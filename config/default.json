@@ -1,0 +1,24 @@
+{
+  "capture": {
+    "device": "/dev/video0",
+    "width": 1280,
+    "height": 720,
+    "format": "auto"
+  },
+  "shader": {
+    "enabled": false,
+    "path": "",
+    "preset": ""
+  },
+  "output": {
+    "window_width": 1280,
+    "window_height": 720,
+    "fullscreen": false,
+    "vsync": true
+  },
+  "hotkeys": {
+    "toggle_shader": "s",
+    "screenshot": "f12",
+    "exit": "escape"
+  }
+}

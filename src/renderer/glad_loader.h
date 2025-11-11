@@ -1,0 +1,124 @@
+#pragma once
+
+#include <cstddef>
+
+// Header simples para carregar funções OpenGL via GLFW
+// GLFW pode carregar as funções OpenGL diretamente
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Declarações das funções OpenGL que precisamos
+// Essas serão carregadas dinamicamente via GLFW
+
+typedef unsigned int GLenum;
+typedef unsigned int GLbitfield;
+typedef unsigned int GLuint;
+typedef int GLint;
+typedef int GLsizei;
+typedef unsigned char GLboolean;
+typedef signed char GLbyte;
+typedef short GLshort;
+typedef unsigned char GLubyte;
+typedef unsigned short GLushort;
+typedef float GLfloat;
+typedef float GLclampf;
+typedef double GLdouble;
+typedef double GLclampd;
+typedef void GLvoid;
+typedef char GLchar;
+typedef ptrdiff_t GLsizeiptr;
+
+// Funções OpenGL 3.3 Core
+extern GLuint (*glCreateShader)(GLenum type);
+extern void (*glShaderSource)(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
+extern void (*glCompileShader)(GLuint shader);
+extern void (*glGetShaderiv)(GLuint shader, GLenum pname, GLint* params);
+extern void (*glGetShaderInfoLog)(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+extern void (*glDeleteShader)(GLuint shader);
+extern GLuint (*glCreateProgram)(void);
+extern void (*glAttachShader)(GLuint program, GLuint shader);
+extern void (*glLinkProgram)(GLuint program);
+extern void (*glGetProgramiv)(GLuint program, GLenum pname, GLint* params);
+extern void (*glGetProgramInfoLog)(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+extern void (*glDeleteProgram)(GLuint program);
+extern void (*glUseProgram)(GLuint program);
+extern void (*glGenVertexArrays)(GLsizei n, GLuint* arrays);
+extern void (*glDeleteVertexArrays)(GLsizei n, const GLuint* arrays);
+extern void (*glBindVertexArray)(GLuint array);
+extern void (*glGenBuffers)(GLsizei n, GLuint* buffers);
+extern void (*glDeleteBuffers)(GLsizei n, const GLuint* buffers);
+extern void (*glBindBuffer)(GLenum target, GLuint buffer);
+extern void (*glBufferData)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+extern void (*glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
+extern void (*glEnableVertexAttribArray)(GLuint index);
+extern void (*glGenTextures)(GLsizei n, GLuint* textures);
+extern void (*glDeleteTextures)(GLsizei n, const GLuint* textures);
+extern void (*glBindTexture)(GLenum target, GLuint texture);
+extern void (*glTexParameteri)(GLenum target, GLenum pname, GLint param);
+extern void (*glTexImage2D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* data);
+extern void (*glTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* data);
+extern void (*glGenFramebuffers)(GLsizei n, GLuint* framebuffers);
+extern void (*glDeleteFramebuffers)(GLsizei n, const GLuint* framebuffers);
+extern void (*glBindFramebuffer)(GLenum target, GLuint framebuffer);
+extern void (*glFramebufferTexture2D)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+extern GLenum (*glCheckFramebufferStatus)(GLenum target);
+extern void (*glActiveTexture)(GLenum texture);
+extern GLint (*glGetUniformLocation)(GLuint program, const char* name);
+extern void (*glBindAttribLocation)(GLuint program, GLuint index, const char* name);
+extern void (*glUniform1i)(GLint location, GLint v0);
+extern void (*glUniform1f)(GLint location, GLfloat v0);
+extern void (*glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
+extern void (*glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+
+// Funções básicas do OpenGL 1.x/2.x - usamos as versões estáticas linkadas
+// Declarações forward (implementações vêm do OpenGL linkado estaticamente)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glClear(GLbitfield mask);
+void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices);
+#ifdef __cplusplus
+}
+#endif
+
+// Constantes OpenGL
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_FRAGMENT_SHADER 0x8B30
+#define GL_COMPILE_STATUS 0x8B81
+#define GL_LINK_STATUS 0x8B82
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_STATIC_DRAW 0x88E4
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_CLAMP_TO_EDGE 0x812F
+#define GL_LINEAR 0x2601
+#define GL_RGB 0x1907
+#define GL_RGBA 0x1908
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_FLOAT 0x1406
+#define GL_RGBA32F 0x8814
+#define GL_FALSE 0
+#define GL_COLOR_BUFFER_BIT 0x00004000
+#define GL_TRIANGLES 0x0004
+#define GL_UNSIGNED_INT 0x1405
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_TEXTURE0 0x84C0
+#define GL_RGBA32F 0x8814
+#define GL_RGBA 0x1908
+
+bool loadOpenGLFunctions();
+
+#ifdef __cplusplus
+}
+#endif
+
