@@ -24,6 +24,7 @@ struct ShaderTexture {
     std::string path;
     std::string wrapMode = "clamp_to_border";
     bool mipmap = false;
+    bool linear = true; // Linear filtering (padrão true)
 };
 
 class ShaderPreset {

@@ -71,6 +71,7 @@ extern void (*glUniform1i)(GLint location, GLint v0);
 extern void (*glUniform1f)(GLint location, GLfloat v0);
 extern void (*glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
 extern void (*glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+extern void (*glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 
 // Funções básicas do OpenGL 1.x/2.x - usamos as versões estáticas linkadas
 // Declarações forward (implementações vêm do OpenGL linkado estaticamente)

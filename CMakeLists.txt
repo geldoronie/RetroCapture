@@ -34,6 +34,9 @@ endif()
 # V4L2 (via libv4l2)
 pkg_check_modules(V4L2 REQUIRED libv4l2)
 
+# PNG (via libpng)
+pkg_check_modules(PNG REQUIRED libpng)
+
 # Threading
 find_package(Threads REQUIRED)
 
@@ -54,6 +57,7 @@ if(glfw3_FOUND)
         OpenGL::GL
         glfw
         ${V4L2_LIBRARIES}
+        ${PNG_LIBRARIES}
         Threads::Threads
     )
 else()
@@ -61,6 +65,7 @@ else()
         OpenGL::GL
         ${GLFW_LIBRARIES}
         ${V4L2_LIBRARIES}
+        ${PNG_LIBRARIES}
         Threads::Threads
     )
 endif()
@@ -73,6 +78,7 @@ if(NOT glfw3_FOUND)
 endif()
 target_include_directories(retrocapture PRIVATE
     ${V4L2_INCLUDE_DIRS}
+    ${PNG_INCLUDE_DIRS}
 )
 
 # Compiler flags

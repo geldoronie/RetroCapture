@@ -7,7 +7,7 @@ void printUsage(const char* programName) {
     std::cout << "Uso: " << programName << " [opções]\n";
     std::cout << "\nOpções de Shader:\n";
     std::cout << "  --shader <caminho>     Carregar shader GLSL simples (.glsl)\n";
-    std::cout << "  --preset <caminho>     Carregar preset com múltiplos passes (.glslp, .slangp)\n";
+    std::cout << "  --preset <caminho>     Carregar preset com múltiplos passes (.glslp)\n";
     std::cout << "\nOpções de Captura:\n";
     std::cout << "  --device <caminho>     Dispositivo de captura (padrão: /dev/video0)\n";
     std::cout << "  --width <valor>        Largura da captura (padrão: 1920)\n";
@@ -16,7 +16,7 @@ void printUsage(const char* programName) {
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
-    std::cout << "  " << programName << " --device /dev/video2 --preset shaders/shaders_slang/crt/zfast-crt.slangp\n";
+    std::cout << "  " << programName << " --device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
     std::cout << "  " << programName << " --device /dev/video1 --width 3840 --height 2160 --fps 60\n";
 }

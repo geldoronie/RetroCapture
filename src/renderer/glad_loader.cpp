@@ -45,6 +45,7 @@ void (*glUniform1i)(GLint, GLint) = nullptr;
 void (*glUniform1f)(GLint, GLfloat) = nullptr;
 void (*glUniform2f)(GLint, GLfloat, GLfloat) = nullptr;
 void (*glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
+void (*glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 
 // Funções básicas (glViewport, glClearColor, glClear, glDrawElements) são do OpenGL 1.x/2.x
 // e estão linkadas estaticamente via OpenGL::GL - não precisam ser declaradas aqui
@@ -105,6 +106,7 @@ bool loadOpenGLFunctions() {
     LOAD_FUNC(glUniform1f)
     LOAD_FUNC(glUniform2f)
     LOAD_FUNC(glUniform4f)
+    LOAD_FUNC(glUniformMatrix4fv)
     
     // Funções básicas (glViewport, glClearColor, glClear, glDrawElements) são do OpenGL 1.x/2.x
     // e estão linkadas estaticamente - não precisam ser carregadas dinamicamente

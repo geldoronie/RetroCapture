@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <cstdint>
 
 struct ShaderPassData {
@@ -17,6 +18,8 @@ struct ShaderPassData {
     uint32_t height = 0;
     bool floatFramebuffer = false;
     ShaderPass passInfo;
+    // Parâmetros extraídos de #pragma parameter (nome -> valor padrão)
+    std::map<std::string, float> extractedParameters;
 };
 
 class ShaderEngine {

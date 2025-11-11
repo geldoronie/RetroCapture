@@ -206,11 +206,25 @@ void Application::run()
             {
                 textureToRender = m_shaderEngine->applyShader(m_texture, m_textureWidth, m_textureHeight);
                 isShaderTexture = true;
+
+                // DEBUG: Verificar textura retornada
+                if (textureToRender == 0)
+                {
+                    LOG_WARN("Shader retornou textura inválida (0), usando textura original");
+                    textureToRender = m_texture;
+                    isShaderTexture = false;
+                }
             }
 
-            // Para texturas do shader (framebuffer), não inverter Y
-            // Para textura original (câmera), inverter Y
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), !isShaderTexture);
+            // Limpar o framebuffer da janela antes de renderizar
+            // IMPORTANTE: O framebuffer 0 é a janela (default framebuffer)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            // Para texturas do shader (framebuffer), inverter Y (shader renderiza invertido)
+            // Para textura original (câmera), não inverter Y (já está correta)
+            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture);
             m_window->swapBuffers();
         }
         else
