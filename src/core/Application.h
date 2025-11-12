@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cstdint>
+#include <cinttypes>
 #include "../renderer/glad_loader.h"
 
 class VideoCapture;
@@ -28,6 +29,17 @@ public:
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
     
+    // Controles V4L2 (valores opcionais, -1 significa não configurar)
+    void setV4L2Brightness(int32_t value) { m_v4l2Brightness = value; }
+    void setV4L2Contrast(int32_t value) { m_v4l2Contrast = value; }
+    void setV4L2Saturation(int32_t value) { m_v4l2Saturation = value; }
+    void setV4L2Hue(int32_t value) { m_v4l2Hue = value; }
+    void setV4L2Gain(int32_t value) { m_v4l2Gain = value; }
+    void setV4L2Exposure(int32_t value) { m_v4l2Exposure = value; }
+    void setV4L2Sharpness(int32_t value) { m_v4l2Sharpness = value; }
+    void setV4L2Gamma(int32_t value) { m_v4l2Gamma = value; }
+    void setV4L2WhiteBalance(int32_t value) { m_v4l2WhiteBalance = value; }
+    
 private:
     bool m_initialized = false;
     
@@ -52,6 +64,17 @@ private:
     uint32_t m_windowHeight = 1080;
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
+    
+    // Controles V4L2 (-1 significa não configurar)
+    int32_t m_v4l2Brightness = -1;
+    int32_t m_v4l2Contrast = -1;
+    int32_t m_v4l2Saturation = -1;
+    int32_t m_v4l2Hue = -1;
+    int32_t m_v4l2Gain = -1;
+    int32_t m_v4l2Exposure = -1;
+    int32_t m_v4l2Sharpness = -1;
+    int32_t m_v4l2Gamma = -1;
+    int32_t m_v4l2WhiteBalance = -1;
     
     bool initCapture();
     bool initWindow();

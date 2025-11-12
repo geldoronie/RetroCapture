@@ -24,6 +24,20 @@ public:
     
     bool setFormat(uint32_t width, uint32_t height, uint32_t pixelFormat = 0);
     bool setFramerate(uint32_t fps);
+    
+    // Controles V4L2
+    bool setControl(uint32_t controlId, int32_t value);
+    bool getControl(uint32_t controlId, int32_t& value);
+    bool setBrightness(int32_t value);      // -100 a 100 (padrão: 0)
+    bool setContrast(int32_t value);        // -100 a 100 (padrão: 0)
+    bool setSaturation(int32_t value);      // -100 a 100 (padrão: 0)
+    bool setHue(int32_t value);            // -100 a 100 (padrão: 0)
+    bool setGain(int32_t value);           // 0 a 100 (padrão: 0)
+    bool setExposure(int32_t value);        // -13 a 1 (padrão: -6)
+    bool setSharpness(int32_t value);       // 0 a 6 (padrão: 3)
+    bool setGamma(int32_t value);          // 100 a 300 (padrão: 100)
+    bool setWhiteBalanceTemperature(int32_t value); // 2800 a 6500 (padrão: 4600)
+    
     bool startCapture();
     void stopCapture();
     

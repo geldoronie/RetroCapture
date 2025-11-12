@@ -317,6 +317,79 @@ std::vector<uint32_t> VideoCapture::getSupportedFormats() {
     return formats;
 }
 
+bool VideoCapture::setControl(uint32_t controlId, int32_t value) {
+    if (m_fd < 0) {
+        LOG_ERROR("Dispositivo não está aberto");
+        return false;
+    }
+    
+    struct v4l2_control ctrl = {};
+    ctrl.id = controlId;
+    ctrl.value = value;
+    
+    if (ioctl(m_fd, VIDIOC_S_CTRL, &ctrl) < 0) {
+        LOG_WARN("Falha ao definir controle V4L2 (ID: " + std::to_string(controlId) + 
+                 ", valor: " + std::to_string(value) + "): " + strerror(errno));
+        return false;
+    }
+    
+    return true;
+}
+
+bool VideoCapture::getControl(uint32_t controlId, int32_t& value) {
+    if (m_fd < 0) {
+        LOG_ERROR("Dispositivo não está aberto");
+        return false;
+    }
+    
+    struct v4l2_control ctrl = {};
+    ctrl.id = controlId;
+    
+    if (ioctl(m_fd, VIDIOC_G_CTRL, &ctrl) < 0) {
+        LOG_WARN("Falha ao obter controle V4L2 (ID: " + std::to_string(controlId) + ")");
+        return false;
+    }
+    
+    value = ctrl.value;
+    return true;
+}
+
+bool VideoCapture::setBrightness(int32_t value) {
+    return setControl(V4L2_CID_BRIGHTNESS, value);
+}
+
+bool VideoCapture::setContrast(int32_t value) {
+    return setControl(V4L2_CID_CONTRAST, value);
+}
+
+bool VideoCapture::setSaturation(int32_t value) {
+    return setControl(V4L2_CID_SATURATION, value);
+}
+
+bool VideoCapture::setHue(int32_t value) {
+    return setControl(V4L2_CID_HUE, value);
+}
+
+bool VideoCapture::setGain(int32_t value) {
+    return setControl(V4L2_CID_GAIN, value);
+}
+
+bool VideoCapture::setExposure(int32_t value) {
+    return setControl(V4L2_CID_EXPOSURE_ABSOLUTE, value);
+}
+
+bool VideoCapture::setSharpness(int32_t value) {
+    return setControl(V4L2_CID_SHARPNESS, value);
+}
+
+bool VideoCapture::setGamma(int32_t value) {
+    return setControl(V4L2_CID_GAMMA, value);
+}
+
+bool VideoCapture::setWhiteBalanceTemperature(int32_t value) {
+    return setControl(V4L2_CID_WHITE_BALANCE_TEMPERATURE, value);
+}
+
 bool VideoCapture::convertYUYVtoRGB(const Frame& /*input*/, std::vector<uint8_t>& /*output*/) {
     // Esta função não é mais usada - a conversão é feita em Application
     return false;

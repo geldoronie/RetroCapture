@@ -1220,10 +1220,9 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         // Por enquanto, vamos usar vec2 apenas
         // Se necessário, podemos adicionar verificação de tipo usando glGetActiveUniform
     }
-    else if (passIndex == 0)
-    {
-        LOG_WARN("Pass 0: Uniform 'OutputSize' não encontrado (shader pode precisar dele)");
-    }
+    // Nota: Se OutputSize não for encontrado, pode ser que o shader não o use
+    // ou que ele tenha sido otimizado fora pelo compilador GLSL
+    // Não é necessariamente um erro, apenas um aviso informativo
 
     // PassOutputSize# - Tamanhos de saída de passes anteriores (RetroArch injeta isso)
     // Permite que shaders acessem informações de passes anteriores
@@ -1532,10 +1531,9 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
             LOG_INFO("Pass 0: TextureSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
         }
     }
-    else if (passIndex == 0)
-    {
-        LOG_WARN("Pass 0: Uniform 'TextureSize' não encontrado (shader pode precisar dele)");
-    }
+    // Nota: Se TextureSize não for encontrado, pode ser que o shader não o use
+    // ou que ele tenha sido otimizado fora pelo compilador GLSL
+    // Não é necessariamente um erro, apenas um aviso informativo
 
     // InputSize (vec2 alternativo)
     loc = getUniformLocation(program, "InputSize");
@@ -1547,10 +1545,9 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
             LOG_INFO("Pass 0: InputSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
         }
     }
-    else if (passIndex == 0)
-    {
-        LOG_WARN("Pass 0: Uniform 'InputSize' não encontrado (shader pode precisar dele)");
-    }
+    // Nota: Se InputSize não for encontrado, pode ser que o shader não o use
+    // ou que ele tenha sido otimizado fora pelo compilador GLSL
+    // Não é necessariamente um erro, apenas um aviso informativo
 
     // VideoSize (tamanho original)
     loc = getUniformLocation(program, "IN.video_size");
@@ -2322,13 +2319,34 @@ std::string ShaderEngine::convertSlangToGLSL(const std::string &slangSource, boo
     result = std::regex_replace(result, std::regex(R"(params\.(\w+))"), "$1");
 
     // Agora verificar se os uniforms já foram definidos
-    bool hasSourceSize = result.find("uniform vec4 SourceSize") != std::string::npos;
-    bool hasOriginalSize = result.find("uniform vec4 OriginalSize") != std::string::npos;
-    bool hasOutputSize = result.find("uniform vec4 OutputSize") != std::string::npos;
+    // Verificar tanto vec4 quanto vec2 (alguns shaders usam vec2)
+    bool hasSourceSize = (result.find("uniform vec4 SourceSize") != std::string::npos ||
+                          result.find("uniform vec2 SourceSize") != std::string::npos ||
+                          result.find("uniform COMPAT_PRECISION vec4 SourceSize") != std::string::npos ||
+                          result.find("uniform COMPAT_PRECISION vec2 SourceSize") != std::string::npos);
+    bool hasOriginalSize = (result.find("uniform vec4 OriginalSize") != std::string::npos ||
+                            result.find("uniform vec2 OriginalSize") != std::string::npos ||
+                            result.find("uniform COMPAT_PRECISION vec4 OriginalSize") != std::string::npos ||
+                            result.find("uniform COMPAT_PRECISION vec2 OriginalSize") != std::string::npos);
+    bool hasOutputSize = (result.find("uniform vec4 OutputSize") != std::string::npos ||
+                          result.find("uniform vec2 OutputSize") != std::string::npos ||
+                          result.find("uniform COMPAT_PRECISION vec4 OutputSize") != std::string::npos ||
+                          result.find("uniform COMPAT_PRECISION vec2 OutputSize") != std::string::npos);
+    bool hasInputSize = (result.find("uniform vec4 InputSize") != std::string::npos ||
+                         result.find("uniform vec2 InputSize") != std::string::npos ||
+                         result.find("uniform COMPAT_PRECISION vec4 InputSize") != std::string::npos ||
+                         result.find("uniform COMPAT_PRECISION vec2 InputSize") != std::string::npos);
+    bool hasTextureSize = (result.find("uniform vec4 TextureSize") != std::string::npos ||
+                           result.find("uniform vec2 TextureSize") != std::string::npos ||
+                           result.find("uniform COMPAT_PRECISION vec4 TextureSize") != std::string::npos ||
+                           result.find("uniform COMPAT_PRECISION vec2 TextureSize") != std::string::npos);
     bool hasFrameCount = (result.find("uniform float FrameCount") != std::string::npos ||
-                          result.find("uniform uint FrameCount") != std::string::npos);
+                          result.find("uniform uint FrameCount") != std::string::npos ||
+                          result.find("uniform int FrameCount") != std::string::npos ||
+                          result.find("uniform COMPAT_PRECISION int FrameCount") != std::string::npos);
 
     // Se não foram definidos mas são usados, adicionar as definições
+    // Preferir vec2 para OutputSize e InputSize (mais comum em shaders modernos)
     std::ostringstream missingUniforms;
     if (!hasSourceSize && result.find("SourceSize") != std::string::npos)
     {
@@ -2340,7 +2358,18 @@ std::string ShaderEngine::convertSlangToGLSL(const std::string &slangSource, boo
     }
     if (!hasOutputSize && result.find("OutputSize") != std::string::npos)
     {
-        missingUniforms << "uniform vec4 OutputSize;\n";
+        // Preferir vec2 pois muitos shaders modernos usam vec2
+        missingUniforms << "uniform vec2 OutputSize;\n";
+    }
+    if (!hasInputSize && result.find("InputSize") != std::string::npos)
+    {
+        // Preferir vec2 pois muitos shaders modernos usam vec2
+        missingUniforms << "uniform vec2 InputSize;\n";
+    }
+    if (!hasTextureSize && result.find("TextureSize") != std::string::npos)
+    {
+        // Preferir vec2 pois muitos shaders modernos usam vec2
+        missingUniforms << "uniform vec2 TextureSize;\n";
     }
     // FrameCount é SEMPRE necessário, adicionar se não existe
     if (!hasFrameCount)

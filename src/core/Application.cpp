@@ -158,6 +158,53 @@ bool Application::initCapture()
         LOG_INFO("Usando framerate padrão do dispositivo");
     }
 
+    // Configurar controles V4L2 se especificados
+    if (m_v4l2Brightness >= 0) {
+        if (m_capture->setBrightness(m_v4l2Brightness)) {
+            LOG_INFO("Brilho V4L2 configurado: " + std::to_string(m_v4l2Brightness));
+        }
+    }
+    if (m_v4l2Contrast >= 0) {
+        if (m_capture->setContrast(m_v4l2Contrast)) {
+            LOG_INFO("Contraste V4L2 configurado: " + std::to_string(m_v4l2Contrast));
+        }
+    }
+    if (m_v4l2Saturation >= 0) {
+        if (m_capture->setSaturation(m_v4l2Saturation)) {
+            LOG_INFO("Saturação V4L2 configurada: " + std::to_string(m_v4l2Saturation));
+        }
+    }
+    if (m_v4l2Hue >= 0) {
+        if (m_capture->setHue(m_v4l2Hue)) {
+            LOG_INFO("Matiz V4L2 configurado: " + std::to_string(m_v4l2Hue));
+        }
+    }
+    if (m_v4l2Gain >= 0) {
+        if (m_capture->setGain(m_v4l2Gain)) {
+            LOG_INFO("Ganho V4L2 configurado: " + std::to_string(m_v4l2Gain));
+        }
+    }
+    if (m_v4l2Exposure >= 0) {
+        if (m_capture->setExposure(m_v4l2Exposure)) {
+            LOG_INFO("Exposição V4L2 configurada: " + std::to_string(m_v4l2Exposure));
+        }
+    }
+    if (m_v4l2Sharpness >= 0) {
+        if (m_capture->setSharpness(m_v4l2Sharpness)) {
+            LOG_INFO("Nitidez V4L2 configurada: " + std::to_string(m_v4l2Sharpness));
+        }
+    }
+    if (m_v4l2Gamma >= 0) {
+        if (m_capture->setGamma(m_v4l2Gamma)) {
+            LOG_INFO("Gama V4L2 configurado: " + std::to_string(m_v4l2Gamma));
+        }
+    }
+    if (m_v4l2WhiteBalance >= 0) {
+        if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance)) {
+            LOG_INFO("Balanço de branco V4L2 configurado: " + std::to_string(m_v4l2WhiteBalance));
+        }
+    }
+
     if (!m_capture->startCapture())
     {
         LOG_ERROR("Falha ao iniciar captura");
