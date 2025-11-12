@@ -69,9 +69,11 @@ extern void (*glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint sr
 extern void (*glActiveTexture)(GLenum texture);
 extern GLint (*glGetUniformLocation)(GLuint program, const char* name);
 extern void (*glBindAttribLocation)(GLuint program, GLuint index, const char* name);
+extern void (*glGetActiveUniform)(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLint* size, GLenum* type, GLchar* name);
 extern void (*glUniform1i)(GLint location, GLint v0);
 extern void (*glUniform1f)(GLint location, GLfloat v0);
 extern void (*glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
+extern void (*glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 extern void (*glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 extern void (*glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 
@@ -139,6 +141,10 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 #define GL_SRGB8_ALPHA8 0x8C43
 #define GL_CULL_FACE 0x0B44
 #define GL_DEPTH_TEST 0x0B71
+#define GL_ACTIVE_UNIFORMS 0x8B86
+#define GL_FLOAT_VEC2 0x8B50
+#define GL_FLOAT_VEC3 0x8B51
+#define GL_FLOAT_VEC4 0x8B52
 #define GL_TRUE 1
 #define GL_FALSE 0
 

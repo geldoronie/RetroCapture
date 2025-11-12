@@ -290,6 +290,149 @@ bool ShaderEngine::loadPresetPasses()
             pragmaPos = processedSource.find("#pragma parameter", lineEnd);
         }
 
+        // Verificar se OutputSize é usado e detectar o tipo esperado
+        // IMPORTANTE: Detectar o tipo necessário ANTES de verificar a declaração
+        // Se o código precisa de vec3 mas está declarado como vec2, precisamos corrigir
+        bool outputSizeUsed = (processedSource.find("OutputSize") != std::string::npos);
+
+        // IMPORTANTE: Verificar PRIMEIRO se OutputSize é usado em #define que espera vec2
+        // Padrão: #define OutSize vec4(OutputSize, 1.0 / OutputSize)
+        // ou: #define outsize vec4(OutputSize, 1.0 / OutputSize)
+        // Este padrão REQUER que OutputSize seja vec2
+        // Padrão mais flexível: qualquer nome de variável seguido de vec4(OutputSize, ...)
+        std::regex definePattern(R"(#define\s+\w+\s+vec4\s*\(\s*OutputSize\s*,\s*[^)]*OutputSize)");
+        bool usedInVec4Define = std::regex_search(processedSource, definePattern);
+
+        // Detectar tipo necessário baseado no uso no código
+        std::string requiredType = "vec2"; // Default
+        if (outputSizeUsed)
+        {
+            // Se OutputSize é usado em #define vec4(OutputSize, ...), DEVE ser vec2
+            // Esta verificação deve vir ANTES de outras detecções para ter prioridade
+            if (usedInVec4Define)
+            {
+                requiredType = "vec2";
+                LOG_INFO("Pass " + std::to_string(i) + ": OutputSize usado em #define vec4(OutputSize, ...), forçando vec2");
+            }
+            else
+            {
+                // Procurar por padrões de uso que indiquem o tipo necessário
+                // Padrões possíveis:
+                // - vec3 x = OutputSize;
+                // - vec3 x = OutputSize.xyz;
+                // - vec3 x; x = OutputSize;
+                // - vec3(OutputSize)
+                // - vec3 x = vec3(OutputSize);
+                std::regex vec3Pattern1(R"(\bvec3\s+\w+\s*=\s*OutputSize\b)");
+                std::regex vec3Pattern2(R"(\bvec3\s*\(\s*OutputSize\s*\))");
+                std::regex vec3Pattern3(R"(\bvec3\s+\w+\s*=\s*OutputSize\s*\.)");
+                std::regex vec3Pattern4(R"(\bvec3\s+\w+\s*=\s*vec3\s*\(\s*OutputSize)");
+
+                std::regex vec4Pattern1(R"(\bvec4\s+\w+\s*=\s*OutputSize\b)");
+                std::regex vec4Pattern2(R"(\bvec4\s*\(\s*OutputSize\s*\))");
+                std::regex vec4Pattern3(R"(\bvec4\s+\w+\s*=\s*vec4\s*\(\s*OutputSize)");
+
+                bool isVec3 = std::regex_search(processedSource, vec3Pattern1) ||
+                              std::regex_search(processedSource, vec3Pattern2) ||
+                              std::regex_search(processedSource, vec3Pattern3) ||
+                              std::regex_search(processedSource, vec3Pattern4);
+                bool isVec4 = std::regex_search(processedSource, vec4Pattern1) ||
+                              std::regex_search(processedSource, vec4Pattern2) ||
+                              std::regex_search(processedSource, vec4Pattern3);
+
+                if (isVec3)
+                {
+                    requiredType = "vec3";
+                }
+                else if (isVec4)
+                {
+                    requiredType = "vec4";
+                }
+                else
+                {
+                    // Se OutputSize é usado mas não detectamos o tipo, fazer uma análise mais profunda
+                    // Contar ocorrências de vec3, vec4 próximas a OutputSize
+                    int vec3Count = 0;
+                    int vec4Count = 0;
+
+                    // Procurar todas as ocorrências de OutputSize
+                    size_t pos = 0;
+                    while ((pos = processedSource.find("OutputSize", pos)) != std::string::npos)
+                    {
+                        // Verificar contexto antes e depois de OutputSize (até 100 caracteres)
+                        size_t start = (pos > 100) ? pos - 100 : 0;
+                        size_t end = (pos + 100 < processedSource.length()) ? pos + 100 : processedSource.length();
+                        std::string context = processedSource.substr(start, end - start);
+
+                        // Contar vec3 e vec4 no contexto
+                        if (context.find("vec3") != std::string::npos)
+                            vec3Count++;
+                        if (context.find("vec4") != std::string::npos)
+                            vec4Count++;
+
+                        pos += 10; // Avançar após "OutputSize"
+                    }
+
+                    // Se há mais vec3 do que vec4 próximo a OutputSize, assumir vec3
+                    if (vec3Count > vec4Count && vec3Count > 0)
+                    {
+                        requiredType = "vec3";
+                        LOG_INFO("Pass " + std::to_string(i) + ": Detectado " + std::to_string(vec3Count) +
+                                 " ocorrências de vec3 próximo a OutputSize, assumindo vec3");
+                    }
+                    else if (vec4Count > vec3Count && vec4Count > 0)
+                    {
+                        requiredType = "vec4";
+                        LOG_INFO("Pass " + std::to_string(i) + ": Detectado " + std::to_string(vec4Count) +
+                                 " ocorrências de vec4 próximo a OutputSize, assumindo vec4");
+                    }
+                    else if (processedSource.find("vec3") != std::string::npos &&
+                             processedSource.find("OutputSize") != std::string::npos)
+                    {
+                        // Fallback: se há vec3 e OutputSize no shader, assumir vec3
+                        requiredType = "vec3";
+                        LOG_INFO("Pass " + std::to_string(i) + ": Fallback: assumindo vec3 para OutputSize (vec3 presente no shader)");
+                    }
+                }
+            }
+        }
+
+        // Verificar se OutputSize já está declarado como uniform
+        std::regex uniformDeclRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
+        std::smatch declMatch;
+        bool hasOutputSizeDecl = std::regex_search(processedSource, declMatch, uniformDeclRegex);
+        std::string declaredType = hasOutputSizeDecl ? declMatch[1].str() : "";
+
+        // Se o tipo necessário é diferente do declarado, precisamos corrigir
+        if (outputSizeUsed)
+        {
+            if (!hasOutputSizeDecl)
+            {
+                // Não está declarado, injetar com o tipo necessário
+                std::string outputSizeDecl = "uniform " + requiredType + " OutputSize;\n";
+                std::regex versionRegex(R"(#version\s+\d+[^\n]*)");
+                processedSource = std::regex_replace(processedSource, versionRegex, "$&\n" + outputSizeDecl, std::regex_constants::format_first_only);
+                LOG_INFO("Pass " + std::to_string(i) + ": Injetado uniform " + requiredType + " OutputSize");
+            }
+            else if (declaredType != requiredType)
+            {
+                // Está declarado mas com tipo errado, substituir
+                std::regex replaceRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
+                std::string replacement = "uniform " + requiredType + " OutputSize";
+                processedSource = std::regex_replace(processedSource, replaceRegex, replacement);
+                LOG_INFO("Pass " + std::to_string(i) + ": Corrigido OutputSize de " + declaredType + " para " + requiredType);
+            }
+            else
+            {
+                LOG_INFO("Pass " + std::to_string(i) + ": OutputSize já declarado como " + declaredType + " (tipo necessário: " + requiredType + ")");
+            }
+        }
+
+        // CORREÇÃO: Corrigir atribuições de vec4 para vec3 que causam erros de compilação
+        // APENAS se o compilador reportar erro específico sobre isso
+        // Não fazer correção preventiva pois pode quebrar shaders que funcionam
+        // A correção será feita apenas quando detectarmos o erro específico durante a compilação
+
         // Armazenar valores padrão para injeção em setupUniforms
         passData.extractedParameters = paramDefaults;
 
@@ -327,23 +470,402 @@ bool ShaderEngine::loadPresetPasses()
         // Adicionar extensão para inicialização estilo C (GL_ARB_shading_language_420pack)
         // Isso permite inicialização de arrays e estruturas estilo C
         std::string extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
-        vertexSource = versionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
-        fragmentSource = versionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
+
+        // IMPORTANTE: Para shaders que escalam a altura (como interlacing.glsl com scale_y = 2.0),
+        // o shader lê COMPAT_TEXTURE(Source, vTexCoord) onde Source é a entrada, mas vTexCoord.y
+        // é baseado na saída. Precisamos ajustar o vertex shader para que TEX0.y seja baseado
+        // na entrada quando a saída é escalada. Isso permite que o fragment shader leia corretamente
+        // da textura de entrada.
+        // Verificar se este pass escala a altura e se é o shader interlacing.glsl
+        bool needsTexCoordAdjustment = false;
+        if (i < m_preset.getPasses().size())
+        {
+            const auto &presetPass = m_preset.getPasses()[i];
+            // Verificar se scale_y escala a altura
+            if (presetPass.scaleTypeY == "viewport" || presetPass.scaleTypeY == "absolute" ||
+                (presetPass.scaleTypeY == "source" && presetPass.scaleY != 1.0f))
+            {
+                // Verificar se é o shader interlacing.glsl
+                if (passInfo.shaderPath.find("interlacing.glsl") != std::string::npos)
+                {
+                    needsTexCoordAdjustment = true;
+                }
+            }
+        }
+
+        std::string vertexCode = codeAfterVersion;
+        // Se precisamos ajustar TexCoord, injetar código após TEX0.xy = TexCoord.xy;
+        if (needsTexCoordAdjustment)
+        {
+            // Procurar por "TEX0.xy = TexCoord.xy;" no código do vertex shader
+            std::string pattern = "TEX0.xy = TexCoord.xy;";
+            size_t pos = vertexCode.find(pattern);
+            if (pos != std::string::npos)
+            {
+                // Injetar código para ajustar TEX0.y baseado na entrada quando a saída é escalada
+                // Quando a saída tem o dobro da altura, cada linha da entrada deve ser lida duas vezes
+                // Para replicar cada linha: TEX0.y = floor(TEX0.y * OutputSize.y / 2.0) / InputSize.y
+                // Mas isso requer floor() que pode não estar disponível no vertex shader
+                // Alternativa: usar uma abordagem que mapeia [0,1] na saída para [0,1] na entrada
+                // mas replicando cada linha: TEX0.y = (floor(TEX0.y * OutputSize.y / 2.0) + 0.5) / InputSize.y
+                // Simplificando: TEX0.y = floor(TEX0.y * OutputSize.y / 2.0) / InputSize.y
+                std::string adjustment = "\n   // Ajustar TEX0.y para replicar cada linha da entrada duas vezes na saída\n";
+                adjustment += "   // Quando a saída tem o dobro da altura, mapear coordenadas para replicar linhas\n";
+                adjustment += "   TEX0.y = (floor(TEX0.y * OutputSize.y / 2.0) + 0.5) / InputSize.y;\n";
+                vertexCode.insert(pos + pattern.length(), adjustment);
+                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste de TexCoord.y injetado no vertex shader");
+            }
+        }
+
+        // IMPORTANTE: Para shaders como box-center.glsl que usam gl_FragCoord.xy diretamente
+        // na verificação de bordas, precisamos ajustar o fragment shader para normalizar
+        // gl_FragCoord.xy dividindo por OutputSize.xy
+        std::string fragmentCode = codeAfterVersion;
+        bool needsFragCoordAdjustment = false;
+        bool needsInterlaceAdjustment = false;
+        if (i < m_preset.getPasses().size())
+        {
+            const auto &presetPass = m_preset.getPasses()[i];
+            // Verificar se é o shader box-center.glsl
+            if (passInfo.shaderPath.find("box-center.glsl") != std::string::npos)
+            {
+                needsFragCoordAdjustment = true;
+            }
+            // Verificar se é o shader interlacing.glsl e se precisa ajustar o cálculo do interlace
+            if (passInfo.shaderPath.find("interlacing.glsl") != std::string::npos && needsTexCoordAdjustment)
+            {
+                needsInterlaceAdjustment = true;
+            }
+        }
+
+        // Se precisamos ajustar gl_FragCoord, injetar código após bordertest = gl_FragCoord.xy;
+        if (needsFragCoordAdjustment)
+        {
+            // Procurar por "bordertest = gl_FragCoord.xy;" no código do fragment shader
+            std::string pattern = "bordertest = gl_FragCoord.xy;";
+            size_t pos = fragmentCode.find(pattern);
+            if (pos != std::string::npos)
+            {
+                // Injetar código para normalizar gl_FragCoord.xy dividindo por OutputSize.xy
+                std::string adjustment = "\n   // Normalizar gl_FragCoord.xy dividindo por OutputSize.xy\n";
+                adjustment += "   bordertest = bordertest / OutputSize.xy;\n";
+                fragmentCode.insert(pos + pattern.length(), adjustment);
+                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste de gl_FragCoord.xy injetado no fragment shader");
+            }
+        }
+
+        // Se precisamos ajustar o cálculo do interlace, usar gl_FragCoord.y em vez de vTexCoord.y
+        if (needsInterlaceAdjustment)
+        {
+            // Procurar por padrões como "y = 2.000001 * TextureSize.y * vTexCoord.y" ou "y = TextureSize.y * vTexCoord.y"
+            // e substituir vTexCoord.y por gl_FragCoord.y / OutputSize.y para usar coordenadas baseadas na saída
+            std::regex interlacePattern1(R"(\by\s*=\s*2\.0+[0-9]*\s*\*\s*TextureSize\.y\s*\*\s*vTexCoord\.y)");
+            std::regex interlacePattern2(R"(\by\s*=\s*TextureSize\.y\s*\*\s*vTexCoord\.y)");
+
+            if (std::regex_search(fragmentCode, interlacePattern1))
+            {
+                // Substituir vTexCoord.y por gl_FragCoord.y / OutputSize.y no cálculo do interlace
+                fragmentCode = std::regex_replace(fragmentCode, interlacePattern1,
+                                                  "y = 2.000001 * TextureSize.y * (gl_FragCoord.y / OutputSize.y)");
+                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste do cálculo de interlace injetado (padrão 1)");
+            }
+            else if (std::regex_search(fragmentCode, interlacePattern2))
+            {
+                // Substituir vTexCoord.y por gl_FragCoord.y / OutputSize.y no cálculo do interlace
+                fragmentCode = std::regex_replace(fragmentCode, interlacePattern2,
+                                                  "y = TextureSize.y * (gl_FragCoord.y / OutputSize.y)");
+                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste do cálculo de interlace injetado (padrão 2)");
+            }
+        }
+
+        vertexSource = versionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
+        fragmentSource = versionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
 
         // Compilar shaders
+        LOG_INFO("Pass " + std::to_string(i) + ": Compilando shader: " + passInfo.shaderPath);
         if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
         {
-            LOG_ERROR("Falha ao compilar vertex shader do pass " + std::to_string(i));
+            LOG_ERROR("Falha ao compilar vertex shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
             cleanupPresetPasses();
             return false;
         }
+        LOG_INFO("Pass " + std::to_string(i) + ": Vertex shader compilado com sucesso");
 
-        if (!compileShader(fragmentSource, GL_FRAGMENT_SHADER, passData.fragmentShader))
+        // Tentar compilar o fragment shader
+        GLuint tempFragmentShader = 0;
+        if (!compileShader(fragmentSource, GL_FRAGMENT_SHADER, tempFragmentShader))
         {
-            LOG_ERROR("Falha ao compilar fragment shader do pass " + std::to_string(i));
-            glDeleteShader(passData.vertexShader);
-            cleanupPresetPasses();
-            return false;
+            // Se falhou, obter a mensagem de erro do shader temporário
+            char errorLog[512] = {0};
+            if (tempFragmentShader != 0)
+            {
+                glGetShaderInfoLog(tempFragmentShader, 512, nullptr, errorLog);
+            }
+            std::string errorMsg = std::string(errorLog);
+
+            LOG_INFO("Pass " + std::to_string(i) + ": Erro de compilação detectado: " + (errorMsg.empty() ? "(sem mensagem)" : errorMsg));
+
+            // Verificar se o erro é sobre vec3 = vec4
+            bool isVec3Vec4Error = (errorMsg.find("initializer of type vec4 cannot be assigned to variable of type vec3") != std::string::npos ||
+                                    errorMsg.find("cannot convert") != std::string::npos ||
+                                    (errorMsg.find("vec4") != std::string::npos && errorMsg.find("vec3") != std::string::npos));
+
+            if (isVec3Vec4Error)
+            {
+                LOG_INFO("Pass " + std::to_string(i) + ": Erro detectado como vec3 = vec4, tentando correção automática");
+            }
+
+            // Tentar corrigir erro específico de vec3 = vec4
+            // Procurar por padrão: vec3 var = COMPAT_TEXTURE(...)
+            std::string correctedSource = fragmentSource;
+            std::regex vec3TextureError(R"(\bvec3\s+(\w+)\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()");
+            std::smatch match;
+
+            if (std::regex_search(fragmentSource, match, vec3TextureError))
+            {
+                std::string varName = match[1].str();
+                LOG_INFO("Pass " + std::to_string(i) + ": Detectado vec3 " + varName + " = COMPAT_TEXTURE(...)");
+
+                // Verificar se a variável é usada com .rgb ou similar depois
+                // Procurar por padrões como: var.rgb, var.r, var.g, var.b, etc.
+                std::regex rgbPattern(varName + R"(\s*\.(rgb|r|g|b|rg|rb|gb))");
+                bool usesRgb = std::regex_search(fragmentSource, rgbPattern);
+
+                // Mudar declaração para vec4 (sempre, já que COMPAT_TEXTURE retorna vec4)
+                // IMPORTANTE: Precisamos preservar COMPAT_TEXTURE na substituição
+                // Tentar substituição simples primeiro (mais confiável)
+                std::string oldPattern = "vec3 " + varName + " = COMPAT_TEXTURE";
+                std::string newPattern = "vec4 " + varName + " = COMPAT_TEXTURE";
+                size_t pos = correctedSource.find(oldPattern);
+                if (pos != std::string::npos)
+                {
+                    correctedSource.replace(pos, oldPattern.length(), newPattern);
+                    LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição simples");
+                }
+                else
+                {
+                    // Tentar com espaços diferentes
+                    oldPattern = "vec3\t" + varName + " = COMPAT_TEXTURE";
+                    newPattern = "vec4\t" + varName + " = COMPAT_TEXTURE";
+                    pos = correctedSource.find(oldPattern);
+                    if (pos != std::string::npos)
+                    {
+                        correctedSource.replace(pos, oldPattern.length(), newPattern);
+                        LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição com tab");
+                    }
+                    else
+                    {
+                        // Tentar com regex (última opção)
+                        std::string pattern = R"(\bvec3\s+)" + varName + R"(\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()";
+                        std::regex regexPattern(pattern);
+                        std::smatch match;
+
+                        if (std::regex_search(correctedSource, match, regexPattern))
+                        {
+                            // Capturar a função de textura e construir a substituição manualmente
+                            std::string textureFunc = match[2].str(); // COMPAT_TEXTURE, texture ou texture2D
+                            std::string fullMatch = match[0].str();   // Match completo
+                            std::string replacement = "vec4 " + varName + " = " + textureFunc + "(";
+
+                            // Substituir manualmente para garantir que funcione
+                            size_t matchPos = correctedSource.find(fullMatch);
+                            if (matchPos != std::string::npos)
+                            {
+                                correctedSource.replace(matchPos, fullMatch.length(), replacement);
+                                LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição regex manual com " + textureFunc);
+                            }
+                            else
+                            {
+                                // Fallback: usar regex_replace
+                                correctedSource = std::regex_replace(correctedSource, regexPattern, replacement);
+                                LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição regex com " + textureFunc);
+                            }
+                        }
+                    }
+                }
+
+                // Verificar se a substituição foi feita (verificar de várias formas)
+                bool substitutionFound = false;
+                if (correctedSource.find("vec4 " + varName) != std::string::npos ||
+                    correctedSource.find("vec4\t" + varName) != std::string::npos ||
+                    correctedSource.find("vec4  " + varName) != std::string::npos) // Dois espaços
+                {
+                    substitutionFound = true;
+                    LOG_INFO("Pass " + std::to_string(i) + ": Corrigido vec3 " + varName + " para vec4 (usa .rgb: " + (usesRgb ? "sim" : "não") + ")");
+                }
+                else
+                {
+                    // Verificar se ainda tem vec3 (substituição falhou)
+                    if (correctedSource.find("vec3 " + varName) != std::string::npos ||
+                        correctedSource.find("vec3\t" + varName) != std::string::npos)
+                    {
+                        LOG_ERROR("Pass " + std::to_string(i) + ": Substituição falhou - ainda encontrado vec3 " + varName);
+                        // Tentar substituição manual linha por linha
+                        std::istringstream iss(correctedSource);
+                        std::ostringstream oss;
+                        std::string line;
+                        bool found = false;
+                        while (std::getline(iss, line))
+                        {
+                            // Procurar por qualquer linha que contenha vec3, o nome da variável e COMPAT_TEXTURE
+                            if (line.find("vec3") != std::string::npos &&
+                                line.find(varName) != std::string::npos &&
+                                line.find("COMPAT_TEXTURE") != std::string::npos)
+                            {
+                                // Substituir vec3 por vec4
+                                size_t pos = line.find("vec3");
+                                if (pos != std::string::npos)
+                                {
+                                    line.replace(pos, 4, "vec4");
+                                    found = true;
+                                    LOG_INFO("Pass " + std::to_string(i) + ": Substituição manual aplicada na linha: " + line);
+                                }
+                            }
+                            oss << line << "\n";
+                        }
+                        if (found)
+                        {
+                            correctedSource = oss.str();
+                            substitutionFound = true;
+                            LOG_INFO("Pass " + std::to_string(i) + ": Substituição manual bem-sucedida");
+                        }
+                        else
+                        {
+                            // Última tentativa: substituição direta no string
+                            size_t pos = correctedSource.find("vec3 " + varName + " = COMPAT_TEXTURE");
+                            if (pos != std::string::npos)
+                            {
+                                correctedSource.replace(pos, 4, "vec4");
+                                substitutionFound = true;
+                                LOG_INFO("Pass " + std::to_string(i) + ": Substituição direta aplicada");
+                            }
+                            else
+                            {
+                                // Tentar com espaços diferentes
+                                pos = correctedSource.find("vec3\t" + varName + " = COMPAT_TEXTURE");
+                                if (pos != std::string::npos)
+                                {
+                                    correctedSource.replace(pos, 4, "vec4");
+                                    substitutionFound = true;
+                                    LOG_INFO("Pass " + std::to_string(i) + ": Substituição direta com tab aplicada");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (substitutionFound)
+                {
+                    // CORREÇÃO ADICIONAL: Se mudamos vec3 para vec4, precisamos corrigir usos de vec4(var, float)
+                    // Padrão: vec4(varName, float) onde varName agora é vec4
+                    // Isso deve ser corrigido para vec4(varName.rgb, float) ou apenas varName
+                    std::regex vec4ConstructorPattern(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*[\d.]+\s*\))");
+                    if (std::regex_search(correctedSource, vec4ConstructorPattern))
+                    {
+                        // Substituir vec4(varName, float) por vec4(varName.rgb, float)
+                        correctedSource = std::regex_replace(correctedSource,
+                                                             std::regex(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*([\d.]+)\s*\))"),
+                                                             "vec4(" + varName + ".rgb, $1)");
+                        LOG_INFO("Pass " + std::to_string(i) + ": Corrigido vec4(" + varName + ", float) para vec4(" + varName + ".rgb, float)");
+                    }
+
+                    // Log da linha corrigida para debug
+                    std::istringstream iss(correctedSource);
+                    std::string line;
+                    int lineNum = 0;
+                    while (std::getline(iss, line) && lineNum < 110)
+                    {
+                        lineNum++;
+                        if (lineNum >= 98 && lineNum <= 110 && (line.find(varName) != std::string::npos || line.find("FragColor") != std::string::npos))
+                        {
+                            LOG_INFO("Pass " + std::to_string(i) + " linha corrigida " + std::to_string(lineNum) + ": " + line);
+                        }
+                    }
+
+                    // Tentar compilar novamente
+                    GLuint testShader = 0;
+                    if (compileShader(correctedSource, GL_FRAGMENT_SHADER, testShader))
+                    {
+                        // Sucesso! Usar a versão corrigida
+                        if (passData.fragmentShader != 0)
+                            glDeleteShader(passData.fragmentShader);
+                        passData.fragmentShader = testShader;
+                        fragmentSource = correctedSource;
+                        LOG_INFO("Pass " + std::to_string(i) + ": Correção bem-sucedida! (" + passInfo.shaderPath + ")");
+                    }
+                    else
+                    {
+                        // Ainda falhou, mostrar erro detalhado
+                        char infoLog[512];
+                        glGetShaderInfoLog(testShader, 512, nullptr, infoLog);
+                        LOG_ERROR("Falha ao compilar fragment shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ") mesmo após correção: " + std::string(infoLog));
+                        std::istringstream iss2(correctedSource);
+                        std::string line2;
+                        int lineNum2 = 0;
+                        while (std::getline(iss2, line2) && lineNum2 < 110)
+                        {
+                            lineNum2++;
+                            if (lineNum2 >= 95 && lineNum2 <= 110)
+                            {
+                                LOG_INFO("Pass " + std::to_string(i) + " linha corrigida " + std::to_string(lineNum2) + ": " + line2);
+                            }
+                        }
+                        if (testShader != 0)
+                            glDeleteShader(testShader);
+                        glDeleteShader(passData.vertexShader);
+                        if (tempFragmentShader != 0)
+                            glDeleteShader(tempFragmentShader);
+                        cleanupPresetPasses();
+                        return false;
+                    }
+                }
+                else
+                {
+                    LOG_ERROR("Pass " + std::to_string(i) + ": Falha ao aplicar correção (substituição não encontrada)");
+                    std::istringstream iss(fragmentSource);
+                    std::string line;
+                    int lineNum = 0;
+                    while (std::getline(iss, line) && lineNum < 105)
+                    {
+                        lineNum++;
+                        if (lineNum >= 95 && lineNum <= 105)
+                        {
+                            LOG_INFO("Pass " + std::to_string(i) + " linha " + std::to_string(lineNum) + ": " + line);
+                        }
+                    }
+                    glDeleteShader(passData.vertexShader);
+                    if (tempFragmentShader != 0)
+                        glDeleteShader(tempFragmentShader);
+                    cleanupPresetPasses();
+                    return false;
+                }
+            }
+            else
+            {
+                // Erro não relacionado a vec3 = vec4 ou padrão não encontrado
+                LOG_ERROR("Falha ao compilar fragment shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
+                std::istringstream iss(fragmentSource);
+                std::string line;
+                int lineNum = 0;
+                while (std::getline(iss, line) && lineNum < 105)
+                {
+                    lineNum++;
+                    if (lineNum >= 95 && lineNum <= 105)
+                    {
+                        LOG_INFO("Pass " + std::to_string(i) + " linha " + std::to_string(lineNum) + ": " + line);
+                    }
+                }
+                glDeleteShader(passData.vertexShader);
+                if (tempFragmentShader != 0)
+                    glDeleteShader(tempFragmentShader);
+                cleanupPresetPasses();
+                return false;
+            }
+        }
+        else
+        {
+            // Compilação bem-sucedida
+            passData.fragmentShader = tempFragmentShader;
         }
 
         // Criar e linkar programa para este pass (cada pass precisa de seu próprio programa)
@@ -357,6 +879,8 @@ bool ShaderEngine::loadPresetPasses()
 
         glAttachShader(program, passData.vertexShader);
         glAttachShader(program, passData.fragmentShader);
+
+        LOG_INFO("Pass " + std::to_string(i) + ": Linkando programa de shader");
 
         // Ligar atributos antes de linkar (necessário quando não usamos layout(location))
         // RetroArch shaders podem usar VertexCoord ou Position
@@ -382,7 +906,7 @@ bool ShaderEngine::loadPresetPasses()
         {
             char infoLog[512];
             glGetProgramInfoLog(program, 512, nullptr, infoLog);
-            LOG_ERROR("Erro ao linkar shader program do pass " + std::to_string(i) + ": " + std::string(infoLog));
+            LOG_ERROR("Erro ao linkar shader program do pass " + std::to_string(i) + " (" + passInfo.shaderPath + "): " + std::string(infoLog));
             glDeleteProgram(program);
             glDeleteShader(passData.vertexShader);
             glDeleteShader(passData.fragmentShader);
@@ -392,9 +916,23 @@ bool ShaderEngine::loadPresetPasses()
 
         passData.program = program;
         passData.floatFramebuffer = passInfo.floatFramebuffer;
+
+        LOG_INFO("Pass " + std::to_string(i) + ": Programa linkado com sucesso (" + passInfo.shaderPath + ")");
     }
 
     LOG_INFO("Preset passes carregados: " + std::to_string(m_passes.size()));
+
+    // Verificar se há texturas de referência
+    const auto &textures = m_preset.getTextures();
+    if (!textures.empty())
+    {
+        LOG_INFO("Preset requer " + std::to_string(textures.size()) + " textura(s) de referência");
+        for (const auto &tex : textures)
+        {
+            LOG_INFO("  - Textura: " + tex.first + " = " + tex.second.path);
+        }
+    }
+
     return true;
 }
 
@@ -527,10 +1065,10 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
             glViewport(0, 0, outputWidth, outputHeight);
 
-            // DEBUG: Log do viewport do primeiro pass
-            if (i == 0)
+            // DEBUG: Log do viewport do primeiro e último pass
+            if (i == 0 || i == m_passes.size() - 1)
             {
-                LOG_INFO("Pass 0 viewport: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
+                LOG_INFO("Pass " + std::to_string(i) + " viewport: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
                          " (scaleType: " + scaleTypeX + "/" + scaleTypeY + ", viewport: " +
                          std::to_string(m_viewportWidth) + "x" + std::to_string(m_viewportHeight) + ")");
             }
@@ -659,9 +1197,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                     glBindTexture(GL_TEXTURE_2D, currentTexture);
                     glUniform1i(loc, 0);
                     textureBound = true;
-                    if (i == 0)
+                    if (i == 0 || i == 3 || i == 4)
                     {
-                        LOG_INFO("Pass 0: Uniform de textura de entrada encontrado: '" + std::string(name) + 
+                        LOG_INFO("Pass " + std::to_string(i) + ": Uniform de textura de entrada encontrado: '" + std::string(name) +
                                  "' vinculado à unidade 0, textura ID=" + std::to_string(currentTexture));
                     }
                     break; // Encontrou um, não precisa tentar os outros
@@ -673,15 +1211,15 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 }
             }
 
-            // Se nenhum uniform foi encontrado, logar aviso apenas no primeiro pass
-            if (!textureBound && i == 0)
+            // Se nenhum uniform foi encontrado, logar aviso (primeiro pass, pass 3 e pass 4 que estão falhando)
+            if (!textureBound && (i == 0 || i == 3 || i == 4))
             {
-                LOG_WARN("Nenhum uniform de textura encontrado no pass 0 (Texture/Source/Input/s_p/etc)");
+                LOG_WARN("Nenhum uniform de textura encontrado no pass " + std::to_string(i) + " (Texture/Source/Input/s_p/etc)");
                 LOG_WARN("Isso pode causar tela preta - o shader precisa de um uniform de textura de entrada");
-                LOG_WARN("Pass 0: Programa de shader: " + std::to_string(pass.program));
-                
+                LOG_WARN("Pass " + std::to_string(i) + ": Programa de shader: " + std::to_string(pass.program));
+
                 // Tentar listar todos os uniforms do programa (debug)
-                GLint numUniforms = 0;
+                // GLint numUniforms = 0;
                 // glGetProgramiv(pass.program, GL_ACTIVE_UNIFORMS, &numUniforms);
                 // LOG_INFO("Pass 0: Número de uniforms ativos: " + std::to_string(numUniforms));
             }
@@ -880,7 +1418,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // DEBUG: Log antes de renderizar
             if (i == 0)
             {
-                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer) + 
+                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer) +
                          ", textura de entrada ID=" + std::to_string(currentTexture));
             }
 
@@ -891,19 +1429,38 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // IMPORTANTE: Não precisamos desabilitar blending aqui porque não habilitamos
             // O blending será aplicado apenas na renderização final na janela
 
-            // DEBUG: Verificar se houve erro OpenGL (apenas no primeiro pass)
-            if (i == 0)
+            // DEBUG: Verificar se houve erro OpenGL e verificar se algo foi renderizado
+            // Nota: glGetError pode não estar disponível, então vamos apenas verificar o framebuffer
+
+            // Verificar se o framebuffer está completo (todos os passes)
+            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE)
             {
-                // Verificar se o framebuffer está completo
-                GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                if (status != GL_FRAMEBUFFER_COMPLETE)
-                {
-                    LOG_ERROR("Pass 0: Framebuffer incompleto! Status: " + std::to_string(status));
-                }
-                else
-                {
-                    LOG_INFO("Pass 0: Framebuffer completo e válido");
-                }
+                LOG_ERROR("Pass " + std::to_string(i) + ": Framebuffer incompleto após renderização! Status: " + std::to_string(status));
+            }
+            else if (i == 0 || i == m_passes.size() - 1)
+            {
+                LOG_INFO("Pass " + std::to_string(i) + ": Framebuffer completo e válido após renderização");
+            }
+
+            // DEBUG: Verificar se a textura de saída tem conteúdo (TODOS os passes para identificar onde fica preto)
+            // Tentar ler um pixel para verificar se há conteúdo
+            // IMPORTANTE: glReadPixels requer que o framebuffer esteja bindado
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, pass.framebuffer);
+            unsigned char pixel[4] = {0, 0, 0, 0};
+            glReadPixels(outputWidth / 2, outputHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            LOG_INFO("Pass " + std::to_string(i) + ": Pixel central (" + std::to_string(outputWidth / 2) + "," +
+                     std::to_string(outputHeight / 2) + ") = [" + std::to_string(pixel[0]) + "," +
+                     std::to_string(pixel[1]) + "," + std::to_string(pixel[2]) + "," +
+                     std::to_string(pixel[3]) + "] (textura=" + std::to_string(pass.texture) + ", input=" +
+                     std::to_string(currentTexture) + ")");
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+            // Se o pixel está preto e não é o primeiro pass, avisar
+            if (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && i > 0)
+            {
+                LOG_WARN("Pass " + std::to_string(i) + ": Pixel central está PRETO! Textura de entrada ID=" +
+                         std::to_string(currentTexture));
             }
 
             // Próximo pass usa a saída deste
@@ -942,9 +1499,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // Essas são as dimensões FINAIS do último pass do shader
         m_outputWidth = currentWidth;
         m_outputHeight = currentHeight;
-        
+
         // DEBUG: Log das dimensões de saída atualizadas
-        LOG_INFO("ShaderEngine: Dimensões de saída atualizadas: " + 
+        LOG_INFO("ShaderEngine: Dimensões de saída atualizadas: " +
                  std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
 
         // IMPORTANTE: Resetar viewport para um tamanho grande após os passes
@@ -1207,27 +1764,80 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     }
 
     // OutputSize (vec4 do RetroArch - convertido de params.OutputSize)
-    // IMPORTANTE: Alguns shaders usam vec4, outros usam vec2
-    // O problema é que não podemos saber o tipo sem glGetActiveUniform
-    // Vamos tentar configurar como vec2 primeiro (muitos shaders modernos usam vec2)
-    // Se o shader espera vec4, o OpenGL pode aceitar vec2 nos primeiros componentes
-    // Mas o ideal é verificar o tipo do uniform
+    // IMPORTANTE: Alguns shaders usam vec4, outros usam vec2, e alguns podem usar vec3
+    // Vamos tentar detectar o tipo verificando o código do shader primeiro
+    // Se não conseguirmos detectar, tentamos vec2 primeiro (mais comum)
     loc = getUniformLocation(program, "OutputSize");
     if (loc >= 0)
     {
-        // IMPORTANTE: Tentar como vec2 primeiro (shaders como crt-geom usam vec2)
-        // Se o shader espera vec4, vamos configurar como vec4 depois
-        // Mas na prática, vamos tentar vec2 primeiro pois muitos shaders modernos usam vec2
-        glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
-        if (passIndex == 0)
+        // Verificar o tipo do uniform usando glGetActiveUniform
+        // Primeiro, precisamos obter o número de uniforms ativos
+        GLint numUniforms = 0;
+        glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &numUniforms);
+
+        GLenum uniformType = GL_FLOAT_VEC2; // Default
+        bool foundType = false;
+
+        for (GLint i = 0; i < numUniforms; ++i)
         {
-            LOG_INFO("Pass 0: OutputSize configurado como vec2: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight));
+            char uniformName[256];
+            GLint uniformSize;
+            GLenum type;
+            glGetActiveUniform(program, i, sizeof(uniformName), nullptr, &uniformSize, &type, uniformName);
+
+            if (std::string(uniformName) == "OutputSize")
+            {
+                uniformType = type;
+                foundType = true;
+                break;
+            }
         }
-        
-        // Se o shader espera vec4, podemos tentar configurar como vec4 também
-        // Mas isso pode causar problemas se o shader espera vec2
-        // Por enquanto, vamos usar vec2 apenas
-        // Se necessário, podemos adicionar verificação de tipo usando glGetActiveUniform
+
+        // Configurar baseado no tipo detectado
+        if (foundType)
+        {
+            if (uniformType == GL_FLOAT_VEC2)
+            {
+                glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
+            }
+            else if (uniformType == GL_FLOAT_VEC3)
+            {
+                // vec3: usar width, height, 1.0/width (ou similar)
+                glUniform3f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight),
+                            1.0f / static_cast<float>(outputWidth));
+            }
+            else if (uniformType == GL_FLOAT_VEC4)
+            {
+                glUniform4f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight),
+                            1.0f / static_cast<float>(outputWidth), 1.0f / static_cast<float>(outputHeight));
+            }
+            else
+            {
+                // Fallback: tentar vec2
+                glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
+            }
+        }
+        else
+        {
+            // Não encontramos o tipo, tentar vec2 primeiro (mais comum)
+            glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
+        }
+
+        if (passIndex == 0 || passIndex == 4)
+        {
+            std::string typeStr = "vec2 (fallback)";
+            if (foundType)
+            {
+                if (uniformType == GL_FLOAT_VEC2)
+                    typeStr = "vec2";
+                else if (uniformType == GL_FLOAT_VEC3)
+                    typeStr = "vec3";
+                else if (uniformType == GL_FLOAT_VEC4)
+                    typeStr = "vec4";
+            }
+            LOG_INFO("Pass " + std::to_string(passIndex) + ": OutputSize configurado como " + typeStr +
+                     ": " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight));
+        }
     }
     // Nota: Se OutputSize não for encontrado, pode ser que o shader não o use
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
@@ -1327,6 +1937,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform1f(loc, frameCountValue);
+        if (passIndex == 3)
+        {
+            LOG_INFO("Pass 3: FrameCount configurado como: " + std::to_string(frameCountValue));
+        }
+    }
+    else if (passIndex == 3)
+    {
+        LOG_WARN("Pass 3: Uniform 'FrameCount' não encontrado!");
     }
 
     // MVPMatrix (mat4 do RetroArch - matriz identidade)
@@ -1386,9 +2004,9 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
                 auto presetIt = presetParams.find(param.first);
                 float value = (presetIt != presetParams.end()) ? presetIt->second : param.second;
                 glUniform1f(loc, value);
-                if (passIndex == 0)
+                if (passIndex == 0 || passIndex == 3)
                 {
-                    LOG_INFO("Pass 0: Parâmetro '" + param.first + "' = " + std::to_string(value));
+                    LOG_INFO("Pass " + std::to_string(passIndex) + ": Parâmetro '" + param.first + "' = " + std::to_string(value));
                 }
             }
             else if (passIndex == 0)
@@ -1531,14 +2149,47 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     }
 
     // TextureSize (vec2 alternativo)
+    // IMPORTANTE: Para shaders como interlacing.glsl que escalam a altura (scale_y = 2.0),
+    // TextureSize pode precisar refletir a altura da SAÍDA, não da entrada
+    // O shader interlacing.glsl usa: y = 2.000001 * TextureSize.y * vTexCoord.y
+    // Onde vTexCoord.y é a coordenada na textura de SAÍDA (0.0 a 1.0)
+    // Se TextureSize.y é a altura da entrada (224) mas a saída é 448, o cálculo fica errado
+    // Vamos tentar usar a altura da SAÍDA quando o pass escala a altura
     loc = getUniformLocation(program, "TextureSize");
     if (loc >= 0)
     {
-        glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
-        if (passIndex == 0)
+        // Para shaders que escalam a altura (como interlacing.glsl com scale_y = 2.0),
+        // usar a altura da SAÍDA em TextureSize.y para que o cálculo de y funcione corretamente
+        // Isso é necessário porque vTexCoord.y é baseado na textura de saída
+        float textureSizeY = static_cast<float>(inputHeight);
+
+        // IMPORTANTE: Para shaders como interlacing.glsl que escalam a altura (scale_y = 2.0),
+        // o shader lê COMPAT_TEXTURE(Source, vTexCoord) onde Source é a entrada.
+        // Ajustamos o vertex shader para que vTexCoord.y seja baseado na entrada (replicando linhas).
+        // O shader calcula o padrão de interlace usando: y = 2.000001 * TextureSize.y * vTexCoord.y
+        // Como ajustamos o vertex shader para que vTexCoord.y seja baseado na entrada,
+        // mas o padrão de interlace precisa ser baseado na SAÍDA, precisamos ajustar TextureSize.y
+        // para ser a altura da SAÍDA quando o pass escala a altura. Isso permite que o cálculo
+        // do interlace funcione corretamente para determinar quais linhas da SAÍDA devem ser escuras.
+        // O ajuste no vertex shader garante que a leitura da textura de entrada seja correta.
+        if (outputHeight != inputHeight && passIndex == 3)
         {
-            LOG_INFO("Pass 0: TextureSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
+            textureSizeY = static_cast<float>(outputHeight);
+            LOG_INFO("Pass " + std::to_string(passIndex) + ": TextureSize.y ajustado para altura de SAÍDA: " + std::to_string(outputHeight) + " (entrada era: " + std::to_string(inputHeight) + ") para cálculo de interlace");
         }
+        // Para Pass 4 (box-center.glsl), TextureSize deve ser o tamanho da textura de entrada (1280x448)
+        // O shader usa TextureSize para calcular vTexCoord baseado na textura de entrada
+        // Se TextureSize for diferente do tamanho real da textura, vTexCoord pode sair de [0,1]
+
+        glUniform2f(loc, static_cast<float>(inputWidth), textureSizeY);
+        if (passIndex == 0 || passIndex == 3 || passIndex == 4)
+        {
+            LOG_INFO("Pass " + std::to_string(passIndex) + ": TextureSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(static_cast<uint32_t>(textureSizeY)) + " (input: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight) + ", output: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) + ")");
+        }
+    }
+    else if (passIndex == 3 || passIndex == 4)
+    {
+        LOG_WARN("Pass " + std::to_string(passIndex) + ": Uniform 'TextureSize' não encontrado!");
     }
     // Nota: Se TextureSize não for encontrado, pode ser que o shader não o use
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
@@ -1549,10 +2200,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
-        if (passIndex == 0)
+        if (passIndex == 0 || passIndex == 3 || passIndex == 4)
         {
-            LOG_INFO("Pass 0: InputSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
+            LOG_INFO("Pass " + std::to_string(passIndex) + ": InputSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
         }
+    }
+    else if (passIndex == 3 || passIndex == 4)
+    {
+        LOG_WARN("Pass " + std::to_string(passIndex) + ": Uniform 'InputSize' não encontrado!");
     }
     // Nota: Se InputSize não for encontrado, pode ser que o shader não o use
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
@@ -1581,14 +2236,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     // Mas se espera vec2 e passamos vec4, também pode causar problemas
     // A solução é verificar o tipo do uniform, mas isso requer glGetActiveUniform
     // Por enquanto, vamos configurar ambos (vec4 acima e vec2 aqui se necessário)
-    
+
     // OutputSize como vec2 (IN.output_size é um formato alternativo)
     loc = getUniformLocation(program, "IN.output_size");
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
     }
-    
+
     // IMPORTANTE: Se o shader declarou OutputSize como vec2 (não vec4), precisamos usar glUniform2f
     // Mas já configuramos como vec4 acima. O problema é que se o shader espera vec2,
     // passar vec4 pode não funcionar corretamente.
@@ -1862,7 +2517,17 @@ bool ShaderEngine::compileShader(const std::string &source, GLenum type, GLuint 
     {
         char infoLog[512];
         glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-        LOG_ERROR("Erro ao compilar shader: " + std::string(infoLog));
+        std::string errorMsg = std::string(infoLog);
+        LOG_ERROR("Erro ao compilar shader: " + errorMsg);
+
+        // Tentar corrigir automaticamente se o erro for sobre vec3 = vec4
+        if (errorMsg.find("initializer of type vec4 cannot be assigned to variable of type vec3") != std::string::npos ||
+            errorMsg.find("cannot convert") != std::string::npos)
+        {
+            // Este erro será tratado no nível superior (loadPresetPasses)
+            // onde temos acesso ao código fonte completo
+        }
+
         glDeleteShader(shader);
         shader = 0;
         return false;

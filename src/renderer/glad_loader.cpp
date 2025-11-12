@@ -43,9 +43,11 @@ void (*glBlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint
 void (*glActiveTexture)(GLenum) = nullptr;
 GLint (*glGetUniformLocation)(GLuint, const char*) = nullptr;
 void (*glBindAttribLocation)(GLuint, GLuint, const char*) = nullptr;
+void (*glGetActiveUniform)(GLuint, GLuint, GLsizei, GLsizei*, GLint*, GLenum*, GLchar*) = nullptr;
 void (*glUniform1i)(GLint, GLint) = nullptr;
 void (*glUniform1f)(GLint, GLfloat) = nullptr;
 void (*glUniform2f)(GLint, GLfloat, GLfloat) = nullptr;
+void (*glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 
@@ -106,9 +108,11 @@ bool loadOpenGLFunctions() {
     LOAD_FUNC(glActiveTexture)
     LOAD_FUNC(glGetUniformLocation)
     LOAD_FUNC(glBindAttribLocation)
+    LOAD_FUNC(glGetActiveUniform)
     LOAD_FUNC(glUniform1i)
     LOAD_FUNC(glUniform1f)
     LOAD_FUNC(glUniform2f)
+    LOAD_FUNC(glUniform3f)
     LOAD_FUNC(glUniform4f)
     LOAD_FUNC(glUniformMatrix4fv)
     
