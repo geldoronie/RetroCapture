@@ -8,6 +8,14 @@
 #include <map>
 #include <cstdint>
 
+struct ShaderParameterInfo {
+    float defaultValue;
+    float min;
+    float max;
+    float step;
+    std::string description;
+};
+
 struct ShaderPassData {
     GLuint program = 0;
     GLuint vertexShader = 0;
@@ -20,6 +28,8 @@ struct ShaderPassData {
     ShaderPass passInfo;
     // Parâmetros extraídos de #pragma parameter (nome -> valor padrão)
     std::map<std::string, float> extractedParameters;
+    // Informações completas dos parâmetros (nome -> info)
+    std::map<std::string, ShaderParameterInfo> parameterInfo;
 };
 
 class ShaderEngine {
@@ -56,6 +66,19 @@ public:
     void setUniform(const std::string& name, float x, float y);
     void setUniform(const std::string& name, float x, float y, float z, float w);
     
+    // Parâmetros de shader (extraídos de #pragma parameter)
+    struct ShaderParameter {
+        std::string name;
+        float value;
+        float defaultValue;
+        float min;
+        float max;
+        float step;
+        std::string description;
+    };
+    std::vector<ShaderParameter> getShaderParameters() const;
+    bool setShaderParameter(const std::string& name, float value);
+    
 private:
     bool m_initialized = false;
     bool m_shaderActive = false;
@@ -87,6 +110,9 @@ private:
     std::unordered_map<std::string, GLint> m_uniformLocations;
     float m_frameCount = 0.0f;
     float m_time = 0.0f;
+    
+    // Parâmetros customizados (valores alterados pelo usuário)
+    std::map<std::string, float> m_customParameters;
     
     // Histórico de frames para motion blur (mantém até 7 frames anteriores)
     std::vector<GLuint> m_frameHistory; // Texturas de frames anteriores

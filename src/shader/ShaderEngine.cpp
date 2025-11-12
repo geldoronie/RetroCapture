@@ -176,6 +176,8 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
         LOG_WARN("Extensão de preset não reconhecida: " + extension + ". Esperando .glslp");
     }
 
+    m_customParameters.clear(); // Limpar parâmetros customizados ao carregar novo preset
+
     if (!m_preset.load(presetPath))
     {
         return false;
@@ -250,23 +252,47 @@ bool ShaderEngine::loadPresetPasses()
         // EXTRAIR parâmetros de #pragma parameter ANTES de remover
         // Formato: #pragma parameter paramName "Description" default min max step
         std::map<std::string, float> paramDefaults; // Nome -> valor padrão
-        std::regex pragmaParamRegex(R"(#pragma\s+parameter\s+(\w+)\s+"[^"]*"\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+)");
+        std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)");
         auto pragmaBegin = std::sregex_iterator(processedSource.begin(), processedSource.end(), pragmaParamRegex);
         auto pragmaEnd = std::sregex_iterator();
         for (std::sregex_iterator i = pragmaBegin; i != pragmaEnd; ++i)
         {
             std::string paramName = (*i)[1].str();
-            std::string defaultValue = (*i)[2].str();
+            std::string description = (*i)[2].str();
+            std::string defaultValue = (*i)[3].str();
+            std::string minValue = (*i)[4].str();
+            std::string maxValue = (*i)[5].str();
+            std::string stepValue = (*i)[6].str();
             // Ignorar parâmetros que são apenas labels/títulos (começam com bogus_)
             if (paramName.find("bogus_") == std::string::npos)
             {
                 try
                 {
-                    paramDefaults[paramName] = std::stof(defaultValue);
+                    float defVal = std::stof(defaultValue);
+                    float minVal = std::stof(minValue);
+                    float maxVal = std::stof(maxValue);
+                    float stepVal = std::stof(stepValue);
+                    
+                    paramDefaults[paramName] = defVal;
+                    
+                    ShaderParameterInfo info;
+                    info.defaultValue = defVal;
+                    info.min = minVal;
+                    info.max = maxVal;
+                    info.step = stepVal;
+                    info.description = description;
+                    passData.parameterInfo[paramName] = info;
                 }
                 catch (...)
                 {
                     paramDefaults[paramName] = 0.0f; // Fallback
+                    ShaderParameterInfo info;
+                    info.defaultValue = 0.0f;
+                    info.min = 0.0f;
+                    info.max = 1.0f;
+                    info.step = 0.01f;
+                    info.description = description;
+                    passData.parameterInfo[paramName] = info;
                 }
             }
         }
@@ -1965,10 +1991,22 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
             loc = getUniformLocation(program, param.first);
             if (loc >= 0)
             {
-                // Verificar se há valor customizado no preset, senão usar valor padrão do #pragma parameter
-                const auto &presetParams = m_preset.getParameters();
-                auto presetIt = presetParams.find(param.first);
-                float value = (presetIt != presetParams.end()) ? presetIt->second : param.second;
+                // Verificar se há valor customizado (do usuário), do preset, ou usar valor padrão do #pragma parameter
+                float value = param.second;
+                auto customIt = m_customParameters.find(param.first);
+                if (customIt != m_customParameters.end())
+                {
+                    value = customIt->second;
+                }
+                else
+                {
+                    const auto &presetParams = m_preset.getParameters();
+                    auto presetIt = presetParams.find(param.first);
+                    if (presetIt != presetParams.end())
+                    {
+                        value = presetIt->second;
+                    }
+                }
                 glUniform1f(loc, value);
                 // Log removido para reduzir verbosidade
             }
@@ -3476,4 +3514,98 @@ void ShaderEngine::applyTextureSettings(GLuint texture, bool filterLinear, const
     GLenum wrap = wrapModeToGLEnum(wrapMode);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+}
+
+std::vector<ShaderEngine::ShaderParameter> ShaderEngine::getShaderParameters() const
+{
+    std::vector<ShaderParameter> params;
+    
+    if (!m_shaderActive || m_passes.empty())
+    {
+        return params;
+    }
+    
+    // Coletar parâmetros de todos os passes (principalmente do pass 0)
+    // Usar um map para evitar duplicatas
+    std::map<std::string, ShaderParameter> paramMap;
+    
+    for (const auto &passData : m_passes)
+    {
+        for (const auto &paramInfo : passData.parameterInfo)
+        {
+            const std::string &name = paramInfo.first;
+            const ShaderParameterInfo &info = paramInfo.second;
+            
+            // Se já existe, manter o primeiro encontrado
+            if (paramMap.find(name) == paramMap.end())
+            {
+                ShaderParameter param;
+                param.name = name;
+                param.defaultValue = info.defaultValue;
+                param.min = info.min;
+                param.max = info.max;
+                param.step = info.step;
+                param.description = info.description;
+                
+                // Obter valor atual (customizado, do preset ou padrão)
+                auto customIt = m_customParameters.find(name);
+                if (customIt != m_customParameters.end())
+                {
+                    param.value = customIt->second;
+                }
+                else
+                {
+                    const auto &presetParams = m_preset.getParameters();
+                    auto presetIt = presetParams.find(name);
+                    param.value = (presetIt != presetParams.end()) ? presetIt->second : info.defaultValue;
+                }
+                
+                paramMap[name] = param;
+            }
+        }
+    }
+    
+    // Converter map para vector
+    for (const auto &pair : paramMap)
+    {
+        params.push_back(pair.second);
+    }
+    
+    return params;
+}
+
+bool ShaderEngine::setShaderParameter(const std::string &name, float value)
+{
+    if (!m_shaderActive)
+    {
+        return false;
+    }
+    
+    // Verificar se o parâmetro existe
+    bool paramExists = false;
+    float minVal = 0.0f, maxVal = 1.0f;
+    for (const auto &passData : m_passes)
+    {
+        auto it = passData.parameterInfo.find(name);
+        if (it != passData.parameterInfo.end())
+        {
+            paramExists = true;
+            minVal = it->second.min;
+            maxVal = it->second.max;
+            break;
+        }
+    }
+    
+    if (!paramExists)
+    {
+        return false;
+    }
+    
+    // Clamp valor entre min e max
+    float clampedValue = std::max(minVal, std::min(maxVal, value));
+    
+    // Armazenar valor customizado
+    m_customParameters[name] = clampedValue;
+    
+    return true;
 }

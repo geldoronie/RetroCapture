@@ -527,6 +527,11 @@ bool Application::initUI()
         }
     }
     
+    // Conectar ShaderEngine à UI para parâmetros
+    if (m_shaderEngine) {
+        m_ui->setShaderEngine(m_shaderEngine);
+    }
+    
     LOG_INFO("UIManager inicializado");
     return true;
 }

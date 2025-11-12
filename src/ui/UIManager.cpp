@@ -1,6 +1,7 @@
 #include "UIManager.h"
 #include "../utils/Logger.h"
 #include "../capture/VideoCapture.h"
+#include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -175,6 +176,52 @@ void UIManager::renderShaderPanel() {
     
     ImGui::Separator();
     ImGui::Text("Shaders found: %zu", m_scannedShaders.size());
+    
+    // Parâmetros do shader
+    if (m_shaderEngine && m_shaderEngine->isShaderActive())
+    {
+        ImGui::Separator();
+        ImGui::Text("Shader Parameters:");
+        
+        auto params = m_shaderEngine->getShaderParameters();
+        if (params.empty())
+        {
+            ImGui::TextDisabled("No parameters available");
+        }
+        else
+        {
+            for (auto &param : params)
+            {
+                ImGui::PushID(param.name.c_str());
+                
+                // Mostrar nome e descrição
+                if (!param.description.empty())
+                {
+                    ImGui::Text("%s", param.description.c_str());
+                }
+                else
+                {
+                    ImGui::Text("%s", param.name.c_str());
+                }
+                
+                // Slider para o parâmetro
+                float value = param.value;
+                if (ImGui::SliderFloat("##param", &value, param.min, param.max, "%.3f"))
+                {
+                    m_shaderEngine->setShaderParameter(param.name, value);
+                }
+                
+                // Botão para resetar ao valor padrão
+                ImGui::SameLine();
+                if (ImGui::Button("Reset##param"))
+                {
+                    m_shaderEngine->setShaderParameter(param.name, param.defaultValue);
+                }
+                
+                ImGui::PopID();
+            }
+        }
+    }
 }
 
 void UIManager::renderImageControls() {

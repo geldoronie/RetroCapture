@@ -29,6 +29,9 @@ public:
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
     void setCurrentShader(const std::string &shader) { m_currentShader = shader; }
     void setOnShaderChanged(std::function<void(const std::string &)> callback) { m_onShaderChanged = callback; }
+    
+    // Parâmetros de shader
+    void setShaderEngine(ShaderEngine* engine) { m_shaderEngine = engine; }
 
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
@@ -68,6 +71,7 @@ private:
     std::string m_currentShader;
     int m_selectedShaderIndex = 0;
     std::function<void(const std::string &)> m_onShaderChanged;
+    ShaderEngine* m_shaderEngine = nullptr;
 
     // Brightness/Contrast
     float m_brightness = 1.0f;
