@@ -183,9 +183,14 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
 
     // Carregar texturas de referência
     const auto &textures = m_preset.getTextures();
+    LOG_INFO("Carregando " + std::to_string(textures.size()) + " texturas de referência");
     for (const auto &tex : textures)
     {
-        loadTextureReference(tex.first, tex.second.path);
+        LOG_INFO("Carregando textura: " + tex.first + " -> " + tex.second.path);
+        if (!loadTextureReference(tex.first, tex.second.path))
+        {
+            LOG_ERROR("Falha ao carregar textura de referência: " + tex.first);
+        }
     }
 
     m_shaderActive = true;
@@ -205,6 +210,12 @@ bool ShaderEngine::loadPresetPasses()
         const auto &passInfo = passes[i];
         auto &passData = m_passes[i];
         passData.passInfo = passInfo;
+
+        // DEBUG: Log das configurações do pass
+        LOG_INFO("Pass " + std::to_string(i) + " config: scaleTypeX=" + passInfo.scaleTypeX +
+                 ", scaleX=" + std::to_string(passInfo.scaleX) +
+                 ", scaleTypeY=" + passInfo.scaleTypeY +
+                 ", scaleY=" + std::to_string(passInfo.scaleY));
 
         // Ler shader
         std::ifstream file(passInfo.shaderPath);
@@ -309,12 +320,15 @@ bool ShaderEngine::loadPresetPasses()
             versionLine = "#version 330\n";
         }
 
-        // Construir shaders: version + define + código completo
+        // Construir shaders: version + extension + define + código completo
         // RetroArch adiciona: "#define VERTEX\n#define PARAMETER_UNIFORM\n" para vertex
         // e "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" para fragment
         // IMPORTANTE: RetroArch também adiciona defines para compatibilidade
-        vertexSource = versionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
-        fragmentSource = versionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
+        // Adicionar extensão para inicialização estilo C (GL_ARB_shading_language_420pack)
+        // Isso permite inicialização de arrays e estruturas estilo C
+        std::string extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
+        vertexSource = versionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
+        fragmentSource = versionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + codeAfterVersion;
 
         // Compilar shaders
         if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
@@ -349,6 +363,16 @@ bool ShaderEngine::loadPresetPasses()
         glBindAttribLocation(program, 0, "Position");
         glBindAttribLocation(program, 0, "VertexCoord"); // RetroArch também usa VertexCoord
         glBindAttribLocation(program, 1, "TexCoord");
+        // IMPORTANTE: Motion blur shaders precisam de PrevTexCoord, Prev1TexCoord, etc.
+        // Como todos os frames têm as mesmas dimensões, podemos usar os mesmos dados de TexCoord
+        glBindAttribLocation(program, 1, "PrevTexCoord");
+        glBindAttribLocation(program, 1, "Prev1TexCoord");
+        glBindAttribLocation(program, 1, "Prev2TexCoord");
+        glBindAttribLocation(program, 1, "Prev3TexCoord");
+        glBindAttribLocation(program, 1, "Prev4TexCoord");
+        glBindAttribLocation(program, 1, "Prev5TexCoord");
+        glBindAttribLocation(program, 1, "Prev6TexCoord");
+        glBindAttribLocation(program, 2, "COLOR"); // Alguns shaders RetroArch usam COLOR como atributo
 
         glLinkProgram(program);
 
@@ -395,12 +419,33 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
         m_sourceWidth = width;
         m_sourceHeight = height;
-        m_viewportWidth = width;
-        m_viewportHeight = height;
+        // IMPORTANTE: viewportWidth e viewportHeight devem ser as dimensões da janela,
+        // não as dimensões da entrada. Eles devem ser atualizados via setViewport()
+        // antes de chamar applyShader(). Se não foram atualizados, usar as dimensões da entrada como fallback.
+        // Mas é melhor sempre atualizar via setViewport() antes de aplicar o shader.
 
         GLuint currentTexture = inputTexture;
         uint32_t currentWidth = width;
         uint32_t currentHeight = height;
+
+        // IMPORTANTE: Guardar a textura original para passes que precisam dela (como hq2x)
+        // Alguns shaders (como hqx-pass2) precisam tanto da saída do pass anterior quanto da entrada original
+        GLuint originalTexture = inputTexture;
+        uint32_t originalWidth = width;
+        uint32_t originalHeight = height;
+
+        // IMPORTANTE: Para motion blur, precisamos manter um histórico de frames anteriores
+        // O histórico deve conter frames JÁ PROCESSADOS (saída do shader), não a entrada
+        // Por isso, não inicializamos aqui - o histórico será preenchido após renderizar
+
+        // DEBUG: Verificar se a textura de entrada é válida
+        if (inputTexture == 0)
+        {
+            LOG_ERROR("applyShader: Textura de entrada inválida (0)!");
+            return 0;
+        }
+        LOG_INFO("applyShader: inputTexture=" + std::to_string(inputTexture) + " (" +
+                 std::to_string(width) + "x" + std::to_string(height) + ")");
 
         // Aplicar cada pass
         for (size_t i = 0; i < m_passes.size(); ++i)
@@ -420,17 +465,49 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 absY = static_cast<uint32_t>(std::round(passInfo.scaleY));
             }
 
-            uint32_t outputWidth = calculateScale(currentWidth, passInfo.scaleTypeX, passInfo.scaleX,
+            // IMPORTANTE: Se for o último pass e não especificar escala, usar viewport
+            // Isso garante que a textura final preencha a janela
+            // MAS: Se o primeiro pass especificar viewport explicitamente, não alterar
+            bool isLastPass = (i == m_passes.size() - 1);
+            std::string scaleTypeX = passInfo.scaleTypeX;
+            std::string scaleTypeY = passInfo.scaleTypeY;
+            float scaleX = passInfo.scaleX;
+            float scaleY = passInfo.scaleY;
+
+            // Se for o último pass e não especificar escala (ou for "source" com scale 1.0),
+            // usar viewport para preencher a janela
+            // IMPORTANTE: Não alterar se já especificar viewport explicitamente
+            if (isLastPass && scaleTypeX != "viewport" && (scaleTypeX.empty() || (scaleTypeX == "source" && scaleX == 1.0f)))
+            {
+                scaleTypeX = "viewport";
+                scaleX = 1.0f;
+            }
+            if (isLastPass && scaleTypeY != "viewport" && (scaleTypeY.empty() || (scaleTypeY == "source" && scaleY == 1.0f)))
+            {
+                scaleTypeY = "viewport";
+                scaleY = 1.0f;
+            }
+
+            uint32_t outputWidth = calculateScale(currentWidth, scaleTypeX, scaleX,
                                                   m_viewportWidth, absX);
-            uint32_t outputHeight = calculateScale(currentHeight, passInfo.scaleTypeY, passInfo.scaleY,
+            uint32_t outputHeight = calculateScale(currentHeight, scaleTypeY, scaleY,
                                                    m_viewportHeight, absY);
+
+            // DEBUG: Log das dimensões calculadas
+            if (i == 0 || i == m_passes.size() - 1)
+            {
+                LOG_INFO("Pass " + std::to_string(i) + " escala: " + scaleTypeX + "x" +
+                         std::to_string(scaleX) + ", " + scaleTypeY + "x" +
+                         std::to_string(scaleY) + " -> " + std::to_string(outputWidth) + "x" +
+                         std::to_string(outputHeight));
+            }
 
             // Criar/atualizar framebuffer se necessário
             if (pass.framebuffer == 0 || pass.width != outputWidth || pass.height != outputHeight)
             {
                 cleanupFramebuffer(pass.framebuffer, pass.texture);
-                createFramebuffer(outputWidth, outputHeight, pass.floatFramebuffer,
-                                  pass.framebuffer, pass.texture);
+                createFramebuffer(outputWidth, outputHeight, pass.passInfo.floatFramebuffer,
+                                  pass.framebuffer, pass.texture, pass.passInfo.srgbFramebuffer);
                 pass.width = outputWidth;
                 pass.height = outputHeight;
 
@@ -446,8 +523,25 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
             glViewport(0, 0, outputWidth, outputHeight);
 
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            // DEBUG: Log do viewport do primeiro pass
+            if (i == 0)
+            {
+                LOG_INFO("Pass 0 viewport: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
+                         " (scaleType: " + scaleTypeX + "/" + scaleTypeY + ", viewport: " +
+                         std::to_string(m_viewportWidth) + "x" + std::to_string(m_viewportHeight) + ")");
+            }
+
+            // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
+            // O shader gameboy usa alpha, então precisamos de um fundo transparente
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
+
+            // IMPORTANTE: Para shaders que usam alpha (como Game Boy), NÃO habilitar blending durante a renderização
+            // O blending é necessário apenas na renderização final na janela, não durante a renderização para o framebuffer
+            // Durante a renderização para o framebuffer, queremos que o shader escreva diretamente o alpha que ele calcula
+            // O blending será aplicado depois quando renderizarmos a textura do framebuffer na janela
+            // glEnable(GL_BLEND);
+            // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
             // Usar shader program
             glUseProgram(pass.program);
@@ -474,6 +568,15 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 continue; // Pular este pass se não há textura válida
             }
 
+            // DEBUG: Log do primeiro pass
+            if (i == 0)
+            {
+                LOG_INFO("Pass 0: inputTexture=" + std::to_string(currentTexture) +
+                         " (" + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) +
+                         "), output será " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
+                         ", scaleType: " + scaleTypeX + "/" + scaleTypeY);
+            }
+
             // Configurar uniform Texture/Source DEPOIS do bind (como RetroArch faz)
             // RetroArch shaders podem usar diferentes nomes: Texture, Source, Input, s_p, etc.
             // Tentar todos os nomes comuns
@@ -496,9 +599,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 {
                     glUniform1i(loc, 0);
                     textureBound = true;
-                    if (i == 0 && name != "Texture" && name != "Source")
+                    if (i == 0)
                     {
-                        LOG_INFO("Uniform de textura encontrado: '" + std::string(name) + "' no pass 0");
+                        LOG_INFO("Pass 0: Uniform de textura de entrada encontrado: '" + std::string(name) + "' vinculado à unidade 0");
                     }
                     break; // Encontrou um, não precisa tentar os outros
                 }
@@ -508,22 +611,129 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             if (!textureBound && i == 0)
             {
                 LOG_WARN("Nenhum uniform de textura encontrado no pass 0 (Texture/Source/Input/s_p/etc)");
+                LOG_WARN("Isso pode causar tela preta - o shader precisa de um uniform de textura de entrada");
             }
 
             // Bind texturas de passes anteriores (PassPrev#Texture)
             // RetroArch shaders podem referenciar saídas de passes anteriores
+            // Também suportar nomes alternativos: PrevTexture, Prev1Texture, etc.
             int texUnit = 1;
-            for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+
+            // IMPORTANTE: Se não há passes anteriores (i == 0), mas o shader espera PrevTexture,
+            // vincular a textura de entrada atual para esses uniforms (comportamento comum do RetroArch)
+            // IMPORTANTE: Para motion blur, precisamos vincular frames anteriores reais
+            // Verificar se o shader precisa de histórico de frames (PrevTexture, Prev1Texture, etc.)
+            bool needsHistory = false;
+            for (int prevIdx = 0; prevIdx < 7; ++prevIdx)
             {
-                std::string passTextureName = "PassPrev" + std::to_string(i - prevPass) + "Texture";
-                GLint loc = getUniformLocation(pass.program, passTextureName);
-                if (loc >= 0)
+                std::string name = (prevIdx == 0) ? "PrevTexture" : "Prev" + std::to_string(prevIdx) + "Texture";
+                if (getUniformLocation(pass.program, name) >= 0)
                 {
-                    glActiveTexture(GL_TEXTURE0 + texUnit);
-                    glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
-                    glUniform1i(loc, texUnit);
-                    texUnit++;
+                    needsHistory = true;
+                    break;
                 }
+            }
+
+            if (i == 0)
+            {
+                // Para o primeiro pass, vincular histórico de frames se disponível
+                // IMPORTANTE: Se não há histórico suficiente, NÃO vincular os PrevTexture uniforms
+                // Isso evita que o shader faça média de frames idênticos (que escurece)
+                // O shader motion blur deve funcionar apenas quando há histórico real
+                for (int prevIdx = 0; prevIdx < 7; ++prevIdx) // RetroArch geralmente usa até Prev6Texture
+                {
+                    std::vector<std::string> passTextureNames;
+                    if (prevIdx == 0)
+                    {
+                        passTextureNames.push_back("PrevTexture");
+                        passTextureNames.push_back("PassPrev0Texture");
+                    }
+                    else
+                    {
+                        passTextureNames.push_back("Prev" + std::to_string(prevIdx) + "Texture");
+                        passTextureNames.push_back("PassPrev" + std::to_string(prevIdx) + "Texture");
+                    }
+
+                    bool bound = false;
+                    for (const auto &name : passTextureNames)
+                    {
+                        GLint loc = getUniformLocation(pass.program, name);
+                        if (loc >= 0)
+                        {
+                            // IMPORTANTE: Só vincular se temos histórico real para este índice
+                            // Se não há histórico suficiente, NÃO vincular o uniform
+                            // Isso evita que o shader faça média de frames idênticos (que escurece)
+                            // O shader motion blur deve funcionar apenas quando há histórico real
+                            if (needsHistory && prevIdx < static_cast<int>(m_frameHistory.size()))
+                            {
+                                glActiveTexture(GL_TEXTURE0 + texUnit);
+
+                                // Usar frame do histórico (frames mais antigos primeiro)
+                                // PrevTexture = frame mais recente (índice 0), Prev6Texture = frame mais antigo
+                                // O histórico é ordenado: [mais recente, ..., mais antigo]
+                                size_t historyIdx = prevIdx; // prevIdx=0 é o mais recente, prevIdx=6 é o mais antigo
+                                if (historyIdx < m_frameHistory.size() && m_frameHistory[historyIdx] != 0)
+                                {
+                                    glBindTexture(GL_TEXTURE_2D, m_frameHistory[historyIdx]);
+                                    glUniform1i(loc, texUnit);
+                                    LOG_INFO("Pass 0: Uniform '" + name + "' vinculado ao histórico de frame " + std::to_string(prevIdx) + " (unidade " + std::to_string(texUnit) + ")");
+                                    texUnit++;
+                                    bound = true;
+                                }
+                            }
+                            // Se não há histórico suficiente, não vincular o uniform
+                            // O shader pode usar valores padrão ou zero, mas não fará média de frames idênticos
+                            // Isso evita o escurecimento quando não há histórico suficiente
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Para passes subsequentes, vincular texturas de passes anteriores reais
+                for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+                {
+                    // Tentar diferentes nomes de uniforms
+                    std::vector<std::string> passTextureNames;
+                    if (prevPass == 0)
+                    {
+                        passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
+                        passTextureNames.push_back("PrevTexture");
+                    }
+                    else
+                    {
+                        passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
+                        passTextureNames.push_back("Prev" + std::to_string(prevPass) + "Texture");
+                    }
+
+                    bool bound = false;
+                    for (const auto &name : passTextureNames)
+                    {
+                        GLint loc = getUniformLocation(pass.program, name);
+                        if (loc >= 0)
+                        {
+                            glActiveTexture(GL_TEXTURE0 + texUnit);
+                            glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
+                            glUniform1i(loc, texUnit);
+                            texUnit++;
+                            bound = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // IMPORTANTE: Vincular textura original (OrigTexture) se o shader precisar
+            // Alguns shaders (como hqx-pass2) precisam da textura original além da saída do pass anterior
+            GLint origTexLoc = getUniformLocation(pass.program, "OrigTexture");
+            if (origTexLoc >= 0)
+            {
+                glActiveTexture(GL_TEXTURE0 + texUnit);
+                glBindTexture(GL_TEXTURE_2D, originalTexture);
+                glUniform1i(origTexLoc, texUnit);
+                LOG_INFO("Pass " + std::to_string(i) + ": Uniform 'OrigTexture' vinculado à textura original (unidade " + std::to_string(texUnit) + ")");
+                texUnit++;
             }
 
             // Bind texturas de referência (LUTs, etc)
@@ -540,11 +750,27 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 }
+                else
+                {
+                    // Se não especificar linear, usar nearest (padrão para paletas)
+                    // GL_NEAREST = 0x2600 (definido em GL/gl.h, mas não carregado dinamicamente)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, 0x2600); // GL_NEAREST
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 0x2600); // GL_NEAREST
+                }
 
                 GLint loc = getUniformLocation(pass.program, texRef.first);
                 if (loc >= 0)
                 {
                     glUniform1i(loc, texUnit);
+                    LOG_INFO("Pass " + std::to_string(i) + ": Textura de referência '" + texRef.first +
+                             "' (texture ID=" + std::to_string(texRef.second) + ") vinculada na unidade " + std::to_string(texUnit));
+                }
+                else
+                {
+                    // Não logar aviso se a textura não for usada neste pass
+                    // Alguns shaders (como hqx-pass1) não usam todas as texturas de referência
+                    // Apenas logar em modo DEBUG se necessário
+                    // LOG_WARN("Pass " + std::to_string(i) + ": Uniform de textura de referência '" + texRef.first + "' não encontrado");
                 }
                 texUnit++;
             }
@@ -558,9 +784,33 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             glEnableVertexAttribArray(0); // Position
             glEnableVertexAttribArray(1); // TexCoord
 
+            // DEBUG: Log antes de renderizar
+            if (i == 0)
+            {
+                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer));
+            }
+
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
             glBindVertexArray(0);
+
+            // IMPORTANTE: Não precisamos desabilitar blending aqui porque não habilitamos
+            // O blending será aplicado apenas na renderização final na janela
+
+            // DEBUG: Verificar se houve erro OpenGL (apenas no primeiro pass)
+            if (i == 0)
+            {
+                // Verificar se o framebuffer está completo
+                GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                if (status != GL_FRAMEBUFFER_COMPLETE)
+                {
+                    LOG_ERROR("Pass 0: Framebuffer incompleto! Status: " + std::to_string(status));
+                }
+                else
+                {
+                    LOG_INFO("Pass 0: Framebuffer completo e válido");
+                }
+            }
 
             // Próximo pass usa a saída deste
             currentTexture = pass.texture;
@@ -570,11 +820,21 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // DEBUG: Log do primeiro e último pass
             if (i == 0)
             {
-                LOG_INFO("Pass 0 renderizado: input=" + std::to_string(inputTexture) + ", output=" + std::to_string(currentTexture));
+                LOG_INFO("Pass 0 renderizado: input=" + std::to_string(inputTexture) + " (" +
+                         std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + "), output=" +
+                         std::to_string(currentTexture) + " (" + std::to_string(outputWidth) + "x" +
+                         std::to_string(outputHeight) + ")");
+
+                // Verificar se a textura de saída é válida
+                if (currentTexture == 0)
+                {
+                    LOG_ERROR("Pass 0: Textura de saída inválida (0)!");
+                }
             }
             if (i == m_passes.size() - 1)
             {
-                LOG_INFO("Último pass (" + std::to_string(i) + "): outputTexture=" + std::to_string(currentTexture));
+                LOG_INFO("Último pass (" + std::to_string(i) + "): outputTexture=" + std::to_string(currentTexture) +
+                         " (" + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) + ")");
             }
         }
 
@@ -583,6 +843,147 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
+
+        // IMPORTANTE: Resetar viewport para um tamanho grande após os passes
+        // Isso garante que a renderização final use o viewport correto
+        // O viewport será configurado novamente em Application::run() antes de renderizar
+        // Mas é bom garantir que não fique com um viewport pequeno
+        // Usar um tamanho grande padrão (1920x1080) para garantir que não fique pequeno
+        glViewport(0, 0, 1920, 1080);
+
+        // IMPORTANTE: Atualizar histórico de frames para motion blur
+        // O histórico deve conter frames JÁ PROCESSADOS (saída do shader)
+        // IMPORTANTE: Precisamos copiar o conteúdo para texturas dedicadas, não apenas armazenar referências
+        // As texturas dos framebuffers são reutilizadas e sobrescritas a cada frame
+        if (currentTexture != 0 && currentWidth > 0 && currentHeight > 0)
+        {
+            // Encontrar qual framebuffer contém currentTexture
+            GLuint sourceFramebuffer = 0;
+            for (const auto &pass : m_passes)
+            {
+                if (pass.texture == currentTexture)
+                {
+                    sourceFramebuffer = pass.framebuffer;
+                    break;
+                }
+            }
+
+            // Criar uma nova textura para o histórico (se necessário)
+            GLuint historyTexture = 0;
+            if (m_frameHistory.size() < MAX_FRAME_HISTORY)
+            {
+                // Criar nova textura para o histórico
+                glGenTextures(1, &historyTexture);
+                glBindTexture(GL_TEXTURE_2D, historyTexture);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, currentWidth, currentHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            else
+            {
+                // Reutilizar a textura mais antiga (ring buffer)
+                historyTexture = m_frameHistory.back();
+                m_frameHistory.pop_back();
+                m_frameHistoryWidths.pop_back();
+                m_frameHistoryHeights.pop_back();
+
+                // Verificar se precisa redimensionar
+                if (m_frameHistoryWidths.empty() || m_frameHistoryHeights.empty() ||
+                    m_frameHistoryWidths.back() != currentWidth || m_frameHistoryHeights.back() != currentHeight)
+                {
+                    glBindTexture(GL_TEXTURE_2D, historyTexture);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, currentWidth, currentHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                }
+            }
+
+            // Copiar conteúdo do framebuffer para a textura do histórico
+            // Usar renderização simples: renderizar a textura atual para um framebuffer temporário
+            // vinculado à textura do histórico usando o VAO e shader program existente
+            if (sourceFramebuffer != 0 && historyTexture != 0)
+            {
+                // Criar framebuffer temporário para a textura do histórico
+                GLuint copyFramebuffer = 0;
+                glGenFramebuffers(1, &copyFramebuffer);
+                glBindFramebuffer(GL_FRAMEBUFFER, copyFramebuffer);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, historyTexture, 0);
+
+                // Verificar se o framebuffer está completo
+                GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                if (status == GL_FRAMEBUFFER_COMPLETE)
+                {
+                    glViewport(0, 0, currentWidth, currentHeight);
+                    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                    glClear(GL_COLOR_BUFFER_BIT);
+
+                    // Renderizar a textura atual para o framebuffer temporário usando o VAO
+                    // Usar o shader program do primeiro pass para copiar a textura
+                    if (!m_passes.empty() && m_passes[0].program != 0)
+                    {
+                        // Usar o shader program do primeiro pass temporariamente
+                        glUseProgram(m_passes[0].program);
+                        glBindVertexArray(m_VAO);
+
+                        // Bind da textura atual
+                        glActiveTexture(GL_TEXTURE0);
+                        glBindTexture(GL_TEXTURE_2D, currentTexture);
+
+                        // Configurar uniform Texture se existir
+                        GLint texLoc = getUniformLocation(m_passes[0].program, "Texture");
+                        if (texLoc < 0)
+                        {
+                            texLoc = getUniformLocation(m_passes[0].program, "Source");
+                        }
+                        if (texLoc >= 0)
+                        {
+                            glUniform1i(texLoc, 0);
+                        }
+
+                        // Renderizar
+                        glEnableVertexAttribArray(0);
+                        glEnableVertexAttribArray(1);
+                        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+                        glBindVertexArray(0);
+                        glBindTexture(GL_TEXTURE_2D, 0);
+                        glUseProgram(0);
+                    }
+                    else
+                    {
+                        // Se não há shader program disponível, a textura ficará vazia
+                        // Mas pelo menos não crasha
+                        LOG_WARN("Não foi possível copiar frame para histórico (sem shader program)");
+                    }
+                }
+
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(1, &copyFramebuffer);
+            }
+
+            // IMPORTANTE: Por enquanto, vamos apenas armazenar a referência da textura
+            // Isso não é ideal, mas permite que o código compile e funcione
+            // O problema é que as texturas dos framebuffers são reutilizadas, então
+            // o histórico pode conter texturas sobrescritas
+            // Uma implementação completa precisaria copiar o conteúdo usando renderização
+
+            // Adicionar ao histórico
+            m_frameHistory.insert(m_frameHistory.begin(), historyTexture);
+            m_frameHistoryWidths.insert(m_frameHistoryWidths.begin(), currentWidth);
+            m_frameHistoryHeights.insert(m_frameHistoryHeights.begin(), currentHeight);
+
+            // DEBUG: Log apenas quando necessário
+            if (m_frameHistory.size() == 1)
+            {
+                LOG_INFO("Primeiro frame copiado para histórico (textura dedicada)");
+            }
+            else if (m_frameHistory.size() == MAX_FRAME_HISTORY)
+            {
+                LOG_INFO("Histórico completo: " + std::to_string(MAX_FRAME_HISTORY) + " frames (texturas dedicadas)");
+            }
+        }
 
         return currentTexture;
     }
@@ -642,12 +1043,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 uint32_t ShaderEngine::calculateScale(uint32_t sourceSize, const std::string &scaleType, float scale,
                                       uint32_t viewportSize, uint32_t /*absoluteValue*/)
 {
-    if (scaleType == "source")
+    // Se scaleType está vazio ou não especificado, usar "source" com scale 1.0 (padrão RetroArch)
+    if (scaleType.empty() || scaleType == "source")
     {
+        // Se scale não foi especificado (0.0), usar 1.0
+        if (scale == 0.0f)
+        {
+            scale = 1.0f;
+        }
         return static_cast<uint32_t>(std::round(sourceSize * scale));
     }
     else if (scaleType == "viewport")
     {
+        // Se scale não foi especificado (0.0), usar 1.0
+        if (scale == 0.0f)
+        {
+            scale = 1.0f;
+        }
         return static_cast<uint32_t>(std::round(viewportSize * scale));
     }
     else if (scaleType == "absolute")
@@ -655,6 +1067,7 @@ uint32_t ShaderEngine::calculateScale(uint32_t sourceSize, const std::string &sc
         // Para absolute, o valor está em scale (como "800" no preset)
         return static_cast<uint32_t>(std::round(scale));
     }
+    // Fallback: retornar sourceSize (sem escala) - mantém o tamanho original
     return sourceSize;
 }
 
@@ -1214,6 +1627,12 @@ void ShaderEngine::cleanupPresetPasses()
         cleanupFramebuffer(pass.framebuffer, pass.texture);
     }
     m_passes.clear();
+
+    // Limpar histórico de frames
+    // IMPORTANTE: Não deletar as texturas aqui, pois elas pertencem aos framebuffers dos passes
+    m_frameHistory.clear();
+    m_frameHistoryWidths.clear();
+    m_frameHistoryHeights.clear();
 }
 
 bool ShaderEngine::compileShader(const std::string &source, GLenum type, GLuint &shader)
@@ -1305,17 +1724,36 @@ GLint ShaderEngine::getUniformLocation(GLuint program, const std::string &name)
     return location;
 }
 
-void ShaderEngine::createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint &fb, GLuint &tex)
+void ShaderEngine::createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint &fb, GLuint &tex, bool srgbBuffer)
 {
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
 
-    // Usar RGBA para garantir compatibilidade
-    GLenum internalFormat = floatBuffer ? GL_RGBA32F : GL_RGBA;
+    // Usar RGBA para garantir compatibilidade e preservar alpha
+    // IMPORTANTE: Para shaders que usam alpha (como Game Boy), precisamos preservar o alpha
+    // GL_RGBA (0x1908) é equivalente a GL_RGBA8 e garante 8 bits por canal incluindo alpha
+    // Para float buffers, usar GL_RGBA32F que também preserva alpha
+    // Para sRGB buffers, usar GL_SRGB8_ALPHA8
+    GLenum internalFormat = GL_RGBA;
+    if (floatBuffer)
+    {
+        internalFormat = GL_RGBA32F;
+    }
+    else if (srgbBuffer)
+    {
+        internalFormat = GL_SRGB8_ALPHA8;
+    }
+
     GLenum format = GL_RGBA;
     GLenum type = floatBuffer ? GL_FLOAT : GL_UNSIGNED_BYTE;
 
+    // IMPORTANTE: Garantir que o alpha seja preservado na textura
+    // Criar a textura com dados nulos (nullptr) para garantir que o alpha seja inicializado corretamente
     glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, nullptr);
+
+    // IMPORTANTE: Verificar se o formato suporta alpha
+    // Se o driver não suportar GL_RGBA, pode ser necessário usar GL_RGBA8 explicitamente
+    // Mas GL_RGBA deve funcionar na maioria dos casos
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -2117,4 +2555,11 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
     }
 
     return result;
+}
+
+void ShaderEngine::setViewport(uint32_t width, uint32_t height)
+{
+    m_viewportWidth = width;
+    m_viewportHeight = height;
+    LOG_INFO("Viewport atualizado: " + std::to_string(width) + "x" + std::to_string(height));
 }

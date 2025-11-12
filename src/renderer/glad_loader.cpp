@@ -38,6 +38,8 @@ void (*glDeleteFramebuffers)(GLsizei, const GLuint*) = nullptr;
 void (*glBindFramebuffer)(GLenum, GLuint) = nullptr;
 void (*glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint) = nullptr;
 GLenum (*glCheckFramebufferStatus)(GLenum) = nullptr;
+void (*glGenerateMipmap)(GLenum) = nullptr;
+void (*glBlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) = nullptr;
 void (*glActiveTexture)(GLenum) = nullptr;
 GLint (*glGetUniformLocation)(GLuint, const char*) = nullptr;
 void (*glBindAttribLocation)(GLuint, GLuint, const char*) = nullptr;
@@ -99,6 +101,8 @@ bool loadOpenGLFunctions() {
     LOAD_FUNC(glBindFramebuffer)
     LOAD_FUNC(glFramebufferTexture2D)
     LOAD_FUNC(glCheckFramebufferStatus)
+    LOAD_FUNC(glGenerateMipmap)
+    LOAD_FUNC(glBlitFramebuffer)
     LOAD_FUNC(glActiveTexture)
     LOAD_FUNC(glGetUniformLocation)
     LOAD_FUNC(glBindAttribLocation)
@@ -107,6 +111,9 @@ bool loadOpenGLFunctions() {
     LOAD_FUNC(glUniform2f)
     LOAD_FUNC(glUniform4f)
     LOAD_FUNC(glUniformMatrix4fv)
+    
+    // glEnable, glDisable, glBlendFunc são funções do OpenGL 1.x/2.x
+    // e estão disponíveis estaticamente - não precisam ser carregadas dinamicamente
     
     // Funções básicas (glViewport, glClearColor, glClear, glDrawElements) são do OpenGL 1.x/2.x
     // e estão linkadas estaticamente - não precisam ser carregadas dinamicamente

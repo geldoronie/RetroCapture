@@ -30,7 +30,15 @@ uniform int flipY;
 void main() {
     // Inverter coordenada Y apenas se flipY estiver ativo
     vec2 coord = (flipY == 1) ? vec2(TexCoord.x, 1.0 - TexCoord.y) : TexCoord;
-    FragColor = texture(ourTexture, coord);
+    vec4 texColor = texture(ourTexture, coord);
+    
+    // IMPORTANTE: Para shaders que usam alpha (como Game Boy), precisamos preservar o alpha
+    // Se o alpha for 0, o pixel deve ser transparente (não preto)
+    // O blending será feito pelo OpenGL se habilitado na renderização final
+    // Aqui apenas passamos a cor com alpha preservado
+    // DEBUG: Se o alpha for muito baixo, podemos forçar para ver se o blending funciona
+    // FragColor = vec4(texColor.rgb, texColor.a);
+    FragColor = texColor;
 }
 )";
 
@@ -222,13 +230,25 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
     }
 }
 
-void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY) {
+void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend) {
     // Verificar se a textura é válida
     if (texture == 0) {
         LOG_ERROR("Tentativa de renderizar textura inválida (0)");
         return;
     }
     
+    // IMPORTANTE: Habilitar blending ANTES de usar o shader program
+    // Para texturas com alpha (como shaders Game Boy), precisamos de blending
+    // O blending permite que pixels com alpha 0 sejam transparentes
+    if (enableBlend) {
+        glEnable(GL_BLEND);
+        // GL_SRC_ALPHA: usa o alpha da textura fonte
+        // GL_ONE_MINUS_SRC_ALPHA: usa (1 - alpha) para o destino
+        // Isso cria o efeito de transparência corretamente
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+        glDisable(GL_BLEND);
+    }
     
     glUseProgram(m_shaderProgram);
     glBindVertexArray(m_VAO);

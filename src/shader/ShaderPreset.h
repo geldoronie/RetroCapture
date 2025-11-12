@@ -12,6 +12,7 @@ struct ShaderPass {
     std::string alias;
     bool floatFramebuffer = false;
     bool srgbFramebuffer = false;
+    unsigned int frameCountMod = 0; // Módulo para FrameCount (0 = desabilitado)
     
     // Scaling
     std::string scaleTypeX = "source"; // "source", "viewport", "absolute"

@@ -59,6 +59,30 @@ bool ShaderPreset::load(const std::string& presetPath) {
             continue;
         }
         
+        // Verificar linha de texturas (textures = NAME1;NAME2;...)
+        if (line.find("textures =") == 0) {
+            size_t eqPos = line.find('=');
+            if (eqPos != std::string::npos) {
+                std::string value = line.substr(eqPos + 1);
+                value.erase(0, value.find_first_not_of(" \t\""));
+                // Parsear lista de nomes de texturas separados por ;
+                std::istringstream iss(value);
+                std::string texName;
+                while (std::getline(iss, texName, ';')) {
+                    // Remover espaços
+                    texName.erase(0, texName.find_first_not_of(" \t"));
+                    texName.erase(texName.find_last_not_of(" \t") + 1);
+                    if (!texName.empty()) {
+                        // Criar entrada de textura vazia (o caminho será definido depois)
+                        ShaderTexture tex;
+                        m_textures[texName] = tex;
+                        LOG_INFO("Textura declarada: " + texName);
+                    }
+                }
+            }
+            continue;
+        }
+        
         // Parsear linha
         parseLine(line, numShaders);
     }
@@ -119,15 +143,31 @@ bool ShaderPreset::parseLine(const std::string& line, int& passIndex) {
             pass.scaleTypeY = value;
         } else if (key.find("scale_y") == 0) {
             pass.scaleY = parseFloat(value);
+        } else if (key.find("scale_type") == 0 && key.find("scale_type_x") != 0 && key.find("scale_type_y") != 0) {
+            // scale_type0, scale_type1, etc (sem _x ou _y) - aplicar para ambos X e Y
+            pass.scaleTypeX = value;
+            pass.scaleTypeY = value;
+            LOG_INFO("Pass " + std::to_string(idx) + " scale_type: " + value + " (aplicado para X e Y)");
+        } else if (key.find("scale") == 0 && key.find("scale_x") != 0 && key.find("scale_y") != 0 && 
+                   key.find("scale_type") != 0) {
+            // scale0, scale1, etc (sem _x ou _y) - aplicar para ambos X e Y
+            float scaleVal = parseFloat(value);
+            pass.scaleX = scaleVal;
+            pass.scaleY = scaleVal;
+            LOG_INFO("Pass " + std::to_string(idx) + " scale: " + value + " (aplicado para X e Y)");
         }
     } else {
         // Texturas ou parâmetros globais
-        if (key.find("Sampler") == 0 && key.find("_wrap_mode") == std::string::npos && 
-            key.find("_mipmap") == std::string::npos) {
+        // Verificar se é uma textura (pode começar com "Sampler" ou qualquer nome como "COLOR_PALETTE", "BACKGROUND", etc)
+        bool isTextureName = (m_textures.find(key) != m_textures.end());
+        
+        if ((key.find("Sampler") == 0 && key.find("_wrap_mode") == std::string::npos && 
+             key.find("_mipmap") == std::string::npos) || isTextureName) {
             // É uma textura
             ShaderTexture tex;
             tex.path = resolvePath(value);
             m_textures[key] = tex;
+            LOG_INFO("Textura definida: " + key + " -> " + tex.path);
         } else if (key.find("Sampler") == 0 && key.find("_wrap_mode") != std::string::npos) {
             // Wrap mode de textura
             std::string texName = key.substr(0, key.find("_wrap_mode"));
@@ -148,8 +188,15 @@ bool ShaderPreset::parseLine(const std::string& line, int& passIndex) {
             }
         } else if (key.find("frame_count_mod") == 0) {
             // frame_count_mod# - módulo para FrameCount por pass
-            // Armazenar como parâmetro especial
-            m_parameters[key] = parseFloat(value);
+            // Extrair índice do pass
+            size_t numPos = key.find_first_of("0123456789");
+            if (numPos != std::string::npos) {
+                int idx = std::stoi(key.substr(numPos));
+                if (idx >= 0 && idx < static_cast<int>(m_passes.size())) {
+                    m_passes[idx].frameCountMod = static_cast<unsigned int>(parseFloat(value));
+                    LOG_INFO("Pass " + std::to_string(idx) + ": frame_count_mod = " + std::to_string(m_passes[idx].frameCountMod));
+                }
+            }
         } else {
             // Parâmetro global (uniform)
             m_parameters[key] = parseFloat(value);

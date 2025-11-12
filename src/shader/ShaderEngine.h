@@ -39,6 +39,9 @@ public:
     // Aplicar shader/preset na textura
     GLuint applyShader(GLuint inputTexture, uint32_t width, uint32_t height);
     
+    // Atualizar viewport (dimensões da janela)
+    void setViewport(uint32_t width, uint32_t height);
+    
     // Desabilitar shader (retorna ao renderizador básico)
     void disableShader();
     
@@ -81,10 +84,16 @@ private:
     float m_frameCount = 0.0f;
     float m_time = 0.0f;
     
+    // Histórico de frames para motion blur (mantém até 7 frames anteriores)
+    std::vector<GLuint> m_frameHistory; // Texturas de frames anteriores
+    std::vector<uint32_t> m_frameHistoryWidths;
+    std::vector<uint32_t> m_frameHistoryHeights;
+    static constexpr size_t MAX_FRAME_HISTORY = 7;
+    
     bool compileShader(const std::string& source, GLenum type, GLuint& shader);
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader);
     GLint getUniformLocation(GLuint program, const std::string& name);
-    void createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint& fb, GLuint& tex);
+    void createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint& fb, GLuint& tex, bool srgbBuffer = false);
     void cleanupFramebuffer(GLuint& fb, GLuint& tex);
     void createQuad();
     void cleanupQuad();
@@ -101,6 +110,10 @@ private:
                       uint32_t outputWidth, uint32_t outputHeight);
     bool loadTextureReference(const std::string& name, const std::string& path);
     void cleanupTextureReferences();
+    
+    // Funções auxiliares para aplicar configurações de textura
+    GLenum wrapModeToGLEnum(const std::string& wrapMode);
+    void applyTextureSettings(GLuint texture, bool filterLinear, const std::string& wrapMode, bool generateMipmap = false);
     
     // Conversão Slang para GLSL
     std::string convertSlangToGLSL(const std::string& slangSource, bool isVertex, const std::string& basePath = "");

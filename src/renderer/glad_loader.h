@@ -64,6 +64,8 @@ extern void (*glDeleteFramebuffers)(GLsizei n, const GLuint* framebuffers);
 extern void (*glBindFramebuffer)(GLenum target, GLuint framebuffer);
 extern void (*glFramebufferTexture2D)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
 extern GLenum (*glCheckFramebufferStatus)(GLenum target);
+extern void (*glGenerateMipmap)(GLenum target);
+extern void (*glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 extern void (*glActiveTexture)(GLenum texture);
 extern GLint (*glGetUniformLocation)(GLuint program, const char* name);
 extern void (*glBindAttribLocation)(GLuint program, GLuint index, const char* name);
@@ -82,6 +84,10 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glClear(GLbitfield mask);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices);
+void glEnable(GLenum cap);
+void glDisable(GLenum cap);
+void glBlendFunc(GLenum sfactor, GLenum dfactor);
+void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 #ifdef __cplusplus
 }
 #endif
@@ -116,6 +122,20 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices
 #define GL_TEXTURE0 0x84C0
 #define GL_RGBA32F 0x8814
 #define GL_RGBA 0x1908
+#define GL_BLEND 0x0BE2
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_COLOR_BUFFER_BIT 0x00004000
+#define GL_REPEAT 0x2901
+#define GL_CLAMP_TO_BORDER 0x812D
+#define GL_MIRRORED_REPEAT 0x8370
+#define GL_NEAREST 0x2600
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_SRGB8_ALPHA8 0x8C43
 
 bool loadOpenGLFunctions();
 

@@ -204,6 +204,10 @@ void Application::run()
 
             if (m_shaderEngine && m_shaderEngine->isShaderActive())
             {
+                // IMPORTANTE: Atualizar viewport com as dimensões da janela antes de aplicar o shader
+                // Isso garante que o último pass renderize para o tamanho correto da janela
+                m_shaderEngine->setViewport(m_window->getWidth(), m_window->getHeight());
+
                 textureToRender = m_shaderEngine->applyShader(m_texture, m_textureWidth, m_textureHeight);
                 isShaderTexture = true;
 
@@ -214,17 +218,38 @@ void Application::run()
                     textureToRender = m_texture;
                     isShaderTexture = false;
                 }
+                else
+                {
+                    // DEBUG: Log das dimensões
+                    LOG_INFO("Renderizando textura do shader: " + std::to_string(textureToRender) +
+                             ", janela: " + std::to_string(m_window->getWidth()) + "x" + std::to_string(m_window->getHeight()));
+                }
             }
 
             // Limpar o framebuffer da janela antes de renderizar
             // IMPORTANTE: O framebuffer 0 é a janela (default framebuffer)
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+            // IMPORTANTE: Resetar viewport para o tamanho completo da janela
+            // Isso garante que a textura seja renderizada em toda a janela
+            glViewport(0, 0, m_window->getWidth(), m_window->getHeight());
+
+            // IMPORTANTE: Para shaders com alpha (como Game Boy), não limpar com preto opaco
+            // Limpar com preto transparente para que o blending funcione corretamente
+            if (isShaderTexture)
+            {
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparente para shaders com alpha
+            }
+            else
+            {
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaco para captura normal
+            }
             glClear(GL_COLOR_BUFFER_BIT);
 
             // Para texturas do shader (framebuffer), inverter Y (shader renderiza invertido)
             // Para textura original (câmera), não inverter Y (já está correta)
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture);
+            // IMPORTANTE: Se for textura do shader, pode precisar de blending para alpha
+            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture, isShaderTexture);
             m_window->swapBuffers();
         }
         else
