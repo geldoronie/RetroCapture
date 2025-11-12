@@ -55,8 +55,6 @@ bool Application::init()
         uint32_t currentWidth = m_window->getWidth();
         uint32_t currentHeight = m_window->getHeight();
         m_shaderEngine->setViewport(currentWidth, currentHeight);
-        LOG_INFO("Viewport final configurado após inicialização: " + 
-                 std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
     }
     
     LOG_INFO("Application inicializada com sucesso");
@@ -135,8 +133,6 @@ bool Application::initRenderer()
             uint32_t currentWidth = m_window->getWidth();
             uint32_t currentHeight = m_window->getHeight();
             m_shaderEngine->setViewport(currentWidth, currentHeight);
-            LOG_INFO("Viewport inicial do ShaderEngine configurado: " + 
-                     std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
         }
         
         // IMPORTANTE: Agora que o ShaderEngine está inicializado, configurar o callback de resize
@@ -148,8 +144,6 @@ bool Application::initRenderer()
                 // Isso é especialmente crítico quando entra em fullscreen
                 if (appPtr && appPtr->m_shaderEngine) {
                     appPtr->m_shaderEngine->setViewport(width, height);
-                    LOG_INFO("Viewport atualizado via resize callback (fullscreen/resize): " + 
-                             std::to_string(width) + "x" + std::to_string(height));
                 }
             });
         }
@@ -543,8 +537,6 @@ void Application::run()
         uint32_t currentWidth = m_window->getWidth();
         uint32_t currentHeight = m_window->getHeight();
         m_shaderEngine->setViewport(currentWidth, currentHeight);
-        LOG_INFO("Viewport configurado antes do loop principal: " + 
-                 std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
     }
 
     while (!m_window->shouldClose())
@@ -606,9 +598,7 @@ void Application::run()
                 }
                 else
                 {
-                    // DEBUG: Log das dimensões
-                    LOG_INFO("Renderizando textura do shader: " + std::to_string(textureToRender) +
-                             ", janela: " + std::to_string(m_window->getWidth()) + "x" + std::to_string(m_window->getHeight()));
+                    // Log removido para reduzir verbosidade
                 }
             }
 
@@ -626,8 +616,7 @@ void Application::run()
             // DEBUG: Log para verificar se as dimensões mudaram
             static uint32_t lastViewportWidth = 0, lastViewportHeight = 0;
             if (currentWidth != lastViewportWidth || currentHeight != lastViewportHeight) {
-                LOG_INFO("Viewport OpenGL atualizado: " + 
-                         std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+                // Log removido para reduzir verbosidade
                 lastViewportWidth = currentWidth;
                 lastViewportHeight = currentHeight;
             }
@@ -659,10 +648,7 @@ void Application::run()
                 // O shader processa mas mantém a proporção da imagem original
                 renderWidth = m_textureWidth;
                 renderHeight = m_textureHeight;
-                LOG_INFO("maintainAspect (com shader): Usando dimensões da captura original: " + 
-                         std::to_string(renderWidth) + "x" + std::to_string(renderHeight) +
-                         " (saída do shader: " + std::to_string(m_shaderEngine->getOutputWidth()) + 
-                         "x" + std::to_string(m_shaderEngine->getOutputHeight()) + ")");
+                // Log removido para reduzir verbosidade
             } else if (isShaderTexture) {
                 // Sem maintainAspect, usar dimensões de saída do shader
                 renderWidth = m_shaderEngine->getOutputWidth();

@@ -183,10 +183,10 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
 
     // Carregar texturas de referência
     const auto &textures = m_preset.getTextures();
-    LOG_INFO("Carregando " + std::to_string(textures.size()) + " texturas de referência");
+    // Log removido para reduzir verbosidade
     for (const auto &tex : textures)
     {
-        LOG_INFO("Carregando textura: " + tex.first + " -> " + tex.second.path);
+        // Log removido para reduzir verbosidade
         if (!loadTextureReference(tex.first, tex.second.path))
         {
             LOG_ERROR("Falha ao carregar textura de referência: " + tex.first);
@@ -212,10 +212,7 @@ bool ShaderEngine::loadPresetPasses()
         passData.passInfo = passInfo;
 
         // DEBUG: Log das configurações do pass
-        LOG_INFO("Pass " + std::to_string(i) + " config: scaleTypeX=" + passInfo.scaleTypeX +
-                 ", scaleX=" + std::to_string(passInfo.scaleX) +
-                 ", scaleTypeY=" + passInfo.scaleTypeY +
-                 ", scaleY=" + std::to_string(passInfo.scaleY));
+        // Log removido para reduzir verbosidade
 
         // Ler shader
         std::ifstream file(passInfo.shaderPath);
@@ -312,7 +309,7 @@ bool ShaderEngine::loadPresetPasses()
             if (usedInVec4Define)
             {
                 requiredType = "vec2";
-                LOG_INFO("Pass " + std::to_string(i) + ": OutputSize usado em #define vec4(OutputSize, ...), forçando vec2");
+                // Log removido para reduzir verbosidade
             }
             else
             {
@@ -377,21 +374,19 @@ bool ShaderEngine::loadPresetPasses()
                     if (vec3Count > vec4Count && vec3Count > 0)
                     {
                         requiredType = "vec3";
-                        LOG_INFO("Pass " + std::to_string(i) + ": Detectado " + std::to_string(vec3Count) +
-                                 " ocorrências de vec3 próximo a OutputSize, assumindo vec3");
+                        // Log removido para reduzir verbosidade
                     }
                     else if (vec4Count > vec3Count && vec4Count > 0)
                     {
                         requiredType = "vec4";
-                        LOG_INFO("Pass " + std::to_string(i) + ": Detectado " + std::to_string(vec4Count) +
-                                 " ocorrências de vec4 próximo a OutputSize, assumindo vec4");
+                        // Log removido para reduzir verbosidade
                     }
                     else if (processedSource.find("vec3") != std::string::npos &&
                              processedSource.find("OutputSize") != std::string::npos)
                     {
                         // Fallback: se há vec3 e OutputSize no shader, assumir vec3
                         requiredType = "vec3";
-                        LOG_INFO("Pass " + std::to_string(i) + ": Fallback: assumindo vec3 para OutputSize (vec3 presente no shader)");
+                        // Log removido para reduzir verbosidade
                     }
                 }
             }
@@ -412,7 +407,7 @@ bool ShaderEngine::loadPresetPasses()
                 std::string outputSizeDecl = "uniform " + requiredType + " OutputSize;\n";
                 std::regex versionRegex(R"(#version\s+\d+[^\n]*)");
                 processedSource = std::regex_replace(processedSource, versionRegex, "$&\n" + outputSizeDecl, std::regex_constants::format_first_only);
-                LOG_INFO("Pass " + std::to_string(i) + ": Injetado uniform " + requiredType + " OutputSize");
+                // Log removido para reduzir verbosidade
             }
             else if (declaredType != requiredType)
             {
@@ -420,11 +415,11 @@ bool ShaderEngine::loadPresetPasses()
                 std::regex replaceRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
                 std::string replacement = "uniform " + requiredType + " OutputSize";
                 processedSource = std::regex_replace(processedSource, replaceRegex, replacement);
-                LOG_INFO("Pass " + std::to_string(i) + ": Corrigido OutputSize de " + declaredType + " para " + requiredType);
+                // Log removido para reduzir verbosidade
             }
             else
             {
-                LOG_INFO("Pass " + std::to_string(i) + ": OutputSize já declarado como " + declaredType + " (tipo necessário: " + requiredType + ")");
+                // Log removido para reduzir verbosidade
             }
         }
 
@@ -513,7 +508,7 @@ bool ShaderEngine::loadPresetPasses()
                 adjustment += "   // Quando a saída tem o dobro da altura, mapear coordenadas para replicar linhas\n";
                 adjustment += "   TEX0.y = (floor(TEX0.y * OutputSize.y / 2.0) + 0.5) / InputSize.y;\n";
                 vertexCode.insert(pos + pattern.length(), adjustment);
-                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste de TexCoord.y injetado no vertex shader");
+                // Log removido para reduzir verbosidade
             }
         }
 
@@ -523,19 +518,15 @@ bool ShaderEngine::loadPresetPasses()
         std::string fragmentCode = codeAfterVersion;
         bool needsFragCoordAdjustment = false;
         bool needsInterlaceAdjustment = false;
-        if (i < m_preset.getPasses().size())
+        // Verificar se é o shader box-center.glsl
+        if (passInfo.shaderPath.find("box-center.glsl") != std::string::npos)
         {
-            const auto &presetPass = m_preset.getPasses()[i];
-            // Verificar se é o shader box-center.glsl
-            if (passInfo.shaderPath.find("box-center.glsl") != std::string::npos)
-            {
-                needsFragCoordAdjustment = true;
-            }
-            // Verificar se é o shader interlacing.glsl e se precisa ajustar o cálculo do interlace
-            if (passInfo.shaderPath.find("interlacing.glsl") != std::string::npos && needsTexCoordAdjustment)
-            {
-                needsInterlaceAdjustment = true;
-            }
+            needsFragCoordAdjustment = true;
+        }
+        // Verificar se é o shader interlacing.glsl e se precisa ajustar o cálculo do interlace
+        if (passInfo.shaderPath.find("interlacing.glsl") != std::string::npos && needsTexCoordAdjustment)
+        {
+            needsInterlaceAdjustment = true;
         }
 
         // Se precisamos ajustar gl_FragCoord, injetar código após bordertest = gl_FragCoord.xy;
@@ -550,7 +541,7 @@ bool ShaderEngine::loadPresetPasses()
                 std::string adjustment = "\n   // Normalizar gl_FragCoord.xy dividindo por OutputSize.xy\n";
                 adjustment += "   bordertest = bordertest / OutputSize.xy;\n";
                 fragmentCode.insert(pos + pattern.length(), adjustment);
-                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste de gl_FragCoord.xy injetado no fragment shader");
+                // Log removido para reduzir verbosidade
             }
         }
 
@@ -567,14 +558,14 @@ bool ShaderEngine::loadPresetPasses()
                 // Substituir vTexCoord.y por gl_FragCoord.y / OutputSize.y no cálculo do interlace
                 fragmentCode = std::regex_replace(fragmentCode, interlacePattern1,
                                                   "y = 2.000001 * TextureSize.y * (gl_FragCoord.y / OutputSize.y)");
-                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste do cálculo de interlace injetado (padrão 1)");
+                // Log removido para reduzir verbosidade
             }
             else if (std::regex_search(fragmentCode, interlacePattern2))
             {
                 // Substituir vTexCoord.y por gl_FragCoord.y / OutputSize.y no cálculo do interlace
                 fragmentCode = std::regex_replace(fragmentCode, interlacePattern2,
                                                   "y = TextureSize.y * (gl_FragCoord.y / OutputSize.y)");
-                LOG_INFO("Pass " + std::to_string(i) + ": Ajuste do cálculo de interlace injetado (padrão 2)");
+                // Log removido para reduzir verbosidade
             }
         }
 
@@ -582,14 +573,14 @@ bool ShaderEngine::loadPresetPasses()
         fragmentSource = versionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
 
         // Compilar shaders
-        LOG_INFO("Pass " + std::to_string(i) + ": Compilando shader: " + passInfo.shaderPath);
+        // Log removido para reduzir verbosidade
         if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
         {
             LOG_ERROR("Falha ao compilar vertex shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
             cleanupPresetPasses();
             return false;
         }
-        LOG_INFO("Pass " + std::to_string(i) + ": Vertex shader compilado com sucesso");
+        // Log removido para reduzir verbosidade
 
         // Tentar compilar o fragment shader
         GLuint tempFragmentShader = 0;
@@ -603,7 +594,7 @@ bool ShaderEngine::loadPresetPasses()
             }
             std::string errorMsg = std::string(errorLog);
 
-            LOG_INFO("Pass " + std::to_string(i) + ": Erro de compilação detectado: " + (errorMsg.empty() ? "(sem mensagem)" : errorMsg));
+            // Log removido para reduzir verbosidade (mantido apenas LOG_ERROR para erros críticos)
 
             // Verificar se o erro é sobre vec3 = vec4
             bool isVec3Vec4Error = (errorMsg.find("initializer of type vec4 cannot be assigned to variable of type vec3") != std::string::npos ||
@@ -612,7 +603,7 @@ bool ShaderEngine::loadPresetPasses()
 
             if (isVec3Vec4Error)
             {
-                LOG_INFO("Pass " + std::to_string(i) + ": Erro detectado como vec3 = vec4, tentando correção automática");
+                // Log removido para reduzir verbosidade
             }
 
             // Tentar corrigir erro específico de vec3 = vec4
@@ -624,7 +615,7 @@ bool ShaderEngine::loadPresetPasses()
             if (std::regex_search(fragmentSource, match, vec3TextureError))
             {
                 std::string varName = match[1].str();
-                LOG_INFO("Pass " + std::to_string(i) + ": Detectado vec3 " + varName + " = COMPAT_TEXTURE(...)");
+                // Log removido para reduzir verbosidade
 
                 // Verificar se a variável é usada com .rgb ou similar depois
                 // Procurar por padrões como: var.rgb, var.r, var.g, var.b, etc.
@@ -640,7 +631,7 @@ bool ShaderEngine::loadPresetPasses()
                 if (pos != std::string::npos)
                 {
                     correctedSource.replace(pos, oldPattern.length(), newPattern);
-                    LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição simples");
+                    // Log removido para reduzir verbosidade
                 }
                 else
                 {
@@ -651,7 +642,7 @@ bool ShaderEngine::loadPresetPasses()
                     if (pos != std::string::npos)
                     {
                         correctedSource.replace(pos, oldPattern.length(), newPattern);
-                        LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição com tab");
+                        // Log removido para reduzir verbosidade
                     }
                     else
                     {
@@ -672,13 +663,13 @@ bool ShaderEngine::loadPresetPasses()
                             if (matchPos != std::string::npos)
                             {
                                 correctedSource.replace(matchPos, fullMatch.length(), replacement);
-                                LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição regex manual com " + textureFunc);
+                                // Log removido para reduzir verbosidade
                             }
                             else
                             {
                                 // Fallback: usar regex_replace
                                 correctedSource = std::regex_replace(correctedSource, regexPattern, replacement);
-                                LOG_INFO("Pass " + std::to_string(i) + ": Aplicada substituição regex com " + textureFunc);
+                                // Log removido para reduzir verbosidade
                             }
                         }
                     }
@@ -691,7 +682,7 @@ bool ShaderEngine::loadPresetPasses()
                     correctedSource.find("vec4  " + varName) != std::string::npos) // Dois espaços
                 {
                     substitutionFound = true;
-                    LOG_INFO("Pass " + std::to_string(i) + ": Corrigido vec3 " + varName + " para vec4 (usa .rgb: " + (usesRgb ? "sim" : "não") + ")");
+                    // Log removido para reduzir verbosidade
                 }
                 else
                 {
@@ -718,7 +709,7 @@ bool ShaderEngine::loadPresetPasses()
                                 {
                                     line.replace(pos, 4, "vec4");
                                     found = true;
-                                    LOG_INFO("Pass " + std::to_string(i) + ": Substituição manual aplicada na linha: " + line);
+                                    // Log removido para reduzir verbosidade
                                 }
                             }
                             oss << line << "\n";
@@ -727,7 +718,7 @@ bool ShaderEngine::loadPresetPasses()
                         {
                             correctedSource = oss.str();
                             substitutionFound = true;
-                            LOG_INFO("Pass " + std::to_string(i) + ": Substituição manual bem-sucedida");
+                            // Log removido para reduzir verbosidade
                         }
                         else
                         {
@@ -737,7 +728,7 @@ bool ShaderEngine::loadPresetPasses()
                             {
                                 correctedSource.replace(pos, 4, "vec4");
                                 substitutionFound = true;
-                                LOG_INFO("Pass " + std::to_string(i) + ": Substituição direta aplicada");
+                                // Log removido para reduzir verbosidade
                             }
                             else
                             {
@@ -747,7 +738,7 @@ bool ShaderEngine::loadPresetPasses()
                                 {
                                     correctedSource.replace(pos, 4, "vec4");
                                     substitutionFound = true;
-                                    LOG_INFO("Pass " + std::to_string(i) + ": Substituição direta com tab aplicada");
+                                    // Log removido para reduzir verbosidade
                                 }
                             }
                         }
@@ -766,7 +757,7 @@ bool ShaderEngine::loadPresetPasses()
                         correctedSource = std::regex_replace(correctedSource,
                                                              std::regex(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*([\d.]+)\s*\))"),
                                                              "vec4(" + varName + ".rgb, $1)");
-                        LOG_INFO("Pass " + std::to_string(i) + ": Corrigido vec4(" + varName + ", float) para vec4(" + varName + ".rgb, float)");
+                        // Log removido para reduzir verbosidade
                     }
 
                     // Log da linha corrigida para debug
@@ -778,7 +769,7 @@ bool ShaderEngine::loadPresetPasses()
                         lineNum++;
                         if (lineNum >= 98 && lineNum <= 110 && (line.find(varName) != std::string::npos || line.find("FragColor") != std::string::npos))
                         {
-                            LOG_INFO("Pass " + std::to_string(i) + " linha corrigida " + std::to_string(lineNum) + ": " + line);
+                            // Log removido para reduzir verbosidade
                         }
                     }
 
@@ -791,7 +782,7 @@ bool ShaderEngine::loadPresetPasses()
                             glDeleteShader(passData.fragmentShader);
                         passData.fragmentShader = testShader;
                         fragmentSource = correctedSource;
-                        LOG_INFO("Pass " + std::to_string(i) + ": Correção bem-sucedida! (" + passInfo.shaderPath + ")");
+                        // Log removido para reduzir verbosidade
                     }
                     else
                     {
@@ -807,7 +798,7 @@ bool ShaderEngine::loadPresetPasses()
                             lineNum2++;
                             if (lineNum2 >= 95 && lineNum2 <= 110)
                             {
-                                LOG_INFO("Pass " + std::to_string(i) + " linha corrigida " + std::to_string(lineNum2) + ": " + line2);
+                                // Log removido para reduzir verbosidade
                             }
                         }
                         if (testShader != 0)
@@ -830,7 +821,7 @@ bool ShaderEngine::loadPresetPasses()
                         lineNum++;
                         if (lineNum >= 95 && lineNum <= 105)
                         {
-                            LOG_INFO("Pass " + std::to_string(i) + " linha " + std::to_string(lineNum) + ": " + line);
+                            // Log removido para reduzir verbosidade
                         }
                     }
                     glDeleteShader(passData.vertexShader);
@@ -852,7 +843,7 @@ bool ShaderEngine::loadPresetPasses()
                     lineNum++;
                     if (lineNum >= 95 && lineNum <= 105)
                     {
-                        LOG_INFO("Pass " + std::to_string(i) + " linha " + std::to_string(lineNum) + ": " + line);
+                        // Log removido para reduzir verbosidade
                     }
                 }
                 glDeleteShader(passData.vertexShader);
@@ -880,7 +871,7 @@ bool ShaderEngine::loadPresetPasses()
         glAttachShader(program, passData.vertexShader);
         glAttachShader(program, passData.fragmentShader);
 
-        LOG_INFO("Pass " + std::to_string(i) + ": Linkando programa de shader");
+        // Log removido para reduzir verbosidade
 
         // Ligar atributos antes de linkar (necessário quando não usamos layout(location))
         // RetroArch shaders podem usar VertexCoord ou Position
@@ -917,19 +908,19 @@ bool ShaderEngine::loadPresetPasses()
         passData.program = program;
         passData.floatFramebuffer = passInfo.floatFramebuffer;
 
-        LOG_INFO("Pass " + std::to_string(i) + ": Programa linkado com sucesso (" + passInfo.shaderPath + ")");
+        // Log removido para reduzir verbosidade
     }
 
-    LOG_INFO("Preset passes carregados: " + std::to_string(m_passes.size()));
+    // Log removido para reduzir verbosidade
 
     // Verificar se há texturas de referência
     const auto &textures = m_preset.getTextures();
     if (!textures.empty())
     {
-        LOG_INFO("Preset requer " + std::to_string(textures.size()) + " textura(s) de referência");
+        // Log removido para reduzir verbosidade
         for (const auto &tex : textures)
         {
-            LOG_INFO("  - Textura: " + tex.first + " = " + tex.second.path);
+            // Log removido para reduzir verbosidade
         }
     }
 
@@ -980,8 +971,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             LOG_ERROR("applyShader: Textura de entrada inválida (0)!");
             return 0;
         }
-        LOG_INFO("applyShader: inputTexture=" + std::to_string(inputTexture) + " (" +
-                 std::to_string(width) + "x" + std::to_string(height) + ")");
+        // Log removido para reduzir verbosidade
 
         // IMPORTANTE: Incrementar FrameCount apenas uma vez por frame (não por pass)
         // Isso permite que shaders animados funcionem corretamente
@@ -1038,10 +1028,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // DEBUG: Log das dimensões calculadas
             if (i == 0 || i == m_passes.size() - 1)
             {
-                LOG_INFO("Pass " + std::to_string(i) + " escala: " + scaleTypeX + "x" +
-                         std::to_string(scaleX) + ", " + scaleTypeY + "x" +
-                         std::to_string(scaleY) + " -> " + std::to_string(outputWidth) + "x" +
-                         std::to_string(outputHeight));
+                // Log removido para reduzir verbosidade
             }
 
             // Criar/atualizar framebuffer se necessário
@@ -1056,7 +1043,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 // DEBUG: Log do primeiro pass
                 if (i == 0)
                 {
-                    LOG_INFO("Pass 0 framebuffer criado: fb=" + std::to_string(pass.framebuffer) + ", tex=" + std::to_string(pass.texture));
+                    // Log removido para reduzir verbosidade
                 }
             }
 
@@ -1065,13 +1052,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
             glViewport(0, 0, outputWidth, outputHeight);
 
-            // DEBUG: Log do viewport do primeiro e último pass
-            if (i == 0 || i == m_passes.size() - 1)
-            {
-                LOG_INFO("Pass " + std::to_string(i) + " viewport: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
-                         " (scaleType: " + scaleTypeX + "/" + scaleTypeY + ", viewport: " +
-                         std::to_string(m_viewportWidth) + "x" + std::to_string(m_viewportHeight) + ")");
-            }
+            // Log removido para reduzir verbosidade
 
             // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
             // O shader gameboy usa alpha, então precisamos de um fundo transparente
@@ -1099,11 +1080,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 continue; // Pular este pass se o programa é inválido
             }
 
-            // DEBUG: Log do programa sendo usado
-            if (i == 0)
-            {
-                LOG_INFO("Pass 0: Usando programa de shader: " + std::to_string(pass.program));
-            }
+            // Log removido para reduzir verbosidade
 
             // IMPORTANTE: Configurar uniforms ANTES de bind de texturas
             // Mas o uniform Texture/Source precisa ser configurado DEPOIS do bind
@@ -1129,12 +1106,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             std::string wrapMode = passInfo.wrapMode;
             bool mipmapInput = passInfo.mipmapInput;
 
-            // DEBUG: Log das configurações aplicadas no primeiro pass
-            if (i == 0)
-            {
-                LOG_INFO("Pass 0: Aplicando configurações de textura: filter=" + (filterLinear ? std::string("linear") : std::string("nearest")) +
-                         ", wrap=" + wrapMode + ", mipmap=" + (mipmapInput ? std::string("yes") : std::string("no")));
-            }
+            // Log removido para reduzir verbosidade
 
             // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
             // IMPORTANTE: Aplicar sempre, pois alguns shaders (como crt-geom) precisam de GL_NEAREST no primeiro pass
@@ -1165,10 +1137,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // DEBUG: Log do primeiro pass
             if (i == 0)
             {
-                LOG_INFO("Pass 0: inputTexture=" + std::to_string(currentTexture) +
-                         " (" + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) +
-                         "), output será " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) +
-                         ", scaleType: " + scaleTypeX + "/" + scaleTypeY);
+                // Log removido para reduzir verbosidade
             }
 
             // Configurar uniform Texture/Source DEPOIS do bind (como RetroArch faz)
@@ -1199,8 +1168,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                     textureBound = true;
                     if (i == 0 || i == 3 || i == 4)
                     {
-                        LOG_INFO("Pass " + std::to_string(i) + ": Uniform de textura de entrada encontrado: '" + std::string(name) +
-                                 "' vinculado à unidade 0, textura ID=" + std::to_string(currentTexture));
+                        // Log removido para reduzir verbosidade
                     }
                     break; // Encontrou um, não precisa tentar os outros
                 }
@@ -1285,7 +1253,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                                 {
                                     glBindTexture(GL_TEXTURE_2D, m_frameHistory[historyIdx]);
                                     glUniform1i(loc, texUnit);
-                                    LOG_INFO("Pass 0: Uniform '" + name + "' vinculado ao histórico de frame " + std::to_string(prevIdx) + " (unidade " + std::to_string(texUnit) + ")");
+                                    // Log removido para reduzir verbosidade
                                     texUnit++;
                                 }
                             }
@@ -1338,7 +1306,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 glActiveTexture(GL_TEXTURE0 + texUnit);
                 glBindTexture(GL_TEXTURE_2D, originalTexture);
                 glUniform1i(origTexLoc, texUnit);
-                LOG_INFO("Pass " + std::to_string(i) + ": Uniform 'OrigTexture' vinculado à textura original (unidade " + std::to_string(texUnit) + ")");
+                // Log removido para reduzir verbosidade
                 texUnit++;
             }
 
@@ -1388,8 +1356,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 if (loc >= 0)
                 {
                     glUniform1i(loc, texUnit);
-                    LOG_INFO("Pass " + std::to_string(i) + ": Textura de referência '" + texRef.first +
-                             "' (texture ID=" + std::to_string(texRef.second) + ") vinculada na unidade " + std::to_string(texUnit));
+                    // Log removido para reduzir verbosidade
                 }
                 else
                 {
@@ -1415,12 +1382,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, currentTexture);
 
-            // DEBUG: Log antes de renderizar
-            if (i == 0)
-            {
-                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer) +
-                         ", textura de entrada ID=" + std::to_string(currentTexture));
-            }
+            // Log removido para reduzir verbosidade
 
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
@@ -1438,55 +1400,21 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             {
                 LOG_ERROR("Pass " + std::to_string(i) + ": Framebuffer incompleto após renderização! Status: " + std::to_string(status));
             }
-            else if (i == 0 || i == m_passes.size() - 1)
-            {
-                LOG_INFO("Pass " + std::to_string(i) + ": Framebuffer completo e válido após renderização");
-            }
+            // Log removido para reduzir verbosidade
 
-            // DEBUG: Verificar se a textura de saída tem conteúdo (TODOS os passes para identificar onde fica preto)
-            // Tentar ler um pixel para verificar se há conteúdo
-            // IMPORTANTE: glReadPixels requer que o framebuffer esteja bindado
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, pass.framebuffer);
-            unsigned char pixel[4] = {0, 0, 0, 0};
-            glReadPixels(outputWidth / 2, outputHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-            LOG_INFO("Pass " + std::to_string(i) + ": Pixel central (" + std::to_string(outputWidth / 2) + "," +
-                     std::to_string(outputHeight / 2) + ") = [" + std::to_string(pixel[0]) + "," +
-                     std::to_string(pixel[1]) + "," + std::to_string(pixel[2]) + "," +
-                     std::to_string(pixel[3]) + "] (textura=" + std::to_string(pass.texture) + ", input=" +
-                     std::to_string(currentTexture) + ")");
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-            // Se o pixel está preto e não é o primeiro pass, avisar
-            if (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && i > 0)
-            {
-                LOG_WARN("Pass " + std::to_string(i) + ": Pixel central está PRETO! Textura de entrada ID=" +
-                         std::to_string(currentTexture));
-            }
+            // Log de pixel removido para reduzir verbosidade (mantido apenas LOG_WARN para problemas)
 
             // Próximo pass usa a saída deste
             currentTexture = pass.texture;
             currentWidth = outputWidth;
             currentHeight = outputHeight;
 
-            // DEBUG: Log do primeiro e último pass
-            if (i == 0)
+            // Verificar se a textura de saída é válida
+            if (i == 0 && currentTexture == 0)
             {
-                LOG_INFO("Pass 0 renderizado: input=" + std::to_string(inputTexture) + " (" +
-                         std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + "), output=" +
-                         std::to_string(currentTexture) + " (" + std::to_string(outputWidth) + "x" +
-                         std::to_string(outputHeight) + ")");
-
-                // Verificar se a textura de saída é válida
-                if (currentTexture == 0)
-                {
-                    LOG_ERROR("Pass 0: Textura de saída inválida (0)!");
-                }
+                LOG_ERROR("Pass 0: Textura de saída inválida (0)!");
             }
-            if (i == m_passes.size() - 1)
-            {
-                LOG_INFO("Último pass (" + std::to_string(i) + "): outputTexture=" + std::to_string(currentTexture) +
-                         " (" + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) + ")");
-            }
+            // Log removido para reduzir verbosidade
         }
 
         // Desvincular framebuffer após todos os passes
@@ -1500,9 +1428,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         m_outputWidth = currentWidth;
         m_outputHeight = currentHeight;
 
-        // DEBUG: Log das dimensões de saída atualizadas
-        LOG_INFO("ShaderEngine: Dimensões de saída atualizadas: " +
-                 std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+        // Log removido para reduzir verbosidade
 
         // IMPORTANTE: Resetar viewport para um tamanho grande após os passes
         // Isso garante que a renderização final use o viewport correto
@@ -1637,17 +1563,15 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // DEBUG: Log apenas quando necessário
             if (m_frameHistory.size() == 1)
             {
-                LOG_INFO("Primeiro frame copiado para histórico (textura dedicada)");
+                // Log removido para reduzir verbosidade
             }
             else if (m_frameHistory.size() == MAX_FRAME_HISTORY)
             {
-                LOG_INFO("Histórico completo: " + std::to_string(MAX_FRAME_HISTORY) + " frames (texturas dedicadas)");
+                // Log removido para reduzir verbosidade
             }
         }
 
-        // DEBUG: Log final antes de retornar
-        LOG_INFO("applyShader: Retornando textura final: " + std::to_string(currentTexture) +
-                 " (" + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + ")");
+        // Log removido para reduzir verbosidade
 
         if (currentTexture == 0)
         {
@@ -1835,8 +1759,7 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
                 else if (uniformType == GL_FLOAT_VEC4)
                     typeStr = "vec4";
             }
-            LOG_INFO("Pass " + std::to_string(passIndex) + ": OutputSize configurado como " + typeStr +
-                     ": " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight));
+            // Log removido para reduzir verbosidade
         }
     }
     // Nota: Se OutputSize não for encontrado, pode ser que o shader não o use
@@ -1939,7 +1862,7 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform1f(loc, frameCountValue);
         if (passIndex == 3)
         {
-            LOG_INFO("Pass 3: FrameCount configurado como: " + std::to_string(frameCountValue));
+            // Log removido para reduzir verbosidade
         }
     }
     else if (passIndex == 3)
@@ -1992,7 +1915,7 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         const auto &extractedParams = m_passes[passIndex].extractedParameters;
         if (passIndex == 0 && !extractedParams.empty())
         {
-            LOG_INFO("Pass 0: " + std::to_string(extractedParams.size()) + " parâmetros extraídos de #pragma parameter");
+            // Log removido para reduzir verbosidade
         }
         for (const auto &param : extractedParams)
         {
@@ -2004,10 +1927,7 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
                 auto presetIt = presetParams.find(param.first);
                 float value = (presetIt != presetParams.end()) ? presetIt->second : param.second;
                 glUniform1f(loc, value);
-                if (passIndex == 0 || passIndex == 3)
-                {
-                    LOG_INFO("Pass " + std::to_string(passIndex) + ": Parâmetro '" + param.first + "' = " + std::to_string(value));
-                }
+                // Log removido para reduzir verbosidade
             }
             else if (passIndex == 0)
             {
@@ -2175,17 +2095,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         if (outputHeight != inputHeight && passIndex == 3)
         {
             textureSizeY = static_cast<float>(outputHeight);
-            LOG_INFO("Pass " + std::to_string(passIndex) + ": TextureSize.y ajustado para altura de SAÍDA: " + std::to_string(outputHeight) + " (entrada era: " + std::to_string(inputHeight) + ") para cálculo de interlace");
+            // Log removido para reduzir verbosidade
         }
         // Para Pass 4 (box-center.glsl), TextureSize deve ser o tamanho da textura de entrada (1280x448)
         // O shader usa TextureSize para calcular vTexCoord baseado na textura de entrada
         // Se TextureSize for diferente do tamanho real da textura, vTexCoord pode sair de [0,1]
 
         glUniform2f(loc, static_cast<float>(inputWidth), textureSizeY);
-        if (passIndex == 0 || passIndex == 3 || passIndex == 4)
-        {
-            LOG_INFO("Pass " + std::to_string(passIndex) + ": TextureSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(static_cast<uint32_t>(textureSizeY)) + " (input: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight) + ", output: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight) + ")");
-        }
+        // Log removido para reduzir verbosidade
     }
     else if (passIndex == 3 || passIndex == 4)
     {
@@ -2200,10 +2117,7 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
-        if (passIndex == 0 || passIndex == 3 || passIndex == 4)
-        {
-            LOG_INFO("Pass " + std::to_string(passIndex) + ": InputSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
-        }
+        // Log removido para reduzir verbosidade
     }
     else if (passIndex == 3 || passIndex == 4)
     {
@@ -2459,8 +2373,7 @@ bool ShaderEngine::loadTextureReference(const std::string &name, const std::stri
 
     m_textureReferences[name] = texture;
 
-    LOG_INFO("Textura '" + name + "' carregada com sucesso: " + std::to_string(width) + "x" + std::to_string(height) +
-             " (filter=" + (filterLinear ? "linear" : "nearest") + ", wrap=" + wrapMode + ", mipmap=" + (mipmap ? "yes" : "no") + ")");
+    // Log removido para reduzir verbosidade
 
     return true;
 }
@@ -2651,7 +2564,7 @@ void ShaderEngine::createFramebuffer(uint32_t width, uint32_t height, bool float
     }
 
     // DEBUG: Log do framebuffer criado
-    LOG_INFO("Framebuffer criado: fb=" + std::to_string(fb) + ", tex=" + std::to_string(tex) + ", size=" + std::to_string(width) + "x" + std::to_string(height));
+    // Log removido para reduzir verbosidade
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -3472,7 +3385,7 @@ void ShaderEngine::setViewport(uint32_t width, uint32_t height)
 {
     m_viewportWidth = width;
     m_viewportHeight = height;
-    LOG_INFO("Viewport atualizado: " + std::to_string(width) + "x" + std::to_string(height));
+    // Log removido para reduzir verbosidade
 }
 
 GLenum ShaderEngine::wrapModeToGLEnum(const std::string &wrapMode)
