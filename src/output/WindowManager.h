@@ -33,6 +33,9 @@ public:
     // Obter ponteiro GLFWwindow (para ImGui, etc)
     void* getWindow() const { return m_window; }
     
+    // Toggle fullscreen
+    void setFullscreen(bool fullscreen, int monitorIndex = -1);
+    
     // Callbacks
     // IMPORTANTE: Usa std::function para permitir lambdas com capture
     void setResizeCallback(std::function<void(int, int)> callback);

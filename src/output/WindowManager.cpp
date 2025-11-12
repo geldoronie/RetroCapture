@@ -153,4 +153,50 @@ void WindowManager::setResizeCallback(std::function<void(int, int)> callback) {
     m_resizeCallback = callback;
 }
 
+void WindowManager::setFullscreen(bool fullscreen, int monitorIndex) {
+    if (!m_window || !m_initialized) {
+        return;
+    }
+    
+    GLFWwindow* window = static_cast<GLFWwindow*>(m_window);
+    
+    if (fullscreen) {
+        // Entrar em fullscreen
+        GLFWmonitor* monitor = nullptr;
+        if (monitorIndex >= 0) {
+            int monitorCount;
+            GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+            if (monitorIndex < monitorCount) {
+                monitor = monitors[monitorIndex];
+            } else {
+                monitor = glfwGetPrimaryMonitor();
+            }
+        } else {
+            monitor = glfwGetPrimaryMonitor();
+        }
+        
+        if (monitor) {
+            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        }
+    } else {
+        // Sair do fullscreen (voltar para windowed)
+        // Usar dimensões anteriores ou padrão
+        int width = m_width > 0 ? m_width : 1280;
+        int height = m_height > 0 ? m_height : 720;
+        glfwSetWindowMonitor(window, nullptr, 100, 100, width, height, GLFW_DONT_CARE);
+    }
+    
+    // Atualizar dimensões após mudança
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    m_width = fbWidth > 0 ? fbWidth : m_width;
+    m_height = fbHeight > 0 ? fbHeight : m_height;
+    
+    // Chamar callback de resize para atualizar viewport
+    if (m_resizeCallback) {
+        m_resizeCallback(m_width, m_height);
+    }
+}
+
 

@@ -417,8 +417,18 @@ bool Application::initUI()
     });
     
     m_ui->setOnFullscreenChanged([this](bool fullscreen) {
-        // TODO: Implementar toggle de fullscreen
         LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
+        if (m_window) {
+            m_window->setFullscreen(fullscreen, m_monitorIndex);
+            m_fullscreen = fullscreen;
+            
+            // Atualizar viewport do shader engine após mudança de fullscreen
+            if (m_shaderEngine) {
+                uint32_t currentWidth = m_window->getWidth();
+                uint32_t currentHeight = m_window->getHeight();
+                m_shaderEngine->setViewport(currentWidth, currentHeight);
+            }
+        }
     });
     
     m_ui->setOnV4L2ControlChanged([this](const std::string& name, int32_t value) {
