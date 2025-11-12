@@ -445,6 +445,12 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         LOG_INFO("applyShader: inputTexture=" + std::to_string(inputTexture) + " (" +
                  std::to_string(width) + "x" + std::to_string(height) + ")");
 
+        // IMPORTANTE: Incrementar FrameCount apenas uma vez por frame (não por pass)
+        // Isso permite que shaders animados funcionem corretamente
+        // FrameCount é usado por shaders para criar animações baseadas no número de frames
+        m_frameCount += 1.0f;
+        m_time += 0.016f; // ~60fps (aproximado, será ajustado pelo tempo real se necessário)
+
         // Aplicar cada pass
         for (size_t i = 0; i < m_passes.size(); ++i)
         {
@@ -1587,8 +1593,10 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     // Mas na prática, muitos drivers OpenGL são tolerantes com isso.
 
     // Frame count e time
-    m_frameCount += 1.0f;
-    m_time += 0.016f; // ~60fps
+    // IMPORTANTE: NÃO incrementar aqui! FrameCount deve ser incrementado apenas uma vez por frame
+    // no início de applyShader(), não a cada chamada de setupUniforms() (que é chamado para cada pass)
+    // m_frameCount += 1.0f; // MOVED TO applyShader()
+    // m_time += 0.016f; // ~60fps
 
     loc = getUniformLocation(program, "IN.frame_count");
     if (loc >= 0)

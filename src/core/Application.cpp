@@ -249,7 +249,7 @@ void Application::run()
             // Para texturas do shader (framebuffer), inverter Y (shader renderiza invertido)
             // Para textura original (câmera), não inverter Y (já está correta)
             // IMPORTANTE: Se for textura do shader, pode precisar de blending para alpha
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture, isShaderTexture, m_brightness);
+            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture, isShaderTexture, m_brightness, m_contrast);
             m_window->swapBuffers();
         }
         else

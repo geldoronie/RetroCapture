@@ -27,6 +27,7 @@ out vec4 FragColor;
 uniform sampler2D ourTexture;
 uniform int flipY;
 uniform float brightness;
+uniform float contrast;
 
 void main() {
     // Inverter coordenada Y apenas se flipY estiver ativo
@@ -34,8 +35,16 @@ void main() {
     vec4 texColor = texture(ourTexture, coord);
     
     // Aplicar brilho multiplicando RGB pelo fator de brilho
+    vec3 color = texColor.rgb * brightness;
+    
+    // Aplicar contraste: (color - 0.5) * contrast + 0.5
+    // contrast = 1.0: sem alteração
+    // contrast > 1.0: aumenta contraste
+    // contrast < 1.0: diminui contraste
+    color = (color - 0.5) * contrast + 0.5;
+    
     // Preservar alpha para shaders que usam transparência
-    FragColor = vec4(texColor.rgb * brightness, texColor.a);
+    FragColor = vec4(color, texColor.a);
 }
 )";
 
@@ -227,7 +236,7 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
     }
 }
 
-void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness) {
+void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast) {
     // Verificar se a textura é válida
     if (texture == 0) {
         LOG_ERROR("Tentativa de renderizar textura inválida (0)");
@@ -270,6 +279,12 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
     GLint brightnessLoc = glGetUniformLocation(m_shaderProgram, "brightness");
     if (brightnessLoc >= 0) {
         glUniform1f(brightnessLoc, brightness);
+    }
+    
+    // Configurar contraste
+    GLint contrastLoc = glGetUniformLocation(m_shaderProgram, "contrast");
+    if (contrastLoc >= 0) {
+        glUniform1f(contrastLoc, contrast);
     }
     
     glViewport(0, 0, windowWidth, windowHeight);

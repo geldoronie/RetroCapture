@@ -25,6 +25,7 @@ public:
     void setResolution(uint32_t width, uint32_t height) { m_captureWidth = width; m_captureHeight = height; }
     void setFramerate(uint32_t fps) { m_captureFps = fps; }
     void setBrightness(float brightness) { m_brightness = brightness; }
+    void setContrast(float contrast) { m_contrast = contrast; }
     
 private:
     bool m_initialized = false;
@@ -47,6 +48,7 @@ private:
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;
     float m_brightness = 1.0f;
+    float m_contrast = 1.0f;
     
     bool initCapture();
     bool initWindow();

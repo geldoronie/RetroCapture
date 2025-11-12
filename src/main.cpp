@@ -15,6 +15,7 @@ void printUsage(const char* programName) {
     std::cout << "  --fps <valor>          Framerate da captura (padrão: 60)\n";
     std::cout << "\nOpções de Ajuste:\n";
     std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
+    std::cout << "  --contrast <valor>     Contraste geral (0.0-5.0, padrão: 1.0)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
@@ -35,6 +36,7 @@ int main(int argc, char* argv[]) {
     int captureHeight = 1080;
     int captureFps = 60;
     float brightness = 1.0f;
+    float contrast = 1.0f;
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i) {
@@ -73,6 +75,12 @@ int main(int argc, char* argv[]) {
                 LOG_ERROR("Brilho inválido. Use um valor entre 0.0 e 5.0");
                 return 1;
             }
+        } else if (arg == "--contrast" && i + 1 < argc) {
+            contrast = std::stof(argv[++i]);
+            if (contrast < 0.0f || contrast > 5.0f) {
+                LOG_ERROR("Contraste inválido. Use um valor entre 0.0 e 5.0");
+                return 1;
+            }
         } else {
             LOG_WARN("Argumento desconhecido: " + arg);
             printUsage(argv[0]);
@@ -85,6 +93,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Resolução: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Brilho: " + std::to_string(brightness));
+    LOG_INFO("Contraste: " + std::to_string(contrast));
 
     Application app;
 
@@ -102,6 +111,7 @@ int main(int argc, char* argv[]) {
     app.setResolution(captureWidth, captureHeight);
     app.setFramerate(captureFps);
     app.setBrightness(brightness);
+    app.setContrast(contrast);
     
     if (!app.init()) {
         LOG_ERROR("Falha ao inicializar aplicação");
