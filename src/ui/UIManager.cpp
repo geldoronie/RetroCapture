@@ -240,6 +240,134 @@ void UIManager::renderV4L2Controls() {
         return;
     }
     
+    ImGui::Text("Capture Resolution & Framerate");
+    ImGui::Separator();
+    
+    // Controles de resolução
+    ImGui::Text("Resolution:");
+    int width = static_cast<int>(m_captureWidth);
+    int height = static_cast<int>(m_captureHeight);
+    
+    ImGui::PushItemWidth(100);
+    ImGui::PushID("width");
+    bool widthEdited = ImGui::InputInt("Width##capture", &width, 1, 10);
+    width = std::max(1, std::min(7680, width)); // Limitar entre 1 e 7680
+    bool widthDeactivated = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::PopID();
+    
+    ImGui::SameLine();
+    
+    ImGui::PushID("height");
+    bool heightEdited = ImGui::InputInt("Height##capture", &height, 1, 10);
+    height = std::max(1, std::min(4320, height)); // Limitar entre 1 e 4320
+    bool heightDeactivated = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::PopID();
+    ImGui::PopItemWidth();
+    
+    // Aplicar mudanças quando qualquer campo perder o foco
+    if ((widthDeactivated || heightDeactivated) && (widthEdited || heightEdited)) {
+        if (width != static_cast<int>(m_captureWidth) || height != static_cast<int>(m_captureHeight)) {
+            m_captureWidth = static_cast<uint32_t>(width);
+            m_captureHeight = static_cast<uint32_t>(height);
+            if (m_onResolutionChanged) {
+                m_onResolutionChanged(m_captureWidth, m_captureHeight);
+            }
+        }
+    }
+    
+    // Resoluções comuns (botões rápidos)
+    ImGui::Text("Quick resolutions:");
+    if (ImGui::Button("640x480")) {
+        m_captureWidth = 640;
+        m_captureHeight = 480;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(640, 480);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("800x600")) {
+        m_captureWidth = 800;
+        m_captureHeight = 600;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(800, 600);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("1280x720")) {
+        m_captureWidth = 1280;
+        m_captureHeight = 720;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(1280, 720);
+        }
+    }
+    if (ImGui::Button("1920x1080")) {
+        m_captureWidth = 1920;
+        m_captureHeight = 1080;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(1920, 1080);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("2560x1440")) {
+        m_captureWidth = 2560;
+        m_captureHeight = 1440;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(2560, 1440);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("3840x2160")) {
+        m_captureWidth = 3840;
+        m_captureHeight = 2160;
+        if (m_onResolutionChanged) {
+            m_onResolutionChanged(3840, 2160);
+        }
+    }
+    
+    ImGui::Separator();
+    
+    // Controle de FPS
+    ImGui::Text("Framerate:");
+    int fps = static_cast<int>(m_captureFps);
+    ImGui::PushItemWidth(100);
+    bool fpsEdited = ImGui::InputInt("FPS##capture", &fps, 1, 5);
+    fps = std::max(1, std::min(240, fps)); // Limitar entre 1 e 240
+    ImGui::PopItemWidth();
+    
+    // Aplicar mudanças quando o campo perder o foco
+    if (ImGui::IsItemDeactivatedAfterEdit() && fpsEdited) {
+        if (fps != static_cast<int>(m_captureFps)) {
+            m_captureFps = static_cast<uint32_t>(fps);
+            if (m_onFramerateChanged) {
+                m_onFramerateChanged(m_captureFps);
+            }
+        }
+    }
+    
+    // FPS comuns (botões rápidos)
+    ImGui::Text("Quick FPS:");
+    if (ImGui::Button("30")) {
+        m_captureFps = 30;
+        if (m_onFramerateChanged) {
+            m_onFramerateChanged(30);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("60")) {
+        m_captureFps = 60;
+        if (m_onFramerateChanged) {
+            m_onFramerateChanged(60);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("120")) {
+        m_captureFps = 120;
+        if (m_onFramerateChanged) {
+            m_onFramerateChanged(120);
+        }
+    }
+    
+    ImGui::Separator();
     ImGui::Text("V4L2 Hardware Controls");
     ImGui::Separator();
     

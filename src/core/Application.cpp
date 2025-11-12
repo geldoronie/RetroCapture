@@ -279,6 +279,100 @@ bool Application::initCapture()
     return true;
 }
 
+bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps)
+{
+    if (!m_capture || !m_capture->isOpen()) {
+        LOG_ERROR("Captura não está aberta, não é possível reconfigurar");
+        return false;
+    }
+    
+    LOG_INFO("Reconfigurando captura: " + std::to_string(width) + "x" + 
+             std::to_string(height) + " @ " + std::to_string(fps) + "fps");
+    
+    // Salvar valores atuais para rollback se necessário
+    uint32_t oldWidth = m_captureWidth;
+    uint32_t oldHeight = m_captureHeight;
+    uint32_t oldFps = m_captureFps;
+    std::string devicePath = m_devicePath;
+    
+    // IMPORTANTE: Fechar e reabrir o dispositivo completamente
+    // Isso é necessário porque alguns drivers V4L2 não permitem mudar
+    // a resolução sem fechar o dispositivo
+    LOG_INFO("Fechando dispositivo para reconfiguração...");
+    m_capture->stopCapture();
+    m_capture->close();
+    
+    // Pequeno delay para garantir que o dispositivo foi liberado
+    usleep(100000); // 100ms
+    
+    // Reabrir dispositivo
+    LOG_INFO("Reabrindo dispositivo...");
+    if (!m_capture->open(devicePath)) {
+        LOG_ERROR("Falha ao reabrir dispositivo após reconfiguração");
+        return false;
+    }
+    
+    // Configurar novo formato
+    if (!m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+        LOG_ERROR("Falha ao configurar novo formato de captura");
+        // Tentar rollback: reabrir com formato anterior
+        m_capture->close();
+        usleep(100000);
+        if (m_capture->open(devicePath)) {
+            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFramerate(oldFps);
+            m_capture->startCapture();
+        }
+        return false;
+    }
+    
+    // Obter dimensões reais (o driver pode ter ajustado)
+    uint32_t actualWidth = m_capture->getWidth();
+    uint32_t actualHeight = m_capture->getHeight();
+    
+    // Configurar framerate
+    if (!m_capture->setFramerate(fps)) {
+        LOG_WARN("Não foi possível configurar framerate para " + std::to_string(fps) + "fps");
+        LOG_INFO("Usando framerate padrão do dispositivo");
+    }
+    
+    // Reiniciar captura (isso cria os buffers com o novo formato)
+    if (!m_capture->startCapture()) {
+        LOG_ERROR("Falha ao reiniciar captura após reconfiguração");
+        // Tentar rollback
+        m_capture->stopCapture();
+        m_capture->close();
+        usleep(100000);
+        if (m_capture->open(devicePath)) {
+            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFramerate(oldFps);
+            m_capture->startCapture();
+        }
+        return false;
+    }
+    
+    // Atualizar dimensões internas com valores reais
+    m_captureWidth = actualWidth;
+    m_captureHeight = actualHeight;
+    m_captureFps = fps;
+    
+    // IMPORTANTE: Descarta alguns frames iniciais após reconfiguração
+    // Os primeiros frames podem estar com dados antigos ou inválidos
+    // Isso garante que quando o loop principal tentar processar, já teremos frames válidos
+    LOG_INFO("Descartando frames iniciais após reconfiguração...");
+    Frame dummyFrame;
+    for (int i = 0; i < 5; ++i) {
+        m_capture->captureLatestFrame(dummyFrame);
+        usleep(10000); // 10ms entre tentativas
+    }
+    
+    LOG_INFO("Captura reconfigurada com sucesso: " + 
+             std::to_string(actualWidth) + "x" + 
+             std::to_string(actualHeight) + " @ " + std::to_string(fps) + "fps");
+    
+    return true;
+}
+
 bool Application::initUI()
 {
     m_ui = new UIManager();
@@ -353,6 +447,53 @@ bool Application::initUI()
         }
     });
     
+    m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height) {
+        LOG_INFO("Resolução alterada via UI: " + std::to_string(width) + "x" + std::to_string(height));
+        if (reconfigureCapture(width, height, m_captureFps)) {
+            // Atualizar textura se necessário (usar valores reais do dispositivo)
+            uint32_t actualWidth = m_capture->getWidth();
+            uint32_t actualHeight = m_capture->getHeight();
+            
+            // Sempre deletar e recriar a textura após reconfiguração
+            if (m_texture != 0) {
+                glDeleteTextures(1, &m_texture);
+                m_texture = 0;
+            }
+            
+            // Resetar estado para forçar recriação da textura no próximo frame
+            m_textureWidth = 0;
+            m_textureHeight = 0;
+            m_hasValidFrame = false;
+            
+            // Atualizar informações na UI com valores reais
+            if (m_ui && m_capture) {
+                m_ui->setCaptureInfo(actualWidth, actualHeight, 
+                                    m_captureFps, m_devicePath);
+            }
+            
+            LOG_INFO("Textura será recriada no próximo frame: " + 
+                     std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
+        } else {
+            // Se falhou, atualizar UI com valores atuais
+            if (m_ui && m_capture) {
+                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                    m_captureFps, m_devicePath);
+            }
+        }
+    });
+    
+    m_ui->setOnFramerateChanged([this](uint32_t fps) {
+        LOG_INFO("Framerate alterado via UI: " + std::to_string(fps) + "fps");
+        if (reconfigureCapture(m_captureWidth, m_captureHeight, fps)) {
+            m_captureFps = fps;
+            // Atualizar informações na UI
+            if (m_ui && m_capture) {
+                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                    m_captureFps, m_devicePath);
+            }
+        }
+    });
+    
     // Configurar valores iniciais
     m_ui->setBrightness(m_brightness);
     m_ui->setContrast(m_contrast);
@@ -422,7 +563,18 @@ void Application::run()
         bool newFrame = false;
         if (m_capture)
         {
-            newFrame = processFrame();
+            // Tentar processar frame várias vezes se não temos textura válida
+            // Isso é importante após reconfiguração quando a textura foi deletada
+            int maxAttempts = (m_texture == 0 && !m_hasValidFrame) ? 5 : 1;
+            for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+                newFrame = processFrame();
+                if (newFrame && m_hasValidFrame && m_texture != 0) {
+                    break; // Frame processado com sucesso
+                }
+                if (attempt < maxAttempts - 1) {
+                    usleep(5000); // 5ms entre tentativas
+                }
+            }
         }
 
         // Sempre renderizar se temos um frame válido

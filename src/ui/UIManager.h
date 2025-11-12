@@ -50,6 +50,8 @@ public:
 
     // Informações da captura
     void setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device);
+    void setOnResolutionChanged(std::function<void(uint32_t, uint32_t)> callback) { m_onResolutionChanged = callback; }
+    void setOnFramerateChanged(std::function<void(uint32_t)> callback) { m_onFramerateChanged = callback; }
 
     // Visibilidade da UI
     bool isVisible() const { return m_uiVisible; }
@@ -100,6 +102,8 @@ private:
     uint32_t m_captureHeight = 0;
     uint32_t m_captureFps = 0;
     std::string m_captureDevice;
+    std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
+    std::function<void(uint32_t)> m_onFramerateChanged;
 
     // UI helpers
     void renderShaderPanel();

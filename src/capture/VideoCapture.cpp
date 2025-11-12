@@ -183,6 +183,11 @@ bool VideoCapture::initMemoryMapping() {
 }
 
 void VideoCapture::cleanupBuffers() {
+    // Desenfileirar todos os buffers antes de limpar
+    if (m_streaming) {
+        stopCapture();
+    }
+    
     for (auto& buffer : m_buffers) {
         if (buffer.start && buffer.start != MAP_FAILED) {
             munmap(buffer.start, buffer.length);

@@ -41,6 +41,7 @@ public:
     
     bool startCapture();
     void stopCapture();
+    void cleanupBuffers(); // Limpar buffers (necessário ao reconfigurar formato)
     
     bool captureFrame(Frame& frame);
     
@@ -70,7 +71,6 @@ private:
     bool m_streaming = false;
     
     bool initMemoryMapping();
-    void cleanupBuffers();
     bool convertYUYVtoRGB(const Frame& input, std::vector<uint8_t>& output);
 };
 

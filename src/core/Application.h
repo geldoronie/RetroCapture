@@ -85,6 +85,7 @@ private:
     int32_t m_v4l2WhiteBalance = -1;
     
     bool initCapture();
+    bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
     bool initWindow();
     bool initRenderer();
     bool initUI();
