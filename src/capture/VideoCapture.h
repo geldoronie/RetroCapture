@@ -28,6 +28,7 @@ public:
     // Controles V4L2
     bool setControl(uint32_t controlId, int32_t value);
     bool getControl(uint32_t controlId, int32_t& value);
+    bool getControl(uint32_t controlId, int32_t& value, int32_t& min, int32_t& max, int32_t& step);
     bool setBrightness(int32_t value);      // -100 a 100 (padrão: 0)
     bool setContrast(int32_t value);        // -100 a 100 (padrão: 0)
     bool setSaturation(int32_t value);      // -100 a 100 (padrão: 0)

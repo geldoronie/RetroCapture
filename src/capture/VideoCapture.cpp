@@ -354,6 +354,42 @@ bool VideoCapture::getControl(uint32_t controlId, int32_t& value) {
     return true;
 }
 
+bool VideoCapture::getControl(uint32_t controlId, int32_t& value, int32_t& min, int32_t& max, int32_t& step) {
+    if (m_fd < 0) {
+        LOG_ERROR("Dispositivo não está aberto");
+        return false;
+    }
+    
+    // Primeiro, obter informações do controle (min, max, step)
+    struct v4l2_queryctrl queryctrl = {};
+    queryctrl.id = controlId;
+    
+    if (ioctl(m_fd, VIDIOC_QUERYCTRL, &queryctrl) < 0) {
+        // Controle não disponível
+        return false;
+    }
+    
+    // Verificar se o controle está desabilitado
+    if (queryctrl.flags & V4L2_CTRL_FLAG_DISABLED) {
+        return false;
+    }
+    
+    min = queryctrl.minimum;
+    max = queryctrl.maximum;
+    step = queryctrl.step;
+    
+    // Agora obter o valor atual
+    struct v4l2_control ctrl = {};
+    ctrl.id = controlId;
+    
+    if (ioctl(m_fd, VIDIOC_G_CTRL, &ctrl) < 0) {
+        return false;
+    }
+    
+    value = ctrl.value;
+    return true;
+}
+
 bool VideoCapture::setBrightness(int32_t value) {
     return setControl(V4L2_CID_BRIGHTNESS, value);
 }

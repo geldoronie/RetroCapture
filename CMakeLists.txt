@@ -37,6 +37,37 @@ pkg_check_modules(V4L2 REQUIRED libv4l2)
 # PNG (via libpng)
 pkg_check_modules(PNG REQUIRED libpng)
 
+# ImGui (via FetchContent)
+include(FetchContent)
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG docking
+)
+FetchContent_MakeAvailable(imgui)
+
+# Criar target para ImGui
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+target_link_libraries(imgui PUBLIC
+    glfw
+    OpenGL::GL
+    X11
+)
+
 # Threading
 find_package(Threads REQUIRED)
 
@@ -59,6 +90,7 @@ if(glfw3_FOUND)
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
         Threads::Threads
+        imgui
     )
 else()
     target_link_libraries(retrocapture
@@ -67,6 +99,7 @@ else()
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
         Threads::Threads
+        imgui
     )
 endif()
 

@@ -30,6 +30,9 @@ public:
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     
+    // Obter ponteiro GLFWwindow (para ImGui, etc)
+    void* getWindow() const { return m_window; }
+    
     // Callbacks
     // IMPORTANTE: Usa std::function para permitir lambdas com capture
     void setResizeCallback(std::function<void(int, int)> callback);

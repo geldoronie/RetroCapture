@@ -9,6 +9,7 @@ class VideoCapture;
 class WindowManager;
 class OpenGLRenderer;
 class ShaderEngine;
+class UIManager;
 
 class Application {
 public:
@@ -50,6 +51,7 @@ private:
     WindowManager* m_window = nullptr;
     OpenGLRenderer* m_renderer = nullptr;
     ShaderEngine* m_shaderEngine = nullptr;
+    UIManager* m_ui = nullptr;
     
     GLuint m_texture = 0;
     uint32_t m_textureWidth = 0;
@@ -85,7 +87,9 @@ private:
     bool initCapture();
     bool initWindow();
     bool initRenderer();
+    bool initUI();
     bool processFrame(); // Retorna true se um novo frame foi processado
     void convertYUYVtoRGB(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
+    void handleKeyInput();
 };
 

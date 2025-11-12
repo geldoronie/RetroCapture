@@ -4,11 +4,15 @@
 #include "../output/WindowManager.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../shader/ShaderEngine.h"
+#include "../ui/UIManager.h"
 #include "../renderer/glad_loader.h"
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 #include <linux/videodev2.h>
 #include <vector>
 #include <cstring>
 #include <unistd.h>
+#include <filesystem>
 
 Application::Application()
 {
@@ -34,6 +38,11 @@ bool Application::init()
     }
 
     if (!initCapture())
+    {
+        return false;
+    }
+
+    if (!initUI())
     {
         return false;
     }
@@ -270,6 +279,113 @@ bool Application::initCapture()
     return true;
 }
 
+bool Application::initUI()
+{
+    m_ui = new UIManager();
+    
+    // Obter GLFWwindow* do WindowManager
+    GLFWwindow* window = static_cast<GLFWwindow*>(m_window->getWindow());
+    if (!window) {
+        LOG_ERROR("Falha ao obter janela GLFW para ImGui");
+        delete m_ui;
+        m_ui = nullptr;
+        return false;
+    }
+    
+    if (!m_ui->init(window)) {
+        LOG_ERROR("Falha ao inicializar UIManager");
+        delete m_ui;
+        m_ui = nullptr;
+        return false;
+    }
+    
+    // Configurar callbacks
+    m_ui->setOnShaderChanged([this](const std::string& shaderPath) {
+        if (m_shaderEngine) {
+            if (shaderPath.empty()) {
+                m_shaderEngine->disableShader();
+                LOG_INFO("Shader desabilitado");
+            } else {
+                std::filesystem::path fullPath = std::filesystem::current_path() / "shaders" / "shaders_glsl" / shaderPath;
+                if (m_shaderEngine->loadPreset(fullPath.string())) {
+                    LOG_INFO("Shader carregado via UI: " + shaderPath);
+                } else {
+                    LOG_ERROR("Falha ao carregar shader via UI: " + shaderPath);
+                }
+            }
+        }
+    });
+    
+    m_ui->setOnBrightnessChanged([this](float brightness) {
+        m_brightness = brightness;
+    });
+    
+    m_ui->setOnContrastChanged([this](float contrast) {
+        m_contrast = contrast;
+    });
+    
+    m_ui->setOnMaintainAspectChanged([this](bool maintain) {
+        m_maintainAspect = maintain;
+    });
+    
+    m_ui->setOnFullscreenChanged([this](bool fullscreen) {
+        // TODO: Implementar toggle de fullscreen
+        LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
+    });
+    
+    m_ui->setOnV4L2ControlChanged([this](const std::string& name, int32_t value) {
+        if (!m_capture) return;
+        
+        // Mapear nome para control ID
+        uint32_t cid = 0;
+        if (name == "Brightness") cid = V4L2_CID_BRIGHTNESS;
+        else if (name == "Contrast") cid = V4L2_CID_CONTRAST;
+        else if (name == "Saturation") cid = V4L2_CID_SATURATION;
+        else if (name == "Hue") cid = V4L2_CID_HUE;
+        else if (name == "Gain") cid = V4L2_CID_GAIN;
+        else if (name == "Exposure") cid = V4L2_CID_EXPOSURE_ABSOLUTE;
+        else if (name == "Sharpness") cid = V4L2_CID_SHARPNESS;
+        else if (name == "Gamma") cid = V4L2_CID_GAMMA;
+        else if (name == "White Balance") cid = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
+        
+        if (cid != 0) {
+            m_capture->setControl(cid, value);
+        }
+    });
+    
+    // Configurar valores iniciais
+    m_ui->setBrightness(m_brightness);
+    m_ui->setContrast(m_contrast);
+    m_ui->setMaintainAspect(m_maintainAspect);
+    m_ui->setFullscreen(m_fullscreen);
+    
+    // Configurar controles V4L2
+    if (m_capture) {
+        m_ui->setV4L2Controls(m_capture);
+    }
+    
+    // Configurar informações da captura
+    if (m_capture) {
+        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                            m_captureFps, m_devicePath);
+    }
+    
+    // Configurar shader atual
+    if (!m_presetPath.empty()) {
+        std::filesystem::path presetPath(m_presetPath);
+        std::filesystem::path basePath("shaders/shaders_glsl");
+        std::filesystem::path relativePath = std::filesystem::relative(presetPath, basePath);
+        if (!relativePath.empty() && relativePath != presetPath) {
+            m_ui->setCurrentShader(relativePath.string());
+        } else {
+            m_ui->setCurrentShader(m_presetPath);
+        }
+    }
+    
+    LOG_INFO("UIManager inicializado");
+    return true;
+}
+
 void Application::run()
 {
     if (!m_initialized)
@@ -293,6 +409,14 @@ void Application::run()
     while (!m_window->shouldClose())
     {
         m_window->pollEvents();
+        
+        // Processar entrada de teclado (F12 para toggle UI)
+        handleKeyInput();
+
+        // Iniciar frame do ImGui
+        if (m_ui) {
+            m_ui->beginFrame();
+        }
 
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
         bool newFrame = false;
@@ -409,12 +533,27 @@ void Application::run()
             m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), 
                                      shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                      m_maintainAspect, renderWidth, renderHeight);
+            
+            // Renderizar UI
+            if (m_ui) {
+                m_ui->render();
+                // IMPORTANTE: endFrame() deve ser chamado ANTES do swapBuffers()
+                // para que a UI seja renderizada no buffer correto
+                m_ui->endFrame();
+            }
+            
             m_window->swapBuffers();
         }
         else
         {
             // Se não há frame válido ainda, fazer um pequeno sleep
             usleep(1000); // 1ms
+            
+            // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
+            // Isso evita o erro "Forgot to call Render() or EndFrame()"
+            if (m_ui) {
+                m_ui->endFrame();
+            }
         }
     }
 
@@ -595,6 +734,13 @@ void Application::shutdown()
         m_renderer = nullptr;
     }
 
+    if (m_ui)
+    {
+        m_ui->shutdown();
+        delete m_ui;
+        m_ui = nullptr;
+    }
+
     if (m_window)
     {
         m_window->shutdown();
@@ -603,4 +749,24 @@ void Application::shutdown()
     }
 
     m_initialized = false;
+}
+
+void Application::handleKeyInput()
+{
+    if (!m_ui || !m_window) return;
+    
+    GLFWwindow* window = static_cast<GLFWwindow*>(m_window->getWindow());
+    if (!window) return;
+    
+    // F12 para toggle UI
+    static bool f12Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS) {
+        if (!f12Pressed) {
+            m_ui->toggle();
+            LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
+            f12Pressed = true;
+        }
+    } else {
+        f12Pressed = false;
+    }
 }
