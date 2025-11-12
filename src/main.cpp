@@ -13,6 +13,9 @@ void printUsage(const char* programName) {
     std::cout << "  --width <valor>        Largura da captura (padrão: 1920)\n";
     std::cout << "  --height <valor>       Altura da captura (padrão: 1080)\n";
     std::cout << "  --fps <valor>          Framerate da captura (padrão: 60)\n";
+    std::cout << "\nOpções de Janela:\n";
+    std::cout << "  --window-width <valor>  Largura da janela (padrão: 1920)\n";
+    std::cout << "  --window-height <valor> Altura da janela (padrão: 1080)\n";
     std::cout << "\nOpções de Ajuste:\n";
     std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
     std::cout << "  --contrast <valor>     Contraste geral (0.0-5.0, padrão: 1.0)\n";
@@ -22,6 +25,7 @@ void printUsage(const char* programName) {
     std::cout << "  " << programName << " --device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
     std::cout << "  " << programName << " --device /dev/video1 --width 3840 --height 2160 --fps 60\n";
+    std::cout << "  " << programName << " --window-width 1280 --window-height 720 --brightness 1.2\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -35,6 +39,8 @@ int main(int argc, char* argv[]) {
     int captureWidth = 1920;
     int captureHeight = 1080;
     int captureFps = 60;
+    int windowWidth = 1920;
+    int windowHeight = 1080;
     float brightness = 1.0f;
     float contrast = 1.0f;
 
@@ -69,6 +75,18 @@ int main(int argc, char* argv[]) {
                 LOG_ERROR("FPS inválido. Use um valor entre 1 e 240");
                 return 1;
             }
+        } else if (arg == "--window-width" && i + 1 < argc) {
+            windowWidth = std::stoi(argv[++i]);
+            if (windowWidth <= 0 || windowWidth > 7680) {
+                LOG_ERROR("Largura da janela inválida. Use um valor entre 1 e 7680");
+                return 1;
+            }
+        } else if (arg == "--window-height" && i + 1 < argc) {
+            windowHeight = std::stoi(argv[++i]);
+            if (windowHeight <= 0 || windowHeight > 4320) {
+                LOG_ERROR("Altura da janela inválida. Use um valor entre 1 e 4320");
+                return 1;
+            }
         } else if (arg == "--brightness" && i + 1 < argc) {
             brightness = std::stof(argv[++i]);
             if (brightness < 0.0f || brightness > 5.0f) {
@@ -90,8 +108,9 @@ int main(int argc, char* argv[]) {
     
     LOG_INFO("Inicializando aplicação...");
     LOG_INFO("Dispositivo: " + devicePath);
-    LOG_INFO("Resolução: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
+    LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
+    LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
     LOG_INFO("Brilho: " + std::to_string(brightness));
     LOG_INFO("Contraste: " + std::to_string(contrast));
 
@@ -110,6 +129,7 @@ int main(int argc, char* argv[]) {
     app.setDevicePath(devicePath);
     app.setResolution(captureWidth, captureHeight);
     app.setFramerate(captureFps);
+    app.setWindowSize(windowWidth, windowHeight);
     app.setBrightness(brightness);
     app.setContrast(contrast);
     

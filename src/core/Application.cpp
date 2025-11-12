@@ -48,8 +48,8 @@ bool Application::initWindow()
     m_window = new WindowManager();
 
     WindowConfig config;
-    config.width = 1920;
-    config.height = 1080;
+    config.width = m_windowWidth;
+    config.height = m_windowHeight;
     config.title = "RetroCapture";
     config.fullscreen = false;
     config.vsync = true;

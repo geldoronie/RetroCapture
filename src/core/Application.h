@@ -24,6 +24,7 @@ public:
     void setDevicePath(const std::string& path) { m_devicePath = path; }
     void setResolution(uint32_t width, uint32_t height) { m_captureWidth = width; m_captureHeight = height; }
     void setFramerate(uint32_t fps) { m_captureFps = fps; }
+    void setWindowSize(uint32_t width, uint32_t height) { m_windowWidth = width; m_windowHeight = height; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
     
@@ -47,6 +48,8 @@ private:
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;
+    uint32_t m_windowWidth = 1920;
+    uint32_t m_windowHeight = 1080;
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
     
