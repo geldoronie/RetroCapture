@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cstdint>
+#include <functional>
 
 struct WindowConfig {
     uint32_t width = 1920;
@@ -9,6 +10,7 @@ struct WindowConfig {
     std::string title = "RetroCapture";
     bool fullscreen = false;
     bool vsync = true;
+    int monitorIndex = -1; // -1 = usar monitor primário, 0+ = índice do monitor
 };
 
 class WindowManager {
@@ -29,7 +31,12 @@ public:
     uint32_t getHeight() const { return m_height; }
     
     // Callbacks
-    void setResizeCallback(void (*callback)(int, int));
+    // IMPORTANTE: Usa std::function para permitir lambdas com capture
+    void setResizeCallback(std::function<void(int, int)> callback);
+    
+    // Obter ponteiro para Application (para callbacks)
+    void setUserData(void* userData) { m_userData = userData; }
+    void* getUserData() const { return m_userData; }
     
 private:
     void* m_window = nullptr; // GLFWwindow* (opaque pointer)
@@ -37,6 +44,7 @@ private:
     uint32_t m_height = 0;
     bool m_initialized = false;
     
-    void (*m_resizeCallback)(int, int) = nullptr;
+    std::function<void(int, int)> m_resizeCallback = nullptr;
+    void* m_userData = nullptr; // User data para callbacks
 };
 

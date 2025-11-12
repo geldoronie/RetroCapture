@@ -39,6 +39,17 @@ bool Application::init()
     }
 
     m_initialized = true;
+    
+    // IMPORTANTE: Após inicialização completa, garantir que o viewport está atualizado
+    // Isso é especialmente importante quando a janela é criada em fullscreen
+    if (m_window && m_shaderEngine) {
+        uint32_t currentWidth = m_window->getWidth();
+        uint32_t currentHeight = m_window->getHeight();
+        m_shaderEngine->setViewport(currentWidth, currentHeight);
+        LOG_INFO("Viewport final configurado após inicialização: " + 
+                 std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+    }
+    
     LOG_INFO("Application inicializada com sucesso");
     return true;
 }
@@ -51,7 +62,8 @@ bool Application::initWindow()
     config.width = m_windowWidth;
     config.height = m_windowHeight;
     config.title = "RetroCapture";
-    config.fullscreen = false;
+    config.fullscreen = m_fullscreen;
+    config.monitorIndex = m_monitorIndex;
     config.vsync = true;
 
     if (!m_window->init(config))
@@ -64,13 +76,16 @@ bool Application::initWindow()
 
     m_window->makeCurrent();
     
-    // Configurar callback de resize para atualizar viewport mantendo proporção
-    // O WindowManager já atualiza m_width e m_height automaticamente
-    // O viewport será recalculado no próximo frame em renderTexture()
-    m_window->setResizeCallback([](int width, int height) {
-        // Callback vazio - o WindowManager já atualiza as dimensões
-        // O viewport será recalculado automaticamente no próximo frame
-    });
+    // Armazenar ponteiro da Application no WindowManager para uso em callbacks
+    m_window->setUserData(this);
+    
+    // Configurar callback de resize para atualizar viewport quando a janela for redimensionada
+    // ou entrar em fullscreen
+    // IMPORTANTE: Este callback é chamado pelo GLFW quando a janela muda de tamanho,
+    // incluindo quando entra em fullscreen
+    // IMPORTANTE: O ShaderEngine ainda não foi inicializado aqui, então vamos atualizar
+    // o callback depois que o ShaderEngine for criado
+    // Por enquanto, vamos apenas armazenar o ponteiro
     
     return true;
 }
@@ -104,6 +119,32 @@ bool Application::initRenderer()
     }
     else
     {
+        // IMPORTANTE: Atualizar viewport do ShaderEngine com as dimensões atuais da janela
+        // Isso é especialmente importante quando a janela é criada em fullscreen
+        // O callback de resize pode não ser chamado imediatamente na criação
+        if (m_window) {
+            uint32_t currentWidth = m_window->getWidth();
+            uint32_t currentHeight = m_window->getHeight();
+            m_shaderEngine->setViewport(currentWidth, currentHeight);
+            LOG_INFO("Viewport inicial do ShaderEngine configurado: " + 
+                     std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+        }
+        
+        // IMPORTANTE: Agora que o ShaderEngine está inicializado, configurar o callback de resize
+        // para atualizar o viewport quando a janela for redimensionada ou entrar em fullscreen
+        if (m_window) {
+            Application* appPtr = this;
+            m_window->setResizeCallback([appPtr](int width, int height) {
+                // IMPORTANTE: Atualizar viewport do ShaderEngine imediatamente quando resize acontece
+                // Isso é especialmente crítico quando entra em fullscreen
+                if (appPtr && appPtr->m_shaderEngine) {
+                    appPtr->m_shaderEngine->setViewport(width, height);
+                    LOG_INFO("Viewport atualizado via resize callback (fullscreen/resize): " + 
+                             std::to_string(width) + "x" + std::to_string(height));
+                }
+            });
+        }
+        
         // Carregar shader ou preset se especificado
         if (!m_presetPath.empty())
         {
@@ -238,6 +279,16 @@ void Application::run()
     }
 
     LOG_INFO("Iniciando loop principal...");
+    
+    // IMPORTANTE: Garantir que o viewport está atualizado antes do primeiro frame
+    // Isso é especialmente importante quando a janela é criada em fullscreen
+    if (m_shaderEngine) {
+        uint32_t currentWidth = m_window->getWidth();
+        uint32_t currentHeight = m_window->getHeight();
+        m_shaderEngine->setViewport(currentWidth, currentHeight);
+        LOG_INFO("Viewport configurado antes do loop principal: " + 
+                 std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+    }
 
     while (!m_window->shouldClose())
     {
@@ -262,7 +313,10 @@ void Application::run()
             {
                 // IMPORTANTE: Atualizar viewport com as dimensões da janela antes de aplicar o shader
                 // Isso garante que o último pass renderize para o tamanho correto da janela
-                m_shaderEngine->setViewport(m_window->getWidth(), m_window->getHeight());
+                // IMPORTANTE: Sempre usar dimensões atuais, especialmente quando entra em fullscreen
+                uint32_t currentWidth = m_window->getWidth();
+                uint32_t currentHeight = m_window->getHeight();
+                m_shaderEngine->setViewport(currentWidth, currentHeight);
 
                 textureToRender = m_shaderEngine->applyShader(m_texture, m_textureWidth, m_textureHeight);
                 isShaderTexture = true;
@@ -288,7 +342,21 @@ void Application::run()
 
             // IMPORTANTE: Resetar viewport para o tamanho completo da janela
             // Isso garante que a textura seja renderizada em toda a janela
-            glViewport(0, 0, m_window->getWidth(), m_window->getHeight());
+            // IMPORTANTE: Sempre atualizar viewport com as dimensões atuais da janela
+            // Isso é especialmente importante quando entra em fullscreen
+            uint32_t currentWidth = m_window->getWidth();
+            uint32_t currentHeight = m_window->getHeight();
+            
+            // DEBUG: Log para verificar se as dimensões mudaram
+            static uint32_t lastViewportWidth = 0, lastViewportHeight = 0;
+            if (currentWidth != lastViewportWidth || currentHeight != lastViewportHeight) {
+                LOG_INFO("Viewport OpenGL atualizado: " + 
+                         std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+                lastViewportWidth = currentWidth;
+                lastViewportHeight = currentHeight;
+            }
+            
+            glViewport(0, 0, currentWidth, currentHeight);
 
             // IMPORTANTE: Para shaders com alpha (como Game Boy), não limpar com preto opaco
             // Limpar com preto transparente para que o blending funcione corretamente

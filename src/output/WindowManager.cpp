@@ -26,11 +26,35 @@ bool WindowManager::init(const WindowConfig& config) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
+    // Determinar qual monitor usar
+    GLFWmonitor* monitor = nullptr;
+    if (config.fullscreen) {
+        if (config.monitorIndex >= 0) {
+            // Usar monitor específico
+            int monitorCount;
+            GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+            if (config.monitorIndex < monitorCount) {
+                monitor = monitors[config.monitorIndex];
+                const char* monitorName = glfwGetMonitorName(monitor);
+                LOG_INFO("Usando monitor " + std::to_string(config.monitorIndex) + 
+                         (monitorName ? (": " + std::string(monitorName)) : ""));
+            } else {
+                LOG_WARN("Monitor índice " + std::to_string(config.monitorIndex) + 
+                         " não encontrado (total: " + std::to_string(monitorCount) + 
+                         "), usando monitor primário");
+                monitor = glfwGetPrimaryMonitor();
+            }
+        } else {
+            // Usar monitor primário
+            monitor = glfwGetPrimaryMonitor();
+        }
+    }
+    
     GLFWwindow* window = glfwCreateWindow(
         config.width,
         config.height,
         config.title.c_str(),
-        config.fullscreen ? glfwGetPrimaryMonitor() : nullptr,
+        monitor,
         nullptr
     );
     
@@ -56,8 +80,13 @@ bool WindowManager::init(const WindowConfig& config) {
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int width, int height) {
         WindowManager* wm = static_cast<WindowManager*>(glfwGetWindowUserPointer(w));
         if (wm) {
+            // Atualizar dimensões do WindowManager
             wm->m_width = width;
             wm->m_height = height;
+            
+            // Chamar callback do WindowManager (se configurado)
+            // IMPORTANTE: Este callback pode ser uma lambda que atualiza o viewport do ShaderEngine
+            // Isso garante que o viewport seja atualizado imediatamente quando entra em fullscreen
             if (wm->m_resizeCallback) {
                 wm->m_resizeCallback(width, height);
             }
@@ -65,11 +94,19 @@ bool WindowManager::init(const WindowConfig& config) {
     });
     
     m_window = window;
-    m_width = config.width;
-    m_height = config.height;
+    
+    // IMPORTANTE: Sempre obter as dimensões reais do framebuffer após criar a janela
+    // Isso é especialmente importante em fullscreen, onde as dimensões podem ser diferentes
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    m_width = fbWidth > 0 ? fbWidth : config.width;
+    m_height = fbHeight > 0 ? fbHeight : config.height;
+    
     m_initialized = true;
     
-    LOG_INFO("Janela criada: " + std::to_string(m_width) + "x" + std::to_string(m_height));
+    LOG_INFO("Janela criada: " + std::to_string(m_width) + "x" + std::to_string(m_height) + 
+             (config.fullscreen ? " (fullscreen)" : " (windowed)") +
+             " [framebuffer: " + std::to_string(fbWidth) + "x" + std::to_string(fbHeight) + "]");
     
     return true;
 }
@@ -112,7 +149,7 @@ void WindowManager::makeCurrent() {
     }
 }
 
-void WindowManager::setResizeCallback(void (*callback)(int, int)) {
+void WindowManager::setResizeCallback(std::function<void(int, int)> callback) {
     m_resizeCallback = callback;
 }
 
