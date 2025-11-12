@@ -65,13 +65,14 @@ bool ShaderPreset::load(const std::string& presetPath) {
             if (eqPos != std::string::npos) {
                 std::string value = line.substr(eqPos + 1);
                 value.erase(0, value.find_first_not_of(" \t\""));
+                value.erase(value.find_last_not_of(" \t\"") + 1);
                 // Parsear lista de nomes de texturas separados por ;
                 std::istringstream iss(value);
                 std::string texName;
                 while (std::getline(iss, texName, ';')) {
-                    // Remover espaços
-                    texName.erase(0, texName.find_first_not_of(" \t"));
-                    texName.erase(texName.find_last_not_of(" \t") + 1);
+                    // Remover espaços e aspas
+                    texName.erase(0, texName.find_first_not_of(" \t\""));
+                    texName.erase(texName.find_last_not_of(" \t\"") + 1);
                     if (!texName.empty()) {
                         // Criar entrada de textura vazia (o caminho será definido depois)
                         ShaderTexture tex;
