@@ -279,6 +279,32 @@ void UIManager::renderImageControls() {
             m_onFullscreenChanged(fullscreen);
         }
     }
+    
+    // Monitor Index (usado quando fullscreen está ativo)
+    ImGui::Separator();
+    ImGui::Text("Monitor Index:");
+    if (!fullscreen && !m_fullscreen) {
+        ImGui::TextDisabled("(only used in fullscreen mode)");
+    } else {
+        ImGui::TextDisabled("(-1 = primary monitor, 0+ = specific monitor)");
+    }
+    int monitorIndex = m_monitorIndex;
+    ImGui::PushItemWidth(100);
+    if (ImGui::InputInt("##monitor", &monitorIndex, 1, 5)) {
+        monitorIndex = std::max(-1, monitorIndex); // Não permitir valores negativos menores que -1
+        m_monitorIndex = monitorIndex;
+        if (m_onMonitorIndexChanged) {
+            m_onMonitorIndexChanged(monitorIndex);
+        }
+    }
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##monitor")) {
+        m_monitorIndex = -1;
+        if (m_onMonitorIndexChanged) {
+            m_onMonitorIndexChanged(-1);
+        }
+    }
 }
 
 void UIManager::renderV4L2Controls() {

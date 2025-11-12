@@ -431,6 +431,22 @@ bool Application::initUI()
         }
     });
     
+    m_ui->setOnMonitorIndexChanged([this](int monitorIndex) {
+        LOG_INFO("Monitor index alterado: " + std::to_string(monitorIndex));
+        m_monitorIndex = monitorIndex;
+        // Se estiver em fullscreen, atualizar para usar o novo monitor
+        if (m_fullscreen && m_window) {
+            m_window->setFullscreen(true, monitorIndex);
+            
+            // Atualizar viewport do shader engine após mudança de monitor
+            if (m_shaderEngine) {
+                uint32_t currentWidth = m_window->getWidth();
+                uint32_t currentHeight = m_window->getHeight();
+                m_shaderEngine->setViewport(currentWidth, currentHeight);
+            }
+        }
+    });
+    
     m_ui->setOnV4L2ControlChanged([this](const std::string& name, int32_t value) {
         if (!m_capture) return;
         
@@ -503,6 +519,7 @@ bool Application::initUI()
     m_ui->setContrast(m_contrast);
     m_ui->setMaintainAspect(m_maintainAspect);
     m_ui->setFullscreen(m_fullscreen);
+    m_ui->setMonitorIndex(m_monitorIndex);
     
     // Configurar controles V4L2
     if (m_capture) {

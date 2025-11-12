@@ -43,6 +43,8 @@ public:
 
     void setFullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
     void setOnFullscreenChanged(std::function<void(bool)> callback) { m_onFullscreenChanged = callback; }
+    void setMonitorIndex(int index) { m_monitorIndex = index; }
+    void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
 
     // Controles V4L2
     void setV4L2Controls(VideoCapture *capture);
@@ -85,7 +87,9 @@ private:
 
     // Fullscreen
     bool m_fullscreen = false;
+    int m_monitorIndex = -1; // -1 = usar monitor primário
     std::function<void(bool)> m_onFullscreenChanged;
+    std::function<void(int)> m_onMonitorIndexChanged;
 
     // V4L2 Controls
     VideoCapture *m_capture = nullptr;
