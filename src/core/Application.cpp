@@ -664,10 +664,10 @@ void Application::run()
                 renderHeight = m_textureHeight;
             }
             
-            // Para texturas do shader, inverter Y (shader renderiza invertido)
-            // Para textura original (câmera), NÃO inverter Y (câmera já está correta)
-            // flipY: true para shader (precisa inverter), false para câmera (já está correto)
-            bool shouldFlipY = isShaderTexture;
+            // IMPORTANTE: A imagem da câmera vem invertida (Y invertido)
+            // Shaders também renderizam invertido, então ambos precisam de inversão Y
+            // flipY: true para ambos (câmera e shader precisam inverter)
+            bool shouldFlipY = true;
             m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), 
                                      shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                      m_maintainAspect, renderWidth, renderHeight);
