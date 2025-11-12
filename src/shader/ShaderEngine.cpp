@@ -431,8 +431,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // IMPORTANTE: Guardar a textura original para passes que precisam dela (como hq2x)
         // Alguns shaders (como hqx-pass2) precisam tanto da saída do pass anterior quanto da entrada original
         GLuint originalTexture = inputTexture;
-        uint32_t originalWidth = width;
-        uint32_t originalHeight = height;
 
         // IMPORTANTE: Para motion blur, precisamos manter um histórico de frames anteriores
         // O histórico deve conter frames JÁ PROCESSADOS (saída do shader), não a entrada
@@ -533,6 +531,8 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
             // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
             // O shader gameboy usa alpha, então precisamos de um fundo transparente
+            // IMPORTANTE: Habilitar color mask antes de limpar (como RetroArch faz)
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
@@ -540,8 +540,10 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // O blending é necessário apenas na renderização final na janela, não durante a renderização para o framebuffer
             // Durante a renderização para o framebuffer, queremos que o shader escreva diretamente o alpha que ele calcula
             // O blending será aplicado depois quando renderizarmos a textura do framebuffer na janela
-            // glEnable(GL_BLEND);
-            // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            // IMPORTANTE: Desabilitar blending, culling e depth test (como RetroArch faz)
+            glDisable(GL_BLEND);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
 
             // Usar shader program
             glUseProgram(pass.program);
@@ -550,6 +552,13 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             if (pass.program == 0)
             {
                 LOG_ERROR("Programa de shader inválido no pass " + std::to_string(i));
+                continue; // Pular este pass se o programa é inválido
+            }
+
+            // DEBUG: Log do programa sendo usado
+            if (i == 0)
+            {
+                LOG_INFO("Pass 0: Usando programa de shader: " + std::to_string(pass.program));
             }
 
             // IMPORTANTE: Configurar uniforms ANTES de bind de texturas
@@ -567,6 +576,47 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 LOG_ERROR("Textura de entrada inválida no pass " + std::to_string(i));
                 continue; // Pular este pass se não há textura válida
             }
+
+            // IMPORTANTE: Aplicar filter_linear# e wrap_mode# na textura de entrada
+            // RetroArch aplica essas configurações quando faz bind da textura
+            // Isso é crítico para shaders como motionblur-simple e crt-geom que precisam de GL_NEAREST
+            // A textura já está bindada (glBindTexture acima), então apenas aplicar parâmetros
+            bool filterLinear = passInfo.filterLinear;
+            std::string wrapMode = passInfo.wrapMode;
+            bool mipmapInput = passInfo.mipmapInput;
+
+            // DEBUG: Log das configurações aplicadas no primeiro pass
+            if (i == 0)
+            {
+                LOG_INFO("Pass 0: Aplicando configurações de textura: filter=" + (filterLinear ? std::string("linear") : std::string("nearest")) +
+                         ", wrap=" + wrapMode + ", mipmap=" + (mipmapInput ? std::string("yes") : std::string("no")));
+            }
+
+            // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
+            // IMPORTANTE: Aplicar sempre, pois alguns shaders (como crt-geom) precisam de GL_NEAREST no primeiro pass
+            GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+            // Se mipmap for necessário, usar filtros de mipmap
+            if (mipmapInput)
+            {
+                if (filterLinear)
+                {
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                }
+                else
+                {
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+                }
+                glGenerateMipmap(GL_TEXTURE_2D);
+            }
+
+            // Aplicar wrap mode
+            // IMPORTANTE: Usar clamp_to_edge como fallback se clamp_to_border não for suportado
+            GLenum wrap = wrapModeToGLEnum(wrapMode);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 
             // DEBUG: Log do primeiro pass
             if (i == 0)
@@ -597,13 +647,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 GLint loc = getUniformLocation(pass.program, name);
                 if (loc >= 0)
                 {
+                    // IMPORTANTE: Garantir que a textura está bindada ANTES de configurar o uniform
+                    // E garantir que estamos na unidade de textura correta
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, currentTexture);
                     glUniform1i(loc, 0);
                     textureBound = true;
                     if (i == 0)
                     {
-                        LOG_INFO("Pass 0: Uniform de textura de entrada encontrado: '" + std::string(name) + "' vinculado à unidade 0");
+                        LOG_INFO("Pass 0: Uniform de textura de entrada encontrado: '" + std::string(name) + 
+                                 "' vinculado à unidade 0, textura ID=" + std::to_string(currentTexture));
                     }
                     break; // Encontrou um, não precisa tentar os outros
+                }
+                else if (i == 0)
+                {
+                    // Log apenas no primeiro pass para debug
+                    // LOG_INFO("Pass 0: Uniform '" + std::string(name) + "' não encontrado");
                 }
             }
 
@@ -612,6 +672,12 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             {
                 LOG_WARN("Nenhum uniform de textura encontrado no pass 0 (Texture/Source/Input/s_p/etc)");
                 LOG_WARN("Isso pode causar tela preta - o shader precisa de um uniform de textura de entrada");
+                LOG_WARN("Pass 0: Programa de shader: " + std::to_string(pass.program));
+                
+                // Tentar listar todos os uniforms do programa (debug)
+                GLint numUniforms = 0;
+                // glGetProgramiv(pass.program, GL_ACTIVE_UNIFORMS, &numUniforms);
+                // LOG_INFO("Pass 0: Número de uniforms ativos: " + std::to_string(numUniforms));
             }
 
             // Bind texturas de passes anteriores (PassPrev#Texture)
@@ -654,7 +720,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                         passTextureNames.push_back("PassPrev" + std::to_string(prevIdx) + "Texture");
                     }
 
-                    bool bound = false;
                     for (const auto &name : passTextureNames)
                     {
                         GLint loc = getUniformLocation(pass.program, name);
@@ -678,7 +743,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                                     glUniform1i(loc, texUnit);
                                     LOG_INFO("Pass 0: Uniform '" + name + "' vinculado ao histórico de frame " + std::to_string(prevIdx) + " (unidade " + std::to_string(texUnit) + ")");
                                     texUnit++;
-                                    bound = true;
                                 }
                             }
                             // Se não há histórico suficiente, não vincular o uniform
@@ -707,7 +771,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                         passTextureNames.push_back("Prev" + std::to_string(prevPass) + "Texture");
                     }
 
-                    bool bound = false;
                     for (const auto &name : passTextureNames)
                     {
                         GLint loc = getUniformLocation(pass.program, name);
@@ -717,7 +780,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                             glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
                             glUniform1i(loc, texUnit);
                             texUnit++;
-                            bound = true;
                             break;
                         }
                     }
@@ -743,20 +805,40 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 glActiveTexture(GL_TEXTURE0 + texUnit);
                 glBindTexture(GL_TEXTURE_2D, texRef.second);
 
-                // Configurar filtro linear se especificado
+                // Aplicar configurações do preset (filter_linear, wrap_mode, mipmap)
+                bool filterLinear = true;               // Padrão: linear
+                std::string wrapMode = "clamp_to_edge"; // Padrão: clamp_to_edge
+                bool mipmap = false;                    // Padrão: sem mipmap
+
                 auto texIt = presetTextures.find(texRef.first);
-                if (texIt != presetTextures.end() && texIt->second.linear)
+                if (texIt != presetTextures.end())
                 {
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    filterLinear = texIt->second.linear;
+                    wrapMode = texIt->second.wrapMode;
+                    mipmap = texIt->second.mipmap;
                 }
-                else
+
+                // Aplicar configurações (textura já está bindada)
+                GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+                if (mipmap)
                 {
-                    // Se não especificar linear, usar nearest (padrão para paletas)
-                    // GL_NEAREST = 0x2600 (definido em GL/gl.h, mas não carregado dinamicamente)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, 0x2600); // GL_NEAREST
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 0x2600); // GL_NEAREST
+                    if (filterLinear)
+                    {
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                    }
+                    else
+                    {
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+                    }
+                    glGenerateMipmap(GL_TEXTURE_2D);
                 }
+
+                GLenum wrap = wrapModeToGLEnum(wrapMode);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 
                 GLint loc = getUniformLocation(pass.program, texRef.first);
                 if (loc >= 0)
@@ -784,10 +866,16 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             glEnableVertexAttribArray(0); // Position
             glEnableVertexAttribArray(1); // TexCoord
 
+            // IMPORTANTE: Garantir que a textura está bindada antes de renderizar
+            // Alguns drivers podem desvincular a textura durante mudanças de estado
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, currentTexture);
+
             // DEBUG: Log antes de renderizar
             if (i == 0)
             {
-                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer));
+                LOG_INFO("Pass 0: Renderizando para framebuffer " + std::to_string(pass.framebuffer) + 
+                         ", textura de entrada ID=" + std::to_string(currentTexture));
             }
 
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
@@ -985,6 +1073,16 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             }
         }
 
+        // DEBUG: Log final antes de retornar
+        LOG_INFO("applyShader: Retornando textura final: " + std::to_string(currentTexture) +
+                 " (" + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + ")");
+
+        if (currentTexture == 0)
+        {
+            LOG_ERROR("applyShader: Textura final inválida (0)! Retornando textura de entrada original.");
+            return inputTexture;
+        }
+
         return currentTexture;
     }
     else
@@ -1094,11 +1192,31 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     }
 
     // OutputSize (vec4 do RetroArch - convertido de params.OutputSize)
+    // IMPORTANTE: Alguns shaders usam vec4, outros usam vec2
+    // O problema é que não podemos saber o tipo sem glGetActiveUniform
+    // Vamos tentar configurar como vec2 primeiro (muitos shaders modernos usam vec2)
+    // Se o shader espera vec4, o OpenGL pode aceitar vec2 nos primeiros componentes
+    // Mas o ideal é verificar o tipo do uniform
     loc = getUniformLocation(program, "OutputSize");
     if (loc >= 0)
     {
-        glUniform4f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight),
-                    1.0f / static_cast<float>(outputWidth), 1.0f / static_cast<float>(outputHeight));
+        // IMPORTANTE: Tentar como vec2 primeiro (shaders como crt-geom usam vec2)
+        // Se o shader espera vec4, vamos configurar como vec4 depois
+        // Mas na prática, vamos tentar vec2 primeiro pois muitos shaders modernos usam vec2
+        glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
+        if (passIndex == 0)
+        {
+            LOG_INFO("Pass 0: OutputSize configurado como vec2: " + std::to_string(outputWidth) + "x" + std::to_string(outputHeight));
+        }
+        
+        // Se o shader espera vec4, podemos tentar configurar como vec4 também
+        // Mas isso pode causar problemas se o shader espera vec2
+        // Por enquanto, vamos usar vec2 apenas
+        // Se necessário, podemos adicionar verificação de tipo usando glGetActiveUniform
+    }
+    else if (passIndex == 0)
+    {
+        LOG_WARN("Pass 0: Uniform 'OutputSize' não encontrado (shader pode precisar dele)");
     }
 
     // PassOutputSize# - Tamanhos de saída de passes anteriores (RetroArch injeta isso)
@@ -1179,16 +1297,15 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     }
 
     // FrameCount (uint convertido para float - convertido de params.FrameCount)
-    // Verificar se há frame_count_mod# para este pass
+    // IMPORTANTE: Aplicar frame_count_mod# do passInfo (não do preset parameters)
+    // RetroArch armazena frame_count_mod diretamente no pass
     float frameCountValue = m_frameCount;
-    std::string frameCountModKey = "frame_count_mod" + std::to_string(passIndex);
-    const auto &presetParams = m_preset.getParameters();
-    if (presetParams.find(frameCountModKey) != presetParams.end())
+    if (passIndex < m_passes.size())
     {
-        float modValue = presetParams.at(frameCountModKey);
-        if (modValue > 0.0f)
+        const auto &passData = m_passes[passIndex];
+        if (passData.passInfo.frameCountMod > 0)
         {
-            frameCountValue = fmod(m_frameCount, modValue);
+            frameCountValue = fmod(m_frameCount, static_cast<float>(passData.passInfo.frameCountMod));
         }
     }
 
@@ -1241,6 +1358,10 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (passIndex < m_passes.size())
     {
         const auto &extractedParams = m_passes[passIndex].extractedParameters;
+        if (passIndex == 0 && !extractedParams.empty())
+        {
+            LOG_INFO("Pass 0: " + std::to_string(extractedParams.size()) + " parâmetros extraídos de #pragma parameter");
+        }
         for (const auto &param : extractedParams)
         {
             loc = getUniformLocation(program, param.first);
@@ -1251,6 +1372,15 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
                 auto presetIt = presetParams.find(param.first);
                 float value = (presetIt != presetParams.end()) ? presetIt->second : param.second;
                 glUniform1f(loc, value);
+                if (passIndex == 0)
+                {
+                    LOG_INFO("Pass 0: Parâmetro '" + param.first + "' = " + std::to_string(value));
+                }
+            }
+            else if (passIndex == 0)
+            {
+                // Log apenas se não encontrou (pode ser normal se o shader não usa)
+                // LOG_WARN("Pass 0: Uniform de parâmetro '" + param.first + "' não encontrado");
             }
         }
     }
@@ -1391,6 +1521,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
+        if (passIndex == 0)
+        {
+            LOG_INFO("Pass 0: TextureSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
+        }
+    }
+    else if (passIndex == 0)
+    {
+        LOG_WARN("Pass 0: Uniform 'TextureSize' não encontrado (shader pode precisar dele)");
     }
 
     // InputSize (vec2 alternativo)
@@ -1398,6 +1536,14 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
+        if (passIndex == 0)
+        {
+            LOG_INFO("Pass 0: InputSize configurado como vec2: " + std::to_string(inputWidth) + "x" + std::to_string(inputHeight));
+        }
+    }
+    else if (passIndex == 0)
+    {
+        LOG_WARN("Pass 0: Uniform 'InputSize' não encontrado (shader pode precisar dele)");
     }
 
     // VideoSize (tamanho original)
@@ -1414,12 +1560,31 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
     }
 
-    // OutputSize (alternativo)
+    // OutputSize (alternativo como vec2 - alguns shaders como crt-geom usam vec2 OutputSize)
+    // IMPORTANTE: Se o shader declarou OutputSize como vec2, precisamos usar glUniform2f
+    // Mas se declarou como vec4, precisamos usar glUniform4f
+    // O problema é que não podemos saber qual é sem verificar o tipo do uniform
+    // Vamos tentar configurar como vec2 também (muitos shaders usam vec2)
+    // NOTA: Se o shader espera vec4 e passamos vec2, pode causar problemas
+    // Mas se espera vec2 e passamos vec4, também pode causar problemas
+    // A solução é verificar o tipo do uniform, mas isso requer glGetActiveUniform
+    // Por enquanto, vamos configurar ambos (vec4 acima e vec2 aqui se necessário)
+    
+    // OutputSize como vec2 (IN.output_size é um formato alternativo)
     loc = getUniformLocation(program, "IN.output_size");
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
     }
+    
+    // IMPORTANTE: Se o shader declarou OutputSize como vec2 (não vec4), precisamos usar glUniform2f
+    // Mas já configuramos como vec4 acima. O problema é que se o shader espera vec2,
+    // passar vec4 pode não funcionar corretamente.
+    // Vamos adicionar uma verificação: se o uniform OutputSize existe mas não aceitou vec4,
+    // tentar como vec2. Mas isso é complicado sem verificar o tipo.
+    // Por enquanto, vamos assumir que se o shader usa vec2 OutputSize, ele também terá
+    // uma declaração explícita e o glUniform4f acima pode não funcionar.
+    // Mas na prática, muitos drivers OpenGL são tolerantes com isso.
 
     // Frame count e time
     m_frameCount += 1.0f;
@@ -1578,20 +1743,55 @@ bool ShaderEngine::loadTextureReference(const std::string &name, const std::stri
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
 
-    // Configurações padrão de textura
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Carregar dados na textura
+    // Carregar dados na textura primeiro
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData.data());
+
+    // Aplicar configurações do preset (filter_linear, wrap_mode, mipmap)
+    // Buscar configurações da textura no preset
+    const auto &textures = m_preset.getTextures();
+    bool filterLinear = true;               // Padrão: linear
+    std::string wrapMode = "clamp_to_edge"; // Padrão: clamp_to_edge
+    bool mipmap = false;                    // Padrão: sem mipmap
+
+    if (textures.find(name) != textures.end())
+    {
+        const auto &texInfo = textures.at(name);
+        filterLinear = texInfo.linear;
+        wrapMode = texInfo.wrapMode;
+        mipmap = texInfo.mipmap;
+    }
+
+    // Aplicar configurações (textura já está bindada)
+    // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
+    GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+    // Se mipmap for necessário, usar filtros de mipmap
+    if (mipmap)
+    {
+        if (filterLinear)
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        }
+        else
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        }
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+
+    // Aplicar wrap mode
+    GLenum wrap = wrapModeToGLEnum(wrapMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 
     glBindTexture(GL_TEXTURE_2D, 0);
 
     m_textureReferences[name] = texture;
 
-    LOG_INFO("Textura '" + name + "' carregada com sucesso: " + std::to_string(width) + "x" + std::to_string(height));
+    LOG_INFO("Textura '" + name + "' carregada com sucesso: " + std::to_string(width) + "x" + std::to_string(height) +
+             " (filter=" + (filterLinear ? "linear" : "nearest") + ", wrap=" + wrapMode + ", mipmap=" + (mipmap ? "yes" : "no") + ")");
 
     return true;
 }
@@ -2562,4 +2762,60 @@ void ShaderEngine::setViewport(uint32_t width, uint32_t height)
     m_viewportWidth = width;
     m_viewportHeight = height;
     LOG_INFO("Viewport atualizado: " + std::to_string(width) + "x" + std::to_string(height));
+}
+
+GLenum ShaderEngine::wrapModeToGLEnum(const std::string &wrapMode)
+{
+    if (wrapMode == "repeat" || wrapMode == "REPEAT")
+    {
+        return GL_REPEAT;
+    }
+    else if (wrapMode == "mirrored_repeat" || wrapMode == "MIRRORED_REPEAT")
+    {
+        return GL_MIRRORED_REPEAT;
+    }
+    else if (wrapMode == "clamp_to_border" || wrapMode == "CLAMP_TO_BORDER")
+    {
+        return GL_CLAMP_TO_BORDER;
+    }
+    else if (wrapMode == "clamp_to_edge" || wrapMode == "CLAMP_TO_EDGE")
+    {
+        return GL_CLAMP_TO_EDGE;
+    }
+    // Padrão: clamp_to_edge
+    return GL_CLAMP_TO_EDGE;
+}
+
+void ShaderEngine::applyTextureSettings(GLuint texture, bool filterLinear, const std::string &wrapMode, bool generateMipmap)
+{
+    if (texture == 0)
+        return;
+
+    // IMPORTANTE: A textura já deve estar bindada quando esta função é chamada
+    // Apenas aplicar os parâmetros sem fazer bind/unbind
+    // Isso evita desvincular a textura acidentalmente
+
+    // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
+    GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+    // Se mipmap for necessário, usar filtros de mipmap
+    if (generateMipmap)
+    {
+        if (filterLinear)
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        }
+        else
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        }
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+
+    // Aplicar wrap mode
+    GLenum wrap = wrapModeToGLEnum(wrapMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 }

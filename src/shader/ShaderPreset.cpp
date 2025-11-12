@@ -124,17 +124,29 @@ bool ShaderPreset::parseLine(const std::string& line, int& passIndex) {
         if (key.find("shader") == 0) {
             pass.shaderPath = resolvePath(value);
         } else if (key.find("filter_linear") == 0) {
-            pass.filterLinear = (value == "true");
+            // Aceitar "true", "false", true, false (com ou sem aspas)
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+            pass.filterLinear = (lowerValue == "true" || lowerValue == "1");
         } else if (key.find("wrap_mode") == 0) {
             pass.wrapMode = value;
         } else if (key.find("mipmap_input") == 0) {
-            pass.mipmapInput = (value == "true");
+            // Aceitar "true", "false", true, false (com ou sem aspas)
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+            pass.mipmapInput = (lowerValue == "true" || lowerValue == "1");
         } else if (key.find("alias") == 0) {
             pass.alias = value;
         } else if (key.find("float_framebuffer") == 0) {
-            pass.floatFramebuffer = (value == "true");
+            // Aceitar "true", "false", true, false (com ou sem aspas)
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+            pass.floatFramebuffer = (lowerValue == "true" || lowerValue == "1");
         } else if (key.find("srgb_framebuffer") == 0) {
-            pass.srgbFramebuffer = (value == "true");
+            // Aceitar "true", "false", true, false (com ou sem aspas)
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+            pass.srgbFramebuffer = (lowerValue == "true" || lowerValue == "1");
         } else if (key.find("scale_type_x") == 0) {
             pass.scaleTypeX = value;
         } else if (key.find("scale_x") == 0) {
@@ -178,13 +190,19 @@ bool ShaderPreset::parseLine(const std::string& line, int& passIndex) {
             // Mipmap de textura
             std::string texName = key.substr(0, key.find("_mipmap"));
             if (m_textures.find(texName) != m_textures.end()) {
-                m_textures[texName].mipmap = (value == "true");
+                // Aceitar "true", "false", true, false (com ou sem aspas)
+                std::string lowerValue = value;
+                std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+                m_textures[texName].mipmap = (lowerValue == "true" || lowerValue == "1");
             }
         } else if (key.find("_linear") != std::string::npos) {
             // Linear filtering de textura (ex: SamplerLUT_linear, noise1_linear)
             std::string texName = key.substr(0, key.find("_linear"));
             if (m_textures.find(texName) != m_textures.end()) {
-                m_textures[texName].linear = (value == "true");
+                // Aceitar "true", "false", true, false (com ou sem aspas)
+                std::string lowerValue = value;
+                std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::tolower);
+                m_textures[texName].linear = (lowerValue == "true" || lowerValue == "1");
             }
         } else if (key.find("frame_count_mod") == 0) {
             // frame_count_mod# - módulo para FrameCount por pass

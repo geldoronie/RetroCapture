@@ -8,95 +8,51 @@
 ## 🔴 CRÍTICO - Recursos Essenciais
 
 ### 1. **filter_linear#** - Filtragem de Texturas
-**Status**: Parcialmente implementado (apenas como uniform)
-**Problema**: O `filter_linear#` está sendo passado como uniform, mas não está sendo aplicado nas texturas reais.
-
-**O que fazer**:
-- Quando `filter_linear# = false`, usar `GL_NEAREST` em vez de `GL_LINEAR`
-- Aplicar nas texturas de entrada dos passes (inputTexture)
-- Aplicar nas texturas de referência (LUTs, masks, etc)
-
-**Código atual**:
-```cpp
-// Apenas passa como uniform, não aplica na textura
-glUniform1f(loc, passInfo.filterLinear ? 1.0f : 0.0f);
-```
-
-**Código necessário**:
-```cpp
-// Aplicar filtro na textura de entrada
-GLenum filter = passInfo.filterLinear ? GL_LINEAR : GL_NEAREST;
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-```
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**: 
+- Função `applyTextureSettings()` criada para aplicar configurações de textura
+- Aplicado nas texturas de entrada dos passes
+- Aplicado nas texturas de referência (LUTs, masks, etc)
+- Suporta `GL_LINEAR` e `GL_NEAREST` conforme `filter_linear#`
 
 ### 2. **wrap_mode#** - Modo de Envolvimento de Texturas
-**Status**: Não implementado
-**Problema**: Texturas sempre usam `GL_CLAMP_TO_EDGE`, mas alguns shaders precisam de `GL_REPEAT` ou `GL_MIRRORED_REPEAT`.
-
-**Valores possíveis**:
-- `clamp_to_edge` → `GL_CLAMP_TO_EDGE`
-- `clamp_to_border` → `GL_CLAMP_TO_BORDER`
-- `repeat` → `GL_REPEAT`
-- `mirrored_repeat` → `GL_MIRRORED_REPEAT`
-
-**Onde aplicar**:
-- Texturas de entrada dos passes
-- Texturas de referência (LUTs, masks)
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**:
+- Função `wrapModeToGLEnum()` criada para converter strings para enums OpenGL
+- Suporta: `clamp_to_edge`, `clamp_to_border`, `repeat`, `mirrored_repeat`
+- Aplicado nas texturas de entrada dos passes
+- Aplicado nas texturas de referência (LUTs, masks)
 
 ### 3. **Cópia Real de Frames para Histórico**
-**Status**: Implementado parcialmente (usa renderização, mas pode não estar funcionando)
-**Problema**: O motion blur não funciona porque os frames não estão sendo copiados corretamente.
-
-**O que fazer**:
-- Garantir que a renderização para o framebuffer temporário está funcionando
-- Verificar se o shader program usado para cópia está correto
-- Adicionar logs para debug
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**:
+- Frames são copiados para texturas dedicadas usando framebuffer temporário
+- Histórico mantém até 7 frames anteriores (MAX_FRAME_HISTORY)
+- Usa renderização real em vez de apenas referências
+- Suporta ring buffer para reutilização de texturas
 
 ## 🟡 IMPORTANTE - Recursos Comuns
 
 ### 4. **frame_count_mod#** - Módulo de FrameCount por Pass
-**Status**: Não implementado
-**Problema**: Alguns shaders precisam que `FrameCount` seja aplicado com um módulo específico por pass.
-
-**Exemplo**:
-```
-frame_count_mod0 = 2  // FrameCount % 2 para pass 0
-```
-
-**O que fazer**:
-- Armazenar `frame_count_mod#` no `ShaderPass`
-- Aplicar módulo em `setupUniforms`:
-```cpp
-float frameCount = m_frameCount;
-if (passInfo.frameCountMod > 0) {
-    frameCount = fmod(m_frameCount, passInfo.frameCountMod);
-}
-glUniform1f(frameCountLoc, frameCount);
-```
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**:
+- `frame_count_mod#` é armazenado em `ShaderPass.frameCountMod`
+- Aplicado em `setupUniforms()` usando `fmod()`
+- Suporta módulo por pass específico
 
 ### 5. **mipmap_input#** - Geração de Mipmaps
-**Status**: Não implementado
-**Problema**: Alguns shaders precisam de mipmaps nas texturas de entrada.
-
-**O que fazer**:
-- Quando `mipmap_input# = true`, gerar mipmaps:
-```cpp
-if (passInfo.mipmapInput) {
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-}
-```
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**:
+- Suportado em `applyTextureSettings()` com parâmetro `generateMipmap`
+- Quando `mipmap_input# = true`, gera mipmaps usando `glGenerateMipmap()`
+- Aplica filtros de mipmap apropriados (`GL_LINEAR_MIPMAP_LINEAR` ou `GL_NEAREST_MIPMAP_NEAREST`)
 
 ### 6. **srgb_framebuffer#** - Framebuffers sRGB
-**Status**: Não implementado
-**Problema**: Alguns shaders precisam de framebuffers sRGB para correção de cor.
-
-**O que fazer**:
-- Quando `srgb_framebuffer# = true`, usar formato sRGB:
-```cpp
-GLenum internalFormat = passInfo.srgbFramebuffer ? GL_SRGB8_ALPHA8 : GL_RGBA;
-```
+**Status**: ✅ **IMPLEMENTADO**
+**Implementação**:
+- Suportado em `createFramebuffer()` com parâmetro `srgbBuffer`
+- Quando `srgb_framebuffer# = true`, usa `GL_SRGB8_ALPHA8` como formato interno
+- Parsing já estava implementado em `ShaderPreset.cpp`
 
 ## 🟢 OPCIONAL - Recursos Avançados
 
@@ -135,14 +91,14 @@ alias1 = "ColorPass"
 ## 📝 Prioridades de Implementação
 
 ### Alta Prioridade (Blocam shaders comuns):
-1. ✅ **filter_linear#** - Aplicar nas texturas reais
-2. ✅ **wrap_mode#** - Necessário para muitos shaders
-3. ✅ **Cópia de frames** - Corrigir motion blur
+1. ✅ **filter_linear#** - Aplicar nas texturas reais - **IMPLEMENTADO**
+2. ✅ **wrap_mode#** - Necessário para muitos shaders - **IMPLEMENTADO**
+3. ✅ **Cópia de frames** - Corrigir motion blur - **IMPLEMENTADO**
 
 ### Média Prioridade (Melhoram compatibilidade):
-4. **frame_count_mod#** - Usado em vários shaders
-5. **mipmap_input#** - Usado em alguns shaders avançados
-6. **srgb_framebuffer#** - Usado em shaders de correção de cor
+4. ✅ **frame_count_mod#** - Usado em vários shaders - **IMPLEMENTADO**
+5. ✅ **mipmap_input#** - Usado em alguns shaders avançados - **IMPLEMENTADO**
+6. ✅ **srgb_framebuffer#** - Usado em shaders de correção de cor - **IMPLEMENTADO**
 
 ### Baixa Prioridade (Recursos avançados):
 7. **alias#** - Conveniência, não essencial

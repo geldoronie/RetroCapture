@@ -24,6 +24,7 @@ public:
     void setDevicePath(const std::string& path) { m_devicePath = path; }
     void setResolution(uint32_t width, uint32_t height) { m_captureWidth = width; m_captureHeight = height; }
     void setFramerate(uint32_t fps) { m_captureFps = fps; }
+    void setBrightness(float brightness) { m_brightness = brightness; }
     
 private:
     bool m_initialized = false;
@@ -45,6 +46,7 @@ private:
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;
+    float m_brightness = 1.0f;
     
     bool initCapture();
     bool initWindow();

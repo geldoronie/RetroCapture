@@ -88,6 +88,7 @@ void glEnable(GLenum cap);
 void glDisable(GLenum cap);
 void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 #ifdef __cplusplus
 }
 #endif
@@ -136,6 +137,10 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
 #define GL_LINEAR_MIPMAP_NEAREST 0x2701
 #define GL_NEAREST_MIPMAP_NEAREST 0x2700
 #define GL_SRGB8_ALPHA8 0x8C43
+#define GL_CULL_FACE 0x0B44
+#define GL_DEPTH_TEST 0x0B71
+#define GL_TRUE 1
+#define GL_FALSE 0
 
 bool loadOpenGLFunctions();
 

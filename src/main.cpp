@@ -13,6 +13,8 @@ void printUsage(const char* programName) {
     std::cout << "  --width <valor>        Largura da captura (padrão: 1920)\n";
     std::cout << "  --height <valor>       Altura da captura (padrão: 1080)\n";
     std::cout << "  --fps <valor>          Framerate da captura (padrão: 60)\n";
+    std::cout << "\nOpções de Ajuste:\n";
+    std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
@@ -32,6 +34,7 @@ int main(int argc, char* argv[]) {
     int captureWidth = 1920;
     int captureHeight = 1080;
     int captureFps = 60;
+    float brightness = 1.0f;
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i) {
@@ -64,6 +67,12 @@ int main(int argc, char* argv[]) {
                 LOG_ERROR("FPS inválido. Use um valor entre 1 e 240");
                 return 1;
             }
+        } else if (arg == "--brightness" && i + 1 < argc) {
+            brightness = std::stof(argv[++i]);
+            if (brightness < 0.0f || brightness > 5.0f) {
+                LOG_ERROR("Brilho inválido. Use um valor entre 0.0 e 5.0");
+                return 1;
+            }
         } else {
             LOG_WARN("Argumento desconhecido: " + arg);
             printUsage(argv[0]);
@@ -75,6 +84,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Dispositivo: " + devicePath);
     LOG_INFO("Resolução: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
+    LOG_INFO("Brilho: " + std::to_string(brightness));
 
     Application app;
 
@@ -91,6 +101,7 @@ int main(int argc, char* argv[]) {
     app.setDevicePath(devicePath);
     app.setResolution(captureWidth, captureHeight);
     app.setFramerate(captureFps);
+    app.setBrightness(brightness);
     
     if (!app.init()) {
         LOG_ERROR("Falha ao inicializar aplicação");

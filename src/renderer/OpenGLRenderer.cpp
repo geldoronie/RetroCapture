@@ -26,19 +26,16 @@ out vec4 FragColor;
 
 uniform sampler2D ourTexture;
 uniform int flipY;
+uniform float brightness;
 
 void main() {
     // Inverter coordenada Y apenas se flipY estiver ativo
     vec2 coord = (flipY == 1) ? vec2(TexCoord.x, 1.0 - TexCoord.y) : TexCoord;
     vec4 texColor = texture(ourTexture, coord);
     
-    // IMPORTANTE: Para shaders que usam alpha (como Game Boy), precisamos preservar o alpha
-    // Se o alpha for 0, o pixel deve ser transparente (não preto)
-    // O blending será feito pelo OpenGL se habilitado na renderização final
-    // Aqui apenas passamos a cor com alpha preservado
-    // DEBUG: Se o alpha for muito baixo, podemos forçar para ver se o blending funciona
-    // FragColor = vec4(texColor.rgb, texColor.a);
-    FragColor = texColor;
+    // Aplicar brilho multiplicando RGB pelo fator de brilho
+    // Preservar alpha para shaders que usam transparência
+    FragColor = vec4(texColor.rgb * brightness, texColor.a);
 }
 )";
 
@@ -230,7 +227,7 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
     }
 }
 
-void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend) {
+void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness) {
     // Verificar se a textura é válida
     if (texture == 0) {
         LOG_ERROR("Tentativa de renderizar textura inválida (0)");
@@ -267,6 +264,12 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
     GLint flipYLoc = glGetUniformLocation(m_shaderProgram, "flipY");
     if (flipYLoc >= 0) {
         glUniform1i(flipYLoc, flipY ? 1 : 0);
+    }
+    
+    // Configurar brilho
+    GLint brightnessLoc = glGetUniformLocation(m_shaderProgram, "brightness");
+    if (brightnessLoc >= 0) {
+        glUniform1f(brightnessLoc, brightness);
     }
     
     glViewport(0, 0, windowWidth, windowHeight);

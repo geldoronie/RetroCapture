@@ -7,7 +7,7 @@
 struct ShaderPass {
     std::string shaderPath;
     bool filterLinear = true;
-    std::string wrapMode = "clamp_to_border";
+    std::string wrapMode = "clamp_to_edge"; // Padrão mais seguro e universalmente suportado
     bool mipmapInput = false;
     std::string alias;
     bool floatFramebuffer = false;

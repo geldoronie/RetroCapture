@@ -19,7 +19,7 @@ public:
     void updateTexture(GLuint texture, const uint8_t* data, uint32_t width, uint32_t height, uint32_t format);
     
     // Renderizar textura na tela
-    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY = true, bool enableBlend = false);
+    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY = true, bool enableBlend = false, float brightness = 1.0f);
     
     // Limpar tela
     void clear(float r = 0.0f, float g = 0.0f, float b = 0.0f, float a = 1.0f);
