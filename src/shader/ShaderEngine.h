@@ -47,6 +47,10 @@ public:
     
     bool isShaderActive() const { return m_shaderActive; }
     
+    // Obter dimensões de saída do shader
+    uint32_t getOutputWidth() const { return m_outputWidth; }
+    uint32_t getOutputHeight() const { return m_outputHeight; }
+    
     // Uniforms do RetroArch
     void setUniform(const std::string& name, float value);
     void setUniform(const std::string& name, float x, float y);

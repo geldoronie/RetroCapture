@@ -63,6 +63,15 @@ bool Application::initWindow()
     }
 
     m_window->makeCurrent();
+    
+    // Configurar callback de resize para atualizar viewport mantendo proporção
+    // O WindowManager já atualiza m_width e m_height automaticamente
+    // O viewport será recalculado no próximo frame em renderTexture()
+    m_window->setResizeCallback([](int width, int height) {
+        // Callback vazio - o WindowManager já atualiza as dimensões
+        // O viewport será recalculado automaticamente no próximo frame
+    });
+    
     return true;
 }
 
@@ -296,7 +305,42 @@ void Application::run()
             // Para texturas do shader (framebuffer), inverter Y (shader renderiza invertido)
             // Para textura original (câmera), não inverter Y (já está correta)
             // IMPORTANTE: Se for textura do shader, pode precisar de blending para alpha
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), isShaderTexture, isShaderTexture, m_brightness, m_contrast);
+            // Obter dimensões da textura para calcular aspect ratio
+            // IMPORTANTE: Para maintainAspect, sempre usar as dimensões da CAPTURA ORIGINAL
+            // porque o shader processa a imagem mas mantém a mesma proporção
+            // A textura de saída do shader pode ter dimensões da janela (viewport), não da imagem
+            uint32_t renderWidth, renderHeight;
+            if (isShaderTexture && m_maintainAspect) {
+                // Para maintainAspect com shader, usar dimensões da captura original
+                // O shader processa mas mantém a proporção da imagem original
+                renderWidth = m_textureWidth;
+                renderHeight = m_textureHeight;
+                LOG_INFO("maintainAspect (com shader): Usando dimensões da captura original: " + 
+                         std::to_string(renderWidth) + "x" + std::to_string(renderHeight) +
+                         " (saída do shader: " + std::to_string(m_shaderEngine->getOutputWidth()) + 
+                         "x" + std::to_string(m_shaderEngine->getOutputHeight()) + ")");
+            } else if (isShaderTexture) {
+                // Sem maintainAspect, usar dimensões de saída do shader
+                renderWidth = m_shaderEngine->getOutputWidth();
+                renderHeight = m_shaderEngine->getOutputHeight();
+                if (renderWidth == 0 || renderHeight == 0) {
+                    LOG_WARN("Dimensões de saída do shader inválidas (0x0), usando dimensões da captura");
+                    renderWidth = m_textureWidth;
+                    renderHeight = m_textureHeight;
+                }
+            } else {
+                // Sem shader, usar dimensões da captura
+                renderWidth = m_textureWidth;
+                renderHeight = m_textureHeight;
+            }
+            
+            // Para texturas do shader, inverter Y (shader renderiza invertido)
+            // Para textura original (câmera), NÃO inverter Y (câmera já está correta)
+            // flipY: true para shader (precisa inverter), false para câmera (já está correto)
+            bool shouldFlipY = isShaderTexture;
+            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), 
+                                     shouldFlipY, isShaderTexture, m_brightness, m_contrast,
+                                     m_maintainAspect, renderWidth, renderHeight);
             m_window->swapBuffers();
         }
         else

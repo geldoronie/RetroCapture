@@ -16,6 +16,7 @@ void printUsage(const char* programName) {
     std::cout << "\nOpções de Janela:\n";
     std::cout << "  --window-width <valor>  Largura da janela (padrão: 1920)\n";
     std::cout << "  --window-height <valor> Altura da janela (padrão: 1080)\n";
+    std::cout << "  --maintain-aspect       Manter proporção da captura (evita deformação)\n";
     std::cout << "\nOpções de Ajuste:\n";
     std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
     std::cout << "  --contrast <valor>     Contraste geral (0.0-5.0, padrão: 1.0)\n";
@@ -36,6 +37,7 @@ void printUsage(const char* programName) {
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
     std::cout << "  " << programName << " --device /dev/video1 --width 3840 --height 2160 --fps 60\n";
     std::cout << "  " << programName << " --window-width 1280 --window-height 720 --brightness 1.2\n";
+    std::cout << "  " << programName << " --window-width 800 --window-height 600 --maintain-aspect\n";
     std::cout << "  " << programName << " --v4l2-brightness 20 --v4l2-contrast 10 --v4l2-saturation 5\n";
 }
 
@@ -52,6 +54,7 @@ int main(int argc, char* argv[]) {
     int captureFps = 60;
     int windowWidth = 1920;
     int windowHeight = 1080;
+    bool maintainAspect = false;
     float brightness = 1.0f;
     float contrast = 1.0f;
     
@@ -109,6 +112,8 @@ int main(int argc, char* argv[]) {
                 LOG_ERROR("Altura da janela inválida. Use um valor entre 1 e 4320");
                 return 1;
             }
+        } else if (arg == "--maintain-aspect") {
+            maintainAspect = true;
         } else if (arg == "--brightness" && i + 1 < argc) {
             brightness = std::stof(argv[++i]);
             if (brightness < 0.0f || brightness > 5.0f) {
@@ -187,6 +192,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
+    LOG_INFO("Manter proporção: " + std::string(maintainAspect ? "sim" : "não"));
     LOG_INFO("Brilho: " + std::to_string(brightness));
     LOG_INFO("Contraste: " + std::to_string(contrast));
 
@@ -206,6 +212,7 @@ int main(int argc, char* argv[]) {
     app.setResolution(captureWidth, captureHeight);
     app.setFramerate(captureFps);
     app.setWindowSize(windowWidth, windowHeight);
+    app.setMaintainAspect(maintainAspect);
     app.setBrightness(brightness);
     app.setContrast(contrast);
     

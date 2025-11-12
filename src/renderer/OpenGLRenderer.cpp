@@ -236,7 +236,7 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
     }
 }
 
-void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast) {
+void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast, bool maintainAspect, uint32_t textureWidth, uint32_t textureHeight) {
     // Verificar se a textura é válida
     if (texture == 0) {
         LOG_ERROR("Tentativa de renderizar textura inválida (0)");
@@ -287,7 +287,29 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
         glUniform1f(contrastLoc, contrast);
     }
     
-    glViewport(0, 0, windowWidth, windowHeight);
+    // Calcular viewport mantendo proporção se solicitado
+    GLint viewportX = 0;
+    GLint viewportY = 0;
+    GLsizei viewportWidth = windowWidth;
+    GLsizei viewportHeight = windowHeight;
+    
+    if (maintainAspect && textureWidth > 0 && textureHeight > 0) {
+        // Calcular aspect ratio da textura e da janela
+        float textureAspect = static_cast<float>(textureWidth) / static_cast<float>(textureHeight);
+        float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+        
+        if (textureAspect > windowAspect) {
+            // Textura é mais larga: ajustar altura (letterboxing)
+            viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
+            viewportY = (windowHeight - viewportHeight) / 2;
+        } else {
+            // Textura é mais alta: ajustar largura (pillarboxing)
+            viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
+            viewportX = (windowWidth - viewportWidth) / 2;
+        }
+    }
+    
+    glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     
     glBindVertexArray(0);

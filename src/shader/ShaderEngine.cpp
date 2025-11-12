@@ -938,6 +938,15 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
 
+        // IMPORTANTE: Atualizar dimensões de saída para uso em maintainAspect
+        // Essas são as dimensões FINAIS do último pass do shader
+        m_outputWidth = currentWidth;
+        m_outputHeight = currentHeight;
+        
+        // DEBUG: Log das dimensões de saída atualizadas
+        LOG_INFO("ShaderEngine: Dimensões de saída atualizadas: " + 
+                 std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+
         // IMPORTANTE: Resetar viewport para um tamanho grande após os passes
         // Isso garante que a renderização final use o viewport correto
         // O viewport será configurado novamente em Application::run() antes de renderizar
