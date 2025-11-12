@@ -113,6 +113,7 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 #define GL_RGB 0x1907
 #define GL_RGBA 0x1908
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_INT 0x1404
 #define GL_FLOAT 0x1406
 #define GL_RGBA32F 0x8814
 #define GL_FALSE 0

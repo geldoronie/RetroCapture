@@ -393,7 +393,9 @@ bool ShaderEngine::loadPresetPasses()
         }
 
         // Verificar se OutputSize já está declarado como uniform
-        std::regex uniformDeclRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
+        // IMPORTANTE: Shaders podem ter múltiplas declarações (VERTEX e FRAGMENT)
+        // Precisamos verificar todas e substituir TODAS se necessário
+        std::regex uniformDeclRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+|PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
         std::smatch declMatch;
         bool hasOutputSizeDecl = std::regex_search(processedSource, declMatch, uniformDeclRegex);
         std::string declaredType = hasOutputSizeDecl ? declMatch[1].str() : "";
@@ -411,9 +413,27 @@ bool ShaderEngine::loadPresetPasses()
             }
             else if (declaredType != requiredType)
             {
-                // Está declarado mas com tipo errado, substituir
-                std::regex replaceRegex(R"(uniform\s+(?:COMPAT_PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
-                std::string replacement = "uniform " + requiredType + " OutputSize";
+                // Está declarado mas com tipo errado, substituir TODAS as ocorrências
+                // IMPORTANTE: Shaders podem ter múltiplas declarações (VERTEX e FRAGMENT)
+                // Precisamos substituir TODAS, preservando o qualificador de precisão
+                // Padrão mais flexível para capturar PRECISION, COMPAT_PRECISION ou nenhum
+                std::regex replaceRegex(R"(uniform\s+((?:COMPAT_)?PRECISION\s+)?(vec[234]|float|int|uint)\s+OutputSize)");
+                
+                // Encontrar a primeira ocorrência para determinar o qualificador usado
+                std::smatch firstMatch;
+                std::string precisionQualifier = "";
+                if (std::regex_search(processedSource, firstMatch, replaceRegex))
+                {
+                    if (firstMatch[1].matched && !firstMatch[1].str().empty())
+                    {
+                        precisionQualifier = firstMatch[1].str();
+                    }
+                }
+                
+                // Construir replacement preservando o qualificador de precisão
+                std::string replacement = "uniform " + precisionQualifier + requiredType + " OutputSize";
+                
+                // Substituir TODAS as ocorrências (não apenas a primeira)
                 processedSource = std::regex_replace(processedSource, replaceRegex, replacement);
                 // Log removido para reduzir verbosidade
             }
@@ -1859,16 +1879,39 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     loc = getUniformLocation(program, "FrameCount");
     if (loc >= 0)
     {
-        glUniform1f(loc, frameCountValue);
-        if (passIndex == 3)
+        // FrameCount pode ser declarado como int ou float
+        // Verificar o tipo do uniform e usar a função apropriada
+        GLenum uniformType = GL_FLOAT;
+        GLint uniformSize = 0;
+        char uniformName[256];
+        GLsizei nameLength = 0;
+        
+        // Encontrar o índice do uniform
+        GLint uniformCount = 0;
+        glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &uniformCount);
+        bool foundType = false;
+        for (GLint i = 0; i < uniformCount; ++i)
         {
-            // Log removido para reduzir verbosidade
+            glGetActiveUniform(program, i, 256, &nameLength, &uniformSize, &uniformType, uniformName);
+            if (std::string(uniformName) == "FrameCount")
+            {
+                foundType = true;
+                break;
+            }
+        }
+        
+        if (foundType && uniformType == GL_INT)
+        {
+            // Se é int, usar glUniform1i
+            glUniform1i(loc, static_cast<GLint>(frameCountValue));
+        }
+        else
+        {
+            // Se é float ou não encontramos o tipo, usar glUniform1f (padrão)
+            glUniform1f(loc, frameCountValue);
         }
     }
-    else if (passIndex == 3)
-    {
-        LOG_WARN("Pass 3: Uniform 'FrameCount' não encontrado!");
-    }
+    // Remover aviso - é normal que uniforms não usados sejam otimizados pelo compilador
 
     // MVPMatrix (mat4 do RetroArch - matriz identidade)
     // RetroArch shaders podem usar MVPMatrix * VertexCoord
@@ -2117,15 +2160,10 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     if (loc >= 0)
     {
         glUniform2f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight));
-        // Log removido para reduzir verbosidade
-    }
-    else if (passIndex == 3 || passIndex == 4)
-    {
-        LOG_WARN("Pass " + std::to_string(passIndex) + ": Uniform 'InputSize' não encontrado!");
     }
     // Nota: Se InputSize não for encontrado, pode ser que o shader não o use
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
-    // Não é necessariamente um erro, apenas um aviso informativo
+    // Isso é normal e não é um erro - não gerar avisos
 
     // VideoSize (tamanho original)
     loc = getUniformLocation(program, "IN.video_size");
