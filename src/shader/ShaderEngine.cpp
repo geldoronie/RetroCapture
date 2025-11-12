@@ -2147,13 +2147,9 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform2f(loc, static_cast<float>(inputWidth), textureSizeY);
         // Log removido para reduzir verbosidade
     }
-    else if (passIndex == 3 || passIndex == 4)
-    {
-        LOG_WARN("Pass " + std::to_string(passIndex) + ": Uniform 'TextureSize' não encontrado!");
-    }
     // Nota: Se TextureSize não for encontrado, pode ser que o shader não o use
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
-    // Não é necessariamente um erro, apenas um aviso informativo
+    // Isso é normal e não é um erro - não gerar avisos
 
     // InputSize (vec2 alternativo)
     loc = getUniformLocation(program, "InputSize");
