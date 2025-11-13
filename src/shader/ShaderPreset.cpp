@@ -27,6 +27,7 @@ bool ShaderPreset::load(const std::string& presetPath) {
     if (m_basePath.empty()) {
         m_basePath = std::filesystem::current_path().string();
     }
+    m_presetPath = path.string(); // Armazenar caminho completo do preset
     
     std::ifstream file(presetPath);
     if (!file.is_open()) {
@@ -382,5 +383,99 @@ float ShaderPreset::parseFloat(const std::string& value) {
     } catch (...) {
         return 0.0f;
     }
+}
+
+bool ShaderPreset::save(const std::string& presetPath, const std::unordered_map<std::string, float>& customParameters) const {
+    return saveAs(presetPath, customParameters);
+}
+
+bool ShaderPreset::saveAs(const std::string& presetPath, const std::unordered_map<std::string, float>& customParameters) const {
+    if (m_presetPath.empty()) {
+        LOG_ERROR("Nenhum preset carregado para salvar");
+        return false;
+    }
+    
+    // Ler arquivo original
+    std::ifstream inputFile(m_presetPath);
+    if (!inputFile.is_open()) {
+        LOG_ERROR("Falha ao abrir preset original para leitura: " + m_presetPath);
+        return false;
+    }
+    
+    // Ler todas as linhas do arquivo original
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(inputFile, line)) {
+        lines.push_back(line);
+    }
+    inputFile.close();
+    
+    // Criar map de parâmetros atualizados (combinar parâmetros originais com customizados)
+    std::unordered_map<std::string, float> updatedParameters = m_parameters;
+    for (const auto& customParam : customParameters) {
+        updatedParameters[customParam.first] = customParam.second;
+    }
+    
+    // Escrever arquivo novo/atualizado
+    std::ofstream outputFile(presetPath);
+    if (!outputFile.is_open()) {
+        LOG_ERROR("Falha ao criar arquivo de preset: " + presetPath);
+        return false;
+    }
+    
+    // Processar cada linha, atualizando parâmetros quando necessário
+    for (const std::string& originalLine : lines) {
+        std::string processedLine = originalLine;
+        
+        // Verificar se é uma linha de parâmetro (formato: paramName = value)
+        size_t eqPos = processedLine.find('=');
+        if (eqPos != std::string::npos) {
+            std::string key = processedLine.substr(0, eqPos);
+            // Remover espaços
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            
+            // Verificar se é um parâmetro que precisa ser atualizado
+            if (updatedParameters.find(key) != updatedParameters.end()) {
+                // Atualizar valor do parâmetro
+                float newValue = updatedParameters.at(key);
+                std::string newValueStr = std::to_string(newValue);
+                // Remover zeros desnecessários no final
+                size_t dotPos = newValueStr.find('.');
+                if (dotPos != std::string::npos) {
+                    // Remover zeros à direita após o ponto decimal
+                    while (newValueStr.size() > dotPos + 1 && newValueStr.back() == '0') {
+                        newValueStr.pop_back();
+                    }
+                    // Se só sobrou o ponto, remover também
+                    if (newValueStr.back() == '.') {
+                        newValueStr.pop_back();
+                    }
+                }
+                
+                // Reconstruir linha com novo valor
+                std::string valuePart = processedLine.substr(eqPos + 1);
+                // Preservar espaços e aspas se existirem
+                size_t firstNonSpace = valuePart.find_first_not_of(" \t\"");
+                if (firstNonSpace != std::string::npos) {
+                    std::string prefix = valuePart.substr(0, firstNonSpace);
+                    std::string suffix = "";
+                    size_t lastNonSpace = valuePart.find_last_not_of(" \t\"");
+                    if (lastNonSpace != std::string::npos && lastNonSpace < valuePart.size() - 1) {
+                        suffix = valuePart.substr(lastNonSpace + 1);
+                    }
+                    processedLine = key + " = " + prefix + newValueStr + suffix;
+                } else {
+                    processedLine = key + " = " + newValueStr;
+                }
+            }
+        }
+        
+        outputFile << processedLine << "\n";
+    }
+    
+    outputFile.close();
+    LOG_INFO("Preset salvo: " + presetPath);
+    return true;
 }
 

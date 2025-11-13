@@ -177,6 +177,65 @@ void UIManager::renderShaderPanel() {
     ImGui::Separator();
     ImGui::Text("Shaders found: %zu", m_scannedShaders.size());
     
+    // Botões de salvar preset
+    if (m_shaderEngine && m_shaderEngine->isShaderActive()) {
+        ImGui::Separator();
+        ImGui::Text("Save Preset:");
+        
+        std::string currentPreset = m_shaderEngine->getPresetPath();
+        if (!currentPreset.empty()) {
+            // Extrair apenas o nome do arquivo
+            std::filesystem::path presetPath(currentPreset);
+            std::string fileName = presetPath.filename().string();
+            
+            if (ImGui::Button("Save")) {
+                // Salvar por cima do arquivo atual
+                if (m_onSavePreset) {
+                    m_onSavePreset(currentPreset, true);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Save As...")) {
+                // Abrir dialog para salvar como novo arquivo
+                strncpy(m_savePresetPath, fileName.c_str(), sizeof(m_savePresetPath) - 1);
+                m_savePresetPath[sizeof(m_savePresetPath) - 1] = '\0';
+                m_showSaveDialog = true;
+            }
+        } else {
+            ImGui::TextDisabled("No preset loaded");
+        }
+        
+        // Dialog para "Save As"
+        if (m_showSaveDialog) {
+            ImGui::OpenPopup("Save Preset As");
+            m_showSaveDialog = false;
+        }
+        
+        if (ImGui::BeginPopupModal("Save Preset As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Enter preset filename:");
+            ImGui::InputText("##presetname", m_savePresetPath, sizeof(m_savePresetPath));
+            
+            if (ImGui::Button("Save")) {
+                if (m_onSavePreset && strlen(m_savePresetPath) > 0) {
+                    // Construir caminho completo
+                    std::filesystem::path basePath("shaders/shaders_glsl");
+                    std::filesystem::path newPath = basePath / m_savePresetPath;
+                    // Garantir extensão .glslp
+                    if (newPath.extension() != ".glslp") {
+                        newPath.replace_extension(".glslp");
+                    }
+                    m_onSavePreset(newPath.string(), false);
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    
     // Parâmetros do shader
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
     {

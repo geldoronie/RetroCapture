@@ -32,6 +32,7 @@ public:
     
     // Parâmetros de shader
     void setShaderEngine(ShaderEngine* engine) { m_shaderEngine = engine; }
+    void setOnSavePreset(std::function<void(const std::string&, bool)> callback) { m_onSavePreset = callback; }
 
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
@@ -122,4 +123,9 @@ private:
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";
+    
+    // Save preset
+    std::function<void(const std::string&, bool)> m_onSavePreset; // path, overwrite
+    char m_savePresetPath[512] = "";
+    bool m_showSaveDialog = false;
 };

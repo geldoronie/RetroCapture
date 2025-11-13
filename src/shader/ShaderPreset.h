@@ -34,18 +34,24 @@ public:
     ~ShaderPreset();
     
     bool load(const std::string& presetPath);
+    bool save(const std::string& presetPath, const std::unordered_map<std::string, float>& customParameters = {}) const;
+    bool saveAs(const std::string& presetPath, const std::unordered_map<std::string, float>& customParameters = {}) const;
     
     const std::vector<ShaderPass>& getPasses() const { return m_passes; }
     const std::unordered_map<std::string, ShaderTexture>& getTextures() const { return m_textures; }
     const std::unordered_map<std::string, float>& getParameters() const { return m_parameters; }
     
     std::string getBasePath() const { return m_basePath; }
+    std::string getPresetPath() const { return m_presetPath; }
+    
+    void setParameter(const std::string& name, float value) { m_parameters[name] = value; }
     
 private:
     std::vector<ShaderPass> m_passes;
     std::unordered_map<std::string, ShaderTexture> m_textures;
     std::unordered_map<std::string, float> m_parameters;
     std::string m_basePath;
+    std::string m_presetPath; // Caminho do preset carregado
     
     bool parseLine(const std::string& line, int& passIndex);
     std::string resolvePath(const std::string& path);

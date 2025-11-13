@@ -45,6 +45,7 @@ public:
     
     // Carregar preset com múltiplos passes
     bool loadPreset(const std::string& presetPath);
+    std::string getPresetPath() const { return m_presetPath; }
     
     // Aplicar shader/preset na textura
     GLuint applyShader(GLuint inputTexture, uint32_t width, uint32_t height);
@@ -79,6 +80,10 @@ public:
     std::vector<ShaderParameter> getShaderParameters() const;
     bool setShaderParameter(const std::string& name, float value);
     
+    // Acesso ao preset para salvar
+    ShaderPreset& getPreset() { return m_preset; }
+    const ShaderPreset& getPreset() const { return m_preset; }
+    
 private:
     bool m_initialized = false;
     bool m_shaderActive = false;
@@ -94,6 +99,7 @@ private:
     
     // Modo preset (múltiplos passes)
     ShaderPreset m_preset;
+    std::string m_presetPath; // Caminho do preset carregado
     std::vector<ShaderPassData> m_passes;
     std::unordered_map<std::string, GLuint> m_textureReferences;
     uint32_t m_sourceWidth = 0;

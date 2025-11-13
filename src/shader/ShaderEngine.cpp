@@ -182,6 +182,8 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
     {
         return false;
     }
+    
+    m_presetPath = presetPath; // Armazenar caminho do preset
 
     // Carregar texturas de referência
     const auto &textures = m_preset.getTextures();

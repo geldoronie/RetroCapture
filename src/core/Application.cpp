@@ -549,6 +549,40 @@ bool Application::initUI()
         m_ui->setShaderEngine(m_shaderEngine);
     }
     
+    // Callback para salvar preset
+    m_ui->setOnSavePreset([this](const std::string& path, bool overwrite) {
+        if (!m_shaderEngine || !m_shaderEngine->isShaderActive()) {
+            LOG_WARN("Nenhum preset carregado para salvar");
+            return;
+        }
+        
+        // Obter parâmetros customizados do ShaderEngine
+        auto params = m_shaderEngine->getShaderParameters();
+        std::unordered_map<std::string, float> customParams;
+        for (const auto& param : params) {
+            // Salvar todos os valores (mesmo se iguais ao padrão, para preservar configuração)
+            customParams[param.name] = param.value;
+        }
+        
+        // Salvar preset
+        const ShaderPreset& preset = m_shaderEngine->getPreset();
+        if (overwrite) {
+            // Salvar por cima
+            if (preset.save(path, customParams)) {
+                LOG_INFO("Preset salvo: " + path);
+            } else {
+                LOG_ERROR("Falha ao salvar preset: " + path);
+            }
+        } else {
+            // Salvar como novo arquivo
+            if (preset.saveAs(path, customParams)) {
+                LOG_INFO("Preset salvo como: " + path);
+            } else {
+                LOG_ERROR("Falha ao salvar preset como: " + path);
+            }
+        }
+    });
+    
     LOG_INFO("UIManager inicializado");
     return true;
 }
