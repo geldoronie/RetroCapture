@@ -1,67 +1,62 @@
 # Changelog
 
-## [0.3.0] - 2025-11-11
+All notable changes to RetroCapture will be documented in this file.
 
-### Adicionado
-- ✅ Parâmetros de linha de comando para resolução (`--width`, `--height`)
-- ✅ Parâmetro de linha de comando para framerate (`--fps`)
-- ✅ Configuração dinâmica de captura V4L2
-- ✅ Validação de parâmetros (limites de resolução e framerate)
-- ✅ Detecção de capacidades do dispositivo V4L2
-- ✅ Suporte a múltiplas resoluções (480p até 4K)
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Melhorado
-- Mensagens de log mais informativas sobre configuração de captura
-- Tratamento de erros quando resolução não é suportada
-- Fallback gracioso quando framerate não pode ser configurado
+## [Unreleased]
 
-## [0.2.0] - 2025-11-11
+### Added
+- Real-time video capture via V4L2
+- Support for RetroArch GLSL shaders and presets (`.glslp`)
+- Multi-pass shader preset support
+- Graphical user interface with ImGui
+- V4L2 hardware controls (brightness, contrast, saturation, hue, gain, exposure, sharpness, gamma, white balance)
+- Fullscreen and multi-monitor support
+- Aspect ratio maintenance (letterboxing/pillarboxing)
+- Real-time shader parameter editing
+- Shader preset saving (overwrite and save as)
+- V4L2 device selection via GUI
+- Dynamic resolution and framerate configuration
+- Command-line interface with comprehensive parameter support
+- Portable AppImage distribution
+- Support for RetroArch uniforms: `OutputSize`, `InputSize`, `SourceSize`, `FrameCount`, `TextureSize`, `MVPMatrix`, `FrameDirection`
+- Reference texture loading (LUTs, PNG images)
+- Shader parameter extraction from `#pragma parameter` directives
+- Automatic shader type detection and correction
+- History buffer support for animated shaders
 
-### Adicionado
-- ✅ Suporte completo a shaders RetroArch (GLSL e Slang)
-- ✅ Conversão automática de Slang (Vulkan) para GLSL (OpenGL 3.3)
-- ✅ Suporte a múltiplos passes de shader
-- ✅ Processamento de diretivas `#include` em shaders
-- ✅ Carregamento de presets RetroArch (`.slangp`, `.glslp`)
-- ✅ Uniforms do RetroArch: `SourceSize`, `OutputSize`, `OriginalSize`, `FrameCount`
-- ✅ Parâmetros customizados com valores padrão
-- ✅ Scaling types: `source`, `viewport`, `absolute`
-- ✅ Argumentos de linha de comando: `--shader`, `--preset`, `--device`
+### Changed
+- Improved shader path resolution for RetroArch-style relative paths
+- Enhanced uniform type detection and injection
+- Better error handling and logging
 
-### Corrigido
-- ✅ Coordenadas de textura invertidas em shaders
-- ✅ Framebuffer rendering para múltiplos passes
-- ✅ Conversão de `push_constant` uniform blocks
-- ✅ Remoção de `layout(location=X)` para compatibilidade GLSL 3.3
-- ✅ Conversão de `uint` para `float` em uniforms
-- ✅ Separação de vertex/fragment shaders em arquivos Slang únicos
-- ✅ Resolução de paths relativos do RetroArch
+### Fixed
+- Image orientation issues
+- Shader compilation errors with type mismatches
+- Framebuffer management for multi-pass shaders
+- Texture binding for reference textures
+- Uniform type detection (`vec2`, `vec3`, `vec4` for `OutputSize`)
+- V4L2 control value validation and alignment
 
-### Técnico
-- Conversão Slang→GLSL:
-  - `#version 450` → `#version 330`
-  - `layout(push_constant) uniform Push {...} params;` → uniforms individuais
-  - `params.X` → `X`
-  - `set =`, `binding =` removidos
-  - `layout(location =)` removido
-  - `uniform uint` → `uniform float`
-  - `#pragma stage vertex/fragment` processado
-  - `#include` recursivo com múltiplos caminhos de busca
-  - `global.MVP` substituído por `Position` direto
+### Known Issues
+- Not all shaders work perfectly (some complex multi-pass presets may have issues)
+- Some shader features may not be fully implemented yet
+- Single-threaded architecture may limit performance on multi-core systems
 
-## [0.1.0] - 2025-11-10
+---
 
-### Adicionado
-- ✅ Captura de vídeo V4L2 em tempo real
-- ✅ Renderização OpenGL 3.3+ com GLFW
-- ✅ Conversão YUYV para RGB
-- ✅ Sistema de logging
-- ✅ Pipeline de baixa latência
-- ✅ Memory mapping para buffers V4L2
-- ✅ Non-blocking capture
+## [0.1.0] - TBD
 
-### Inicial
-- Estrutura base do projeto
-- CMake build system
-- Arquitetura modular (capture, renderer, shader engine)
-
+### Added
+- Initial release
+- Real-time V4L2 video capture
+- OpenGL 3.3+ rendering with GLFW
+- YUYV to RGB conversion
+- Logging system
+- Low-latency pipeline
+- Memory mapping for V4L2 buffers
+- Non-blocking capture
+- Basic shader support
+- Modular architecture (capture, renderer, shader engine)
