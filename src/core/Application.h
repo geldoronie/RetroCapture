@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <cinttypes>
+#include <memory>
 #include "../renderer/glad_loader.h"
 
 class VideoCapture;
@@ -10,6 +11,7 @@ class WindowManager;
 class OpenGLRenderer;
 class ShaderEngine;
 class UIManager;
+class FrameProcessor;
 
 class Application {
 public:
@@ -47,11 +49,12 @@ public:
 private:
     bool m_initialized = false;
     
-    VideoCapture* m_capture = nullptr;
-    WindowManager* m_window = nullptr;
-    OpenGLRenderer* m_renderer = nullptr;
-    ShaderEngine* m_shaderEngine = nullptr;
-    UIManager* m_ui = nullptr;
+    std::unique_ptr<VideoCapture> m_capture;
+    std::unique_ptr<WindowManager> m_window;
+    std::unique_ptr<OpenGLRenderer> m_renderer;
+    std::unique_ptr<ShaderEngine> m_shaderEngine;
+    std::unique_ptr<UIManager> m_ui;
+    std::unique_ptr<FrameProcessor> m_frameProcessor;
     
     GLuint m_texture = 0;
     uint32_t m_textureWidth = 0;
@@ -90,7 +93,6 @@ private:
     bool initRenderer();
     bool initUI();
     bool processFrame(); // Retorna true se um novo frame foi processado
-    void convertYUYVtoRGB(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
     void handleKeyInput();
 };
 

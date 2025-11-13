@@ -1,5 +1,7 @@
 #include "UIManager.h"
 #include "../utils/Logger.h"
+#include "../utils/ShaderScanner.h"
+#include "../utils/V4L2DeviceScanner.h"
 #include "../capture/VideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
@@ -9,9 +11,6 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -53,7 +52,7 @@ bool UIManager::init(GLFWwindow *window)
     if (envShaderPath && std::filesystem::exists(envShaderPath)) {
         m_shaderBasePath = envShaderPath;
     }
-    scanShaders(m_shaderBasePath);
+    m_scannedShaders = ShaderScanner::scan(m_shaderBasePath);
 
     m_initialized = true;
     LOG_INFO("UIManager inicializado");
@@ -126,7 +125,7 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Rescan Shaders"))
             {
-                scanShaders(m_shaderBasePath);
+                m_scannedShaders = ShaderScanner::scan(m_shaderBasePath);
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Esc"))
@@ -457,7 +456,7 @@ void UIManager::renderV4L2Controls()
     // Scan devices if list is empty
     if (m_v4l2Devices.empty())
     {
-        scanV4L2Devices();
+        refreshV4L2Devices();
     }
 
     // Combo box for device selection
@@ -495,7 +494,7 @@ void UIManager::renderV4L2Controls()
     ImGui::SameLine();
     if (ImGui::Button("Refresh##devices"))
     {
-        scanV4L2Devices();
+        refreshV4L2Devices();
     }
 
     ImGui::Separator();
@@ -879,117 +878,8 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
     }
 }
 
-void UIManager::scanV4L2Devices()
+void UIManager::refreshV4L2Devices()
 {
-    m_v4l2Devices.clear();
-
-    // Scan /dev/video* devices
-    for (int i = 0; i < 32; ++i)
-    {
-        std::string devicePath = "/dev/video" + std::to_string(i);
-
-        // Try to open device to check if it exists and is a V4L2 device
-        int fd = open(devicePath.c_str(), O_RDWR | O_NONBLOCK);
-        if (fd >= 0)
-        {
-            // Check if it's a video capture device
-            struct v4l2_capability cap = {};
-            if (ioctl(fd, VIDIOC_QUERYCAP, &cap) >= 0)
-            {
-                if (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)
-                {
-                    m_v4l2Devices.push_back(devicePath);
-                }
-            }
-            close(fd);
-        }
-    }
-
-    // Sort devices
-    std::sort(m_v4l2Devices.begin(), m_v4l2Devices.end());
+    m_v4l2Devices = V4L2DeviceScanner::scan();
 }
 
-void UIManager::scanShaders(const std::string &basePath)
-{
-    m_scannedShaders.clear();
-
-    std::filesystem::path path(basePath);
-    if (!std::filesystem::exists(path))
-    {
-        // Tentar caminho relativo ao diretório de trabalho
-        path = std::filesystem::current_path() / basePath;
-    }
-
-    if (!std::filesystem::exists(path))
-    {
-        LOG_WARN("Diretório de shaders não encontrado: " + basePath);
-        return;
-    }
-
-    try
-    {
-        // Normalizar o caminho base para comparações
-        std::filesystem::path normalizedBasePath = std::filesystem::canonical(path);
-
-        // Escanear recursivamente todos os arquivos
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(path))
-        {
-            if (entry.is_regular_file())
-            {
-                std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                if (ext == ".glslp")
-                {
-                    std::filesystem::path entryPath = entry.path();
-
-                    // Tentar normalizar o caminho do arquivo
-                    std::filesystem::path normalizedEntryPath;
-                    try
-                    {
-                        normalizedEntryPath = std::filesystem::canonical(entryPath);
-                    }
-                    catch (...)
-                    {
-                        // Se falhar, usar o caminho original
-                        normalizedEntryPath = entryPath;
-                    }
-
-                    // Obter o diretório pai normalizado
-                    std::filesystem::path parentPath = normalizedEntryPath.parent_path();
-                    try
-                    {
-                        parentPath = std::filesystem::canonical(parentPath);
-                    }
-                    catch (...)
-                    {
-                        // Se falhar, usar o caminho original
-                        parentPath = entryPath.parent_path();
-                    }
-
-                    // Calcular caminho relativo
-                    std::string relativePath;
-                    if (parentPath == normalizedBasePath)
-                    {
-                        // Arquivo está na raiz, usar apenas o nome do arquivo
-                        relativePath = entryPath.filename().string();
-                    }
-                    else
-                    {
-                        // Arquivo está em subpasta, usar caminho relativo completo
-                        relativePath = std::filesystem::relative(entryPath, path).string();
-                    }
-
-                    m_scannedShaders.push_back(relativePath);
-                }
-            }
-        }
-
-        std::sort(m_scannedShaders.begin(), m_scannedShaders.end());
-        LOG_INFO("Encontrados " + std::to_string(m_scannedShaders.size()) + " shaders em " + basePath);
-    }
-    catch (const std::exception &e)
-    {
-        LOG_ERROR("Erro ao escanear shaders: " + std::string(e.what()));
-    }
-}

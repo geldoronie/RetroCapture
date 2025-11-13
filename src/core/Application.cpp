@@ -5,6 +5,8 @@
 #include "../renderer/OpenGLRenderer.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
+#include "../v4l2/V4L2ControlMapper.h"
+#include "../processing/FrameProcessor.h"
 #include "../renderer/glad_loader.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -64,7 +66,7 @@ bool Application::init()
 
 bool Application::initWindow()
 {
-    m_window = new WindowManager();
+    m_window = std::make_unique<WindowManager>();
 
     WindowConfig config;
     config.width = m_windowWidth;
@@ -77,8 +79,7 @@ bool Application::initWindow()
     if (!m_window->init(config))
     {
         LOG_ERROR("Falha ao inicializar janela");
-        delete m_window;
-        m_window = nullptr;
+        m_window.reset();
         return false;
     }
 
@@ -106,23 +107,24 @@ bool Application::initRenderer()
         m_window->makeCurrent();
     }
 
-    m_renderer = new OpenGLRenderer();
+    m_renderer = std::make_unique<OpenGLRenderer>();
 
     if (!m_renderer->init())
     {
         LOG_ERROR("Falha ao inicializar renderer");
-        delete m_renderer;
-        m_renderer = nullptr;
+        m_renderer.reset();
         return false;
     }
 
+    // Inicializar FrameProcessor (depois do renderer estar pronto)
+    m_frameProcessor = std::make_unique<FrameProcessor>();
+
     // Inicializar ShaderEngine
-    m_shaderEngine = new ShaderEngine();
+    m_shaderEngine = std::make_unique<ShaderEngine>();
     if (!m_shaderEngine->init())
     {
         LOG_ERROR("Falha ao inicializar ShaderEngine");
-        delete m_shaderEngine;
-        m_shaderEngine = nullptr;
+        m_shaderEngine.reset();
         // Não é crítico, podemos continuar sem shaders
     }
     else
@@ -181,15 +183,14 @@ bool Application::initRenderer()
 
 bool Application::initCapture()
 {
-    m_capture = new VideoCapture();
+    m_capture = std::make_unique<VideoCapture>();
 
     // Abrir dispositivo especificado (ou padrão /dev/video0)
     if (!m_capture->open(m_devicePath))
     {
         LOG_ERROR("Falha ao abrir dispositivo de captura: " + m_devicePath);
         LOG_INFO("Tente especificar outro dispositivo com --device /dev/videoX");
-        delete m_capture;
-        m_capture = nullptr;
+        m_capture.reset();
         return false;
     }
 
@@ -202,8 +203,7 @@ bool Application::initCapture()
         LOG_ERROR("Falha ao configurar formato de captura");
         LOG_WARN("Resolução solicitada pode não ser suportada pelo dispositivo");
         m_capture->close();
-        delete m_capture;
-        m_capture = nullptr;
+        m_capture.reset();
         return false;
     }
 
@@ -282,8 +282,7 @@ bool Application::initCapture()
     if (!m_capture->startCapture())
     {
         LOG_ERROR("Falha ao iniciar captura");
-        delete m_capture;
-        m_capture = nullptr;
+        m_capture.reset();
         return false;
     }
 
@@ -398,23 +397,21 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
 bool Application::initUI()
 {
-    m_ui = new UIManager();
+    m_ui = std::make_unique<UIManager>();
 
     // Obter GLFWwindow* do WindowManager
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
     if (!window)
     {
         LOG_ERROR("Falha ao obter janela GLFW para ImGui");
-        delete m_ui;
-        m_ui = nullptr;
+        m_ui.reset();
         return false;
     }
 
     if (!m_ui->init(window))
     {
         LOG_ERROR("Falha ao inicializar UIManager");
-        delete m_ui;
-        m_ui = nullptr;
+        m_ui.reset();
         return false;
     }
 
@@ -479,17 +476,8 @@ bool Application::initUI()
                                   {
         if (!m_capture) return;
         
-        // Mapear nome para control ID
-        uint32_t cid = 0;
-        if (name == "Brightness") cid = V4L2_CID_BRIGHTNESS;
-        else if (name == "Contrast") cid = V4L2_CID_CONTRAST;
-        else if (name == "Saturation") cid = V4L2_CID_SATURATION;
-        else if (name == "Hue") cid = V4L2_CID_HUE;
-        else if (name == "Gain") cid = V4L2_CID_GAIN;
-        else if (name == "Exposure") cid = V4L2_CID_EXPOSURE_ABSOLUTE;
-        else if (name == "Sharpness") cid = V4L2_CID_SHARPNESS;
-        else if (name == "Gamma") cid = V4L2_CID_GAMMA;
-        else if (name == "White Balance") cid = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
+        // Mapear nome para control ID usando V4L2ControlMapper
+        uint32_t cid = V4L2ControlMapper::nameToControlId(name);
         
         if (cid != 0) {
             // Obter range real do dispositivo para validar
@@ -563,7 +551,7 @@ bool Application::initUI()
     // Configurar controles V4L2
     if (m_capture)
     {
-        m_ui->setV4L2Controls(m_capture);
+        m_ui->setV4L2Controls(m_capture.get());
     }
 
     // Configurar informações da captura
@@ -605,7 +593,7 @@ bool Application::initUI()
                                     m_captureFps, devicePath);
                 
                 // Recarregar controles V4L2
-                m_ui->setV4L2Controls(m_capture);
+                m_ui->setV4L2Controls(m_capture.get());
                 
                 LOG_INFO("Dispositivo alterado com sucesso");
             } else {
@@ -634,7 +622,7 @@ bool Application::initUI()
     // Conectar ShaderEngine à UI para parâmetros
     if (m_shaderEngine)
     {
-        m_ui->setShaderEngine(m_shaderEngine);
+        m_ui->setShaderEngine(m_shaderEngine.get());
     }
 
     // Callback para salvar preset
@@ -868,7 +856,7 @@ void Application::run()
 
 bool Application::processFrame()
 {
-    if (!m_capture)
+    if (!m_capture || !m_frameProcessor)
     {
         return false;
     }
@@ -880,128 +868,32 @@ bool Application::processFrame()
         return false; // Nenhum frame novo disponível
     }
 
-    // Se a textura ainda não foi criada ou o tamanho mudou
-    bool textureCreated = false;
-    if (m_texture == 0 || m_textureWidth != frame.width || m_textureHeight != frame.height)
+    // Processar frame usando FrameProcessor
+    GLuint outputTexture = 0;
+    uint32_t outputWidth = 0;
+    uint32_t outputHeight = 0;
+
+    if (!m_frameProcessor->processFrame(frame, 
+                                        m_texture,
+                                        m_textureWidth,
+                                        m_textureHeight,
+                                        m_renderer.get(),
+                                        outputTexture,
+                                        outputWidth,
+                                        outputHeight))
     {
-        if (m_texture != 0)
-        {
-            glDeleteTextures(1, &m_texture);
-        }
-
-        m_textureWidth = frame.width;
-        m_textureHeight = frame.height;
-
-        // Criar textura vazia primeiro
-        glGenTextures(1, &m_texture);
-        glBindTexture(GL_TEXTURE_2D, m_texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        textureCreated = true;
-        LOG_INFO("Textura criada: " + std::to_string(m_textureWidth) + "x" + std::to_string(m_textureHeight));
+        return false; // Falha ao processar frame
     }
 
-    // Converter e atualizar textura
-    glBindTexture(GL_TEXTURE_2D, m_texture);
-
-    if (frame.format == V4L2_PIX_FMT_YUYV)
-    {
-        // Converter YUYV para RGB
-        std::vector<uint8_t> rgbBuffer(frame.width * frame.height * 3);
-        convertYUYVtoRGB(frame.data, rgbBuffer.data(), frame.width, frame.height);
-
-        if (textureCreated)
-        {
-            // Primeira vez: usar glTexImage2D
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0, GL_RGB, GL_UNSIGNED_BYTE, rgbBuffer.data());
-        }
-        else
-        {
-            // Atualização: usar glTexSubImage2D (mais rápido, não realoca)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, rgbBuffer.data());
-        }
-    }
-    else
-    {
-        // Usar formato diretamente (se suportado)
-        if (textureCreated)
-        {
-            m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
-        }
-        else
-        {
-            // Para outros formatos, ainda precisamos atualizar via renderer
-            m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
-        }
-    }
-
+    // Atualizar estado com resultados
+    m_texture = outputTexture;
+    m_textureWidth = outputWidth;
+    m_textureHeight = outputHeight;
     m_hasValidFrame = true;
+
     return true; // Frame processado com sucesso
 }
 
-void Application::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
-{
-    // Conversão YUYV para RGB
-    // YUYV: Y0 U0 Y1 V0 Y2 U1 Y3 V1 ...
-    for (uint32_t y = 0; y < height; ++y)
-    {
-        for (uint32_t x = 0; x < width; x += 2)
-        {
-            uint32_t idx = y * width * 2 + x * 2;
-
-            int y0 = yuyv[idx];
-            int u = yuyv[idx + 1];
-            int y1 = yuyv[idx + 2];
-            int v = yuyv[idx + 3];
-
-            // Converter primeiro pixel
-            int c = y0 - 16;
-            int d = u - 128;
-            int e = v - 128;
-
-            int r0 = (298 * c + 409 * e + 128) >> 8;
-            int g0 = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            int b0 = (298 * c + 516 * d + 128) >> 8;
-
-            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255
-                                           : r0;
-            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255
-                                           : g0;
-            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255
-                                           : b0;
-
-            uint32_t rgbIdx0 = (y * width + x) * 3;
-            rgb[rgbIdx0] = r0;
-            rgb[rgbIdx0 + 1] = g0;
-            rgb[rgbIdx0 + 2] = b0;
-
-            // Converter segundo pixel (mesmo U e V)
-            c = y1 - 16;
-
-            int r1 = (298 * c + 409 * e + 128) >> 8;
-            int g1 = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            int b1 = (298 * c + 516 * d + 128) >> 8;
-
-            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255
-                                           : r1;
-            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255
-                                           : g1;
-            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255
-                                           : b1;
-
-            if (x + 1 < width)
-            {
-                uint32_t rgbIdx1 = (y * width + x + 1) * 3;
-                rgb[rgbIdx1] = r1;
-                rgb[rgbIdx1 + 1] = g1;
-                rgb[rgbIdx1 + 2] = b1;
-            }
-        }
-    }
-}
 
 void Application::shutdown()
 {
@@ -1022,37 +914,34 @@ void Application::shutdown()
     {
         m_capture->stopCapture();
         m_capture->close();
-        delete m_capture;
-        m_capture = nullptr;
     }
 
     if (m_shaderEngine)
     {
         m_shaderEngine->shutdown();
-        delete m_shaderEngine;
-        m_shaderEngine = nullptr;
     }
 
     if (m_renderer)
     {
         m_renderer->shutdown();
-        delete m_renderer;
-        m_renderer = nullptr;
     }
 
     if (m_ui)
     {
         m_ui->shutdown();
-        delete m_ui;
-        m_ui = nullptr;
     }
 
     if (m_window)
     {
         m_window->shutdown();
-        delete m_window;
-        m_window = nullptr;
     }
+
+    // Smart pointers will automatically clean up when reset or destroyed
+    m_capture.reset();
+    m_shaderEngine.reset();
+    m_renderer.reset();
+    m_ui.reset();
+    m_window.reset();
 
     m_initialized = false;
 }

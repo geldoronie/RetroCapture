@@ -55,7 +55,7 @@ public:
     }
     void setOnDeviceChanged(std::function<void(const std::string &)> callback) { m_onDeviceChanged = callback; }
     void setCurrentDevice(const std::string& device) { m_currentDevice = device; }
-    void scanV4L2Devices();
+    void refreshV4L2Devices();
 
     // Informações da captura
     void setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device);
@@ -127,7 +127,6 @@ private:
     void renderImageControls();
     void renderV4L2Controls();
     void renderInfoPanel();
-    void scanShaders(const std::string &basePath);
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";
