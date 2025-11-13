@@ -48,6 +48,11 @@ bool UIManager::init(GLFWwindow *window)
     ImGui_ImplOpenGL3_Init("#version 330");
 
     // Scan for shaders
+    // Verificar se há variável de ambiente para o caminho dos shaders (útil para AppImage)
+    const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+    if (envShaderPath && std::filesystem::exists(envShaderPath)) {
+        m_shaderBasePath = envShaderPath;
+    }
     scanShaders(m_shaderBasePath);
 
     m_initialized = true;
