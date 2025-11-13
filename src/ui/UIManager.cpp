@@ -9,6 +9,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -442,6 +445,55 @@ void UIManager::renderV4L2Controls()
         return;
     }
 
+    // Device selection
+    ImGui::Text("V4L2 Device:");
+    ImGui::Separator();
+
+    // Scan devices if list is empty
+    if (m_v4l2Devices.empty())
+    {
+        scanV4L2Devices();
+    }
+
+    // Combo box for device selection
+    int selectedIndex = -1;
+    for (size_t i = 0; i < m_v4l2Devices.size(); ++i)
+    {
+        if (m_v4l2Devices[i] == m_currentDevice)
+        {
+            selectedIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (ImGui::BeginCombo("##device", m_currentDevice.empty() ? "Select device" : m_currentDevice.c_str()))
+    {
+        for (size_t i = 0; i < m_v4l2Devices.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i));
+            if (ImGui::Selectable(m_v4l2Devices[i].c_str(), isSelected))
+            {
+                m_currentDevice = m_v4l2Devices[i];
+                if (m_onDeviceChanged)
+                {
+                    m_onDeviceChanged(m_v4l2Devices[i]);
+                }
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##devices"))
+    {
+        scanV4L2Devices();
+    }
+
+    ImGui::Separator();
     ImGui::Text("Capture Resolution & Framerate");
     ImGui::Separator();
 
@@ -479,69 +531,6 @@ void UIManager::renderV4L2Controls()
             }
         }
     }
-
-    // Resoluções comuns (botões rápidos)
-    ImGui::Text("Quick resolutions:");
-    if (ImGui::Button("640x480"))
-    {
-        m_captureWidth = 640;
-        m_captureHeight = 480;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(640, 480);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("800x600"))
-    {
-        m_captureWidth = 800;
-        m_captureHeight = 600;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(800, 600);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("1280x720"))
-    {
-        m_captureWidth = 1280;
-        m_captureHeight = 720;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(1280, 720);
-        }
-    }
-    if (ImGui::Button("1920x1080"))
-    {
-        m_captureWidth = 1920;
-        m_captureHeight = 1080;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(1920, 1080);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("2560x1440"))
-    {
-        m_captureWidth = 2560;
-        m_captureHeight = 1440;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(2560, 1440);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("3840x2160"))
-    {
-        m_captureWidth = 3840;
-        m_captureHeight = 2160;
-        if (m_onResolutionChanged)
-        {
-            m_onResolutionChanged(3840, 2160);
-        }
-    }
-
-    ImGui::Separator();
 
     // Controle de FPS
     ImGui::Text("Framerate:");
@@ -594,9 +583,135 @@ void UIManager::renderV4L2Controls()
     }
 
     ImGui::Separator();
+    
+    // Resoluções 4:3
+    ImGui::Text("4:3 Resolutions:");
+    if (ImGui::Button("320x240"))
+    {
+        m_captureWidth = 320;
+        m_captureHeight = 240;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(320, 240);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("640x480"))
+    {
+        m_captureWidth = 640;
+        m_captureHeight = 480;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(640, 480);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("800x600"))
+    {
+        m_captureWidth = 800;
+        m_captureHeight = 600;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(800, 600);
+        }
+    }
+    if (ImGui::Button("1024x768"))
+    {
+        m_captureWidth = 1024;
+        m_captureHeight = 768;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(1024, 768);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("1280x960"))
+    {
+        m_captureWidth = 1280;
+        m_captureHeight = 960;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(1280, 960);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("1600x1200"))
+    {
+        m_captureWidth = 1600;
+        m_captureHeight = 1200;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(1600, 1200);
+        }
+    }
+    if (ImGui::Button("2048x1536"))
+    {
+        m_captureWidth = 2048;
+        m_captureHeight = 1536;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(2048, 1536);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("2560x1920"))
+    {
+        m_captureWidth = 2560;
+        m_captureHeight = 1920;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(2560, 1920);
+        }
+    }
+
+    ImGui::Separator();
+    
+    // Resoluções 16:9
+    ImGui::Text("16:9 Resolutions:");
+    if (ImGui::Button("1280x720"))
+    {
+        m_captureWidth = 1280;
+        m_captureHeight = 720;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(1280, 720);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("1920x1080"))
+    {
+        m_captureWidth = 1920;
+        m_captureHeight = 1080;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(1920, 1080);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("2560x1440"))
+    {
+        m_captureWidth = 2560;
+        m_captureHeight = 1440;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(2560, 1440);
+        }
+    }
+    if (ImGui::Button("3840x2160"))
+    {
+        m_captureWidth = 3840;
+        m_captureHeight = 2160;
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(3840, 2160);
+        }
+    }
+
+    ImGui::Separator();
     ImGui::Text("V4L2 Hardware Controls");
     ImGui::Separator();
 
+    // Renderizar controles dinâmicos (discovered from device)
     for (auto &control : m_v4l2Controls)
     {
         if (!control.available)
@@ -614,6 +729,80 @@ void UIManager::renderV4L2Controls()
             }
         }
     }
+
+    ImGui::Separator();
+    ImGui::Text("All V4L2 Controls:");
+    ImGui::Separator();
+
+    // Helper function para renderizar controle com range do dispositivo ou padrão
+    auto renderControl = [this](const char *name, uint32_t cid, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    {
+        if (!m_capture)
+            return;
+
+        int32_t value, min, max, step;
+        bool available = m_capture->getControl(cid, value, min, max, step);
+
+        // Se não disponível, usar valores padrão
+        if (!available)
+        {
+            min = defaultMin;
+            max = defaultMax;
+            value = defaultValue;
+            step = 1;
+        }
+
+        // Alinhar valor com step
+        if (step > 1)
+        {
+            value = ((value - min) / step) * step + min;
+        }
+
+        // Clamp valor
+        value = std::max(min, std::min(max, value));
+
+        if (ImGui::SliderInt(name, &value, min, max))
+        {
+            // Alinhar valor com step antes de aplicar
+            if (step > 1)
+            {
+                value = ((value - min) / step) * step + min;
+            }
+            value = std::max(min, std::min(max, value));
+
+            if (m_onV4L2ControlChanged)
+            {
+                m_onV4L2ControlChanged(name, value);
+            }
+        }
+    };
+
+    // Brightness
+    renderControl("Brightness", V4L2_CID_BRIGHTNESS, -100, 100, 0);
+
+    // Contrast
+    renderControl("Contrast", V4L2_CID_CONTRAST, -100, 100, 0);
+
+    // Saturation
+    renderControl("Saturation", V4L2_CID_SATURATION, -100, 100, 0);
+
+    // Hue
+    renderControl("Hue", V4L2_CID_HUE, -100, 100, 0);
+
+    // Gain
+    renderControl("Gain", V4L2_CID_GAIN, 0, 100, 0);
+
+    // Exposure
+    renderControl("Exposure", V4L2_CID_EXPOSURE_ABSOLUTE, -13, 1, 0);
+
+    // Sharpness
+    renderControl("Sharpness", V4L2_CID_SHARPNESS, 0, 6, 0);
+
+    // Gamma
+    renderControl("Gamma", V4L2_CID_GAMMA, 100, 300, 100);
+
+    // White Balance
+    renderControl("White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE, 2800, 6500, 4000);
 }
 
 void UIManager::setV4L2Controls(VideoCapture *capture)
@@ -679,6 +868,40 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
     m_captureHeight = height;
     m_captureFps = fps;
     m_captureDevice = device;
+    if (m_currentDevice.empty())
+    {
+        m_currentDevice = device;
+    }
+}
+
+void UIManager::scanV4L2Devices()
+{
+    m_v4l2Devices.clear();
+
+    // Scan /dev/video* devices
+    for (int i = 0; i < 32; ++i)
+    {
+        std::string devicePath = "/dev/video" + std::to_string(i);
+
+        // Try to open device to check if it exists and is a V4L2 device
+        int fd = open(devicePath.c_str(), O_RDWR | O_NONBLOCK);
+        if (fd >= 0)
+        {
+            // Check if it's a video capture device
+            struct v4l2_capability cap = {};
+            if (ioctl(fd, VIDIOC_QUERYCAP, &cap) >= 0)
+            {
+                if (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)
+                {
+                    m_v4l2Devices.push_back(devicePath);
+                }
+            }
+            close(fd);
+        }
+    }
+
+    // Sort devices
+    std::sort(m_v4l2Devices.begin(), m_v4l2Devices.end());
 }
 
 void UIManager::scanShaders(const std::string &basePath)

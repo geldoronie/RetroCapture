@@ -48,15 +48,16 @@ bool Application::init()
     }
 
     m_initialized = true;
-    
+
     // IMPORTANTE: Após inicialização completa, garantir que o viewport está atualizado
     // Isso é especialmente importante quando a janela é criada em fullscreen
-    if (m_window && m_shaderEngine) {
+    if (m_window && m_shaderEngine)
+    {
         uint32_t currentWidth = m_window->getWidth();
         uint32_t currentHeight = m_window->getHeight();
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
-    
+
     LOG_INFO("Application inicializada com sucesso");
     return true;
 }
@@ -82,10 +83,10 @@ bool Application::initWindow()
     }
 
     m_window->makeCurrent();
-    
+
     // Armazenar ponteiro da Application no WindowManager para uso em callbacks
     m_window->setUserData(this);
-    
+
     // Configurar callback de resize para atualizar viewport quando a janela for redimensionada
     // ou entrar em fullscreen
     // IMPORTANTE: Este callback é chamado pelo GLFW quando a janela muda de tamanho,
@@ -93,7 +94,7 @@ bool Application::initWindow()
     // IMPORTANTE: O ShaderEngine ainda não foi inicializado aqui, então vamos atualizar
     // o callback depois que o ShaderEngine for criado
     // Por enquanto, vamos apenas armazenar o ponteiro
-    
+
     return true;
 }
 
@@ -129,25 +130,27 @@ bool Application::initRenderer()
         // IMPORTANTE: Atualizar viewport do ShaderEngine com as dimensões atuais da janela
         // Isso é especialmente importante quando a janela é criada em fullscreen
         // O callback de resize pode não ser chamado imediatamente na criação
-        if (m_window) {
+        if (m_window)
+        {
             uint32_t currentWidth = m_window->getWidth();
             uint32_t currentHeight = m_window->getHeight();
             m_shaderEngine->setViewport(currentWidth, currentHeight);
         }
-        
+
         // IMPORTANTE: Agora que o ShaderEngine está inicializado, configurar o callback de resize
         // para atualizar o viewport quando a janela for redimensionada ou entrar em fullscreen
-        if (m_window) {
-            Application* appPtr = this;
-            m_window->setResizeCallback([appPtr](int width, int height) {
+        if (m_window)
+        {
+            Application *appPtr = this;
+            m_window->setResizeCallback([appPtr](int width, int height)
+                                        {
                 // IMPORTANTE: Atualizar viewport do ShaderEngine imediatamente quando resize acontece
                 // Isso é especialmente crítico quando entra em fullscreen
                 if (appPtr && appPtr->m_shaderEngine) {
                     appPtr->m_shaderEngine->setViewport(width, height);
-                }
-            });
+                } });
         }
-        
+
         // Carregar shader ou preset se especificado
         if (!m_presetPath.empty())
         {
@@ -212,48 +215,66 @@ bool Application::initCapture()
     }
 
     // Configurar controles V4L2 se especificados
-    if (m_v4l2Brightness >= 0) {
-        if (m_capture->setBrightness(m_v4l2Brightness)) {
+    if (m_v4l2Brightness >= 0)
+    {
+        if (m_capture->setBrightness(m_v4l2Brightness))
+        {
             LOG_INFO("Brilho V4L2 configurado: " + std::to_string(m_v4l2Brightness));
         }
     }
-    if (m_v4l2Contrast >= 0) {
-        if (m_capture->setContrast(m_v4l2Contrast)) {
+    if (m_v4l2Contrast >= 0)
+    {
+        if (m_capture->setContrast(m_v4l2Contrast))
+        {
             LOG_INFO("Contraste V4L2 configurado: " + std::to_string(m_v4l2Contrast));
         }
     }
-    if (m_v4l2Saturation >= 0) {
-        if (m_capture->setSaturation(m_v4l2Saturation)) {
+    if (m_v4l2Saturation >= 0)
+    {
+        if (m_capture->setSaturation(m_v4l2Saturation))
+        {
             LOG_INFO("Saturação V4L2 configurada: " + std::to_string(m_v4l2Saturation));
         }
     }
-    if (m_v4l2Hue >= 0) {
-        if (m_capture->setHue(m_v4l2Hue)) {
+    if (m_v4l2Hue >= 0)
+    {
+        if (m_capture->setHue(m_v4l2Hue))
+        {
             LOG_INFO("Matiz V4L2 configurado: " + std::to_string(m_v4l2Hue));
         }
     }
-    if (m_v4l2Gain >= 0) {
-        if (m_capture->setGain(m_v4l2Gain)) {
+    if (m_v4l2Gain >= 0)
+    {
+        if (m_capture->setGain(m_v4l2Gain))
+        {
             LOG_INFO("Ganho V4L2 configurado: " + std::to_string(m_v4l2Gain));
         }
     }
-    if (m_v4l2Exposure >= 0) {
-        if (m_capture->setExposure(m_v4l2Exposure)) {
+    if (m_v4l2Exposure >= 0)
+    {
+        if (m_capture->setExposure(m_v4l2Exposure))
+        {
             LOG_INFO("Exposição V4L2 configurada: " + std::to_string(m_v4l2Exposure));
         }
     }
-    if (m_v4l2Sharpness >= 0) {
-        if (m_capture->setSharpness(m_v4l2Sharpness)) {
+    if (m_v4l2Sharpness >= 0)
+    {
+        if (m_capture->setSharpness(m_v4l2Sharpness))
+        {
             LOG_INFO("Nitidez V4L2 configurada: " + std::to_string(m_v4l2Sharpness));
         }
     }
-    if (m_v4l2Gamma >= 0) {
-        if (m_capture->setGamma(m_v4l2Gamma)) {
+    if (m_v4l2Gamma >= 0)
+    {
+        if (m_capture->setGamma(m_v4l2Gamma))
+        {
             LOG_INFO("Gama V4L2 configurado: " + std::to_string(m_v4l2Gamma));
         }
     }
-    if (m_v4l2WhiteBalance >= 0) {
-        if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance)) {
+    if (m_v4l2WhiteBalance >= 0)
+    {
+        if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance))
+        {
             LOG_INFO("Balanço de branco V4L2 configurado: " + std::to_string(m_v4l2WhiteBalance));
         }
     }
@@ -275,120 +296,131 @@ bool Application::initCapture()
 
 bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps)
 {
-    if (!m_capture || !m_capture->isOpen()) {
+    if (!m_capture || !m_capture->isOpen())
+    {
         LOG_ERROR("Captura não está aberta, não é possível reconfigurar");
         return false;
     }
-    
-    LOG_INFO("Reconfigurando captura: " + std::to_string(width) + "x" + 
+
+    LOG_INFO("Reconfigurando captura: " + std::to_string(width) + "x" +
              std::to_string(height) + " @ " + std::to_string(fps) + "fps");
-    
+
     // Salvar valores atuais para rollback se necessário
     uint32_t oldWidth = m_captureWidth;
     uint32_t oldHeight = m_captureHeight;
     uint32_t oldFps = m_captureFps;
     std::string devicePath = m_devicePath;
-    
+
     // IMPORTANTE: Fechar e reabrir o dispositivo completamente
     // Isso é necessário porque alguns drivers V4L2 não permitem mudar
     // a resolução sem fechar o dispositivo
     LOG_INFO("Fechando dispositivo para reconfiguração...");
     m_capture->stopCapture();
     m_capture->close();
-    
+
     // Pequeno delay para garantir que o dispositivo foi liberado
     usleep(100000); // 100ms
-    
+
     // Reabrir dispositivo
     LOG_INFO("Reabrindo dispositivo...");
-    if (!m_capture->open(devicePath)) {
+    if (!m_capture->open(devicePath))
+    {
         LOG_ERROR("Falha ao reabrir dispositivo após reconfiguração");
         return false;
     }
-    
+
     // Configurar novo formato
-    if (!m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+    if (!m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV))
+    {
         LOG_ERROR("Falha ao configurar novo formato de captura");
         // Tentar rollback: reabrir com formato anterior
         m_capture->close();
         usleep(100000);
-        if (m_capture->open(devicePath)) {
+        if (m_capture->open(devicePath))
+        {
             m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
         return false;
     }
-    
+
     // Obter dimensões reais (o driver pode ter ajustado)
     uint32_t actualWidth = m_capture->getWidth();
     uint32_t actualHeight = m_capture->getHeight();
-    
+
     // Configurar framerate
-    if (!m_capture->setFramerate(fps)) {
+    if (!m_capture->setFramerate(fps))
+    {
         LOG_WARN("Não foi possível configurar framerate para " + std::to_string(fps) + "fps");
         LOG_INFO("Usando framerate padrão do dispositivo");
     }
-    
+
     // Reiniciar captura (isso cria os buffers com o novo formato)
-    if (!m_capture->startCapture()) {
+    if (!m_capture->startCapture())
+    {
         LOG_ERROR("Falha ao reiniciar captura após reconfiguração");
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
         usleep(100000);
-        if (m_capture->open(devicePath)) {
+        if (m_capture->open(devicePath))
+        {
             m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
         return false;
     }
-    
+
     // Atualizar dimensões internas com valores reais
     m_captureWidth = actualWidth;
     m_captureHeight = actualHeight;
     m_captureFps = fps;
-    
+
     // IMPORTANTE: Descarta alguns frames iniciais após reconfiguração
     // Os primeiros frames podem estar com dados antigos ou inválidos
     // Isso garante que quando o loop principal tentar processar, já teremos frames válidos
     LOG_INFO("Descartando frames iniciais após reconfiguração...");
     Frame dummyFrame;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 5; ++i)
+    {
         m_capture->captureLatestFrame(dummyFrame);
         usleep(10000); // 10ms entre tentativas
     }
-    
-    LOG_INFO("Captura reconfigurada com sucesso: " + 
-             std::to_string(actualWidth) + "x" + 
+
+    LOG_INFO("Captura reconfigurada com sucesso: " +
+             std::to_string(actualWidth) + "x" +
              std::to_string(actualHeight) + " @ " + std::to_string(fps) + "fps");
-    
+
     return true;
 }
 
 bool Application::initUI()
 {
     m_ui = new UIManager();
-    
+
     // Obter GLFWwindow* do WindowManager
-    GLFWwindow* window = static_cast<GLFWwindow*>(m_window->getWindow());
-    if (!window) {
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
+    if (!window)
+    {
         LOG_ERROR("Falha ao obter janela GLFW para ImGui");
         delete m_ui;
         m_ui = nullptr;
         return false;
     }
-    
-    if (!m_ui->init(window)) {
+
+    if (!m_ui->init(window))
+    {
         LOG_ERROR("Falha ao inicializar UIManager");
         delete m_ui;
         m_ui = nullptr;
         return false;
     }
-    
+
     // Configurar callbacks
-    m_ui->setOnShaderChanged([this](const std::string& shaderPath) {
+    m_ui->setOnShaderChanged([this](const std::string &shaderPath)
+                             {
         if (m_shaderEngine) {
             if (shaderPath.empty()) {
                 m_shaderEngine->disableShader();
@@ -401,22 +433,19 @@ bool Application::initUI()
                     LOG_ERROR("Falha ao carregar shader via UI: " + shaderPath);
                 }
             }
-        }
-    });
-    
-    m_ui->setOnBrightnessChanged([this](float brightness) {
-        m_brightness = brightness;
-    });
-    
-    m_ui->setOnContrastChanged([this](float contrast) {
-        m_contrast = contrast;
-    });
-    
-    m_ui->setOnMaintainAspectChanged([this](bool maintain) {
-        m_maintainAspect = maintain;
-    });
-    
-    m_ui->setOnFullscreenChanged([this](bool fullscreen) {
+        } });
+
+    m_ui->setOnBrightnessChanged([this](float brightness)
+                                 { m_brightness = brightness; });
+
+    m_ui->setOnContrastChanged([this](float contrast)
+                               { m_contrast = contrast; });
+
+    m_ui->setOnMaintainAspectChanged([this](bool maintain)
+                                     { m_maintainAspect = maintain; });
+
+    m_ui->setOnFullscreenChanged([this](bool fullscreen)
+                                 {
         LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
         if (m_window) {
             m_window->setFullscreen(fullscreen, m_monitorIndex);
@@ -428,10 +457,10 @@ bool Application::initUI()
                 uint32_t currentHeight = m_window->getHeight();
                 m_shaderEngine->setViewport(currentWidth, currentHeight);
             }
-        }
-    });
-    
-    m_ui->setOnMonitorIndexChanged([this](int monitorIndex) {
+        } });
+
+    m_ui->setOnMonitorIndexChanged([this](int monitorIndex)
+                                   {
         LOG_INFO("Monitor index alterado: " + std::to_string(monitorIndex));
         m_monitorIndex = monitorIndex;
         // Se estiver em fullscreen, atualizar para usar o novo monitor
@@ -444,10 +473,10 @@ bool Application::initUI()
                 uint32_t currentHeight = m_window->getHeight();
                 m_shaderEngine->setViewport(currentWidth, currentHeight);
             }
-        }
-    });
-    
-    m_ui->setOnV4L2ControlChanged([this](const std::string& name, int32_t value) {
+        } });
+
+    m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
+                                  {
         if (!m_capture) return;
         
         // Mapear nome para control ID
@@ -463,11 +492,22 @@ bool Application::initUI()
         else if (name == "White Balance") cid = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
         
         if (cid != 0) {
+            // Obter range real do dispositivo para validar
+            int32_t currentValue, min, max, step;
+            if (m_capture->getControl(cid, currentValue, min, max, step)) {
+                // Alinhar valor com step
+                if (step > 1) {
+                    value = ((value - min) / step) * step + min;
+                }
+                // Clamp ao range
+                value = std::max(min, std::min(max, value));
+            }
+            
             m_capture->setControl(cid, value);
-        }
-    });
-    
-    m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height) {
+        } });
+
+    m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
+                                 {
         LOG_INFO("Resolução alterada via UI: " + std::to_string(width) + "x" + std::to_string(height));
         if (reconfigureCapture(width, height, m_captureFps)) {
             // Atualizar textura se necessário (usar valores reais do dispositivo)
@@ -499,10 +539,10 @@ bool Application::initUI()
                 m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                     m_captureFps, m_devicePath);
             }
-        }
-    });
-    
-    m_ui->setOnFramerateChanged([this](uint32_t fps) {
+        } });
+
+    m_ui->setOnFramerateChanged([this](uint32_t fps)
+                                {
         LOG_INFO("Framerate alterado via UI: " + std::to_string(fps) + "fps");
         if (reconfigureCapture(m_captureWidth, m_captureHeight, fps)) {
             m_captureFps = fps;
@@ -511,46 +551,95 @@ bool Application::initUI()
                 m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                     m_captureFps, m_devicePath);
             }
-        }
-    });
-    
+        } });
+
     // Configurar valores iniciais
     m_ui->setBrightness(m_brightness);
     m_ui->setContrast(m_contrast);
     m_ui->setMaintainAspect(m_maintainAspect);
     m_ui->setFullscreen(m_fullscreen);
     m_ui->setMonitorIndex(m_monitorIndex);
-    
+
     // Configurar controles V4L2
-    if (m_capture) {
+    if (m_capture)
+    {
         m_ui->setV4L2Controls(m_capture);
     }
-    
+
     // Configurar informações da captura
-    if (m_capture) {
-        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                            m_captureFps, m_devicePath);
+    if (m_capture)
+    {
+        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                             m_captureFps, m_devicePath);
+        m_ui->setCurrentDevice(m_devicePath);
     }
-    
+
+    // Callback para mudança de dispositivo
+    m_ui->setOnDeviceChanged([this](const std::string &devicePath)
+                             {
+        LOG_INFO("Mudando dispositivo para: " + devicePath);
+        
+        // Salvar configurações atuais
+        uint32_t oldWidth = m_captureWidth;
+        uint32_t oldHeight = m_captureHeight;
+        uint32_t oldFps = m_captureFps;
+        
+        // Fechar dispositivo atual
+        if (m_capture) {
+            m_capture->stopCapture();
+            m_capture->close();
+        }
+        
+        // Atualizar caminho do dispositivo
+        m_devicePath = devicePath;
+        
+        // Reabrir com novo dispositivo
+        if (m_capture && m_capture->open(devicePath)) {
+            // Reconfigurar formato e framerate
+            if (m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV)) {
+                m_capture->setFramerate(oldFps);
+                m_capture->startCapture();
+                
+                // Atualizar informações na UI
+                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                    m_captureFps, devicePath);
+                
+                // Recarregar controles V4L2
+                m_ui->setV4L2Controls(m_capture);
+                
+                LOG_INFO("Dispositivo alterado com sucesso");
+            } else {
+                LOG_ERROR("Falha ao configurar formato no novo dispositivo");
+            }
+        } else {
+            LOG_ERROR("Falha ao abrir novo dispositivo: " + devicePath);
+        } });
+
     // Configurar shader atual
-    if (!m_presetPath.empty()) {
+    if (!m_presetPath.empty())
+    {
         std::filesystem::path presetPath(m_presetPath);
         std::filesystem::path basePath("shaders/shaders_glsl");
         std::filesystem::path relativePath = std::filesystem::relative(presetPath, basePath);
-        if (!relativePath.empty() && relativePath != presetPath) {
+        if (!relativePath.empty() && relativePath != presetPath)
+        {
             m_ui->setCurrentShader(relativePath.string());
-        } else {
+        }
+        else
+        {
             m_ui->setCurrentShader(m_presetPath);
         }
     }
-    
+
     // Conectar ShaderEngine à UI para parâmetros
-    if (m_shaderEngine) {
+    if (m_shaderEngine)
+    {
         m_ui->setShaderEngine(m_shaderEngine);
     }
-    
+
     // Callback para salvar preset
-    m_ui->setOnSavePreset([this](const std::string& path, bool overwrite) {
+    m_ui->setOnSavePreset([this](const std::string &path, bool overwrite)
+                          {
         if (!m_shaderEngine || !m_shaderEngine->isShaderActive()) {
             LOG_WARN("Nenhum preset carregado para salvar");
             return;
@@ -580,9 +669,8 @@ bool Application::initUI()
             } else {
                 LOG_ERROR("Falha ao salvar preset como: " + path);
             }
-        }
-    });
-    
+        } });
+
     LOG_INFO("UIManager inicializado");
     return true;
 }
@@ -596,10 +684,11 @@ void Application::run()
     }
 
     LOG_INFO("Iniciando loop principal...");
-    
+
     // IMPORTANTE: Garantir que o viewport está atualizado antes do primeiro frame
     // Isso é especialmente importante quando a janela é criada em fullscreen
-    if (m_shaderEngine) {
+    if (m_shaderEngine)
+    {
         uint32_t currentWidth = m_window->getWidth();
         uint32_t currentHeight = m_window->getHeight();
         m_shaderEngine->setViewport(currentWidth, currentHeight);
@@ -608,12 +697,13 @@ void Application::run()
     while (!m_window->shouldClose())
     {
         m_window->pollEvents();
-        
+
         // Processar entrada de teclado (F12 para toggle UI)
         handleKeyInput();
 
         // Iniciar frame do ImGui
-        if (m_ui) {
+        if (m_ui)
+        {
             m_ui->beginFrame();
         }
 
@@ -624,12 +714,15 @@ void Application::run()
             // Tentar processar frame várias vezes se não temos textura válida
             // Isso é importante após reconfiguração quando a textura foi deletada
             int maxAttempts = (m_texture == 0 && !m_hasValidFrame) ? 5 : 1;
-            for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+            for (int attempt = 0; attempt < maxAttempts; ++attempt)
+            {
                 newFrame = processFrame();
-                if (newFrame && m_hasValidFrame && m_texture != 0) {
+                if (newFrame && m_hasValidFrame && m_texture != 0)
+                {
                     break; // Frame processado com sucesso
                 }
-                if (attempt < maxAttempts - 1) {
+                if (attempt < maxAttempts - 1)
+                {
                     usleep(5000); // 5ms entre tentativas
                 }
             }
@@ -678,15 +771,16 @@ void Application::run()
             // Isso é especialmente importante quando entra em fullscreen
             uint32_t currentWidth = m_window->getWidth();
             uint32_t currentHeight = m_window->getHeight();
-            
+
             // DEBUG: Log para verificar se as dimensões mudaram
             static uint32_t lastViewportWidth = 0, lastViewportHeight = 0;
-            if (currentWidth != lastViewportWidth || currentHeight != lastViewportHeight) {
+            if (currentWidth != lastViewportWidth || currentHeight != lastViewportHeight)
+            {
                 // Log removido para reduzir verbosidade
                 lastViewportWidth = currentWidth;
                 lastViewportHeight = currentHeight;
             }
-            
+
             glViewport(0, 0, currentWidth, currentHeight);
 
             // IMPORTANTE: Para shaders com alpha (como Game Boy), não limpar com preto opaco
@@ -709,53 +803,61 @@ void Application::run()
             // porque o shader processa a imagem mas mantém a mesma proporção
             // A textura de saída do shader pode ter dimensões da janela (viewport), não da imagem
             uint32_t renderWidth, renderHeight;
-            if (isShaderTexture && m_maintainAspect) {
+            if (isShaderTexture && m_maintainAspect)
+            {
                 // Para maintainAspect com shader, usar dimensões da captura original
                 // O shader processa mas mantém a proporção da imagem original
                 renderWidth = m_textureWidth;
                 renderHeight = m_textureHeight;
                 // Log removido para reduzir verbosidade
-            } else if (isShaderTexture) {
+            }
+            else if (isShaderTexture)
+            {
                 // Sem maintainAspect, usar dimensões de saída do shader
                 renderWidth = m_shaderEngine->getOutputWidth();
                 renderHeight = m_shaderEngine->getOutputHeight();
-                if (renderWidth == 0 || renderHeight == 0) {
+                if (renderWidth == 0 || renderHeight == 0)
+                {
                     LOG_WARN("Dimensões de saída do shader inválidas (0x0), usando dimensões da captura");
                     renderWidth = m_textureWidth;
                     renderHeight = m_textureHeight;
                 }
-            } else {
+            }
+            else
+            {
                 // Sem shader, usar dimensões da captura
                 renderWidth = m_textureWidth;
                 renderHeight = m_textureHeight;
             }
-            
+
             // IMPORTANTE: A imagem da câmera vem invertida (Y invertido)
             // Shaders também renderizam invertido, então ambos precisam de inversão Y
             // flipY: true para ambos (câmera e shader precisam inverter)
             bool shouldFlipY = true;
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(), 
-                                     shouldFlipY, isShaderTexture, m_brightness, m_contrast,
-                                     m_maintainAspect, renderWidth, renderHeight);
-            
+            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
+                                      shouldFlipY, isShaderTexture, m_brightness, m_contrast,
+                                      m_maintainAspect, renderWidth, renderHeight);
+
             // Renderizar UI
-            if (m_ui) {
+            if (m_ui)
+            {
                 m_ui->render();
                 // IMPORTANTE: endFrame() deve ser chamado ANTES do swapBuffers()
                 // para que a UI seja renderizada no buffer correto
                 m_ui->endFrame();
             }
-            
+
             m_window->swapBuffers();
         }
         else
         {
             // Se não há frame válido ainda, fazer um pequeno sleep
             usleep(1000); // 1ms
-            
+
             // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
             // Isso evita o erro "Forgot to call Render() or EndFrame()"
-            if (m_ui) {
+            if (m_ui)
+            {
                 m_ui->endFrame();
             }
         }
@@ -957,20 +1059,26 @@ void Application::shutdown()
 
 void Application::handleKeyInput()
 {
-    if (!m_ui || !m_window) return;
-    
-    GLFWwindow* window = static_cast<GLFWwindow*>(m_window->getWindow());
-    if (!window) return;
-    
+    if (!m_ui || !m_window)
+        return;
+
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
+    if (!window)
+        return;
+
     // F12 para toggle UI
     static bool f12Pressed = false;
-    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS) {
-        if (!f12Pressed) {
+    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS)
+    {
+        if (!f12Pressed)
+        {
             m_ui->toggle();
             LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
             f12Pressed = true;
         }
-    } else {
+    }
+    else
+    {
         f12Pressed = false;
     }
 }

@@ -53,6 +53,9 @@ public:
     {
         m_onV4L2ControlChanged = callback;
     }
+    void setOnDeviceChanged(std::function<void(const std::string &)> callback) { m_onDeviceChanged = callback; }
+    void setCurrentDevice(const std::string& device) { m_currentDevice = device; }
+    void scanV4L2Devices();
 
     // Informações da captura
     void setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device);
@@ -105,6 +108,11 @@ private:
     };
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
+    
+    // Device selection
+    std::vector<std::string> m_v4l2Devices;
+    std::string m_currentDevice;
+    std::function<void(const std::string &)> m_onDeviceChanged;
 
     // Capture info
     uint32_t m_captureWidth = 0;
