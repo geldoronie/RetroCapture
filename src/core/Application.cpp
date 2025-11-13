@@ -1,12 +1,12 @@
 #include "Application.h"
 #include "../utils/Logger.h"
 #include "../capture/VideoCapture.h"
+#include "../v4l2/V4L2ControlMapper.h"
+#include "../processing/FrameProcessor.h"
 #include "../output/WindowManager.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
-#include "../v4l2/V4L2ControlMapper.h"
-#include "../processing/FrameProcessor.h"
 #include "../renderer/glad_loader.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -116,8 +116,9 @@ bool Application::initRenderer()
         return false;
     }
 
-    // Inicializar FrameProcessor (depois do renderer estar pronto)
+    // Inicializar FrameProcessor
     m_frameProcessor = std::make_unique<FrameProcessor>();
+    m_frameProcessor->init(m_renderer.get());
 
     // Inicializar ShaderEngine
     m_shaderEngine = std::make_unique<ShaderEngine>();
@@ -477,7 +478,7 @@ bool Application::initUI()
         if (!m_capture) return;
         
         // Mapear nome para control ID usando V4L2ControlMapper
-        uint32_t cid = V4L2ControlMapper::nameToControlId(name);
+        uint32_t cid = V4L2ControlMapper::getControlId(name);
         
         if (cid != 0) {
             // Obter range real do dispositivo para validar
@@ -503,15 +504,9 @@ bool Application::initUI()
             uint32_t actualHeight = m_capture->getHeight();
             
             // Sempre deletar e recriar a textura após reconfiguração
-            if (m_texture != 0) {
-                glDeleteTextures(1, &m_texture);
-                m_texture = 0;
+            if (m_frameProcessor) {
+                m_frameProcessor->deleteTexture();
             }
-            
-            // Resetar estado para forçar recriação da textura no próximo frame
-            m_textureWidth = 0;
-            m_textureHeight = 0;
-            m_hasValidFrame = false;
             
             // Atualizar informações na UI com valores reais
             if (m_ui && m_capture) {
@@ -701,11 +696,11 @@ void Application::run()
         {
             // Tentar processar frame várias vezes se não temos textura válida
             // Isso é importante após reconfiguração quando a textura foi deletada
-            int maxAttempts = (m_texture == 0 && !m_hasValidFrame) ? 5 : 1;
+            int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
             for (int attempt = 0; attempt < maxAttempts; ++attempt)
             {
-                newFrame = processFrame();
-                if (newFrame && m_hasValidFrame && m_texture != 0)
+                newFrame = m_frameProcessor->processFrame(m_capture.get());
+                if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
                 {
                     break; // Frame processado com sucesso
                 }
@@ -718,10 +713,10 @@ void Application::run()
 
         // Sempre renderizar se temos um frame válido
         // Isso garante que estamos sempre mostrando o frame mais recente
-        if (m_hasValidFrame && m_texture != 0)
+        if (m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
             // Aplicar shader se estiver ativo
-            GLuint textureToRender = m_texture;
+            GLuint textureToRender = m_frameProcessor->getTexture();
             bool isShaderTexture = false;
 
             if (m_shaderEngine && m_shaderEngine->isShaderActive())
@@ -733,14 +728,16 @@ void Application::run()
                 uint32_t currentHeight = m_window->getHeight();
                 m_shaderEngine->setViewport(currentWidth, currentHeight);
 
-                textureToRender = m_shaderEngine->applyShader(m_texture, m_textureWidth, m_textureHeight);
+                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(), 
+                                                               m_frameProcessor->getTextureWidth(), 
+                                                               m_frameProcessor->getTextureHeight());
                 isShaderTexture = true;
 
                 // DEBUG: Verificar textura retornada
                 if (textureToRender == 0)
                 {
                     LOG_WARN("Shader retornou textura inválida (0), usando textura original");
-                    textureToRender = m_texture;
+                    textureToRender = m_frameProcessor->getTexture();
                     isShaderTexture = false;
                 }
                 else
@@ -795,8 +792,8 @@ void Application::run()
             {
                 // Para maintainAspect com shader, usar dimensões da captura original
                 // O shader processa mas mantém a proporção da imagem original
-                renderWidth = m_textureWidth;
-                renderHeight = m_textureHeight;
+                renderWidth = m_frameProcessor->getTextureWidth();
+                renderHeight = m_frameProcessor->getTextureHeight();
                 // Log removido para reduzir verbosidade
             }
             else if (isShaderTexture)
@@ -807,15 +804,15 @@ void Application::run()
                 if (renderWidth == 0 || renderHeight == 0)
                 {
                     LOG_WARN("Dimensões de saída do shader inválidas (0x0), usando dimensões da captura");
-                    renderWidth = m_textureWidth;
-                    renderHeight = m_textureHeight;
+                    renderWidth = m_frameProcessor->getTextureWidth();
+                    renderHeight = m_frameProcessor->getTextureHeight();
                 }
             }
             else
             {
                 // Sem shader, usar dimensões da captura
-                renderWidth = m_textureWidth;
-                renderHeight = m_textureHeight;
+                renderWidth = m_frameProcessor->getTextureWidth();
+                renderHeight = m_frameProcessor->getTextureHeight();
             }
 
             // IMPORTANTE: A imagem da câmera vem invertida (Y invertido)
@@ -854,47 +851,6 @@ void Application::run()
     LOG_INFO("Loop principal encerrado");
 }
 
-bool Application::processFrame()
-{
-    if (!m_capture || !m_frameProcessor)
-    {
-        return false;
-    }
-
-    Frame frame;
-    // Usar captureLatestFrame para descartar frames antigos e pegar apenas o mais recente
-    if (!m_capture->captureLatestFrame(frame))
-    {
-        return false; // Nenhum frame novo disponível
-    }
-
-    // Processar frame usando FrameProcessor
-    GLuint outputTexture = 0;
-    uint32_t outputWidth = 0;
-    uint32_t outputHeight = 0;
-
-    if (!m_frameProcessor->processFrame(frame, 
-                                        m_texture,
-                                        m_textureWidth,
-                                        m_textureHeight,
-                                        m_renderer.get(),
-                                        outputTexture,
-                                        outputWidth,
-                                        outputHeight))
-    {
-        return false; // Falha ao processar frame
-    }
-
-    // Atualizar estado com resultados
-    m_texture = outputTexture;
-    m_textureWidth = outputWidth;
-    m_textureHeight = outputHeight;
-    m_hasValidFrame = true;
-
-    return true; // Frame processado com sucesso
-}
-
-
 void Application::shutdown()
 {
     if (!m_initialized)
@@ -904,44 +860,46 @@ void Application::shutdown()
 
     LOG_INFO("Encerrando Application...");
 
-    if (m_texture != 0)
+    if (m_frameProcessor)
     {
-        glDeleteTextures(1, &m_texture);
-        m_texture = 0;
+        m_frameProcessor->deleteTexture();
     }
 
     if (m_capture)
     {
         m_capture->stopCapture();
         m_capture->close();
+        m_capture.reset();
     }
 
     if (m_shaderEngine)
     {
         m_shaderEngine->shutdown();
+        m_shaderEngine.reset();
+    }
+
+    if (m_frameProcessor)
+    {
+        m_frameProcessor.reset();
     }
 
     if (m_renderer)
     {
         m_renderer->shutdown();
+        m_renderer.reset();
     }
 
     if (m_ui)
     {
         m_ui->shutdown();
+        m_ui.reset();
     }
 
     if (m_window)
     {
         m_window->shutdown();
+        m_window.reset();
     }
-
-    // Smart pointers will automatically clean up when reset or destroyed
-    m_capture.reset();
-    m_shaderEngine.reset();
-    m_renderer.reset();
-    m_ui.reset();
-    m_window.reset();
 
     m_initialized = false;
 }

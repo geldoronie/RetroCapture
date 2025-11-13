@@ -1,18 +1,12 @@
 #include "ShaderScanner.h"
-#include "Logger.h"
+#include "../utils/Logger.h"
 #include <filesystem>
 #include <algorithm>
+#include <cctype>
 
 std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
 {
     std::vector<std::string> shaders;
-    scan(basePath, shaders);
-    return shaders;
-}
-
-size_t ShaderScanner::scan(const std::string& basePath, std::vector<std::string>& shaders)
-{
-    shaders.clear();
 
     std::filesystem::path path(basePath);
     if (!std::filesystem::exists(path))
@@ -24,7 +18,7 @@ size_t ShaderScanner::scan(const std::string& basePath, std::vector<std::string>
     if (!std::filesystem::exists(path))
     {
         LOG_WARN("Diretório de shaders não encontrado: " + basePath);
-        return 0;
+        return shaders;
     }
 
     try
@@ -85,15 +79,15 @@ size_t ShaderScanner::scan(const std::string& basePath, std::vector<std::string>
                 }
             }
         }
-
-        std::sort(shaders.begin(), shaders.end());
-        LOG_INFO("Encontrados " + std::to_string(shaders.size()) + " shaders em " + basePath);
     }
-    catch (const std::exception &e)
+    catch (const std::filesystem::filesystem_error &e)
     {
-        LOG_ERROR("Erro ao escanear shaders: " + std::string(e.what()));
+        LOG_ERROR("Erro ao escanear diretório de shaders: " + std::string(e.what()));
     }
 
-    return shaders.size();
+    // Sort the shader list alphabetically
+    std::sort(shaders.begin(), shaders.end());
+
+    return shaders;
 }
 

@@ -11,6 +11,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -48,11 +51,12 @@ bool UIManager::init(GLFWwindow *window)
 
     // Scan for shaders
     // Verificar se há variável de ambiente para o caminho dos shaders (útil para AppImage)
-    const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-    if (envShaderPath && std::filesystem::exists(envShaderPath)) {
+    const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+    if (envShaderPath && std::filesystem::exists(envShaderPath))
+    {
         m_shaderBasePath = envShaderPath;
     }
-    m_scannedShaders = ShaderScanner::scan(m_shaderBasePath);
+    scanShaders(m_shaderBasePath);
 
     m_initialized = true;
     LOG_INFO("UIManager inicializado");
@@ -125,7 +129,7 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Rescan Shaders"))
             {
-                m_scannedShaders = ShaderScanner::scan(m_shaderBasePath);
+                scanShaders(m_shaderBasePath);
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Esc"))
@@ -587,7 +591,7 @@ void UIManager::renderV4L2Controls()
     }
 
     ImGui::Separator();
-    
+
     // Resoluções 4:3
     ImGui::Text("4:3 Resolutions:");
     if (ImGui::Button("320x240"))
@@ -669,7 +673,7 @@ void UIManager::renderV4L2Controls()
     }
 
     ImGui::Separator();
-    
+
     // Resoluções 16:9
     ImGui::Text("16:9 Resolutions:");
     if (ImGui::Button("1280x720"))
@@ -716,15 +720,19 @@ void UIManager::renderV4L2Controls()
     ImGui::Separator();
 
     // Renderizar controles dinâmicos (discovered from device)
-    for (auto &control : m_v4l2Controls)
+    for (size_t i = 0; i < m_v4l2Controls.size(); ++i)
     {
+        auto &control = m_v4l2Controls[i];
         if (!control.available)
         {
             continue;
         }
 
+        // Use PushID to create unique IDs for each control
+        ImGui::PushID(static_cast<int>(i));
+        std::string label = control.name + "##dynamic";
         int32_t value = control.value;
-        if (ImGui::SliderInt(control.name.c_str(), &value, control.min, control.max))
+        if (ImGui::SliderInt(label.c_str(), &value, control.min, control.max))
         {
             control.value = value;
             if (m_onV4L2ControlChanged)
@@ -732,6 +740,7 @@ void UIManager::renderV4L2Controls()
                 m_onV4L2ControlChanged(control.name, value);
             }
         }
+        ImGui::PopID();
     }
 
     ImGui::Separator();
@@ -765,7 +774,9 @@ void UIManager::renderV4L2Controls()
         // Clamp valor
         value = std::max(min, std::min(max, value));
 
-        if (ImGui::SliderInt(name, &value, min, max))
+        // Use unique ID with suffix to avoid conflicts with dynamic controls
+        std::string label = std::string(name) + "##manual";
+        if (ImGui::SliderInt(label.c_str(), &value, min, max))
         {
             // Alinhar valor com step antes de aplicar
             if (step > 1)
@@ -878,8 +889,18 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
     }
 }
 
-void UIManager::refreshV4L2Devices()
+void UIManager::scanV4L2Devices()
 {
     m_v4l2Devices = V4L2DeviceScanner::scan();
 }
 
+void UIManager::refreshV4L2Devices()
+{
+    scanV4L2Devices();
+}
+
+void UIManager::scanShaders(const std::string &basePath)
+{
+    m_scannedShaders = ShaderScanner::scan(basePath);
+    LOG_INFO("Encontrados " + std::to_string(m_scannedShaders.size()) + " shaders em " + basePath);
+}

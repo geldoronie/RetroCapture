@@ -56,11 +56,6 @@ private:
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     
-    GLuint m_texture = 0;
-    uint32_t m_textureWidth = 0;
-    uint32_t m_textureHeight = 0;
-    bool m_hasValidFrame = false;
-    
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
@@ -92,7 +87,6 @@ private:
     bool initWindow();
     bool initRenderer();
     bool initUI();
-    bool processFrame(); // Retorna true se um novo frame foi processado
     void handleKeyInput();
 };
 

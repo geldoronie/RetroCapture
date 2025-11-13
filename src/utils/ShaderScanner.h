@@ -4,26 +4,19 @@
 #include <vector>
 
 /**
- * Scans filesystem for shader preset files (.glslp).
+ * Scans for shader preset files (.glslp) in a directory.
  * 
- * This class follows the Single Responsibility Principle by isolating
- * file system scanning logic from UI rendering.
+ * This class extracts shader scanning logic from UIManager
+ * while preserving the exact same behavior.
  */
 class ShaderScanner {
 public:
     /**
-     * Scan a directory for shader preset files.
-     * @param basePath Base directory path to scan
-     * @return Vector of relative paths to .glslp files
+     * Scan for shader presets in a directory.
+     * 
+     * @param basePath Base path to scan for shaders
+     * @return Vector of relative paths to shader presets (relative to basePath)
      */
     static std::vector<std::string> scan(const std::string& basePath);
-    
-    /**
-     * Scan a directory for shader preset files and populate a vector.
-     * @param basePath Base directory path to scan
-     * @param[out] shaders Vector to populate with relative paths to .glslp files
-     * @return Number of shaders found
-     */
-    static size_t scan(const std::string& basePath, std::vector<std::string>& shaders);
 };
 

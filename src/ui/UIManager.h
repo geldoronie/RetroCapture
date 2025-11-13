@@ -127,6 +127,10 @@ private:
     void renderImageControls();
     void renderV4L2Controls();
     void renderInfoPanel();
+    
+    // Scanning methods
+    void scanShaders(const std::string &basePath);
+    void scanV4L2Devices();
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";

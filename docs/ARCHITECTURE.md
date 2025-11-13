@@ -10,6 +10,7 @@ RetroCapture is a real-time video capture application for Linux that applies Ret
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Application                              │
 │                    (Main Orchestrator)                           │
+│                  (uses std::unique_ptr)                         │
 └─────────────────────────────────────────────────────────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
@@ -25,14 +26,28 @@ RetroCapture is a real-time video capture application for Linux that applies Ret
         │            │ OpenGLRenderer│               │
         │            │   (OpenGL)    │               │
         │            └──────────────┘                │
+        │                     ▲                      │
         │                     │                      │
-        └─────────────────────┼──────────────────────┘
+        ▼                     │                      │
+┌──────────────┐              │                      │
+│FrameProcessor│──────────────┘                      │
+│  (YUYV→RGB)  │                                     │
+│  (Textures)  │                                     │
+└──────────────┘                                     │
+        │                                             │
+        └─────────────────────────────────────────────┘
                               │
                               ▼
                     ┌──────────────┐
                     │   UIManager   │
                     │   (ImGui)     │
                     └──────────────┘
+
+Utility Classes:
+├── ShaderPreprocessor (shader preprocessing)
+├── V4L2ControlMapper (control name→ID mapping)
+├── ShaderScanner (shader discovery)
+└── V4L2DeviceScanner (device discovery)
 ```
 
 ## Main Components
@@ -44,20 +59,24 @@ RetroCapture is a real-time video capture application for Linux that applies Ret
 **Main Features**:
 - Initialization and shutdown of all components
 - Main rendering loop
-- Video frame processing
-- Format conversion (YUYV → RGB)
 - Coordination between capture, shaders, and rendering
+- Event handling (keyboard input, window events)
 
 **Dependencies**:
 - `VideoCapture`: Frame capture
 - `WindowManager`: Window management
 - `OpenGLRenderer`: OpenGL rendering
+- `FrameProcessor`: Frame processing and texture management
 - `ShaderEngine`: Shader processing
 - `UIManager`: Graphical interface
 
+**Memory Management**:
+- Uses `std::unique_ptr` for automatic memory management
+- All components are owned by `Application` and automatically cleaned up
+
 **Data Flow**:
 ```
-VideoCapture → Frame (YUYV) → RGB Conversion → OpenGL Texture → ShaderEngine → Rendering
+VideoCapture → FrameProcessor (YUYV→RGB, Texture) → ShaderEngine → OpenGLRenderer → Window
 ```
 
 ### 2. VideoCapture (`src/capture/VideoCapture.h/cpp`)
@@ -132,19 +151,40 @@ void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight,
                    bool maintainAspect = false, uint32_t textureWidth = 0, uint32_t textureHeight = 0);
 ```
 
-### 5. ShaderEngine (`src/shader/ShaderEngine.h/cpp`)
+### 5. FrameProcessor (`src/processing/FrameProcessor.h/cpp`)
+
+**Responsibility**: Processing video frames from V4L2 capture and converting them to OpenGL textures.
+
+**Main Features**:
+- Frame capture from `VideoCapture`
+- YUYV to RGB conversion
+- OpenGL texture creation and management
+- Texture updates (reuses textures when possible)
+- Handles texture resizing when capture resolution changes
+
+**Main API**:
+```cpp
+bool processFrame(VideoCapture* capture);
+GLuint getTexture() const;
+uint32_t getTextureWidth() const;
+uint32_t getTextureHeight() const;
+bool hasValidFrame() const;
+void deleteTexture();
+```
+
+### 6. ShaderEngine (`src/shader/ShaderEngine.h/cpp`)
 
 **Responsibility**: Loading, compilation, and application of RetroArch shaders.
 
 **Main Features**:
 - Loading RetroArch presets (`.glslp`)
-- Parsing GLSL shaders with support for `#if defined(VERTEX)` / `#elif defined(FRAGMENT)`
-- Vertex and fragment shader compilation
 - Multiple pass management
 - RetroArch uniform injection (`OutputSize`, `InputSize`, `FrameCount`, etc.)
 - Intermediate framebuffer management
 - Reference texture loading (LUTs, etc.)
 - Support for configurable parameters (`#pragma parameter`)
+
+**Note**: Shader preprocessing (includes, parameter extraction, OutputSize correction) is handled by `ShaderPreprocessor`.
 
 **Main API**:
 ```cpp
@@ -182,7 +222,7 @@ struct ShaderPassData {
 - `PassOutputSize#`, `PassInputSize#`: Pass sizes
 - Custom parameters via `#pragma parameter`
 
-### 6. ShaderPreset (`src/shader/ShaderPreset.h/cpp`)
+### 7. ShaderPreset (`src/shader/ShaderPreset.h/cpp`)
 
 **Responsibility**: Parsing and management of RetroArch preset files (`.glslp`).
 
@@ -203,7 +243,35 @@ wrap_mode0 = "clamp_to_edge"
 ...
 ```
 
-### 7. UIManager (`src/ui/UIManager.h/cpp`)
+### 8. ShaderPreprocessor (`src/shader/ShaderPreprocessor.h/cpp`)
+
+**Responsibility**: Preprocessing GLSL shader source code.
+
+**Main Features**:
+- Processing `#include` directives (recursive)
+- Extracting `#pragma parameter` directives
+- Correcting `OutputSize` uniform type based on usage
+- Building final shader source with version, extensions, and defines
+- Injecting compatibility code for specific shaders (interlacing, box-center, etc.)
+
+**Main API**:
+```cpp
+static PreprocessResult preprocess(
+    const std::string& shaderSource,
+    const std::string& shaderPath,
+    size_t passIndex,
+    uint32_t outputWidth, uint32_t outputHeight,
+    uint32_t inputWidth, uint32_t inputHeight,
+    const std::vector<ShaderPass>& presetPasses);
+static std::string processIncludes(const std::string& source, const std::string& basePath);
+```
+
+**Preprocessing Approach**:
+- Uses the same source code for both vertex and fragment shaders
+- Adds `#define VERTEX` or `#define FRAGMENT` before the code
+- Lets the GLSL preprocessor handle conditional blocks (`#if defined(VERTEX)` / `#elif defined(FRAGMENT)`)
+
+### 9. UIManager (`src/ui/UIManager.h/cpp`)
 
 **Responsibility**: Graphical interface using ImGui.
 
@@ -222,17 +290,22 @@ wrap_mode0 = "clamp_to_edge"
 - **V4L2**: Hardware controls, resolution, framerate, device
 - **Info**: Capture and application information
 
+**Utility Classes Used**:
+- `ShaderScanner`: Scans for shader presets in directories
+- `V4L2DeviceScanner`: Scans for V4L2 capture devices
+- `V4L2ControlMapper`: Maps control names to V4L2 control IDs
+
 ## Data Flow
 
 ### Rendering Pipeline
 
 ```
-1. VideoCapture::captureFrame()
+1. VideoCapture::captureLatestFrame()
    └─▶ Frame (YUYV) from V4L2 device
 
-2. Application::processFrame()
+2. FrameProcessor::processFrame()
    └─▶ YUYV → RGB conversion
-       └─▶ OpenGLRenderer::updateTexture()
+       └─▶ OpenGL texture creation/update
            └─▶ OpenGL Texture (GLuint)
 
 3. ShaderEngine::applyShader()
@@ -259,12 +332,16 @@ while (!window->shouldClose()) {
     window->pollEvents();
     handleKeyInput();
     
-    // 2. Capture frame
-    if (processFrame()) {
+    // 2. Capture and process frame
+    if (m_frameProcessor->processFrame(m_capture.get())) {
         // 3. Apply shader (if any)
-        GLuint outputTexture = m_texture;
+        GLuint outputTexture = m_frameProcessor->getTexture();
         if (m_shaderEngine && m_shaderEngine->isShaderActive()) {
-            outputTexture = m_shaderEngine->applyShader(m_texture, m_textureWidth, m_textureHeight);
+            outputTexture = m_shaderEngine->applyShader(
+                m_frameProcessor->getTexture(),
+                m_frameProcessor->getTextureWidth(),
+                m_frameProcessor->getTextureHeight()
+            );
         }
         
         // 4. Render to screen
@@ -292,16 +369,23 @@ src/
 │   ├── VideoCapture.h/cpp   # V4L2 capture
 ├── output/
 │   ├── WindowManager.h/cpp  # Window management (GLFW)
+├── processing/
+│   ├── FrameProcessor.h/cpp # Frame processing (YUYV→RGB, textures)
 ├── renderer/
 │   ├── OpenGLRenderer.h/cpp # OpenGL rendering
 │   └── glad_loader.h/cpp   # Dynamic OpenGL function loading
 ├── shader/
 │   ├── ShaderEngine.h/cpp   # Shader engine
-│   └── ShaderPreset.h/cpp  # Preset parser
+│   ├── ShaderPreset.h/cpp  # Preset parser
+│   └── ShaderPreprocessor.h/cpp # Shader preprocessing
 ├── ui/
 │   ├── UIManager.h/cpp     # Graphical interface (ImGui)
-└── utils/
-    └── Logger.h/cpp        # Logging system
+├── utils/
+│   ├── Logger.h/cpp        # Logging system
+│   ├── ShaderScanner.h/cpp # Shader discovery
+│   └── V4L2DeviceScanner.h/cpp # V4L2 device discovery
+└── v4l2/
+    └── V4L2ControlMapper.h/cpp # V4L2 control name→ID mapping
 ```
 
 ## Dependencies
@@ -329,9 +413,34 @@ Currently, the application is **single-threaded**. Frame processing, shaders, an
 ## Memory Management
 
 - **RAII**: All resources are managed via constructors/destructors
-- **Raw pointers**: Used for main components (can be converted to `std::unique_ptr` in the future)
+- **Smart Pointers**: `Application` uses `std::unique_ptr` for all main components
+  - Automatic cleanup on destruction
+  - Exception-safe memory management
+  - Clear ownership semantics
 - **OpenGL Resources**: Manually managed with `glDelete*` on shutdown
 - **V4L2 Buffers**: Use memory mapping (mmap) for efficiency
+
+## Utility Classes
+
+### ShaderPreprocessor (`src/shader/ShaderPreprocessor.h/cpp`)
+- Handles all shader source preprocessing
+- Extracted from `ShaderEngine` to improve separation of concerns
+
+### V4L2ControlMapper (`src/v4l2/V4L2ControlMapper.h/cpp`)
+- Maps V4L2 control names to control IDs
+- Extracted from `Application` to improve modularity
+
+### ShaderScanner (`src/utils/ShaderScanner.h/cpp`)
+- Scans directories for shader preset files (`.glslp`)
+- Extracted from `UIManager` to improve separation of concerns
+
+### V4L2DeviceScanner (`src/utils/V4L2DeviceScanner.h/cpp`)
+- Scans for available V4L2 video capture devices
+- Extracted from `UIManager` to improve separation of concerns
+
+### FrameProcessor (`src/processing/FrameProcessor.h/cpp`)
+- Handles frame processing and texture management
+- Extracted from `Application` to improve separation of concerns
 
 ## Extensibility
 
@@ -341,6 +450,7 @@ The architecture was designed to be extensible:
 2. **New shader types**: Extend `ShaderEngine` to support other formats
 3. **New outputs**: Add output classes (recording, streaming, etc.)
 4. **Plugins**: Structure allows adding processing plugins
+5. **New processors**: Add processing classes similar to `FrameProcessor`
 
 ## Performance Considerations
 

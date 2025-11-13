@@ -1,20 +1,13 @@
 #include "V4L2DeviceScanner.h"
 #include <linux/videodev2.h>
-#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <algorithm>
 
 std::vector<std::string> V4L2DeviceScanner::scan()
 {
     std::vector<std::string> devices;
-    scan(devices);
-    return devices;
-}
-
-size_t V4L2DeviceScanner::scan(std::vector<std::string>& devices)
-{
-    devices.clear();
 
     // Scan /dev/video* devices
     for (int i = 0; i < 32; ++i)
@@ -40,27 +33,7 @@ size_t V4L2DeviceScanner::scan(std::vector<std::string>& devices)
 
     // Sort devices
     std::sort(devices.begin(), devices.end());
-    
-    return devices.size();
-}
 
-bool V4L2DeviceScanner::isValidDevice(const std::string& devicePath)
-{
-    int fd = open(devicePath.c_str(), O_RDWR | O_NONBLOCK);
-    if (fd < 0)
-    {
-        return false;
-    }
-
-    struct v4l2_capability cap = {};
-    bool isValid = false;
-    
-    if (ioctl(fd, VIDIOC_QUERYCAP, &cap) >= 0)
-    {
-        isValid = (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) != 0;
-    }
-    
-    close(fd);
-    return isValid;
+    return devices;
 }
 

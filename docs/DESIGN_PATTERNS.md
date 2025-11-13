@@ -11,16 +11,17 @@ The `Application` acts as a facade that simplifies the complex interface of mult
 **Example**:
 ```cpp
 class Application {
-    VideoCapture* m_capture;
-    WindowManager* m_window;
-    OpenGLRenderer* m_renderer;
-    ShaderEngine* m_shaderEngine;
-    UIManager* m_ui;
+    std::unique_ptr<VideoCapture> m_capture;
+    std::unique_ptr<WindowManager> m_window;
+    std::unique_ptr<OpenGLRenderer> m_renderer;
+    std::unique_ptr<FrameProcessor> m_frameProcessor;
+    std::unique_ptr<ShaderEngine> m_shaderEngine;
+    std::unique_ptr<UIManager> m_ui;
     
 public:
     bool init();  // Initializes all subsystems
     void run();   // Orchestrates main loop
-    void shutdown(); // Cleans up all resources
+    void shutdown(); // Cleans up all resources (automatic via unique_ptr)
 };
 ```
 
