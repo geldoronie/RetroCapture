@@ -208,7 +208,7 @@ When reporting shader compatibility issues, please include:
 
 ## 📄 License
 
-See [LICENCE](LICENCE) for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🔗 Additional Resources
 
