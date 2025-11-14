@@ -34,13 +34,14 @@ void printUsage(const char *programName)
     std::cout << "  --v4l2-gamma <valor>         Gama V4L2 (100 a 300, padrão: não configurar)\n";
     std::cout << "  --v4l2-whitebalance <valor>  Balanço de branco V4L2 (2800 a 6500, padrão: não configurar)\n";
     std::cout << "\nOpções de Streaming:\n";
-    std::cout << "  --stream-enable              Habilitar streaming HTTP MJPEG\n";
+    std::cout << "  --stream-enable              Habilitar streaming HTTP\n";
+    std::cout << "  --stream-audio               Habilitar áudio no stream (usa MPEG-TS em vez de MJPEG)\n";
     std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
     std::cout << "  --stream-width <largura>    Largura do stream (padrão: mesma da janela)\n";
     std::cout << "  --stream-height <altura>    Altura do stream (padrão: mesma da janela)\n";
     std::cout << "  --stream-fps <fps>          FPS do stream (padrão: mesmo da captura)\n";
     std::cout << "  --stream-bitrate <kbps>      Bitrate do stream em kbps (padrão: auto)\n";
-    std::cout << "  --stream-quality <1-100>    Qualidade JPEG (1-100, padrão: 85)\n";
+    std::cout << "  --stream-quality <1-100>    Qualidade JPEG (1-100, padrão: 85, apenas MJPEG)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
@@ -87,6 +88,7 @@ int main(int argc, char *argv[])
 
     // Streaming options
     bool streamingEnabled = false;
+    bool streamingWithAudio = false;
     int streamingPort = 8080;
     int streamWidth = 0;    // 0 = usar largura da janela
     int streamHeight = 0;   // 0 = usar altura da janela
@@ -281,6 +283,10 @@ int main(int argc, char *argv[])
         {
             streamingEnabled = true;
         }
+        else if (arg == "--stream-audio")
+        {
+            streamingWithAudio = true;
+        }
         else if (arg == "--stream-port" && i + 1 < argc)
         {
             streamingPort = std::stoi(argv[++i]);
@@ -411,6 +417,7 @@ int main(int argc, char *argv[])
 
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
+    app.setStreamingWithAudio(streamingWithAudio);
     app.setStreamingPort(streamingPort);
     if (streamWidth > 0)
         app.setStreamingWidth(streamWidth);

@@ -15,6 +15,7 @@ class ShaderEngine;
 class UIManager;
 class FrameProcessor;
 class StreamManager;
+class AudioCapture;
 
 class Application {
 public:
@@ -51,6 +52,7 @@ public:
     
     // Streaming configuration
     void setStreamingEnabled(bool enabled) { m_streamingEnabled = enabled; }
+    void setStreamingWithAudio(bool withAudio) { m_streamingWithAudio = withAudio; }
     void setStreamingPort(uint16_t port) { m_streamingPort = port; }
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -68,6 +70,7 @@ private:
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
+    std::unique_ptr<AudioCapture> m_audioCapture;
     
     // Configuração
     std::string m_shaderPath;
@@ -103,6 +106,7 @@ private:
     uint32_t m_streamingFps = 0;    // 0 = usar FPS da captura
     uint32_t m_streamingBitrate = 0; // 0 = calcular automaticamente
     int m_streamingQuality = 85;     // Qualidade JPEG (1-100)
+    bool m_streamingWithAudio = false; // true = usar MPEG-TS (áudio+video), false = MJPEG (só vídeo)
     
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
@@ -114,6 +118,7 @@ private:
     bool initRenderer();
     bool initUI();
     bool initStreaming();
+    bool initAudioCapture();
     void handleKeyInput();
 };
 

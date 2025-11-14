@@ -54,6 +54,18 @@ public:
     virtual bool pushFrame(const uint8_t* data, uint32_t width, uint32_t height) = 0;
     
     /**
+     * Push audio samples to be streamed
+     * @param samples Audio samples (16-bit PCM)
+     * @param sampleCount Number of samples
+     * @return true if audio was queued successfully
+     */
+    virtual bool pushAudio(const int16_t* samples, size_t sampleCount) { 
+        (void)samples; 
+        (void)sampleCount; 
+        return false; // Default: no audio support
+    }
+    
+    /**
      * Get the stream URL (for display in UI)
      */
     virtual std::string getStreamUrl() const = 0;

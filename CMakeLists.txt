@@ -37,11 +37,12 @@ pkg_check_modules(V4L2 REQUIRED libv4l2)
 # PNG (via libpng)
 pkg_check_modules(PNG REQUIRED libpng)
 
-# FFmpeg for RTSP streaming
+# FFmpeg for streaming
 pkg_check_modules(AVCODEC REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_check_modules(SWSCALE REQUIRED libswscale)
+pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 
 # HTTP server for MJPEG streaming
 pkg_check_modules(MICROHTTPD QUIET libmicrohttpd)
@@ -49,6 +50,9 @@ if(NOT MICROHTTPD_FOUND)
     # Fallback: use simple socket-based HTTP server
     message(STATUS "libmicrohttpd not found, will use simple HTTP server")
 endif()
+
+# PulseAudio for audio capture
+pkg_check_modules(PULSE REQUIRED libpulse)
 
 # ImGui (via FetchContent)
 include(FetchContent)
@@ -106,6 +110,8 @@ if(glfw3_FOUND)
         ${AVFORMAT_LIBRARIES}
         ${AVUTIL_LIBRARIES}
         ${SWSCALE_LIBRARIES}
+        ${SWRESAMPLE_LIBRARIES}
+        ${PULSE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -119,6 +125,8 @@ else()
         ${AVFORMAT_LIBRARIES}
         ${AVUTIL_LIBRARIES}
         ${SWSCALE_LIBRARIES}
+        ${SWRESAMPLE_LIBRARIES}
+        ${PULSE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -137,6 +145,8 @@ target_include_directories(retrocapture PRIVATE
     ${AVFORMAT_INCLUDE_DIRS}
     ${AVUTIL_INCLUDE_DIRS}
     ${SWSCALE_INCLUDE_DIRS}
+    ${SWRESAMPLE_INCLUDE_DIRS}
+    ${PULSE_INCLUDE_DIRS}
 )
 
 # Compiler flags

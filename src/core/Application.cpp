@@ -10,6 +10,8 @@
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPMJPEGStreamer.h"
+#include "../streaming/HTTPTSStreamer.h"
+#include "../audio/AudioCapture.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <linux/videodev2.h>
@@ -54,6 +56,15 @@ bool Application::init()
     if (!initStreaming())
     {
         LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
+    }
+    
+    // Initialize audio capture if streaming with audio is enabled
+    if (m_streamingEnabled && m_streamingWithAudio)
+    {
+        if (!initAudioCapture())
+        {
+            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+        }
     }
 
     m_initialized = true;
@@ -796,13 +807,25 @@ bool Application::initStreaming()
                            (m_window ? m_window->getHeight() : m_windowHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
     
-    // Add HTTP MJPEG streamer and configure it
-    auto mjpegStreamer = std::make_unique<HTTPMJPEGStreamer>();
-    mjpegStreamer->setQuality(m_streamingQuality);
-    if (m_streamingBitrate > 0) {
-        mjpegStreamer->setBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
+    // Add streamer based on audio support
+    if (m_streamingWithAudio) {
+        // Use MPEG-TS streamer for audio+video
+        auto tsStreamer = std::make_unique<HTTPTSStreamer>();
+        if (m_streamingBitrate > 0) {
+            tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
+        }
+        m_streamManager->addStreamer(std::move(tsStreamer));
+        LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
+    } else {
+        // Use MJPEG streamer for video only
+        auto mjpegStreamer = std::make_unique<HTTPMJPEGStreamer>();
+        mjpegStreamer->setQuality(m_streamingQuality);
+        if (m_streamingBitrate > 0) {
+            mjpegStreamer->setBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
+        }
+        m_streamManager->addStreamer(std::move(mjpegStreamer));
+        LOG_INFO("Usando HTTP MJPEG streamer (apenas vídeo)");
     }
-    m_streamManager->addStreamer(std::move(mjpegStreamer));
     
     if (!m_streamManager->initialize(m_streamingPort, streamWidth, streamHeight, streamFps))
     {
@@ -824,6 +847,40 @@ bool Application::initStreaming()
     {
         LOG_INFO("Stream disponível: " + url);
     }
+    
+    return true;
+}
+
+bool Application::initAudioCapture()
+{
+    if (!m_streamingEnabled || !m_streamingWithAudio)
+    {
+        return true; // Audio não habilitado, não é erro
+    }
+    
+    LOG_INFO("Inicializando captura de áudio...");
+    
+    m_audioCapture = std::make_unique<AudioCapture>();
+    
+    // Open default audio device (will create virtual sink)
+    if (!m_audioCapture->open())
+    {
+        LOG_ERROR("Falha ao abrir dispositivo de áudio");
+        m_audioCapture.reset();
+        return false;
+    }
+    
+    // Start capturing
+    if (!m_audioCapture->startCapture())
+    {
+        LOG_ERROR("Falha ao iniciar captura de áudio");
+        m_audioCapture->close();
+        m_audioCapture.reset();
+        return false;
+    }
+    
+    LOG_INFO("Captura de áudio iniciada: " + std::to_string(m_audioCapture->getSampleRate()) + 
+             "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
     
     return true;
 }
@@ -1144,6 +1201,22 @@ void Application::run()
                     }
                 }
             }
+            
+            // Push audio samples to streamer if audio capture is active
+            if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+            {
+                // Read audio samples and push to streamer
+                // Process audio in smaller chunks to avoid blocking
+                const size_t maxSamples = 1024; // Read up to 1024 samples at a time
+                int16_t audioBuffer[maxSamples];
+                size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
+                
+                if (samplesRead > 0)
+                {
+                    // Push audio to streamer (it will handle routing to streamers that support audio)
+                    m_streamManager->pushAudio(audioBuffer, samplesRead);
+                }
+            }
 
             // Atualizar informações de streaming na UI
             if (m_ui && m_streamManager && m_streamManager->isActive())
@@ -1243,6 +1316,13 @@ void Application::shutdown()
     {
         m_streamManager->cleanup();
         m_streamManager.reset();
+    }
+    
+    if (m_audioCapture)
+    {
+        m_audioCapture->stopCapture();
+        m_audioCapture->close();
+        m_audioCapture.reset();
     }
 
     m_initialized = false;
