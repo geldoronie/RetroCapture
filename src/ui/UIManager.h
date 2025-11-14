@@ -66,6 +66,26 @@ public:
     bool isVisible() const { return m_uiVisible; }
     void setVisible(bool visible) { m_uiVisible = visible; }
     void toggle() { m_uiVisible = !m_uiVisible; }
+    
+    // Streaming info setters (public)
+    void setStreamingActive(bool active) { m_streamingActive = active; }
+    void setStreamUrl(const std::string& url) { m_streamUrl = url; }
+    void setStreamClientCount(uint32_t count) { m_streamClientCount = count; }
+    void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
+    void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
+    void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
+    void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
+    void setStreamingQuality(int quality) { m_streamingQuality = quality; }
+    
+    // Streaming callbacks
+    void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
+    void setOnStreamingPortChanged(std::function<void(uint16_t)> callback) { m_onStreamingPortChanged = callback; }
+    void setOnStreamingWidthChanged(std::function<void(uint32_t)> callback) { m_onStreamingWidthChanged = callback; }
+    void setOnStreamingHeightChanged(std::function<void(uint32_t)> callback) { m_onStreamingHeightChanged = callback; }
+    void setOnStreamingFpsChanged(std::function<void(uint32_t)> callback) { m_onStreamingFpsChanged = callback; }
+    void setOnStreamingBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingBitrateChanged = callback; }
+    void setOnStreamingQualityChanged(std::function<void(int)> callback) { m_onStreamingQualityChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -127,6 +147,7 @@ private:
     void renderImageControls();
     void renderV4L2Controls();
     void renderInfoPanel();
+    void renderStreamingPanel();
     
     // Scanning methods
     void scanShaders(const std::string &basePath);
@@ -139,4 +160,24 @@ private:
     std::function<void(const std::string&, bool)> m_onSavePreset; // path, overwrite
     char m_savePresetPath[512] = "";
     bool m_showSaveDialog = false;
+    
+    // Streaming controls
+    bool m_streamingEnabled = false;
+    uint16_t m_streamingPort = 8080;
+    uint32_t m_streamingWidth = 0;
+    uint32_t m_streamingHeight = 0;
+    uint32_t m_streamingFps = 0;
+    uint32_t m_streamingBitrate = 0;
+    int m_streamingQuality = 85;
+    bool m_streamingActive = false;
+    std::string m_streamUrl = "";
+    uint32_t m_streamClientCount = 0;
+    
+    std::function<void(bool)> m_onStreamingStartStop;
+    std::function<void(uint16_t)> m_onStreamingPortChanged;
+    std::function<void(uint32_t)> m_onStreamingWidthChanged;
+    std::function<void(uint32_t)> m_onStreamingHeightChanged;
+    std::function<void(uint32_t)> m_onStreamingFpsChanged;
+    std::function<void(uint32_t)> m_onStreamingBitrateChanged;
+    std::function<void(int)> m_onStreamingQualityChanged;
 };

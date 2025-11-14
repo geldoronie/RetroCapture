@@ -37,6 +37,19 @@ pkg_check_modules(V4L2 REQUIRED libv4l2)
 # PNG (via libpng)
 pkg_check_modules(PNG REQUIRED libpng)
 
+# FFmpeg for RTSP streaming
+pkg_check_modules(AVCODEC REQUIRED libavcodec)
+pkg_check_modules(AVFORMAT REQUIRED libavformat)
+pkg_check_modules(AVUTIL REQUIRED libavutil)
+pkg_check_modules(SWSCALE REQUIRED libswscale)
+
+# HTTP server for MJPEG streaming
+pkg_check_modules(MICROHTTPD QUIET libmicrohttpd)
+if(NOT MICROHTTPD_FOUND)
+    # Fallback: use simple socket-based HTTP server
+    message(STATUS "libmicrohttpd not found, will use simple HTTP server")
+endif()
+
 # ImGui (via FetchContent)
 include(FetchContent)
 FetchContent_Declare(
@@ -89,6 +102,10 @@ if(glfw3_FOUND)
         glfw
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
+        ${AVCODEC_LIBRARIES}
+        ${AVFORMAT_LIBRARIES}
+        ${AVUTIL_LIBRARIES}
+        ${SWSCALE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -98,6 +115,10 @@ else()
         ${GLFW_LIBRARIES}
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
+        ${AVCODEC_LIBRARIES}
+        ${AVFORMAT_LIBRARIES}
+        ${AVUTIL_LIBRARIES}
+        ${SWSCALE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -112,6 +133,10 @@ endif()
 target_include_directories(retrocapture PRIVATE
     ${V4L2_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIRS}
+    ${AVCODEC_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
+    ${SWSCALE_INCLUDE_DIRS}
 )
 
 # Compiler flags

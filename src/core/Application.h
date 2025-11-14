@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cinttypes>
 #include <memory>
+#include <mutex>
+#include <atomic>
 #include "../renderer/glad_loader.h"
 
 class VideoCapture;
@@ -12,6 +14,7 @@ class OpenGLRenderer;
 class ShaderEngine;
 class UIManager;
 class FrameProcessor;
+class StreamManager;
 
 class Application {
 public:
@@ -46,6 +49,15 @@ public:
     void setV4L2Gamma(int32_t value) { m_v4l2Gamma = value; }
     void setV4L2WhiteBalance(int32_t value) { m_v4l2WhiteBalance = value; }
     
+    // Streaming configuration
+    void setStreamingEnabled(bool enabled) { m_streamingEnabled = enabled; }
+    void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
+    void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
+    void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
+    void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
+    void setStreamingQuality(int quality) { m_streamingQuality = quality; }
+    
 private:
     bool m_initialized = false;
     
@@ -55,6 +67,7 @@ private:
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
+    std::unique_ptr<StreamManager> m_streamManager;
     
     // Configuração
     std::string m_shaderPath;
@@ -82,11 +95,25 @@ private:
     int32_t m_v4l2Gamma = -1;
     int32_t m_v4l2WhiteBalance = -1;
     
+    // Streaming configuration
+    bool m_streamingEnabled = false;
+    uint16_t m_streamingPort = 8080;
+    uint32_t m_streamingWidth = 0;  // 0 = usar largura da janela
+    uint32_t m_streamingHeight = 0; // 0 = usar altura da janela
+    uint32_t m_streamingFps = 0;    // 0 = usar FPS da captura
+    uint32_t m_streamingBitrate = 0; // 0 = calcular automaticamente
+    int m_streamingQuality = 85;     // Qualidade JPEG (1-100)
+    
+    // Thread safety for resize operations
+    mutable std::mutex m_resizeMutex;
+    std::atomic<bool> m_isResizing{false};
+    
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
     bool initWindow();
     bool initRenderer();
     bool initUI();
+    bool initStreaming();
     void handleKeyInput();
 };
 

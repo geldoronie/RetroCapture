@@ -179,6 +179,12 @@ void UIManager::render()
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Streaming"))
+        {
+            renderStreamingPanel();
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
@@ -886,6 +892,105 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
     if (m_currentDevice.empty())
     {
         m_currentDevice = device;
+    }
+}
+
+void UIManager::renderStreamingPanel()
+{
+    ImGui::Text("HTTP MJPEG Streaming");
+    ImGui::Separator();
+    
+    // Status
+    ImGui::Text("Status: %s", m_streamingActive ? "Ativo" : "Inativo");
+    if (m_streamingActive) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
+    } else {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
+    }
+    
+    if (m_streamingActive && !m_streamUrl.empty()) {
+        ImGui::Text("URL: %s", m_streamUrl.c_str());
+        ImGui::Text("Clientes conectados: %u", m_streamClientCount);
+    }
+    
+    ImGui::Separator();
+    
+    // Controles
+    int port = static_cast<int>(m_streamingPort);
+    if (ImGui::InputInt("Porta", &port, 1, 100)) {
+        if (port >= 1024 && port <= 65535) {
+            m_streamingPort = static_cast<uint16_t>(port);
+            if (m_onStreamingPortChanged) {
+                m_onStreamingPortChanged(m_streamingPort);
+            }
+        }
+    }
+    
+    int width = static_cast<int>(m_streamingWidth);
+    if (ImGui::InputInt("Largura (0 = janela)", &width, 1, 100)) {
+        if (width >= 0 && width <= 7680) {
+            m_streamingWidth = static_cast<uint32_t>(width);
+            if (m_onStreamingWidthChanged) {
+                m_onStreamingWidthChanged(m_streamingWidth);
+            }
+        }
+    }
+    
+    int height = static_cast<int>(m_streamingHeight);
+    if (ImGui::InputInt("Altura (0 = janela)", &height, 1, 100)) {
+        if (height >= 0 && height <= 4320) {
+            m_streamingHeight = static_cast<uint32_t>(height);
+            if (m_onStreamingHeightChanged) {
+                m_onStreamingHeightChanged(m_streamingHeight);
+            }
+        }
+    }
+    
+    int fps = static_cast<int>(m_streamingFps);
+    if (ImGui::InputInt("FPS (0 = captura)", &fps, 1, 10)) {
+        if (fps >= 0 && fps <= 120) {
+            m_streamingFps = static_cast<uint32_t>(fps);
+            if (m_onStreamingFpsChanged) {
+                m_onStreamingFpsChanged(m_streamingFps);
+            }
+        }
+    }
+    
+    int bitrate = static_cast<int>(m_streamingBitrate);
+    if (ImGui::InputInt("Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000)) {
+        if (bitrate >= 0 && bitrate <= 50000) {
+            m_streamingBitrate = static_cast<uint32_t>(bitrate);
+            if (m_onStreamingBitrateChanged) {
+                m_onStreamingBitrateChanged(m_streamingBitrate);
+            }
+        }
+    }
+    
+    int quality = m_streamingQuality;
+    if (ImGui::SliderInt("Qualidade JPEG", &quality, 1, 100)) {
+        m_streamingQuality = quality;
+        if (m_onStreamingQualityChanged) {
+            m_onStreamingQualityChanged(m_streamingQuality);
+        }
+    }
+    
+    ImGui::Separator();
+    
+    // Botão Start/Stop
+    if (m_streamingActive) {
+        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0))) {
+            if (m_onStreamingStartStop) {
+                m_onStreamingStartStop(false);
+            }
+        }
+    } else {
+        if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0))) {
+            if (m_onStreamingStartStop) {
+                m_onStreamingStartStop(true);
+            }
+        }
     }
 }
 
