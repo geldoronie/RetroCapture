@@ -464,6 +464,7 @@ bool AudioCapture::createVirtualSink() {
     g_sinkOperationSuccess = false;
     g_sinkIndex = PA_INVALID_INDEX;
     
+    LOG_INFO("Verificando se sink virtual 'RetroCapture' já existe...");
     pa_operation* op = pa_context_get_sink_info_by_name(m_context, "RetroCapture", sinkInfoCallback, this);
     if (op) {
         int ret = 0;
@@ -472,7 +473,8 @@ bool AudioCapture::createVirtualSink() {
         
         while (iteration < maxIterations) {
             pa_mainloop_iterate(m_mainloop, 0, &ret);
-            if (g_sinkIndex != PA_INVALID_INDEX || !g_sinkOperationSuccess) {
+            if (g_sinkIndex != PA_INVALID_INDEX) {
+                // Sink encontrado
                 break;
             }
             usleep(10000);
@@ -488,27 +490,32 @@ bool AudioCapture::createVirtualSink() {
         }
     }
     
+    LOG_INFO("Sink virtual 'RetroCapture' não encontrado, criando novo...");
+    
     // Criar sink virtual usando module-null-sink
     // Isso cria um sink que aparece no qpwgraph
     g_sinkOperationSuccess = false;
     g_moduleIndex = PA_INVALID_INDEX;
     
+    LOG_INFO("Carregando módulo module-null-sink...");
     const char* args = "sink_name=RetroCapture sink_properties='device.description=\"RetroCapture Audio Input\"'";
     op = pa_context_load_module(m_context, "module-null-sink", args, operationCallback, this);
     
     if (!op) {
-        LOG_ERROR("Falha ao criar operação para carregar module-null-sink");
+        LOG_ERROR("Falha ao criar operação para carregar module-null-sink: " + 
+                  std::string(pa_strerror(pa_context_errno(m_context))));
         return false;
     }
     
     // Processar eventos até a operação completar
     int ret = 0;
-    int maxIterations = 50;
+    int maxIterations = 100; // Aumentar timeout
     int iteration = 0;
     
     while (iteration < maxIterations) {
         pa_mainloop_iterate(m_mainloop, 0, &ret);
         if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX) {
+            LOG_INFO("Módulo module-null-sink carregado com sucesso (índice: " + std::to_string(g_moduleIndex) + ")");
             break;
         }
         usleep(10000);
@@ -518,12 +525,19 @@ bool AudioCapture::createVirtualSink() {
     pa_operation_unref(op);
     
     if (!g_sinkOperationSuccess || g_moduleIndex == PA_INVALID_INDEX) {
-        LOG_ERROR("Falha ao criar sink virtual (timeout ou erro)");
+        LOG_ERROR("Falha ao criar sink virtual (timeout ou erro após " + std::to_string(maxIterations) + " iterações)");
+        LOG_ERROR("g_sinkOperationSuccess: " + std::to_string(g_sinkOperationSuccess.load()) + 
+                  ", g_moduleIndex: " + std::to_string(g_moduleIndex.load()));
         return false;
     }
     
     // Buscar o índice do sink criado
+    // Dar um tempo para o PulseAudio criar o sink
+    usleep(100000); // 100ms
+    
+    LOG_INFO("Buscando índice do sink virtual 'RetroCapture' criado...");
     g_sinkIndex = PA_INVALID_INDEX;
+    g_sinkOperationSuccess = false;
     op = pa_context_get_sink_info_by_name(m_context, "RetroCapture", sinkInfoCallback, this);
     if (op) {
         iteration = 0;
@@ -539,13 +553,18 @@ bool AudioCapture::createVirtualSink() {
     }
     
     if (g_sinkIndex == PA_INVALID_INDEX) {
-        LOG_ERROR("Falha ao obter índice do sink virtual criado");
-        return false;
+        LOG_ERROR("Falha ao obter índice do sink virtual criado (pode levar alguns segundos para aparecer no qpwgraph)");
+        // Não falhar completamente - o sink pode existir mesmo sem o índice
+        // Tentar usar o nome diretamente
+        LOG_WARN("Tentando usar sink virtual por nome 'RetroCapture' mesmo sem índice");
+        m_virtualSinkIndex = 0; // Usar 0 como placeholder
+        return true;
     }
     
     m_virtualSinkIndex = g_sinkIndex;
     LOG_INFO("Sink virtual 'RetroCapture' criado com sucesso (índice: " + std::to_string(m_virtualSinkIndex) + ")");
     LOG_INFO("O sink aparecerá no qpwgraph - conecte outras aplicações a ele para capturar áudio");
+    LOG_INFO("Se não aparecer imediatamente, aguarde alguns segundos e atualize o qpwgraph");
     
     return true;
 }

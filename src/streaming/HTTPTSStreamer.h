@@ -35,6 +35,9 @@ public:
     void setVideoBitrate(uint32_t bitrate) { m_videoBitrate = bitrate; }
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
     
+    // Public for static callback
+    int writeToClients(const uint8_t* buf, int buf_size);
+    
 private:
     void serverThread();
     void handleClient(int clientFd);
@@ -95,6 +98,7 @@ private:
     
     std::mutex m_audioMutex;
     std::queue<std::vector<int16_t>> m_audioSamples;
+    std::vector<int16_t> m_audioBuffer; // Buffer para acumular samples até ter um frame completo
     
     // Output buffer for clients
     std::mutex m_outputMutex;

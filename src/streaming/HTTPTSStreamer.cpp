@@ -23,12 +23,11 @@ extern "C"
 // Static callback for AVIO write
 static int avioWriteCallback(void* opaque, const uint8_t* buf, int buf_size) {
     HTTPTSStreamer* self = static_cast<HTTPTSStreamer*>(opaque);
-    // This will be called when we write packets
-    // We'll handle this in muxPacket
-    (void)self;
-    (void)buf;
-    (void)buf_size;
-    return 0;
+    if (!self || !buf || buf_size <= 0) {
+        return -1;
+    }
+    // Write to output buffer and send to all clients
+    return self->writeToClients(buf, buf_size);
 }
 
 HTTPTSStreamer::HTTPTSStreamer()
@@ -560,16 +559,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
     
     // Stream MPEG-TS data
+    // Data is sent via avioWriteCallback when packets are muxed
+    // Just keep the connection alive and check if client is still connected
     while (m_running) {
-        std::vector<uint8_t> data;
-        
-        {
-            std::lock_guard<std::mutex> lock(m_outputMutex);
-            // For now, we'll send data from encoding thread
-            // This is a simplified version - in production, we'd use a proper queue
-            usleep(33000); // ~30fps
-        }
-        
         // Check if client is still connected
         char test;
         if (recv(clientFd, &test, 1, MSG_PEEK | MSG_DONTWAIT) <= 0) {
@@ -577,6 +569,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 break; // Client disconnected
             }
         }
+        
+        // Sleep briefly to avoid busy-waiting
+        usleep(10000); // 10ms
     }
     
     close(clientFd);
@@ -593,34 +588,299 @@ void HTTPTSStreamer::handleClient(int clientFd)
 void HTTPTSStreamer::encodingThread()
 {
     // This will encode video and audio frames and mux them into MPEG-TS
-    // Implementation will be added in next step
+    AVFormatContext* formatCtx = static_cast<AVFormatContext*>(m_ffmpeg.formatCtx);
+    AVCodecContext* videoCodecCtx = static_cast<AVCodecContext*>(m_ffmpeg.videoCodecCtx);
+    AVCodecContext* audioCodecCtx = static_cast<AVCodecContext*>(m_ffmpeg.audioCodecCtx);
+    
+    if (!formatCtx || !videoCodecCtx || !audioCodecCtx) {
+        LOG_ERROR("FFmpeg context não inicializado no encoding thread");
+        return;
+    }
+    
     while (m_running) {
-        usleep(33000); // ~30fps
+        bool hasVideo = false;
+        bool hasAudio = false;
+        
+        // Check for video frame
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            hasVideo = !m_videoFrames.empty();
+        }
+        
+        // Check for audio samples
+        {
+            std::lock_guard<std::mutex> lock(m_audioMutex);
+            hasAudio = !m_audioSamples.empty();
+        }
+        
+        // Process video frame if available
+        if (hasVideo) {
+            std::vector<uint8_t> frameData;
+            uint32_t width, height;
+            
+            {
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                if (!m_videoFrames.empty()) {
+                    frameData = std::move(m_videoFrames.front());
+                    m_videoFrames.pop();
+                    width = m_frameWidth;
+                    height = m_frameHeight;
+                }
+            }
+            
+            if (!frameData.empty()) {
+                encodeVideoFrame(frameData.data(), width, height);
+            }
+        }
+        
+        // Process audio samples if available
+        // Processar todos os samples disponíveis para evitar atraso
+        while (true) {
+            std::vector<int16_t> audioData;
+            
+            {
+                std::lock_guard<std::mutex> lock(m_audioMutex);
+                if (!m_audioSamples.empty()) {
+                    audioData = std::move(m_audioSamples.front());
+                    m_audioSamples.pop();
+                } else {
+                    break; // Não há mais samples
+                }
+            }
+            
+            if (!audioData.empty()) {
+                encodeAudioFrame(audioData.data(), audioData.size());
+            }
+        }
+        
+        // If no data available, sleep briefly
+        if (!hasVideo && !hasAudio) {
+            usleep(1000); // 1ms
+        }
     }
 }
 
 bool HTTPTSStreamer::encodeVideoFrame(const uint8_t* rgbData, uint32_t width, uint32_t height)
 {
-    // Implementation will be added
-    (void)rgbData;
-    (void)width;
-    (void)height;
-    return false;
+    if (!rgbData || !m_active) {
+        return false;
+    }
+    
+    AVCodecContext* videoCodecCtx = static_cast<AVCodecContext*>(m_ffmpeg.videoCodecCtx);
+    AVFrame* videoFrame = static_cast<AVFrame*>(m_ffmpeg.videoFrame);
+    SwsContext* swsCtx = static_cast<SwsContext*>(m_ffmpeg.swsCtx);
+    AVStream* videoStream = static_cast<AVStream*>(m_ffmpeg.videoStream);
+    
+    if (!videoCodecCtx || !videoFrame || !swsCtx || !videoStream) {
+        return false;
+    }
+    
+    // Convert RGB to YUV420P
+    const uint8_t* srcData[1] = {rgbData};
+    int srcLinesize[1] = {static_cast<int>(width * 3)};
+    
+    int ret = sws_scale(swsCtx, srcData, srcLinesize, 0, height,
+                        videoFrame->data, videoFrame->linesize);
+    if (ret < 0) {
+        LOG_ERROR("Falha ao converter RGB para YUV");
+        return false;
+    }
+    
+    // Set frame properties
+    videoFrame->pts = m_ffmpeg.videoPts;
+    m_ffmpeg.videoPts += av_rescale_q(1, {1, static_cast<int>(m_fps)}, videoCodecCtx->time_base);
+    
+    // Encode frame
+    AVPacket* pkt = av_packet_alloc();
+    if (!pkt) {
+        return false;
+    }
+    
+    ret = avcodec_send_frame(videoCodecCtx, videoFrame);
+    if (ret < 0) {
+        av_packet_free(&pkt);
+        return false;
+    }
+    
+    while (ret >= 0) {
+        ret = avcodec_receive_packet(videoCodecCtx, pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            break;
+        } else if (ret < 0) {
+            av_packet_free(&pkt);
+            return false;
+        }
+        
+        // Mux packet
+        pkt->stream_index = videoStream->index;
+        av_packet_rescale_ts(pkt, videoCodecCtx->time_base, videoStream->time_base);
+        muxPacket(pkt);
+        
+        av_packet_unref(pkt);
+    }
+    
+    av_packet_free(&pkt);
+    return true;
 }
 
 bool HTTPTSStreamer::encodeAudioFrame(const int16_t* samples, size_t sampleCount)
 {
-    // Implementation will be added
-    (void)samples;
-    (void)sampleCount;
-    return false;
+    if (!samples || !m_active || sampleCount == 0) {
+        return false;
+    }
+    
+    AVCodecContext* audioCodecCtx = static_cast<AVCodecContext*>(m_ffmpeg.audioCodecCtx);
+    AVFrame* audioFrame = static_cast<AVFrame*>(m_ffmpeg.audioFrame);
+    SwrContext* swrCtx = static_cast<SwrContext*>(m_ffmpeg.swrCtx);
+    AVStream* audioStream = static_cast<AVStream*>(m_ffmpeg.audioStream);
+    
+    if (!audioCodecCtx || !audioFrame || !swrCtx || !audioStream) {
+        return false;
+    }
+    
+    // Acumular samples no buffer até ter um frame completo
+    // AAC geralmente precisa de 1024 samples por canal (2048 samples total para stereo)
+    size_t samplesPerFrame = m_ffmpeg.audioFrameSize * m_channels;
+    
+    {
+        std::lock_guard<std::mutex> lock(m_audioMutex);
+        m_audioBuffer.insert(m_audioBuffer.end(), samples, samples + sampleCount);
+    }
+    
+    // Processar frames completos
+    bool encoded = false;
+    while (true) {
+        size_t availableSamples = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_audioMutex);
+            availableSamples = m_audioBuffer.size();
+        }
+        
+        if (availableSamples < samplesPerFrame) {
+            break; // Não há samples suficientes para um frame completo
+        }
+        
+        // Extrair um frame completo
+        std::vector<int16_t> frameSamples(samplesPerFrame);
+        {
+            std::lock_guard<std::mutex> lock(m_audioMutex);
+            std::copy(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame, frameSamples.begin());
+            m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame);
+        }
+        
+        // Resample and convert audio
+        const uint8_t* srcData[1] = {reinterpret_cast<const uint8_t*>(frameSamples.data())};
+        const int srcSampleCount = static_cast<int>(m_ffmpeg.audioFrameSize);
+        
+        int ret = swr_convert(swrCtx, audioFrame->data, audioFrame->nb_samples,
+                             srcData, srcSampleCount);
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            LOG_ERROR("Falha ao converter áudio: " + std::string(errbuf));
+            break;
+        }
+        
+        if (ret == 0) {
+            // Nenhum sample convertido, pode ser um problema
+            break;
+        }
+        
+        // Set frame properties
+        audioFrame->pts = m_ffmpeg.audioPts;
+        m_ffmpeg.audioPts += ret;
+        
+        // Encode frame
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) {
+            break;
+        }
+        
+        ret = avcodec_send_frame(audioCodecCtx, audioFrame);
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            LOG_ERROR("Falha ao enviar frame de áudio para encoder: " + std::string(errbuf));
+            av_packet_free(&pkt);
+            break;
+        }
+        
+        while (ret >= 0) {
+            ret = avcodec_receive_packet(audioCodecCtx, pkt);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                break;
+            } else if (ret < 0) {
+                char errbuf[256];
+                av_strerror(ret, errbuf, sizeof(errbuf));
+                LOG_ERROR("Falha ao receber pacote de áudio do encoder: " + std::string(errbuf));
+                av_packet_free(&pkt);
+                return false;
+            }
+            
+            // Mux packet
+            pkt->stream_index = audioStream->index;
+            av_packet_rescale_ts(pkt, audioCodecCtx->time_base, audioStream->time_base);
+            muxPacket(pkt);
+            
+            av_packet_unref(pkt);
+        }
+        
+        av_packet_free(&pkt);
+        encoded = true;
+    }
+    
+    return encoded;
 }
 
 bool HTTPTSStreamer::muxPacket(void* packet)
 {
-    // Implementation will be added
+    if (!packet || !m_active) {
+        return false;
+    }
+    
     AVPacket* pkt = static_cast<AVPacket*>(packet);
-    (void)pkt;
-    return false;
+    AVFormatContext* formatCtx = static_cast<AVFormatContext*>(m_ffmpeg.formatCtx);
+    
+    if (!formatCtx || !pkt) {
+        return false;
+    }
+    
+    // Write packet to format context (this will trigger avioWriteCallback)
+    int ret = av_interleaved_write_frame(formatCtx, pkt);
+    if (ret < 0) {
+        char errbuf[256];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        LOG_ERROR("Falha ao escrever pacote MPEG-TS: " + std::string(errbuf));
+        return false;
+    }
+    
+    return true;
+}
+
+int HTTPTSStreamer::writeToClients(const uint8_t* buf, int buf_size)
+{
+    if (!buf || buf_size <= 0) {
+        return -1;
+    }
+    
+    std::lock_guard<std::mutex> lock(m_outputMutex);
+    
+    // Send to all connected clients
+    auto it = m_clientSockets.begin();
+    while (it != m_clientSockets.end()) {
+        int clientFd = *it;
+        ssize_t sent = send(clientFd, buf, buf_size, MSG_NOSIGNAL);
+        
+        if (sent < 0 || sent != buf_size) {
+            // Client disconnected or error - remove from list
+            close(clientFd);
+            it = m_clientSockets.erase(it);
+            m_clientCount--;
+        } else {
+            ++it;
+        }
+    }
+    
+    return buf_size;
 }
 

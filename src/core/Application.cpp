@@ -57,7 +57,7 @@ bool Application::init()
     {
         LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
     }
-    
+
     // Initialize audio capture if streaming with audio is enabled
     if (m_streamingEnabled && m_streamingWithAudio)
     {
@@ -591,14 +591,22 @@ bool Application::initUI()
     m_ui->setStreamingFps(m_streamingFps);
     m_ui->setStreamingBitrate(m_streamingBitrate);
     m_ui->setStreamingQuality(m_streamingQuality);
-    
-    m_ui->setOnStreamingStartStop([this](bool start) {
+
+    m_ui->setOnStreamingStartStop([this](bool start)
+                                  {
         if (start) {
             // Iniciar streaming
             m_streamingEnabled = true;
             if (!initStreaming()) {
                 LOG_ERROR("Falha ao iniciar streaming");
                 m_streamingEnabled = false;
+            } else {
+                // Initialize audio capture if streaming with audio is enabled
+                if (m_streamingWithAudio && !m_audioCapture) {
+                    if (!initAudioCapture()) {
+                        LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+                    }
+                }
             }
         } else {
             // Parar streaming
@@ -608,14 +616,15 @@ bool Application::initUI()
                 m_streamManager->cleanup();
                 m_streamManager.reset();
             }
+            // Não fechar o AudioCapture aqui - pode ser usado novamente
         }
         // Atualizar UI
         if (m_ui) {
             m_ui->setStreamingActive(m_streamingEnabled && m_streamManager && m_streamManager->isActive());
-        }
-    });
-    
-    m_ui->setOnStreamingPortChanged([this](uint16_t port) {
+        } });
+
+    m_ui->setOnStreamingPortChanged([this](uint16_t port)
+                                    {
         m_streamingPort = port;
         // Se streaming estiver ativo, reiniciar
         if (m_streamingEnabled && m_streamManager) {
@@ -623,22 +632,19 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
-    
-    m_ui->setOnStreamingWidthChanged([this](uint32_t width) {
-        m_streamingWidth = width;
-    });
-    
-    m_ui->setOnStreamingHeightChanged([this](uint32_t height) {
-        m_streamingHeight = height;
-    });
-    
-    m_ui->setOnStreamingFpsChanged([this](uint32_t fps) {
-        m_streamingFps = fps;
-    });
-    
-    m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate) {
+        } });
+
+    m_ui->setOnStreamingWidthChanged([this](uint32_t width)
+                                     { m_streamingWidth = width; });
+
+    m_ui->setOnStreamingHeightChanged([this](uint32_t height)
+                                      { m_streamingHeight = height; });
+
+    m_ui->setOnStreamingFpsChanged([this](uint32_t fps)
+                                   { m_streamingFps = fps; });
+
+    m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate)
+                                       {
         m_streamingBitrate = bitrate;
         // Atualizar bitrate do streamer se estiver ativo
         if (m_streamManager && m_streamManager->isActive()) {
@@ -647,10 +653,10 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
-    
-    m_ui->setOnStreamingQualityChanged([this](int quality) {
+        } });
+
+    m_ui->setOnStreamingQualityChanged([this](int quality)
+                                       {
         m_streamingQuality = quality;
         // Atualizar qualidade do streamer se estiver ativo
         if (m_streamManager && m_streamManager->isActive()) {
@@ -659,9 +665,8 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
-    
+        } });
+
     // Callback para mudança de dispositivo
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
@@ -795,59 +800,71 @@ bool Application::initStreaming()
     {
         return true; // Streaming não habilitado, não é erro
     }
-    
+
     LOG_INFO("Inicializando streaming...");
-    
+
     m_streamManager = std::make_unique<StreamManager>();
-    
+
     // Determine stream dimensions and FPS
-    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : 
-                          (m_window ? m_window->getWidth() : m_windowWidth);
-    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : 
-                           (m_window ? m_window->getHeight() : m_windowHeight);
+    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_window ? m_window->getWidth() : m_windowWidth);
+    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_window ? m_window->getHeight() : m_windowHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
-    
+
     // Add streamer based on audio support
-    if (m_streamingWithAudio) {
+    if (m_streamingWithAudio)
+    {
         // Use MPEG-TS streamer for audio+video
         auto tsStreamer = std::make_unique<HTTPTSStreamer>();
-        if (m_streamingBitrate > 0) {
+        if (m_streamingBitrate > 0)
+        {
             tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
         }
         m_streamManager->addStreamer(std::move(tsStreamer));
         LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
-    } else {
+    }
+    else
+    {
         // Use MJPEG streamer for video only
         auto mjpegStreamer = std::make_unique<HTTPMJPEGStreamer>();
         mjpegStreamer->setQuality(m_streamingQuality);
-        if (m_streamingBitrate > 0) {
+        if (m_streamingBitrate > 0)
+        {
             mjpegStreamer->setBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
         }
         m_streamManager->addStreamer(std::move(mjpegStreamer));
         LOG_INFO("Usando HTTP MJPEG streamer (apenas vídeo)");
     }
-    
+
     if (!m_streamManager->initialize(m_streamingPort, streamWidth, streamHeight, streamFps))
     {
         LOG_ERROR("Falha ao inicializar StreamManager");
         m_streamManager.reset();
         return false;
     }
-    
+
     if (!m_streamManager->start())
     {
         LOG_ERROR("Falha ao iniciar streaming");
         m_streamManager.reset();
         return false;
     }
-    
+
     LOG_INFO("Streaming iniciado na porta " + std::to_string(m_streamingPort));
     auto urls = m_streamManager->getStreamUrls();
-    for (const auto& url : urls)
+    for (const auto &url : urls)
     {
         LOG_INFO("Stream disponível: " + url);
     }
-    
+
+    // Initialize audio capture if streaming with audio is enabled and not already initialized
+    if (m_streamingWithAudio && !m_audioCapture)
+    {
+        if (!initAudioCapture())
+        {
+            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+        }
+    }
+
     return true;
 }
 
@@ -857,11 +874,11 @@ bool Application::initAudioCapture()
     {
         return true; // Audio não habilitado, não é erro
     }
-    
+
     LOG_INFO("Inicializando captura de áudio...");
-    
+
     m_audioCapture = std::make_unique<AudioCapture>();
-    
+
     // Open default audio device (will create virtual sink)
     if (!m_audioCapture->open())
     {
@@ -869,7 +886,7 @@ bool Application::initAudioCapture()
         m_audioCapture.reset();
         return false;
     }
-    
+
     // Start capturing
     if (!m_audioCapture->startCapture())
     {
@@ -878,10 +895,10 @@ bool Application::initAudioCapture()
         m_audioCapture.reset();
         return false;
     }
-    
-    LOG_INFO("Captura de áudio iniciada: " + std::to_string(m_audioCapture->getSampleRate()) + 
+
+    LOG_INFO("Captura de áudio iniciada: " + std::to_string(m_audioCapture->getSampleRate()) +
              "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
-    
+
     return true;
 }
 
@@ -954,15 +971,16 @@ void Application::run()
                 // IMPORTANTE: Validar dimensões antes de atualizar viewport para evitar problemas durante resize
                 uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
                 uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
-                
+
                 // Validar dimensões antes de atualizar viewport
-                if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320) {
+                if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320)
+                {
                     m_shaderEngine->setViewport(currentWidth, currentHeight);
                 }
 
-                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(), 
-                                                               m_frameProcessor->getTextureWidth(), 
-                                                               m_frameProcessor->getTextureHeight());
+                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(),
+                                                              m_frameProcessor->getTextureWidth(),
+                                                              m_frameProcessor->getTextureHeight());
                 isShaderTexture = true;
 
                 // DEBUG: Verificar textura retornada
@@ -982,7 +1000,7 @@ void Application::run()
             // IMPORTANTE: O framebuffer 0 é a janela (default framebuffer)
             // IMPORTANTE: Lock mutex para proteger durante resize
             std::lock_guard<std::mutex> resizeLock(m_resizeMutex);
-            
+
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
             // IMPORTANTE: Resetar viewport para o tamanho completo da janela
@@ -991,11 +1009,13 @@ void Application::run()
             // Isso é especialmente importante quando entra em fullscreen
             uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
             uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
-            
+
             // Validar dimensões antes de continuar
-            if (currentWidth == 0 || currentHeight == 0 || currentWidth > 7680 || currentHeight > 4320) {
+            if (currentWidth == 0 || currentHeight == 0 || currentWidth > 7680 || currentHeight > 4320)
+            {
                 // Dimensões inválidas, pular este frame
-                if (m_ui) {
+                if (m_ui)
+                {
                     m_ui->endFrame();
                 }
                 m_window->swapBuffers();
@@ -1067,7 +1087,7 @@ void Application::run()
             m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
-            
+
             // Stream frame if streaming is enabled
             // IMPORTANTE: Não fazer streaming durante resize para evitar problemas
             if (m_streamManager && m_streamManager->isActive() && !m_isResizing)
@@ -1075,110 +1095,129 @@ void Application::run()
                 // Get current window dimensions for reading (já temos lock do mutex)
                 uint32_t windowWidth = currentWidth;
                 uint32_t windowHeight = currentHeight;
-                
+
                 // Validate window dimensions first
-                if (windowWidth == 0 || windowHeight == 0 || windowWidth > 7680 || windowHeight > 4320) {
+                if (windowWidth == 0 || windowHeight == 0 || windowWidth > 7680 || windowHeight > 4320)
+                {
                     // Skip streaming if window dimensions are invalid
                     // This can happen during resize
-                } else {
+                }
+                else
+                {
                     // Determine stream dimensions (may be different from window)
                     uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : windowWidth;
                     uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : windowHeight;
-                    
+
                     // Validate stream dimensions
-                    if (streamWidth == 0 || streamHeight == 0 || streamWidth > 7680 || streamHeight > 4320) {
+                    if (streamWidth == 0 || streamHeight == 0 || streamWidth > 7680 || streamHeight > 4320)
+                    {
                         // Skip streaming if stream dimensions are invalid
-                    } else {
+                    }
+                    else
+                    {
                         // Calculate buffer size and validate
                         // IMPORTANTE: OpenGL pode adicionar padding quando a largura não é múltipla de 4
                         // O problema ocorre porque windowWidth * 3 (bytes por linha) pode não ser múltiplo de 4
                         // e o OpenGL adiciona padding por padrão, causando corrupção de memória ao ler
                         // Isso é especialmente importante quando redimensionamos no eixo X
                         size_t frameDataSize = static_cast<size_t>(windowWidth) * static_cast<size_t>(windowHeight) * 3;
-                        if (frameDataSize == 0 || frameDataSize > (7680 * 4320 * 3)) {
+                        if (frameDataSize == 0 || frameDataSize > (7680 * 4320 * 3))
+                        {
                             // Skip if size calculation overflows or is too large
-                        } else {
+                        }
+                        else
+                        {
                             // Read pixels from framebuffer (always read full window size)
-                            
+
                             // IMPORTANTE: Validar que as dimensões são seguras antes de ler
-                            bool canReadPixels = (windowWidth > 0 && windowHeight > 0 && 
-                                                 windowWidth <= 7680 && windowHeight <= 4320 &&
-                                                 frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3));
-                            
+                            bool canReadPixels = (windowWidth > 0 && windowHeight > 0 &&
+                                                  windowWidth <= 7680 && windowHeight <= 4320 &&
+                                                  frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3));
+
                             std::vector<uint8_t> frameData;
-                            if (canReadPixels) {
+                            if (canReadPixels)
+                            {
                                 frameData.resize(frameDataSize);
-                                
+
                                 // IMPORTANTE: Configurar alinhamento antes de ler
                                 // Usar alinhamento de 1 byte para evitar padding
                                 // Isso garante que cada linha seja lida contiguamente
                                 // Nota: Assumimos que GLAD foi carregado e essas funções estão disponíveis
                                 // Se não estiverem, precisaremos incluir os headers corretos
-                                
+
                                 // Ler pixels (o alinhamento padrão do OpenGL pode causar problemas)
                                 // Vamos ler linha por linha para garantir que não há padding
                                 // IMPORTANTE: OpenGL lê do bottom-left, então lemos de baixo para cima
                                 // mas armazenamos de cima para baixo (row 0 = topo da imagem)
                                 size_t rowSize = static_cast<size_t>(windowWidth) * 3;
-                                for (uint32_t row = 0; row < windowHeight; row++) {
+                                for (uint32_t row = 0; row < windowHeight; row++)
+                                {
                                     // Ler uma linha por vez para evitar problemas de padding
                                     // OpenGL pode adicionar padding no final de cada linha se não configurarmos corretamente
                                     // Ler da linha mais baixa (windowHeight - 1) para a mais alta (0)
                                     // e armazenar na ordem correta (row 0 = topo)
-                                    glReadPixels(0, static_cast<GLint>(windowHeight - 1 - row), 
-                                                static_cast<GLsizei>(windowWidth), 1, 
-                                                GL_RGB, GL_UNSIGNED_BYTE, 
-                                                frameData.data() + (row * rowSize));
+                                    glReadPixels(0, static_cast<GLint>(windowHeight - 1 - row),
+                                                 static_cast<GLsizei>(windowWidth), 1,
+                                                 GL_RGB, GL_UNSIGNED_BYTE,
+                                                 frameData.data() + (row * rowSize));
                                 }
                                 // IMPORTANTE: frameData agora está na ordem correta (topo no índice 0)
                                 // Não precisamos fazer flip vertical depois
                             }
-                            
+
                             // Process the frame data (só se leitura foi bem-sucedida)
-                            if (canReadPixels && !frameData.empty() && frameData.size() == frameDataSize) {
-                
+                            if (canReadPixels && !frameData.empty() && frameData.size() == frameDataSize)
+                            {
+
                                 // If stream dimensions differ from window, we need to resize
                                 std::vector<uint8_t> processedData;
-                                const uint8_t* dataToSend = frameData.data();
+                                const uint8_t *dataToSend = frameData.data();
                                 uint32_t dataWidth = windowWidth;
                                 uint32_t dataHeight = windowHeight;
-                                
-                                if (streamWidth != windowWidth || streamHeight != windowHeight) {
+
+                                if (streamWidth != windowWidth || streamHeight != windowHeight)
+                                {
                                     // Resize using bilinear interpolation
                                     size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
-                                    if (processedSize > 0 && processedSize <= (7680 * 4320 * 3)) {
+                                    if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
+                                    {
                                         processedData.resize(processedSize);
-                                        for (uint32_t y = 0; y < streamHeight; y++) {
-                                            for (uint32_t x = 0; x < streamWidth; x++) {
+                                        for (uint32_t y = 0; y < streamHeight; y++)
+                                        {
+                                            for (uint32_t x = 0; x < streamWidth; x++)
+                                            {
                                                 float fx = (float)x / streamWidth * windowWidth;
                                                 float fy = (float)y / streamHeight * windowHeight;
                                                 uint32_t x0 = (uint32_t)fx;
                                                 uint32_t y0 = (uint32_t)fy;
                                                 uint32_t x1 = std::min(x0 + 1, windowWidth - 1);
                                                 uint32_t y1 = std::min(y0 + 1, windowHeight - 1);
-                                                
+
                                                 float dx = fx - x0;
                                                 float dy = fy - y0;
-                                                
-                                                for (int c = 0; c < 3; c++) {
+
+                                                for (int c = 0; c < 3; c++)
+                                                {
                                                     size_t idx00 = (y0 * windowWidth + x0) * 3 + c;
                                                     size_t idx10 = (y0 * windowWidth + x1) * 3 + c;
                                                     size_t idx01 = (y1 * windowWidth + x0) * 3 + c;
                                                     size_t idx11 = (y1 * windowWidth + x1) * 3 + c;
-                                                    
-                                                    if (idx00 < frameDataSize && idx10 < frameDataSize && 
-                                                        idx01 < frameDataSize && idx11 < frameDataSize) {
+
+                                                    if (idx00 < frameDataSize && idx10 < frameDataSize &&
+                                                        idx01 < frameDataSize && idx11 < frameDataSize)
+                                                    {
                                                         float v00 = frameData[idx00];
                                                         float v10 = frameData[idx10];
                                                         float v01 = frameData[idx01];
                                                         float v11 = frameData[idx11];
-                                                        
+
                                                         float v0 = v00 * (1 - dx) + v10 * dx;
                                                         float v1 = v01 * (1 - dx) + v11 * dx;
                                                         float v = v0 * (1 - dy) + v1 * dy;
-                                                        
+
                                                         size_t outIdx = (y * streamWidth + x) * 3 + c;
-                                                        if (outIdx < processedSize) {
+                                                        if (outIdx < processedSize)
+                                                        {
                                                             processedData[outIdx] = (uint8_t)v;
                                                         }
                                                     }
@@ -1190,7 +1229,7 @@ void Application::run()
                                         dataHeight = streamHeight;
                                     }
                                 }
-                                
+
                                 // IMPORTANTE: Não precisamos fazer flip vertical porque já lemos
                                 // linha por linha de baixo para cima e armazenamos na ordem correta
                                 // (topo no índice 0, fundo no final)
@@ -1201,7 +1240,7 @@ void Application::run()
                     }
                 }
             }
-            
+
             // Push audio samples to streamer if audio capture is active
             if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
             {
@@ -1210,7 +1249,7 @@ void Application::run()
                 const size_t maxSamples = 1024; // Read up to 1024 samples at a time
                 int16_t audioBuffer[maxSamples];
                 size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
-                
+
                 if (samplesRead > 0)
                 {
                     // Push audio to streamer (it will handle routing to streamers that support audio)
@@ -1223,17 +1262,20 @@ void Application::run()
             {
                 m_ui->setStreamingActive(true);
                 auto urls = m_streamManager->getStreamUrls();
-                if (!urls.empty()) {
+                if (!urls.empty())
+                {
                     m_ui->setStreamUrl(urls[0]);
                 }
                 uint32_t clientCount = m_streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
-            } else if (m_ui) {
+            }
+            else if (m_ui)
+            {
                 m_ui->setStreamingActive(false);
                 m_ui->setStreamUrl("");
                 m_ui->setStreamClientCount(0);
             }
-            
+
             // Renderizar UI
             if (m_ui)
             {
@@ -1317,7 +1359,7 @@ void Application::shutdown()
         m_streamManager->cleanup();
         m_streamManager.reset();
     }
-    
+
     if (m_audioCapture)
     {
         m_audioCapture->stopCapture();
