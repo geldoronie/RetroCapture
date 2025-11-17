@@ -27,7 +27,9 @@ static int avioWriteCallback(void* opaque, const uint8_t* buf, int buf_size) {
         return -1;
     }
     // Write to output buffer and send to all clients
-    return self->writeToClients(buf, buf_size);
+    // Retornar o número de bytes escritos para indicar sucesso
+    int written = self->writeToClients(buf, buf_size);
+    return written > 0 ? written : -1;
 }
 
 HTTPTSStreamer::HTTPTSStreamer()
@@ -57,22 +59,25 @@ bool HTTPTSStreamer::initialize(uint16_t port, uint32_t width, uint32_t height, 
 bool HTTPTSStreamer::initializeFFmpeg()
 {
     // Initialize format context for MPEG-TS
-    m_ffmpeg.formatBufferSize = 4096;
+    // Usar buffer pequeno para forçar envio frequente e reduzir latência
+    m_ffmpeg.formatBufferSize = 188 * 7; // 7 pacotes TS (188 bytes cada) = ~1.3KB
     m_ffmpeg.formatBuffer = (uint8_t*)av_malloc(m_ffmpeg.formatBufferSize);
     if (!m_ffmpeg.formatBuffer) {
         LOG_ERROR("Falha ao alocar buffer para format context");
         return false;
     }
     
-    // Create format context for MPEG-TS output
-    // Note: For now, we'll use a simpler approach - write directly to a buffer
-    // and then send to clients. A more sophisticated approach would use custom AVIO.
-    // For simplicity, we'll use a memory buffer approach.
+    // Criar AVIO context com write callback
+    // O buffer será usado pelo FFmpeg para escrever dados
     AVIOContext* ioCtx = avio_alloc_context(
         m_ffmpeg.formatBuffer, m_ffmpeg.formatBufferSize, 1, this,
         nullptr, // read function (not needed for output)
         avioWriteCallback, // write function
         nullptr); // seek function (not needed)
+    
+    // Configurar para não usar buffer interno do AVIO (write imediato)
+    ioCtx->write_flag = 1;
+    ioCtx->direct = 1; // Modo direto - escreve imediatamente sem buffering
     
     if (!ioCtx) {
         LOG_ERROR("Falha ao criar AVIO context");
@@ -125,11 +130,14 @@ bool HTTPTSStreamer::initializeFFmpeg()
     videoCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
     videoCodecCtx->bit_rate = m_videoBitrate;
     videoCodecCtx->gop_size = 10;
-    videoCodecCtx->max_b_frames = 1;
+    videoCodecCtx->max_b_frames = 0; // Desabilitar B-frames para menor latência
     
-    // Set codec options
+    // Set codec options para baixa latência
     av_opt_set(videoCodecCtx->priv_data, "preset", "ultrafast", 0);
     av_opt_set(videoCodecCtx->priv_data, "tune", "zerolatency", 0);
+    av_opt_set(videoCodecCtx->priv_data, "profile", "baseline", 0); // Baseline profile para menor latência
+    av_opt_set_int(videoCodecCtx->priv_data, "rc-lookahead", 0, 0); // Sem lookahead
+    av_opt_set_int(videoCodecCtx->priv_data, "sliced-threads", 1, 0); // Threading para menor latência
     
     ret = avcodec_open2(videoCodecCtx, videoCodec, nullptr);
     if (ret < 0) {
@@ -276,13 +284,26 @@ bool HTTPTSStreamer::initializeFFmpeg()
     av_channel_layout_uninit(&inChLayout);
     av_channel_layout_uninit(&outChLayout);
     
-    // Write header
-    ret = avformat_write_header(formatCtx, nullptr);
+    // Configurar opções de formato para baixa latência
+    AVDictionary* opts = nullptr;
+    av_dict_set_int(&opts, "muxrate", 0, 0); // Sem limite de bitrate no muxer
+    av_dict_set_int(&opts, "flush_packets", 1, 0); // Flush imediato
+    av_dict_set_int(&opts, "pcr_period", 10, 0); // PCR muito frequente (10ms) para menor latência
+    av_dict_set_int(&opts, "muxrate", 0, 0); // Sem limite de bitrate
+    av_dict_set_int(&opts, "max_delay", 0, 0); // Sem delay máximo - enviar imediatamente
+    
+    av_dict_set(&formatCtx->metadata, "service_name", "RetroCapture", 0);
+    av_dict_set(&formatCtx->metadata, "service_provider", "RetroCapture", 0);
+    
+    // Write header com opções de baixa latência
+    ret = avformat_write_header(formatCtx, &opts);
     if (ret < 0) {
         LOG_ERROR("Falha ao escrever header MPEG-TS");
+        av_dict_free(&opts);
         cleanupFFmpeg();
         return false;
     }
+    av_dict_free(&opts);
     
     LOG_INFO("FFmpeg inicializado para MPEG-TS streaming");
     return true;
@@ -687,8 +708,17 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t* rgbData, uint32_t width, ui
     }
     
     // Set frame properties
+    // Usar PTS baseado no frame number para garantir continuidade
     videoFrame->pts = m_ffmpeg.videoPts;
-    m_ffmpeg.videoPts += av_rescale_q(1, {1, static_cast<int>(m_fps)}, videoCodecCtx->time_base);
+    // Incrementar PTS baseado no time_base do codec
+    int64_t ptsIncrement = av_rescale_q(1, {1, static_cast<int>(m_fps)}, videoCodecCtx->time_base);
+    m_ffmpeg.videoPts += ptsIncrement;
+    
+    // Garantir que o PTS não seja negativo
+    if (videoFrame->pts < 0) {
+        videoFrame->pts = 0;
+        m_ffmpeg.videoPts = ptsIncrement;
+    }
     
     // Encode frame
     AVPacket* pkt = av_packet_alloc();
@@ -713,7 +743,12 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t* rgbData, uint32_t width, ui
         
         // Mux packet
         pkt->stream_index = videoStream->index;
+        // Rescalar PTS para o time_base do stream
         av_packet_rescale_ts(pkt, videoCodecCtx->time_base, videoStream->time_base);
+        // Garantir que DTS <= PTS para evitar problemas de buffering
+        if (pkt->dts > pkt->pts) {
+            pkt->dts = pkt->pts;
+        }
         muxPacket(pkt);
         
         av_packet_unref(pkt);
@@ -787,8 +822,17 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t* samples, size_t sampleCount
         }
         
         // Set frame properties
+        // PTS baseado no número de samples processados
         audioFrame->pts = m_ffmpeg.audioPts;
+        // Incrementar PTS baseado no número de samples de saída (ret)
+        // Isso garante que o PTS está sincronizado com o número real de samples
         m_ffmpeg.audioPts += ret;
+        
+        // Garantir que o PTS não seja negativo
+        if (audioFrame->pts < 0) {
+            audioFrame->pts = 0;
+            m_ffmpeg.audioPts = ret;
+        }
         
         // Encode frame
         AVPacket* pkt = av_packet_alloc();
@@ -819,7 +863,12 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t* samples, size_t sampleCount
             
             // Mux packet
             pkt->stream_index = audioStream->index;
+            // Rescalar PTS para o time_base do stream
             av_packet_rescale_ts(pkt, audioCodecCtx->time_base, audioStream->time_base);
+            // Garantir que DTS <= PTS para evitar problemas de buffering
+            if (pkt->dts > pkt->pts) {
+                pkt->dts = pkt->pts;
+            }
             muxPacket(pkt);
             
             av_packet_unref(pkt);
@@ -845,13 +894,21 @@ bool HTTPTSStreamer::muxPacket(void* packet)
         return false;
     }
     
-    // Write packet to format context (this will trigger avioWriteCallback)
+    // Usar av_interleaved_write_frame para garantir sincronização correta
+    // Mas com flush imediato após cada pacote
     int ret = av_interleaved_write_frame(formatCtx, pkt);
     if (ret < 0) {
         char errbuf[256];
         av_strerror(ret, errbuf, sizeof(errbuf));
         LOG_ERROR("Falha ao escrever pacote MPEG-TS: " + std::string(errbuf));
         return false;
+    }
+    
+    // Flush imediato do AVIO context para forçar envio aos clientes
+    // Isso é crítico para reduzir latência
+    AVIOContext* pb = formatCtx->pb;
+    if (pb && pb->buffer_size > 0) {
+        avio_flush(pb);
     }
     
     return true;
