@@ -76,7 +76,10 @@ public:
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
     void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
+    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
     void setStreamingQuality(int quality) { m_streamingQuality = quality; }
+    void setStreamingVideoCodec(const std::string& codec) { m_streamingVideoCodec = codec; }
+    void setStreamingAudioCodec(const std::string& codec) { m_streamingAudioCodec = codec; }
     
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -85,7 +88,10 @@ public:
     void setOnStreamingHeightChanged(std::function<void(uint32_t)> callback) { m_onStreamingHeightChanged = callback; }
     void setOnStreamingFpsChanged(std::function<void(uint32_t)> callback) { m_onStreamingFpsChanged = callback; }
     void setOnStreamingBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingBitrateChanged = callback; }
+    void setOnStreamingAudioBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingAudioBitrateChanged = callback; }
     void setOnStreamingQualityChanged(std::function<void(int)> callback) { m_onStreamingQualityChanged = callback; }
+    void setOnStreamingVideoCodecChanged(std::function<void(const std::string&)> callback) { m_onStreamingVideoCodecChanged = callback; }
+    void setOnStreamingAudioCodecChanged(std::function<void(const std::string&)> callback) { m_onStreamingAudioCodecChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -168,7 +174,10 @@ private:
     uint32_t m_streamingHeight = 0;
     uint32_t m_streamingFps = 0;
     uint32_t m_streamingBitrate = 0;
+    uint32_t m_streamingAudioBitrate = 128;
     int m_streamingQuality = 85;
+    std::string m_streamingVideoCodec = "h264";
+    std::string m_streamingAudioCodec = "aac";
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -179,5 +188,8 @@ private:
     std::function<void(uint32_t)> m_onStreamingHeightChanged;
     std::function<void(uint32_t)> m_onStreamingFpsChanged;
     std::function<void(uint32_t)> m_onStreamingBitrateChanged;
+    std::function<void(uint32_t)> m_onStreamingAudioBitrateChanged;
     std::function<void(int)> m_onStreamingQualityChanged;
+    std::function<void(const std::string&)> m_onStreamingVideoCodecChanged;
+    std::function<void(const std::string&)> m_onStreamingAudioCodecChanged;
 };

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include "../renderer/glad_loader.h"
 
 class VideoCapture;
@@ -52,13 +53,18 @@ public:
     
     // Streaming configuration
     void setStreamingEnabled(bool enabled) { m_streamingEnabled = enabled; }
-    void setStreamingWithAudio(bool withAudio) { m_streamingWithAudio = withAudio; }
     void setStreamingPort(uint16_t port) { m_streamingPort = port; }
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
     void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
+    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
     void setStreamingQuality(int quality) { m_streamingQuality = quality; }
+    void setStreamingVideoCodec(const std::string& codec) { m_streamingVideoCodec = codec; }
+    void setStreamingAudioCodec(const std::string& codec) { m_streamingAudioCodec = codec; }
+    
+    // Configuração de comportamento quando janela não está em foco
+    void setPauseWhenUnfocused(bool pause) { m_pauseWhenUnfocused = pause; }
     
 private:
     bool m_initialized = false;
@@ -71,6 +77,11 @@ private:
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<AudioCapture> m_audioCapture;
+    
+    // Streaming thread
+    std::thread m_streamingThread;
+    std::atomic<bool> m_streamingThreadRunning{false};
+    void streamingThreadFunc();
     
     // Configuração
     std::string m_shaderPath;
@@ -104,9 +115,12 @@ private:
     uint32_t m_streamingWidth = 0;  // 0 = usar largura da janela
     uint32_t m_streamingHeight = 0; // 0 = usar altura da janela
     uint32_t m_streamingFps = 0;    // 0 = usar FPS da captura
-    uint32_t m_streamingBitrate = 0; // 0 = calcular automaticamente
-    int m_streamingQuality = 85;     // Qualidade JPEG (1-100)
-    bool m_streamingWithAudio = false; // true = usar MPEG-TS (áudio+video), false = MJPEG (só vídeo)
+    uint32_t m_streamingBitrate = 0; // 0 = calcular automaticamente (vídeo)
+    uint32_t m_streamingAudioBitrate = 128; // 128 kbps (áudio)
+    int m_streamingQuality = 85;     // Qualidade JPEG (1-100) - não usado mais, mantido para compatibilidade
+    std::string m_streamingVideoCodec = "h264"; // Codec de vídeo: "h264", "h265", "vp8", "vp9"
+    std::string m_streamingAudioCodec = "aac";  // Codec de áudio: "aac", "mp3", "opus"
+    bool m_pauseWhenUnfocused = false; // true = pausar quando janela não está em foco, false = continuar sempre
     
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

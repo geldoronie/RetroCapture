@@ -9,7 +9,6 @@
 #include "../ui/UIManager.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
-#include "../streaming/HTTPMJPEGStreamer.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/AudioCapture.h"
 #define GLFW_INCLUDE_NONE
@@ -58,8 +57,8 @@ bool Application::init()
         LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
     }
 
-    // Initialize audio capture if streaming with audio is enabled
-    if (m_streamingEnabled && m_streamingWithAudio)
+    // Initialize audio capture (sempre necessário para streaming)
+    if (m_streamingEnabled)
     {
         if (!initAudioCapture())
         {
@@ -590,7 +589,10 @@ bool Application::initUI()
     m_ui->setStreamingHeight(m_streamingHeight);
     m_ui->setStreamingFps(m_streamingFps);
     m_ui->setStreamingBitrate(m_streamingBitrate);
+    m_ui->setStreamingAudioBitrate(m_streamingAudioBitrate);
     m_ui->setStreamingQuality(m_streamingQuality);
+    m_ui->setStreamingVideoCodec(m_streamingVideoCodec);
+    m_ui->setStreamingAudioCodec(m_streamingAudioCodec);
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
@@ -601,8 +603,8 @@ bool Application::initUI()
                 LOG_ERROR("Falha ao iniciar streaming");
                 m_streamingEnabled = false;
             } else {
-                // Initialize audio capture if streaming with audio is enabled
-                if (m_streamingWithAudio && !m_audioCapture) {
+                // Initialize audio capture (sempre necessário para streaming)
+                if (!m_audioCapture) {
                     if (!initAudioCapture()) {
                         LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
                     }
@@ -611,6 +613,16 @@ bool Application::initUI()
         } else {
             // Parar streaming
             m_streamingEnabled = false;
+            // Parar thread de streaming
+            if (m_streamingThreadRunning)
+            {
+                m_streamingThreadRunning = false;
+                if (m_streamingThread.joinable())
+                {
+                    m_streamingThread.join();
+                }
+            }
+            
             if (m_streamManager) {
                 m_streamManager->stop();
                 m_streamManager->cleanup();
@@ -649,6 +661,39 @@ bool Application::initUI()
         // Atualizar bitrate do streamer se estiver ativo
         if (m_streamManager && m_streamManager->isActive()) {
             // Reiniciar streaming com novo bitrate
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+    
+    m_ui->setOnStreamingAudioBitrateChanged([this](uint32_t bitrate)
+                                            {
+        m_streamingAudioBitrate = bitrate;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+    
+    m_ui->setOnStreamingVideoCodecChanged([this](const std::string& codec)
+                                         {
+        m_streamingVideoCodec = codec;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+    
+    m_ui->setOnStreamingAudioCodecChanged([this](const std::string& codec)
+                                         {
+        m_streamingAudioCodec = codec;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
             m_streamManager.reset();
@@ -810,30 +855,33 @@ bool Application::initStreaming()
     uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_window ? m_window->getHeight() : m_windowHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
-    // Add streamer based on audio support
-    if (m_streamingWithAudio)
+    // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
+    auto tsStreamer = std::make_unique<HTTPTSStreamer>();
+    
+    // Configurar bitrate de vídeo
+    if (m_streamingBitrate > 0)
     {
-        // Use MPEG-TS streamer for audio+video
-        auto tsStreamer = std::make_unique<HTTPTSStreamer>();
-        if (m_streamingBitrate > 0)
-        {
-            tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
-        }
-        m_streamManager->addStreamer(std::move(tsStreamer));
-        LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
+        tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
     }
-    else
+    
+    // Configurar bitrate de áudio
+    if (m_streamingAudioBitrate > 0)
     {
-        // Use MJPEG streamer for video only
-        auto mjpegStreamer = std::make_unique<HTTPMJPEGStreamer>();
-        mjpegStreamer->setQuality(m_streamingQuality);
-        if (m_streamingBitrate > 0)
-        {
-            mjpegStreamer->setBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
-        }
-        m_streamManager->addStreamer(std::move(mjpegStreamer));
-        LOG_INFO("Usando HTTP MJPEG streamer (apenas vídeo)");
+        tsStreamer->setAudioBitrate(m_streamingAudioBitrate * 1000); // Converter kbps para bps
     }
+    
+    // Configurar codecs
+    tsStreamer->setVideoCodec(m_streamingVideoCodec);
+    tsStreamer->setAudioCodec(m_streamingAudioCodec);
+    
+    // Configurar formato de áudio para corresponder ao AudioCapture
+    if (m_audioCapture && m_audioCapture->isOpen())
+    {
+        tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+    }
+    
+    m_streamManager->addStreamer(std::move(tsStreamer));
+    LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
 
     if (!m_streamManager->initialize(m_streamingPort, streamWidth, streamHeight, streamFps))
     {
@@ -856,13 +904,34 @@ bool Application::initStreaming()
         LOG_INFO("Stream disponível: " + url);
     }
 
-    // Initialize audio capture if streaming with audio is enabled and not already initialized
-    if (m_streamingWithAudio && !m_audioCapture)
+    // Initialize audio capture if not already initialized (sempre necessário para streaming)
+    if (!m_audioCapture)
     {
         if (!initAudioCapture())
         {
             LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
         }
+        else
+        {
+            // Atualizar formato de áudio no streamer após inicializar captura
+            // Isso garante que o streamer use o mesmo formato que o AudioCapture
+            if (m_streamManager && m_audioCapture && m_audioCapture->isOpen())
+            {
+                // O streamer já foi adicionado, precisamos atualizar o formato
+                // Por enquanto, o formato padrão (44100Hz, 2 canais) deve funcionar
+                // mas idealmente deveríamos ter uma forma de atualizar o streamer
+                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) + 
+                         "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
+            }
+        }
+    }
+
+    // Iniciar thread dedicada para streaming (se ainda não estiver rodando)
+    if (!m_streamingThreadRunning)
+    {
+        m_streamingThreadRunning = true;
+        m_streamingThread = std::thread(&Application::streamingThreadFunc, this);
+        LOG_INFO("Thread de streaming iniciada");
     }
 
     return true;
@@ -870,7 +939,7 @@ bool Application::initStreaming()
 
 bool Application::initAudioCapture()
 {
-    if (!m_streamingEnabled || !m_streamingWithAudio)
+    if (!m_streamingEnabled)
     {
         return true; // Audio não habilitado, não é erro
     }
@@ -925,6 +994,19 @@ void Application::run()
     {
         m_window->pollEvents();
 
+        // Verificar se a janela está em foco (se a opção de pausar quando não focada estiver ativa)
+        bool shouldProcess = true;
+        if (m_pauseWhenUnfocused && m_window)
+        {
+            void *glfwWindow = m_window->getWindow();
+            if (glfwWindow)
+            {
+                // Verificar se a janela está focada usando GLFW
+                int focused = glfwGetWindowAttrib(static_cast<GLFWwindow *>(glfwWindow), GLFW_FOCUSED);
+                shouldProcess = (focused == GLFW_TRUE);
+            }
+        }
+
         // Processar entrada de teclado (F12 para toggle UI)
         handleKeyInput();
 
@@ -935,6 +1017,8 @@ void Application::run()
         }
 
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
+        // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
+        // Isso garante que o streaming e processamento continuem funcionando
         bool newFrame = false;
         if (m_capture)
         {
@@ -1089,7 +1173,8 @@ void Application::run()
                                       m_maintainAspect, renderWidth, renderHeight);
 
             // Stream frame if streaming is enabled
-            // IMPORTANTE: Não fazer streaming durante resize para evitar problemas
+            // IMPORTANTE: Streaming sempre continua, mesmo quando a janela não está focada
+            // Não fazer streaming durante resize para evitar problemas
             if (m_streamManager && m_streamManager->isActive() && !m_isResizing)
             {
                 // Get current window dimensions for reading (já temos lock do mutex)
@@ -1234,28 +1319,19 @@ void Application::run()
                                 // linha por linha de baixo para cima e armazenamos na ordem correta
                                 // (topo no índice 0, fundo no final)
                                 // frameData/dataToSend já está na orientação correta
-                                m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+                                // Enviar frame para streaming (não bloqueia - apenas enfileira)
+                                if (m_streamManager && m_streamManager->isActive())
+                                {
+                                    m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Push audio samples to streamer if audio capture is active
-            if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
-            {
-                // Read audio samples and push to streamer
-                // Process audio in smaller chunks to avoid blocking
-                const size_t maxSamples = 1024; // Read up to 1024 samples at a time
-                int16_t audioBuffer[maxSamples];
-                size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
-
-                if (samplesRead > 0)
-                {
-                    // Push audio to streamer (it will handle routing to streamers that support audio)
-                    m_streamManager->pushAudio(audioBuffer, samplesRead);
-                }
-            }
+            // Áudio é processado pela thread dedicada de streaming
+            // Não precisamos processar aqui no loop principal
 
             // Atualizar informações de streaming na UI
             if (m_ui && m_streamManager && m_streamManager->isActive())
@@ -1289,8 +1365,16 @@ void Application::run()
         }
         else
         {
-            // Se não há frame válido ainda, fazer um pequeno sleep
-            usleep(1000); // 1ms
+            // Se não há frame válido ainda ou se não devemos processar, fazer um pequeno sleep
+            if (!shouldProcess)
+            {
+                // Quando pausado (janela não focada), fazer sleep maior para economizar CPU
+                usleep(100000); // 100ms
+            }
+            else
+            {
+                usleep(1000); // 1ms
+            }
 
             // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
             // Isso evita o erro "Forgot to call Render() or EndFrame()"
@@ -1302,6 +1386,45 @@ void Application::run()
     }
 
     LOG_INFO("Loop principal encerrado");
+}
+
+void Application::streamingThreadFunc()
+{
+    LOG_INFO("Thread de streaming iniciada");
+
+    // Esta thread é responsável por processar áudio continuamente
+    // Os frames de vídeo são processados pelo encodingThread do HTTPTSStreamer
+    // Mas podemos garantir que o áudio seja processado de forma mais contínua aqui
+
+    while (m_streamingThreadRunning && m_streamingEnabled)
+    {
+        // Processar áudio continuamente
+        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        {
+            // Ler áudio em chunks maiores para melhor throughput
+            const size_t maxSamples = 2048; // Ler até 2048 samples por vez
+            int16_t audioBuffer[maxSamples];
+            size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
+
+            if (samplesRead > 0)
+            {
+                // Push audio to streamer
+                m_streamManager->pushAudio(audioBuffer, samplesRead);
+            }
+            else
+            {
+                // Sem samples disponíveis, fazer um pequeno sleep
+                usleep(1000); // 1ms
+            }
+        }
+        else
+        {
+            // Sem captura de áudio ativa, fazer sleep maior
+            usleep(10000); // 10ms
+        }
+    }
+
+    LOG_INFO("Thread de streaming encerrada");
 }
 
 void Application::shutdown()
@@ -1352,6 +1475,17 @@ void Application::shutdown()
     {
         m_window->shutdown();
         m_window.reset();
+    }
+
+    // Parar thread de streaming
+    if (m_streamingThreadRunning)
+    {
+        m_streamingThreadRunning = false;
+        if (m_streamingThread.joinable())
+        {
+            m_streamingThread.join();
+        }
+        LOG_INFO("Thread de streaming encerrada");
     }
 
     if (m_streamManager)

@@ -897,7 +897,7 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
 
 void UIManager::renderStreamingPanel()
 {
-    ImGui::Text("HTTP MJPEG Streaming");
+    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
     ImGui::Separator();
     
     // Status
@@ -916,8 +916,10 @@ void UIManager::renderStreamingPanel()
     }
     
     ImGui::Separator();
+    ImGui::Text("Configurações Básicas");
+    ImGui::Separator();
     
-    // Controles
+    // Controles básicos
     int port = static_cast<int>(m_streamingPort);
     if (ImGui::InputInt("Porta", &port, 1, 100)) {
         if (port >= 1024 && port <= 65535) {
@@ -958,8 +960,51 @@ void UIManager::renderStreamingPanel()
         }
     }
     
+    ImGui::Separator();
+    ImGui::Text("Codecs");
+    ImGui::Separator();
+    
+    // Seleção de codec de vídeo
+    const char* videoCodecs[] = { "h264", "h265", "vp8", "vp9" };
+    int currentVideoCodecIndex = 0;
+    for (int i = 0; i < 4; i++) {
+        if (m_streamingVideoCodec == videoCodecs[i]) {
+            currentVideoCodecIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4)) {
+        m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
+        if (m_onStreamingVideoCodecChanged) {
+            m_onStreamingVideoCodecChanged(m_streamingVideoCodec);
+        }
+    }
+    
+    // Seleção de codec de áudio
+    const char* audioCodecs[] = { "aac", "mp3", "opus" };
+    int currentAudioCodecIndex = 0;
+    for (int i = 0; i < 3; i++) {
+        if (m_streamingAudioCodec == audioCodecs[i]) {
+            currentAudioCodecIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("Codec de Áudio", &currentAudioCodecIndex, audioCodecs, 3)) {
+        m_streamingAudioCodec = audioCodecs[currentAudioCodecIndex];
+        if (m_onStreamingAudioCodecChanged) {
+            m_onStreamingAudioCodecChanged(m_streamingAudioCodec);
+        }
+    }
+    
+    ImGui::Separator();
+    ImGui::Text("Bitrates");
+    ImGui::Separator();
+    
+    // Bitrate de vídeo
     int bitrate = static_cast<int>(m_streamingBitrate);
-    if (ImGui::InputInt("Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000)) {
+    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000)) {
         if (bitrate >= 0 && bitrate <= 50000) {
             m_streamingBitrate = static_cast<uint32_t>(bitrate);
             if (m_onStreamingBitrateChanged) {
@@ -968,11 +1013,14 @@ void UIManager::renderStreamingPanel()
         }
     }
     
-    int quality = m_streamingQuality;
-    if (ImGui::SliderInt("Qualidade JPEG", &quality, 1, 100)) {
-        m_streamingQuality = quality;
-        if (m_onStreamingQualityChanged) {
-            m_onStreamingQualityChanged(m_streamingQuality);
+    // Bitrate de áudio
+    int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
+    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32)) {
+        if (audioBitrate >= 32 && audioBitrate <= 320) {
+            m_streamingAudioBitrate = static_cast<uint32_t>(audioBitrate);
+            if (m_onStreamingAudioBitrateChanged) {
+                m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
+            }
         }
     }
     

@@ -34,14 +34,15 @@ void printUsage(const char *programName)
     std::cout << "  --v4l2-gamma <valor>         Gama V4L2 (100 a 300, padrão: não configurar)\n";
     std::cout << "  --v4l2-whitebalance <valor>  Balanço de branco V4L2 (2800 a 6500, padrão: não configurar)\n";
     std::cout << "\nOpções de Streaming:\n";
-    std::cout << "  --stream-enable              Habilitar streaming HTTP\n";
-    std::cout << "  --stream-audio               Habilitar áudio no stream (usa MPEG-TS em vez de MJPEG)\n";
+    std::cout << "  --stream-enable              Habilitar streaming HTTP MPEG-TS (áudio + vídeo)\n";
     std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
     std::cout << "  --stream-width <largura>    Largura do stream (padrão: mesma da janela)\n";
     std::cout << "  --stream-height <altura>    Altura do stream (padrão: mesma da janela)\n";
     std::cout << "  --stream-fps <fps>          FPS do stream (padrão: mesmo da captura)\n";
-    std::cout << "  --stream-bitrate <kbps>      Bitrate do stream em kbps (padrão: auto)\n";
-    std::cout << "  --stream-quality <1-100>    Qualidade JPEG (1-100, padrão: 85, apenas MJPEG)\n";
+    std::cout << "  --stream-bitrate <kbps>      Bitrate de vídeo em kbps (padrão: auto)\n";
+    std::cout << "  --stream-audio-bitrate <kbps> Bitrate de áudio em kbps (padrão: 128)\n";
+    std::cout << "  --stream-video-codec <codec> Codec de vídeo: h264, h265, vp8, vp9 (padrão: h264)\n";
+    std::cout << "  --stream-audio-codec <codec> Codec de áudio: aac, mp3, opus (padrão: aac)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
@@ -88,13 +89,15 @@ int main(int argc, char *argv[])
 
     // Streaming options
     bool streamingEnabled = false;
-    bool streamingWithAudio = false;
     int streamingPort = 8080;
     int streamWidth = 0;    // 0 = usar largura da janela
     int streamHeight = 0;   // 0 = usar altura da janela
     int streamFps = 0;      // 0 = usar FPS da captura
     int streamBitrate = 0;  // 0 = calcular automaticamente
-    int streamQuality = 85; // Qualidade JPEG (1-100)
+    int streamAudioBitrate = 128; // Bitrate de áudio em kbps
+    std::string streamVideoCodec = "h264"; // Codec de vídeo
+    std::string streamAudioCodec = "aac";  // Codec de áudio
+    int streamQuality = 85; // Qualidade JPEG (1-100) - não usado mais
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -283,10 +286,6 @@ int main(int argc, char *argv[])
         {
             streamingEnabled = true;
         }
-        else if (arg == "--stream-audio")
-        {
-            streamingWithAudio = true;
-        }
         else if (arg == "--stream-port" && i + 1 < argc)
         {
             streamingPort = std::stoi(argv[++i]);
@@ -331,6 +330,23 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Bitrate do stream inválido. Use um valor entre 100 e 50000 kbps");
                 return 1;
             }
+        }
+        else if (arg == "--stream-audio-bitrate" && i + 1 < argc)
+        {
+            streamAudioBitrate = std::stoi(argv[++i]);
+            if (streamAudioBitrate < 32 || streamAudioBitrate > 320)
+            {
+                LOG_ERROR("Bitrate de áudio inválido. Use um valor entre 32 e 320 kbps");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-video-codec" && i + 1 < argc)
+        {
+            streamVideoCodec = argv[++i];
+        }
+        else if (arg == "--stream-audio-codec" && i + 1 < argc)
+        {
+            streamAudioCodec = argv[++i];
         }
         else if (arg == "--stream-quality" && i + 1 < argc)
         {
@@ -417,7 +433,6 @@ int main(int argc, char *argv[])
 
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
-    app.setStreamingWithAudio(streamingWithAudio);
     app.setStreamingPort(streamingPort);
     if (streamWidth > 0)
         app.setStreamingWidth(streamWidth);
@@ -427,6 +442,9 @@ int main(int argc, char *argv[])
         app.setStreamingFps(streamFps);
     if (streamBitrate > 0)
         app.setStreamingBitrate(streamBitrate);
+    app.setStreamingAudioBitrate(streamAudioBitrate);
+    app.setStreamingVideoCodec(streamVideoCodec);
+    app.setStreamingAudioCodec(streamAudioCodec);
     app.setStreamingQuality(streamQuality);
 
     if (!app.init())

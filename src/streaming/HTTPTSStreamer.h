@@ -34,6 +34,9 @@ public:
     // Additional configuration methods
     void setVideoBitrate(uint32_t bitrate) { m_videoBitrate = bitrate; }
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
+    void setAudioFormat(uint32_t sampleRate, uint32_t channels);
+    void setVideoCodec(const std::string& codecName); // "h264", "h265", "vp8", "vp9", etc
+    void setAudioCodec(const std::string& codecName); // "aac", "mp3", "opus", etc
     
     // Public for static callback
     int writeToClients(const uint8_t* buf, int buf_size);
@@ -54,6 +57,10 @@ private:
     uint32_t m_fps = 30;
     uint32_t m_videoBitrate = 2000000; // 2 Mbps
     uint32_t m_audioBitrate = 128000;  // 128 kbps
+    
+    // Codec selection
+    std::string m_videoCodecName = "h264"; // "h264", "h265", "vp8", "vp9"
+    std::string m_audioCodecName = "aac";  // "aac", "mp3", "opus"
     
     // Audio format
     uint32_t m_sampleRate = 44100;
