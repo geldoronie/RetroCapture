@@ -63,9 +63,6 @@ public:
     void setStreamingVideoCodec(const std::string& codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string& codec) { m_streamingAudioCodec = codec; }
     
-    // Configuração de comportamento quando janela não está em foco
-    void setPauseWhenUnfocused(bool pause) { m_pauseWhenUnfocused = pause; }
-    
 private:
     bool m_initialized = false;
     
@@ -120,7 +117,6 @@ private:
     int m_streamingQuality = 85;     // Qualidade JPEG (1-100) - não usado mais, mantido para compatibilidade
     std::string m_streamingVideoCodec = "h264"; // Codec de vídeo: "h264", "h265", "vp8", "vp9"
     std::string m_streamingAudioCodec = "aac";  // Codec de áudio: "aac", "mp3", "opus"
-    bool m_pauseWhenUnfocused = false; // true = pausar quando janela não está em foco, false = continuar sempre
     
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

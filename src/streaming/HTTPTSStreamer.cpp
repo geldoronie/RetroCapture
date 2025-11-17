@@ -505,6 +505,9 @@ void HTTPTSStreamer::stop()
         m_serverSocket = -1;
     }
 
+    // Reset client count when stopping
+    m_clientCount.store(0);
+
     if (m_serverThread.joinable())
     {
         m_serverThread.join();
@@ -609,9 +612,6 @@ void HTTPTSStreamer::serverThread()
 
 void HTTPTSStreamer::handleClient(int clientFd)
 {
-    m_clientCount++;
-    LOG_INFO("Cliente HTTP MPEG-TS conectado (total: " + std::to_string(m_clientCount.load()) + ")");
-
     // Configurar socket para baixa latência
     int flag = 1;
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)); // Desabilitar Nagle's algorithm
@@ -620,46 +620,38 @@ void HTTPTSStreamer::handleClient(int clientFd)
     int sendBufSize = 8192; // 8KB buffer pequeno
     setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize));
 
-    // Add client to list
-    {
-        std::lock_guard<std::mutex> lock(m_outputMutex);
-        m_clientSockets.push_back(clientFd);
-    }
-
-    // Read HTTP request
+    // Read HTTP request FIRST, before incrementing counter
     char buffer[4096];
     ssize_t bytesRead = recv(clientFd, buffer, sizeof(buffer) - 1, 0);
     if (bytesRead <= 0)
     {
         close(clientFd);
-        m_clientCount--;
-        {
-            std::lock_guard<std::mutex> lock(m_outputMutex);
-            m_clientSockets.erase(
-                std::remove(m_clientSockets.begin(), m_clientSockets.end(), clientFd),
-                m_clientSockets.end());
-        }
         return;
     }
 
     buffer[bytesRead] = '\0';
 
-    // Check if it's a GET request
+    // Check if it's a GET request for /stream
     std::string request(buffer);
-    if (request.find("GET /stream") == std::string::npos &&
-        request.find("GET /") == std::string::npos)
+    bool isStreamRequest = (request.find("GET /stream") != std::string::npos);
+
+    // Only accept /stream requests, reject everything else (favicon, etc.)
+    if (!isStreamRequest)
     {
         const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
         send(clientFd, response, strlen(response), 0);
         close(clientFd);
-        m_clientCount--;
-        {
-            std::lock_guard<std::mutex> lock(m_outputMutex);
-            m_clientSockets.erase(
-                std::remove(m_clientSockets.begin(), m_clientSockets.end(), clientFd),
-                m_clientSockets.end());
-        }
-        return;
+        return; // Don't count rejected requests
+    }
+
+    // Only increment counter for valid stream requests
+    uint32_t count = ++m_clientCount;
+    LOG_INFO("Cliente HTTP MPEG-TS conectado (total: " + std::to_string(count) + ")");
+
+    // Add client to list only after confirming it's a valid stream request
+    {
+        std::lock_guard<std::mutex> lock(m_outputMutex);
+        m_clientSockets.push_back(clientFd);
     }
 
     // Send HTTP headers for MPEG-TS stream
@@ -675,13 +667,14 @@ void HTTPTSStreamer::handleClient(int clientFd)
     if (sent < 0)
     {
         close(clientFd);
-        m_clientCount--;
+        uint32_t countAfter = --m_clientCount;
         {
             std::lock_guard<std::mutex> lock(m_outputMutex);
             m_clientSockets.erase(
                 std::remove(m_clientSockets.begin(), m_clientSockets.end(), clientFd),
                 m_clientSockets.end());
         }
+        LOG_INFO("Cliente HTTP MPEG-TS desconectado (erro ao enviar headers, total: " + std::to_string(countAfter) + ")");
         return;
     }
 
@@ -700,19 +693,41 @@ void HTTPTSStreamer::handleClient(int clientFd)
             }
         }
 
+        // Verificar se o cliente ainda está na lista (pode ter sido removido por writeToClients)
+        {
+            std::lock_guard<std::mutex> lock(m_outputMutex);
+            auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
+            if (it == m_clientSockets.end())
+            {
+                // Cliente já foi removido da lista (provavelmente por writeToClients)
+                // Não decrementar contador novamente
+                close(clientFd);
+                return;
+            }
+        }
+
         // Sleep briefly to avoid busy-waiting
         usleep(10000); // 10ms
     }
 
+    // Cliente desconectou - remover da lista e decrementar contador
     close(clientFd);
-    m_clientCount--;
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
-        m_clientSockets.erase(
-            std::remove(m_clientSockets.begin(), m_clientSockets.end(), clientFd),
-            m_clientSockets.end());
+        // Verificar se ainda está na lista antes de remover
+        auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
+        if (it != m_clientSockets.end())
+        {
+            m_clientSockets.erase(it);
+            uint32_t countAfter = --m_clientCount;
+            LOG_INFO("Cliente HTTP MPEG-TS desconectado (total: " + std::to_string(countAfter) + ")");
+        }
+        else
+        {
+            // Já foi removido por writeToClients, não decrementar novamente
+            LOG_INFO("Cliente HTTP MPEG-TS desconectado (já removido da lista)");
+        }
     }
-    LOG_INFO("Cliente HTTP MPEG-TS desconectado (total: " + std::to_string(m_clientCount.load()) + ")");
 }
 
 void HTTPTSStreamer::encodingThread()
@@ -1144,9 +1159,11 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             if (sent < 0)
             {
                 // Erro ao enviar - cliente desconectado
+                // Remover da lista e decrementar contador (já estamos com o lock)
                 close(clientFd);
                 it = m_clientSockets.erase(it);
-                m_clientCount--;
+                uint32_t countAfter = --m_clientCount;
+                LOG_INFO("Cliente HTTP MPEG-TS desconectado (erro ao enviar dados, total: " + std::to_string(countAfter) + ")");
                 goto next_client;
             }
 

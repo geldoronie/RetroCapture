@@ -994,18 +994,9 @@ void Application::run()
     {
         m_window->pollEvents();
 
-        // Verificar se a janela está em foco (se a opção de pausar quando não focada estiver ativa)
-        bool shouldProcess = true;
-        if (m_pauseWhenUnfocused && m_window)
-        {
-            void *glfwWindow = m_window->getWindow();
-            if (glfwWindow)
-            {
-                // Verificar se a janela está focada usando GLFW
-                int focused = glfwGetWindowAttrib(static_cast<GLFWwindow *>(glfwWindow), GLFW_FOCUSED);
-                shouldProcess = (focused == GLFW_TRUE);
-            }
-        }
+        // IMPORTANTE: Captura, processamento e streaming sempre continuam,
+        // independente do foco da janela. Isso garante que o streaming funcione
+        // mesmo quando a janela não está em foco.
 
         // Processar entrada de teclado (F12 para toggle UI)
         handleKeyInput();
@@ -1365,16 +1356,9 @@ void Application::run()
         }
         else
         {
-            // Se não há frame válido ainda ou se não devemos processar, fazer um pequeno sleep
-            if (!shouldProcess)
-            {
-                // Quando pausado (janela não focada), fazer sleep maior para economizar CPU
-                usleep(100000); // 100ms
-            }
-            else
-            {
-                usleep(1000); // 1ms
-            }
+            // Se não há frame válido ainda, fazer um pequeno sleep
+            // IMPORTANTE: Captura continua mesmo sem frame válido para renderização
+            usleep(1000); // 1ms
 
             // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
             // Isso evita o erro "Forgot to call Render() or EndFrame()"
