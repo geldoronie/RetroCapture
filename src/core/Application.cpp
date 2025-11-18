@@ -91,7 +91,10 @@ bool Application::initWindow()
     config.title = "RetroCapture";
     config.fullscreen = m_fullscreen;
     config.monitorIndex = m_monitorIndex;
-    config.vsync = true;
+    // IMPORTANTE: Desabilitar VSync para evitar bloqueio quando janela não está focada
+    // VSync pode causar pausa na aplicação quando a janela está em segundo plano
+    // Isso garante que captura e streaming continuem funcionando mesmo quando não focada
+    config.vsync = false;
 
     if (!m_window->init(config))
     {
@@ -666,7 +669,7 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
-    
+
     m_ui->setOnStreamingAudioBitrateChanged([this](uint32_t bitrate)
                                             {
         m_streamingAudioBitrate = bitrate;
@@ -677,9 +680,9 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
-    
-    m_ui->setOnStreamingVideoCodecChanged([this](const std::string& codec)
-                                         {
+
+    m_ui->setOnStreamingVideoCodecChanged([this](const std::string &codec)
+                                          {
         m_streamingVideoCodec = codec;
         // Se streaming estiver ativo, reiniciar
         if (m_streamingEnabled && m_streamManager) {
@@ -688,9 +691,9 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
-    
-    m_ui->setOnStreamingAudioCodecChanged([this](const std::string& codec)
-                                         {
+
+    m_ui->setOnStreamingAudioCodecChanged([this](const std::string &codec)
+                                          {
         m_streamingAudioCodec = codec;
         // Se streaming estiver ativo, reiniciar
         if (m_streamingEnabled && m_streamManager) {
@@ -699,9 +702,9 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
-    
+
     m_ui->setOnStreamingAudioBufferSizeChanged([this](uint32_t frames)
-                                         {
+                                               {
         m_streamingAudioBufferSize = frames;
         // Se streaming estiver ativo, reiniciar para aplicar novo tamanho de buffer
         if (m_streamingEnabled && m_streamManager) {
@@ -868,32 +871,32 @@ bool Application::initStreaming()
 
     // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
     auto tsStreamer = std::make_unique<HTTPTSStreamer>();
-    
+
     // Configurar bitrate de vídeo
     if (m_streamingBitrate > 0)
     {
         tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
     }
-    
+
     // Configurar bitrate de áudio
     if (m_streamingAudioBitrate > 0)
     {
         tsStreamer->setAudioBitrate(m_streamingAudioBitrate * 1000); // Converter kbps para bps
     }
-    
+
     // Configurar codecs
     tsStreamer->setVideoCodec(m_streamingVideoCodec);
     tsStreamer->setAudioCodec(m_streamingAudioCodec);
-    
+
     // Configurar tamanho do buffer de áudio
     tsStreamer->setAudioBufferSize(m_streamingAudioBufferSize);
-    
+
     // Configurar formato de áudio para corresponder ao AudioCapture
     if (m_audioCapture && m_audioCapture->isOpen())
     {
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
     }
-    
+
     m_streamManager->addStreamer(std::move(tsStreamer));
     LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
 
@@ -934,7 +937,7 @@ bool Application::initStreaming()
                 // O streamer já foi adicionado, precisamos atualizar o formato
                 // Por enquanto, o formato padrão (44100Hz, 2 canais) deve funcionar
                 // mas idealmente deveríamos ter uma forma de atualizar o streamer
-                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) + 
+                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) +
                          "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
             }
         }
@@ -1276,20 +1279,22 @@ void Application::run()
                                         processedData.resize(processedSize);
                                         float scaleX = (float)windowWidth / streamWidth;
                                         float scaleY = (float)windowHeight / streamHeight;
-                                        
+
                                         for (uint32_t y = 0; y < streamHeight; y++)
                                         {
                                             uint32_t srcY = (uint32_t)(y * scaleY);
-                                            if (srcY >= windowHeight) srcY = windowHeight - 1;
-                                            
+                                            if (srcY >= windowHeight)
+                                                srcY = windowHeight - 1;
+
                                             for (uint32_t x = 0; x < streamWidth; x++)
                                             {
                                                 uint32_t srcX = (uint32_t)(x * scaleX);
-                                                if (srcX >= windowWidth) srcX = windowWidth - 1;
-                                                
+                                                if (srcX >= windowWidth)
+                                                    srcX = windowWidth - 1;
+
                                                 size_t srcIdx = (srcY * windowWidth + srcX) * 3;
                                                 size_t dstIdx = (y * streamWidth + x) * 3;
-                                                
+
                                                 if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
                                                 {
                                                     processedData[dstIdx] = frameData[srcIdx];
