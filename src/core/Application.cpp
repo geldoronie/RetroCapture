@@ -699,6 +699,17 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
+    
+    m_ui->setOnStreamingAudioBufferSizeChanged([this](uint32_t frames)
+                                         {
+        m_streamingAudioBufferSize = frames;
+        // Se streaming estiver ativo, reiniciar para aplicar novo tamanho de buffer
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
 
     m_ui->setOnStreamingQualityChanged([this](int quality)
                                        {
@@ -873,6 +884,9 @@ bool Application::initStreaming()
     // Configurar codecs
     tsStreamer->setVideoCodec(m_streamingVideoCodec);
     tsStreamer->setAudioCodec(m_streamingAudioCodec);
+    
+    // Configurar tamanho do buffer de áudio
+    tsStreamer->setAudioBufferSize(m_streamingAudioBufferSize);
     
     // Configurar formato de áudio para corresponder ao AudioCapture
     if (m_audioCapture && m_audioCapture->isOpen())
@@ -1166,6 +1180,7 @@ void Application::run()
             // Stream frame if streaming is enabled
             // IMPORTANTE: Streaming sempre continua, mesmo quando a janela não está focada
             // Não fazer streaming durante resize para evitar problemas
+            // IMPORTANTE: Não fazer frame skipping - causa desincronização de áudio/vídeo
             if (m_streamManager && m_streamManager->isActive() && !m_isResizing)
             {
                 // Get current window dimensions for reading (já temos lock do mutex)
@@ -1253,50 +1268,33 @@ void Application::run()
 
                                 if (streamWidth != windowWidth || streamHeight != windowHeight)
                                 {
-                                    // Resize using bilinear interpolation
+                                    // Resize usando interpolação mais simples (nearest neighbor) para melhor performance
+                                    // Bilinear é muito pesado e causa queda de FPS no thread principal
                                     size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
                                     if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
                                     {
                                         processedData.resize(processedSize);
+                                        float scaleX = (float)windowWidth / streamWidth;
+                                        float scaleY = (float)windowHeight / streamHeight;
+                                        
                                         for (uint32_t y = 0; y < streamHeight; y++)
                                         {
+                                            uint32_t srcY = (uint32_t)(y * scaleY);
+                                            if (srcY >= windowHeight) srcY = windowHeight - 1;
+                                            
                                             for (uint32_t x = 0; x < streamWidth; x++)
                                             {
-                                                float fx = (float)x / streamWidth * windowWidth;
-                                                float fy = (float)y / streamHeight * windowHeight;
-                                                uint32_t x0 = (uint32_t)fx;
-                                                uint32_t y0 = (uint32_t)fy;
-                                                uint32_t x1 = std::min(x0 + 1, windowWidth - 1);
-                                                uint32_t y1 = std::min(y0 + 1, windowHeight - 1);
-
-                                                float dx = fx - x0;
-                                                float dy = fy - y0;
-
-                                                for (int c = 0; c < 3; c++)
+                                                uint32_t srcX = (uint32_t)(x * scaleX);
+                                                if (srcX >= windowWidth) srcX = windowWidth - 1;
+                                                
+                                                size_t srcIdx = (srcY * windowWidth + srcX) * 3;
+                                                size_t dstIdx = (y * streamWidth + x) * 3;
+                                                
+                                                if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
                                                 {
-                                                    size_t idx00 = (y0 * windowWidth + x0) * 3 + c;
-                                                    size_t idx10 = (y0 * windowWidth + x1) * 3 + c;
-                                                    size_t idx01 = (y1 * windowWidth + x0) * 3 + c;
-                                                    size_t idx11 = (y1 * windowWidth + x1) * 3 + c;
-
-                                                    if (idx00 < frameDataSize && idx10 < frameDataSize &&
-                                                        idx01 < frameDataSize && idx11 < frameDataSize)
-                                                    {
-                                                        float v00 = frameData[idx00];
-                                                        float v10 = frameData[idx10];
-                                                        float v01 = frameData[idx01];
-                                                        float v11 = frameData[idx11];
-
-                                                        float v0 = v00 * (1 - dx) + v10 * dx;
-                                                        float v1 = v01 * (1 - dx) + v11 * dx;
-                                                        float v = v0 * (1 - dy) + v1 * dy;
-
-                                                        size_t outIdx = (y * streamWidth + x) * 3 + c;
-                                                        if (outIdx < processedSize)
-                                                        {
-                                                            processedData[outIdx] = (uint8_t)v;
-                                                        }
-                                                    }
+                                                    processedData[dstIdx] = frameData[srcIdx];
+                                                    processedData[dstIdx + 1] = frameData[srcIdx + 1];
+                                                    processedData[dstIdx + 2] = frameData[srcIdx + 2];
                                                 }
                                             }
                                         }

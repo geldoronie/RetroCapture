@@ -1024,6 +1024,18 @@ void UIManager::renderStreamingPanel()
         }
     }
     
+    // Tamanho do buffer de áudio
+    int audioBufferSize = static_cast<int>(m_streamingAudioBufferSize);
+    if (ImGui::InputInt("Buffer Áudio (frames)", &audioBufferSize, 1, 10)) {
+        if (audioBufferSize >= 1 && audioBufferSize <= 200) {
+            m_streamingAudioBufferSize = static_cast<uint32_t>(audioBufferSize);
+            if (m_onStreamingAudioBufferSizeChanged) {
+                m_onStreamingAudioBufferSizeChanged(m_streamingAudioBufferSize);
+            }
+        }
+    }
+    ImGui::TextDisabled("(Padrão: 50 frames = ~1 segundo a 48kHz)");
+    
     ImGui::Separator();
     
     // Botão Start/Stop

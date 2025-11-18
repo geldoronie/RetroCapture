@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <errno.h>
+#include <time.h>
 
 extern "C"
 {
@@ -79,6 +80,10 @@ HTTPTSStreamer::HTTPTSStreamer()
     // Inicializar PTS de áudio e vídeo para evitar problemas de sincronização
     m_ffmpeg.videoPts = 0;
     m_ffmpeg.audioPts = 0;
+    m_ffmpeg.startTime = 0;
+    m_ffmpeg.audioSamplesProcessed = 0;
+    // Resetar variáveis estáticas de continuidade de PTS ao inicializar
+    // (será resetado na primeira chamada de encodeAudioFrame)
 }
 
 HTTPTSStreamer::~HTTPTSStreamer()
@@ -360,6 +365,12 @@ bool HTTPTSStreamer::initializeFFmpeg()
     av_dict_set(&formatCtx->metadata, "service_name", "RetroCapture", 0);
     av_dict_set(&formatCtx->metadata, "service_provider", "RetroCapture", 0);
 
+    // Configurar start_time para sincronização (usar clock do sistema)
+    // Isso garante que áudio e vídeo usem o mesmo clock base
+    // IMPORTANTE: start_time será definido quando o streaming realmente começar (no start())
+    // Por enquanto, apenas inicializar
+    m_ffmpeg.startTime = 0;
+
     // Write header com opções de baixa latência
     ret = avformat_write_header(formatCtx, &opts);
     if (ret < 0)
@@ -479,6 +490,38 @@ bool HTTPTSStreamer::start()
         return false;
     }
 
+    // Inicializar clock de sincronização quando o streaming realmente começar
+    // Isso garante que áudio e vídeo usem o mesmo clock base desde o início
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    m_ffmpeg.startTime = (int64_t)(ts.tv_sec * 1000000LL + ts.tv_nsec / 1000); // Em microsegundos
+
+    // Configurar start_time no format context para sincronização
+    AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_ffmpeg.formatCtx);
+    if (formatCtx)
+    {
+        formatCtx->start_time = m_ffmpeg.startTime;
+    }
+
+    // Resetar PTS para começar do zero (relativo ao start_time)
+    m_ffmpeg.videoPts = 0;
+    m_ffmpeg.audioPts = 0;
+    m_ffmpeg.audioSamplesProcessed = 0;
+    // Resetar DTS para garantir monotonicidade desde o início
+    m_ffmpeg.lastVideoDts = -1;
+    m_ffmpeg.lastAudioDts = -1;
+
+    // Limpar buffer de áudio para começar limpo
+    {
+        std::lock_guard<std::mutex> lock(m_audioMutex);
+        m_audioBuffer.clear();
+        // Limpar também a fila de samples
+        while (!m_audioSamples.empty())
+        {
+            m_audioSamples.pop();
+        }
+    }
+
     m_running = true;
     m_active = true;
     m_serverThread = std::thread(&HTTPTSStreamer::serverThread, this);
@@ -533,7 +576,15 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_frameMutex);
+    // IMPORTANTE: Usar try_lock para não bloquear o thread principal
+    // Se não conseguir o lock imediatamente, descartar o frame (já temos um mais recente na fila)
+    std::unique_lock<std::mutex> lock(m_frameMutex, std::try_to_lock);
+    if (!lock.owns_lock())
+    {
+        // Não conseguiu o lock - encoding thread está ocupado
+        // Descartar este frame (já temos um mais recente sendo processado)
+        return false;
+    }
 
     // IMPORTANTE: Para reduzir buffering, descartar frames antigos e manter apenas o mais recente
     // Isso garante que sempre processamos o frame mais atual, reduzindo latência
@@ -543,7 +594,7 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         m_videoFrames.pop(); // Descartar frame antigo
     }
 
-    // Store frame
+    // Store frame (copiar dados - operação rápida com lock já adquirido)
     size_t frameSize = width * height * 3;
     std::vector<uint8_t> frame(frameSize);
     memcpy(frame.data(), data, frameSize);
@@ -760,9 +811,62 @@ void HTTPTSStreamer::encodingThread()
             hasAudio = !m_audioSamples.empty() || !m_audioBuffer.empty();
         }
 
-        // IMPORTANTE: Processar vídeo primeiro para reduzir latência
-        // Vídeo tem prioridade porque frames antigos são descartados
-        // Processar vídeo primeiro garante que sempre temos o frame mais recente
+        // IMPORTANTE: Processar áudio e vídeo de forma balanceada para manter sincronização
+        // Processar áudio primeiro se disponível, depois vídeo
+        // Isso garante que o áudio não fique atrasado em relação ao vídeo
+        bool processedAudio = false;
+        if (hasAudio)
+        {
+            // Processar áudio de forma contínua para evitar gaps
+            // IMPORTANTE: Processar áudio mesmo quando não há novos samples na fila
+            // Isso garante que frames completos no buffer sejam processados continuamente
+            {
+                std::unique_lock<std::mutex> lock(m_audioMutex);
+                // Processar todos os samples da fila primeiro
+                size_t samplesPerFrame = m_ffmpeg.audioFrameSize * m_channels;
+                // Usar tamanho configurável do buffer
+                size_t maxBufferSize = samplesPerFrame * m_audioBufferSizeFrames;
+
+                while (!m_audioSamples.empty())
+                {
+                    std::vector<int16_t> audioData = std::move(m_audioSamples.front());
+                    m_audioSamples.pop();
+
+                    // IMPORTANTE: Limitar tamanho do buffer para evitar perda de samples
+                    // Buffer configurável para absorver variações sem descartar samples
+                    // Apenas descartar se realmente estiver muito cheio (evitar perda de dados)
+                    if (m_audioBuffer.size() > maxBufferSize)
+                    {
+                        // Descartar samples antigos apenas se realmente necessário (manter 90% do tamanho)
+                        size_t keepSize = samplesPerFrame * (m_audioBufferSizeFrames * 9 / 10);
+                        m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.end() - keepSize);
+                    }
+
+                    // Adicionar ao buffer de acumulação
+                    m_audioBuffer.insert(m_audioBuffer.end(), audioData.begin(), audioData.end());
+                }
+
+                // Processar TODOS os frames completos do buffer de acumulação
+                // IMPORTANTE: Processar todos os frames disponíveis para evitar skipping e perda de informações
+                // Não limitar o número de frames processados para garantir que nada seja perdido
+                while (m_audioBuffer.size() >= samplesPerFrame)
+                {
+                    // Extrair um frame completo
+                    std::vector<int16_t> frameSamples(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame);
+                    m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame);
+
+                    // Processar o frame (fora do lock)
+                    lock.unlock();
+                    encodeAudioFrame(frameSamples.data(), frameSamples.size());
+                    lock.lock();
+
+                    processedAudio = true;
+                }
+            }
+        }
+
+        // Processar vídeo após áudio para manter sincronização
+        // Vídeo tem latência menor, então pode ser processado depois
         if (hasVideo)
         {
             std::vector<uint8_t> frameData;
@@ -785,58 +889,60 @@ void HTTPTSStreamer::encodingThread()
             }
         }
 
-        // Processar áudio após vídeo para manter sincronização
-        if (hasAudio)
-        {
-            // Processar todos os samples disponíveis para evitar atraso
-            while (true)
-            {
-                std::vector<int16_t> audioData;
-
-                {
-                    std::lock_guard<std::mutex> lock(m_audioMutex);
-                    if (!m_audioSamples.empty())
-                    {
-                        audioData = std::move(m_audioSamples.front());
-                        m_audioSamples.pop();
-                    }
-                    else
-                    {
-                        break; // Não há mais samples na fila
-                    }
-                }
-
-                if (!audioData.empty())
-                {
-                    encodeAudioFrame(audioData.data(), audioData.size());
-                }
-            }
-
-            // Também tentar processar frames completos do buffer de acumulação
-            // Mesmo sem novos samples, pode haver frames completos esperando
-            {
-                std::lock_guard<std::mutex> lock(m_audioMutex);
-                size_t samplesPerFrame = m_ffmpeg.audioFrameSize * m_channels;
-                if (m_audioBuffer.size() >= samplesPerFrame)
-                {
-                    // Há frames completos - processar chamando encodeAudioFrame com dados vazios
-                    // Isso vai processar o buffer de acumulação
-                    encodeAudioFrame(nullptr, 0);
-                }
-            }
-        }
-
-        // Fazer flush periódico para garantir que dados pendentes sejam enviados
+        // Fazer flush após processar dados para garantir envio imediato
+        // Isso é crítico para reduzir buffering no cliente
         AVFormatContext *fmtCtx = static_cast<AVFormatContext *>(m_ffmpeg.formatCtx);
-        if (fmtCtx && fmtCtx->pb)
+        if (fmtCtx && fmtCtx->pb && (hasVideo || processedAudio))
         {
             avio_flush(fmtCtx->pb);
         }
 
-        // If no data available, sleep briefly
-        if (!hasVideo && !hasAudio)
+        // IMPORTANTE: Controlar taxa de processamento para evitar enviar muito rápido
+        // Se processamos vídeo, fazer um pequeno sleep para não sobrecarregar
+        // Isso ajuda a manter a sincronização e evitar que o player fique esperando
+        if (hasVideo || processedAudio)
         {
-            usleep(1000); // 1ms
+            // Calcular tempo esperado para este frame baseado na taxa de FPS
+            // Para vídeo: 1/fps segundos por frame
+            // Para áudio: samples/sample_rate segundos por frame
+            // Usar o menor dos dois para não atrasar
+            int64_t expectedFrameTimeUs = 0;
+            if (hasVideo)
+            {
+                expectedFrameTimeUs = 1000000LL / m_fps; // Microsegundos por frame de vídeo
+            }
+            else if (processedAudio)
+            {
+                // Tempo de um frame de áudio
+                int64_t audioFrameTimeUs = (m_ffmpeg.audioFrameSize * 1000000LL) / m_sampleRate;
+                expectedFrameTimeUs = audioFrameTimeUs;
+            }
+
+            // Se processamos muito rápido, fazer um pequeno sleep para manter taxa correta
+            // Mas não fazer sleep muito longo para não causar atraso
+            if (expectedFrameTimeUs > 0)
+            {
+                // Sleep de 50% do tempo esperado para manter taxa mas não bloquear muito
+                usleep(expectedFrameTimeUs / 2);
+            }
+        }
+        else
+        {
+            // Se não há dados, fazer sleep muito curto para manter o loop responsivo
+            // Mas sempre processar áudio se houver frames completos no buffer
+            // Verificar se há frames completos de áudio no buffer mesmo sem novos samples
+            bool hasCompleteAudioFrame = false;
+            {
+                std::lock_guard<std::mutex> lock(m_audioMutex);
+                size_t samplesPerFrame = m_ffmpeg.audioFrameSize * m_channels;
+                hasCompleteAudioFrame = (m_audioBuffer.size() >= samplesPerFrame);
+            }
+
+            if (!hasCompleteAudioFrame)
+            {
+                usleep(1000); // 1ms - manter loop responsivo
+            }
+            // Se há frame completo, continuar processando sem sleep
         }
     }
 }
@@ -871,17 +977,36 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     }
 
     // Set frame properties
-    // Usar PTS baseado no frame number para garantir continuidade
-    videoFrame->pts = m_ffmpeg.videoPts;
-    // Incrementar PTS baseado no time_base do codec
-    int64_t ptsIncrement = av_rescale_q(1, {1, static_cast<int>(m_fps)}, videoCodecCtx->time_base);
-    m_ffmpeg.videoPts += ptsIncrement;
+    // IMPORTANTE: Usar clock baseado em tempo real para sincronização correta com áudio
+    // Mas garantir que PTS sempre aumente baseado em frame count para evitar problemas
+    // Calcular PTS baseado no tempo decorrido desde o início (mesmo clock do áudio)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t currentTimeUs = (int64_t)(ts.tv_sec * 1000000LL + ts.tv_nsec / 1000);
+    int64_t elapsedTimeUs = currentTimeUs - m_ffmpeg.startTime;
+
+    // Converter tempo decorrido para PTS no time_base do codec
+    // elapsedTimeUs está em microsegundos, converter para time_base do codec
+    AVRational timeBase = videoCodecCtx->time_base;
+    int64_t ptsInTimeBase = av_rescale_q(elapsedTimeUs, {1, 1000000}, timeBase);
+
+    // IMPORTANTE: Garantir que PTS sempre aumente (mesmo que tempo real seja igual)
+    // Usar incremento baseado em frame count como fallback
+    if (m_ffmpeg.videoPts >= ptsInTimeBase)
+    {
+        // Se PTS calculado não aumentou, incrementar baseado em frame count
+        int64_t ptsIncrement = av_rescale_q(1, {1, static_cast<int>(m_fps)}, timeBase);
+        ptsInTimeBase = m_ffmpeg.videoPts + ptsIncrement;
+    }
+
+    videoFrame->pts = ptsInTimeBase;
+    m_ffmpeg.videoPts = ptsInTimeBase;
 
     // Garantir que o PTS não seja negativo
     if (videoFrame->pts < 0)
     {
         videoFrame->pts = 0;
-        m_ffmpeg.videoPts = ptsIncrement;
+        m_ffmpeg.videoPts = 0;
     }
 
     // Encode frame
@@ -915,11 +1040,51 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         pkt->stream_index = videoStream->index;
         // Rescalar PTS para o time_base do stream
         av_packet_rescale_ts(pkt, videoCodecCtx->time_base, videoStream->time_base);
-        // Garantir que DTS <= PTS para evitar problemas de buffering
+
+        // Garantir que DTS <= PTS (necessário para MPEG-TS)
+        if (pkt->dts == AV_NOPTS_VALUE)
+        {
+            pkt->dts = pkt->pts;
+        }
         if (pkt->dts > pkt->pts)
         {
             pkt->dts = pkt->pts;
         }
+        // Garantir que DTS não seja negativo
+        if (pkt->dts < 0)
+        {
+            pkt->dts = pkt->pts;
+        }
+
+        // IMPORTANTE: Garantir que DTS seja monotônico (sempre aumentando estritamente)
+        // O muxer MPEG-TS requer DTS estritamente crescente (não pode ser igual)
+        // IMPORTANTE: Verificar ANTES de atualizar lastVideoDts
+        if (m_ffmpeg.lastVideoDts >= 0)
+        {
+            // Calcular incremento mínimo baseado no time_base do stream
+            AVRational streamTimeBase = videoStream->time_base;
+            int64_t minDtsIncrement = av_rescale_q(1, {1, static_cast<int>(m_fps)}, streamTimeBase);
+            if (minDtsIncrement <= 0)
+            {
+                minDtsIncrement = 1; // Garantir pelo menos 1
+            }
+
+            // CRÍTICO: Garantir que DTS seja sempre MAIOR que o anterior (não igual)
+            // O erro "non monotonically increasing" ocorre quando DTS é igual ao anterior
+            if (pkt->dts <= m_ffmpeg.lastVideoDts)
+            {
+                pkt->dts = m_ffmpeg.lastVideoDts + minDtsIncrement;
+            }
+
+            // Se DTS foi ajustado, garantir que PTS >= DTS
+            if (pkt->pts < pkt->dts)
+            {
+                pkt->pts = pkt->dts;
+            }
+        }
+        // Atualizar lastVideoDts APÓS todas as verificações
+        m_ffmpeg.lastVideoDts = pkt->dts;
+
         muxPacket(pkt);
 
         av_packet_unref(pkt);
@@ -946,145 +1111,192 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         return false;
     }
 
-    // Adicionar samples ao buffer de acumulação (se fornecidos)
-    if (sampleCount > 0 && samples)
+    // IMPORTANTE: Esta função agora apenas processa UM frame completo de samples
+    // O encodingThread já processa todos os frames do buffer
+    // Esta função é chamada apenas com um frame completo já extraído do buffer
+    // Não processar o buffer aqui para evitar duplicação e skipping
+
+    if (sampleCount == 0 || !samples)
     {
-        std::lock_guard<std::mutex> lock(m_audioMutex);
-        m_audioBuffer.insert(m_audioBuffer.end(), samples, samples + sampleCount);
+        return false;
     }
 
-    // Acumular samples no buffer até ter um frame completo
-    // AAC geralmente precisa de 1024 samples por canal (2048 samples total para stereo)
+    // Verificar se temos samples suficientes para um frame completo
     size_t samplesPerFrame = m_ffmpeg.audioFrameSize * m_channels;
-
-    // Processar frames completos
-    bool encoded = false;
-    while (true)
+    if (sampleCount < samplesPerFrame)
     {
-        size_t availableSamples = 0;
-        {
-            std::lock_guard<std::mutex> lock(m_audioMutex);
-            availableSamples = m_audioBuffer.size();
-        }
+        // Não temos samples suficientes - retornar false mas não processar
+        return false;
+    }
 
-        if (availableSamples < samplesPerFrame)
-        {
-            break; // Não há samples suficientes para um frame completo
-        }
+    // Usar apenas os samples necessários para um frame completo
+    std::vector<int16_t> frameSamples(samplesPerFrame);
+    std::copy(samples, samples + samplesPerFrame, frameSamples.begin());
 
-        // Extrair um frame completo
-        std::vector<int16_t> frameSamples(samplesPerFrame);
-        {
-            std::lock_guard<std::mutex> lock(m_audioMutex);
-            std::copy(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame, frameSamples.begin());
-            m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesPerFrame);
-        }
+    // Resample and convert audio
+    // IMPORTANTE: swr_convert espera samples de entrada no formato de entrada (S16)
+    // e converte para o formato de saída (FLTP para AAC)
+    const uint8_t *srcData[1] = {reinterpret_cast<const uint8_t *>(frameSamples.data())};
+    const int srcSampleCount = static_cast<int>(m_ffmpeg.audioFrameSize); // Samples de entrada
 
-        // Resample and convert audio
-        // IMPORTANTE: swr_convert espera samples de entrada no formato de entrada (S16)
-        // e converte para o formato de saída (FLTP para AAC)
-        const uint8_t *srcData[1] = {reinterpret_cast<const uint8_t *>(frameSamples.data())};
-        const int srcSampleCount = static_cast<int>(m_ffmpeg.audioFrameSize); // Samples de entrada
+    // Garantir que o frame está configurado corretamente
+    audioFrame->nb_samples = m_ffmpeg.audioFrameSize;
 
-        // Garantir que o frame está configurado corretamente
-        audioFrame->nb_samples = m_ffmpeg.audioFrameSize;
+    int ret = swr_convert(swrCtx, audioFrame->data, audioFrame->nb_samples,
+                          srcData, srcSampleCount);
+    if (ret < 0)
+    {
+        char errbuf[256];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        LOG_ERROR("Falha ao converter áudio: " + std::string(errbuf));
+        return false;
+    }
 
-        int ret = swr_convert(swrCtx, audioFrame->data, audioFrame->nb_samples,
-                              srcData, srcSampleCount);
-        if (ret < 0)
-        {
-            char errbuf[256];
-            av_strerror(ret, errbuf, sizeof(errbuf));
-            LOG_ERROR("Falha ao converter áudio: " + std::string(errbuf));
-            break;
-        }
+    if (ret == 0)
+    {
+        // Nenhum sample convertido, pode ser um problema
+        return false;
+    }
 
-        if (ret == 0)
-        {
-            // Nenhum sample convertido, pode ser um problema
-            break;
-        }
+    // Ajustar nb_samples se necessário (geralmente ret == audioFrameSize)
+    if (ret != m_ffmpeg.audioFrameSize)
+    {
+        audioFrame->nb_samples = ret;
+    }
 
-        // Ajustar nb_samples se necessário (geralmente ret == audioFrameSize)
-        if (ret != m_ffmpeg.audioFrameSize)
-        {
-            audioFrame->nb_samples = ret;
-        }
+    // Set frame properties
+    // IMPORTANTE: Usar clock baseado em tempo real para sincronização correta com vídeo
+    // Mas garantir que PTS sempre aumente baseado em sample count para evitar problemas
+    // Calcular PTS baseado no tempo decorrido desde o início (mesmo clock do vídeo)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t currentTimeUs = (int64_t)(ts.tv_sec * 1000000LL + ts.tv_nsec / 1000);
+    int64_t elapsedTimeUs = currentTimeUs - m_ffmpeg.startTime;
 
-        // Set frame properties
-        // PTS baseado no número de samples de entrada processados
-        // O PTS deve refletir o tempo real baseado nos samples de entrada
-        audioFrame->pts = m_ffmpeg.audioPts;
-        // Incrementar PTS baseado no número de samples de ENTRADA processados
-        // m_ffmpeg.audioFrameSize é o número de samples por frame (entrada e saída são iguais neste caso)
-        // O PTS é incrementado pelo número de samples processados
-        int64_t samplesConsumed = m_ffmpeg.audioFrameSize; // Samples de entrada consumidos (por canal)
-        // Para stereo, temos samplesConsumed * 2 samples totais, mas o PTS é por sample
-        m_ffmpeg.audioPts += samplesConsumed;
+    // Converter tempo decorrido para PTS no time_base do codec de áudio
+    // elapsedTimeUs está em microsegundos, converter para time_base do codec
+    AVRational timeBase = audioCodecCtx->time_base;
+    int64_t ptsInTimeBase = av_rescale_q(elapsedTimeUs, {1, 1000000}, timeBase);
 
-        // Garantir que o PTS não seja negativo
-        if (audioFrame->pts < 0)
-        {
-            audioFrame->pts = 0;
-            m_ffmpeg.audioPts = samplesConsumed;
-        }
+    // IMPORTANTE: Garantir que PTS sempre aumente (mesmo que tempo real seja igual)
+    // Usar incremento baseado em sample count como fallback
+    int64_t ptsIncrement = av_rescale_q(m_ffmpeg.audioFrameSize, {1, static_cast<int>(m_sampleRate)}, timeBase);
+    if (ptsIncrement <= 0)
+    {
+        ptsIncrement = 1; // Garantir pelo menos 1
+    }
 
-        // Encode frame
-        AVPacket *pkt = av_packet_alloc();
-        if (!pkt)
-        {
-            break;
-        }
+    if (m_ffmpeg.audioPts >= ptsInTimeBase)
+    {
+        // Se PTS calculado não aumentou, incrementar baseado em sample count
+        ptsInTimeBase = m_ffmpeg.audioPts + ptsIncrement;
+    }
 
-        ret = avcodec_send_frame(audioCodecCtx, audioFrame);
-        if (ret < 0)
-        {
-            char errbuf[256];
-            av_strerror(ret, errbuf, sizeof(errbuf));
-            LOG_ERROR("Falha ao enviar frame de áudio para encoder: " + std::string(errbuf));
-            av_packet_free(&pkt);
-            break;
-        }
+    audioFrame->pts = ptsInTimeBase;
+    m_ffmpeg.audioPts = ptsInTimeBase;
 
-        while (ret >= 0)
-        {
-            ret = avcodec_receive_packet(audioCodecCtx, pkt);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-            {
-                break;
-            }
-            else if (ret < 0)
-            {
-                char errbuf[256];
-                av_strerror(ret, errbuf, sizeof(errbuf));
-                LOG_ERROR("Falha ao receber pacote de áudio do encoder: " + std::string(errbuf));
-                av_packet_free(&pkt);
-                return false;
-            }
+    // Atualizar contador de samples processados para referência
+    m_ffmpeg.audioSamplesProcessed += m_ffmpeg.audioFrameSize;
 
-            // Mux packet
-            pkt->stream_index = audioStream->index;
-            // Rescalar PTS para o time_base do stream
-            av_packet_rescale_ts(pkt, audioCodecCtx->time_base, audioStream->time_base);
-            // Garantir que DTS <= PTS para evitar problemas de buffering
-            if (pkt->dts > pkt->pts)
-            {
-                pkt->dts = pkt->pts;
-            }
-            // Garantir que DTS não seja negativo
-            if (pkt->dts < 0)
-            {
-                pkt->dts = pkt->pts;
-            }
-            muxPacket(pkt);
+    // Garantir que o PTS não seja negativo
+    if (audioFrame->pts < 0)
+    {
+        audioFrame->pts = 0;
+        m_ffmpeg.audioPts = 0;
+    }
 
-            av_packet_unref(pkt);
-        }
+    // Encode frame
+    AVPacket *pkt = av_packet_alloc();
+    if (!pkt)
+    {
+        return false;
+    }
 
+    ret = avcodec_send_frame(audioCodecCtx, audioFrame);
+    if (ret < 0)
+    {
+        char errbuf[256];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        LOG_ERROR("Falha ao enviar frame de áudio para encoder: " + std::string(errbuf));
         av_packet_free(&pkt);
+        return false;
+    }
+
+    bool encoded = false;
+    while (ret >= 0)
+    {
+        ret = avcodec_receive_packet(audioCodecCtx, pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        {
+            break;
+        }
+        else if (ret < 0)
+        {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            LOG_ERROR("Falha ao receber pacote de áudio do encoder: " + std::string(errbuf));
+            av_packet_free(&pkt);
+            return false;
+        }
+
+        // Mux packet
+        pkt->stream_index = audioStream->index;
+
+        // IMPORTANTE: O encoder já define PTS e DTS no time_base do codec
+        // Rescalar para o time_base do stream antes de muxar
+        av_packet_rescale_ts(pkt, audioCodecCtx->time_base, audioStream->time_base);
+
+        // Garantir que DTS <= PTS (necessário para MPEG-TS)
+        if (pkt->dts == AV_NOPTS_VALUE)
+        {
+            pkt->dts = pkt->pts;
+        }
+        if (pkt->dts > pkt->pts)
+        {
+            pkt->dts = pkt->pts;
+        }
+        // Garantir que DTS não seja negativo
+        if (pkt->dts < 0)
+        {
+            pkt->dts = pkt->pts;
+        }
+
+        // IMPORTANTE: Garantir que DTS seja monotônico (sempre aumentando estritamente)
+        // O muxer MPEG-TS requer DTS estritamente crescente (não pode ser igual)
+        // IMPORTANTE: Verificar ANTES de atualizar lastAudioDts
+        if (m_ffmpeg.lastAudioDts >= 0)
+        {
+            // Calcular incremento mínimo baseado no time_base do stream
+            AVRational streamTimeBase = audioStream->time_base;
+            int64_t minDtsIncrement = av_rescale_q(m_ffmpeg.audioFrameSize, {1, static_cast<int>(m_sampleRate)}, streamTimeBase);
+            if (minDtsIncrement <= 0)
+            {
+                minDtsIncrement = 1; // Garantir pelo menos 1
+            }
+
+            // CRÍTICO: Garantir que DTS seja sempre MAIOR que o anterior (não igual)
+            // O erro "non monotonically increasing" ocorre quando DTS é igual ao anterior
+            if (pkt->dts <= m_ffmpeg.lastAudioDts)
+            {
+                pkt->dts = m_ffmpeg.lastAudioDts + minDtsIncrement;
+            }
+
+            // Se DTS foi ajustado, garantir que PTS >= DTS
+            if (pkt->pts < pkt->dts)
+            {
+                pkt->pts = pkt->dts;
+            }
+        }
+        // Atualizar lastAudioDts APÓS todas as verificações
+        m_ffmpeg.lastAudioDts = pkt->dts;
+
+        muxPacket(pkt);
+
+        av_packet_unref(pkt);
         encoded = true;
     }
 
+    av_packet_free(&pkt);
     return encoded;
 }
 
@@ -1114,19 +1326,12 @@ bool HTTPTSStreamer::muxPacket(void *packet)
         return false;
     }
 
-    // Flush imediato e agressivo do AVIO context para forçar envio aos clientes
-    // Isso é crítico para reduzir latência mesmo com intercalação
+    // Flush imediato após cada pacote para garantir envio contínuo
+    // Isso é crítico para reduzir buffering no cliente
     AVIOContext *pb = formatCtx->pb;
     if (pb)
     {
-        // Flush múltiplas vezes para garantir que todos os dados sejam enviados
         avio_flush(pb);
-        // Também forçar flush do buffer interno se existir
-        if (pb->buf_end > pb->buf_ptr)
-        {
-            // Há dados no buffer - forçar escrita
-            avio_flush(pb);
-        }
     }
 
     return true;
@@ -1139,15 +1344,19 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         return -1;
     }
 
-    std::lock_guard<std::mutex> lock(m_outputMutex);
-
-    // Send to all connected clients
-    // Enviar em chunks pequenos para evitar bloqueios e reduzir latência
-    auto it = m_clientSockets.begin();
-    while (it != m_clientSockets.end())
+    // Copiar lista de sockets para evitar manter o lock por muito tempo
+    std::vector<int> clientSocketsCopy;
     {
-        int clientFd = *it;
+        std::lock_guard<std::mutex> lock(m_outputMutex);
+        clientSocketsCopy = m_clientSockets;
+    }
 
+    // Enviar para todos os clientes sem manter o lock
+    // Isso evita bloquear o callback do FFmpeg por muito tempo
+    std::vector<int> disconnectedClients;
+
+    for (int clientFd : clientSocketsCopy)
+    {
         // Enviar todos os dados, garantindo que tudo seja enviado
         const uint8_t *data = buf;
         size_t remaining = buf_size;
@@ -1159,20 +1368,30 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             if (sent < 0)
             {
                 // Erro ao enviar - cliente desconectado
-                // Remover da lista e decrementar contador (já estamos com o lock)
-                close(clientFd);
-                it = m_clientSockets.erase(it);
-                uint32_t countAfter = --m_clientCount;
-                LOG_INFO("Cliente HTTP MPEG-TS desconectado (erro ao enviar dados, total: " + std::to_string(countAfter) + ")");
-                goto next_client;
+                disconnectedClients.push_back(clientFd);
+                break;
             }
 
             data += sent;
             remaining -= sent;
         }
+    }
 
-        ++it;
-    next_client:;
+    // Remover clientes desconectados (com lock)
+    if (!disconnectedClients.empty())
+    {
+        std::lock_guard<std::mutex> lock(m_outputMutex);
+        for (int clientFd : disconnectedClients)
+        {
+            auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
+            if (it != m_clientSockets.end())
+            {
+                close(clientFd);
+                m_clientSockets.erase(it);
+                uint32_t countAfter = --m_clientCount;
+                LOG_INFO("Cliente HTTP MPEG-TS desconectado (erro ao enviar dados, total: " + std::to_string(countAfter) + ")");
+            }
+        }
     }
 
     return buf_size;

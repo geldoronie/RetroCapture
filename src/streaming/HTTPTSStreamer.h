@@ -37,6 +37,7 @@ public:
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);
     void setVideoCodec(const std::string& codecName); // "h264", "h265", "vp8", "vp9", etc
     void setAudioCodec(const std::string& codecName); // "aac", "mp3", "opus", etc
+    void setAudioBufferSize(uint32_t frames) { m_audioBufferSizeFrames = frames; } // Tamanho do buffer em frames
     
     // Public for static callback
     int writeToClients(const uint8_t* buf, int buf_size);
@@ -65,6 +66,7 @@ private:
     // Audio format
     uint32_t m_sampleRate = 44100;
     uint32_t m_channels = 2;
+    uint32_t m_audioBufferSizeFrames = 50; // Tamanho do buffer de áudio em frames (padrão: 50 = ~1 segundo a 48kHz)
     
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
@@ -88,6 +90,15 @@ private:
         void* swrCtx = nullptr; // SwrContext*
         int64_t audioPts = 0;
         int audioFrameSize = 0;
+        
+        // Clock para sincronização
+        int64_t startTime = 0; // Tempo de início em microsegundos
+        int64_t audioSamplesProcessed = 0; // Total de samples de áudio processados
+        
+        // Contadores para garantir DTS monotônico
+        // Usar -1 como valor inicial (equivalente a AV_NOPTS_VALUE)
+        int64_t lastVideoDts = -1;
+        int64_t lastAudioDts = -1;
         
         // Muxing
         void* formatCtx = nullptr; // AVFormatContext*
