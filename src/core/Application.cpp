@@ -474,16 +474,14 @@ bool Application::initUI()
     m_ui->setOnFullscreenChanged([this](bool fullscreen)
                                  {
         LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
+        // IMPORTANTE: Fazer mudança de fullscreen de forma assíncrona para evitar travamento
+        // O callback de resize será chamado automaticamente pelo GLFW quando a janela mudar
+        // Não fazer operações bloqueantes aqui
         if (m_window) {
-            m_window->setFullscreen(fullscreen, m_monitorIndex);
             m_fullscreen = fullscreen;
-            
-            // Atualizar viewport do shader engine após mudança de fullscreen
-            if (m_shaderEngine) {
-                uint32_t currentWidth = m_window->getWidth();
-                uint32_t currentHeight = m_window->getHeight();
-                m_shaderEngine->setViewport(currentWidth, currentHeight);
-            }
+            // A mudança de fullscreen será feita no próximo frame do loop principal
+            // para evitar deadlocks e travamentos
+            m_pendingFullscreenChange = true;
         } });
 
     m_ui->setOnMonitorIndexChanged([this](int monitorIndex)
@@ -1067,6 +1065,15 @@ void Application::run()
     {
         m_window->pollEvents();
 
+        // Processar mudança de fullscreen pendente (fora do callback para evitar deadlock)
+        if (m_pendingFullscreenChange && m_window)
+        {
+            m_pendingFullscreenChange = false;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            // O callback de resize será chamado automaticamente pelo GLFW
+            // Não fazer setViewport aqui para evitar bloqueios
+        }
+
         // IMPORTANTE: Captura, processamento e streaming sempre continuam,
         // independente do foco da janela. Isso garante que o streaming funcione
         // mesmo quando a janela não está em foco.
@@ -1298,7 +1305,7 @@ void Application::run()
                                 // ler diretamente e fazer o flip depois
                                 glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
                                              GL_RGB, GL_UNSIGNED_BYTE, frameData.data());
-                                
+
                                 // IMPORTANTE: Fazer flip vertical (OpenGL lê de baixo para cima)
                                 // Fazer flip de forma eficiente - trocar linhas inteiras usando swap
                                 size_t rowSize = static_cast<size_t>(windowWidth) * 3;
@@ -1307,7 +1314,7 @@ void Application::run()
                                     uint32_t oppositeRow = windowHeight - 1 - row;
                                     uint8_t *row1 = frameData.data() + (row * rowSize);
                                     uint8_t *row2 = frameData.data() + (oppositeRow * rowSize);
-                                    
+
                                     // Trocar linhas inteiras usando std::swap_ranges (mais eficiente)
                                     std::swap_ranges(row1, row1 + rowSize, row2);
                                 }

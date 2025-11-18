@@ -193,10 +193,10 @@ void WindowManager::setFullscreen(bool fullscreen, int monitorIndex) {
     m_width = fbWidth > 0 ? fbWidth : m_width;
     m_height = fbHeight > 0 ? fbHeight : m_height;
     
-    // Chamar callback de resize para atualizar viewport
-    if (m_resizeCallback) {
-        m_resizeCallback(m_width, m_height);
-    }
+    // IMPORTANTE: Não chamar callback de resize diretamente aqui
+    // O GLFW já chama o callback de resize automaticamente quando a janela muda
+    // Chamar aqui pode causar deadlock ou travamento
+    // O callback será chamado pelo GLFW no próximo pollEvents()
 }
 
 

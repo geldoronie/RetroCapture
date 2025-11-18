@@ -100,6 +100,7 @@ private:
     uint32_t m_windowWidth = 1920;
     uint32_t m_windowHeight = 1080;
     bool m_fullscreen = false;
+    bool m_pendingFullscreenChange = false; // Flag para mudança de fullscreen pendente
     int m_monitorIndex = -1; // -1 = usar monitor primário
     bool m_maintainAspect = false;
     float m_brightness = 1.0f;
