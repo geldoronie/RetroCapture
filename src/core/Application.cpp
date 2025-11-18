@@ -1290,30 +1290,27 @@ void Application::run()
                             {
                                 frameData.resize(frameDataSize);
 
-                                // IMPORTANTE: Configurar alinhamento antes de ler
-                                // Usar alinhamento de 1 byte para evitar padding
-                                // Isso garante que cada linha seja lida contiguamente
-                                // Nota: Assumimos que GLAD foi carregado e essas funções estão disponíveis
-                                // Se não estiverem, precisaremos incluir os headers corretos
-
-                                // Ler pixels (o alinhamento padrão do OpenGL pode causar problemas)
-                                // Vamos ler linha por linha para garantir que não há padding
-                                // IMPORTANTE: OpenGL lê do bottom-left, então lemos de baixo para cima
-                                // mas armazenamos de cima para baixo (row 0 = topo da imagem)
+                                // IMPORTANTE: Ler tudo de uma vez é muito mais rápido que linha por linha
+                                // OpenGL lê do bottom-left, então precisamos fazer flip vertical depois
+                                // Mas isso é mais rápido que ler linha por linha
+                                // Configurar alinhamento para evitar padding (se disponível via GLAD)
+                                // Nota: glPixelStorei pode não estar disponível diretamente, então vamos
+                                // ler diretamente e fazer o flip depois
+                                glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
+                                             GL_RGB, GL_UNSIGNED_BYTE, frameData.data());
+                                
+                                // IMPORTANTE: Fazer flip vertical (OpenGL lê de baixo para cima)
+                                // Fazer flip de forma eficiente - trocar linhas inteiras usando swap
                                 size_t rowSize = static_cast<size_t>(windowWidth) * 3;
-                                for (uint32_t row = 0; row < windowHeight; row++)
+                                for (uint32_t row = 0; row < windowHeight / 2; row++)
                                 {
-                                    // Ler uma linha por vez para evitar problemas de padding
-                                    // OpenGL pode adicionar padding no final de cada linha se não configurarmos corretamente
-                                    // Ler da linha mais baixa (windowHeight - 1) para a mais alta (0)
-                                    // e armazenar na ordem correta (row 0 = topo)
-                                    glReadPixels(0, static_cast<GLint>(windowHeight - 1 - row),
-                                                 static_cast<GLsizei>(windowWidth), 1,
-                                                 GL_RGB, GL_UNSIGNED_BYTE,
-                                                 frameData.data() + (row * rowSize));
+                                    uint32_t oppositeRow = windowHeight - 1 - row;
+                                    uint8_t *row1 = frameData.data() + (row * rowSize);
+                                    uint8_t *row2 = frameData.data() + (oppositeRow * rowSize);
+                                    
+                                    // Trocar linhas inteiras usando std::swap_ranges (mais eficiente)
+                                    std::swap_ranges(row1, row1 + rowSize, row2);
                                 }
-                                // IMPORTANTE: frameData agora está na ordem correta (topo no índice 0)
-                                // Não precisamos fazer flip vertical depois
                             }
 
                             // Process the frame data (só se leitura foi bem-sucedida)

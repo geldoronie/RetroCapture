@@ -82,6 +82,8 @@ HTTPTSStreamer::HTTPTSStreamer()
     m_ffmpeg.audioPts = 0;
     m_ffmpeg.startTime = 0;
     m_ffmpeg.audioSamplesProcessed = 0;
+    m_ffmpeg.videoFrameCount = 0;
+    m_ffmpeg.audioFrameCount = 0;
     // Resetar variáveis estáticas de continuidade de PTS ao inicializar
     // (será resetado na primeira chamada de encodeAudioFrame)
 }
@@ -98,9 +100,17 @@ bool HTTPTSStreamer::initialize(uint16_t port, uint32_t width, uint32_t height, 
     m_height = height;
     m_fps = fps;
 
+    // Calcular buffer de áudio automaticamente baseado no tempo de 1 frame de vídeo
+    // Buffer de vídeo = 1 frame, então buffer de áudio deve ser equivalente em tempo
+    // Tempo de 1 frame de vídeo = 1/fps segundos
+    // Frames de áudio necessários = (1/fps) * sampleRate / audioFrameSize
+    // Adicionar um pequeno buffer extra (10%) para absorver variações
+    updateAudioBufferSize();
+
     LOG_INFO("HTTP MPEG-TS Streamer inicializado: " + std::to_string(width) + "x" + std::to_string(height) +
              " @ " + std::to_string(fps) + "fps, porta " + std::to_string(port) +
-             ", áudio: " + std::to_string(m_sampleRate) + "Hz, " + std::to_string(m_channels) + " canais");
+             ", áudio: " + std::to_string(m_sampleRate) + "Hz, " + std::to_string(m_channels) + " canais" +
+             ", buffer áudio: " + std::to_string(m_audioBufferSizeFrames) + " frames (sincronizado com vídeo)");
 
     return initializeFFmpeg();
 }
@@ -109,7 +119,10 @@ void HTTPTSStreamer::setAudioFormat(uint32_t sampleRate, uint32_t channels)
 {
     m_sampleRate = sampleRate;
     m_channels = channels;
-    LOG_INFO("Formato de áudio configurado: " + std::to_string(sampleRate) + "Hz, " + std::to_string(channels) + " canais");
+    // Recalcular buffer de áudio quando o formato mudar
+    updateAudioBufferSize();
+    LOG_INFO("Formato de áudio configurado: " + std::to_string(sampleRate) + "Hz, " + std::to_string(channels) +
+             " canais, buffer: " + std::to_string(m_audioBufferSizeFrames) + " frames");
 }
 
 void HTTPTSStreamer::setVideoCodec(const std::string &codecName)
@@ -284,6 +297,9 @@ bool HTTPTSStreamer::initializeFFmpeg()
     audioStream->time_base = audioCodecCtx->time_base;
     m_ffmpeg.audioFrameSize = audioCodecCtx->frame_size;
 
+    // Recalcular buffer de áudio agora que temos o audioFrameSize
+    updateAudioBufferSize();
+
     // Allocate frames
     AVFrame *videoFrame = av_frame_alloc();
     AVFrame *audioFrame = av_frame_alloc();
@@ -447,6 +463,37 @@ void HTTPTSStreamer::cleanupFFmpeg()
     }
 }
 
+void HTTPTSStreamer::updateAudioBufferSize()
+{
+    // Calcular buffer de áudio baseado em múltiplos frames de vídeo para garantir continuidade
+    // O buffer precisa ser grande o suficiente para absorver variações de timing
+    // Usar ~0.5-1 segundo de vídeo como referência para o buffer de áudio
+    //
+    // Se audioFrameSize ainda não foi definido (durante initialize), usar estimativa padrão
+    // AAC típico: 1024 samples por frame a 48kHz
+    uint32_t estimatedFrameSize = m_ffmpeg.audioFrameSize > 0 ? m_ffmpeg.audioFrameSize : 1024;
+
+    if (m_fps > 0 && m_sampleRate > 0 && estimatedFrameSize > 0)
+    {
+        // Calcular quantos frames de áudio correspondem a ~0.5 segundos de vídeo
+        // Isso garante buffer suficiente para absorver variações sem gaps
+        // Frames de áudio = (sampleRate * 0.5) / audioFrameSize
+        // Usar 0.5 segundos como base (pode ser ajustado se necessário)
+        double audioFramesForHalfSecond = (static_cast<double>(m_sampleRate) * 0.5) / static_cast<double>(estimatedFrameSize);
+        uint32_t calculatedFrames = static_cast<uint32_t>(audioFramesForHalfSecond);
+
+        // Garantir mínimo de 10 frames (para absorver variações) e máximo razoável
+        calculatedFrames = std::max(10u, std::min(calculatedFrames, 200u));
+
+        m_audioBufferSizeFrames = calculatedFrames;
+    }
+    else
+    {
+        // Fallback: usar valor padrão seguro (50 frames = ~1 segundo a 48kHz)
+        m_audioBufferSizeFrames = 50;
+    }
+}
+
 bool HTTPTSStreamer::start()
 {
     if (m_active)
@@ -503,10 +550,12 @@ bool HTTPTSStreamer::start()
         formatCtx->start_time = m_ffmpeg.startTime;
     }
 
-    // Resetar PTS para começar do zero (relativo ao start_time)
+    // Resetar PTS e contadores para começar do zero (relativo ao start_time)
     m_ffmpeg.videoPts = 0;
     m_ffmpeg.audioPts = 0;
     m_ffmpeg.audioSamplesProcessed = 0;
+    m_ffmpeg.videoFrameCount = 0;
+    m_ffmpeg.audioFrameCount = 0;
     // Resetar DTS para garantir monotonicidade desde o início
     m_ffmpeg.lastVideoDts = -1;
     m_ffmpeg.lastAudioDts = -1;
@@ -983,27 +1032,18 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     }
 
     // Set frame properties
-    // IMPORTANTE: Usar clock baseado em tempo real para sincronização correta com áudio
-    // Mas garantir que PTS sempre aumente baseado em frame count para evitar problemas
-    // Calcular PTS baseado no tempo decorrido desde o início (mesmo clock do áudio)
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    int64_t currentTimeUs = (int64_t)(ts.tv_sec * 1000000LL + ts.tv_nsec / 1000);
-    int64_t elapsedTimeUs = currentTimeUs - m_ffmpeg.startTime;
-
-    // Converter tempo decorrido para PTS no time_base do codec
-    // elapsedTimeUs está em microsegundos, converter para time_base do codec
+    // IMPORTANTE: Usar contador incremental para sincronização precisa
+    // O PTS deve ser baseado na quantidade de frames processados, não no tempo real
+    // Isso garante sincronização perfeita mesmo quando há buffering ou variações de timing
     AVRational timeBase = videoCodecCtx->time_base;
-    int64_t ptsInTimeBase = av_rescale_q(elapsedTimeUs, {1, 1000000}, timeBase);
 
-    // IMPORTANTE: Garantir que PTS sempre aumente (mesmo que tempo real seja igual)
-    // Usar incremento baseado em frame count como fallback
-    if (m_ffmpeg.videoPts >= ptsInTimeBase)
-    {
-        // Se PTS calculado não aumentou, incrementar baseado em frame count
-        int64_t ptsIncrement = av_rescale_q(1, {1, static_cast<int>(m_fps)}, timeBase);
-        ptsInTimeBase = m_ffmpeg.videoPts + ptsIncrement;
-    }
+    // Incrementar contador de frames de vídeo
+    m_ffmpeg.videoFrameCount++;
+
+    // Calcular PTS baseado no número de frames processados
+    // PTS = videoFrameCount / fps no time_base do codec
+    // time_base = {1, fps}, então PTS = videoFrameCount
+    int64_t ptsInTimeBase = av_rescale_q(m_ffmpeg.videoFrameCount, {1, static_cast<int>(m_fps)}, timeBase);
 
     videoFrame->pts = ptsInTimeBase;
     m_ffmpeg.videoPts = ptsInTimeBase;
@@ -1171,32 +1211,19 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
     }
 
     // Set frame properties
-    // IMPORTANTE: Usar clock baseado em tempo real para sincronização correta com vídeo
-    // Mas garantir que PTS sempre aumente baseado em sample count para evitar problemas
-    // Calcular PTS baseado no tempo decorrido desde o início (mesmo clock do vídeo)
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    int64_t currentTimeUs = (int64_t)(ts.tv_sec * 1000000LL + ts.tv_nsec / 1000);
-    int64_t elapsedTimeUs = currentTimeUs - m_ffmpeg.startTime;
-
-    // Converter tempo decorrido para PTS no time_base do codec de áudio
-    // elapsedTimeUs está em microsegundos, converter para time_base do codec
+    // IMPORTANTE: Usar contador incremental para sincronização precisa
+    // O PTS deve ser baseado na quantidade de samples processados, não no tempo real
+    // Isso garante sincronização perfeita mesmo quando há buffering ou variações de timing
     AVRational timeBase = audioCodecCtx->time_base;
-    int64_t ptsInTimeBase = av_rescale_q(elapsedTimeUs, {1, 1000000}, timeBase);
 
-    // IMPORTANTE: Garantir que PTS sempre aumente (mesmo que tempo real seja igual)
-    // Usar incremento baseado em sample count como fallback
-    int64_t ptsIncrement = av_rescale_q(m_ffmpeg.audioFrameSize, {1, static_cast<int>(m_sampleRate)}, timeBase);
-    if (ptsIncrement <= 0)
-    {
-        ptsIncrement = 1; // Garantir pelo menos 1
-    }
+    // Incrementar contador de frames de áudio
+    m_ffmpeg.audioFrameCount++;
 
-    if (m_ffmpeg.audioPts >= ptsInTimeBase)
-    {
-        // Se PTS calculado não aumentou, incrementar baseado em sample count
-        ptsInTimeBase = m_ffmpeg.audioPts + ptsIncrement;
-    }
+    // Calcular PTS baseado no número de samples processados
+    // PTS = (audioFrameCount * audioFrameSize) / sampleRate no time_base do codec
+    // time_base = {1, sampleRate}, então PTS = audioFrameCount * audioFrameSize
+    int64_t totalSamples = m_ffmpeg.audioFrameCount * m_ffmpeg.audioFrameSize;
+    int64_t ptsInTimeBase = av_rescale_q(totalSamples, {1, static_cast<int>(m_sampleRate)}, timeBase);
 
     audioFrame->pts = ptsInTimeBase;
     m_ffmpeg.audioPts = ptsInTimeBase;

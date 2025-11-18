@@ -180,7 +180,7 @@ private:
     int m_streamingQuality = 85;
     std::string m_streamingVideoCodec = "h264";
     std::string m_streamingAudioCodec = "aac";
-    uint32_t m_streamingAudioBufferSize = 50; // Tamanho do buffer de áudio em frames
+    uint32_t m_streamingAudioBufferSize = 1; // Tamanho do buffer de áudio em frames
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;

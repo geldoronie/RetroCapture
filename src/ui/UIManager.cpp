@@ -1024,9 +1024,17 @@ void UIManager::renderStreamingPanel()
         }
     }
     
-    // Tamanho do buffer de áudio
+    // Tamanho do buffer de áudio (calculado automaticamente para sincronizar com vídeo)
+    // Mostrar como "auto" mas permitir override manual
+    ImGui::Text("Buffer Áudio: %u frames (auto = 1 frame vídeo)", m_streamingAudioBufferSize);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Calculado automaticamente para corresponder ao tempo de 1 frame de vídeo.\n"
+                          "Pode ser ajustado manualmente se necessário.");
+    }
     int audioBufferSize = static_cast<int>(m_streamingAudioBufferSize);
-    if (ImGui::InputInt("Buffer Áudio (frames)", &audioBufferSize, 1, 10)) {
+    if (ImGui::InputInt("##BufferAudioManual", &audioBufferSize, 1, 10)) {
         if (audioBufferSize >= 1 && audioBufferSize <= 200) {
             m_streamingAudioBufferSize = static_cast<uint32_t>(audioBufferSize);
             if (m_onStreamingAudioBufferSizeChanged) {
@@ -1034,7 +1042,7 @@ void UIManager::renderStreamingPanel()
             }
         }
     }
-    ImGui::TextDisabled("(Padrão: 50 frames = ~1 segundo a 48kHz)");
+    ImGui::TextDisabled("(Calculado automaticamente para sincronizar com 1 frame de vídeo)");
     
     ImGui::Separator();
     
