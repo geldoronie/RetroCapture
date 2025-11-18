@@ -538,12 +538,15 @@ void HTTPTSStreamer::stop()
         return;
     }
 
+    // IMPORTANTE: Sinalizar parada primeiro para que as threads possam terminar
     m_running = false;
     m_active = false;
 
     // Close server socket to wake up accept()
+    // IMPORTANTE: Fazer isso ANTES do join para garantir que accept() seja interrompido
     if (m_serverSocket >= 0)
     {
+        shutdown(m_serverSocket, SHUT_RDWR); // Shutdown antes de close para garantir que accept() seja interrompido
         close(m_serverSocket);
         m_serverSocket = -1;
     }
@@ -551,6 +554,9 @@ void HTTPTSStreamer::stop()
     // Reset client count when stopping
     m_clientCount.store(0);
 
+    // IMPORTANTE: Fazer join das threads (devem terminar rapidamente após m_running = false)
+    // O shutdown do socket deve ter acordado accept(), então serverThread deve terminar rapidamente
+    // O encodingThread deve terminar no próximo loop quando verificar m_running = false
     if (m_serverThread.joinable())
     {
         m_serverThread.join();

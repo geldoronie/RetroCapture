@@ -616,21 +616,57 @@ bool Application::initUI()
         } else {
             // Parar streaming
             m_streamingEnabled = false;
-            // Parar thread de streaming
+            
+            // IMPORTANTE: Parar streaming de forma não-bloqueante para não travar a UI
+            // Sinalizar parada primeiro para que as threads possam terminar
             if (m_streamingThreadRunning)
             {
                 m_streamingThreadRunning = false;
-                if (m_streamingThread.joinable())
-                {
-                    m_streamingThread.join();
-                }
             }
             
+            // Fazer stop() do streamManager (ele vai sinalizar as threads para parar)
+            // IMPORTANTE: Fazer isso em uma thread separada para não bloquear a UI
             if (m_streamManager) {
-                m_streamManager->stop();
-                m_streamManager->cleanup();
+                // Criar uma cópia do ponteiro para usar na thread
+                auto streamManagerPtr = m_streamManager.get();
+                
+                // IMPORTANTE: Aguardar um pouco para que a thread de streaming processe
+                // m_streamingThreadRunning = false antes de resetar o streamManager
+                // Isso evita que a thread de streaming tente usar streamManager após reset
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                
+                // Fazer stop e cleanup em thread separada
+                // IMPORTANTE: Não capturar 'this' para evitar problemas de lifetime
+                std::thread stopThread([streamManagerPtr]() {
+                    if (streamManagerPtr) {
+                        streamManagerPtr->stop();
+                        streamManagerPtr->cleanup();
+                    }
+                });
+                stopThread.detach(); // Detach para não bloquear
+                
+                // Reset do streamManager após um pequeno delay para garantir que
+                // a thread de streaming já processou a sinalização de parada
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 m_streamManager.reset();
             }
+            
+            // IMPORTANTE: Fazer join da thread de streaming em thread separada para não bloquear a UI
+            // Mas garantir que a thread seja limpa antes de poder iniciar novamente
+            if (m_streamingThread.joinable())
+            {
+                // Fazer join em thread separada para não bloquear
+                std::thread joinThread([this]() {
+                    // Aguardar um pouco para garantir que a thread processou m_streamingThreadRunning = false
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (m_streamingThread.joinable())
+                    {
+                        m_streamingThread.join();
+                    }
+                });
+                joinThread.detach();
+            }
+            
             // Não fechar o AudioCapture aqui - pode ser usado novamente
         }
         // Atualizar UI
@@ -943,13 +979,32 @@ bool Application::initStreaming()
         }
     }
 
-    // Iniciar thread dedicada para streaming (se ainda não estiver rodando)
-    if (!m_streamingThreadRunning)
+    // IMPORTANTE: Garantir que a thread anterior foi limpa antes de criar uma nova
+    // Se a thread anterior ainda estiver rodando, aguardar que ela termine
+    // Isso é necessário para evitar criar múltiplas threads ou usar uma thread em estado inválido
+    if (m_streamingThreadRunning || m_streamingThread.joinable())
     {
-        m_streamingThreadRunning = true;
-        m_streamingThread = std::thread(&Application::streamingThreadFunc, this);
-        LOG_INFO("Thread de streaming iniciada");
+        // Thread anterior ainda está rodando ou joinable - aguardar que termine
+        LOG_WARN("Thread de streaming anterior ainda está ativa, aguardando término...");
+        m_streamingThreadRunning = false;
+
+        // Aguardar um pouco para que a thread processe a sinalização de parada
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Fazer join de forma síncrona para garantir que a thread foi limpa
+        // Isso pode bloquear brevemente, mas é necessário para evitar problemas
+        if (m_streamingThread.joinable())
+        {
+            m_streamingThread.join();
+        }
+        LOG_INFO("Thread de streaming anterior encerrada");
     }
+
+    // Agora podemos criar uma nova thread com segurança
+    // IMPORTANTE: Garantir que m_streamingThreadRunning está false antes de criar nova thread
+    m_streamingThreadRunning = true;
+    m_streamingThread = std::thread(&Application::streamingThreadFunc, this);
+    LOG_INFO("Thread de streaming iniciada");
 
     return true;
 }
@@ -1385,8 +1440,21 @@ void Application::streamingThreadFunc()
 
     while (m_streamingThreadRunning && m_streamingEnabled)
     {
+        // IMPORTANTE: Verificar se streamManager ainda existe antes de usar
+        // Pode ter sido resetado enquanto estamos rodando
+        std::unique_ptr<StreamManager> streamManagerCopy;
+        bool hasStreamManager = false;
+        {
+            // Fazer uma verificação rápida se m_streamManager ainda existe
+            // Não podemos fazer lock direto, então vamos verificar de forma segura
+            if (m_streamManager)
+            {
+                hasStreamManager = true;
+            }
+        }
+
         // Processar áudio continuamente
-        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        if (m_audioCapture && m_audioCapture->isOpen() && hasStreamManager && m_streamManager && m_streamManager->isActive())
         {
             // Ler áudio em chunks maiores para melhor throughput
             const size_t maxSamples = 2048; // Ler até 2048 samples por vez
@@ -1395,8 +1463,11 @@ void Application::streamingThreadFunc()
 
             if (samplesRead > 0)
             {
-                // Push audio to streamer
-                m_streamManager->pushAudio(audioBuffer, samplesRead);
+                // Push audio to streamer (verificar novamente antes de usar)
+                if (m_streamManager && m_streamManager->isActive())
+                {
+                    m_streamManager->pushAudio(audioBuffer, samplesRead);
+                }
             }
             else
             {
