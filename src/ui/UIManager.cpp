@@ -931,7 +931,7 @@ void UIManager::renderStreamingPanel()
     }
     
     int width = static_cast<int>(m_streamingWidth);
-    if (ImGui::InputInt("Largura (0 = janela)", &width, 1, 100)) {
+    if (ImGui::InputInt("Largura (0 = captura)", &width, 1, 100)) {
         if (width >= 0 && width <= 7680) {
             m_streamingWidth = static_cast<uint32_t>(width);
             if (m_onStreamingWidthChanged) {
@@ -941,7 +941,7 @@ void UIManager::renderStreamingPanel()
     }
     
     int height = static_cast<int>(m_streamingHeight);
-    if (ImGui::InputInt("Altura (0 = janela)", &height, 1, 100)) {
+    if (ImGui::InputInt("Altura (0 = captura)", &height, 1, 100)) {
         if (height >= 0 && height <= 4320) {
             m_streamingHeight = static_cast<uint32_t>(height);
             if (m_onStreamingHeightChanged) {

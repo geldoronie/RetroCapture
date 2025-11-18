@@ -900,9 +900,10 @@ bool Application::initStreaming()
 
     m_streamManager = std::make_unique<StreamManager>();
 
-    // Determine stream dimensions and FPS
-    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_window ? m_window->getWidth() : m_windowWidth);
-    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_window ? m_window->getHeight() : m_windowHeight);
+    // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
+    // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
+    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
     // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
@@ -1253,9 +1254,10 @@ void Application::run()
                 }
                 else
                 {
-                    // Determine stream dimensions (may be different from window)
-                    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : windowWidth;
-                    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : windowHeight;
+                    // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
+                    // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
+                    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+                    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
 
                     // Validate stream dimensions
                     if (streamWidth == 0 || streamHeight == 0 || streamWidth > 7680 || streamHeight > 4320)
