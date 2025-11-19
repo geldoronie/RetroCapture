@@ -902,7 +902,7 @@ bool Application::initStreaming()
     {
         LOG_INFO("Parando thread de streaming anterior...");
         m_streamingThreadRunning = false;
-        
+
         // Aguardar que a thread termine
         if (m_streamingThread.joinable())
         {
@@ -911,7 +911,7 @@ bool Application::initStreaming()
             m_streamingThread.join();
         }
     }
-    
+
     // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
     // Isso previne problemas de double free quando há mudanças de configuração
     if (m_streamManager)
@@ -924,7 +924,7 @@ bool Application::initStreaming()
         }
         m_streamManager->cleanup();
         m_streamManager.reset();
-        
+
         // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
         // e recursos foram liberados antes de criar um novo StreamManager
         usleep(100000); // 100ms
@@ -958,7 +958,7 @@ bool Application::initStreaming()
     tsStreamer->setAudioCodec(m_streamingAudioCodec);
 
     // Configurar tamanho do buffer de áudio
-    tsStreamer->setAudioBufferSize(m_streamingAudioBufferSize);
+    // setAudioBufferSize removido - buffer é gerenciado automaticamente (OBS style)
 
     // Configurar formato de áudio para corresponder ao AudioCapture
     if (m_audioCapture && m_audioCapture->isOpen())
@@ -1319,11 +1319,11 @@ void Application::run()
                                 size_t rowSizeUnpadded = static_cast<size_t>(windowWidth) * 3;
                                 size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4; // Alinhar para múltiplo de 4
                                 size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(windowHeight);
-                                
+
                                 // Alocar buffer com padding para leitura
                                 std::vector<uint8_t> frameDataWithPadding;
                                 frameDataWithPadding.resize(totalSizeWithPadding);
-                                
+
                                 // Ler pixels com padding
                                 glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
                                              GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
@@ -1337,10 +1337,10 @@ void Application::run()
                                     uint32_t srcRow = windowHeight - 1 - row;
                                     // Linha de destino (de cima para baixo)
                                     uint32_t dstRow = row;
-                                    
+
                                     const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
                                     uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
-                                    
+
                                     // Copiar linha sem padding
                                     memcpy(dstPtr, srcPtr, rowSizeUnpadded);
                                 }
@@ -1489,7 +1489,7 @@ void Application::streamingThreadFunc()
         if (m_audioCapture && m_audioCapture->isOpen() && hasStreamManager && m_streamManager && m_streamManager->isActive())
         {
             // Ler áudio em chunks maiores para melhor throughput
-            const size_t maxSamples = 2048; // Ler até 2048 samples por vez
+            const size_t maxSamples = 512; // Ler até 2048 samples por vez
             int16_t audioBuffer[maxSamples];
             size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
 
@@ -1504,13 +1504,13 @@ void Application::streamingThreadFunc()
             else
             {
                 // Sem samples disponíveis, fazer um pequeno sleep
-                usleep(1000); // 1ms
+                usleep(10); // 10us
             }
         }
         else
         {
             // Sem captura de áudio ativa, fazer sleep maior
-            usleep(10000); // 10ms
+            usleep(10); // 10us
         }
     }
 
