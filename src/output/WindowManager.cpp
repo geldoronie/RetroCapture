@@ -176,11 +176,18 @@ void WindowManager::setFullscreen(bool fullscreen, int monitorIndex) {
         }
         
         if (monitor) {
+            // IMPORTANTE: Desabilitar auto-iconify para evitar que a janela minimize quando perder o foco
+            // Isso permite que a aplicação permaneça em fullscreen mesmo quando o usuário interage com outras janelas
+            glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
+            
             const GLFWvidmode* mode = glfwGetVideoMode(monitor);
             glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
         }
     } else {
         // Sair do fullscreen (voltar para windowed)
+        // Reabilitar auto-iconify quando sair do fullscreen (comportamento padrão)
+        glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+        
         // Usar dimensões anteriores ou padrão
         int width = m_width > 0 ? m_width : 1280;
         int height = m_height > 0 ? m_height : 720;
