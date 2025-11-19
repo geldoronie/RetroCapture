@@ -98,6 +98,8 @@ public:
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
+    bool m_configWindowVisible = true; // Janela de configuração visível por padrão
+    bool m_configWindowJustOpened = true; // Flag para aplicar posição/tamanho inicial apenas quando aberta
     GLFWwindow *m_window = nullptr;
 
     // Shader selection

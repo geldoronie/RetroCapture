@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 
 UIManager::UIManager()
 {
@@ -41,6 +42,18 @@ bool UIManager::init(GLFWwindow *window)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Configurar nome do arquivo de configuração para usar o nome da aplicação
+    io.IniFilename = "RetroCapture.ini";
+    
+    // Remover apenas o arquivo de configuração antigo (imgui.ini) se existir
+    // O RetroCapture.ini pode ser criado normalmente
+    std::string oldIniPath = "imgui.ini";
+    if (std::filesystem::exists(oldIniPath))
+    {
+        std::filesystem::remove(oldIniPath);
+        LOG_INFO("Arquivo de configuração antigo removido: " + oldIniPath);
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -68,6 +81,15 @@ void UIManager::shutdown()
     if (!m_initialized)
     {
         return;
+    }
+
+    // Remover apenas o arquivo antigo (imgui.ini) se ainda existir
+    // O RetroCapture.ini pode ser mantido
+    std::string oldIniPath = "imgui.ini";
+    if (std::filesystem::exists(oldIniPath))
+    {
+        std::filesystem::remove(oldIniPath);
+        LOG_INFO("Arquivo de configuração antigo removido no shutdown: " + oldIniPath);
     }
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -118,12 +140,8 @@ void UIManager::render()
         return;
     }
 
-    // Main window
-    ImGui::Begin("RetroCapture Controls", &m_uiVisible,
-                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_MenuBar);
-
-    // Menu bar
-    if (ImGui::BeginMenuBar())
+    // Main menu bar fixo no topo
+    if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
@@ -145,50 +163,92 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Toggle UI", "F12"))
             {
-                m_uiVisible = false;
+                m_uiVisible = !m_uiVisible;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Configuration", nullptr, m_configWindowVisible))
+            {
+                m_configWindowVisible = !m_configWindowVisible;
+                // Quando a janela é aberta, marcar para aplicar posição/tamanho inicial
+                if (m_configWindowVisible)
+                {
+                    m_configWindowJustOpened = true;
+                }
             }
             ImGui::EndMenu();
         }
-        ImGui::EndMenuBar();
+        ImGui::EndMainMenuBar();
     }
 
-    // Tabs
-    if (ImGui::BeginTabBar("MainTabs"))
+    // Renderizar janela de configuração apenas se estiver visível
+    if (m_configWindowVisible)
     {
-        if (ImGui::BeginTabItem("Shaders"))
+        // Aplicar posição e tamanho inicial apenas quando a janela é aberta
+        if (m_configWindowJustOpened)
         {
-            renderShaderPanel();
-            ImGui::EndTabItem();
+            // Obter altura do menu bar para posicionar a janela abaixo dele
+            float menuBarHeight = ImGui::GetFrameHeight();
+            
+            // Obter dimensões da viewport
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImVec2 workPos = viewport->WorkPos;
+            
+            // Definir posição inicial: um pouco abaixo do menu bar
+            ImVec2 initialPos(workPos.x + 10.0f, workPos.y + menuBarHeight + 10.0f);
+            
+            // Definir tamanho inicial menor que 640x480 (usar 600x400 para caber em resoluções menores)
+            ImVec2 initialSize(600.0f, 400.0f);
+            
+            // Configurar posição e tamanho inicial (ignora o que está salvo no .ini)
+            ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
+            
+            m_configWindowJustOpened = false;
         }
+        
+        // Janela flutuante redimensionável
+        // Usar ImGuiWindowFlags_NoSavedSettings para não salvar posição/tamanho no .ini
+        ImGui::Begin("RetroCapture Controls", &m_configWindowVisible,
+                     ImGuiWindowFlags_NoSavedSettings);
 
-        if (ImGui::BeginTabItem("Image"))
+        // Tabs
+        if (ImGui::BeginTabBar("MainTabs"))
         {
-            renderImageControls();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Shaders"))
+            {
+                renderShaderPanel();
+                ImGui::EndTabItem();
+            }
 
-        if (ImGui::BeginTabItem("V4L2"))
-        {
-            renderV4L2Controls();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Image"))
+            {
+                renderImageControls();
+                ImGui::EndTabItem();
+            }
 
-        if (ImGui::BeginTabItem("Info"))
-        {
-            renderInfoPanel();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("V4L2"))
+            {
+                renderV4L2Controls();
+                ImGui::EndTabItem();
+            }
 
-        if (ImGui::BeginTabItem("Streaming"))
-        {
-            renderStreamingPanel();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Info"))
+            {
+                renderInfoPanel();
+                ImGui::EndTabItem();
+            }
 
-        ImGui::EndTabBar();
+            if (ImGui::BeginTabItem("Streaming"))
+            {
+                renderStreamingPanel();
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+        
+        ImGui::End();
     }
-
-    ImGui::End();
 }
 
 void UIManager::renderShaderPanel()
