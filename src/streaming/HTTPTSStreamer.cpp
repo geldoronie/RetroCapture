@@ -100,10 +100,23 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
 
     std::lock_guard<std::mutex> lock(m_videoMutex);
 
-    // Limitar tamanho da fila
-    while (m_videoQueue.size() >= MAX_VIDEO_QUEUE_SIZE)
+    // Se a fila estiver muito cheia, logar mas NÃO descartar
+    // O encodingThread vai processar e liberar espaço
+    if (m_videoQueue.size() >= MAX_VIDEO_QUEUE_SIZE)
     {
-        m_videoQueue.pop(); // Descartar frame mais antigo
+        // Log apenas ocasionalmente para não spammar
+        static int logCounter = 0;
+        if (logCounter++ % 60 == 0)
+        {
+            LOG_INFO("Fila de vídeo cheia (" + std::to_string(m_videoQueue.size()) + " frames), aguardando processamento...");
+        }
+        // NÃO descartar - aguardar que o encodingThread processe
+        // Se realmente não couber, o frame será perdido, mas isso é melhor que descartar frames antigos
+        if (m_videoQueue.size() >= MAX_VIDEO_QUEUE_SIZE * 2)
+        {
+            // Apenas em caso extremo (fila 2x maior que o máximo), descartar o mais antigo
+            m_videoQueue.pop();
+        }
     }
 
     // Adicionar frame
@@ -1411,23 +1424,45 @@ void HTTPTSStreamer::encodingThread()
         // Processar frame de vídeo se passou tempo suficiente
         if (elapsedUs >= videoFrameIntervalUs)
         {
-            // 1. Processar frame de vídeo
-            VideoFrame videoFrame;
-            bool hasVideo = false;
-
+            // Processar TODOS os frames disponíveis até alcançar a taxa correta
+            // Se estamos atrasados, processar múltiplos frames para recuperar
+            int framesToProcess = 1;
+            if (elapsedUs > videoFrameIntervalUs * 2)
             {
-                std::lock_guard<std::mutex> videoLock(m_videoMutex);
-                if (!m_videoQueue.empty())
+                // Se estamos muito atrasados, processar múltiplos frames
+                framesToProcess = static_cast<int>(elapsedUs / videoFrameIntervalUs);
+                framesToProcess = std::min(framesToProcess, 5); // Limitar a 5 frames por vez
+            }
+
+            int framesProcessed = 0;
+            for (int i = 0; i < framesToProcess; i++)
+            {
+                VideoFrame videoFrame;
+                bool hasVideo = false;
+
                 {
-                    videoFrame = std::move(m_videoQueue.front());
-                    m_videoQueue.pop();
-                    hasVideo = true;
+                    std::lock_guard<std::mutex> videoLock(m_videoMutex);
+                    if (!m_videoQueue.empty())
+                    {
+                        videoFrame = std::move(m_videoQueue.front());
+                        m_videoQueue.pop();
+                        hasVideo = true;
+                    }
+                }
+
+                if (hasVideo)
+                {
+                    encodeVideoFrame(videoFrame.data.data(), videoFrame.width, videoFrame.height);
+                    framesProcessed++;
+                }
+                else
+                {
+                    break; // Não há mais frames
                 }
             }
 
-            if (hasVideo)
+            if (framesProcessed > 0)
             {
-                encodeVideoFrame(videoFrame.data.data(), videoFrame.width, videoFrame.height);
                 clock_gettime(CLOCK_MONOTONIC, &lastVideoTime);
             }
             else

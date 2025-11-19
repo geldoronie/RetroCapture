@@ -124,7 +124,7 @@ private:
     };
     std::mutex m_videoMutex;
     std::queue<VideoFrame> m_videoQueue;
-    static constexpr size_t MAX_VIDEO_QUEUE_SIZE = 60; // Máximo de frames na fila (aumentado para evitar descarte)
+    static constexpr size_t MAX_VIDEO_QUEUE_SIZE = 120; // Máximo de frames na fila (aumentado para evitar descarte)
 
     // Buffer de áudio: acumulador contínuo de samples
     std::mutex m_audioMutex;
