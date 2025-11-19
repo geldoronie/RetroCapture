@@ -49,6 +49,7 @@ private:
     void encodingThread();
     bool initializeFFmpeg();
     void cleanupFFmpeg();
+    void flushCodecs(); // Flush codecs antes de fechar (envia NULL e recebe todos os pacotes pendentes)
     bool encodeVideoFrame(const uint8_t* rgbData, uint32_t width, uint32_t height);
     bool encodeAudioFrame(const int16_t* samples, size_t sampleCount);
     bool muxPacket(void* packet); // AVPacket* - using void* to avoid including FFmpeg headers in .h
@@ -71,6 +72,7 @@ private:
     
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_cleanedUp{false}; // Flag para evitar cleanup duplicado
     std::thread m_serverThread;
     std::thread m_encodingThread;
     

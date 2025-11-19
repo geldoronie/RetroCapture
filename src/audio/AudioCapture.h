@@ -79,6 +79,7 @@ private:
     pa_context* m_context;
     pa_stream* m_stream;
     uint32_t m_virtualSinkIndex; // Index do sink virtual criado
+    uint32_t m_moduleIndex; // Index do módulo PulseAudio carregado (para remoção)
     
     // Audio format
     uint32_t m_sampleRate;

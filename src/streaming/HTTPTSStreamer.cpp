@@ -86,6 +86,7 @@ HTTPTSStreamer::HTTPTSStreamer()
     m_ffmpeg.audioFrameCount = 0;
     // Resetar variáveis estáticas de continuidade de PTS ao inicializar
     // (será resetado na primeira chamada de encodeAudioFrame)
+    m_cleanedUp = false;
 }
 
 HTTPTSStreamer::~HTTPTSStreamer()
@@ -139,6 +140,15 @@ void HTTPTSStreamer::setAudioCodec(const std::string &codecName)
 
 bool HTTPTSStreamer::initializeFFmpeg()
 {
+    // IMPORTANTE: Verificar se já foi inicializado para evitar double initialization
+    if (m_ffmpeg.formatCtx || m_ffmpeg.videoCodecCtx || m_ffmpeg.audioCodecCtx)
+    {
+        LOG_WARN("FFmpeg já foi inicializado - limpando antes de reinicializar...");
+        cleanupFFmpeg();
+        // Aguardar um pouco para garantir que o cleanup terminou
+        usleep(50000); // 50ms
+    }
+    
     // Initialize format context for MPEG-TS
     // Usar buffer mínimo (1 pacote TS) para forçar envio imediato
     m_ffmpeg.formatBufferSize = 188; // 1 pacote TS (188 bytes) - mínimo possível
@@ -150,22 +160,41 @@ bool HTTPTSStreamer::initializeFFmpeg()
     }
 
     // Criar AVIO context com write callback
-    // O buffer será usado pelo FFmpeg para escrever dados
+    // IMPORTANTE: Passar nullptr como buffer e deixar o FFmpeg alocar seu próprio buffer
+    // Isso evita problemas de double free e gerenciamento de memória
     AVIOContext *ioCtx = avio_alloc_context(
-        m_ffmpeg.formatBuffer, m_ffmpeg.formatBufferSize, 1, this,
+        nullptr, // buffer - FFmpeg alocará seu próprio buffer
+        m_ffmpeg.formatBufferSize, 1, this,
         nullptr,           // read function (not needed for output)
         avioWriteCallback, // write function
         nullptr);          // seek function (not needed)
 
     // Configurar para não usar buffer interno do AVIO (write imediato)
-    ioCtx->write_flag = 1;
-    ioCtx->direct = 1;            // Modo direto - escreve imediatamente sem buffering
-    ioCtx->min_packet_size = 188; // Tamanho mínimo de pacote TS
+    if (ioCtx)
+    {
+        ioCtx->write_flag = 1;
+        ioCtx->direct = 1;            // Modo direto - escreve imediatamente sem buffering
+        ioCtx->min_packet_size = 188; // Tamanho mínimo de pacote TS
+    }
 
     if (!ioCtx)
     {
         LOG_ERROR("Falha ao criar AVIO context");
+        // Liberar buffer se não conseguimos criar o contexto
+        if (m_ffmpeg.formatBuffer)
+        {
+            av_free(m_ffmpeg.formatBuffer);
+            m_ffmpeg.formatBuffer = nullptr;
+        }
         return false;
+    }
+
+    // IMPORTANTE: Como não estamos usando o formatBuffer, podemos liberá-lo
+    // O FFmpeg gerenciará seu próprio buffer interno
+    if (m_ffmpeg.formatBuffer)
+    {
+        av_free(m_ffmpeg.formatBuffer);
+        m_ffmpeg.formatBuffer = nullptr;
     }
 
     // Allocate format context
@@ -404,6 +433,14 @@ bool HTTPTSStreamer::initializeFFmpeg()
 
 void HTTPTSStreamer::cleanupFFmpeg()
 {
+    // IMPORTANTE: Verificar se já foi limpo para evitar double free
+    if (!m_ffmpeg.swsCtx && !m_ffmpeg.swrCtx && !m_ffmpeg.videoFrame &&
+        !m_ffmpeg.audioFrame && !m_ffmpeg.videoCodecCtx && !m_ffmpeg.audioCodecCtx &&
+        !m_ffmpeg.formatCtx && !m_ffmpeg.formatBuffer)
+    {
+        return; // Já foi limpo
+    }
+
     if (m_ffmpeg.swsCtx)
     {
         sws_freeContext(static_cast<SwsContext *>(m_ffmpeg.swsCtx));
@@ -413,6 +450,8 @@ void HTTPTSStreamer::cleanupFFmpeg()
     if (m_ffmpeg.swrCtx)
     {
         SwrContext *swrCtx = static_cast<SwrContext *>(m_ffmpeg.swrCtx);
+        // IMPORTANTE: swr_free() pode ser chamado mesmo se swr_init() não foi chamado
+        // Mas precisamos garantir que não há operações pendentes
         swr_free(&swrCtx);
         m_ffmpeg.swrCtx = nullptr;
     }
@@ -450,16 +489,172 @@ void HTTPTSStreamer::cleanupFFmpeg()
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_ffmpeg.formatCtx);
         if (formatCtx->pb)
         {
+            // IMPORTANTE: avio_context_free() já libera o buffer interno
+            // Não precisamos liberar formatBuffer separadamente
+            // O buffer é gerenciado pelo AVIOContext, então não devemos liberá-lo manualmente
             avio_context_free(&formatCtx->pb);
+            formatCtx->pb = nullptr;
         }
         avformat_free_context(formatCtx);
         m_ffmpeg.formatCtx = nullptr;
     }
 
-    if (m_ffmpeg.formatBuffer)
+    // IMPORTANTE: Não liberar formatBuffer aqui - ele é gerenciado pelo AVIOContext
+    // Se o AVIOContext foi liberado acima, o buffer também foi liberado
+    // Liberar aqui causaria double free
+    m_ffmpeg.formatBuffer = nullptr;
+}
+
+void HTTPTSStreamer::flushCodecs()
+{
+    // IMPORTANTE: Fazer flush dos codecs para processar todos os frames pendentes
+    // Isso previne o erro "frames left in the queue on closing"
+    AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_ffmpeg.formatCtx);
+    AVCodecContext *videoCodecCtx = static_cast<AVCodecContext *>(m_ffmpeg.videoCodecCtx);
+    AVCodecContext *audioCodecCtx = static_cast<AVCodecContext *>(m_ffmpeg.audioCodecCtx);
+    AVStream *videoStream = static_cast<AVStream *>(m_ffmpeg.videoStream);
+    AVStream *audioStream = static_cast<AVStream *>(m_ffmpeg.audioStream);
+
+    if (!formatCtx || !videoCodecCtx || !audioCodecCtx)
     {
-        av_free(m_ffmpeg.formatBuffer);
-        m_ffmpeg.formatBuffer = nullptr;
+        return; // Codecs não inicializados
+    }
+
+    // Flush video codec
+    if (videoCodecCtx && videoStream)
+    {
+        // Enviar NULL para indicar fim do stream
+        int ret = avcodec_send_frame(videoCodecCtx, nullptr);
+        if (ret >= 0)
+        {
+            // Receber todos os pacotes pendentes
+            AVPacket *pkt = av_packet_alloc();
+            if (pkt)
+            {
+                while (ret >= 0)
+                {
+                    ret = avcodec_receive_packet(videoCodecCtx, pkt);
+                    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                    {
+                        break;
+                    }
+                    else if (ret >= 0)
+                    {
+                        // Mux packet
+                        pkt->stream_index = videoStream->index;
+                        av_packet_rescale_ts(pkt, videoCodecCtx->time_base, videoStream->time_base);
+                        
+                        // Garantir DTS válido
+                        if (pkt->dts == AV_NOPTS_VALUE)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        if (pkt->dts > pkt->pts)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        if (pkt->dts < 0)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        
+                        // Garantir monotonicidade do DTS
+                        if (pkt->dts <= m_ffmpeg.lastVideoDts)
+                        {
+                            pkt->dts = m_ffmpeg.lastVideoDts + 1;
+                        }
+                        if (pkt->pts < pkt->dts)
+                        {
+                            pkt->pts = pkt->dts;
+                        }
+                        m_ffmpeg.lastVideoDts = pkt->dts;
+                        
+                        // Mux
+                        ret = av_interleaved_write_frame(formatCtx, pkt);
+                        if (ret < 0)
+                        {
+                            char errbuf[256];
+                            av_strerror(ret, errbuf, sizeof(errbuf));
+                            LOG_ERROR("Falha ao muxar pacote de vídeo durante flush: " + std::string(errbuf));
+                        }
+                        av_packet_unref(pkt);
+                    }
+                }
+                av_packet_free(&pkt);
+            }
+        }
+    }
+
+    // Flush audio codec
+    if (audioCodecCtx && audioStream)
+    {
+        // Enviar NULL para indicar fim do stream
+        int ret = avcodec_send_frame(audioCodecCtx, nullptr);
+        if (ret >= 0)
+        {
+            // Receber todos os pacotes pendentes
+            AVPacket *pkt = av_packet_alloc();
+            if (pkt)
+            {
+                while (ret >= 0)
+                {
+                    ret = avcodec_receive_packet(audioCodecCtx, pkt);
+                    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                    {
+                        break;
+                    }
+                    else if (ret >= 0)
+                    {
+                        // Mux packet
+                        pkt->stream_index = audioStream->index;
+                        av_packet_rescale_ts(pkt, audioCodecCtx->time_base, audioStream->time_base);
+                        
+                        // Garantir DTS válido
+                        if (pkt->dts == AV_NOPTS_VALUE)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        if (pkt->dts > pkt->pts)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        if (pkt->dts < 0)
+                        {
+                            pkt->dts = pkt->pts;
+                        }
+                        
+                        // Garantir monotonicidade do DTS
+                        if (pkt->dts <= m_ffmpeg.lastAudioDts)
+                        {
+                            pkt->dts = m_ffmpeg.lastAudioDts + 1;
+                        }
+                        if (pkt->pts < pkt->dts)
+                        {
+                            pkt->pts = pkt->dts;
+                        }
+                        m_ffmpeg.lastAudioDts = pkt->dts;
+                        
+                        // Mux
+                        ret = av_interleaved_write_frame(formatCtx, pkt);
+                        if (ret < 0)
+                        {
+                            char errbuf[256];
+                            av_strerror(ret, errbuf, sizeof(errbuf));
+                            LOG_ERROR("Falha ao muxar pacote de áudio durante flush: " + std::string(errbuf));
+                        }
+                        av_packet_unref(pkt);
+                    }
+                }
+                av_packet_free(&pkt);
+            }
+        }
+    }
+
+    // Fazer flush final do formato
+    if (formatCtx && formatCtx->pb)
+    {
+        av_write_trailer(formatCtx);
+        avio_flush(formatCtx->pb);
     }
 }
 
@@ -582,7 +777,9 @@ bool HTTPTSStreamer::start()
 
 void HTTPTSStreamer::stop()
 {
-    if (!m_active)
+    // IMPORTANTE: Verificar se já está parado para evitar chamadas duplicadas
+    // Isso previne problemas de double free quando stop() é chamado múltiplas vezes
+    if (!m_active && !m_running)
     {
         return;
     }
@@ -615,6 +812,10 @@ void HTTPTSStreamer::stop()
     {
         m_encodingThread.join();
     }
+
+    // IMPORTANTE: Fazer flush dos codecs após as threads terminarem
+    // Isso garante que todos os frames pendentes sejam processados antes de fechar os codecs
+    flushCodecs();
 
     LOG_INFO("HTTP MPEG-TS Streamer parado");
 }
@@ -689,7 +890,29 @@ uint32_t HTTPTSStreamer::getClientCount() const
 
 void HTTPTSStreamer::cleanup()
 {
+    // IMPORTANTE: Verificar se já foi limpo para evitar double free
+    // Isso previne problemas quando cleanup() é chamado múltiplas vezes
+    // (por exemplo, pelo StreamManager e pelo destrutor)
+    bool expected = false;
+    if (!m_cleanedUp.compare_exchange_strong(expected, true))
+    {
+        return; // Já foi limpo
+    }
+
+    // IMPORTANTE: Sinalizar cleanup ANTES de parar para que as threads saibam
+    // Mas ainda precisamos garantir que as threads terminem antes de limpar recursos
+    // As threads verificam m_cleanedUp e devem terminar rapidamente
+
+    // IMPORTANTE: Garantir que stop() seja chamado apenas uma vez
+    // e que as threads terminem antes de limpar recursos FFmpeg
     stop();
+    
+    // IMPORTANTE: Aguardar um pouco extra para garantir que todas as operações FFmpeg
+    // nas threads tenham terminado antes de limpar recursos
+    usleep(50000); // 50ms
+
+    // IMPORTANTE: cleanupFFmpeg() já verifica se foi limpo antes
+    // então é seguro chamar múltiplas vezes
     cleanupFFmpeg();
 }
 
@@ -849,8 +1072,14 @@ void HTTPTSStreamer::encodingThread()
         return;
     }
 
-    while (m_running)
+    while (m_running && !m_cleanedUp.load())
     {
+        // IMPORTANTE: Verificar se foi limpo durante o loop
+        if (m_cleanedUp.load())
+        {
+            break;
+        }
+        
         bool hasVideo = false;
         bool hasAudio = false;
 
@@ -1004,7 +1233,8 @@ void HTTPTSStreamer::encodingThread()
 
 bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height)
 {
-    if (!rgbData || !m_active)
+    // IMPORTANTE: Verificar se foi limpo antes de usar recursos
+    if (!rgbData || !m_active || m_cleanedUp.load())
     {
         return false;
     }
@@ -1142,7 +1372,8 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
 bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount)
 {
-    if (!m_active)
+    // IMPORTANTE: Verificar se foi limpo antes de usar recursos
+    if (!m_active || m_cleanedUp.load())
     {
         return false;
     }

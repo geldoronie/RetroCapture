@@ -14,6 +14,7 @@ AudioCapture::AudioCapture()
     , m_context(nullptr)
     , m_stream(nullptr)
     , m_virtualSinkIndex(PA_INVALID_INDEX)
+    , m_moduleIndex(PA_INVALID_INDEX)
     , m_sampleRate(44100)
     , m_channels(2)
     , m_bytesPerSample(2) // 16-bit
@@ -60,14 +61,31 @@ bool AudioCapture::initializePulseAudio() {
 }
 
 void AudioCapture::cleanupPulseAudio() {
+    // IMPORTANTE: Parar captura antes de limpar
+    stopCapture();
+    
+    // IMPORTANTE: Remover sink virtual ANTES de desconectar o contexto
+    // Isso garante que o sink seja removido corretamente
     removeVirtualSink();
     
+    // IMPORTANTE: Processar eventos do mainloop para garantir que operações pendentes sejam concluídas
+    if (m_mainloop && m_context) {
+        int ret = 0;
+        // Processar eventos por até 1 segundo para garantir que operações assíncronas sejam concluídas
+        for (int i = 0; i < 100; i++) {
+            pa_mainloop_iterate(m_mainloop, 0, &ret);
+            usleep(10000); // 10ms
+        }
+    }
+    
     if (m_stream) {
+        pa_stream_disconnect(m_stream);
         pa_stream_unref(m_stream);
         m_stream = nullptr;
     }
     
     if (m_context) {
+        pa_context_disconnect(m_context);
         pa_context_unref(m_context);
         m_context = nullptr;
     }
@@ -79,6 +97,7 @@ void AudioCapture::cleanupPulseAudio() {
     
     m_mainloopApi = nullptr;
     m_virtualSinkIndex = PA_INVALID_INDEX;
+    m_moduleIndex = PA_INVALID_INDEX;
 }
 
 void AudioCapture::contextStateCallback(pa_context* c, void* userdata) {
@@ -450,6 +469,13 @@ void AudioCapture::operationCallback(pa_context* c, uint32_t index, void* userda
     g_sinkOperationSuccess = (index != PA_INVALID_INDEX);
 }
 
+// Callback para operações de unload
+static void unloadModuleCallback(pa_context* c, int success, void* userdata) {
+    (void)c;
+    (void)userdata;
+    g_sinkOperationSuccess = (success != 0);
+}
+
 bool AudioCapture::createVirtualSink() {
     if (m_virtualSinkIndex != PA_INVALID_INDEX) {
         return true; // Já criado
@@ -482,12 +508,15 @@ bool AudioCapture::createVirtualSink() {
         }
         pa_operation_unref(op);
         
-        if (g_sinkIndex != PA_INVALID_INDEX) {
-            // Sink já existe
-            m_virtualSinkIndex = g_sinkIndex;
-            LOG_INFO("Sink virtual 'RetroCapture' já existe (índice: " + std::to_string(m_virtualSinkIndex) + ")");
-            return true;
-        }
+    if (g_sinkIndex != PA_INVALID_INDEX) {
+        // Sink já existe - precisamos encontrar o módulo que o criou
+        // Por enquanto, marcar que não criamos o módulo (m_moduleIndex permanece PA_INVALID_INDEX)
+        // Isso significa que não vamos tentar removê-lo ao fechar
+        m_virtualSinkIndex = g_sinkIndex;
+        m_moduleIndex = PA_INVALID_INDEX; // Não sabemos qual módulo criou, então não removemos
+        LOG_INFO("Sink virtual 'RetroCapture' já existe (índice: " + std::to_string(m_virtualSinkIndex) + ")");
+        return true;
+    }
     }
     
     LOG_INFO("Sink virtual 'RetroCapture' não encontrado, criando novo...");
@@ -515,6 +544,7 @@ bool AudioCapture::createVirtualSink() {
     while (iteration < maxIterations) {
         pa_mainloop_iterate(m_mainloop, 0, &ret);
         if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX) {
+            m_moduleIndex = g_moduleIndex; // Armazenar índice do módulo para remoção posterior
             LOG_INFO("Módulo module-null-sink carregado com sucesso (índice: " + std::to_string(g_moduleIndex) + ")");
             break;
         }
@@ -570,25 +600,47 @@ bool AudioCapture::createVirtualSink() {
 }
 
 void AudioCapture::removeVirtualSink() {
-    if (m_virtualSinkIndex == PA_INVALID_INDEX) {
-        return;
-    }
-    
-    if (pa_context_get_state(m_context) != PA_CONTEXT_READY) {
+    // IMPORTANTE: Só remover o sink se nós mesmos o criamos (m_moduleIndex != PA_INVALID_INDEX)
+    // Se o sink já existia quando abrimos, não devemos removê-lo
+    if (m_moduleIndex == PA_INVALID_INDEX) {
+        // Não criamos o módulo, então não removemos
         m_virtualSinkIndex = PA_INVALID_INDEX;
         return;
     }
     
-    // Descobrir o módulo ID do sink virtual
-    // Isso é um pouco complicado - vamos usar uma abordagem mais simples:
-    // descarregar todos os módulos null-sink e recriar se necessário
-    // Por enquanto, vamos apenas marcar como removido e deixar o PulseAudio gerenciar
+    if (m_virtualSinkIndex == PA_INVALID_INDEX) {
+        m_moduleIndex = PA_INVALID_INDEX;
+        return;
+    }
     
-    // Na prática, é melhor deixar o sink existir mesmo após fechar,
-    // para que o usuário não precise recriar toda vez
-    // Mas podemos adicionar uma opção para removê-lo se necessário
+    if (!m_context || pa_context_get_state(m_context) != PA_CONTEXT_READY) {
+        m_virtualSinkIndex = PA_INVALID_INDEX;
+        m_moduleIndex = PA_INVALID_INDEX;
+        return;
+    }
     
-    LOG_INFO("Sink virtual 'RetroCapture' mantido (pode ser usado novamente)");
+    // Descarregar o módulo que criou o sink virtual
+    LOG_INFO("Removendo sink virtual 'RetroCapture' (módulo: " + std::to_string(m_moduleIndex) + ")");
+    g_sinkOperationSuccess = false;
+    pa_operation* op = pa_context_unload_module(m_context, m_moduleIndex, unloadModuleCallback, this);
+    if (op) {
+        int ret = 0;
+        int maxIterations = 50;
+        int iteration = 0;
+        
+        while (iteration < maxIterations) {
+            pa_mainloop_iterate(m_mainloop, 0, &ret);
+            if (g_sinkOperationSuccess) {
+                break;
+            }
+            usleep(10000); // 10ms
+            iteration++;
+        }
+        pa_operation_unref(op);
+    }
+    
     m_virtualSinkIndex = PA_INVALID_INDEX;
+    m_moduleIndex = PA_INVALID_INDEX;
+    LOG_INFO("Sink virtual 'RetroCapture' removido");
 }
 

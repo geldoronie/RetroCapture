@@ -896,6 +896,40 @@ bool Application::initStreaming()
 
     LOG_INFO("Inicializando streaming...");
 
+    // IMPORTANTE: Parar thread de streaming ANTES de limpar StreamManager
+    // Isso previne problemas de double free quando há mudanças de configuração
+    if (m_streamingThreadRunning || m_streamingThread.joinable())
+    {
+        LOG_INFO("Parando thread de streaming anterior...");
+        m_streamingThreadRunning = false;
+        
+        // Aguardar que a thread termine
+        if (m_streamingThread.joinable())
+        {
+            // Aguardar um pouco para que a thread processe a sinalização
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            m_streamingThread.join();
+        }
+    }
+    
+    // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
+    // Isso previne problemas de double free quando há mudanças de configuração
+    if (m_streamManager)
+    {
+        LOG_INFO("Limpando StreamManager existente antes de reinicializar...");
+        // Parar e limpar de forma segura
+        if (m_streamManager->isActive())
+        {
+            m_streamManager->stop();
+        }
+        m_streamManager->cleanup();
+        m_streamManager.reset();
+        
+        // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
+        // e recursos foram liberados antes de criar um novo StreamManager
+        usleep(100000); // 100ms
+    }
+
     m_streamManager = std::make_unique<StreamManager>();
 
     // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
@@ -978,26 +1012,9 @@ bool Application::initStreaming()
         }
     }
 
-    // IMPORTANTE: Garantir que a thread anterior foi limpa antes de criar uma nova
-    // Se a thread anterior ainda estiver rodando, aguardar que ela termine
-    // Isso é necessário para evitar criar múltiplas threads ou usar uma thread em estado inválido
-    if (m_streamingThreadRunning || m_streamingThread.joinable())
-    {
-        // Thread anterior ainda está rodando ou joinable - aguardar que termine
-        LOG_WARN("Thread de streaming anterior ainda está ativa, aguardando término...");
-        m_streamingThreadRunning = false;
-
-        // Aguardar um pouco para que a thread processe a sinalização de parada
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // Fazer join de forma síncrona para garantir que a thread foi limpa
-        // Isso pode bloquear brevemente, mas é necessário para evitar problemas
-        if (m_streamingThread.joinable())
-        {
-            m_streamingThread.join();
-        }
-        LOG_INFO("Thread de streaming anterior encerrada");
-    }
+    // IMPORTANTE: A thread de streaming já foi limpa acima no início da função
+    // Esta verificação é redundante, mas mantida como segurança extra
+    // (não deveria ser necessária, mas ajuda a garantir que não há threads órfãs)
 
     // Agora podemos criar uma nova thread com segurança
     // IMPORTANTE: Garantir que m_streamingThreadRunning está false antes de criar nova thread
@@ -1295,28 +1312,37 @@ void Application::run()
                             std::vector<uint8_t> frameData;
                             if (canReadPixels)
                             {
-                                frameData.resize(frameDataSize);
-
-                                // IMPORTANTE: Ler tudo de uma vez é muito mais rápido que linha por linha
-                                // OpenGL lê do bottom-left, então precisamos fazer flip vertical depois
-                                // Mas isso é mais rápido que ler linha por linha
-                                // Configurar alinhamento para evitar padding (se disponível via GLAD)
-                                // Nota: glPixelStorei pode não estar disponível diretamente, então vamos
-                                // ler diretamente e fazer o flip depois
+                                // IMPORTANTE: OpenGL adiciona padding quando a largura da linha não é múltipla de 4 bytes
+                                // Para RGB (3 bytes por pixel), precisamos calcular o tamanho real com padding
+                                // Tamanho da linha sem padding: windowWidth * 3
+                                // Tamanho da linha com padding (alinhado para 4 bytes): ((windowWidth * 3 + 3) / 4) * 4
+                                size_t rowSizeUnpadded = static_cast<size_t>(windowWidth) * 3;
+                                size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4; // Alinhar para múltiplo de 4
+                                size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(windowHeight);
+                                
+                                // Alocar buffer com padding para leitura
+                                std::vector<uint8_t> frameDataWithPadding;
+                                frameDataWithPadding.resize(totalSizeWithPadding);
+                                
+                                // Ler pixels com padding
                                 glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
-                                             GL_RGB, GL_UNSIGNED_BYTE, frameData.data());
+                                             GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
-                                // IMPORTANTE: Fazer flip vertical (OpenGL lê de baixo para cima)
-                                // Fazer flip de forma eficiente - trocar linhas inteiras usando swap
-                                size_t rowSize = static_cast<size_t>(windowWidth) * 3;
-                                for (uint32_t row = 0; row < windowHeight / 2; row++)
+                                // Copiar dados removendo padding e fazer flip vertical ao mesmo tempo
+                                // OpenGL lê de baixo para cima, então precisamos inverter
+                                frameData.resize(frameDataSize);
+                                for (uint32_t row = 0; row < windowHeight; row++)
                                 {
-                                    uint32_t oppositeRow = windowHeight - 1 - row;
-                                    uint8_t *row1 = frameData.data() + (row * rowSize);
-                                    uint8_t *row2 = frameData.data() + (oppositeRow * rowSize);
-
-                                    // Trocar linhas inteiras usando std::swap_ranges (mais eficiente)
-                                    std::swap_ranges(row1, row1 + rowSize, row2);
+                                    // Linha de origem (de baixo para cima devido ao OpenGL)
+                                    uint32_t srcRow = windowHeight - 1 - row;
+                                    // Linha de destino (de cima para baixo)
+                                    uint32_t dstRow = row;
+                                    
+                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
+                                    uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
+                                    
+                                    // Copiar linha sem padding
+                                    memcpy(dstPtr, srcPtr, rowSizeUnpadded);
                                 }
                             }
 
