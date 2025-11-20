@@ -1260,160 +1260,6 @@ void Application::run()
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
 
-            // Stream frame if streaming is enabled
-            // IMPORTANTE: Streaming sempre continua, mesmo quando a janela não está focada
-            // Não fazer streaming durante resize para evitar problemas
-            // IMPORTANTE: Não fazer frame skipping - causa desincronização de áudio/vídeo
-            if (m_streamManager && m_streamManager->isActive() && !m_isResizing)
-            {
-                // Get current window dimensions for reading (já temos lock do mutex)
-                uint32_t windowWidth = currentWidth;
-                uint32_t windowHeight = currentHeight;
-
-                // Validate window dimensions first
-                if (windowWidth == 0 || windowHeight == 0 || windowWidth > 7680 || windowHeight > 4320)
-                {
-                    // Skip streaming if window dimensions are invalid
-                    // This can happen during resize
-                }
-                else
-                {
-                    // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
-                    // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
-                    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-                    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
-
-                    // Validate stream dimensions
-                    if (streamWidth == 0 || streamHeight == 0 || streamWidth > 7680 || streamHeight > 4320)
-                    {
-                        // Skip streaming if stream dimensions are invalid
-                    }
-                    else
-                    {
-                        // Calculate buffer size and validate
-                        // IMPORTANTE: OpenGL pode adicionar padding quando a largura não é múltipla de 4
-                        // O problema ocorre porque windowWidth * 3 (bytes por linha) pode não ser múltiplo de 4
-                        // e o OpenGL adiciona padding por padrão, causando corrupção de memória ao ler
-                        // Isso é especialmente importante quando redimensionamos no eixo X
-                        size_t frameDataSize = static_cast<size_t>(windowWidth) * static_cast<size_t>(windowHeight) * 3;
-                        if (frameDataSize == 0 || frameDataSize > (7680 * 4320 * 3))
-                        {
-                            // Skip if size calculation overflows or is too large
-                        }
-                        else
-                        {
-                            // Read pixels from framebuffer (always read full window size)
-
-                            // IMPORTANTE: Validar que as dimensões são seguras antes de ler
-                            bool canReadPixels = (windowWidth > 0 && windowHeight > 0 &&
-                                                  windowWidth <= 7680 && windowHeight <= 4320 &&
-                                                  frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3));
-
-                            std::vector<uint8_t> frameData;
-                            if (canReadPixels)
-                            {
-                                // IMPORTANTE: OpenGL adiciona padding quando a largura da linha não é múltipla de 4 bytes
-                                // Para RGB (3 bytes por pixel), precisamos calcular o tamanho real com padding
-                                // Tamanho da linha sem padding: windowWidth * 3
-                                // Tamanho da linha com padding (alinhado para 4 bytes): ((windowWidth * 3 + 3) / 4) * 4
-                                size_t rowSizeUnpadded = static_cast<size_t>(windowWidth) * 3;
-                                size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4; // Alinhar para múltiplo de 4
-                                size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(windowHeight);
-
-                                // Alocar buffer com padding para leitura
-                                std::vector<uint8_t> frameDataWithPadding;
-                                frameDataWithPadding.resize(totalSizeWithPadding);
-
-                                // Ler pixels com padding
-                                glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
-                                             GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
-
-                                // Copiar dados removendo padding e fazer flip vertical ao mesmo tempo
-                                // OpenGL lê de baixo para cima, então precisamos inverter
-                                frameData.resize(frameDataSize);
-                                for (uint32_t row = 0; row < windowHeight; row++)
-                                {
-                                    // Linha de origem (de baixo para cima devido ao OpenGL)
-                                    uint32_t srcRow = windowHeight - 1 - row;
-                                    // Linha de destino (de cima para baixo)
-                                    uint32_t dstRow = row;
-
-                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
-                                    uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
-
-                                    // Copiar linha sem padding
-                                    memcpy(dstPtr, srcPtr, rowSizeUnpadded);
-                                }
-                            }
-
-                            // Process the frame data (só se leitura foi bem-sucedida)
-                            if (canReadPixels && !frameData.empty() && frameData.size() == frameDataSize)
-                            {
-
-                                // If stream dimensions differ from window, we need to resize
-                                std::vector<uint8_t> processedData;
-                                const uint8_t *dataToSend = frameData.data();
-                                uint32_t dataWidth = windowWidth;
-                                uint32_t dataHeight = windowHeight;
-
-                                if (streamWidth != windowWidth || streamHeight != windowHeight)
-                                {
-                                    // Resize usando interpolação mais simples (nearest neighbor) para melhor performance
-                                    // Bilinear é muito pesado e causa queda de FPS no thread principal
-                                    size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
-                                    if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
-                                    {
-                                        processedData.resize(processedSize);
-                                        float scaleX = (float)windowWidth / streamWidth;
-                                        float scaleY = (float)windowHeight / streamHeight;
-
-                                        for (uint32_t y = 0; y < streamHeight; y++)
-                                        {
-                                            uint32_t srcY = (uint32_t)(y * scaleY);
-                                            if (srcY >= windowHeight)
-                                                srcY = windowHeight - 1;
-
-                                            for (uint32_t x = 0; x < streamWidth; x++)
-                                            {
-                                                uint32_t srcX = (uint32_t)(x * scaleX);
-                                                if (srcX >= windowWidth)
-                                                    srcX = windowWidth - 1;
-
-                                                size_t srcIdx = (srcY * windowWidth + srcX) * 3;
-                                                size_t dstIdx = (y * streamWidth + x) * 3;
-
-                                                if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
-                                                {
-                                                    processedData[dstIdx] = frameData[srcIdx];
-                                                    processedData[dstIdx + 1] = frameData[srcIdx + 1];
-                                                    processedData[dstIdx + 2] = frameData[srcIdx + 2];
-                                                }
-                                            }
-                                        }
-                                        dataToSend = processedData.data();
-                                        dataWidth = streamWidth;
-                                        dataHeight = streamHeight;
-                                    }
-                                }
-
-                                // IMPORTANTE: Não precisamos fazer flip vertical porque já lemos
-                                // linha por linha de baixo para cima e armazenamos na ordem correta
-                                // (topo no índice 0, fundo no final)
-                                // frameData/dataToSend já está na orientação correta
-                                // Enviar frame para streaming (não bloqueia - apenas enfileira)
-                                if (m_streamManager && m_streamManager->isActive())
-                                {
-                                    m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Áudio é processado pela thread dedicada de streaming
-            // Não precisamos processar aqui no loop principal
-
             // Atualizar informações de streaming na UI
             if (m_ui && m_streamManager && m_streamManager->isActive())
             {
@@ -1472,8 +1318,14 @@ void Application::streamingThreadFunc()
 
     while (m_streamingThreadRunning && m_streamingEnabled)
     {
-        // IMPORTANTE: Verificar se streamManager ainda existe antes de usar
-        // Pode ter sido resetado enquanto estamos rodando
+        if (!m_audioCapture || !m_audioCapture->isOpen() || !m_streamManager || !m_streamManager->isActive() || !m_window || m_window->getWidth() == 0 || m_window->getHeight() == 0 || m_window->getWidth() > 7680 || m_window->getHeight() > 4320)
+        {
+            // Skip audio processing if audio capture is not open or stream manager is not active
+            usleep(100000); // 100ms
+            continue;
+        }
+
+        // Audio processing
         std::unique_ptr<StreamManager> streamManagerCopy;
         bool hasStreamManager = false;
         {
@@ -1485,32 +1337,145 @@ void Application::streamingThreadFunc()
             }
         }
 
-        // Processar áudio continuamente
-        if (m_audioCapture && m_audioCapture->isOpen() && hasStreamManager && m_streamManager && m_streamManager->isActive())
-        {
-            // Ler áudio em chunks maiores para melhor throughput
-            const size_t maxSamples = 512; // Ler até 2048 samples por vez
-            int16_t audioBuffer[maxSamples];
-            size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
+        // Ler áudio em chunks maiores para melhor throughput
+        const size_t maxSamples = 512; // Ler até 2048 samples por vez
+        int16_t audioBuffer[maxSamples];
+        size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
 
-            if (samplesRead > 0)
+        if (samplesRead > 0)
+        {
+            // Push audio to streamer (verificar novamente antes de usar)
+            if (m_streamManager && m_streamManager->isActive())
             {
-                // Push audio to streamer (verificar novamente antes de usar)
-                if (m_streamManager && m_streamManager->isActive())
-                {
-                    m_streamManager->pushAudio(audioBuffer, samplesRead);
-                }
-            }
-            else
-            {
-                // Sem samples disponíveis, fazer um pequeno sleep
-                usleep(10); // 10us
+                m_streamManager->pushAudio(audioBuffer, samplesRead);
             }
         }
         else
         {
-            // Sem captura de áudio ativa, fazer sleep maior
-            usleep(10); // 10us
+            // Sem samples disponíveis, fazer um pequeno sleep
+            usleep(100000); // 100ms
+        }
+
+        // Frame processing
+        uint32_t windowWidth = m_window->getWidth();
+        uint32_t windowHeight = m_window->getHeight();
+
+        // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
+        // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
+        uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+        uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
+
+        // Calculate buffer size and validate
+        // IMPORTANTE: OpenGL pode adicionar padding quando a largura não é múltipla de 4
+        // O problema ocorre porque windowWidth * 3 (bytes por linha) pode não ser múltiplo de 4
+        // e o OpenGL adiciona padding por padrão, causando corrupção de memória ao ler
+        // Isso é especialmente importante quando redimensionamos no eixo X
+        size_t frameDataSize = static_cast<size_t>(windowWidth) * static_cast<size_t>(windowHeight) * 3;
+
+        // Validate frame data size
+        if (frameDataSize == 0 || frameDataSize > (7680 * 4320 * 3))
+        {
+            // Skip if size calculation overflows or is too large
+            usleep(100000); // 100ms
+            continue;
+        }
+
+        // IMPORTANTE: Validar que as dimensões são seguras antes de ler
+        bool canReadPixels = (windowWidth > 0 && windowHeight > 0 &&
+                              windowWidth <= 7680 && windowHeight <= 4320 &&
+                              frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3));
+
+        std::vector<uint8_t> frameData;
+        if (canReadPixels)
+        {
+            // IMPORTANTE: OpenGL adiciona padding quando a largura da linha não é múltipla de 4 bytes
+            // Para RGB (3 bytes por pixel), precisamos calcular o tamanho real com padding
+            // Tamanho da linha sem padding: windowWidth * 3
+            // Tamanho da linha com padding (alinhado para 4 bytes): ((windowWidth * 3 + 3) / 4) * 4
+            size_t rowSizeUnpadded = static_cast<size_t>(windowWidth) * 3;
+            size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4; // Alinhar para múltiplo de 4
+            size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(windowHeight);
+
+            // Alocar buffer com padding para leitura
+            std::vector<uint8_t> frameDataWithPadding;
+            frameDataWithPadding.resize(totalSizeWithPadding);
+
+            // Ler pixels com padding
+            glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
+                         GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+
+            // Copiar dados removendo padding e fazer flip vertical ao mesmo tempo
+            // OpenGL lê de baixo para cima, então precisamos inverter
+            frameData.resize(frameDataSize);
+            for (uint32_t row = 0; row < windowHeight; row++)
+            {
+                // Linha de origem (de baixo para cima devido ao OpenGL)
+                uint32_t srcRow = windowHeight - 1 - row;
+                // Linha de destino (de cima para baixo)
+                uint32_t dstRow = row;
+
+                const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
+                uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
+
+                // Copiar linha sem padding
+                memcpy(dstPtr, srcPtr, rowSizeUnpadded);
+            }
+        }
+
+        // Process the frame data (só se leitura foi bem-sucedida)
+        if (canReadPixels && !frameData.empty() && frameData.size() == frameDataSize)
+        {
+
+            // If stream dimensions differ from window, we need to resize
+            std::vector<uint8_t> processedData;
+            const uint8_t *dataToSend = frameData.data();
+            uint32_t dataWidth = windowWidth;
+            uint32_t dataHeight = windowHeight;
+
+            if (streamWidth != windowWidth || streamHeight != windowHeight)
+            {
+                // Resize usando interpolação mais simples (nearest neighbor) para melhor performance
+                // Bilinear é muito pesado e causa queda de FPS no thread principal
+                size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
+                if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
+                {
+                    processedData.resize(processedSize);
+                    float scaleX = (float)windowWidth / streamWidth;
+                    float scaleY = (float)windowHeight / streamHeight;
+
+                    for (uint32_t y = 0; y < streamHeight; y++)
+                    {
+                        uint32_t srcY = (uint32_t)(y * scaleY);
+                        if (srcY >= windowHeight)
+                            srcY = windowHeight - 1;
+
+                        for (uint32_t x = 0; x < streamWidth; x++)
+                        {
+                            uint32_t srcX = (uint32_t)(x * scaleX);
+                            if (srcX >= windowWidth)
+                                srcX = windowWidth - 1;
+
+                            size_t srcIdx = (srcY * windowWidth + srcX) * 3;
+                            size_t dstIdx = (y * streamWidth + x) * 3;
+
+                            if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
+                            {
+                                processedData[dstIdx] = frameData[srcIdx];
+                                processedData[dstIdx + 1] = frameData[srcIdx + 1];
+                                processedData[dstIdx + 2] = frameData[srcIdx + 2];
+                            }
+                        }
+                    }
+                    dataToSend = processedData.data();
+                    dataWidth = streamWidth;
+                    dataHeight = streamHeight;
+                }
+            }
+
+            if (m_streamManager && m_streamManager->isActive())
+            {
+                m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+            }
         }
     }
 
