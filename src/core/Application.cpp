@@ -1639,7 +1639,8 @@ void Application::streamingThreadFunc()
         else if (!hasVideoFrame)
         {
             // Sem frame disponível, fazer um pequeno sleep para não consumir CPU desnecessariamente
-            usleep(1000); // 1ms
+            // Reduzir sleep para verificar mais frequentemente e não perder frames
+            usleep(100); // 0.1ms para verificar mais frequentemente
         }
     }
 

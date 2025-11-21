@@ -843,8 +843,10 @@ bool HTTPTSStreamer::initializeMuxers()
     m_audioStream = audioStream;
 
     // Configurar callback de escrita
+    // Aumentar buffer para 256KB para reduzir chamadas ao callback e evitar corrupção
+    // Buffer maior = menos fragmentação = menos chance de corrupção
     formatCtx->pb = avio_alloc_context(
-        static_cast<unsigned char *>(av_malloc(64 * 1024)), 64 * 1024,
+        static_cast<unsigned char *>(av_malloc(256 * 1024)), 256 * 1024,
         1, this, nullptr, writeCallback, nullptr);
     if (!formatCtx->pb)
     {
@@ -1153,45 +1155,56 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         }
 
         packetCount++;
-        // Configurar stream_index do pacote
-        pkt->stream_index = videoStream->index;
 
-        // Converter PTS/DTS do time_base do codec para o time_base do stream
-        if (pkt->pts != AV_NOPTS_VALUE)
+        // CRÍTICO: Fazer cópia do pacote ANTES de modificar qualquer coisa
+        // Isso evita corromper os dados originais do codec
+        AVPacket *pktCopy = av_packet_clone(pkt);
+        if (!pktCopy)
         {
-            pkt->pts = av_rescale_q(pkt->pts, codecCtx->time_base, videoStream->time_base);
-        }
-        if (pkt->dts != AV_NOPTS_VALUE)
-        {
-            pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, videoStream->time_base);
+            LOG_ERROR("encodeVideoFrame: Failed to clone packet");
+            av_packet_unref(pkt);
+            continue; // Pular este pacote se não conseguirmos clonar
         }
 
-        // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
+        // Configurar stream_index do pacote (na cópia)
+        pktCopy->stream_index = videoStream->index;
+
+        // Converter PTS/DTS do time_base do codec para o time_base do stream (na cópia)
+        if (pktCopy->pts != AV_NOPTS_VALUE)
+        {
+            pktCopy->pts = av_rescale_q(pktCopy->pts, codecCtx->time_base, videoStream->time_base);
+        }
+        if (pktCopy->dts != AV_NOPTS_VALUE)
+        {
+            pktCopy->dts = av_rescale_q(pktCopy->dts, codecCtx->time_base, videoStream->time_base);
+        }
+
+        // Garantir que PTS e DTS sejam monotônicos (sempre aumentem) - na cópia
         {
             std::lock_guard<std::mutex> lock(m_ptsMutex);
-            if (pkt->pts != AV_NOPTS_VALUE)
+            if (pktCopy->pts != AV_NOPTS_VALUE)
             {
-                if (m_lastVideoPTS >= 0 && pkt->pts <= m_lastVideoPTS)
+                if (m_lastVideoPTS >= 0 && pktCopy->pts <= m_lastVideoPTS)
                 {
                     // PTS não aumentou, forçar incremento mínimo
-                    pkt->pts = m_lastVideoPTS + 1;
+                    pktCopy->pts = m_lastVideoPTS + 1;
                 }
-                m_lastVideoPTS = pkt->pts;
+                m_lastVideoPTS = pktCopy->pts;
             }
-            if (pkt->dts != AV_NOPTS_VALUE)
+            if (pktCopy->dts != AV_NOPTS_VALUE)
             {
-                if (m_lastVideoDTS >= 0 && pkt->dts <= m_lastVideoDTS)
+                if (m_lastVideoDTS >= 0 && pktCopy->dts <= m_lastVideoDTS)
                 {
                     // DTS não aumentou, forçar incremento mínimo
-                    pkt->dts = m_lastVideoDTS + 1;
+                    pktCopy->dts = m_lastVideoDTS + 1;
                 }
-                m_lastVideoDTS = pkt->dts;
+                m_lastVideoDTS = pktCopy->dts;
             }
             // Garantir DTS <= PTS (requisito do MPEG-TS)
-            if (pkt->pts != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
+            if (pktCopy->pts != AV_NOPTS_VALUE && pktCopy->dts != AV_NOPTS_VALUE && pktCopy->dts > pktCopy->pts)
             {
-                pkt->dts = pkt->pts;
-                m_lastVideoDTS = pkt->dts;
+                pktCopy->dts = pktCopy->pts;
+                m_lastVideoDTS = pktCopy->dts;
             }
         }
 
@@ -1210,15 +1223,19 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
                      " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
                      std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
                      ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
-                     ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts));
+                     ", PTS=" + std::to_string(pktCopy->pts) + ", DTS=" + std::to_string(pktCopy->dts));
         }
         videoEncodeLogCount++;
 
-        // Muxar e enviar pacote diretamente (já foi removido da fila bruta antes de chamar esta função)
-        if (!muxPacket(pkt))
+        // Muxar e enviar pacote (usar cópia, não o original)
+        // muxPacket não precisa fazer outra cópia agora, mas vamos manter por segurança
+        if (!muxPacket(pktCopy))
         {
             LOG_ERROR("encodeVideoFrame: muxPacket failed");
         }
+
+        // Liberar cópia e original
+        av_packet_free(&pktCopy);
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
@@ -1420,54 +1437,60 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         while (avcodec_receive_packet(codecCtx, pkt) >= 0)
         {
             packetCount++;
-            // Configurar stream_index do pacote
-            pkt->stream_index = audioStream->index;
 
-            // Converter PTS/DTS do time_base do codec para o time_base do stream
-            if (pkt->pts != AV_NOPTS_VALUE)
+            // CRÍTICO: Fazer cópia do pacote ANTES de modificar qualquer coisa
+            // Isso evita corromper os dados originais do codec
+            AVPacket *pktCopy = av_packet_clone(pkt);
+            if (!pktCopy)
             {
-                pkt->pts = av_rescale_q(pkt->pts, codecCtx->time_base, audioStream->time_base);
-            }
-            if (pkt->dts != AV_NOPTS_VALUE)
-            {
-                pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, audioStream->time_base);
+                LOG_ERROR("encodeAudioFrame: Failed to clone packet");
+                av_packet_unref(pkt);
+                continue; // Pular este pacote se não conseguirmos clonar
             }
 
-            // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
+            // Configurar stream_index do pacote (na cópia)
+            pktCopy->stream_index = audioStream->index;
+
+            // Converter PTS/DTS do time_base do codec para o time_base do stream (na cópia)
+            if (pktCopy->pts != AV_NOPTS_VALUE)
+            {
+                pktCopy->pts = av_rescale_q(pktCopy->pts, codecCtx->time_base, audioStream->time_base);
+            }
+            if (pktCopy->dts != AV_NOPTS_VALUE)
+            {
+                pktCopy->dts = av_rescale_q(pktCopy->dts, codecCtx->time_base, audioStream->time_base);
+            }
+
+            // Garantir que PTS e DTS sejam monotônicos (sempre aumentem) - na cópia
             {
                 std::lock_guard<std::mutex> lock(m_ptsMutex);
-                if (pkt->pts != AV_NOPTS_VALUE)
+                if (pktCopy->pts != AV_NOPTS_VALUE)
                 {
-                    if (m_lastAudioPTS >= 0 && pkt->pts <= m_lastAudioPTS)
+                    if (m_lastAudioPTS >= 0 && pktCopy->pts <= m_lastAudioPTS)
                     {
                         // PTS não aumentou, forçar incremento mínimo
-                        pkt->pts = m_lastAudioPTS + 1;
+                        pktCopy->pts = m_lastAudioPTS + 1;
                     }
-                    m_lastAudioPTS = pkt->pts;
+                    m_lastAudioPTS = pktCopy->pts;
                 }
-                if (pkt->dts != AV_NOPTS_VALUE)
+                if (pktCopy->dts != AV_NOPTS_VALUE)
                 {
-                    if (m_lastAudioDTS >= 0 && pkt->dts <= m_lastAudioDTS)
+                    if (m_lastAudioDTS >= 0 && pktCopy->dts <= m_lastAudioDTS)
                     {
                         // DTS não aumentou, forçar incremento mínimo
-                        pkt->dts = m_lastAudioDTS + 1;
+                        pktCopy->dts = m_lastAudioDTS + 1;
                     }
-                    m_lastAudioDTS = pkt->dts;
+                    m_lastAudioDTS = pktCopy->dts;
                 }
                 // Garantir DTS <= PTS (requisito do MPEG-TS)
-                if (pkt->pts != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
+                if (pktCopy->pts != AV_NOPTS_VALUE && pktCopy->dts != AV_NOPTS_VALUE && pktCopy->dts > pktCopy->pts)
                 {
-                    pkt->dts = pkt->pts;
-                    m_lastAudioDTS = pkt->dts;
+                    pktCopy->dts = pktCopy->pts;
+                    m_lastAudioDTS = pktCopy->dts;
                 }
             }
 
             // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
-            // Atualizar último PTS de áudio processado
-            if (pkt->pts != AV_NOPTS_VALUE)
-            {
-            }
-
             static int audioEncodeLogCount = 0;
             static int64_t firstAudioEncodeTime = 0;
             int64_t muxTimeUs = getTimestampUs();
@@ -1485,17 +1508,21 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
                          " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
                          std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
                          ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
-                         ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts) +
+                         ", PTS=" + std::to_string(pktCopy->pts) + ", DTS=" + std::to_string(pktCopy->dts) +
                          ", duration=" + std::to_string(audioDurationMs) + "ms" +
                          ", accumulator_size=" + std::to_string(accumulatorSize));
             }
             audioEncodeLogCount++;
 
-            // Muxar e enviar pacote diretamente
-            if (!muxPacket(pkt))
+            // Muxar e enviar pacote (usar cópia, não o original)
+            // muxPacket não precisa fazer outra cópia agora, mas vamos manter por segurança
+            if (!muxPacket(pktCopy))
             {
                 LOG_ERROR("encodeAudioFrame: muxPacket failed");
             }
+
+            // Liberar cópia e original
+            av_packet_free(&pktCopy);
             av_packet_unref(pkt);
         }
         av_packet_free(&pkt);
@@ -1529,43 +1556,57 @@ bool HTTPTSStreamer::muxPacket(void *packet)
     }
     AVPacket *pkt = static_cast<AVPacket *>(packet);
 
+    // NOTA: O pacote já foi clonado antes de chamar esta função
+    // Mas vamos fazer outra cópia por segurança para garantir que não há corrupção
+    // durante o muxing assíncrono
+    AVPacket *pktCopy = av_packet_clone(pkt);
+    if (!pktCopy)
+    {
+        LOG_ERROR("muxPacket: Failed to clone packet");
+        return false;
+    }
+
     // Garantir que DTS seja válido e monotônico
-    if (pkt->dts == AV_NOPTS_VALUE)
+    if (pktCopy->dts == AV_NOPTS_VALUE)
     {
         // Se DTS não está definido, usar PTS
-        if (pkt->pts != AV_NOPTS_VALUE)
+        if (pktCopy->pts != AV_NOPTS_VALUE)
         {
-            pkt->dts = pkt->pts;
+            pktCopy->dts = pktCopy->pts;
         }
         else
         {
             LOG_ERROR("muxPacket: Both PTS and DTS are invalid");
+            av_packet_free(&pktCopy);
             return false;
         }
     }
 
     // Garantir que DTS <= PTS (requisito do MPEG-TS)
-    if (pkt->pts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
+    if (pktCopy->pts != AV_NOPTS_VALUE && pktCopy->dts > pktCopy->pts)
     {
-        pkt->dts = pkt->pts;
+        pktCopy->dts = pktCopy->pts;
     }
 
     // Proteger av_interleaved_write_frame com mutex (não é thread-safe)
-    // Mas manter lock mínimo para não bloquear encoding
+    // O writeCallback também será chamado dentro deste lock, garantindo thread-safety
     {
         std::lock_guard<std::mutex> lock(m_muxMutex);
-        int ret = av_interleaved_write_frame(formatCtx, pkt);
+        int ret = av_interleaved_write_frame(formatCtx, pktCopy);
         if (ret < 0)
         {
             char errbuf[256];
             av_strerror(ret, errbuf, sizeof(errbuf));
-            LOG_ERROR("Failed to write packet (stream=" + std::to_string(pkt->stream_index) +
-                      ", pts=" + std::to_string(pkt->pts) + ", dts=" + std::to_string(pkt->dts) +
+            LOG_ERROR("Failed to write packet (stream=" + std::to_string(pktCopy->stream_index) +
+                      ", pts=" + std::to_string(pktCopy->pts) + ", dts=" + std::to_string(pktCopy->dts) +
                       "): " + std::string(errbuf));
+            av_packet_free(&pktCopy);
             return false;
         }
     }
 
+    // Liberar cópia do pacote após muxing
+    av_packet_free(&pktCopy);
     return true;
 }
 
@@ -1730,9 +1771,9 @@ void HTTPTSStreamer::encodingThread()
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
 
-            // Processar frames não processados (limitar a alguns por iteração para não sobrecarregar)
+            // Processar frames não processados (aumentar limite para alcançar 60 FPS)
             size_t framesProcessedThisIteration = 0;
-            const size_t MAX_FRAMES_PER_ITERATION = 5; // Processar até 5 frames por iteração
+            const size_t MAX_FRAMES_PER_ITERATION = 20; // Processar até 20 frames por iteração para 60 FPS
 
             for (auto &frame : m_timestampedVideoBuffer)
             {
@@ -1803,12 +1844,12 @@ void HTTPTSStreamer::encodingThread()
             }
         }
 
-        // Se processamos algo, continuar imediatamente (sem sleep)
+        // Se processamos algo, continuar imediatamente (sem sleep) para máxima velocidade
         // Se não processamos nada, dormir um pouco para não consumir CPU desnecessariamente
         if (!processedAny)
         {
-            std::this_thread::sleep_for(std::chrono::microseconds(100)); // 0.1ms quando não há dados
+            std::this_thread::sleep_for(std::chrono::microseconds(50)); // 0.05ms quando não há dados
         }
-        // Se processamos, não dormir - continuar imediatamente para processar mais frames
+        // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }
 }
