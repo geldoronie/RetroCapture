@@ -417,6 +417,7 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 
     // Enviar dados para todos os clientes conectados
     // Remover clientes que falharam ao enviar
+    // OTIMIZAÇÃO: Não bloquear se socket não estiver pronto - apenas enviar o que conseguir
     auto it = m_clientSockets.begin();
     while (it != m_clientSockets.end())
     {
@@ -426,7 +427,11 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         size_t totalSent = 0;
         bool error = false;
 
-        while (totalSent < static_cast<size_t>(buf_size) && !error)
+        // Limitar tentativas para não bloquear muito tempo
+        int maxAttempts = 3;
+        int attempts = 0;
+
+        while (totalSent < static_cast<size_t>(buf_size) && !error && attempts < maxAttempts)
         {
             size_t toSend = static_cast<size_t>(buf_size) - totalSent;
             // Limitar tamanho do chunk
@@ -435,7 +440,7 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
                 toSend = 65536;
             }
 
-            ssize_t sent = send(clientFd, buf + totalSent, toSend, MSG_NOSIGNAL);
+            ssize_t sent = send(clientFd, buf + totalSent, toSend, MSG_NOSIGNAL | MSG_DONTWAIT);
             if (sent < 0)
             {
                 int err = errno;
@@ -451,8 +456,15 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
                 }
                 else
                 {
-                    // Socket não está pronto, tentar novamente
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    // Socket não está pronto - NÃO BLOQUEAR, apenas pular este cliente
+                    // Retornar o que foi enviado para não bloquear o FFmpeg
+                    attempts++;
+                    if (attempts >= maxAttempts)
+                    {
+                        // Pular este cliente por agora, mas não remover
+                        break;
+                    }
+                    // Não fazer sleep - apenas tentar novamente imediatamente
                     continue;
                 }
             }
@@ -468,6 +480,7 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             else
             {
                 totalSent += sent;
+                attempts = 0; // Reset attempts on successful send
             }
         }
 
@@ -477,7 +490,9 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         }
     }
 
-    return buf_size; // Sempre retornar buf_size para o FFmpeg
+    // Sempre retornar buf_size para o FFmpeg, mesmo se não enviou tudo
+    // Isso evita bloquear o encoding
+    return buf_size;
 }
 
 bool HTTPTSStreamer::initializeFFmpeg()
@@ -866,6 +881,17 @@ void HTTPTSStreamer::cleanupFFmpeg()
         m_audioAccumulator.clear();
     }
 
+    // Resetar rastreamento de PTS/DTS
+    {
+        std::lock_guard<std::mutex> lock(m_ptsMutex);
+        m_lastVideoFramePTS = -1;
+        m_lastVideoPTS = -1;
+        m_lastVideoDTS = -1;
+        m_lastAudioFramePTS = -1;
+        m_lastAudioPTS = -1;
+        m_lastAudioDTS = -1;
+    }
+
     // Limpar header do formato
     {
         std::lock_guard<std::mutex> headerLock(m_headerMutex);
@@ -1020,7 +1046,20 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     // Converter para unidades do time_base do codec (geralmente 1/fps)
     // codecCtx->time_base é tipicamente {1, fps} para vídeo
     AVRational timeBase = codecCtx->time_base;
-    videoFrame->pts = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+    int64_t calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+
+    // Garantir que PTS do frame seja monotônico ANTES de enviar ao codec
+    {
+        std::lock_guard<std::mutex> lock(m_ptsMutex);
+        if (m_lastVideoFramePTS >= 0 && calculatedPTS <= m_lastVideoFramePTS)
+        {
+            // PTS não aumentou, forçar incremento mínimo baseado no FPS
+            // Incremento mínimo = 1 frame (timeBase.den / timeBase.num geralmente = fps)
+            calculatedPTS = m_lastVideoFramePTS + 1;
+        }
+        m_lastVideoFramePTS = calculatedPTS;
+    }
+    videoFrame->pts = calculatedPTS;
 
     // Forçar primeiro frame como keyframe
     static int64_t frameCount = 0;
@@ -1053,7 +1092,8 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
     // Tentar receber pacotes múltiplas vezes para garantir que todos sejam processados
     // Isso é especialmente importante para o primeiro keyframe
-    int maxAttempts = (frameCount == 1 && videoFrame->key_frame == 1) ? 10 : 1;
+    // REDUZIDO de 10 para 3 para evitar atraso excessivo
+    int maxAttempts = (frameCount == 1 && videoFrame->key_frame == 1) ? 3 : 1;
 
     for (int attempt = 0; attempt < maxAttempts; attempt++)
     {
@@ -1086,6 +1126,35 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         if (pkt->dts != AV_NOPTS_VALUE)
         {
             pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, videoStream->time_base);
+        }
+
+        // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
+        {
+            std::lock_guard<std::mutex> lock(m_ptsMutex);
+            if (pkt->pts != AV_NOPTS_VALUE)
+            {
+                if (m_lastVideoPTS >= 0 && pkt->pts <= m_lastVideoPTS)
+                {
+                    // PTS não aumentou, forçar incremento mínimo
+                    pkt->pts = m_lastVideoPTS + 1;
+                }
+                m_lastVideoPTS = pkt->pts;
+            }
+            if (pkt->dts != AV_NOPTS_VALUE)
+            {
+                if (m_lastVideoDTS >= 0 && pkt->dts <= m_lastVideoDTS)
+                {
+                    // DTS não aumentou, forçar incremento mínimo
+                    pkt->dts = m_lastVideoDTS + 1;
+                }
+                m_lastVideoDTS = pkt->dts;
+            }
+            // Garantir DTS <= PTS (requisito do MPEG-TS)
+            if (pkt->pts != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
+            {
+                pkt->dts = pkt->pts;
+                m_lastVideoDTS = pkt->dts;
+            }
         }
 
         // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
@@ -1269,7 +1338,20 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
 
         // Converter para unidades do time_base do codec (geralmente 1/sampleRate para áudio)
         AVRational timeBase = codecCtx->time_base;
-        audioFrame->pts = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+        int64_t calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+
+        // Garantir que PTS do frame seja monotônico ANTES de enviar ao codec
+        {
+            std::lock_guard<std::mutex> lock(m_ptsMutex);
+            if (m_lastAudioFramePTS >= 0 && calculatedPTS <= m_lastAudioFramePTS)
+            {
+                // PTS não aumentou, forçar incremento mínimo baseado no frame_size
+                // Incremento mínimo = 1 frame de áudio (samplesPerFrame)
+                calculatedPTS = m_lastAudioFramePTS + samplesPerFrame;
+            }
+            m_lastAudioFramePTS = calculatedPTS;
+        }
+        audioFrame->pts = calculatedPTS;
 
         int64_t frameEncodeTimeUs = getTimestampUs();
         frameCount++;
@@ -1311,6 +1393,35 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
             if (pkt->dts != AV_NOPTS_VALUE)
             {
                 pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, audioStream->time_base);
+            }
+
+            // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
+            {
+                std::lock_guard<std::mutex> lock(m_ptsMutex);
+                if (pkt->pts != AV_NOPTS_VALUE)
+                {
+                    if (m_lastAudioPTS >= 0 && pkt->pts <= m_lastAudioPTS)
+                    {
+                        // PTS não aumentou, forçar incremento mínimo
+                        pkt->pts = m_lastAudioPTS + 1;
+                    }
+                    m_lastAudioPTS = pkt->pts;
+                }
+                if (pkt->dts != AV_NOPTS_VALUE)
+                {
+                    if (m_lastAudioDTS >= 0 && pkt->dts <= m_lastAudioDTS)
+                    {
+                        // DTS não aumentou, forçar incremento mínimo
+                        pkt->dts = m_lastAudioDTS + 1;
+                    }
+                    m_lastAudioDTS = pkt->dts;
+                }
+                // Garantir DTS <= PTS (requisito do MPEG-TS)
+                if (pkt->pts != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
+                {
+                    pkt->dts = pkt->pts;
+                    m_lastAudioDTS = pkt->dts;
+                }
             }
 
             // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
@@ -1401,15 +1512,20 @@ bool HTTPTSStreamer::muxPacket(void *packet)
         pkt->dts = pkt->pts;
     }
 
-    int ret = av_interleaved_write_frame(formatCtx, pkt);
-    if (ret < 0)
+    // Proteger av_interleaved_write_frame com mutex (não é thread-safe)
+    // Mas manter lock mínimo para não bloquear encoding
     {
-        char errbuf[256];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        LOG_ERROR("Failed to write packet (stream=" + std::to_string(pkt->stream_index) +
-                  ", pts=" + std::to_string(pkt->pts) + ", dts=" + std::to_string(pkt->dts) +
-                  "): " + std::string(errbuf));
-        return false;
+        std::lock_guard<std::mutex> lock(m_muxMutex);
+        int ret = av_interleaved_write_frame(formatCtx, pkt);
+        if (ret < 0)
+        {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            LOG_ERROR("Failed to write packet (stream=" + std::to_string(pkt->stream_index) +
+                      ", pts=" + std::to_string(pkt->pts) + ", dts=" + std::to_string(pkt->dts) +
+                      "): " + std::string(errbuf));
+            return false;
+        }
     }
 
     return true;
@@ -1513,16 +1629,16 @@ HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
     int64_t overlapStartUs = std::max(videoStartUs, audioStartUs);
     int64_t overlapEndUs = std::min(videoEndUs, audioEndUs);
 
-    // Verificar se há sobreposição suficiente (mínimo 1 segundo)
-    if (overlapEndUs - overlapStartUs < MIN_BUFFER_TIME_US)
+    // Verificar se há sobreposição (qualquer sobreposição é suficiente para começar a processar)
+    if (overlapEndUs <= overlapStartUs)
     {
-        return SyncZone::invalid(); // Aguardar mais dados
+        return SyncZone::invalid(); // Não há sobreposição temporal
     }
 
-    // Zona sincronizada: meio da sobreposição (não as pontas)
-    // Pegar do meio para garantir que há dados suficientes antes e depois
-    int64_t zoneStartUs = overlapStartUs + (overlapEndUs - overlapStartUs) / 4;   // 25% do início
-    int64_t zoneEndUs = overlapStartUs + 3 * (overlapEndUs - overlapStartUs) / 4; // 75% do início
+    // Zona sincronizada: processar desde o início da sobreposição até o final
+    // Para 60fps, precisamos processar imediatamente, não esperar por uma zona "segura"
+    int64_t zoneStartUs = overlapStartUs;
+    int64_t zoneEndUs = overlapEndUs;
 
     // Encontrar índices correspondentes nos buffers
     size_t videoStartIdx = 0;
@@ -1568,65 +1684,59 @@ void HTTPTSStreamer::encodingThread()
 {
     while (m_running)
     {
-        // Calcular zona de sincronização
-        SyncZone zone = calculateSyncZone();
+        bool processedAny = false;
 
-        if (!zone.isValid())
-        {
-            // Não há zona válida ainda - AGUARDAR (não descartar)
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-
-        // Processar dados da zona sincronizada
+        // Processar TODOS os frames de vídeo disponíveis (sem esperar por sincronização)
+        // Para 60fps, precisamos processar imediatamente tudo que chega
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
 
-            // Processar frames de vídeo da zona sincronizada
-            for (size_t i = zone.videoStartIdx; i < zone.videoEndIdx && i < m_timestampedVideoBuffer.size(); i++)
+            // Processar TODOS os frames não processados
+            for (auto &frame : m_timestampedVideoBuffer)
             {
-                auto &frame = m_timestampedVideoBuffer[i];
                 if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
                 {
                     encodeVideoFrame(frame.data->data(), frame.width, frame.height, frame.captureTimestampUs);
                     frame.processed = true; // Marcar como processado
+                    processedAny = true;
                 }
             }
-        }
 
-        {
-            std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-
-            // Processar chunks de áudio da zona sincronizada
-            for (size_t i = zone.audioStartIdx; i < zone.audioEndIdx && i < m_timestampedAudioBuffer.size(); i++)
-            {
-                auto &audio = m_timestampedAudioBuffer[i];
-                if (!audio.processed && audio.samples && audio.sampleCount > 0)
-                {
-                    encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
-                    audio.processed = true; // Marcar como processado
-                }
-            }
-        }
-
-        // Limpar dados processados (remover do buffer após envio bem-sucedido)
-        {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
+            // Remover frames processados do início
             while (!m_timestampedVideoBuffer.empty() && m_timestampedVideoBuffer.front().processed)
             {
                 m_timestampedVideoBuffer.pop_front();
             }
         }
 
+        // Processar TODOS os chunks de áudio disponíveis (sem esperar por sincronização)
         {
             std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
+
+            // Processar TODOS os chunks não processados
+            for (auto &audio : m_timestampedAudioBuffer)
+            {
+                if (!audio.processed && audio.samples && audio.sampleCount > 0)
+                {
+                    encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
+                    audio.processed = true; // Marcar como processado
+                    processedAny = true;
+                }
+            }
+
+            // Remover chunks processados do início
             while (!m_timestampedAudioBuffer.empty() && m_timestampedAudioBuffer.front().processed)
             {
                 m_timestampedAudioBuffer.pop_front();
             }
         }
 
-        // Aguardar um pouco antes de recalcular a zona
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Se processamos algo, continuar imediatamente (sem sleep)
+        // Se não processamos nada, dormir um pouco para não consumir CPU desnecessariamente
+        if (!processedAny)
+        {
+            std::this_thread::sleep_for(std::chrono::microseconds(100)); // 0.1ms quando não há dados
+        }
+        // Se processamos, não dormir - continuar imediatamente para processar mais frames
     }
 }

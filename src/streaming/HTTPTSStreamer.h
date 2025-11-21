@@ -150,7 +150,7 @@ private:
 
     // Configuração de buffer temporal
     static constexpr int64_t MAX_BUFFER_TIME_US = 5 * 1000000LL; // 5 segundos máximo
-    static constexpr int64_t MIN_BUFFER_TIME_US = 1 * 1000000LL; // 1 segundo mínimo para calcular zona
+    static constexpr int64_t MIN_BUFFER_TIME_US = 0;             // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
     static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;    // 50ms de tolerância para sincronização
 
     // Buffers temporais ordenados por timestamp de captura
@@ -169,6 +169,21 @@ private:
     std::mutex m_audioAccumulatorMutex;
     std::vector<int16_t> m_audioAccumulator;
 
+    // Rastreamento de último PTS/DTS usado para garantir monotonicidade
+    // AV_NOPTS_VALUE = 0x8000000000000000 (não podemos usar no header, então usamos -1 como valor inválido)
+    std::mutex m_ptsMutex;
+    int64_t m_lastVideoFramePTS = -1; // Último PTS usado no frame (antes de enviar ao codec)
+    int64_t m_lastVideoPTS = -1;      // Último PTS do pacote (depois do codec)
+    int64_t m_lastVideoDTS = -1;
+    int64_t m_lastAudioFramePTS = -1; // Último PTS usado no frame (antes de enviar ao codec)
+    int64_t m_lastAudioPTS = -1;      // Último PTS do pacote (depois do codec)
+    int64_t m_lastAudioDTS = -1;
+
+    // Mutexes para sincronização
+    std::mutex m_muxMutex;    // Proteger av_interleaved_write_frame (não é thread-safe)
+    std::mutex m_outputMutex; // Proteger lista de clientes e writeToClients
+    std::mutex m_headerMutex; // Proteger m_formatHeader
+
     // Threads
     std::thread m_serverThread;
     std::thread m_encodingThread; // Thread única para encoding
@@ -177,11 +192,9 @@ private:
     std::atomic<uint32_t> m_clientCount{0};
 
     // Output buffer for clients
-    std::mutex m_outputMutex; // Mutex para proteger m_clientSockets
     std::vector<int> m_clientSockets;
 
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
-    std::mutex m_headerMutex;
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
 };
