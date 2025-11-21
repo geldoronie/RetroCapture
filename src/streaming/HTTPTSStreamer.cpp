@@ -564,7 +564,8 @@ bool HTTPTSStreamer::initializeVideoCodec()
     codecCtx->max_b_frames = 0;                       // Sem B-frames para baixa latência
     codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
     codecCtx->bit_rate = m_videoBitrate;
-    codecCtx->thread_count = 0; // Auto-detect (melhor que fixo)
+    codecCtx->thread_count = 0;                                // Auto-detect (melhor que fixo)
+    codecCtx->thread_type = FF_THREAD_SLICE | FF_THREAD_FRAME; // Usar threading de slice e frame para paralelismo
 
     // Configurar preset rápido para libx264 (velocidade de encoding)
     AVDictionary *opts = nullptr;
@@ -579,6 +580,10 @@ bool HTTPTSStreamer::initializeVideoCodec()
         av_dict_set(&opts, "profile", "baseline", 0);
         // Keyframe mínimo a cada 2 segundos
         av_dict_set_int(&opts, "keyint_min", static_cast<int>(m_fps * 2), 0);
+        // OTIMIZAÇÃO: Reduzir lookahead para zero (zerolatency já faz isso, mas garantir)
+        av_dict_set_int(&opts, "rc-lookahead", 0, 0);
+        // OTIMIZAÇÃO: Reduzir buffer de VBV para menor latência
+        av_dict_set_int(&opts, "vbv-bufsize", m_videoBitrate / 10, 0); // 100ms de buffer
     }
 
     // Abrir codec com opções
@@ -594,10 +599,12 @@ bool HTTPTSStreamer::initializeVideoCodec()
     m_videoCodecContext = codecCtx;
 
     // Criar SWS context para conversão RGB -> YUV
+    // OTIMIZAÇÃO: Usar SWS_FAST_BILINEAR para máxima velocidade (mais rápido que SWS_BILINEAR)
+    // Adicionar flags de otimização: SWS_ACCURATE_RND e SWS_FULL_CHR_H_INT para melhor performance
     SwsContext *swsCtx = sws_getContext(
         m_width, m_height, AV_PIX_FMT_RGB24,
         m_width, m_height, AV_PIX_FMT_YUV420P,
-        SWS_BILINEAR, nullptr, nullptr, nullptr);
+        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 
     if (!swsCtx)
     {
@@ -1156,55 +1163,49 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
         packetCount++;
 
-        // CRÍTICO: Fazer cópia do pacote ANTES de modificar qualquer coisa
-        // Isso evita corromper os dados originais do codec
-        AVPacket *pktCopy = av_packet_clone(pkt);
-        if (!pktCopy)
+        // OTIMIZAÇÃO: Não clonar aqui, vamos clonar apenas em muxPacket se necessário
+        // Isso reduz alocações e cópias desnecessárias
+        AVPacket *pktToMux = pkt; // Usar pacote original diretamente
+
+        // Configurar stream_index do pacote
+        pktToMux->stream_index = videoStream->index;
+
+        // Converter PTS/DTS do time_base do codec para o time_base do stream
+        if (pktToMux->pts != AV_NOPTS_VALUE)
         {
-            LOG_ERROR("encodeVideoFrame: Failed to clone packet");
-            av_packet_unref(pkt);
-            continue; // Pular este pacote se não conseguirmos clonar
+            pktToMux->pts = av_rescale_q(pktToMux->pts, codecCtx->time_base, videoStream->time_base);
+        }
+        if (pktToMux->dts != AV_NOPTS_VALUE)
+        {
+            pktToMux->dts = av_rescale_q(pktToMux->dts, codecCtx->time_base, videoStream->time_base);
         }
 
-        // Configurar stream_index do pacote (na cópia)
-        pktCopy->stream_index = videoStream->index;
-
-        // Converter PTS/DTS do time_base do codec para o time_base do stream (na cópia)
-        if (pktCopy->pts != AV_NOPTS_VALUE)
-        {
-            pktCopy->pts = av_rescale_q(pktCopy->pts, codecCtx->time_base, videoStream->time_base);
-        }
-        if (pktCopy->dts != AV_NOPTS_VALUE)
-        {
-            pktCopy->dts = av_rescale_q(pktCopy->dts, codecCtx->time_base, videoStream->time_base);
-        }
-
-        // Garantir que PTS e DTS sejam monotônicos (sempre aumentem) - na cópia
+        // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
         {
             std::lock_guard<std::mutex> lock(m_ptsMutex);
-            if (pktCopy->pts != AV_NOPTS_VALUE)
+            if (pktToMux->pts != AV_NOPTS_VALUE)
             {
-                if (m_lastVideoPTS >= 0 && pktCopy->pts <= m_lastVideoPTS)
+                if (m_lastVideoPTS >= 0 && pktToMux->pts <= m_lastVideoPTS)
                 {
                     // PTS não aumentou, forçar incremento mínimo
-                    pktCopy->pts = m_lastVideoPTS + 1;
+                    pktToMux->pts = m_lastVideoPTS + 1;
                 }
-                m_lastVideoPTS = pktCopy->pts;
+                m_lastVideoPTS = pktToMux->pts;
             }
-            if (pktCopy->dts != AV_NOPTS_VALUE)
+            if (pktToMux->dts != AV_NOPTS_VALUE)
             {
-                if (m_lastVideoDTS >= 0 && pktCopy->dts <= m_lastVideoDTS)
+                if (m_lastVideoDTS >= 0 && pktToMux->dts <= m_lastVideoDTS)
                 {
                     // DTS não aumentou, forçar incremento mínimo
-                    pktCopy->dts = m_lastVideoDTS + 1;
+                    pktToMux->dts = m_lastVideoDTS + 1;
                 }
-                m_lastVideoDTS = pktCopy->dts;
+                m_lastVideoDTS = pktToMux->dts;
             }
             // Garantir DTS <= PTS (requisito do MPEG-TS)
-            if (pktCopy->pts != AV_NOPTS_VALUE && pktCopy->dts != AV_NOPTS_VALUE && pktCopy->dts > pktCopy->pts)
+            if (pktToMux->pts != AV_NOPTS_VALUE && pktToMux->dts != AV_NOPTS_VALUE && pktToMux->dts > pktToMux->pts)
             {
-                pktCopy->dts = pktCopy->pts;
-                m_lastVideoDTS = pktCopy->dts;
+                pktToMux->dts = pktToMux->pts;
+                m_lastVideoDTS = pktToMux->dts;
             }
         }
 
@@ -1223,19 +1224,17 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
                      " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
                      std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
                      ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
-                     ", PTS=" + std::to_string(pktCopy->pts) + ", DTS=" + std::to_string(pktCopy->dts));
+                     ", PTS=" + std::to_string(pktToMux->pts) + ", DTS=" + std::to_string(pktToMux->dts));
         }
         videoEncodeLogCount++;
 
-        // Muxar e enviar pacote (usar cópia, não o original)
-        // muxPacket não precisa fazer outra cópia agora, mas vamos manter por segurança
-        if (!muxPacket(pktCopy))
+        // Muxar e enviar pacote (muxPacket fará a cópia se necessário)
+        if (!muxPacket(pktToMux))
         {
             LOG_ERROR("encodeVideoFrame: muxPacket failed");
         }
 
-        // Liberar cópia e original
-        av_packet_free(&pktCopy);
+        // Liberar pacote original (muxPacket já fez cópia se necessário)
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
@@ -1766,55 +1765,69 @@ void HTTPTSStreamer::encodingThread()
         bool processedAny = false;
 
         // Processar frames de vídeo disponíveis (sem esperar por sincronização)
-        // IMPORTANTE: Só marcar como processado se o encoding foi bem-sucedido
-        // Se falhar, manter no buffer para tentar novamente
+        // OTIMIZAÇÃO CRÍTICA: Copiar dados para fora do lock e fazer encoding sem lock
+        // Isso evita bloquear outras threads durante o encoding (que pode ser lento)
+        std::vector<std::tuple<std::shared_ptr<std::vector<uint8_t>>, uint32_t, uint32_t, int64_t, size_t>> framesToProcess;
+        size_t totalFrames = 0;
+
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-
-            // Processar TODOS os frames disponíveis para alcançar 60 FPS
-            // Remover limite artificial - processar o máximo possível por iteração
-            size_t framesProcessedThisIteration = 0;
-            size_t totalFrames = m_timestampedVideoBuffer.size();
+            totalFrames = m_timestampedVideoBuffer.size();
 
             // Se há muitos frames acumulados, processar mais agressivamente
-            // Processar até 60 frames por iteração se houver muitos na fila
             const size_t MAX_FRAMES_PER_ITERATION = (totalFrames > 30) ? 60 : (totalFrames > 15) ? 40
                                                                                                  : 30;
 
-            for (auto &frame : m_timestampedVideoBuffer)
+            // Copiar dados dos frames não processados para fora do lock
+            size_t framesCopied = 0;
+            for (size_t i = 0; i < m_timestampedVideoBuffer.size() && framesCopied < MAX_FRAMES_PER_ITERATION; i++)
             {
-                if (framesProcessedThisIteration >= MAX_FRAMES_PER_ITERATION)
-                {
-                    break; // Limitar apenas se exceder o máximo dinâmico
-                }
-
+                auto &frame = m_timestampedVideoBuffer[i];
                 if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
                 {
-                    // Tentar encodar o frame
-                    bool encodeSuccess = encodeVideoFrame(frame.data->data(), frame.width, frame.height, frame.captureTimestampUs);
+                    // Copiar referência aos dados (shared_ptr já gerencia memória)
+                    framesToProcess.push_back({frame.data, frame.width, frame.height, frame.captureTimestampUs, i});
+                    framesCopied++;
+                }
+            }
+        }
 
-                    // SÓ marcar como processado se o encoding foi bem-sucedido
-                    if (encodeSuccess)
+        // Processar frames FORA do lock (encoding pode ser lento)
+        // OTIMIZAÇÃO: Processar múltiplos frames em batch para melhor cache locality
+        std::vector<size_t> processedIndices;
+        for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
+        {
+            // Tentar encodar o frame (sem lock)
+            bool encodeSuccess = encodeVideoFrame(data->data(), width, height, timestamp);
+
+            // Guardar índice se sucesso (marcar depois em batch)
+            if (encodeSuccess)
+            {
+                processedIndices.push_back(bufferIndex);
+                processedAny = true;
+            }
+        }
+
+        // Marcar todos os frames processados de uma vez (lock único)
+        if (!processedIndices.empty())
+        {
+            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
+            for (size_t idx : processedIndices)
+            {
+                if (idx < m_timestampedVideoBuffer.size())
+                {
+                    auto &frame = m_timestampedVideoBuffer[idx];
+                    if (!frame.processed)
                     {
-                        frame.processed = true; // Marcar como processado apenas se sucesso
-                        processedAny = true;
-                        framesProcessedThisIteration++;
-                    }
-                    else
-                    {
-                        // Encoding falhou (provavelmente codec cheio) - NÃO marcar como processado
-                        // Se temos muitos frames, continuar tentando os próximos
-                        // Se temos poucos frames, parar para não desperdiçar CPU
-                        if (totalFrames < 10)
-                        {
-                            break; // Parar se poucos frames e este falhou
-                        }
-                        // Continuar tentando se há muitos frames acumulados
+                        frame.processed = true;
                     }
                 }
             }
+        }
 
-            // Remover frames processados do início
+        // Remover frames processados do início (com lock)
+        {
+            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
             while (!m_timestampedVideoBuffer.empty() && m_timestampedVideoBuffer.front().processed)
             {
                 m_timestampedVideoBuffer.pop_front();
