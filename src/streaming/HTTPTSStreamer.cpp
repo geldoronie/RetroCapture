@@ -112,8 +112,9 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         // Limpar apenas se o buffer estiver muito grande para evitar overhead
         // CRÍTICO: Reduzir frequência de cleanup para evitar perda de frames
         static size_t cleanupCounter = 0;
-        // Aumentar threshold para buffer maior (30 segundos = ~1800 frames a 60 FPS)
-        if (++cleanupCounter >= 60 || m_timestampedVideoBuffer.size() > 1800)
+        // Aumentar threshold para buffer maior (30 segundos de frames baseado no FPS configurado)
+        const size_t maxFramesFor30Seconds = static_cast<size_t>(m_fps * 30);
+        if (++cleanupCounter >= 60 || m_timestampedVideoBuffer.size() > maxFramesFor30Seconds)
         {
             cleanupOldData();
             cleanupCounter = 0;
