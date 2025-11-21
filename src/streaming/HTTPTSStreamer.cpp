@@ -1116,8 +1116,8 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         {
             // Codec está cheio, precisa receber pacotes antes de enviar mais frames
             // CRÍTICO: Receber TODOS os pacotes pendentes e tentar novamente
-            // Fazer múltiplas tentativas para garantir que o frame seja enviado
-            const int MAX_RETRY_ATTEMPTS = 5;
+            // Aumentar tentativas para garantir que frames sejam enviados mesmo com codec ocupado
+            const int MAX_RETRY_ATTEMPTS = 10;
             for (int retry = 0; retry < MAX_RETRY_ATTEMPTS; retry++)
             {
                 AVPacket *tempPkt = av_packet_alloc();
@@ -1812,13 +1812,22 @@ void HTTPTSStreamer::encodingThread()
         }
 
         // Processar frames FORA do lock (encoding pode ser lento)
-        // CRÍTICO: Processar frames em lotes pequenos para não sobrecarregar o codec
-        // Se processarmos muitos frames de uma vez, o codec fica cheio e retorna EAGAIN
-        // Processar em lotes de 3-5 frames por vez para manter o codec processando continuamente
+        // OTIMIZAÇÃO: Batch dinâmico baseado no tamanho da fila para melhor throughput
+        // Se há muitos frames acumulados, processar mais agressivamente
         std::vector<size_t> processedIndices;
-        // Aumentar batch para processar mais frames e alcançar 60 FPS
-        // Com a Opção A (sem thread intermediária), podemos processar mais frames por vez
-        const size_t MAX_FRAMES_PER_BATCH = 10; // Processar até 10 frames por vez para melhor throughput
+        size_t MAX_FRAMES_PER_BATCH;
+        if (totalFrames > 50)
+        {
+            MAX_FRAMES_PER_BATCH = 20; // Muitos frames acumulados - processar mais agressivamente
+        }
+        else if (totalFrames > 20)
+        {
+            MAX_FRAMES_PER_BATCH = 15; // Fila média - processar moderadamente
+        }
+        else
+        {
+            MAX_FRAMES_PER_BATCH = 10; // Fila pequena - processar normalmente
+        }
         size_t framesProcessed = 0;
 
         for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
@@ -1926,9 +1935,10 @@ void HTTPTSStreamer::encodingThread()
             if (!hasPendingData)
             {
                 // Só dormir se realmente não há dados para processar
-                std::this_thread::sleep_for(std::chrono::microseconds(10)); // 0.01ms quando não há dados
+                std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1µs - mínimo possível
             }
             // Se há dados pendentes mas não processamos, continuar imediatamente (pode ser codec ocupado)
+            // Não fazer sleep - tentar processar novamente imediatamente
         }
         // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }

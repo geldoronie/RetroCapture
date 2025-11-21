@@ -1083,32 +1083,22 @@ void Application::run()
             samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
 
             // CRÍTICO: Processar áudio em loop até esgotar todos os samples disponíveis
-            // Isso garante que mesmo se o loop principal não rodar a 60 FPS, o áudio será processado continuamente
-            // Limitar a 10 iterações por frame para não bloquear o loop principal por muito tempo
-            const size_t MAX_AUDIO_ITERATIONS = 10;
-            size_t audioIterations = 0;
+            // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
+            // Processar até não haver mais samples (sem limite de iterações)
+            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
 
-            while (audioIterations < MAX_AUDIO_ITERATIONS)
+            while (true)
             {
                 // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
-                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
                 size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
 
                 if (samplesRead > 0)
                 {
                     m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
-                    audioIterations++;
 
-                    // Se lemos menos que o esperado, pode ser que não há mais samples disponíveis
-                    // Mas continuar tentando uma vez mais para garantir
+                    // Se lemos menos que o esperado, não há mais samples disponíveis
                     if (samplesRead < samplesPerVideoFrame)
                     {
-                        // Tentar mais uma vez para pegar samples restantes
-                        size_t remainingSamples = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-                        if (remainingSamples > 0)
-                        {
-                            m_streamManager->pushAudio(audioBuffer.data(), remainingSamples);
-                        }
                         break; // Não há mais samples disponíveis
                     }
                 }
