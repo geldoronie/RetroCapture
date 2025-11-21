@@ -632,54 +632,21 @@ bool Application::initUI()
             // Parar streaming
             m_streamingEnabled = false;
             
-            // IMPORTANTE: Parar streaming de forma não-bloqueante para não travar a UI
-            // Sinalizar parada primeiro para que as threads possam terminar
-            if (m_streamingThreadRunning)
-            {
-                m_streamingThreadRunning = false;
-            }
-            
-            // Fazer stop() do streamManager (ele vai sinalizar as threads para parar)
-            // IMPORTANTE: Fazer isso em uma thread separada para não bloquear a UI
+            // OPÇÃO A: Parar streaming (sem thread intermediária)
+            // Fazer stop() do streamManager em thread separada para não bloquear a UI
             if (m_streamManager) {
-                // Criar uma cópia do ponteiro para usar na thread
                 auto streamManagerPtr = m_streamManager.get();
                 
-                // IMPORTANTE: Aguardar um pouco para que a thread de streaming processe
-                // m_streamingThreadRunning = false antes de resetar o streamManager
-                // Isso evita que a thread de streaming tente usar streamManager após reset
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                
                 // Fazer stop e cleanup em thread separada
-                // IMPORTANTE: Não capturar 'this' para evitar problemas de lifetime
                 std::thread stopThread([streamManagerPtr]() {
                     if (streamManagerPtr) {
                         streamManagerPtr->stop();
                         streamManagerPtr->cleanup();
                     }
                 });
-                stopThread.detach(); // Detach para não bloquear
+                stopThread.detach();
                 
-                // Reset do streamManager após um pequeno delay para garantir que
-                // a thread de streaming já processou a sinalização de parada
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 m_streamManager.reset();
-            }
-            
-            // IMPORTANTE: Fazer join da thread de streaming em thread separada para não bloquear a UI
-            // Mas garantir que a thread seja limpa antes de poder iniciar novamente
-            if (m_streamingThread.joinable())
-            {
-                // Fazer join em thread separada para não bloquear
-                std::thread joinThread([this]() {
-                    // Aguardar um pouco para garantir que a thread processou m_streamingThreadRunning = false
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    if (m_streamingThread.joinable())
-                    {
-                        m_streamingThread.join();
-                    }
-                });
-                joinThread.detach();
             }
             
             // Não fechar o AudioCapture aqui - pode ser usado novamente
@@ -913,21 +880,7 @@ bool Application::initStreaming()
 
     LOG_INFO("Inicializando streaming...");
 
-    // IMPORTANTE: Parar thread de streaming ANTES de limpar StreamManager
-    // Isso previne problemas de double free quando há mudanças de configuração
-    if (m_streamingThreadRunning || m_streamingThread.joinable())
-    {
-        LOG_INFO("Parando thread de streaming anterior...");
-        m_streamingThreadRunning = false;
-
-        // Aguardar que a thread termine
-        if (m_streamingThread.joinable())
-        {
-            // Aguardar um pouco para que a thread processe a sinalização
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            m_streamingThread.join();
-        }
-    }
+    // OPÇÃO A: Não há mais thread de streaming para limpar
 
     // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
     // Isso previne problemas de double free quando há mudanças de configuração
@@ -1035,11 +988,9 @@ bool Application::initStreaming()
     // Esta verificação é redundante, mas mantida como segurança extra
     // (não deveria ser necessária, mas ajuda a garantir que não há threads órfãs)
 
-    // Agora podemos criar uma nova thread com segurança
-    // IMPORTANTE: Garantir que m_streamingThreadRunning está false antes de criar nova thread
-    m_streamingThreadRunning = true;
-    m_streamingThread = std::thread(&Application::streamingThreadFunc, this);
-    LOG_INFO("Thread de streaming iniciada");
+    // OPÇÃO A: Não criar thread de streaming - processamento movido para thread principal
+    // Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
+    LOG_INFO("Streaming inicializado (processamento na thread principal)");
 
     return true;
 }
@@ -1113,6 +1064,61 @@ void Application::run()
         // IMPORTANTE: Captura, processamento e streaming sempre continuam,
         // independente do foco da janela. Isso garante que o streaming funcione
         // mesmo quando a janela não está em foco.
+
+        // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
+        // CRÍTICO: Processar TODOS os samples disponíveis em loop até esgotar
+        // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
+        // O áudio acumula no buffer do AudioCapture e precisa ser processado continuamente
+        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        {
+            // Calcular tamanho do buffer baseado no tempo para sincronização
+            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+            uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+
+            // Calcular samples correspondentes a 1 frame de vídeo
+            // Para 60 FPS e 44100Hz: 44100/60 = 735 samples por frame
+            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                              : 512;
+            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+
+            // CRÍTICO: Processar áudio em loop até esgotar todos os samples disponíveis
+            // Isso garante que mesmo se o loop principal não rodar a 60 FPS, o áudio será processado continuamente
+            // Limitar a 10 iterações por frame para não bloquear o loop principal por muito tempo
+            const size_t MAX_AUDIO_ITERATIONS = 10;
+            size_t audioIterations = 0;
+
+            while (audioIterations < MAX_AUDIO_ITERATIONS)
+            {
+                // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
+                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+
+                if (samplesRead > 0)
+                {
+                    m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                    audioIterations++;
+
+                    // Se lemos menos que o esperado, pode ser que não há mais samples disponíveis
+                    // Mas continuar tentando uma vez mais para garantir
+                    if (samplesRead < samplesPerVideoFrame)
+                    {
+                        // Tentar mais uma vez para pegar samples restantes
+                        size_t remainingSamples = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+                        if (remainingSamples > 0)
+                        {
+                            m_streamManager->pushAudio(audioBuffer.data(), remainingSamples);
+                        }
+                        break; // Não há mais samples disponíveis
+                    }
+                }
+                else
+                {
+                    // Não há mais samples disponíveis, parar
+                    break;
+                }
+            }
+        }
 
         // Processar entrada de teclado (F12 para toggle UI)
         handleKeyInput();
@@ -1360,46 +1366,54 @@ void Application::run()
                         }
                     }
 
-                    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
-
-                    // Adicionar frame à fila (thread-safe)
-                    // Usar fila em vez de buffer único para evitar perda de frames
-                    if (!allZeros && !frameData.empty())
+                    // OPÇÃO A: Processar frame diretamente na thread principal (eliminar thread intermediária)
+                    // Fazer resize (se necessário) e pushFrame diretamente aqui
+                    if (!allZeros && !frameData.empty() && m_streamManager && m_streamManager->isActive())
                     {
-                        int64_t captureTimeUs = getTimestampUs();
-                        {
-                            std::lock_guard<std::mutex> lock(m_frameDataMutex);
+                        uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+                        uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
 
-                            // Limitar tamanho da fila para evitar acúmulo excessivo
-                            // Se a fila estiver cheia, remover o frame mais antigo
-                            if (m_frameQueue.size() >= MAX_FRAME_QUEUE_SIZE)
+                        // Resize se necessário
+                        const uint8_t *dataToSend = frameData.data();
+                        uint32_t dataWidth = captureWidth;
+                        uint32_t dataHeight = captureHeight;
+
+                        std::vector<uint8_t> processedData; // Manter em escopo para não perder dados durante resize
+                        if (streamWidth != dataWidth || streamHeight != dataHeight)
+                        {
+                            size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
+                            if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
                             {
-                                m_frameQueue.pop_front(); // Remover frame mais antigo
+                                processedData.resize(processedSize);
+
+                                // OTIMIZAÇÃO CRÍTICA: Usar libswscale para resize (muito mais rápido que pixel por pixel)
+                                SwsContext *swsCtx = sws_getContext(
+                                    dataWidth, dataHeight, AV_PIX_FMT_RGB24,
+                                    streamWidth, streamHeight, AV_PIX_FMT_RGB24,
+                                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+
+                                if (swsCtx)
+                                {
+                                    const uint8_t *srcData[1] = {frameData.data()};
+                                    int srcLinesize[1] = {static_cast<int>(dataWidth * 3)};
+                                    uint8_t *dstData[1] = {processedData.data()};
+                                    int dstLinesize[1] = {static_cast<int>(streamWidth * 3)};
+
+                                    // Fazer resize otimizado com libswscale
+                                    sws_scale(swsCtx, srcData, srcLinesize, 0, dataHeight,
+                                              dstData, dstLinesize);
+
+                                    sws_freeContext(swsCtx);
+
+                                    dataToSend = processedData.data();
+                                    dataWidth = streamWidth;
+                                    dataHeight = streamHeight;
+                                }
                             }
-
-                            // Adicionar novo frame à fila
-                            SharedFrameData newFrame;
-                            newFrame.frameData = std::move(frameData);
-                            newFrame.width = captureWidth;
-                            newFrame.height = captureHeight;
-                            m_frameQueue.push_back(std::move(newFrame));
                         }
 
-                        // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
-                        static int videoCaptureLogCount = 0;
-                        static int64_t firstVideoCaptureTime = 0;
-                        if (videoCaptureLogCount == 0)
-                        {
-                            firstVideoCaptureTime = captureTimeUs;
-                        }
-                        if (videoCaptureLogCount < 10 || (videoCaptureLogCount % 60 == 0))
-                        {
-                            int64_t elapsedUs = captureTimeUs - firstVideoCaptureTime;
-                            LOG_INFO("[SYNC_DEBUG] [VIDEO_CAPTURE] Frame #" + std::to_string(videoCaptureLogCount) +
-                                     " captured at " + std::to_string(captureTimeUs) + "us, elapsed=" +
-                                     std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)");
-                        }
-                        videoCaptureLogCount++;
+                        // Enviar frame diretamente para streaming (sem thread intermediária)
+                        m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
                     }
                 }
             }
@@ -1452,199 +1466,8 @@ void Application::run()
     LOG_INFO("Loop principal encerrado");
 }
 
-void Application::streamingThreadFunc()
-{
-    LOG_INFO("Thread de streaming iniciada");
-
-    // Esta thread é responsável por processar áudio continuamente
-    // Os frames de vídeo são processados pelo encodingThread do HTTPTSStreamer
-    // Mas podemos garantir que o áudio seja processado de forma mais contínua aqui
-
-    while (m_streamingThreadRunning && m_streamingEnabled)
-    {
-        if (!m_audioCapture || !m_audioCapture->isOpen() || !m_streamManager || !m_streamManager->isActive() || !m_window || m_window->getWidth() == 0 || m_window->getHeight() == 0 || m_window->getWidth() > 7680 || m_window->getHeight() > 4320)
-        {
-            // Skip audio processing if audio capture is not open or stream manager is not active
-            usleep(100000); // 100ms
-            continue;
-        }
-
-        // Audio processing
-        std::unique_ptr<StreamManager> streamManagerCopy;
-        bool hasStreamManager = false;
-        {
-            // Fazer uma verificação rápida se m_streamManager ainda existe
-            // Não podemos fazer lock direto, então vamos verificar de forma segura
-            if (m_streamManager)
-            {
-                hasStreamManager = true;
-            }
-        }
-
-        // Calcular tamanho do buffer baseado no tempo para sincronização
-        // 1 segundo de áudio = 1 segundo de vídeo
-        // samplesPerVideoFrame = sampleRate / fps (para corresponder ao tempo de 1 frame de vídeo)
-        uint32_t audioSampleRate = m_audioCapture->getSampleRate();
-        uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
-
-        // Calcular samples correspondentes a 1 frame de vídeo (arredondado)
-        // Usar múltiplo de 2 para alinhamento e garantir pelo menos um mínimo razoável
-        size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
-                                          ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps) // Arredondamento
-                                          : 512;                                                             // Fallback se não conseguir calcular
-
-        // Garantir mínimo de 64 samples e máximo razoável (ex: 1 segundo = sampleRate)
-        samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
-
-        // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
-        int64_t audioReadStartUs = getTimestampUs();
-        std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
-        size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-        int64_t audioReadEndUs = getTimestampUs();
-
-        if (samplesRead > 0)
-        {
-            // Push audio to streamer (verificar novamente antes de usar)
-            if (m_streamManager && m_streamManager->isActive())
-            {
-                int64_t audioPushTimeUs = getTimestampUs();
-                m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
-
-                // Log detalhado para depuração de sincronização (primeiros 10 chunks e depois a cada segundo)
-                static int audioCaptureLogCount = 0;
-                static int64_t firstAudioCaptureTime = 0;
-                if (audioCaptureLogCount == 0)
-                {
-                    firstAudioCaptureTime = audioReadStartUs;
-                }
-                if (audioCaptureLogCount < 10 || (audioCaptureLogCount % 60 == 0))
-                {
-                    int64_t elapsedUs = audioReadStartUs - firstAudioCaptureTime;
-                    double audioDurationMs = (static_cast<double>(samplesRead) / static_cast<double>(audioSampleRate)) * 1000.0;
-                    LOG_INFO("[SYNC_DEBUG] [AUDIO_CAPTURE] Chunk #" + std::to_string(audioCaptureLogCount) +
-                             " read " + std::to_string(samplesRead) + " samples (" + std::to_string(audioDurationMs) + "ms)" +
-                             " at " + std::to_string(audioReadStartUs) + "us, elapsed=" +
-                             std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
-                             ", read_duration=" + std::to_string(audioReadEndUs - audioReadStartUs) + "us");
-                }
-                audioCaptureLogCount++;
-            }
-        }
-        else
-        {
-            // Sem samples disponíveis, fazer um pequeno sleep
-            usleep(100000); // 100ms
-        }
-
-        // Processar frames de vídeo da fila
-        // A thread principal faz glReadPixels e adiciona frames à fila
-        // Esta thread processa os dados (resize, etc) e envia para streaming
-        // Usar fila garante que nenhum frame seja perdido, mesmo se novos frames chegarem durante o processamento
-        bool hasVideoFrame = false;
-        SharedFrameData frameData;
-        {
-            std::lock_guard<std::mutex> lock(m_frameDataMutex);
-            if (!m_frameQueue.empty())
-            {
-                frameData = std::move(m_frameQueue.front());
-                m_frameQueue.pop_front(); // Remover da fila apenas após copiar
-                hasVideoFrame = true;
-            }
-        }
-
-        if (hasVideoFrame && m_streamManager && m_streamManager->isActive())
-        {
-            int64_t videoPushTimeUs = getTimestampUs();
-            uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-            uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
-
-            // Resize se necessário
-            const uint8_t *dataToSend = frameData.frameData.data();
-            uint32_t dataWidth = frameData.width;
-            uint32_t dataHeight = frameData.height;
-            bool resizeSuccess = true;
-
-            // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
-            static int videoPushLogCount = 0;
-            static int64_t firstVideoPushTime = 0;
-            if (videoPushLogCount == 0)
-            {
-                firstVideoPushTime = videoPushTimeUs;
-            }
-            if (videoPushLogCount < 10 || (videoPushLogCount % 60 == 0))
-            {
-                int64_t elapsedUs = videoPushTimeUs - firstVideoPushTime;
-                LOG_INFO("[SYNC_DEBUG] [VIDEO_PUSH] Frame #" + std::to_string(videoPushLogCount) +
-                         " pushed to streamer at " + std::to_string(videoPushTimeUs) + "us, elapsed=" +
-                         std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)");
-            }
-            videoPushLogCount++;
-
-            // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
-
-            std::vector<uint8_t> processedData; // Manter em escopo para não perder dados durante resize
-            if (streamWidth != dataWidth || streamHeight != dataHeight)
-            {
-                size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
-                if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
-                {
-                    processedData.resize(processedSize);
-
-                    // OTIMIZAÇÃO CRÍTICA: Usar libswscale para resize (muito mais rápido que pixel por pixel)
-                    // libswscale usa SIMD e é otimizado para performance
-                    // SWS_FAST_BILINEAR é o mais rápido, adequado para streaming
-                    SwsContext *swsCtx = sws_getContext(
-                        dataWidth, dataHeight, AV_PIX_FMT_RGB24,
-                        streamWidth, streamHeight, AV_PIX_FMT_RGB24,
-                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-
-                    if (swsCtx)
-                    {
-                        const uint8_t *srcData[1] = {frameData.frameData.data()};
-                        int srcLinesize[1] = {static_cast<int>(dataWidth * 3)};
-                        uint8_t *dstData[1] = {processedData.data()};
-                        int dstLinesize[1] = {static_cast<int>(streamWidth * 3)};
-
-                        // Fazer resize otimizado com libswscale
-                        sws_scale(swsCtx, srcData, srcLinesize, 0, dataHeight,
-                                  dstData, dstLinesize);
-
-                        sws_freeContext(swsCtx);
-
-                        dataToSend = processedData.data();
-                        dataWidth = streamWidth;
-                        dataHeight = streamHeight;
-                    }
-                    else
-                    {
-                        resizeSuccess = false; // Falha ao criar contexto de scaling
-                    }
-                }
-                else
-                {
-                    resizeSuccess = false; // Tamanho inválido
-                }
-            }
-
-            // Enviar frame para streaming (na thread de streaming)
-            // Frame já foi removido da fila, então não há risco de perda
-            if (resizeSuccess)
-            {
-                m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
-            }
-            // Se resize falhou, o frame já foi removido da fila (não podemos reenviar)
-            // Mas isso é raro e não deve causar perda significativa
-        }
-        else if (!hasVideoFrame)
-        {
-            // Sem frame disponível, fazer um pequeno sleep para não consumir CPU desnecessariamente
-            // Reduzir sleep para verificar mais frequentemente e não perder frames
-            usleep(100); // 0.1ms para verificar mais frequentemente
-        }
-    }
-
-    LOG_INFO("Thread de streaming encerrada");
-}
+// OPÇÃO A: streamingThreadFunc removida - processamento movido para thread principal
+// Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
 
 void Application::shutdown()
 {
@@ -1696,16 +1519,7 @@ void Application::shutdown()
         m_window.reset();
     }
 
-    // Parar thread de streaming
-    if (m_streamingThreadRunning)
-    {
-        m_streamingThreadRunning = false;
-        if (m_streamingThread.joinable())
-        {
-            m_streamingThread.join();
-        }
-        LOG_INFO("Thread de streaming encerrada");
-    }
+    // OPÇÃO A: Não há mais thread de streaming para limpar
 
     if (m_streamManager)
     {

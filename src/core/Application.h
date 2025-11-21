@@ -88,9 +88,7 @@ private:
     std::unique_ptr<AudioCapture> m_audioCapture;
 
     // Streaming thread
-    std::thread m_streamingThread;
-    std::atomic<bool> m_streamingThreadRunning{false};
-    void streamingThreadFunc();
+    // OPÇÃO A: Thread de streaming removida - processamento movido para thread principal
 
     // Configuração
     std::string m_shaderPath;
@@ -137,15 +135,7 @@ private:
     std::atomic<bool> m_isResizing{false};
     
     // Fila de frames para streaming thread (captura de vídeo)
-    // Usar fila em vez de buffer único para evitar perda de frames
-    struct SharedFrameData {
-        std::vector<uint8_t> frameData;
-        uint32_t width = 0;
-        uint32_t height = 0;
-    };
-    mutable std::mutex m_frameDataMutex;
-    std::deque<SharedFrameData> m_frameQueue; // Fila de frames para processar
-    static constexpr size_t MAX_FRAME_QUEUE_SIZE = 60; // Aumentar para 60 frames (1 segundo a 60 FPS) para evitar perda
+    // OPÇÃO A: Fila removida - frames processados diretamente na thread principal
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);

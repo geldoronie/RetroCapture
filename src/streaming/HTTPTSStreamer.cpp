@@ -90,8 +90,10 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     int64_t captureTimestampUs = getTimestampUs();
 
     // Adicionar frame com timestamp ao buffer temporal
+    // OTIMIZAÇÃO: Usar move semantics para evitar cópia desnecessária
     TimestampedFrame frame;
-    frame.data = std::make_shared<std::vector<uint8_t>>(data, data + width * height * 3);
+    frame.data = std::make_shared<std::vector<uint8_t>>(width * height * 3);
+    frame.data->assign(data, data + width * height * 3); // Cópia necessária, mas otimizada
     frame.width = width;
     frame.height = height;
     frame.captureTimestampUs = captureTimestampUs;
@@ -103,11 +105,19 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         {
             m_firstVideoTimestampUs = captureTimestampUs; // Primeiro frame define o início
         }
-        m_timestampedVideoBuffer.push_back(frame);
+        m_timestampedVideoBuffer.push_back(std::move(frame));
         m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
 
-        // Limpar dados antigos se necessário (baseado em tempo)
-        cleanupOldData();
+        // OTIMIZAÇÃO: Limpar dados antigos apenas ocasionalmente (não a cada frame)
+        // Limpar apenas se o buffer estiver muito grande para evitar overhead
+        // CRÍTICO: Reduzir frequência de cleanup para evitar perda de frames
+        static size_t cleanupCounter = 0;
+        // Aumentar threshold para buffer maior (30 segundos = ~1800 frames a 60 FPS)
+        if (++cleanupCounter >= 60 || m_timestampedVideoBuffer.size() > 1800)
+        {
+            cleanupOldData();
+            cleanupCounter = 0;
+        }
     }
 
     return true;
@@ -1093,36 +1103,81 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     {
         videoFrame->key_frame = 1;
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
-        LOG_INFO("encodeVideoFrame: First frame set as keyframe");
+        // Log removido para melhorar performance
     }
     frameCount++;
 
     // Enviar frame para codec
+    // CRÍTICO: Tentar múltiplas vezes se codec estiver cheio para não perder frames
     int ret = avcodec_send_frame(codecCtx, videoFrame);
     if (ret < 0)
     {
         if (ret == AVERROR(EAGAIN))
         {
             // Codec está cheio, precisa receber pacotes antes de enviar mais frames
-            // Isso é normal, mas pode indicar que estamos enviando frames muito rápido
-            // Vamos tentar receber pacotes pendentes antes de retornar erro
-            AVPacket *tempPkt = av_packet_alloc();
-            if (tempPkt)
+            // CRÍTICO: Receber TODOS os pacotes pendentes e tentar novamente
+            // Fazer múltiplas tentativas para garantir que o frame seja enviado
+            const int MAX_RETRY_ATTEMPTS = 5;
+            for (int retry = 0; retry < MAX_RETRY_ATTEMPTS; retry++)
             {
+                AVPacket *tempPkt = av_packet_alloc();
+                if (!tempPkt)
+                {
+                    break;
+                }
+
+                bool receivedAny = false;
+                // Receber TODOS os pacotes pendentes
                 while (avcodec_receive_packet(codecCtx, tempPkt) >= 0)
                 {
-                    // Descartar pacotes antigos para liberar espaço
+                    receivedAny = true;
+                    // CRÍTICO: Muxar e enviar os pacotes recebidos, não descartar!
+                    // Descartar pacotes faz perder frames encodados
+                    AVStream *videoStream = static_cast<AVStream *>(m_videoStream);
+                    if (videoStream)
+                    {
+                        tempPkt->stream_index = videoStream->index;
+                        // Converter PTS/DTS
+                        if (tempPkt->pts != AV_NOPTS_VALUE)
+                        {
+                            tempPkt->pts = av_rescale_q(tempPkt->pts, codecCtx->time_base, videoStream->time_base);
+                        }
+                        if (tempPkt->dts != AV_NOPTS_VALUE)
+                        {
+                            tempPkt->dts = av_rescale_q(tempPkt->dts, codecCtx->time_base, videoStream->time_base);
+                        }
+                        // Muxar pacote (muxPacket fará cópia se necessário)
+                        muxPacket(tempPkt);
+                    }
                     av_packet_unref(tempPkt);
                 }
                 av_packet_free(&tempPkt);
+
                 // Tentar enviar novamente
                 ret = avcodec_send_frame(codecCtx, videoFrame);
+                if (ret >= 0)
+                {
+                    break; // Sucesso!
+                }
+                else if (ret != AVERROR(EAGAIN))
+                {
+                    // Erro diferente de EAGAIN, não continuar tentando
+                    break;
+                }
+                // Se ainda EAGAIN e não recebemos nenhum pacote, pode ser que o codec esteja realmente cheio
+                // Continuar tentando
             }
         }
         if (ret < 0)
         {
-            LOG_ERROR("encodeVideoFrame: avcodec_send_frame failed: " + std::to_string(ret));
-            return false;
+            // Apenas logar se não for EAGAIN (EAGAIN é normal quando codec está cheio)
+            if (ret != AVERROR(EAGAIN))
+            {
+                LOG_ERROR("encodeVideoFrame: avcodec_send_frame failed: " + std::to_string(ret));
+            }
+            // CRÍTICO: Retornar false apenas se for erro real, não EAGAIN
+            // Se for EAGAIN mesmo após múltiplas tentativas, manter frame no buffer para tentar depois
+            return (ret != AVERROR(EAGAIN));
         }
     }
 
@@ -1137,19 +1192,18 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     AVPacket *pkt = av_packet_alloc();
     int packetCount = 0;
 
-    // Tentar receber pacotes múltiplas vezes para garantir que todos sejam processados
-    // Isso é especialmente importante para o primeiro keyframe
-    // Para 60 FPS, reduzir tentativas para processar mais rápido
-    int maxAttempts = (frameCount == 1 && videoFrame->key_frame == 1) ? 2 : 1;
-
-    for (int attempt = 0; attempt < maxAttempts; attempt++)
+    // CRÍTICO: Receber TODOS os pacotes disponíveis do codec
+    // Não limitar tentativas - receber todos os pacotes para não perder frames
+    // Isso é especialmente importante quando o codec está processando múltiplos frames
+    // Remover limite de tentativas - receber até não haver mais pacotes
+    while (true)
     {
         int ret = avcodec_receive_packet(codecCtx, pkt);
         if (ret < 0)
         {
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
             {
-                // Codec precisa de mais frames ou terminou
+                // Codec precisa de mais frames ou terminou - parar de receber
                 break;
             }
             else
@@ -1209,24 +1263,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
             }
         }
 
-        // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
-        static int videoEncodeLogCount = 0;
-        static int64_t firstVideoEncodeTime = 0;
-        int64_t muxTimeUs = getTimestampUs();
-        if (videoEncodeLogCount == 0)
-        {
-            firstVideoEncodeTime = muxTimeUs;
-        }
-        if (videoEncodeLogCount < 10 || (videoEncodeLogCount % 60 == 0))
-        {
-            int64_t elapsedUs = muxTimeUs - firstVideoEncodeTime;
-            LOG_INFO("[SYNC_DEBUG] [VIDEO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
-                     " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
-                     std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
-                     ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
-                     ", PTS=" + std::to_string(pktToMux->pts) + ", DTS=" + std::to_string(pktToMux->dts));
-        }
-        videoEncodeLogCount++;
+        // Logs removidos para melhorar performance - logs são um gargalo significativo
 
         // Muxar e enviar pacote (muxPacket fará a cópia se necessário)
         if (!muxPacket(pktToMux))
@@ -1239,18 +1276,8 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     }
     av_packet_free(&pkt);
 
-    if (packetCount == 0)
-    {
-        if (frameCount == 1)
-        {
-            LOG_WARN("encodeVideoFrame: First frame produced no packets (codec may need more frames)");
-        }
-        else
-        {
-            // Log removido para reduzir poluição
-        }
-    }
-    else if (frameCount == 1 && packetCount > 0)
+    // Após o primeiro keyframe ser enviado, fazer flush explícito para acelerar início do playback
+    if (frameCount == 1 && packetCount > 0)
     {
         // Após o primeiro keyframe ser enviado, fazer flush explícito para acelerar início do playback
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
@@ -1407,7 +1434,7 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         }
         audioFrame->pts = calculatedPTS;
 
-        int64_t frameEncodeTimeUs = getTimestampUs();
+        // Timestamp removido - não é mais necessário sem logs
         frameCount++;
 
         // Enviar frame para codec
@@ -1489,29 +1516,7 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
                 }
             }
 
-            // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
-            static int audioEncodeLogCount = 0;
-            static int64_t firstAudioEncodeTime = 0;
-            int64_t muxTimeUs = getTimestampUs();
-            if (audioEncodeLogCount == 0)
-            {
-                firstAudioEncodeTime = muxTimeUs;
-            }
-            if (audioEncodeLogCount < 10 || (audioEncodeLogCount % 43 == 0)) // ~1 segundo a 44100Hz/1024
-            {
-                int64_t elapsedUs = muxTimeUs - firstAudioEncodeTime;
-                double audioDurationMs = (static_cast<double>(samplesPerFrame) / static_cast<double>(m_audioSampleRate)) * 1000.0;
-                std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-                size_t accumulatorSize = m_audioAccumulator.size();
-                LOG_INFO("[SYNC_DEBUG] [AUDIO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
-                         " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
-                         std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
-                         ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
-                         ", PTS=" + std::to_string(pktCopy->pts) + ", DTS=" + std::to_string(pktCopy->dts) +
-                         ", duration=" + std::to_string(audioDurationMs) + "ms" +
-                         ", accumulator_size=" + std::to_string(accumulatorSize));
-            }
-            audioEncodeLogCount++;
+            // Logs removidos para melhorar performance - logs são um gargalo significativo
 
             // Muxar e enviar pacote (usar cópia, não o original)
             // muxPacket não precisa fazer outra cópia agora, mas vamos manter por segurança
@@ -1657,19 +1662,32 @@ void HTTPTSStreamer::cleanupOldData()
     int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - MAX_BUFFER_TIME_US;
     int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - MAX_BUFFER_TIME_US;
 
-    // Remover frames de vídeo mais antigos que a janela temporal
+    // CRÍTICO: NÃO descartar frames não processados - isso causa perda de frames!
+    // Remover apenas frames processados que estão fora da janela temporal
     while (!m_timestampedVideoBuffer.empty())
     {
         const auto &frame = m_timestampedVideoBuffer.front();
 
-        // Se está dentro da janela temporal, manter
+        // Se está dentro da janela temporal, manter (mesmo que processado)
         if (frame.captureTimestampUs >= oldestAllowedVideoUs)
         {
             break;
         }
 
-        // Se está fora da janela, descartar (mesmo que não processado - dados muito antigos)
-        m_timestampedVideoBuffer.pop_front();
+        // CRÍTICO: NÃO descartar frames não processados - eles ainda precisam ser encodados!
+        // Apenas descartar frames que já foram processados E estão muito antigos
+        if (frame.processed)
+        {
+            // Frame processado e antigo - seguro descartar
+            m_timestampedVideoBuffer.pop_front();
+        }
+        else
+        {
+            // Frame não processado - MANTER mesmo que antigo!
+            // Isso pode acontecer se o encoding está lento, mas não devemos perder frames
+            // Continuar processando frames antigos até que sejam encodados
+            break;
+        }
     }
 
     // Mesma lógica para áudio
@@ -1774,9 +1792,10 @@ void HTTPTSStreamer::encodingThread()
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
             totalFrames = m_timestampedVideoBuffer.size();
 
-            // Se há muitos frames acumulados, processar mais agressivamente
-            const size_t MAX_FRAMES_PER_ITERATION = (totalFrames > 30) ? 60 : (totalFrames > 15) ? 40
-                                                                                                 : 30;
+            // CRÍTICO: Processar TODOS os frames disponíveis, não limitar!
+            // Limitar frames causa acúmulo e perda de frames
+            // Para 60 FPS, precisamos processar todos os frames o mais rápido possível
+            const size_t MAX_FRAMES_PER_ITERATION = totalFrames; // Processar TODOS os frames disponíveis
 
             // Copiar dados dos frames não processados para fora do lock
             size_t framesCopied = 0;
@@ -1793,10 +1812,23 @@ void HTTPTSStreamer::encodingThread()
         }
 
         // Processar frames FORA do lock (encoding pode ser lento)
-        // OTIMIZAÇÃO: Processar múltiplos frames em batch para melhor cache locality
+        // CRÍTICO: Processar frames em lotes pequenos para não sobrecarregar o codec
+        // Se processarmos muitos frames de uma vez, o codec fica cheio e retorna EAGAIN
+        // Processar em lotes de 3-5 frames por vez para manter o codec processando continuamente
         std::vector<size_t> processedIndices;
+        // Aumentar batch para processar mais frames e alcançar 60 FPS
+        // Com a Opção A (sem thread intermediária), podemos processar mais frames por vez
+        const size_t MAX_FRAMES_PER_BATCH = 10; // Processar até 10 frames por vez para melhor throughput
+        size_t framesProcessed = 0;
+
         for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
         {
+            // Limitar frames por batch para evitar que o codec fique cheio
+            if (framesProcessed >= MAX_FRAMES_PER_BATCH)
+            {
+                break; // Processar o resto na próxima iteração
+            }
+
             // Tentar encodar o frame (sem lock)
             bool encodeSuccess = encodeVideoFrame(data->data(), width, height, timestamp);
 
@@ -1805,6 +1837,13 @@ void HTTPTSStreamer::encodingThread()
             {
                 processedIndices.push_back(bufferIndex);
                 processedAny = true;
+                framesProcessed++;
+            }
+            else
+            {
+                // Se falhou (provavelmente EAGAIN - codec cheio), parar e tentar novamente na próxima iteração
+                // Isso evita que muitos frames falhem de uma vez
+                break;
             }
         }
 

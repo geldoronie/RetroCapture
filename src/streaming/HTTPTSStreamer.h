@@ -149,9 +149,9 @@ private:
     std::atomic<bool> m_cleanedUp{false};
 
     // Configuração de buffer temporal
-    static constexpr int64_t MAX_BUFFER_TIME_US = 5 * 1000000LL; // 5 segundos máximo
-    static constexpr int64_t MIN_BUFFER_TIME_US = 0;             // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
-    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;    // 50ms de tolerância para sincronização
+    static constexpr int64_t MAX_BUFFER_TIME_US = 30 * 1000000LL; // 30 segundos máximo - buffer grande para evitar perda de frames
+    static constexpr int64_t MIN_BUFFER_TIME_US = 0;              // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
+    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;     // 50ms de tolerância para sincronização
 
     // Buffers temporais ordenados por timestamp de captura
     std::mutex m_videoBufferMutex;
