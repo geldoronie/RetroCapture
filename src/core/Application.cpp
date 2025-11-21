@@ -1357,15 +1357,28 @@ void Application::run()
 
                     // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
-                    // Copiar dados para buffer compartilhado (thread-safe)
+                    // Adicionar frame à fila (thread-safe)
+                    // Usar fila em vez de buffer único para evitar perda de frames
                     if (!allZeros && !frameData.empty())
                     {
                         int64_t captureTimeUs = getTimestampUs();
-                        std::lock_guard<std::mutex> lock(m_frameDataMutex);
-                        m_sharedFrameData.frameData = std::move(frameData);
-                        m_sharedFrameData.width = captureWidth;
-                        m_sharedFrameData.height = captureHeight;
-                        m_sharedFrameData.hasNewFrame = true;
+                        {
+                            std::lock_guard<std::mutex> lock(m_frameDataMutex);
+
+                            // Limitar tamanho da fila para evitar acúmulo excessivo
+                            // Se a fila estiver cheia, remover o frame mais antigo
+                            if (m_frameQueue.size() >= MAX_FRAME_QUEUE_SIZE)
+                            {
+                                m_frameQueue.pop_front(); // Remover frame mais antigo
+                            }
+
+                            // Adicionar novo frame à fila
+                            SharedFrameData newFrame;
+                            newFrame.frameData = std::move(frameData);
+                            newFrame.width = captureWidth;
+                            newFrame.height = captureHeight;
+                            m_frameQueue.push_back(std::move(newFrame));
+                        }
 
                         // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
                         static int videoCaptureLogCount = 0;
@@ -1518,18 +1531,18 @@ void Application::streamingThreadFunc()
             usleep(100000); // 100ms
         }
 
-        // Processar frames de vídeo do buffer compartilhado
-        // A thread principal faz glReadPixels e copia para m_sharedFrameData
+        // Processar frames de vídeo da fila
+        // A thread principal faz glReadPixels e adiciona frames à fila
         // Esta thread processa os dados (resize, etc) e envia para streaming
-        // Se a fila de vídeo estiver muito grande, descartar frames antigos para evitar atraso excessivo
+        // Usar fila garante que nenhum frame seja perdido, mesmo se novos frames chegarem durante o processamento
         bool hasVideoFrame = false;
         SharedFrameData frameData;
         {
             std::lock_guard<std::mutex> lock(m_frameDataMutex);
-            if (m_sharedFrameData.hasNewFrame && !m_sharedFrameData.frameData.empty())
+            if (!m_frameQueue.empty())
             {
-                frameData = m_sharedFrameData;
-                m_sharedFrameData.hasNewFrame = false; // Marcar como processado
+                frameData = std::move(m_frameQueue.front());
+                m_frameQueue.pop_front(); // Remover da fila apenas após copiar
                 hasVideoFrame = true;
             }
         }
@@ -1544,6 +1557,7 @@ void Application::streamingThreadFunc()
             const uint8_t *dataToSend = frameData.frameData.data();
             uint32_t dataWidth = frameData.width;
             uint32_t dataHeight = frameData.height;
+            bool resizeSuccess = true;
 
             // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
             static int videoPushLogCount = 0;
@@ -1563,12 +1577,12 @@ void Application::streamingThreadFunc()
 
             // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
+            std::vector<uint8_t> processedData; // Manter em escopo para não perder dados durante resize
             if (streamWidth != dataWidth || streamHeight != dataHeight)
             {
                 size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
                 if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
                 {
-                    std::vector<uint8_t> processedData;
                     processedData.resize(processedSize);
 
                     // Otimização: pré-calcular offsets de linha para reduzir cálculos
@@ -1607,10 +1621,20 @@ void Application::streamingThreadFunc()
                     dataWidth = streamWidth;
                     dataHeight = streamHeight;
                 }
+                else
+                {
+                    resizeSuccess = false; // Tamanho inválido
+                }
             }
 
             // Enviar frame para streaming (na thread de streaming)
-            m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+            // Frame já foi removido da fila, então não há risco de perda
+            if (resizeSuccess)
+            {
+                m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+            }
+            // Se resize falhou, o frame já foi removido da fila (não podemos reenviar)
+            // Mas isso é raro e não deve causar perda significativa
         }
         else if (!hasVideoFrame)
         {

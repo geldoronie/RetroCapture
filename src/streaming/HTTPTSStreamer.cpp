@@ -560,19 +560,36 @@ bool HTTPTSStreamer::initializeVideoCodec()
     codecCtx->height = m_height;
     codecCtx->time_base = {1, static_cast<int>(m_fps)};
     codecCtx->framerate = {static_cast<int>(m_fps), 1};
-    codecCtx->gop_size = 1;
-    codecCtx->max_b_frames = 0;
+    codecCtx->gop_size = static_cast<int>(m_fps * 2); // Keyframe a cada 2 segundos (melhor que 1 frame)
+    codecCtx->max_b_frames = 0;                       // Sem B-frames para baixa latência
     codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
     codecCtx->bit_rate = m_videoBitrate;
-    codecCtx->thread_count = 4;
+    codecCtx->thread_count = 0; // Auto-detect (melhor que fixo)
 
-    // Abrir codec
-    if (avcodec_open2(codecCtx, codec, nullptr) < 0)
+    // Configurar preset rápido para libx264 (velocidade de encoding)
+    AVDictionary *opts = nullptr;
+    if (codec->id == AV_CODEC_ID_H264)
+    {
+        // Preset "fast" para balance entre velocidade e qualidade
+        // "veryfast" estava causando qualidade ruim, "fast" é melhor qualidade mas ainda rápido
+        av_dict_set(&opts, "preset", "fast", 0);
+        // Tune "zerolatency" para streaming em tempo real (remove delay do codec)
+        av_dict_set(&opts, "tune", "zerolatency", 0);
+        // Profile "baseline" para compatibilidade máxima
+        av_dict_set(&opts, "profile", "baseline", 0);
+        // Keyframe mínimo a cada 2 segundos
+        av_dict_set_int(&opts, "keyint_min", static_cast<int>(m_fps * 2), 0);
+    }
+
+    // Abrir codec com opções
+    if (avcodec_open2(codecCtx, codec, &opts) < 0)
     {
         LOG_ERROR("Failed to open video codec");
+        av_dict_free(&opts);
         avcodec_free_context(&codecCtx);
         return false;
     }
+    av_dict_free(&opts); // Liberar opções após abrir codec
 
     m_videoCodecContext = codecCtx;
 
@@ -1075,8 +1092,29 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     int ret = avcodec_send_frame(codecCtx, videoFrame);
     if (ret < 0)
     {
-        LOG_ERROR("encodeVideoFrame: avcodec_send_frame failed: " + std::to_string(ret));
-        return false;
+        if (ret == AVERROR(EAGAIN))
+        {
+            // Codec está cheio, precisa receber pacotes antes de enviar mais frames
+            // Isso é normal, mas pode indicar que estamos enviando frames muito rápido
+            // Vamos tentar receber pacotes pendentes antes de retornar erro
+            AVPacket *tempPkt = av_packet_alloc();
+            if (tempPkt)
+            {
+                while (avcodec_receive_packet(codecCtx, tempPkt) >= 0)
+                {
+                    // Descartar pacotes antigos para liberar espaço
+                    av_packet_unref(tempPkt);
+                }
+                av_packet_free(&tempPkt);
+                // Tentar enviar novamente
+                ret = avcodec_send_frame(codecCtx, videoFrame);
+            }
+        }
+        if (ret < 0)
+        {
+            LOG_ERROR("encodeVideoFrame: avcodec_send_frame failed: " + std::to_string(ret));
+            return false;
+        }
     }
 
     // Receber pacotes encodados e muxar/enviar diretamente
@@ -1686,19 +1724,41 @@ void HTTPTSStreamer::encodingThread()
     {
         bool processedAny = false;
 
-        // Processar TODOS os frames de vídeo disponíveis (sem esperar por sincronização)
-        // Para 60fps, precisamos processar imediatamente tudo que chega
+        // Processar frames de vídeo disponíveis (sem esperar por sincronização)
+        // IMPORTANTE: Só marcar como processado se o encoding foi bem-sucedido
+        // Se falhar, manter no buffer para tentar novamente
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
 
-            // Processar TODOS os frames não processados
+            // Processar frames não processados (limitar a alguns por iteração para não sobrecarregar)
+            size_t framesProcessedThisIteration = 0;
+            const size_t MAX_FRAMES_PER_ITERATION = 5; // Processar até 5 frames por iteração
+
             for (auto &frame : m_timestampedVideoBuffer)
             {
+                if (framesProcessedThisIteration >= MAX_FRAMES_PER_ITERATION)
+                {
+                    break; // Limitar processamento por iteração
+                }
+
                 if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
                 {
-                    encodeVideoFrame(frame.data->data(), frame.width, frame.height, frame.captureTimestampUs);
-                    frame.processed = true; // Marcar como processado
-                    processedAny = true;
+                    // Tentar encodar o frame
+                    bool encodeSuccess = encodeVideoFrame(frame.data->data(), frame.width, frame.height, frame.captureTimestampUs);
+
+                    // SÓ marcar como processado se o encoding foi bem-sucedido
+                    if (encodeSuccess)
+                    {
+                        frame.processed = true; // Marcar como processado apenas se sucesso
+                        processedAny = true;
+                        framesProcessedThisIteration++;
+                    }
+                    else
+                    {
+                        // Encoding falhou (provavelmente codec cheio) - NÃO marcar como processado
+                        // Manter no buffer para tentar novamente na próxima iteração
+                        break; // Parar de processar mais frames se este falhou
+                    }
                 }
             }
 
@@ -1709,18 +1769,30 @@ void HTTPTSStreamer::encodingThread()
             }
         }
 
-        // Processar TODOS os chunks de áudio disponíveis (sem esperar por sincronização)
+        // Processar chunks de áudio disponíveis (sem esperar por sincronização)
+        // IMPORTANTE: Só marcar como processado se o encoding foi bem-sucedido
         {
             std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
 
-            // Processar TODOS os chunks não processados
+            // Processar chunks não processados
             for (auto &audio : m_timestampedAudioBuffer)
             {
                 if (!audio.processed && audio.samples && audio.sampleCount > 0)
                 {
-                    encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
-                    audio.processed = true; // Marcar como processado
-                    processedAny = true;
+                    // Tentar encodar o chunk
+                    bool encodeSuccess = encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
+
+                    // SÓ marcar como processado se o encoding foi bem-sucedido
+                    if (encodeSuccess)
+                    {
+                        audio.processed = true; // Marcar como processado apenas se sucesso
+                        processedAny = true;
+                    }
+                    else
+                    {
+                        // Encoding falhou - NÃO marcar como processado, manter no buffer
+                        // Áudio geralmente não falha, mas manter consistência
+                    }
                 }
             }
 

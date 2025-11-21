@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <cinttypes>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -135,15 +136,16 @@ private:
     mutable std::mutex m_resizeMutex;
     std::atomic<bool> m_isResizing{false};
     
-    // Shared frame buffer for streaming thread (captura de vídeo)
+    // Fila de frames para streaming thread (captura de vídeo)
+    // Usar fila em vez de buffer único para evitar perda de frames
     struct SharedFrameData {
         std::vector<uint8_t> frameData;
         uint32_t width = 0;
         uint32_t height = 0;
-        bool hasNewFrame = false;
     };
     mutable std::mutex m_frameDataMutex;
-    SharedFrameData m_sharedFrameData;
+    std::deque<SharedFrameData> m_frameQueue; // Fila de frames para processar
+    static constexpr size_t MAX_FRAME_QUEUE_SIZE = 10; // Limitar tamanho da fila para evitar acúmulo excessivo
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
