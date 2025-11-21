@@ -999,15 +999,17 @@ bool Application::initStreaming()
         }
         else
         {
-            // Atualizar formato de áudio no streamer após inicializar captura
-            // Isso garante que o streamer use o mesmo formato que o AudioCapture
+            // IMPORTANTE: O formato de áudio já foi configurado antes de inicializar o streamer
+            // Se a captura foi inicializada depois, precisamos reinicializar o streaming
+            // para garantir que o sample rate correto seja usado
             if (m_streamManager && m_audioCapture && m_audioCapture->isOpen())
             {
-                // O streamer já foi adicionado, precisamos atualizar o formato
-                // Por enquanto, o formato padrão (44100Hz, 2 canais) deve funcionar
-                // mas idealmente deveríamos ter uma forma de atualizar o streamer
                 LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) +
                          "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
+                // Nota: O streamer já foi configurado com o formato correto antes de ser inicializado
+                // Se a captura foi inicializada depois, o formato pode estar incorreto
+                // Nesse caso, seria necessário reinicializar o streaming, mas isso é complexo
+                // Por enquanto, assumimos que a captura é inicializada antes do streaming
             }
         }
     }
@@ -1256,9 +1258,111 @@ void Application::run()
             // Shaders também renderizam invertido, então ambos precisam de inversão Y
             // flipY: true para ambos (câmera e shader precisam inverter)
             bool shouldFlipY = true;
+
+            // Calcular viewport onde a captura será renderizada (pode ser menor que a janela se maintainAspect estiver ativo)
+            uint32_t windowWidth = m_window->getWidth();
+            uint32_t windowHeight = m_window->getHeight();
+            GLint viewportX = 0;
+            GLint viewportY = 0;
+            GLsizei viewportWidth = windowWidth;
+            GLsizei viewportHeight = windowHeight;
+
+            if (m_maintainAspect && renderWidth > 0 && renderHeight > 0)
+            {
+                // Calcular aspect ratio da textura e da janela (igual ao renderTexture)
+                float textureAspect = static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
+                float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+
+                if (textureAspect > windowAspect)
+                {
+                    // Textura é mais larga: ajustar altura (letterboxing)
+                    viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
+                    viewportY = (windowHeight - viewportHeight) / 2;
+                }
+                else
+                {
+                    // Textura é mais alta: ajustar largura (pillarboxing)
+                    viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
+                    viewportX = (windowWidth - viewportWidth) / 2;
+                }
+            }
+
             m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
+
+            // IMPORTANTE: Capturar apenas a área da captura (sem UI) ANTES de renderizar a UI
+            // Ler apenas o viewport onde a captura foi renderizada e copiar para buffer compartilhado
+            // A thread de streaming processará esses dados de forma independente
+            if (m_streamManager && m_streamManager->isActive())
+            {
+                // Usar dimensões do viewport (área da captura renderizada, sem UI)
+                uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
+                uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
+
+                size_t frameDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
+
+                if (frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3) &&
+                    captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
+                {
+                    // Calcular padding para alinhamento de 4 bytes
+                    size_t rowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
+                    size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4;
+                    size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(captureHeight);
+
+                    std::vector<uint8_t> frameDataWithPadding;
+                    frameDataWithPadding.resize(totalSizeWithPadding);
+
+                    // Ler pixels apenas da área do viewport onde a captura foi renderizada
+                    // IMPORTANTE: glReadPixels lê do framebuffer atual, coordenadas são da janela
+                    // Ler ANTES da UI ser renderizada para capturar apenas a área da captura
+                    glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
+                                 GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+
+                    // Copiar dados removendo padding e fazer flip vertical
+                    std::vector<uint8_t> frameData;
+                    frameData.resize(frameDataSize);
+                    for (uint32_t row = 0; row < captureHeight; row++)
+                    {
+                        uint32_t srcRow = captureHeight - 1 - row; // Flip vertical
+                        uint32_t dstRow = row;
+
+                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
+                        uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
+                        memcpy(dstPtr, srcPtr, rowSizeUnpadded);
+                    }
+
+                    // Verificar se os dados não são todos zeros
+                    bool allZeros = true;
+                    for (size_t i = 0; i < std::min(frameDataSize, static_cast<size_t>(1024)); i++)
+                    {
+                        if (frameData[i] != 0)
+                        {
+                            allZeros = false;
+                            break;
+                        }
+                    }
+
+                    static int readLogCount = 0;
+                    if (readLogCount < 5 || (readLogCount % 60 == 0))
+                    {
+                        LOG_INFO("[VIDEO] Main thread: Captured capture area - " + std::to_string(captureWidth) + "x" +
+                                 std::to_string(captureHeight) + " (viewport: " + std::to_string(viewportX) + "," +
+                                 std::to_string(viewportY) + "), allZeros=" + std::to_string(allZeros));
+                        readLogCount++;
+                    }
+
+                    // Copiar dados para buffer compartilhado (thread-safe)
+                    if (!allZeros && !frameData.empty())
+                    {
+                        std::lock_guard<std::mutex> lock(m_frameDataMutex);
+                        m_sharedFrameData.frameData = std::move(frameData);
+                        m_sharedFrameData.width = captureWidth;
+                        m_sharedFrameData.height = captureHeight;
+                        m_sharedFrameData.hasNewFrame = true;
+                    }
+                }
+            }
 
             // Atualizar informações de streaming na UI
             if (m_ui && m_streamManager && m_streamManager->isActive())
@@ -1279,7 +1383,7 @@ void Application::run()
                 m_ui->setStreamClientCount(0);
             }
 
-            // Renderizar UI
+            // Renderizar UI (após capturar a área da captura)
             if (m_ui)
             {
                 m_ui->render();
@@ -1356,113 +1460,72 @@ void Application::streamingThreadFunc()
             usleep(100000); // 100ms
         }
 
-        // Frame processing
-        uint32_t windowWidth = m_window->getWidth();
-        uint32_t windowHeight = m_window->getHeight();
-
-        // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
-        // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
-        uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-        uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
-
-        // Calculate buffer size and validate
-        // IMPORTANTE: OpenGL pode adicionar padding quando a largura não é múltipla de 4
-        // O problema ocorre porque windowWidth * 3 (bytes por linha) pode não ser múltiplo de 4
-        // e o OpenGL adiciona padding por padrão, causando corrupção de memória ao ler
-        // Isso é especialmente importante quando redimensionamos no eixo X
-        size_t frameDataSize = static_cast<size_t>(windowWidth) * static_cast<size_t>(windowHeight) * 3;
-
-        // Validate frame data size
-        if (frameDataSize == 0 || frameDataSize > (7680 * 4320 * 3))
+        // Processar frames de vídeo do buffer compartilhado
+        // A thread principal faz glReadPixels e copia para m_sharedFrameData
+        // Esta thread processa os dados (resize, etc) e envia para streaming
+        bool hasVideoFrame = false;
+        SharedFrameData frameData;
         {
-            // Skip if size calculation overflows or is too large
-            usleep(100000); // 100ms
-            continue;
-        }
-
-        // IMPORTANTE: Validar que as dimensões são seguras antes de ler
-        bool canReadPixels = (windowWidth > 0 && windowHeight > 0 &&
-                              windowWidth <= 7680 && windowHeight <= 4320 &&
-                              frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3));
-
-        std::vector<uint8_t> frameData;
-        if (canReadPixels)
-        {
-            // IMPORTANTE: OpenGL adiciona padding quando a largura da linha não é múltipla de 4 bytes
-            // Para RGB (3 bytes por pixel), precisamos calcular o tamanho real com padding
-            // Tamanho da linha sem padding: windowWidth * 3
-            // Tamanho da linha com padding (alinhado para 4 bytes): ((windowWidth * 3 + 3) / 4) * 4
-            size_t rowSizeUnpadded = static_cast<size_t>(windowWidth) * 3;
-            size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4; // Alinhar para múltiplo de 4
-            size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(windowHeight);
-
-            // Alocar buffer com padding para leitura
-            std::vector<uint8_t> frameDataWithPadding;
-            frameDataWithPadding.resize(totalSizeWithPadding);
-
-            // Ler pixels com padding
-            glReadPixels(0, 0, static_cast<GLsizei>(windowWidth), static_cast<GLsizei>(windowHeight),
-                         GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
-
-            // Copiar dados removendo padding e fazer flip vertical ao mesmo tempo
-            // OpenGL lê de baixo para cima, então precisamos inverter
-            frameData.resize(frameDataSize);
-            for (uint32_t row = 0; row < windowHeight; row++)
+            std::lock_guard<std::mutex> lock(m_frameDataMutex);
+            if (m_sharedFrameData.hasNewFrame && !m_sharedFrameData.frameData.empty())
             {
-                // Linha de origem (de baixo para cima devido ao OpenGL)
-                uint32_t srcRow = windowHeight - 1 - row;
-                // Linha de destino (de cima para baixo)
-                uint32_t dstRow = row;
-
-                const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
-                uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
-
-                // Copiar linha sem padding
-                memcpy(dstPtr, srcPtr, rowSizeUnpadded);
+                frameData = m_sharedFrameData;
+                m_sharedFrameData.hasNewFrame = false; // Marcar como processado
+                hasVideoFrame = true;
             }
         }
 
-        // Process the frame data (só se leitura foi bem-sucedida)
-        if (canReadPixels && !frameData.empty() && frameData.size() == frameDataSize)
+        if (hasVideoFrame && m_streamManager && m_streamManager->isActive())
         {
+            uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+            uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
 
-            // If stream dimensions differ from window, we need to resize
-            std::vector<uint8_t> processedData;
-            const uint8_t *dataToSend = frameData.data();
-            uint32_t dataWidth = windowWidth;
-            uint32_t dataHeight = windowHeight;
+            // Resize se necessário
+            const uint8_t *dataToSend = frameData.frameData.data();
+            uint32_t dataWidth = frameData.width;
+            uint32_t dataHeight = frameData.height;
 
-            if (streamWidth != windowWidth || streamHeight != windowHeight)
+            static int processLogCount = 0;
+            if (processLogCount < 5 || (processLogCount % 60 == 0))
             {
-                // Resize usando interpolação mais simples (nearest neighbor) para melhor performance
-                // Bilinear é muito pesado e causa queda de FPS no thread principal
+                LOG_INFO("[VIDEO] Streaming thread: Processing frame - " + std::to_string(dataWidth) + "x" +
+                         std::to_string(dataHeight) + " -> " + std::to_string(streamWidth) + "x" +
+                         std::to_string(streamHeight));
+                processLogCount++;
+            }
+
+            if (streamWidth != dataWidth || streamHeight != dataHeight)
+            {
                 size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
                 if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
                 {
+                    std::vector<uint8_t> processedData;
                     processedData.resize(processedSize);
-                    float scaleX = (float)windowWidth / streamWidth;
-                    float scaleY = (float)windowHeight / streamHeight;
+                    float scaleX = (float)dataWidth / streamWidth;
+                    float scaleY = (float)dataHeight / streamHeight;
+
+                    size_t frameDataSize = static_cast<size_t>(dataWidth) * static_cast<size_t>(dataHeight) * 3;
 
                     for (uint32_t y = 0; y < streamHeight; y++)
                     {
                         uint32_t srcY = (uint32_t)(y * scaleY);
-                        if (srcY >= windowHeight)
-                            srcY = windowHeight - 1;
+                        if (srcY >= dataHeight)
+                            srcY = dataHeight - 1;
 
                         for (uint32_t x = 0; x < streamWidth; x++)
                         {
                             uint32_t srcX = (uint32_t)(x * scaleX);
-                            if (srcX >= windowWidth)
-                                srcX = windowWidth - 1;
+                            if (srcX >= dataWidth)
+                                srcX = dataWidth - 1;
 
-                            size_t srcIdx = (srcY * windowWidth + srcX) * 3;
+                            size_t srcIdx = (srcY * dataWidth + srcX) * 3;
                             size_t dstIdx = (y * streamWidth + x) * 3;
 
                             if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
                             {
-                                processedData[dstIdx] = frameData[srcIdx];
-                                processedData[dstIdx + 1] = frameData[srcIdx + 1];
-                                processedData[dstIdx + 2] = frameData[srcIdx + 2];
+                                processedData[dstIdx] = frameData.frameData[srcIdx];
+                                processedData[dstIdx + 1] = frameData.frameData[srcIdx + 1];
+                                processedData[dstIdx + 2] = frameData.frameData[srcIdx + 2];
                             }
                         }
                     }
@@ -1472,10 +1535,13 @@ void Application::streamingThreadFunc()
                 }
             }
 
-            if (m_streamManager && m_streamManager->isActive())
-            {
-                m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
-            }
+            // Enviar frame para streaming (na thread de streaming)
+            m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
+        }
+        else if (!hasVideoFrame)
+        {
+            // Sem frame disponível, fazer um pequeno sleep para não consumir CPU desnecessariamente
+            usleep(1000); // 1ms
         }
     }
 

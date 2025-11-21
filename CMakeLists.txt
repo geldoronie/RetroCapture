@@ -149,11 +149,37 @@ target_include_directories(retrocapture PRIVATE
     ${PULSE_INCLUDE_DIRS}
 )
 
-# Compiler flags
+# Configuração de build types
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+
+# Compiler flags base (comuns a todos os builds)
 target_compile_options(retrocapture PRIVATE
     -Wall
     -Wextra
     -Wpedantic
+)
+
+# Flags específicas por build type
+target_compile_options(retrocapture PRIVATE
+    $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+    $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+    $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+)
+
+# Linker flags específicas por build type
+target_link_options(retrocapture PRIVATE
+    $<$<CONFIG:Debug>:-g>
+    $<$<CONFIG:Release>:>
+    $<$<CONFIG:RelWithDebInfo>:-g>
+    $<$<CONFIG:MinSizeRel>:>
 )
 
 # Instalação

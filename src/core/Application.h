@@ -7,6 +7,7 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+#include <vector>
 #include "../renderer/glad_loader.h"
 
 class VideoCapture;
@@ -133,6 +134,16 @@ private:
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
     std::atomic<bool> m_isResizing{false};
+    
+    // Shared frame buffer for streaming thread (captura de vídeo)
+    struct SharedFrameData {
+        std::vector<uint8_t> frameData;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool hasNewFrame = false;
+    };
+    mutable std::mutex m_frameDataMutex;
+    SharedFrameData m_sharedFrameData;
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
