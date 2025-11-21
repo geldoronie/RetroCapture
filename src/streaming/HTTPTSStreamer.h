@@ -179,6 +179,9 @@ private:
     int64_t m_lastAudioPTS = -1;      // Último PTS do pacote (depois do codec)
     int64_t m_lastAudioDTS = -1;
 
+    // Contador de frames para keyframes periódicos
+    int64_t m_videoFrameCount = 0;
+
     // Mutexes para sincronização
     std::mutex m_muxMutex;    // Proteger av_interleaved_write_frame (não é thread-safe)
     std::mutex m_outputMutex; // Proteger lista de clientes e writeToClients

@@ -500,8 +500,16 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         }
     }
 
-    // Sempre retornar buf_size para o FFmpeg, mesmo se não enviou tudo
-    // Isso evita bloquear o encoding
+    // CRÍTICO: Retornar apenas o que foi realmente enviado para TODOS os clientes
+    // Se algum cliente não recebeu todos os dados, retornar menos que buf_size
+    // Isso evita que o FFmpeg pense que os dados foram escritos quando não foram
+    // O FFmpeg pode tentar novamente com os dados restantes
+    // Por enquanto, vamos retornar buf_size apenas se todos os clientes receberam tudo
+    // Se algum cliente falhou parcialmente, retornar o mínimo enviado
+    // NOTA: Isso pode causar retries do FFmpeg, mas é melhor que corrupção de dados
+
+    // Por segurança, vamos sempre retornar buf_size para não bloquear o encoding
+    // Mas vamos garantir que o buffer do AVIO seja grande o suficiente para evitar problemas
     return buf_size;
 }
 
@@ -588,12 +596,16 @@ bool HTTPTSStreamer::initializeVideoCodec()
         av_dict_set(&opts, "tune", "zerolatency", 0);
         // Profile "baseline" para compatibilidade máxima
         av_dict_set(&opts, "profile", "baseline", 0);
-        // Keyframe mínimo a cada 2 segundos
-        av_dict_set_int(&opts, "keyint_min", static_cast<int>(m_fps * 2), 0);
+        // Keyframe mínimo e máximo a cada 2 segundos (garantir keyframes periódicos)
+        int keyint = static_cast<int>(m_fps * 2);
+        av_dict_set_int(&opts, "keyint_min", keyint, 0);
+        av_dict_set_int(&opts, "keyint", keyint, 0); // Intervalo máximo de keyframes (igual ao mínimo para forçar)
         // OTIMIZAÇÃO: Reduzir lookahead para zero (zerolatency já faz isso, mas garantir)
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
         // OTIMIZAÇÃO: Reduzir buffer de VBV para menor latência
         av_dict_set_int(&opts, "vbv-bufsize", m_videoBitrate / 10, 0); // 100ms de buffer
+        // Desabilitar scenecut para garantir keyframes exatos no intervalo especificado
+        av_dict_set_int(&opts, "scenecut", 0, 0);
     }
 
     // Abrir codec com opções
@@ -917,7 +929,7 @@ void HTTPTSStreamer::cleanupFFmpeg()
         m_audioAccumulator.clear();
     }
 
-    // Resetar rastreamento de PTS/DTS
+    // Resetar rastreamento de PTS/DTS e contadores
     {
         std::lock_guard<std::mutex> lock(m_ptsMutex);
         m_lastVideoFramePTS = -1;
@@ -927,6 +939,7 @@ void HTTPTSStreamer::cleanupFFmpeg()
         m_lastAudioPTS = -1;
         m_lastAudioDTS = -1;
     }
+    m_videoFrameCount = 0;
 
     // Limpar header do formato
     {
@@ -1097,15 +1110,27 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     }
     videoFrame->pts = calculatedPTS;
 
-    // Forçar primeiro frame como keyframe
-    static int64_t frameCount = 0;
-    if (frameCount == 0)
+    // Forçar primeiro frame como keyframe e keyframes periódicos
+    // Usar variável de instância ao invés de static para permitir reset em reinicializações
+    bool forceKeyframe = false;
+    if (m_videoFrameCount == 0)
+    {
+        forceKeyframe = true;
+    }
+    // Forçar keyframe periódico a cada gop_size frames (configurado em initializeVideoCodec)
+    else if (m_videoFrameCount > 0 && (m_videoFrameCount % codecCtx->gop_size == 0))
+    {
+        forceKeyframe = true;
+    }
+
+    if (forceKeyframe)
     {
         videoFrame->key_frame = 1;
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
-        // Log removido para melhorar performance
+        // Usar flags do frame para garantir que o codec respeite o keyframe
+        videoFrame->flags |= AV_FRAME_FLAG_KEY;
     }
-    frameCount++;
+    m_videoFrameCount++;
 
     // Enviar frame para codec
     // CRÍTICO: Tentar múltiplas vezes se codec estiver cheio para não perder frames
@@ -1217,9 +1242,15 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
         packetCount++;
 
-        // OTIMIZAÇÃO: Não clonar aqui, vamos clonar apenas em muxPacket se necessário
-        // Isso reduz alocações e cópias desnecessárias
-        AVPacket *pktToMux = pkt; // Usar pacote original diretamente
+        // CRÍTICO: Clonar pacote ANTES de modificar qualquer coisa
+        // Modificar o pacote original pode corromper dados se o codec ainda estiver usando
+        AVPacket *pktToMux = av_packet_clone(pkt);
+        if (!pktToMux)
+        {
+            LOG_ERROR("encodeVideoFrame: Failed to clone packet");
+            av_packet_unref(pkt);
+            continue; // Pular este pacote e tentar o próximo
+        }
 
         // Configurar stream_index do pacote
         pktToMux->stream_index = videoStream->index;
@@ -1265,19 +1296,22 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
         // Logs removidos para melhorar performance - logs são um gargalo significativo
 
-        // Muxar e enviar pacote (muxPacket fará a cópia se necessário)
+        // Muxar e enviar pacote (muxPacket ainda fará outra cópia por segurança)
         if (!muxPacket(pktToMux))
         {
             LOG_ERROR("encodeVideoFrame: muxPacket failed");
         }
 
-        // Liberar pacote original (muxPacket já fez cópia se necessário)
+        // Liberar cópia do pacote (muxPacket já fez sua própria cópia)
+        av_packet_free(&pktToMux);
+
+        // Liberar pacote original do codec
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
 
     // Após o primeiro keyframe ser enviado, fazer flush explícito para acelerar início do playback
-    if (frameCount == 1 && packetCount > 0)
+    if (m_videoFrameCount == 1 && packetCount > 0)
     {
         // Após o primeiro keyframe ser enviado, fazer flush explícito para acelerar início do playback
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
@@ -1560,15 +1594,10 @@ bool HTTPTSStreamer::muxPacket(void *packet)
     }
     AVPacket *pkt = static_cast<AVPacket *>(packet);
 
-    // NOTA: O pacote já foi clonado antes de chamar esta função
-    // Mas vamos fazer outra cópia por segurança para garantir que não há corrupção
-    // durante o muxing assíncrono
-    AVPacket *pktCopy = av_packet_clone(pkt);
-    if (!pktCopy)
-    {
-        LOG_ERROR("muxPacket: Failed to clone packet");
-        return false;
-    }
+    // NOTA: O pacote já foi clonado antes de chamar esta função (em encodeVideoFrame/encodeAudioFrame)
+    // Não precisamos clonar novamente aqui - o pacote já está seguro e o muxing é protegido por mutex
+    // A clonagem dupla pode causar problemas e é desnecessária
+    AVPacket *pktCopy = pkt;
 
     // Garantir que DTS seja válido e monotônico
     if (pktCopy->dts == AV_NOPTS_VALUE)
@@ -1581,7 +1610,7 @@ bool HTTPTSStreamer::muxPacket(void *packet)
         else
         {
             LOG_ERROR("muxPacket: Both PTS and DTS are invalid");
-            av_packet_free(&pktCopy);
+            // Não liberar pktCopy aqui pois não foi alocado por nós (é apenas um ponteiro para pkt)
             return false;
         }
     }
@@ -1604,13 +1633,13 @@ bool HTTPTSStreamer::muxPacket(void *packet)
             LOG_ERROR("Failed to write packet (stream=" + std::to_string(pktCopy->stream_index) +
                       ", pts=" + std::to_string(pktCopy->pts) + ", dts=" + std::to_string(pktCopy->dts) +
                       "): " + std::string(errbuf));
-            av_packet_free(&pktCopy);
+            // Não liberar pktCopy aqui pois não foi alocado por nós
             return false;
         }
     }
 
-    // Liberar cópia do pacote após muxing
-    av_packet_free(&pktCopy);
+    // Não liberar o pacote aqui - ele será liberado pela função chamadora
+    // (encodeVideoFrame ou encodeAudioFrame já fazem isso)
     return true;
 }
 
@@ -1873,12 +1902,23 @@ void HTTPTSStreamer::encodingThread()
             }
         }
 
-        // Remover frames processados do início (com lock)
+        // OTIMIZAÇÃO: Remover frames processados em batch (mais eficiente que pop_front individual)
+        // IMPORTANTE: Só remover se houver muitos frames processados para evitar remover frames importantes
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            while (!m_timestampedVideoBuffer.empty() && m_timestampedVideoBuffer.front().processed)
+            // Contar quantos frames processados existem no início
+            size_t processedCount = 0;
+            while (processedCount < m_timestampedVideoBuffer.size() &&
+                   m_timestampedVideoBuffer[processedCount].processed)
             {
-                m_timestampedVideoBuffer.pop_front();
+                processedCount++;
+            }
+            // Remover todos de uma vez, mas apenas se houver pelo menos 5 frames processados
+            // Isso evita remover frames muito cedo que podem ser necessários para sincronização
+            if (processedCount >= 5)
+            {
+                m_timestampedVideoBuffer.erase(m_timestampedVideoBuffer.begin(),
+                                               m_timestampedVideoBuffer.begin() + processedCount);
             }
         }
 

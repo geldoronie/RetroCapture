@@ -87,6 +87,13 @@ private:
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<AudioCapture> m_audioCapture;
 
+    // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
+    void *m_resizeSwsContext = nullptr; // SwsContext* (cacheado para resize)
+    uint32_t m_cachedResizeSrcWidth = 0;
+    uint32_t m_cachedResizeSrcHeight = 0;
+    uint32_t m_cachedResizeDstWidth = 0;
+    uint32_t m_cachedResizeDstHeight = 0;
+
     // Streaming thread
     // OPÇÃO A: Thread de streaming removida - processamento movido para thread principal
 

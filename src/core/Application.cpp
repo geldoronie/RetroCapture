@@ -1345,14 +1345,21 @@ void Application::run()
                         memcpy(dstPtr, srcPtr, rowSizeUnpadded);
                     }
 
-                    // Verificar se os dados não são todos zeros
-                    bool allZeros = true;
-                    for (size_t i = 0; i < std::min(frameDataSize, static_cast<size_t>(1024)); i++)
+                    // Verificação rápida de allZeros (apenas primeiros bytes para performance)
+                    // Se o primeiro byte não for zero, o frame não é todo zero
+                    bool allZeros = (frameDataSize > 0 && frameData[0] == 0);
+                    if (allZeros && frameDataSize > 1)
                     {
-                        if (frameData[i] != 0)
+                        // Se o primeiro byte é zero, verificar alguns pontos estratégicos
+                        // ao invés de verificar tudo (muito mais rápido)
+                        size_t checkPoints[] = {frameDataSize / 4, frameDataSize / 2, frameDataSize * 3 / 4, frameDataSize - 1};
+                        for (size_t pt : checkPoints)
                         {
-                            allZeros = false;
-                            break;
+                            if (pt < frameDataSize && frameData[pt] != 0)
+                            {
+                                allZeros = false;
+                                break;
+                            }
                         }
                     }
 
@@ -1376,11 +1383,32 @@ void Application::run()
                             {
                                 processedData.resize(processedSize);
 
-                                // OTIMIZAÇÃO CRÍTICA: Usar libswscale para resize (muito mais rápido que pixel por pixel)
-                                SwsContext *swsCtx = sws_getContext(
-                                    dataWidth, dataHeight, AV_PIX_FMT_RGB24,
-                                    streamWidth, streamHeight, AV_PIX_FMT_RGB24,
-                                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                                // OTIMIZAÇÃO CRÍTICA: Cachear SwsContext para evitar criar/destruir a cada frame
+                                SwsContext *swsCtx = static_cast<SwsContext *>(m_resizeSwsContext);
+
+                                // Recriar SwsContext apenas se as dimensões mudaram
+                                if (!swsCtx ||
+                                    m_cachedResizeSrcWidth != dataWidth ||
+                                    m_cachedResizeSrcHeight != dataHeight ||
+                                    m_cachedResizeDstWidth != streamWidth ||
+                                    m_cachedResizeDstHeight != streamHeight)
+                                {
+                                    if (swsCtx)
+                                    {
+                                        sws_freeContext(swsCtx);
+                                    }
+
+                                    swsCtx = sws_getContext(
+                                        dataWidth, dataHeight, AV_PIX_FMT_RGB24,
+                                        streamWidth, streamHeight, AV_PIX_FMT_RGB24,
+                                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+
+                                    m_resizeSwsContext = swsCtx;
+                                    m_cachedResizeSrcWidth = dataWidth;
+                                    m_cachedResizeSrcHeight = dataHeight;
+                                    m_cachedResizeDstWidth = streamWidth;
+                                    m_cachedResizeDstHeight = streamHeight;
+                                }
 
                                 if (swsCtx)
                                 {
@@ -1392,8 +1420,6 @@ void Application::run()
                                     // Fazer resize otimizado com libswscale
                                     sws_scale(swsCtx, srcData, srcLinesize, 0, dataHeight,
                                               dstData, dstLinesize);
-
-                                    sws_freeContext(swsCtx);
 
                                     dataToSend = processedData.data();
                                     dataWidth = streamWidth;
@@ -1507,6 +1533,14 @@ void Application::shutdown()
     {
         m_window->shutdown();
         m_window.reset();
+    }
+
+    // Limpar cache de SwsContext
+    if (m_resizeSwsContext)
+    {
+        SwsContext *swsCtx = static_cast<SwsContext *>(m_resizeSwsContext);
+        sws_freeContext(swsCtx);
+        m_resizeSwsContext = nullptr;
     }
 
     // OPÇÃO A: Não há mais thread de streaming para limpar
