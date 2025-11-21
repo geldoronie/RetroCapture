@@ -8,14 +8,15 @@
 #include <memory>
 #include <cstdint>
 #include <queue>
+#include <deque>
 #include <utility>
 #include <string>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
 #include <ctime>
-#include <thread>
 #include <chrono>
+#include <condition_variable>
 /**
  * HTTP MPEG-TS streamer implementation.
  *
@@ -51,18 +52,66 @@ public:
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
 
+    // Estruturas para dados com timestamp de captura (declaradas antes de private para uso nas funções)
+    struct TimestampedFrame
+    {
+        std::shared_ptr<std::vector<uint8_t>> data;
+        uint32_t width;
+        uint32_t height;
+        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
+        bool processed = false;     // Flag para marcar se já foi processado e enviado
+    };
+
+    struct TimestampedAudio
+    {
+        std::shared_ptr<std::vector<int16_t>> samples;
+        size_t sampleCount;
+        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
+        int64_t durationUs;         // Duração deste chunk em microssegundos
+        bool processed = false;     // Flag para marcar se já foi processado e enviado
+    };
+
+    // Zona de sincronização
+    struct SyncZone
+    {
+        int64_t startTimeUs;  // Início da zona sincronizada
+        int64_t endTimeUs;    // Fim da zona sincronizada
+        size_t videoStartIdx; // Índice inicial no buffer de vídeo
+        size_t videoEndIdx;   // Índice final no buffer de vídeo
+        size_t audioStartIdx; // Índice inicial no buffer de áudio
+        size_t audioEndIdx;   // Índice final no buffer de áudio
+
+        bool isValid() const
+        {
+            return startTimeUs < endTimeUs &&
+                   videoEndIdx > videoStartIdx &&
+                   audioEndIdx > audioStartIdx;
+        }
+
+        static SyncZone invalid()
+        {
+            SyncZone zone;
+            zone.startTimeUs = 0;
+            zone.endTimeUs = 0;
+            return zone;
+        }
+    };
+
 private:
     void serverThread();
     void handleClient(int clientFd);
-    void encodingThread(); // Thread única para encoding
+    void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
+    SyncZone calculateSyncZone();   // Calcular zona de sincronização entre vídeo e áudio
+    void cleanupOldData();          // Limpar dados antigos baseado em tempo
+    int64_t getTimestampUs() const; // Obter timestamp atual em microssegundos
     bool initializeFFmpeg();
     bool initializeVideoCodec();
     bool initializeAudioCodec();
     bool initializeMuxers();
     void cleanupFFmpeg();
     void flushCodecs();
-    bool encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height);
-    bool encodeAudioFrame(const int16_t *samples, size_t sampleCount);
+    bool encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height, int64_t captureTimestampUs);
+    bool encodeAudioFrame(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs);
     bool muxPacket(void *packet);
 
     // Funções de conversão
@@ -99,17 +148,24 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_cleanedUp{false};
 
-    // Frame Queue (raw frames - antes do encoding)
-    static constexpr size_t MAX_VIDEO_QUEUE_SIZE = 30;  // Limite de frames brutos na fila
-    static constexpr size_t MAX_AUDIO_QUEUE_SIZE = 100; // Limite de chunks de áudio bruto na fila
-    std::mutex m_frameQueueMutex;
-    std::queue<std::pair<std::shared_ptr<std::vector<uint8_t>>, std::pair<uint32_t, uint32_t>>> m_frameQueue;
+    // Configuração de buffer temporal
+    static constexpr int64_t MAX_BUFFER_TIME_US = 5 * 1000000LL; // 5 segundos máximo
+    static constexpr int64_t MIN_BUFFER_TIME_US = 1 * 1000000LL; // 1 segundo mínimo para calcular zona
+    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;    // 50ms de tolerância para sincronização
 
-    // Audio Queue (raw audio - antes do encoding)
-    std::mutex m_audioQueueMutex;
-    std::queue<std::pair<std::shared_ptr<std::vector<int16_t>>, std::pair<size_t, size_t>>> m_audioQueue;
+    // Buffers temporais ordenados por timestamp de captura
+    std::mutex m_videoBufferMutex;
+    std::deque<TimestampedFrame> m_timestampedVideoBuffer;
+    int64_t m_latestVideoTimestampUs = 0;
+    int64_t m_firstVideoTimestampUs = 0; // Primeiro timestamp de vídeo (para calcular PTS relativo)
 
-    // Audio accumulator para acumular samples até ter um frame completo
+    std::mutex m_audioBufferMutex;
+    std::deque<TimestampedAudio> m_timestampedAudioBuffer;
+    int64_t m_latestAudioTimestampUs = 0;
+    int64_t m_firstAudioTimestampUs = 0; // Primeiro timestamp de áudio (para calcular PTS relativo)
+
+    // Audio accumulator para acumular samples até ter um frame completo do codec
+    // (usado internamente no encodeAudioFrame)
     std::mutex m_audioAccumulatorMutex;
     std::vector<int16_t> m_audioAccumulator;
 

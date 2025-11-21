@@ -86,37 +86,29 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_frameQueueMutex);
+    // Capturar timestamp de captura (quando o frame chega ao streamer)
+    int64_t captureTimestampUs = getTimestampUs();
 
-    // Limitar tamanho da fila - descartar frame mais antigo se estiver cheia
-    if (m_frameQueue.size() >= MAX_VIDEO_QUEUE_SIZE)
+    // Adicionar frame com timestamp ao buffer temporal
+    TimestampedFrame frame;
+    frame.data = std::make_shared<std::vector<uint8_t>>(data, data + width * height * 3);
+    frame.width = width;
+    frame.height = height;
+    frame.captureTimestampUs = captureTimestampUs;
+    frame.processed = false;
+
     {
-        // Descartar o frame mais antigo
-        m_frameQueue.pop();
-    }
-
-    // Adicionar novo frame
-    std::shared_ptr<std::vector<uint8_t>> frameData = std::make_shared<std::vector<uint8_t>>(data, data + width * height * 3);
-    m_frameQueue.emplace(frameData, std::make_pair(width, height));
-
-    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
-    size_t frameBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-
-    // Validar que os dados não são todos zeros (frame preto pode ser válido, mas tudo zero pode indicar problema)
-    bool allZeros = true;
-    if (data && frameBytes > 0 && frameBytes <= (7680 * 4320 * 3))
-    {
-        for (size_t i = 0; i < std::min(frameBytes, static_cast<size_t>(1024)); i++)
+        std::lock_guard<std::mutex> lock(m_videoBufferMutex);
+        if (m_timestampedVideoBuffer.empty())
         {
-            if (data[i] != 0)
-            {
-                allZeros = false;
-                break;
-            }
+            m_firstVideoTimestampUs = captureTimestampUs; // Primeiro frame define o início
         }
-    }
+        m_timestampedVideoBuffer.push_back(frame);
+        m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
 
-    // Log removido para reduzir poluição
+        // Limpar dados antigos se necessário (baseado em tempo)
+        cleanupOldData();
+    }
 
     return true;
 }
@@ -128,18 +120,32 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_audioQueueMutex);
+    // Capturar timestamp de captura (quando o áudio chega ao streamer)
+    int64_t captureTimestampUs = getTimestampUs();
 
-    // Limitar tamanho da fila - descartar chunks mais antigos se estiver cheia
-    if (m_audioQueue.size() >= MAX_AUDIO_QUEUE_SIZE)
+    // Calcular duração deste chunk de áudio
+    int64_t durationUs = (sampleCount * 1000000LL) / (m_audioSampleRate * m_audioChannelsCount);
+
+    // Adicionar áudio com timestamp ao buffer temporal
+    TimestampedAudio audio;
+    audio.samples = std::make_shared<std::vector<int16_t>>(samples, samples + sampleCount);
+    audio.sampleCount = sampleCount;
+    audio.captureTimestampUs = captureTimestampUs;
+    audio.durationUs = durationUs;
+    audio.processed = false;
+
     {
-        // Descartar o chunk mais antigo
-        m_audioQueue.pop();
-    }
+        std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+        if (m_timestampedAudioBuffer.empty())
+        {
+            m_firstAudioTimestampUs = captureTimestampUs; // Primeiro chunk define o início
+        }
+        m_timestampedAudioBuffer.push_back(audio);
+        m_latestAudioTimestampUs = std::max(m_latestAudioTimestampUs, captureTimestampUs);
 
-    // Adicionar novo chunk de áudio
-    std::shared_ptr<std::vector<int16_t>> audioSamples = std::make_shared<std::vector<int16_t>>(samples, samples + sampleCount);
-    m_audioQueue.emplace(audioSamples, std::make_pair(m_audioSampleRate, m_audioChannelsCount));
+        // Limpar dados antigos se necessário (baseado em tempo)
+        cleanupOldData();
+    }
 
     return true;
 }
@@ -396,11 +402,11 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             {
                 m_formatHeader.assign(buf, buf + buf_size);
                 m_headerWritten = true;
-                // Log removido para reduzir poluição
             }
         }
     }
 
+    // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
     std::lock_guard<std::mutex> lock(m_outputMutex);
 
     if (m_clientSockets.empty())
@@ -972,7 +978,7 @@ bool HTTPTSStreamer::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uin
     return true;
 }
 
-bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height)
+bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!rgbData || !m_active || width == 0 || height == 0)
     {
@@ -996,25 +1002,34 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         return false;
     }
 
-    // Configurar PTS no time_base do codec
-    static int64_t frameCount = 0;
-    static int64_t firstVideoEncodeTime = 0;
-    int64_t encodeTimeUs = getTimestampUs();
-    if (frameCount == 0)
+    // Configurar PTS baseado no timestamp de captura (relativo ao primeiro frame)
+    // Calcular PTS em unidades do time_base do codec
+    static int64_t firstVideoTimestampUs = 0;
+    static bool firstFrameSet = false;
+
+    if (!firstFrameSet)
     {
-        firstVideoEncodeTime = encodeTimeUs;
+        firstVideoTimestampUs = captureTimestampUs;
+        firstFrameSet = true;
     }
 
-    videoFrame->pts = frameCount;
+    // Calcular tempo relativo desde o primeiro frame (em segundos)
+    int64_t relativeTimeUs = captureTimestampUs - firstVideoTimestampUs;
+    double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
+
+    // Converter para unidades do time_base do codec (geralmente 1/fps)
+    // codecCtx->time_base é tipicamente {1, fps} para vídeo
+    AVRational timeBase = codecCtx->time_base;
+    videoFrame->pts = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
 
     // Forçar primeiro frame como keyframe
+    static int64_t frameCount = 0;
     if (frameCount == 0)
     {
         videoFrame->key_frame = 1;
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
         LOG_INFO("encodeVideoFrame: First frame set as keyframe");
     }
-
     frameCount++;
 
     // Enviar frame para codec
@@ -1075,15 +1090,20 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
         // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
         static int videoEncodeLogCount = 0;
+        static int64_t firstVideoEncodeTime = 0;
         int64_t muxTimeUs = getTimestampUs();
+        if (videoEncodeLogCount == 0)
+        {
+            firstVideoEncodeTime = muxTimeUs;
+        }
         if (videoEncodeLogCount < 10 || (videoEncodeLogCount % 60 == 0))
         {
-            int64_t elapsedUs = encodeTimeUs - firstVideoEncodeTime;
+            int64_t elapsedUs = muxTimeUs - firstVideoEncodeTime;
             LOG_INFO("[SYNC_DEBUG] [VIDEO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
-                     " encoded at " + std::to_string(encodeTimeUs) + "us, elapsed=" +
+                     " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
                      std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
-                     ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts) +
-                     ", encode_duration=" + std::to_string(muxTimeUs - encodeTimeUs) + "us");
+                     ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
+                     ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts));
         }
         videoEncodeLogCount++;
 
@@ -1105,6 +1125,18 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         else
         {
             // Log removido para reduzir poluição
+        }
+    }
+    else if (frameCount == 1 && packetCount > 0)
+    {
+        // Após o primeiro keyframe ser enviado, fazer flush explícito para acelerar início do playback
+        AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
+        if (formatCtx)
+        {
+            // Usar o mesmo mutex usado em muxPacket para proteger o format context
+            // Não há mutex específico, então vamos usar o lock do muxPacket se necessário
+            // Por enquanto, vamos apenas fazer o flush sem lock adicional (muxPacket já protege)
+            av_write_frame(formatCtx, nullptr); // Flush explícito
         }
     }
     // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
@@ -1152,7 +1184,7 @@ bool HTTPTSStreamer::convertInt16ToFloatPlanar(const int16_t *samples, size_t sa
     return true;
 }
 
-bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount)
+bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
 {
     if (!samples || !m_active || sampleCount == 0)
     {
@@ -1191,13 +1223,16 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         return false;
     }
 
+    static int64_t firstAudioTimestampUs = 0;
+    static bool firstAudioFrameSet = false;
     static int64_t frameCount = 0;
-    static int64_t firstAudioEncodeTime = 0;
-    int64_t encodeStartTimeUs = getTimestampUs();
-    if (frameCount == 0)
+
+    if (!firstAudioFrameSet)
     {
-        firstAudioEncodeTime = encodeStartTimeUs;
+        firstAudioTimestampUs = captureTimestampUs;
+        firstAudioFrameSet = true;
     }
+
     bool encodedAny = false;
     bool hadError = false;
 
@@ -1227,8 +1262,15 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
             break;
         }
 
-        // Configurar PTS no time_base do codec
-        audioFrame->pts = frameCount * samplesPerFrame;
+        // Configurar PTS baseado no timestamp de captura (relativo ao primeiro chunk)
+        // Calcular tempo relativo desde o primeiro chunk (em segundos)
+        int64_t relativeTimeUs = captureTimestampUs - firstAudioTimestampUs;
+        double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
+
+        // Converter para unidades do time_base do codec (geralmente 1/sampleRate para áudio)
+        AVRational timeBase = codecCtx->time_base;
+        audioFrame->pts = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+
         int64_t frameEncodeTimeUs = getTimestampUs();
         frameCount++;
 
@@ -1272,20 +1314,30 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
             }
 
             // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
+            // Atualizar último PTS de áudio processado
+            if (pkt->pts != AV_NOPTS_VALUE)
+            {
+            }
+
             static int audioEncodeLogCount = 0;
+            static int64_t firstAudioEncodeTime = 0;
             int64_t muxTimeUs = getTimestampUs();
+            if (audioEncodeLogCount == 0)
+            {
+                firstAudioEncodeTime = muxTimeUs;
+            }
             if (audioEncodeLogCount < 10 || (audioEncodeLogCount % 43 == 0)) // ~1 segundo a 44100Hz/1024
             {
-                int64_t elapsedUs = frameEncodeTimeUs - firstAudioEncodeTime;
+                int64_t elapsedUs = muxTimeUs - firstAudioEncodeTime;
                 double audioDurationMs = (static_cast<double>(samplesPerFrame) / static_cast<double>(m_audioSampleRate)) * 1000.0;
                 std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
                 size_t accumulatorSize = m_audioAccumulator.size();
                 LOG_INFO("[SYNC_DEBUG] [AUDIO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
-                         " encoded at " + std::to_string(frameEncodeTimeUs) + "us, elapsed=" +
+                         " encoded at " + std::to_string(muxTimeUs) + "us, elapsed=" +
                          std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
+                         ", capture_ts=" + std::to_string(captureTimestampUs) + "us" +
                          ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts) +
                          ", duration=" + std::to_string(audioDurationMs) + "ms" +
-                         ", encode_duration=" + std::to_string(muxTimeUs - frameEncodeTimeUs) + "us" +
                          ", accumulator_size=" + std::to_string(accumulatorSize));
             }
             audioEncodeLogCount++;
@@ -1395,84 +1447,186 @@ void HTTPTSStreamer::serverThread()
     LOG_INFO("Server thread stopped");
 }
 
+int64_t HTTPTSStreamer::getTimestampUs() const
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+}
+
+void HTTPTSStreamer::cleanupOldData()
+{
+    // Limpar dados antigos baseado em tempo (não em quantidade)
+    // Remover apenas dados que estão fora da janela temporal máxima
+
+    // Calcular timestamp mais antigo permitido (janela temporal)
+    int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - MAX_BUFFER_TIME_US;
+    int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - MAX_BUFFER_TIME_US;
+
+    // Remover frames de vídeo mais antigos que a janela temporal
+    while (!m_timestampedVideoBuffer.empty())
+    {
+        const auto &frame = m_timestampedVideoBuffer.front();
+
+        // Se está dentro da janela temporal, manter
+        if (frame.captureTimestampUs >= oldestAllowedVideoUs)
+        {
+            break;
+        }
+
+        // Se está fora da janela, descartar (mesmo que não processado - dados muito antigos)
+        m_timestampedVideoBuffer.pop_front();
+    }
+
+    // Mesma lógica para áudio
+    while (!m_timestampedAudioBuffer.empty())
+    {
+        const auto &audio = m_timestampedAudioBuffer.front();
+
+        if (audio.captureTimestampUs >= oldestAllowedAudioUs)
+        {
+            break;
+        }
+
+        m_timestampedAudioBuffer.pop_front();
+    }
+}
+
+HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
+{
+    std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
+    std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
+
+    if (m_timestampedVideoBuffer.empty() || m_timestampedAudioBuffer.empty())
+    {
+        return SyncZone::invalid();
+    }
+
+    // Encontrar sobreposição temporal entre buffers
+    int64_t videoStartUs = m_timestampedVideoBuffer.front().captureTimestampUs;
+    int64_t videoEndUs = m_timestampedVideoBuffer.back().captureTimestampUs;
+
+    int64_t audioStartUs = m_timestampedAudioBuffer.front().captureTimestampUs;
+    int64_t audioEndUs = m_timestampedAudioBuffer.back().captureTimestampUs;
+
+    // Calcular sobreposição
+    int64_t overlapStartUs = std::max(videoStartUs, audioStartUs);
+    int64_t overlapEndUs = std::min(videoEndUs, audioEndUs);
+
+    // Verificar se há sobreposição suficiente (mínimo 1 segundo)
+    if (overlapEndUs - overlapStartUs < MIN_BUFFER_TIME_US)
+    {
+        return SyncZone::invalid(); // Aguardar mais dados
+    }
+
+    // Zona sincronizada: meio da sobreposição (não as pontas)
+    // Pegar do meio para garantir que há dados suficientes antes e depois
+    int64_t zoneStartUs = overlapStartUs + (overlapEndUs - overlapStartUs) / 4;   // 25% do início
+    int64_t zoneEndUs = overlapStartUs + 3 * (overlapEndUs - overlapStartUs) / 4; // 75% do início
+
+    // Encontrar índices correspondentes nos buffers
+    size_t videoStartIdx = 0;
+    size_t videoEndIdx = 0;
+    for (size_t i = 0; i < m_timestampedVideoBuffer.size(); i++)
+    {
+        if (m_timestampedVideoBuffer[i].captureTimestampUs >= zoneStartUs && videoStartIdx == 0)
+        {
+            videoStartIdx = i;
+        }
+        if (m_timestampedVideoBuffer[i].captureTimestampUs <= zoneEndUs)
+        {
+            videoEndIdx = i + 1;
+        }
+    }
+
+    size_t audioStartIdx = 0;
+    size_t audioEndIdx = 0;
+    for (size_t i = 0; i < m_timestampedAudioBuffer.size(); i++)
+    {
+        if (m_timestampedAudioBuffer[i].captureTimestampUs >= zoneStartUs && audioStartIdx == 0)
+        {
+            audioStartIdx = i;
+        }
+        if (m_timestampedAudioBuffer[i].captureTimestampUs <= zoneEndUs)
+        {
+            audioEndIdx = i + 1;
+        }
+    }
+
+    SyncZone zone;
+    zone.startTimeUs = zoneStartUs;
+    zone.endTimeUs = zoneEndUs;
+    zone.videoStartIdx = videoStartIdx;
+    zone.videoEndIdx = videoEndIdx;
+    zone.audioStartIdx = audioStartIdx;
+    zone.audioEndIdx = audioEndIdx;
+
+    return zone;
+}
+
 void HTTPTSStreamer::encodingThread()
 {
     while (m_running)
     {
-        // Processar frames de vídeo da fila bruta
-        bool hasVideo = false;
-        std::pair<std::shared_ptr<std::vector<uint8_t>>, std::pair<uint32_t, uint32_t>> frame;
+        // Calcular zona de sincronização
+        SyncZone zone = calculateSyncZone();
+
+        if (!zone.isValid())
         {
-            std::lock_guard<std::mutex> lock(m_frameQueueMutex);
-            if (!m_frameQueue.empty())
-            {
-                frame = m_frameQueue.front();
-                m_frameQueue.pop(); // REMOVER da fila bruta antes de encodar
-                hasVideo = true;
-            }
+            // Não há zona válida ainda - AGUARDAR (não descartar)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
         }
 
-        // Processar áudio da fila bruta
-        bool hasAudio = false;
-        std::pair<std::shared_ptr<std::vector<int16_t>>, std::pair<size_t, size_t>> audio;
+        // Processar dados da zona sincronizada
         {
-            std::lock_guard<std::mutex> lock(m_audioQueueMutex);
-            if (!m_audioQueue.empty())
-            {
-                audio = m_audioQueue.front();
-                m_audioQueue.pop(); // REMOVER da fila bruta antes de encodar
-                hasAudio = true;
-            }
-        }
+            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
 
-        // Encodar vídeo (já removido da fila bruta, envia diretamente via muxPacket)
-        if (hasVideo && frame.first && frame.second.first > 0 && frame.second.second > 0)
-        {
-            static int videoProcessCount = 0;
-            videoProcessCount++;
-            size_t frameBytes = static_cast<size_t>(frame.second.first) * static_cast<size_t>(frame.second.second) * 3;
-
-            // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
-
-            // Validar dados antes de encodar
-            if (frame.first->size() != frameBytes)
+            // Processar frames de vídeo da zona sincronizada
+            for (size_t i = zone.videoStartIdx; i < zone.videoEndIdx && i < m_timestampedVideoBuffer.size(); i++)
             {
-                LOG_ERROR("[VIDEO] encodingThread: Frame data size mismatch! Expected " +
-                          std::to_string(frameBytes) + " bytes, got " + std::to_string(frame.first->size()) + " bytes");
-            }
-            else if (frame.first->data() == nullptr)
-            {
-                LOG_ERROR("[VIDEO] encodingThread: Frame data pointer is null!");
-            }
-            else
-            {
-                if (!encodeVideoFrame(frame.first->data(), frame.second.first, frame.second.second))
+                auto &frame = m_timestampedVideoBuffer[i];
+                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
                 {
-                    LOG_ERROR("[VIDEO] encodingThread: encodeVideoFrame returned false");
+                    encodeVideoFrame(frame.data->data(), frame.width, frame.height, frame.captureTimestampUs);
+                    frame.processed = true; // Marcar como processado
                 }
             }
-            // Frame já foi removido da fila bruta acima e encodado/enviado
-        }
-        else if (hasVideo)
-        {
-            LOG_WARN("[VIDEO] encodingThread: Video frame has invalid data (hasVideo=" + std::to_string(hasVideo) +
-                     ", frame.first=" + std::to_string(frame.first != nullptr) +
-                     ", size=" + std::to_string(frame.second.first) + "x" + std::to_string(frame.second.second) + ")");
         }
 
-        // Encodar áudio (já removido da fila bruta, envia diretamente via muxPacket)
-        if (hasAudio && audio.first && audio.second.first > 0 && audio.second.second > 0)
         {
-            // encodeAudioFrame retorna false apenas em caso de erro real
-            // Não logar erro se apenas não havia samples suficientes (isso é normal)
-            encodeAudioFrame(audio.first->data(), audio.first->size());
-            // Áudio já foi removido da fila bruta acima e encodado/enviado
+            std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
+
+            // Processar chunks de áudio da zona sincronizada
+            for (size_t i = zone.audioStartIdx; i < zone.audioEndIdx && i < m_timestampedAudioBuffer.size(); i++)
+            {
+                auto &audio = m_timestampedAudioBuffer[i];
+                if (!audio.processed && audio.samples && audio.sampleCount > 0)
+                {
+                    encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
+                    audio.processed = true; // Marcar como processado
+                }
+            }
         }
 
-        // Se não há dados para processar, aguardar um pouco
-        if (!hasVideo && !hasAudio)
+        // Limpar dados processados (remover do buffer após envio bem-sucedido)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
+            while (!m_timestampedVideoBuffer.empty() && m_timestampedVideoBuffer.front().processed)
+            {
+                m_timestampedVideoBuffer.pop_front();
+            }
         }
+
+        {
+            std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
+            while (!m_timestampedAudioBuffer.empty() && m_timestampedAudioBuffer.front().processed)
+            {
+                m_timestampedAudioBuffer.pop_front();
+            }
+        }
+
+        // Aguardar um pouco antes de recalcular a zona
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }

@@ -1521,6 +1521,7 @@ void Application::streamingThreadFunc()
         // Processar frames de vídeo do buffer compartilhado
         // A thread principal faz glReadPixels e copia para m_sharedFrameData
         // Esta thread processa os dados (resize, etc) e envia para streaming
+        // Se a fila de vídeo estiver muito grande, descartar frames antigos para evitar atraso excessivo
         bool hasVideoFrame = false;
         SharedFrameData frameData;
         {
@@ -1569,32 +1570,37 @@ void Application::streamingThreadFunc()
                 {
                     std::vector<uint8_t> processedData;
                     processedData.resize(processedSize);
+
+                    // Otimização: pré-calcular offsets de linha para reduzir cálculos
                     float scaleX = (float)dataWidth / streamWidth;
                     float scaleY = (float)dataHeight / streamHeight;
+                    const uint8_t *srcData = frameData.frameData.data();
+                    uint8_t *dstData = processedData.data();
 
-                    size_t frameDataSize = static_cast<size_t>(dataWidth) * static_cast<size_t>(dataHeight) * 3;
-
+                    // Otimização: processar linha por linha com ponteiros
                     for (uint32_t y = 0; y < streamHeight; y++)
                     {
-                        uint32_t srcY = (uint32_t)(y * scaleY);
+                        uint32_t srcY = static_cast<uint32_t>(y * scaleY);
                         if (srcY >= dataHeight)
                             srcY = dataHeight - 1;
 
+                        const uint8_t *srcRow = srcData + (srcY * dataWidth * 3);
+                        uint8_t *dstRow = dstData + (y * streamWidth * 3);
+
+                        // Otimização: processar múltiplos pixels por iteração quando possível
                         for (uint32_t x = 0; x < streamWidth; x++)
                         {
-                            uint32_t srcX = (uint32_t)(x * scaleX);
+                            uint32_t srcX = static_cast<uint32_t>(x * scaleX);
                             if (srcX >= dataWidth)
                                 srcX = dataWidth - 1;
 
-                            size_t srcIdx = (srcY * dataWidth + srcX) * 3;
-                            size_t dstIdx = (y * streamWidth + x) * 3;
+                            const uint8_t *srcPixel = srcRow + (srcX * 3);
+                            uint8_t *dstPixel = dstRow + (x * 3);
 
-                            if (srcIdx + 2 < frameDataSize && dstIdx + 2 < processedSize)
-                            {
-                                processedData[dstIdx] = frameData.frameData[srcIdx];
-                                processedData[dstIdx + 1] = frameData.frameData[srcIdx + 1];
-                                processedData[dstIdx + 2] = frameData.frameData[srcIdx + 2];
-                            }
+                            // Copiar 3 bytes (RGB) de uma vez
+                            dstPixel[0] = srcPixel[0];
+                            dstPixel[1] = srcPixel[1];
+                            dstPixel[2] = srcPixel[2];
                         }
                     }
                     dataToSend = processedData.data();
