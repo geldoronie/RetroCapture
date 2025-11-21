@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <time.h>
 
 extern "C"
 {
@@ -18,6 +19,14 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+}
+
+// Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
+static int64_t getTimestampUs()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
 }
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
@@ -90,22 +99,8 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     std::shared_ptr<std::vector<uint8_t>> frameData = std::make_shared<std::vector<uint8_t>>(data, data + width * height * 3);
     m_frameQueue.emplace(frameData, std::make_pair(width, height));
 
-    static int logCount = 0;
-    static size_t totalFramesReceived = 0;
-    static size_t totalBytesReceived = 0;
+    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
     size_t frameBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    totalFramesReceived++;
-    totalBytesReceived += frameBytes;
-
-    if (logCount < 10 || m_frameQueue.size() % 60 == 0)
-    {
-        LOG_INFO("[VIDEO] pushFrame: Received frame #" + std::to_string(totalFramesReceived) +
-                 " - " + std::to_string(width) + "x" + std::to_string(height) +
-                 " (" + std::to_string(frameBytes) + " bytes), queue size=" +
-                 std::to_string(m_frameQueue.size()) + ", total bytes=" +
-                 std::to_string(totalBytesReceived));
-        logCount++;
-    }
 
     // Validar que os dados não são todos zeros (frame preto pode ser válido, mas tudo zero pode indicar problema)
     bool allZeros = true;
@@ -121,10 +116,7 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         }
     }
 
-    if (allZeros && logCount < 20)
-    {
-        LOG_WARN("[VIDEO] pushFrame: Frame data appears to be all zeros (first 1024 bytes checked)");
-    }
+    // Log removido para reduzir poluição
 
     return true;
 }
@@ -347,7 +339,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
         else
         {
-            LOG_WARN("Format header not yet available, client will wait for it");
+            // Log removido para reduzir poluição
         }
     }
 
@@ -356,7 +348,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         std::lock_guard<std::mutex> lock(m_outputMutex);
         m_clientSockets.push_back(clientFd);
         m_clientCount = m_clientSockets.size();
-        LOG_INFO("Client connected (total: " + std::to_string(m_clientCount.load()) + ")");
+        // Log removido para reduzir poluição
     }
 
     // Manter conexão aberta - dados serão enviados via writeToClients
@@ -381,7 +373,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         {
             m_clientSockets.erase(it);
             m_clientCount = m_clientSockets.size();
-            LOG_INFO("Client disconnected (total: " + std::to_string(m_clientCount.load()) + ")");
+            // Log removido para reduzir poluição
         }
     }
 }
@@ -404,7 +396,7 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             {
                 m_formatHeader.assign(buf, buf + buf_size);
                 m_headerWritten = true;
-                LOG_INFO("MPEG-TS format header captured (" + std::to_string(buf_size) + " bytes)");
+                // Log removido para reduzir poluição
             }
         }
     }
@@ -995,16 +987,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         return false;
     }
 
-    // Validar dados de entrada
-    size_t expectedSize = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    static int validationLogCount = 0;
-    if (validationLogCount < 5)
-    {
-        LOG_INFO("[VIDEO] encodeVideoFrame: Input validation - width=" + std::to_string(width) +
-                 ", height=" + std::to_string(height) + ", expected size=" + std::to_string(expectedSize) +
-                 " bytes, rgbData=" + std::to_string(rgbData != nullptr));
-        validationLogCount++;
-    }
+    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
     // Converter RGB para YUV
     if (!convertRGBToYUV(rgbData, width, height, videoFrame))
@@ -1015,6 +998,13 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
     // Configurar PTS no time_base do codec
     static int64_t frameCount = 0;
+    static int64_t firstVideoEncodeTime = 0;
+    int64_t encodeTimeUs = getTimestampUs();
+    if (frameCount == 0)
+    {
+        firstVideoEncodeTime = encodeTimeUs;
+    }
+
     videoFrame->pts = frameCount;
 
     // Forçar primeiro frame como keyframe
@@ -1083,16 +1073,19 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
             pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, videoStream->time_base);
         }
 
-        // Log do primeiro pacote para diagnóstico
-        static bool firstPacketLogged = false;
-        if (!firstPacketLogged && packetCount == 1)
+        // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
+        static int videoEncodeLogCount = 0;
+        int64_t muxTimeUs = getTimestampUs();
+        if (videoEncodeLogCount < 10 || (videoEncodeLogCount % 60 == 0))
         {
-            LOG_INFO("encodeVideoFrame: First video packet - pts=" + std::to_string(pkt->pts) +
-                     ", dts=" + std::to_string(pkt->dts) + ", keyframe=" +
-                     std::to_string((pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0) + ", size=" +
-                     std::to_string(pkt->size));
-            firstPacketLogged = true;
+            int64_t elapsedUs = encodeTimeUs - firstVideoEncodeTime;
+            LOG_INFO("[SYNC_DEBUG] [VIDEO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
+                     " encoded at " + std::to_string(encodeTimeUs) + "us, elapsed=" +
+                     std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
+                     ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts) +
+                     ", encode_duration=" + std::to_string(muxTimeUs - encodeTimeUs) + "us");
         }
+        videoEncodeLogCount++;
 
         // Muxar e enviar pacote diretamente (já foi removido da fila bruta antes de chamar esta função)
         if (!muxPacket(pkt))
@@ -1111,19 +1104,10 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         }
         else
         {
-            LOG_WARN("encodeVideoFrame: Frame #" + std::to_string(frameCount) + " produced no packets");
+            // Log removido para reduzir poluição
         }
     }
-    else
-    {
-        static int logCount = 0;
-        if (logCount < 10 || frameCount % 60 == 0)
-        {
-            LOG_INFO("encodeVideoFrame: Encoded frame #" + std::to_string(frameCount) +
-                     " -> " + std::to_string(packetCount) + " packets");
-            logCount++;
-        }
-    }
+    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
     return true;
 }
@@ -1208,6 +1192,12 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
     }
 
     static int64_t frameCount = 0;
+    static int64_t firstAudioEncodeTime = 0;
+    int64_t encodeStartTimeUs = getTimestampUs();
+    if (frameCount == 0)
+    {
+        firstAudioEncodeTime = encodeStartTimeUs;
+    }
     bool encodedAny = false;
     bool hadError = false;
 
@@ -1239,6 +1229,7 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
 
         // Configurar PTS no time_base do codec
         audioFrame->pts = frameCount * samplesPerFrame;
+        int64_t frameEncodeTimeUs = getTimestampUs();
         frameCount++;
 
         // Enviar frame para codec
@@ -1280,6 +1271,25 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
                 pkt->dts = av_rescale_q(pkt->dts, codecCtx->time_base, audioStream->time_base);
             }
 
+            // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
+            static int audioEncodeLogCount = 0;
+            int64_t muxTimeUs = getTimestampUs();
+            if (audioEncodeLogCount < 10 || (audioEncodeLogCount % 43 == 0)) // ~1 segundo a 44100Hz/1024
+            {
+                int64_t elapsedUs = frameEncodeTimeUs - firstAudioEncodeTime;
+                double audioDurationMs = (static_cast<double>(samplesPerFrame) / static_cast<double>(m_audioSampleRate)) * 1000.0;
+                std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
+                size_t accumulatorSize = m_audioAccumulator.size();
+                LOG_INFO("[SYNC_DEBUG] [AUDIO_ENCODE] Frame #" + std::to_string(frameCount - 1) +
+                         " encoded at " + std::to_string(frameEncodeTimeUs) + "us, elapsed=" +
+                         std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
+                         ", PTS=" + std::to_string(pkt->pts) + ", DTS=" + std::to_string(pkt->dts) +
+                         ", duration=" + std::to_string(audioDurationMs) + "ms" +
+                         ", encode_duration=" + std::to_string(muxTimeUs - frameEncodeTimeUs) + "us" +
+                         ", accumulator_size=" + std::to_string(accumulatorSize));
+            }
+            audioEncodeLogCount++;
+
             // Muxar e enviar pacote diretamente
             if (!muxPacket(pkt))
             {
@@ -1292,13 +1302,6 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         if (packetCount > 0)
         {
             encodedAny = true;
-            static int audioLogCount = 0;
-            if (audioLogCount < 5 || frameCount % 100 == 0)
-            {
-                LOG_INFO("encodeAudioFrame: Encoded audio frame #" + std::to_string(frameCount) +
-                         " -> " + std::to_string(packetCount) + " packets");
-                audioLogCount++;
-            }
         }
     }
 
@@ -1429,14 +1432,7 @@ void HTTPTSStreamer::encodingThread()
             videoProcessCount++;
             size_t frameBytes = static_cast<size_t>(frame.second.first) * static_cast<size_t>(frame.second.second) * 3;
 
-            if (videoProcessCount <= 10 || videoProcessCount % 60 == 0)
-            {
-                LOG_INFO("[VIDEO] encodingThread: Processing frame #" + std::to_string(videoProcessCount) +
-                         " - " + std::to_string(frame.second.first) + "x" + std::to_string(frame.second.second) +
-                         " (" + std::to_string(frameBytes) + " bytes), data ptr=" +
-                         std::to_string(frame.first != nullptr) + ", vector size=" +
-                         std::to_string(frame.first->size()));
-            }
+            // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
             // Validar dados antes de encodar
             if (frame.first->size() != frameBytes)

@@ -15,9 +15,21 @@
 #include <GLFW/glfw3.h>
 #include <linux/videodev2.h>
 #include <vector>
+#include <algorithm>
 #include <cstring>
 #include <unistd.h>
 #include <filesystem>
+#include <time.h>
+#include <sstream>
+#include <iomanip>
+
+// Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
+static int64_t getTimestampUs()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+}
 
 Application::Application()
 {
@@ -1343,23 +1355,33 @@ void Application::run()
                         }
                     }
 
-                    static int readLogCount = 0;
-                    if (readLogCount < 5 || (readLogCount % 60 == 0))
-                    {
-                        LOG_INFO("[VIDEO] Main thread: Captured capture area - " + std::to_string(captureWidth) + "x" +
-                                 std::to_string(captureHeight) + " (viewport: " + std::to_string(viewportX) + "," +
-                                 std::to_string(viewportY) + "), allZeros=" + std::to_string(allZeros));
-                        readLogCount++;
-                    }
+                    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
                     // Copiar dados para buffer compartilhado (thread-safe)
                     if (!allZeros && !frameData.empty())
                     {
+                        int64_t captureTimeUs = getTimestampUs();
                         std::lock_guard<std::mutex> lock(m_frameDataMutex);
                         m_sharedFrameData.frameData = std::move(frameData);
                         m_sharedFrameData.width = captureWidth;
                         m_sharedFrameData.height = captureHeight;
                         m_sharedFrameData.hasNewFrame = true;
+
+                        // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
+                        static int videoCaptureLogCount = 0;
+                        static int64_t firstVideoCaptureTime = 0;
+                        if (videoCaptureLogCount == 0)
+                        {
+                            firstVideoCaptureTime = captureTimeUs;
+                        }
+                        if (videoCaptureLogCount < 10 || (videoCaptureLogCount % 60 == 0))
+                        {
+                            int64_t elapsedUs = captureTimeUs - firstVideoCaptureTime;
+                            LOG_INFO("[SYNC_DEBUG] [VIDEO_CAPTURE] Frame #" + std::to_string(videoCaptureLogCount) +
+                                     " captured at " + std::to_string(captureTimeUs) + "us, elapsed=" +
+                                     std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)");
+                        }
+                        videoCaptureLogCount++;
                     }
                 }
             }
@@ -1441,17 +1463,53 @@ void Application::streamingThreadFunc()
             }
         }
 
-        // Ler áudio em chunks maiores para melhor throughput
-        const size_t maxSamples = 512; // Ler até 2048 samples por vez
-        int16_t audioBuffer[maxSamples];
-        size_t samplesRead = m_audioCapture->getSamples(audioBuffer, maxSamples);
+        // Calcular tamanho do buffer baseado no tempo para sincronização
+        // 1 segundo de áudio = 1 segundo de vídeo
+        // samplesPerVideoFrame = sampleRate / fps (para corresponder ao tempo de 1 frame de vídeo)
+        uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+        uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+
+        // Calcular samples correspondentes a 1 frame de vídeo (arredondado)
+        // Usar múltiplo de 2 para alinhamento e garantir pelo menos um mínimo razoável
+        size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                          ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps) // Arredondamento
+                                          : 512;                                                             // Fallback se não conseguir calcular
+
+        // Garantir mínimo de 64 samples e máximo razoável (ex: 1 segundo = sampleRate)
+        samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+
+        // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
+        int64_t audioReadStartUs = getTimestampUs();
+        std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+        size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+        int64_t audioReadEndUs = getTimestampUs();
 
         if (samplesRead > 0)
         {
             // Push audio to streamer (verificar novamente antes de usar)
             if (m_streamManager && m_streamManager->isActive())
             {
-                m_streamManager->pushAudio(audioBuffer, samplesRead);
+                int64_t audioPushTimeUs = getTimestampUs();
+                m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+
+                // Log detalhado para depuração de sincronização (primeiros 10 chunks e depois a cada segundo)
+                static int audioCaptureLogCount = 0;
+                static int64_t firstAudioCaptureTime = 0;
+                if (audioCaptureLogCount == 0)
+                {
+                    firstAudioCaptureTime = audioReadStartUs;
+                }
+                if (audioCaptureLogCount < 10 || (audioCaptureLogCount % 60 == 0))
+                {
+                    int64_t elapsedUs = audioReadStartUs - firstAudioCaptureTime;
+                    double audioDurationMs = (static_cast<double>(samplesRead) / static_cast<double>(audioSampleRate)) * 1000.0;
+                    LOG_INFO("[SYNC_DEBUG] [AUDIO_CAPTURE] Chunk #" + std::to_string(audioCaptureLogCount) +
+                             " read " + std::to_string(samplesRead) + " samples (" + std::to_string(audioDurationMs) + "ms)" +
+                             " at " + std::to_string(audioReadStartUs) + "us, elapsed=" +
+                             std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)" +
+                             ", read_duration=" + std::to_string(audioReadEndUs - audioReadStartUs) + "us");
+                }
+                audioCaptureLogCount++;
             }
         }
         else
@@ -1477,6 +1535,7 @@ void Application::streamingThreadFunc()
 
         if (hasVideoFrame && m_streamManager && m_streamManager->isActive())
         {
+            int64_t videoPushTimeUs = getTimestampUs();
             uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
             uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
 
@@ -1485,14 +1544,23 @@ void Application::streamingThreadFunc()
             uint32_t dataWidth = frameData.width;
             uint32_t dataHeight = frameData.height;
 
-            static int processLogCount = 0;
-            if (processLogCount < 5 || (processLogCount % 60 == 0))
+            // Log detalhado para depuração de sincronização (primeiros 10 frames e depois a cada segundo)
+            static int videoPushLogCount = 0;
+            static int64_t firstVideoPushTime = 0;
+            if (videoPushLogCount == 0)
             {
-                LOG_INFO("[VIDEO] Streaming thread: Processing frame - " + std::to_string(dataWidth) + "x" +
-                         std::to_string(dataHeight) + " -> " + std::to_string(streamWidth) + "x" +
-                         std::to_string(streamHeight));
-                processLogCount++;
+                firstVideoPushTime = videoPushTimeUs;
             }
+            if (videoPushLogCount < 10 || (videoPushLogCount % 60 == 0))
+            {
+                int64_t elapsedUs = videoPushTimeUs - firstVideoPushTime;
+                LOG_INFO("[SYNC_DEBUG] [VIDEO_PUSH] Frame #" + std::to_string(videoPushLogCount) +
+                         " pushed to streamer at " + std::to_string(videoPushTimeUs) + "us, elapsed=" +
+                         std::to_string(elapsedUs) + "us (" + std::to_string(elapsedUs / 1000) + "ms)");
+            }
+            videoPushLogCount++;
+
+            // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
             if (streamWidth != dataWidth || streamHeight != dataHeight)
             {
