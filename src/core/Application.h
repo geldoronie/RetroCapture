@@ -145,7 +145,7 @@ private:
     };
     mutable std::mutex m_frameDataMutex;
     std::deque<SharedFrameData> m_frameQueue; // Fila de frames para processar
-    static constexpr size_t MAX_FRAME_QUEUE_SIZE = 10; // Limitar tamanho da fila para evitar acúmulo excessivo
+    static constexpr size_t MAX_FRAME_QUEUE_SIZE = 60; // Aumentar para 60 frames (1 segundo a 60 FPS) para evitar perda
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);

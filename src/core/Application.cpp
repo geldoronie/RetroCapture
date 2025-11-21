@@ -23,6 +23,11 @@
 #include <sstream>
 #include <iomanip>
 
+extern "C"
+{
+#include <libswscale/swscale.h>
+}
+
 // Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
 static int64_t getTimestampUs()
 {
@@ -1585,41 +1590,35 @@ void Application::streamingThreadFunc()
                 {
                     processedData.resize(processedSize);
 
-                    // Otimização: pré-calcular offsets de linha para reduzir cálculos
-                    float scaleX = (float)dataWidth / streamWidth;
-                    float scaleY = (float)dataHeight / streamHeight;
-                    const uint8_t *srcData = frameData.frameData.data();
-                    uint8_t *dstData = processedData.data();
+                    // OTIMIZAÇÃO CRÍTICA: Usar libswscale para resize (muito mais rápido que pixel por pixel)
+                    // libswscale usa SIMD e é otimizado para performance
+                    // SWS_FAST_BILINEAR é o mais rápido, adequado para streaming
+                    SwsContext *swsCtx = sws_getContext(
+                        dataWidth, dataHeight, AV_PIX_FMT_RGB24,
+                        streamWidth, streamHeight, AV_PIX_FMT_RGB24,
+                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 
-                    // Otimização: processar linha por linha com ponteiros
-                    for (uint32_t y = 0; y < streamHeight; y++)
+                    if (swsCtx)
                     {
-                        uint32_t srcY = static_cast<uint32_t>(y * scaleY);
-                        if (srcY >= dataHeight)
-                            srcY = dataHeight - 1;
+                        const uint8_t *srcData[1] = {frameData.frameData.data()};
+                        int srcLinesize[1] = {static_cast<int>(dataWidth * 3)};
+                        uint8_t *dstData[1] = {processedData.data()};
+                        int dstLinesize[1] = {static_cast<int>(streamWidth * 3)};
 
-                        const uint8_t *srcRow = srcData + (srcY * dataWidth * 3);
-                        uint8_t *dstRow = dstData + (y * streamWidth * 3);
+                        // Fazer resize otimizado com libswscale
+                        sws_scale(swsCtx, srcData, srcLinesize, 0, dataHeight,
+                                  dstData, dstLinesize);
 
-                        // Otimização: processar múltiplos pixels por iteração quando possível
-                        for (uint32_t x = 0; x < streamWidth; x++)
-                        {
-                            uint32_t srcX = static_cast<uint32_t>(x * scaleX);
-                            if (srcX >= dataWidth)
-                                srcX = dataWidth - 1;
+                        sws_freeContext(swsCtx);
 
-                            const uint8_t *srcPixel = srcRow + (srcX * 3);
-                            uint8_t *dstPixel = dstRow + (x * 3);
-
-                            // Copiar 3 bytes (RGB) de uma vez
-                            dstPixel[0] = srcPixel[0];
-                            dstPixel[1] = srcPixel[1];
-                            dstPixel[2] = srcPixel[2];
-                        }
+                        dataToSend = processedData.data();
+                        dataWidth = streamWidth;
+                        dataHeight = streamHeight;
                     }
-                    dataToSend = processedData.data();
-                    dataWidth = streamWidth;
-                    dataHeight = streamHeight;
+                    else
+                    {
+                        resizeSuccess = false; // Falha ao criar contexto de scaling
+                    }
                 }
                 else
                 {

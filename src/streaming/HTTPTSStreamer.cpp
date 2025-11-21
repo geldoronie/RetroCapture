@@ -570,9 +570,9 @@ bool HTTPTSStreamer::initializeVideoCodec()
     AVDictionary *opts = nullptr;
     if (codec->id == AV_CODEC_ID_H264)
     {
-        // Preset "fast" para balance entre velocidade e qualidade
-        // "veryfast" estava causando qualidade ruim, "fast" é melhor qualidade mas ainda rápido
-        av_dict_set(&opts, "preset", "fast", 0);
+        // Preset "veryfast" para máxima velocidade (60 FPS)
+        // Priorizar velocidade sobre qualidade para alcançar o target de FPS
+        av_dict_set(&opts, "preset", "veryfast", 0);
         // Tune "zerolatency" para streaming em tempo real (remove delay do codec)
         av_dict_set(&opts, "tune", "zerolatency", 0);
         // Profile "baseline" para compatibilidade máxima
@@ -1132,8 +1132,8 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
     // Tentar receber pacotes múltiplas vezes para garantir que todos sejam processados
     // Isso é especialmente importante para o primeiro keyframe
-    // REDUZIDO de 10 para 3 para evitar atraso excessivo
-    int maxAttempts = (frameCount == 1 && videoFrame->key_frame == 1) ? 3 : 1;
+    // Para 60 FPS, reduzir tentativas para processar mais rápido
+    int maxAttempts = (frameCount == 1 && videoFrame->key_frame == 1) ? 2 : 1;
 
     for (int attempt = 0; attempt < maxAttempts; attempt++)
     {
@@ -1771,15 +1771,21 @@ void HTTPTSStreamer::encodingThread()
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
 
-            // Processar frames não processados (aumentar limite para alcançar 60 FPS)
+            // Processar TODOS os frames disponíveis para alcançar 60 FPS
+            // Remover limite artificial - processar o máximo possível por iteração
             size_t framesProcessedThisIteration = 0;
-            const size_t MAX_FRAMES_PER_ITERATION = 20; // Processar até 20 frames por iteração para 60 FPS
+            size_t totalFrames = m_timestampedVideoBuffer.size();
+
+            // Se há muitos frames acumulados, processar mais agressivamente
+            // Processar até 60 frames por iteração se houver muitos na fila
+            const size_t MAX_FRAMES_PER_ITERATION = (totalFrames > 30) ? 60 : (totalFrames > 15) ? 40
+                                                                                                 : 30;
 
             for (auto &frame : m_timestampedVideoBuffer)
             {
                 if (framesProcessedThisIteration >= MAX_FRAMES_PER_ITERATION)
                 {
-                    break; // Limitar processamento por iteração
+                    break; // Limitar apenas se exceder o máximo dinâmico
                 }
 
                 if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
@@ -1797,8 +1803,13 @@ void HTTPTSStreamer::encodingThread()
                     else
                     {
                         // Encoding falhou (provavelmente codec cheio) - NÃO marcar como processado
-                        // Manter no buffer para tentar novamente na próxima iteração
-                        break; // Parar de processar mais frames se este falhou
+                        // Se temos muitos frames, continuar tentando os próximos
+                        // Se temos poucos frames, parar para não desperdiçar CPU
+                        if (totalFrames < 10)
+                        {
+                            break; // Parar se poucos frames e este falhou
+                        }
+                        // Continuar tentando se há muitos frames acumulados
                     }
                 }
             }
@@ -1845,10 +1856,27 @@ void HTTPTSStreamer::encodingThread()
         }
 
         // Se processamos algo, continuar imediatamente (sem sleep) para máxima velocidade
-        // Se não processamos nada, dormir um pouco para não consumir CPU desnecessariamente
+        // Se não processamos nada, verificar se há dados pendentes antes de dormir
         if (!processedAny)
         {
-            std::this_thread::sleep_for(std::chrono::microseconds(50)); // 0.05ms quando não há dados
+            // Verificar se há frames ou áudio pendentes antes de dormir
+            bool hasPendingData = false;
+            {
+                std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
+                hasPendingData = !m_timestampedVideoBuffer.empty();
+            }
+            if (!hasPendingData)
+            {
+                std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
+                hasPendingData = !m_timestampedAudioBuffer.empty();
+            }
+
+            if (!hasPendingData)
+            {
+                // Só dormir se realmente não há dados para processar
+                std::this_thread::sleep_for(std::chrono::microseconds(10)); // 0.01ms quando não há dados
+            }
+            // Se há dados pendentes mas não processamos, continuar imediatamente (pode ser codec ocupado)
         }
         // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }
