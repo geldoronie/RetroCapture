@@ -1166,14 +1166,26 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     // Forçar primeiro frame como keyframe e keyframes periódicos
     // Usar variável de instância ao invés de static para permitir reset em reinicializações
     bool forceKeyframe = false;
+
     if (m_videoFrameCount == 0)
     {
+        // Primeiro frame sempre é keyframe
         forceKeyframe = true;
     }
-    // Forçar keyframe periódico a cada gop_size frames (configurado em initializeVideoCodec)
-    else if (m_videoFrameCount > 0 && (m_videoFrameCount % codecCtx->gop_size == 0))
+    // Forçar keyframe periódico mais frequente para permitir recuperação rápida de corrupção
+    // Reduzir intervalo para metade do gop_size (a cada 1 segundo em vez de 2 segundos)
+    else if (m_videoFrameCount > 0 && (m_videoFrameCount % (codecCtx->gop_size / 2) == 0))
+    {
+        // Keyframe periódico mais frequente para permitir recuperação de erros
+        forceKeyframe = true;
+    }
+    // Forçar keyframe se detectamos dessincronização recente
+    else if (m_desyncFrameCount > 0)
     {
         forceKeyframe = true;
+        LOG_WARN("Forçando keyframe devido a dessincronização detectada (" +
+                 std::to_string(m_desyncFrameCount) + " frames)");
+        m_desyncFrameCount = 0; // Reset após forçar keyframe
     }
 
     if (forceKeyframe)
@@ -1357,14 +1369,36 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         }
 
         // Garantir que PTS e DTS sejam monotônicos (sempre aumentem)
+        // Detectar dessincronização baseada em saltos grandes de PTS/DTS
         {
             std::lock_guard<std::mutex> lock(m_ptsMutex);
+            bool desyncDetected = false;
+
             if (pktToMux->pts != AV_NOPTS_VALUE)
             {
-                if (m_lastVideoPTS >= 0 && pktToMux->pts <= m_lastVideoPTS)
+                if (m_lastVideoPTS >= 0)
                 {
-                    // PTS não aumentou, forçar incremento mínimo
-                    pktToMux->pts = m_lastVideoPTS + 1;
+                    // Calcular incremento esperado baseado no FPS
+                    // Para 60 FPS, cada frame deve ter PTS incrementado por ~1/60 do time_base
+                    int64_t expectedIncrement = videoStream->time_base.den / static_cast<int>(m_fps);
+                    int64_t actualIncrement = pktToMux->pts - m_lastVideoPTS;
+
+                    // Detectar salto muito grande (mais de 2x o esperado) ou regressão
+                    if (pktToMux->pts <= m_lastVideoPTS || actualIncrement > expectedIncrement * 2)
+                    {
+                        desyncDetected = true;
+                        m_desyncFrameCount++;
+                    }
+                    else
+                    {
+                        m_desyncFrameCount = 0; // Reset contador se tudo está OK
+                    }
+
+                    if (pktToMux->pts <= m_lastVideoPTS)
+                    {
+                        // PTS não aumentou, forçar incremento mínimo
+                        pktToMux->pts = m_lastVideoPTS + 1;
+                    }
                 }
                 m_lastVideoPTS = pktToMux->pts;
             }
@@ -1374,6 +1408,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
                 {
                     // DTS não aumentou, forçar incremento mínimo
                     pktToMux->dts = m_lastVideoDTS + 1;
+                    desyncDetected = true;
                 }
                 m_lastVideoDTS = pktToMux->dts;
             }
@@ -1382,6 +1417,17 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
             {
                 pktToMux->dts = pktToMux->pts;
                 m_lastVideoDTS = pktToMux->dts;
+                desyncDetected = true;
+            }
+
+            // Se detectamos dessincronização múltiplas vezes consecutivas, forçar keyframe
+            if (desyncDetected && m_desyncFrameCount >= 3)
+            {
+                // Forçar próximo frame como keyframe para permitir recuperação
+                // Isso será aplicado no próximo encodeVideoFrame
+                LOG_WARN("Desincronização detectada (" + std::to_string(m_desyncFrameCount) +
+                         " frames), próximo frame será keyframe para recuperação");
+                m_desyncFrameCount = 0; // Reset após detectar
             }
         }
 
@@ -1777,13 +1823,25 @@ void HTTPTSStreamer::cleanupOldData()
 {
     // Limpar dados antigos baseado em tempo (não em quantidade)
     // Remover apenas dados que estão fora da janela temporal máxima
+    // OTIMIZAÇÃO: Se detectamos dessincronização, ser mais agressivo em descartar frames antigos
+    // para permitir recuperação mais rápida pulando para o tempo atual
 
     // Calcular timestamp mais antigo permitido (janela temporal)
-    int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - MAX_BUFFER_TIME_US;
-    int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - MAX_BUFFER_TIME_US;
+    // Reduzir janela se há dessincronização para permitir recuperação mais rápida
+    int64_t bufferTimeUs = MAX_BUFFER_TIME_US;
+    if (m_desyncFrameCount > 0)
+    {
+        // Reduzir janela pela metade quando há dessincronização
+        bufferTimeUs = MAX_BUFFER_TIME_US / 2;
+    }
 
-    // CRÍTICO: NÃO descartar frames não processados - isso causa perda de frames!
+    int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - bufferTimeUs;
+    int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - bufferTimeUs;
+
+    // CRÍTICO: NÃO descartar frames não processados normalmente - isso causa perda de frames!
     // Remover apenas frames processados que estão fora da janela temporal
+    // EXCEÇÃO: Se há dessincronização, descartar frames não processados muito antigos
+    // para permitir recuperação mais rápida pulando para o tempo atual
     while (!m_timestampedVideoBuffer.empty())
     {
         const auto &frame = m_timestampedVideoBuffer.front();
@@ -1794,7 +1852,18 @@ void HTTPTSStreamer::cleanupOldData()
             break;
         }
 
-        // CRÍTICO: NÃO descartar frames não processados - eles ainda precisam ser encodados!
+        // Se há dessincronização, descartar frames não processados muito antigos
+        // para permitir recuperação mais rápida pulando para o tempo atual
+        if (m_desyncFrameCount > 0 && !frame.processed)
+        {
+            LOG_WARN("Descartando frame não processado antigo devido a dessincronização (timestamp: " +
+                     std::to_string(frame.captureTimestampUs) + " us, atual: " +
+                     std::to_string(m_latestVideoTimestampUs) + " us)");
+            m_timestampedVideoBuffer.pop_front();
+            continue;
+        }
+
+        // CRÍTICO: NÃO descartar frames não processados normalmente - eles ainda precisam ser encodados!
         // Apenas descartar frames que já foram processados E estão muito antigos
         if (frame.processed)
         {
@@ -1898,6 +1967,9 @@ HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
 
 void HTTPTSStreamer::encodingThread()
 {
+    // Aguardar um pouco antes de começar para evitar processar frames muito antigos
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     while (m_running)
     {
         bool processedAny = false;
@@ -1911,6 +1983,71 @@ void HTTPTSStreamer::encodingThread()
         {
             std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
             totalFrames = m_timestampedVideoBuffer.size();
+
+            // CRÍTICO: Se há dessincronização ou muitos frames acumulados, pular frames antigos
+            // para permitir recuperação mais rápida
+            const size_t MAX_BUFFER_FRAMES = static_cast<size_t>(m_fps * 2); // Máximo 2 segundos de frames
+            bool shouldSkipOldFrames = false;
+
+            // Verificar se há dessincronização ou buffer muito grande
+            {
+                std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
+                if (m_desyncFrameCount > 0 || totalFrames > MAX_BUFFER_FRAMES)
+                {
+                    shouldSkipOldFrames = true;
+                }
+            }
+
+            if (shouldSkipOldFrames && totalFrames > 10)
+            {
+                // Pular frames antigos não processados - manter apenas os mais recentes
+                // Calcular quantos frames manter (últimos 0.5 segundos para recuperação mais rápida)
+                size_t framesToKeep = static_cast<size_t>(m_fps / 2); // Apenas 0.5 segundo
+                if (totalFrames > framesToKeep)
+                {
+                    size_t framesToSkip = totalFrames - framesToKeep;
+                    int64_t currentTimeUs = getTimestampUs();
+
+                    LOG_WARN("Pulando " + std::to_string(framesToSkip) + " frames antigos devido a " +
+                             (m_desyncFrameCount > 0 ? "dessincronização" : "buffer grande") +
+                             " (total: " + std::to_string(totalFrames) + " frames, mantendo últimos " +
+                             std::to_string(framesToKeep) + " frames)");
+
+                    // Remover frames antigos não processados
+                    size_t skipped = 0;
+                    while (!m_timestampedVideoBuffer.empty() && skipped < framesToSkip)
+                    {
+                        auto &frame = m_timestampedVideoBuffer.front();
+                        // Pular apenas frames não processados que estão muito atrás no tempo
+                        // Ser mais agressivo: pular se está mais de 0.5 segundos atrás
+                        if (!frame.processed &&
+                            (currentTimeUs - frame.captureTimestampUs) > 500000) // Mais de 0.5 segundo atrás
+                        {
+                            m_timestampedVideoBuffer.pop_front();
+                            skipped++;
+                        }
+                        else
+                        {
+                            // Se chegamos em frames processados ou recentes, parar
+                            break;
+                        }
+                    }
+
+                    if (skipped > 0)
+                    {
+                        LOG_INFO("Pulados " + std::to_string(skipped) + " frames antigos, buffer agora tem " +
+                                 std::to_string(m_timestampedVideoBuffer.size()) + " frames");
+                        // Resetar contador de dessincronização após pular frames
+                        {
+                            std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
+                            m_desyncFrameCount = 0;
+                        }
+                    }
+
+                    // Atualizar totalFrames após pular
+                    totalFrames = m_timestampedVideoBuffer.size();
+                }
+            }
 
             // CRÍTICO: Processar TODOS os frames disponíveis, não limitar!
             // Limitar frames causa acúmulo e perda de frames

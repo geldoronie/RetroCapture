@@ -189,6 +189,9 @@ private:
 
     // Contador de frames para keyframes periódicos
     int64_t m_videoFrameCount = 0;
+    
+    // Detecção de dessincronização e recuperação
+    int m_desyncFrameCount = 0; // Contador de frames dessincronizados consecutivos
 
     // Mutexes para sincronização
     std::mutex m_muxMutex;    // Proteger av_interleaved_write_frame (não é thread-safe)
