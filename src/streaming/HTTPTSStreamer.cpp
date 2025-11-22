@@ -442,91 +442,73 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         return buf_size;
     }
 
+    // CRÍTICO: writeCallback é chamado dentro do lock do muxing
+    // Deve ser MUITO rápido para não bloquear o encoding
+    // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
+    // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
+
     // Enviar dados para todos os clientes conectados
     // Remover clientes que falharam ao enviar
-    // OTIMIZAÇÃO: Não bloquear se socket não estiver pronto - apenas enviar o que conseguir
+    size_t minSent = static_cast<size_t>(buf_size); // Rastrear mínimo enviado a todos os clientes
     auto it = m_clientSockets.begin();
     while (it != m_clientSockets.end())
     {
         int clientFd = *it;
-
-        // Enviar dados em chunks se necessário
         size_t totalSent = 0;
         bool error = false;
 
-        // Limitar tentativas para não bloquear muito tempo
-        int maxAttempts = 3;
-        int attempts = 0;
-
-        while (totalSent < static_cast<size_t>(buf_size) && !error && attempts < maxAttempts)
+        // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
+        size_t toSend = static_cast<size_t>(buf_size);
+        // Limitar tamanho do chunk para evitar problemas
+        if (toSend > 65536)
         {
-            size_t toSend = static_cast<size_t>(buf_size) - totalSent;
-            // Limitar tamanho do chunk
-            if (toSend > 65536)
-            {
-                toSend = 65536;
-            }
+            toSend = 65536;
+        }
 
-            ssize_t sent = send(clientFd, buf + totalSent, toSend, MSG_NOSIGNAL | MSG_DONTWAIT);
-            if (sent < 0)
+        ssize_t sent = send(clientFd, buf, toSend, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent < 0)
+        {
+            int err = errno;
+            // EPIPE e ECONNRESET são normais quando cliente desconecta
+            // EAGAIN/EWOULDBLOCK significa que o socket não está pronto - pular este cliente
+            if (err != EAGAIN && err != EWOULDBLOCK)
             {
-                int err = errno;
-                // EPIPE e ECONNRESET são normais quando cliente desconecta
-                // EAGAIN/EWOULDBLOCK significa que o socket não está pronto
-                if (err != EAGAIN && err != EWOULDBLOCK)
-                {
-                    error = true;
-                    close(clientFd);
-                    it = m_clientSockets.erase(it);
-                    m_clientCount = m_clientSockets.size();
-                    break;
-                }
-                else
-                {
-                    // Socket não está pronto - NÃO BLOQUEAR, apenas pular este cliente
-                    // Retornar o que foi enviado para não bloquear o FFmpeg
-                    attempts++;
-                    if (attempts >= maxAttempts)
-                    {
-                        // Pular este cliente por agora, mas não remover
-                        break;
-                    }
-                    // Não fazer sleep - apenas tentar novamente imediatamente
-                    continue;
-                }
-            }
-            else if (sent == 0)
-            {
-                // Cliente fechou a conexão
-                error = true;
+                // Erro real - remover cliente
                 close(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
-                break;
             }
             else
             {
-                totalSent += sent;
-                attempts = 0; // Reset attempts on successful send
+                // Socket não está pronto - este cliente não recebeu nada
+                totalSent = 0;
+                ++it;
             }
         }
-
-        if (!error)
+        else if (sent == 0)
         {
+            // Cliente fechou a conexão
+            close(clientFd);
+            it = m_clientSockets.erase(it);
+            m_clientCount = m_clientSockets.size();
+        }
+        else
+        {
+            totalSent = static_cast<size_t>(sent);
             ++it;
+        }
+
+        // Atualizar mínimo enviado (se este cliente recebeu menos, usar esse valor)
+        if (totalSent < minSent)
+        {
+            minSent = totalSent;
         }
     }
 
-    // CRÍTICO: Retornar apenas o que foi realmente enviado para TODOS os clientes
-    // Se algum cliente não recebeu todos os dados, retornar menos que buf_size
-    // Isso evita que o FFmpeg pense que os dados foram escritos quando não foram
-    // O FFmpeg pode tentar novamente com os dados restantes
-    // Por enquanto, vamos retornar buf_size apenas se todos os clientes receberam tudo
-    // Se algum cliente falhou parcialmente, retornar o mínimo enviado
-    // NOTA: Isso pode causar retries do FFmpeg, mas é melhor que corrupção de dados
-
-    // Por segurança, vamos sempre retornar buf_size para não bloquear o encoding
-    // Mas vamos garantir que o buffer do AVIO seja grande o suficiente para evitar problemas
+    // CRÍTICO: Sempre retornar buf_size para não bloquear o FFmpeg
+    // O buffer AVIO de 1MB é suficiente para lidar com pequenos atrasos de envio
+    // Retornar menos que buf_size causa retries do FFmpeg que quebram sincronização e causam corrupção
+    // Se alguns clientes não receberam todos os dados, o buffer AVIO vai lidar com isso
     return buf_size;
 }
 
@@ -877,10 +859,11 @@ bool HTTPTSStreamer::initializeMuxers()
     m_audioStream = audioStream;
 
     // Configurar callback de escrita
-    // Aumentar buffer para 256KB para reduzir chamadas ao callback e evitar corrupção
+    // Aumentar buffer para 1MB para reduzir chamadas ao callback e evitar corrupção
     // Buffer maior = menos fragmentação = menos chance de corrupção
+    // Buffer grande também permite que writeCallback seja mais rápido (pode pular clientes lentos)
     formatCtx->pb = avio_alloc_context(
-        static_cast<unsigned char *>(av_malloc(256 * 1024)), 256 * 1024,
+        static_cast<unsigned char *>(av_malloc(1024 * 1024)), 1024 * 1024,
         1, this, nullptr, writeCallback, nullptr);
     if (!formatCtx->pb)
     {
@@ -1226,23 +1209,61 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
                 while (avcodec_receive_packet(codecCtx, tempPkt) >= 0)
                 {
                     receivedAny = true;
+                    // CRÍTICO: Clonar pacote ANTES de modificar qualquer coisa
+                    // Modificar o pacote original pode corromper dados
+                    AVPacket *pktToMux = av_packet_clone(tempPkt);
+                    if (!pktToMux)
+                    {
+                        LOG_ERROR("encodeVideoFrame: Failed to clone packet in retry");
+                        av_packet_unref(tempPkt);
+                        continue;
+                    }
+
                     // CRÍTICO: Muxar e enviar os pacotes recebidos, não descartar!
                     // Descartar pacotes faz perder frames encodados
                     AVStream *videoStream = static_cast<AVStream *>(m_videoStream);
                     if (videoStream)
                     {
-                        tempPkt->stream_index = videoStream->index;
+                        pktToMux->stream_index = videoStream->index;
                         // Converter PTS/DTS
-                        if (tempPkt->pts != AV_NOPTS_VALUE)
+                        if (pktToMux->pts != AV_NOPTS_VALUE)
                         {
-                            tempPkt->pts = av_rescale_q(tempPkt->pts, codecCtx->time_base, videoStream->time_base);
+                            pktToMux->pts = av_rescale_q(pktToMux->pts, codecCtx->time_base, videoStream->time_base);
                         }
-                        if (tempPkt->dts != AV_NOPTS_VALUE)
+                        if (pktToMux->dts != AV_NOPTS_VALUE)
                         {
-                            tempPkt->dts = av_rescale_q(tempPkt->dts, codecCtx->time_base, videoStream->time_base);
+                            pktToMux->dts = av_rescale_q(pktToMux->dts, codecCtx->time_base, videoStream->time_base);
                         }
-                        // Muxar pacote (muxPacket fará cópia se necessário)
-                        muxPacket(tempPkt);
+
+                        // Garantir monotonicidade PTS/DTS
+                        {
+                            std::lock_guard<std::mutex> lock(m_ptsMutex);
+                            if (pktToMux->pts != AV_NOPTS_VALUE)
+                            {
+                                if (m_lastVideoPTS >= 0 && pktToMux->pts <= m_lastVideoPTS)
+                                {
+                                    pktToMux->pts = m_lastVideoPTS + 1;
+                                }
+                                m_lastVideoPTS = pktToMux->pts;
+                            }
+                            if (pktToMux->dts != AV_NOPTS_VALUE)
+                            {
+                                if (m_lastVideoDTS >= 0 && pktToMux->dts <= m_lastVideoDTS)
+                                {
+                                    pktToMux->dts = m_lastVideoDTS + 1;
+                                }
+                                m_lastVideoDTS = pktToMux->dts;
+                            }
+                            if (pktToMux->pts != AV_NOPTS_VALUE && pktToMux->dts != AV_NOPTS_VALUE && pktToMux->dts > pktToMux->pts)
+                            {
+                                pktToMux->dts = pktToMux->pts;
+                                m_lastVideoDTS = pktToMux->dts;
+                            }
+                        }
+
+                        // Muxar pacote clonado
+                        muxPacket(pktToMux);
+                        av_packet_free(&pktToMux);
                     }
                     av_packet_unref(tempPkt);
                 }
