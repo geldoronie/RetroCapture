@@ -74,6 +74,9 @@ public:
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
     void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
+    void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
+    void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
+    void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
 
 private:
     bool m_initialized = false;
@@ -131,6 +134,9 @@ private:
     std::string m_streamingVideoCodec = "h264"; // Codec de vídeo: "h264", "h265", "vp8", "vp9"
     std::string m_streamingAudioCodec = "aac";  // Codec de áudio: "aac", "mp3", "opus"
     std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Profile = "main";     // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
+    std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

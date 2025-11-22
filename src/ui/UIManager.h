@@ -80,6 +80,9 @@ public:
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
     void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
+    void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
+    void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
+    void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
     
     // Streaming info getters (public)
     uint16_t getStreamingPort() const { return m_streamingPort; }
@@ -91,6 +94,9 @@ public:
     std::string getStreamingVideoCodec() const { return m_streamingVideoCodec; }
     std::string getStreamingAudioCodec() const { return m_streamingAudioCodec; }
     std::string getStreamingH264Preset() const { return m_streamingH264Preset; }
+    std::string getStreamingH265Preset() const { return m_streamingH265Preset; }
+    std::string getStreamingH265Profile() const { return m_streamingH265Profile; }
+    std::string getStreamingH265Level() const { return m_streamingH265Level; }
     
     // Image settings getters
     float getBrightness() const { return m_brightness; }
@@ -111,6 +117,9 @@ public:
     void setOnStreamingVideoCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingVideoCodecChanged = callback; }
     void setOnStreamingAudioCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingAudioCodecChanged = callback; }
     void setOnStreamingH264PresetChanged(std::function<void(const std::string &)> callback) { m_onStreamingH264PresetChanged = callback; }
+    void setOnStreamingH265PresetChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265PresetChanged = callback; }
+    void setOnStreamingH265ProfileChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265ProfileChanged = callback; }
+    void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -204,6 +213,9 @@ private:
     std::string m_streamingVideoCodec = "h264";
     std::string m_streamingAudioCodec = "aac";
     std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
+    std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -218,4 +230,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingVideoCodecChanged;
     std::function<void(const std::string &)> m_onStreamingAudioCodecChanged;
     std::function<void(const std::string &)> m_onStreamingH264PresetChanged;
+    std::function<void(const std::string &)> m_onStreamingH265PresetChanged;
+    std::function<void(const std::string &)> m_onStreamingH265ProfileChanged;
+    std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
 };

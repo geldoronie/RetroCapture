@@ -590,6 +590,21 @@ bool HTTPTSStreamer::initializeVideoCodec()
             return false;
         }
     }
+    else if (m_videoCodecName == "h265" || m_videoCodecName == "libx265" || m_videoCodecName == "hevc")
+    {
+        // Para H.265, tentar libx265 primeiro (encoder software mais comum)
+        codec = avcodec_find_encoder_by_name("libx265");
+        if (!codec)
+        {
+            // Fallback: tentar encontrar por ID
+            codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+        }
+        if (!codec)
+        {
+            LOG_ERROR("H.265 codec not found. Make sure libx265 is installed.");
+            return false;
+        }
+    }
     else
     {
         // Para outros codecs, tentar por nome
@@ -619,7 +634,7 @@ bool HTTPTSStreamer::initializeVideoCodec()
     codecCtx->thread_count = 0;                                // Auto-detect (melhor que fixo)
     codecCtx->thread_type = FF_THREAD_SLICE | FF_THREAD_FRAME; // Usar threading de slice e frame para paralelismo
 
-    // Configurar preset rápido para libx264 (velocidade de encoding)
+    // Configurar preset rápido para libx264/libx265 (velocidade de encoding)
     AVDictionary *opts = nullptr;
     if (codec->id == AV_CODEC_ID_H264)
     {
@@ -629,6 +644,30 @@ bool HTTPTSStreamer::initializeVideoCodec()
         av_dict_set(&opts, "tune", "zerolatency", 0);
         // Profile "baseline" para compatibilidade máxima
         av_dict_set(&opts, "profile", "baseline", 0);
+        // Keyframe mínimo e máximo a cada 2 segundos (garantir keyframes periódicos)
+        int keyint = static_cast<int>(m_fps * 2);
+        av_dict_set_int(&opts, "keyint_min", keyint, 0);
+        av_dict_set_int(&opts, "keyint", keyint, 0); // Intervalo máximo de keyframes (igual ao mínimo para forçar)
+        // OTIMIZAÇÃO: Reduzir lookahead para zero (zerolatency já faz isso, mas garantir)
+        av_dict_set_int(&opts, "rc-lookahead", 0, 0);
+        // OTIMIZAÇÃO: Reduzir buffer de VBV para menor latência
+        av_dict_set_int(&opts, "vbv-bufsize", m_videoBitrate / 10, 0); // 100ms de buffer
+        // Desabilitar scenecut para garantir keyframes exatos no intervalo especificado
+        av_dict_set_int(&opts, "scenecut", 0, 0);
+    }
+    else if (codec->id == AV_CODEC_ID_HEVC)
+    {
+        // Preset configurável via UI (padrão: "veryfast" para máxima velocidade)
+        av_dict_set(&opts, "preset", m_h265Preset.c_str(), 0);
+        // Tune "zerolatency" para streaming em tempo real (remove delay do codec)
+        av_dict_set(&opts, "tune", "zerolatency", 0);
+        // Profile configurável via UI (padrão: "main" para compatibilidade máxima)
+        av_dict_set(&opts, "profile", m_h265Profile.c_str(), 0);
+        // Level configurável via UI (padrão: "auto" para detecção automática)
+        if (m_h265Level != "auto" && !m_h265Level.empty())
+        {
+            av_dict_set(&opts, "level-idc", m_h265Level.c_str(), 0);
+        }
         // Keyframe mínimo e máximo a cada 2 segundos (garantir keyframes periódicos)
         int keyint = static_cast<int>(m_fps * 2);
         av_dict_set_int(&opts, "keyint_min", keyint, 0);

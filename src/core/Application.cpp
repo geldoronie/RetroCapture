@@ -610,6 +610,9 @@ bool Application::initUI()
     m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
     m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
     m_streamingH264Preset = m_ui->getStreamingH264Preset();
+    m_streamingH265Preset = m_ui->getStreamingH265Preset();
+    m_streamingH265Profile = m_ui->getStreamingH265Profile();
+    m_streamingH265Level = m_ui->getStreamingH265Level();
 
     // Também sincronizar configurações de imagem
     m_brightness = m_ui->getBrightness();
@@ -749,6 +752,42 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
+
+    m_ui->setOnStreamingH265PresetChanged([this](const std::string &preset)
+                                          {
+        m_streamingH265Preset = preset;
+        // Se streaming estiver ativo, reiniciar para aplicar novo preset
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingH265ProfileChanged([this](const std::string &profile)
+                                          {
+        m_streamingH265Profile = profile;
+        // Se streaming estiver ativo, reiniciar para aplicar novo profile
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingH265LevelChanged([this](const std::string &level)
+                                         {
+        m_streamingH265Level = level;
+        // Se streaming estiver ativo, reiniciar para aplicar novo level
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
 
     // Callback para mudança de dispositivo
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
@@ -942,6 +981,13 @@ bool Application::initStreaming()
     if (m_streamingVideoCodec == "h264")
     {
         tsStreamer->setH264Preset(m_streamingH264Preset);
+    }
+    // Configurar preset, profile e level H.265 (se aplicável)
+    else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
+    {
+        tsStreamer->setH265Preset(m_streamingH265Preset);
+        tsStreamer->setH265Profile(m_streamingH265Profile);
+        tsStreamer->setH265Level(m_streamingH265Level);
     }
 
     // Configurar tamanho do buffer de áudio

@@ -49,6 +49,9 @@ public:
     void setVideoCodec(const std::string &codecName);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
+    void setH265Preset(const std::string &preset) { m_h265Preset = preset; }
+    void setH265Profile(const std::string &profile) { m_h265Profile = profile; }
+    void setH265Level(const std::string &level) { m_h265Level = level; }
 
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
@@ -132,6 +135,9 @@ private:
     std::string m_videoCodecName = "h264";
     std::string m_audioCodecName = "aac";
     std::string m_h264Preset = "veryfast"; // Preset H.264 configurável via UI
+    std::string m_h265Preset = "veryfast"; // Preset H.265 configurável via UI
+    std::string m_h265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
+    std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*

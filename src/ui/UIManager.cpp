@@ -1135,6 +1135,92 @@ void UIManager::renderStreamingPanel()
         }
     }
     
+    // Qualidade H.265 (apenas se codec for h265)
+    if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc") {
+        const char* h265Presets[] = { 
+            "ultrafast", 
+            "superfast", 
+            "veryfast", 
+            "faster", 
+            "fast", 
+            "medium", 
+            "slow", 
+            "slower", 
+            "veryslow" 
+        };
+        int currentPresetIndex = 2; // Padrão: veryfast
+        for (int i = 0; i < 9; i++) {
+            if (m_streamingH265Preset == h265Presets[i]) {
+                currentPresetIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9)) {
+            m_streamingH265Preset = h265Presets[currentPresetIndex];
+            if (m_onStreamingH265PresetChanged) {
+                m_onStreamingH265PresetChanged(m_streamingH265Preset);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Preset do encoder H.265:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        }
+        
+        // Profile H.265
+        const char* h265Profiles[] = { "main", "main10" };
+        int currentProfileIndex = 0;
+        for (int i = 0; i < 2; i++) {
+            if (m_streamingH265Profile == h265Profiles[i]) {
+                currentProfileIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2)) {
+            m_streamingH265Profile = h265Profiles[currentProfileIndex];
+            if (m_onStreamingH265ProfileChanged) {
+                m_onStreamingH265ProfileChanged(m_streamingH265Profile);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Profile do encoder H.265:\n"
+                              "main: 8-bit, máxima compatibilidade\n"
+                              "main10: 10-bit, melhor qualidade, suporte HDR");
+        }
+        
+        // Level H.265
+        const char* h265Levels[] = { 
+            "auto", "1", "2", "2.1", "3", "3.1", 
+            "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2" 
+        };
+        int currentLevelIndex = 0;
+        for (int i = 0; i < 14; i++) {
+            if (m_streamingH265Level == h265Levels[i]) {
+                currentLevelIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14)) {
+            m_streamingH265Level = h265Levels[currentLevelIndex];
+            if (m_onStreamingH265LevelChanged) {
+                m_onStreamingH265LevelChanged(m_streamingH265Level);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Level do encoder H.265:\n"
+                              "auto: Detecção automática (recomendado)\n"
+                              "1-6.2: Níveis específicos para compatibilidade\n"
+                              "Níveis mais altos suportam resoluções/bitrates maiores");
+        }
+    }
+    
     ImGui::Separator();
     ImGui::Text("Bitrates");
     ImGui::Separator();
@@ -1251,6 +1337,9 @@ void UIManager::loadConfig()
             if (streaming.contains("videoCodec")) m_streamingVideoCodec = streaming["videoCodec"].get<std::string>();
             if (streaming.contains("audioCodec")) m_streamingAudioCodec = streaming["audioCodec"].get<std::string>();
             if (streaming.contains("h264Preset")) m_streamingH264Preset = streaming["h264Preset"].get<std::string>();
+            if (streaming.contains("h265Preset")) m_streamingH265Preset = streaming["h265Preset"].get<std::string>();
+            if (streaming.contains("h265Profile")) m_streamingH265Profile = streaming["h265Profile"].get<std::string>();
+            if (streaming.contains("h265Level")) m_streamingH265Level = streaming["h265Level"].get<std::string>();
         }
 
         // Carregar configurações de imagem
@@ -1310,7 +1399,10 @@ void UIManager::saveConfig()
             {"audioBitrate", m_streamingAudioBitrate},
             {"videoCodec", m_streamingVideoCodec},
             {"audioCodec", m_streamingAudioCodec},
-            {"h264Preset", m_streamingH264Preset}
+            {"h264Preset", m_streamingH264Preset},
+            {"h265Preset", m_streamingH265Preset},
+            {"h265Profile", m_streamingH265Profile},
+            {"h265Level", m_streamingH265Level}
         };
 
         // Salvar configurações de imagem
