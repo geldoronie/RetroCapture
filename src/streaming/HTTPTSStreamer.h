@@ -48,6 +48,7 @@ public:
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);
     void setVideoCodec(const std::string &codecName);
     void setAudioCodec(const std::string &codecName);
+    void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
 
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
@@ -130,6 +131,7 @@ private:
     // Codec selection
     std::string m_videoCodecName = "h264";
     std::string m_audioCodecName = "aac";
+    std::string m_h264Preset = "veryfast"; // Preset H.264 configurável via UI
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*
@@ -143,6 +145,12 @@ private:
     void *m_swrContext = nullptr; // SwrContext* (int16 to float planar)
     void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo)
     void *m_audioFrame = nullptr; // AVFrame* (para encoding de áudio)
+    
+    // Cache para dimensões do SwsContext (para recriar quando necessário)
+    uint32_t m_swsSrcWidth = 0;
+    uint32_t m_swsSrcHeight = 0;
+    uint32_t m_swsDstWidth = 0;
+    uint32_t m_swsDstHeight = 0;
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};

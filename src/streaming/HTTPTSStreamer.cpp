@@ -47,10 +47,26 @@ HTTPTSStreamer::~HTTPTSStreamer()
 
 bool HTTPTSStreamer::initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps)
 {
+    // Validar parâmetros
+    if (width == 0 || height == 0)
+    {
+        LOG_ERROR("HTTPTSStreamer::initialize: Invalid dimensions (" +
+                  std::to_string(width) + "x" + std::to_string(height) + ")");
+        return false;
+    }
+    if (fps == 0)
+    {
+        LOG_ERROR("HTTPTSStreamer::initialize: Invalid FPS (" + std::to_string(fps) + ")");
+        return false;
+    }
+
     m_port = port;
     m_width = width;
     m_height = height;
     m_fps = fps;
+
+    LOG_INFO("HTTPTSStreamer::initialize: " + std::to_string(width) + "x" + std::to_string(height) +
+             " @ " + std::to_string(fps) + "fps, port=" + std::to_string(port));
 
     return true;
 }
@@ -590,9 +606,8 @@ bool HTTPTSStreamer::initializeVideoCodec()
     AVDictionary *opts = nullptr;
     if (codec->id == AV_CODEC_ID_H264)
     {
-        // Preset "veryfast" para máxima velocidade (60 FPS)
-        // Priorizar velocidade sobre qualidade para alcançar o target de FPS
-        av_dict_set(&opts, "preset", "veryfast", 0);
+        // Preset configurável via UI (padrão: "veryfast" para máxima velocidade)
+        av_dict_set(&opts, "preset", m_h264Preset.c_str(), 0);
         // Tune "zerolatency" para streaming em tempo real (remove delay do codec)
         av_dict_set(&opts, "tune", "zerolatency", 0);
         // Profile "baseline" para compatibilidade máxima
@@ -621,32 +636,23 @@ bool HTTPTSStreamer::initializeVideoCodec()
 
     m_videoCodecContext = codecCtx;
 
-    // Criar SWS context para conversão RGB -> YUV
-    // OTIMIZAÇÃO: Usar SWS_FAST_BILINEAR para máxima velocidade (mais rápido que SWS_BILINEAR)
-    // Adicionar flags de otimização: SWS_ACCURATE_RND e SWS_FULL_CHR_H_INT para melhor performance
-    SwsContext *swsCtx = sws_getContext(
-        m_width, m_height, AV_PIX_FMT_RGB24,
-        m_width, m_height, AV_PIX_FMT_YUV420P,
-        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-
-    if (!swsCtx)
-    {
-        LOG_ERROR("Failed to create SWS context");
-        avcodec_free_context(&codecCtx);
-        m_videoCodecContext = nullptr;
-        return false;
-    }
-    m_swsContext = swsCtx;
+    // IMPORTANTE: NÃO criar SWS context aqui - será criado dinamicamente em convertRGBToYUV
+    // quando recebermos frames com dimensões conhecidas (pode ser diferente de m_width x m_height)
+    // Isso permite que frames de qualquer tamanho sejam redimensionados para m_width x m_height
+    // durante a conversão RGB->YUV, tudo em um único passo otimizado
+    m_swsContext = nullptr;
+    m_swsSrcWidth = 0;
+    m_swsSrcHeight = 0;
+    m_swsDstWidth = 0;
+    m_swsDstHeight = 0;
 
     // Alocar frame de vídeo
     AVFrame *videoFrame = av_frame_alloc();
     if (!videoFrame)
     {
         LOG_ERROR("Failed to allocate video frame");
-        sws_freeContext(swsCtx);
         avcodec_free_context(&codecCtx);
         m_videoCodecContext = nullptr;
-        m_swsContext = nullptr;
         return false;
     }
 
@@ -657,10 +663,8 @@ bool HTTPTSStreamer::initializeVideoCodec()
     {
         LOG_ERROR("Failed to allocate video frame buffer");
         av_frame_free(&videoFrame);
-        sws_freeContext(swsCtx);
         avcodec_free_context(&codecCtx);
         m_videoCodecContext = nullptr;
-        m_swsContext = nullptr;
         return false;
     }
     m_videoFrame = videoFrame;
@@ -959,6 +963,10 @@ void HTTPTSStreamer::cleanupFFmpeg()
     {
         sws_freeContext(swsCtx);
         m_swsContext = nullptr;
+        m_swsSrcWidth = 0;
+        m_swsSrcHeight = 0;
+        m_swsDstWidth = 0;
+        m_swsDstHeight = 0;
     }
 
     if (audioFrame)
@@ -1032,10 +1040,10 @@ bool HTTPTSStreamer::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uin
         return false;
     }
 
-    SwsContext *swsCtx = static_cast<SwsContext *>(m_swsContext);
     AVFrame *frame = static_cast<AVFrame *>(videoFrame);
+    AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_videoCodecContext);
 
-    if (!swsCtx || !frame)
+    if (!frame || !codecCtx)
     {
         return false;
     }
@@ -1045,11 +1053,72 @@ bool HTTPTSStreamer::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uin
         return false;
     }
 
+    // Obter dimensões de destino (dimensões configuradas para streaming)
+    uint32_t dstWidth = m_width;
+    uint32_t dstHeight = m_height;
+
+    // Validar dimensões de destino (não podem ser 0)
+    if (dstWidth == 0 || dstHeight == 0)
+    {
+        LOG_ERROR("convertRGBToYUV: Invalid destination dimensions (" +
+                  std::to_string(dstWidth) + "x" + std::to_string(dstHeight) + ")");
+        return false;
+    }
+
+    // Obter SwsContext atual (pode ser nullptr se ainda não foi criado ou se dimensões mudaram)
+    SwsContext *swsCtx = static_cast<SwsContext *>(m_swsContext);
+
+    // Verificar se precisamos recriar o SwsContext (dimensões de entrada mudaram ou não existe)
+    if (!swsCtx ||
+        m_swsSrcWidth != width ||
+        m_swsSrcHeight != height ||
+        m_swsDstWidth != dstWidth ||
+        m_swsDstHeight != dstHeight)
+    {
+        // Liberar contexto antigo se existir
+        if (swsCtx)
+        {
+            sws_freeContext(swsCtx);
+            swsCtx = nullptr;
+        }
+
+        // Criar novo SwsContext que faz resize + conversão em um único passo
+        // RGB (dimensões de entrada) -> YUV420P (dimensões de streaming)
+        swsCtx = sws_getContext(
+            width, height, AV_PIX_FMT_RGB24,
+            dstWidth, dstHeight, AV_PIX_FMT_YUV420P,
+            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+
+        if (!swsCtx)
+        {
+            LOG_ERROR("Failed to create SWS context for resize+conversion: " +
+                      std::to_string(width) + "x" + std::to_string(height) + " -> " +
+                      std::to_string(dstWidth) + "x" + std::to_string(dstHeight));
+            return false;
+        }
+
+        m_swsContext = swsCtx;
+        m_swsSrcWidth = width;
+        m_swsSrcHeight = height;
+        m_swsDstWidth = dstWidth;
+        m_swsDstHeight = dstHeight;
+    }
+
+    // Fazer resize + conversão RGB->YUV em um único passo
     const uint8_t *srcData[1] = {rgbData};
     int srcLinesize[1] = {static_cast<int>(width * 3)};
 
-    sws_scale(swsCtx, srcData, srcLinesize, 0, height,
-              frame->data, frame->linesize);
+    int result = sws_scale(swsCtx, srcData, srcLinesize, 0, height,
+                           frame->data, frame->linesize);
+
+    if (result < 0 || result != static_cast<int>(dstHeight))
+    {
+        LOG_ERROR("sws_scale failed or returned wrong size: " + std::to_string(result) +
+                  " (expected " + std::to_string(dstHeight) + "), src=" +
+                  std::to_string(width) + "x" + std::to_string(height) +
+                  ", dst=" + std::to_string(dstWidth) + "x" + std::to_string(dstHeight));
+        return false;
+    }
 
     return true;
 }

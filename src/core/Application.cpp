@@ -23,10 +23,7 @@
 #include <sstream>
 #include <iomanip>
 
-extern "C"
-{
-#include <libswscale/swscale.h>
-}
+// swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
 
 // Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
 static int64_t getTimestampUs()
@@ -608,9 +605,9 @@ bool Application::initUI()
     m_ui->setStreamingFps(m_streamingFps);
     m_ui->setStreamingBitrate(m_streamingBitrate);
     m_ui->setStreamingAudioBitrate(m_streamingAudioBitrate);
-    m_ui->setStreamingQuality(m_streamingQuality);
     m_ui->setStreamingVideoCodec(m_streamingVideoCodec);
     m_ui->setStreamingAudioCodec(m_streamingAudioCodec);
+    m_ui->setStreamingH264Preset(m_streamingH264Preset);
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
@@ -721,23 +718,11 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    m_ui->setOnStreamingAudioBufferSizeChanged([this](uint32_t frames)
-                                               {
-        m_streamingAudioBufferSize = frames;
-        // Se streaming estiver ativo, reiniciar para aplicar novo tamanho de buffer
+    m_ui->setOnStreamingH264PresetChanged([this](const std::string &preset)
+                                          {
+        m_streamingH264Preset = preset;
+        // Se streaming estiver ativo, reiniciar para aplicar novo preset
         if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        } });
-
-    m_ui->setOnStreamingQualityChanged([this](int quality)
-                                       {
-        m_streamingQuality = quality;
-        // Atualizar qualidade do streamer se estiver ativo
-        if (m_streamManager && m_streamManager->isActive()) {
-            // Reiniciar streaming com nova qualidade
             m_streamManager->stop();
             m_streamManager->cleanup();
             m_streamManager.reset();
@@ -908,6 +893,11 @@ bool Application::initStreaming()
     uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
+    LOG_INFO("initStreaming: Using resolution " + std::to_string(streamWidth) + "x" +
+             std::to_string(streamHeight) + " @ " + std::to_string(streamFps) + "fps");
+    LOG_INFO("initStreaming: m_streamingWidth=" + std::to_string(m_streamingWidth) +
+             ", m_streamingHeight=" + std::to_string(m_streamingHeight));
+
     // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
     auto tsStreamer = std::make_unique<HTTPTSStreamer>();
 
@@ -926,6 +916,12 @@ bool Application::initStreaming()
     // Configurar codecs
     tsStreamer->setVideoCodec(m_streamingVideoCodec);
     tsStreamer->setAudioCodec(m_streamingAudioCodec);
+
+    // Configurar preset H.264 (se aplicável)
+    if (m_streamingVideoCodec == "h264")
+    {
+        tsStreamer->setH264Preset(m_streamingH264Preset);
+    }
 
     // Configurar tamanho do buffer de áudio
     // setAudioBufferSize removido - buffer é gerenciado automaticamente (OBS style)
@@ -1304,133 +1300,60 @@ void Application::run()
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
 
-            // IMPORTANTE: Capturar apenas a área da captura (sem UI) ANTES de renderizar a UI
-            // Ler apenas o viewport onde a captura foi renderizada e copiar para buffer compartilhado
-            // A thread de streaming processará esses dados de forma independente
+            // Capturar frame para streaming (ANTES de renderizar UI)
+            // IMPORTANTE: NÃO fazer resize aqui - isso atrasa timestamps e quebra sincronia
+            // Apenas capturar do viewport e enviar - o resize será feito no encoding
             if (m_streamManager && m_streamManager->isActive())
             {
-                // Usar dimensões do viewport (área da captura renderizada, sem UI)
+                // Capturar exatamente do viewport onde renderizou (sem resize)
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
                 uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
 
-                size_t frameDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
+                // Debug: Log quando shader está ativo
+                static int shaderDebugCount = 0;
+                if (isShaderTexture && shaderDebugCount < 5)
+                {
+                    LOG_INFO("[SHADER_CAPTURE] Shader ativo: viewport=" + std::to_string(viewportWidth) +
+                             "x" + std::to_string(viewportHeight) + ", render=" +
+                             std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                    shaderDebugCount++;
+                }
 
-                if (frameDataSize > 0 && frameDataSize <= (7680 * 4320 * 3) &&
+                size_t captureDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
+
+                if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
                     // Calcular padding para alinhamento de 4 bytes
-                    size_t rowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
-                    size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4;
-                    size_t totalSizeWithPadding = rowSizePadded * static_cast<size_t>(captureHeight);
+                    size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
+                    size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                    size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
 
                     std::vector<uint8_t> frameDataWithPadding;
                     frameDataWithPadding.resize(totalSizeWithPadding);
 
-                    // Ler pixels apenas da área do viewport onde a captura foi renderizada
-                    // IMPORTANTE: glReadPixels lê do framebuffer atual, coordenadas são da janela
-                    // Ler ANTES da UI ser renderizada para capturar apenas a área da captura
+                    // Ler pixels do viewport onde renderizou (sempre RGB, sem resize)
                     glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
                                  GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
                     // Copiar dados removendo padding e fazer flip vertical
                     std::vector<uint8_t> frameData;
-                    frameData.resize(frameDataSize);
+                    frameData.resize(captureDataSize);
+
                     for (uint32_t row = 0; row < captureHeight; row++)
                     {
                         uint32_t srcRow = captureHeight - 1 - row; // Flip vertical
                         uint32_t dstRow = row;
 
-                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * rowSizePadded);
-                        uint8_t *dstPtr = frameData.data() + (dstRow * rowSizeUnpadded);
-                        memcpy(dstPtr, srcPtr, rowSizeUnpadded);
+                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
+                        uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
+                        memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                     }
 
-                    // Verificação rápida de allZeros (apenas primeiros bytes para performance)
-                    // Se o primeiro byte não for zero, o frame não é todo zero
-                    bool allZeros = (frameDataSize > 0 && frameData[0] == 0);
-                    if (allZeros && frameDataSize > 1)
-                    {
-                        // Se o primeiro byte é zero, verificar alguns pontos estratégicos
-                        // ao invés de verificar tudo (muito mais rápido)
-                        size_t checkPoints[] = {frameDataSize / 4, frameDataSize / 2, frameDataSize * 3 / 4, frameDataSize - 1};
-                        for (size_t pt : checkPoints)
-                        {
-                            if (pt < frameDataSize && frameData[pt] != 0)
-                            {
-                                allZeros = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    // OPÇÃO A: Processar frame diretamente na thread principal (eliminar thread intermediária)
-                    // Fazer resize (se necessário) e pushFrame diretamente aqui
-                    if (!allZeros && !frameData.empty() && m_streamManager && m_streamManager->isActive())
-                    {
-                        uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-                        uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
-
-                        // Resize se necessário
-                        const uint8_t *dataToSend = frameData.data();
-                        uint32_t dataWidth = captureWidth;
-                        uint32_t dataHeight = captureHeight;
-
-                        std::vector<uint8_t> processedData; // Manter em escopo para não perder dados durante resize
-                        if (streamWidth != dataWidth || streamHeight != dataHeight)
-                        {
-                            size_t processedSize = static_cast<size_t>(streamWidth) * static_cast<size_t>(streamHeight) * 3;
-                            if (processedSize > 0 && processedSize <= (7680 * 4320 * 3))
-                            {
-                                processedData.resize(processedSize);
-
-                                // OTIMIZAÇÃO CRÍTICA: Cachear SwsContext para evitar criar/destruir a cada frame
-                                SwsContext *swsCtx = static_cast<SwsContext *>(m_resizeSwsContext);
-
-                                // Recriar SwsContext apenas se as dimensões mudaram
-                                if (!swsCtx ||
-                                    m_cachedResizeSrcWidth != dataWidth ||
-                                    m_cachedResizeSrcHeight != dataHeight ||
-                                    m_cachedResizeDstWidth != streamWidth ||
-                                    m_cachedResizeDstHeight != streamHeight)
-                                {
-                                    if (swsCtx)
-                                    {
-                                        sws_freeContext(swsCtx);
-                                    }
-
-                                    swsCtx = sws_getContext(
-                                        dataWidth, dataHeight, AV_PIX_FMT_RGB24,
-                                        streamWidth, streamHeight, AV_PIX_FMT_RGB24,
-                                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-
-                                    m_resizeSwsContext = swsCtx;
-                                    m_cachedResizeSrcWidth = dataWidth;
-                                    m_cachedResizeSrcHeight = dataHeight;
-                                    m_cachedResizeDstWidth = streamWidth;
-                                    m_cachedResizeDstHeight = streamHeight;
-                                }
-
-                                if (swsCtx)
-                                {
-                                    const uint8_t *srcData[1] = {frameData.data()};
-                                    int srcLinesize[1] = {static_cast<int>(dataWidth * 3)};
-                                    uint8_t *dstData[1] = {processedData.data()};
-                                    int dstLinesize[1] = {static_cast<int>(streamWidth * 3)};
-
-                                    // Fazer resize otimizado com libswscale
-                                    sws_scale(swsCtx, srcData, srcLinesize, 0, dataHeight,
-                                              dstData, dstLinesize);
-
-                                    dataToSend = processedData.data();
-                                    dataWidth = streamWidth;
-                                    dataHeight = streamHeight;
-                                }
-                            }
-                        }
-
-                        // Enviar frame diretamente para streaming (sem thread intermediária)
-                        m_streamManager->pushFrame(dataToSend, dataWidth, dataHeight);
-                    }
+                    // IMPORTANTE: Enviar TODOS os frames, incluindo frames pretos
+                    // Frames pretos são válidos e devem ser enviados ao stream
+                    // A verificação de "allZeros" foi removida pois rejeitava frames válidos
+                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
                 }
             }
 
@@ -1535,13 +1458,7 @@ void Application::shutdown()
         m_window.reset();
     }
 
-    // Limpar cache de SwsContext
-    if (m_resizeSwsContext)
-    {
-        SwsContext *swsCtx = static_cast<SwsContext *>(m_resizeSwsContext);
-        sws_freeContext(swsCtx);
-        m_resizeSwsContext = nullptr;
-    }
+    // SwsContext de resize foi removido - agora é feito no encoding
 
     // OPÇÃO A: Não há mais thread de streaming para limpar
 

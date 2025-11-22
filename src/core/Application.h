@@ -73,7 +73,7 @@ public:
     void setStreamingQuality(int quality) { m_streamingQuality = quality; }
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
-    void setStreamingAudioBufferSize(uint32_t frames) { m_streamingAudioBufferSize = frames; }
+    void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
 
 private:
     bool m_initialized = false;
@@ -88,11 +88,6 @@ private:
     std::unique_ptr<AudioCapture> m_audioCapture;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
-    void *m_resizeSwsContext = nullptr; // SwsContext* (cacheado para resize)
-    uint32_t m_cachedResizeSrcWidth = 0;
-    uint32_t m_cachedResizeSrcHeight = 0;
-    uint32_t m_cachedResizeDstWidth = 0;
-    uint32_t m_cachedResizeDstHeight = 0;
 
     // Streaming thread
     // OPÇÃO A: Thread de streaming removida - processamento movido para thread principal
@@ -135,7 +130,7 @@ private:
     int m_streamingQuality = 85;                // Qualidade JPEG (1-100) - não usado mais, mantido para compatibilidade
     std::string m_streamingVideoCodec = "h264"; // Codec de vídeo: "h264", "h265", "vp8", "vp9"
     std::string m_streamingAudioCodec = "aac";  // Codec de áudio: "aac", "mp3", "opus"
-    uint32_t m_streamingAudioBufferSize = 50;   // Tamanho do buffer de áudio em frames (padrão: 50 = ~1 segundo a 48kHz)
+    std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

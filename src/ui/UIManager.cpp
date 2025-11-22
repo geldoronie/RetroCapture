@@ -990,33 +990,57 @@ void UIManager::renderStreamingPanel()
         }
     }
     
-    int width = static_cast<int>(m_streamingWidth);
-    if (ImGui::InputInt("Largura (0 = captura)", &width, 1, 100)) {
-        if (width >= 0 && width <= 7680) {
-            m_streamingWidth = static_cast<uint32_t>(width);
-            if (m_onStreamingWidthChanged) {
-                m_onStreamingWidthChanged(m_streamingWidth);
-            }
+    // Resolução - Dropdown
+    const char* resolutions[] = { 
+        "Captura (0x0)", 
+        "320x240", 
+        "640x480", 
+        "800x600", 
+        "1024x768", 
+        "1280x720 (HD)", 
+        "1280x1024", 
+        "1920x1080 (Full HD)", 
+        "2560x1440 (2K)", 
+        "3840x2160 (4K)" 
+    };
+    const uint32_t resolutionWidths[] = { 0, 320, 640, 800, 1024, 1280, 1280, 1920, 2560, 3840 };
+    const uint32_t resolutionHeights[] = { 0, 240, 480, 600, 768, 720, 1024, 1080, 1440, 2160 };
+    
+    int currentResIndex = 0;
+    for (int i = 0; i < 10; i++) {
+        if (m_streamingWidth == resolutionWidths[i] && m_streamingHeight == resolutionHeights[i]) {
+            currentResIndex = i;
+            break;
         }
     }
     
-    int height = static_cast<int>(m_streamingHeight);
-    if (ImGui::InputInt("Altura (0 = captura)", &height, 1, 100)) {
-        if (height >= 0 && height <= 4320) {
-            m_streamingHeight = static_cast<uint32_t>(height);
-            if (m_onStreamingHeightChanged) {
-                m_onStreamingHeightChanged(m_streamingHeight);
-            }
+    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10)) {
+        m_streamingWidth = resolutionWidths[currentResIndex];
+        m_streamingHeight = resolutionHeights[currentResIndex];
+        if (m_onStreamingWidthChanged) {
+            m_onStreamingWidthChanged(m_streamingWidth);
+        }
+        if (m_onStreamingHeightChanged) {
+            m_onStreamingHeightChanged(m_streamingHeight);
         }
     }
     
-    int fps = static_cast<int>(m_streamingFps);
-    if (ImGui::InputInt("FPS (0 = captura)", &fps, 1, 10)) {
-        if (fps >= 0 && fps <= 120) {
-            m_streamingFps = static_cast<uint32_t>(fps);
-            if (m_onStreamingFpsChanged) {
-                m_onStreamingFpsChanged(m_streamingFps);
-            }
+    // FPS - Dropdown
+    const char* fpsOptions[] = { "Captura (0)", "15", "24", "30", "60", "120" };
+    const uint32_t fpsValues[] = { 0, 15, 24, 30, 60, 120 };
+    
+    int currentFpsIndex = 0;
+    for (int i = 0; i < 6; i++) {
+        if (m_streamingFps == fpsValues[i]) {
+            currentFpsIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("FPS", &currentFpsIndex, fpsOptions, 6)) {
+        m_streamingFps = fpsValues[currentFpsIndex];
+        if (m_onStreamingFpsChanged) {
+            m_onStreamingFpsChanged(m_streamingFps);
         }
     }
     
@@ -1058,6 +1082,41 @@ void UIManager::renderStreamingPanel()
         }
     }
     
+    // Qualidade H.264 (apenas se codec for h264)
+    if (m_streamingVideoCodec == "h264") {
+        const char* h264Presets[] = { 
+            "ultrafast", 
+            "superfast", 
+            "veryfast", 
+            "faster", 
+            "fast", 
+            "medium", 
+            "slow", 
+            "slower", 
+            "veryslow" 
+        };
+        int currentPresetIndex = 2; // Padrão: veryfast
+        for (int i = 0; i < 9; i++) {
+            if (m_streamingH264Preset == h264Presets[i]) {
+                currentPresetIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9)) {
+            m_streamingH264Preset = h264Presets[currentPresetIndex];
+            if (m_onStreamingH264PresetChanged) {
+                m_onStreamingH264PresetChanged(m_streamingH264Preset);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Preset do encoder H.264:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        }
+    }
+    
     ImGui::Separator();
     ImGui::Text("Bitrates");
     ImGui::Separator();
@@ -1083,26 +1142,6 @@ void UIManager::renderStreamingPanel()
             }
         }
     }
-    
-    // Tamanho do buffer de áudio (calculado automaticamente para sincronizar com vídeo)
-    // Mostrar como "auto" mas permitir override manual
-    ImGui::Text("Buffer Áudio: %u frames (auto = 1 frame vídeo)", m_streamingAudioBufferSize);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Calculado automaticamente para corresponder ao tempo de 1 frame de vídeo.\n"
-                          "Pode ser ajustado manualmente se necessário.");
-    }
-    int audioBufferSize = static_cast<int>(m_streamingAudioBufferSize);
-    if (ImGui::InputInt("##BufferAudioManual", &audioBufferSize, 1, 10)) {
-        if (audioBufferSize >= 1 && audioBufferSize <= 200) {
-            m_streamingAudioBufferSize = static_cast<uint32_t>(audioBufferSize);
-            if (m_onStreamingAudioBufferSizeChanged) {
-                m_onStreamingAudioBufferSizeChanged(m_streamingAudioBufferSize);
-            }
-        }
-    }
-    ImGui::TextDisabled("(Calculado automaticamente para sincronizar com 1 frame de vídeo)");
     
     ImGui::Separator();
     

@@ -77,10 +77,9 @@ public:
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
     void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
     void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
-    void setStreamingQuality(int quality) { m_streamingQuality = quality; }
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
-    void setStreamingAudioBufferSize(uint32_t frames) { m_streamingAudioBufferSize = frames; }
+    void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -90,10 +89,9 @@ public:
     void setOnStreamingFpsChanged(std::function<void(uint32_t)> callback) { m_onStreamingFpsChanged = callback; }
     void setOnStreamingBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingBitrateChanged = callback; }
     void setOnStreamingAudioBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingAudioBitrateChanged = callback; }
-    void setOnStreamingQualityChanged(std::function<void(int)> callback) { m_onStreamingQualityChanged = callback; }
     void setOnStreamingVideoCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingVideoCodecChanged = callback; }
     void setOnStreamingAudioCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingAudioCodecChanged = callback; }
-    void setOnStreamingAudioBufferSizeChanged(std::function<void(uint32_t)> callback) { m_onStreamingAudioBufferSizeChanged = callback; }
+    void setOnStreamingH264PresetChanged(std::function<void(const std::string &)> callback) { m_onStreamingH264PresetChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -179,10 +177,9 @@ private:
     uint32_t m_streamingFps = 60;
     uint32_t m_streamingBitrate = 8000;
     uint32_t m_streamingAudioBitrate = 256;
-    int m_streamingQuality = 85;
     std::string m_streamingVideoCodec = "h264";
     std::string m_streamingAudioCodec = "aac";
-    uint32_t m_streamingAudioBufferSize = 1; // Tamanho do buffer de áudio em frames
+    std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -194,8 +191,7 @@ private:
     std::function<void(uint32_t)> m_onStreamingFpsChanged;
     std::function<void(uint32_t)> m_onStreamingBitrateChanged;
     std::function<void(uint32_t)> m_onStreamingAudioBitrateChanged;
-    std::function<void(int)> m_onStreamingQualityChanged;
     std::function<void(const std::string &)> m_onStreamingVideoCodecChanged;
     std::function<void(const std::string &)> m_onStreamingAudioCodecChanged;
-    std::function<void(uint32_t)> m_onStreamingAudioBufferSizeChanged;
+    std::function<void(const std::string &)> m_onStreamingH264PresetChanged;
 };

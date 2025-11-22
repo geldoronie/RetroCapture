@@ -455,8 +455,6 @@ int main(int argc, char *argv[])
     app.setStreamingAudioBitrate(streamAudioBitrate);
     app.setStreamingVideoCodec(streamVideoCodec);
     app.setStreamingAudioCodec(streamAudioCodec);
-    app.setStreamingAudioBufferSize(streamAudioBufferSize);
-    app.setStreamingQuality(streamQuality);
 
     if (!app.init())
     {
