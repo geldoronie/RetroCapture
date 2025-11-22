@@ -37,6 +37,23 @@ pkg_check_modules(V4L2 REQUIRED libv4l2)
 # PNG (via libpng)
 pkg_check_modules(PNG REQUIRED libpng)
 
+# FFmpeg for streaming
+pkg_check_modules(AVCODEC REQUIRED libavcodec)
+pkg_check_modules(AVFORMAT REQUIRED libavformat)
+pkg_check_modules(AVUTIL REQUIRED libavutil)
+pkg_check_modules(SWSCALE REQUIRED libswscale)
+pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+
+# HTTP server for MJPEG streaming
+pkg_check_modules(MICROHTTPD QUIET libmicrohttpd)
+if(NOT MICROHTTPD_FOUND)
+    # Fallback: use simple socket-based HTTP server
+    message(STATUS "libmicrohttpd not found, will use simple HTTP server")
+endif()
+
+# PulseAudio for audio capture
+pkg_check_modules(PULSE REQUIRED libpulse)
+
 # ImGui (via FetchContent)
 include(FetchContent)
 FetchContent_Declare(
@@ -45,6 +62,14 @@ FetchContent_Declare(
     GIT_TAG docking
 )
 FetchContent_MakeAvailable(imgui)
+
+# nlohmann/json (header-only JSON library)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
 
 # Criar target para ImGui
 add_library(imgui STATIC
@@ -89,6 +114,12 @@ if(glfw3_FOUND)
         glfw
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
+        ${AVCODEC_LIBRARIES}
+        ${AVFORMAT_LIBRARIES}
+        ${AVUTIL_LIBRARIES}
+        ${SWSCALE_LIBRARIES}
+        ${SWRESAMPLE_LIBRARIES}
+        ${PULSE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -98,6 +129,12 @@ else()
         ${GLFW_LIBRARIES}
         ${V4L2_LIBRARIES}
         ${PNG_LIBRARIES}
+        ${AVCODEC_LIBRARIES}
+        ${AVFORMAT_LIBRARIES}
+        ${AVUTIL_LIBRARIES}
+        ${SWSCALE_LIBRARIES}
+        ${SWRESAMPLE_LIBRARIES}
+        ${PULSE_LIBRARIES}
         Threads::Threads
         imgui
     )
@@ -112,13 +149,62 @@ endif()
 target_include_directories(retrocapture PRIVATE
     ${V4L2_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIRS}
+    ${AVCODEC_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
+    ${SWSCALE_INCLUDE_DIRS}
+    ${SWRESAMPLE_INCLUDE_DIRS}
+    ${PULSE_INCLUDE_DIRS}
 )
 
-# Compiler flags
+# Adicionar include do nlohmann/json (header-only, não precisa linkar)
+# O nlohmann/json é header-only, então precisamos apenas adicionar o diretório de include
+# O FetchContent disponibiliza json_SOURCE_DIR
+if(DEFINED json_SOURCE_DIR)
+    target_include_directories(retrocapture PRIVATE ${json_SOURCE_DIR}/include)
+endif()
+
+# Configuração de build types
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+
+# Compiler flags base (comuns a todos os builds)
 target_compile_options(retrocapture PRIVATE
     -Wall
     -Wextra
     -Wpedantic
+)
+
+# Flags específicas por build type
+target_compile_options(retrocapture PRIVATE
+    $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+    $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+    $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+)
+
+# Linker flags específicas por build type
+target_link_options(retrocapture PRIVATE
+    $<$<CONFIG:Debug>:-g>
+    $<$<CONFIG:Release>:>
+    $<$<CONFIG:RelWithDebInfo>:-g>
+    $<$<CONFIG:MinSizeRel>:>
+)
+
+# Copiar pasta de shaders para o diretório de build
+# Isso garante que o binário encontre os shaders corretamente ao executar
+add_custom_command(TARGET retrocapture POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/shaders"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    COMMENT "Copying shaders directory to build output"
 )
 
 # Instalação

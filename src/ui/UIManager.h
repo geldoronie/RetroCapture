@@ -29,10 +29,10 @@ public:
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
     void setCurrentShader(const std::string &shader) { m_currentShader = shader; }
     void setOnShaderChanged(std::function<void(const std::string &)> callback) { m_onShaderChanged = callback; }
-    
+
     // Parâmetros de shader
-    void setShaderEngine(ShaderEngine* engine) { m_shaderEngine = engine; }
-    void setOnSavePreset(std::function<void(const std::string&, bool)> callback) { m_onSavePreset = callback; }
+    void setShaderEngine(ShaderEngine *engine) { m_shaderEngine = engine; }
+    void setOnSavePreset(std::function<void(const std::string &, bool)> callback) { m_onSavePreset = callback; }
 
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
@@ -54,7 +54,7 @@ public:
         m_onV4L2ControlChanged = callback;
     }
     void setOnDeviceChanged(std::function<void(const std::string &)> callback) { m_onDeviceChanged = callback; }
-    void setCurrentDevice(const std::string& device) { m_currentDevice = device; }
+    void setCurrentDevice(const std::string &device) { m_currentDevice = device; }
     void refreshV4L2Devices();
 
     // Informações da captura
@@ -67,9 +67,71 @@ public:
     void setVisible(bool visible) { m_uiVisible = visible; }
     void toggle() { m_uiVisible = !m_uiVisible; }
 
+    // Streaming info setters (public)
+    void setStreamingActive(bool active) { m_streamingActive = active; }
+    void setStreamUrl(const std::string &url) { m_streamUrl = url; }
+    void setStreamClientCount(uint32_t count) { m_streamClientCount = count; }
+    void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
+    void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
+    void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
+    void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
+    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
+    void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
+    void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
+    void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
+    void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
+    void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
+    void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
+    void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
+    void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    
+    // Streaming info getters (public)
+    uint16_t getStreamingPort() const { return m_streamingPort; }
+    uint32_t getStreamingWidth() const { return m_streamingWidth; }
+    uint32_t getStreamingHeight() const { return m_streamingHeight; }
+    uint32_t getStreamingFps() const { return m_streamingFps; }
+    uint32_t getStreamingBitrate() const { return m_streamingBitrate; }
+    uint32_t getStreamingAudioBitrate() const { return m_streamingAudioBitrate; }
+    std::string getStreamingVideoCodec() const { return m_streamingVideoCodec; }
+    std::string getStreamingAudioCodec() const { return m_streamingAudioCodec; }
+    std::string getStreamingH264Preset() const { return m_streamingH264Preset; }
+    std::string getStreamingH265Preset() const { return m_streamingH265Preset; }
+    std::string getStreamingH265Profile() const { return m_streamingH265Profile; }
+    std::string getStreamingH265Level() const { return m_streamingH265Level; }
+    int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
+    int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
+    
+    // Image settings getters
+    float getBrightness() const { return m_brightness; }
+    float getContrast() const { return m_contrast; }
+    bool getMaintainAspect() const { return m_maintainAspect; }
+    bool getFullscreen() const { return m_fullscreen; }
+    int getMonitorIndex() const { return m_monitorIndex; }
+    std::string getCurrentShader() const { return m_currentShader; }
+
+    // Streaming callbacks
+    void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
+    void setOnStreamingPortChanged(std::function<void(uint16_t)> callback) { m_onStreamingPortChanged = callback; }
+    void setOnStreamingWidthChanged(std::function<void(uint32_t)> callback) { m_onStreamingWidthChanged = callback; }
+    void setOnStreamingHeightChanged(std::function<void(uint32_t)> callback) { m_onStreamingHeightChanged = callback; }
+    void setOnStreamingFpsChanged(std::function<void(uint32_t)> callback) { m_onStreamingFpsChanged = callback; }
+    void setOnStreamingBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingBitrateChanged = callback; }
+    void setOnStreamingAudioBitrateChanged(std::function<void(uint32_t)> callback) { m_onStreamingAudioBitrateChanged = callback; }
+    void setOnStreamingVideoCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingVideoCodecChanged = callback; }
+    void setOnStreamingAudioCodecChanged(std::function<void(const std::string &)> callback) { m_onStreamingAudioCodecChanged = callback; }
+    void setOnStreamingH264PresetChanged(std::function<void(const std::string &)> callback) { m_onStreamingH264PresetChanged = callback; }
+    void setOnStreamingH265PresetChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265PresetChanged = callback; }
+    void setOnStreamingH265ProfileChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265ProfileChanged = callback; }
+    void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
+    void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
+    void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
+
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
+    bool m_configWindowVisible = true; // Janela de configuração visível por padrão
+    bool m_configWindowJustOpened = true; // Flag para aplicar posição/tamanho inicial apenas quando aberta
     GLFWwindow *m_window = nullptr;
 
     // Shader selection
@@ -77,7 +139,7 @@ private:
     std::string m_currentShader;
     int m_selectedShaderIndex = 0;
     std::function<void(const std::string &)> m_onShaderChanged;
-    ShaderEngine* m_shaderEngine = nullptr;
+    ShaderEngine *m_shaderEngine = nullptr;
 
     // Brightness/Contrast
     float m_brightness = 1.0f;
@@ -108,7 +170,7 @@ private:
     };
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
-    
+
     // Device selection
     std::vector<std::string> m_v4l2Devices;
     std::string m_currentDevice;
@@ -127,16 +189,58 @@ private:
     void renderImageControls();
     void renderV4L2Controls();
     void renderInfoPanel();
-    
+    void renderStreamingPanel();
+
     // Scanning methods
     void scanShaders(const std::string &basePath);
     void scanV4L2Devices();
+    
+    // Configuration persistence
+    void loadConfig();
+    void saveConfig();
+    std::string getConfigPath() const;
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";
-    
+
     // Save preset
-    std::function<void(const std::string&, bool)> m_onSavePreset; // path, overwrite
+    std::function<void(const std::string &, bool)> m_onSavePreset; // path, overwrite
     char m_savePresetPath[512] = "";
     bool m_showSaveDialog = false;
+
+    // Streaming controls
+    bool m_streamingEnabled = false;
+    uint16_t m_streamingPort = 8080;
+    uint32_t m_streamingWidth = 640;  // Padrão: 640px
+    uint32_t m_streamingHeight = 480; // Padrão: 480px
+    uint32_t m_streamingFps = 60;
+    uint32_t m_streamingBitrate = 8000;
+    uint32_t m_streamingAudioBitrate = 256;
+    std::string m_streamingVideoCodec = "h264";
+    std::string m_streamingAudioCodec = "aac";
+    std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    std::string m_streamingH265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
+    std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
+    int m_streamingVP8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
+    int m_streamingVP9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    bool m_streamingActive = false;
+    std::string m_streamUrl = "";
+    uint32_t m_streamClientCount = 0;
+
+    std::function<void(bool)> m_onStreamingStartStop;
+    std::function<void(uint16_t)> m_onStreamingPortChanged;
+    std::function<void(uint32_t)> m_onStreamingWidthChanged;
+    std::function<void(uint32_t)> m_onStreamingHeightChanged;
+    std::function<void(uint32_t)> m_onStreamingFpsChanged;
+    std::function<void(uint32_t)> m_onStreamingBitrateChanged;
+    std::function<void(uint32_t)> m_onStreamingAudioBitrateChanged;
+    std::function<void(const std::string &)> m_onStreamingVideoCodecChanged;
+    std::function<void(const std::string &)> m_onStreamingAudioCodecChanged;
+    std::function<void(const std::string &)> m_onStreamingH264PresetChanged;
+    std::function<void(const std::string &)> m_onStreamingH265PresetChanged;
+    std::function<void(const std::string &)> m_onStreamingH265ProfileChanged;
+    std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
+    std::function<void(int)> m_onStreamingVP8SpeedChanged;
+    std::function<void(int)> m_onStreamingVP9SpeedChanged;
 };

@@ -319,8 +319,9 @@ bool ShaderEngine::loadPresetPasses()
 
                 // Verificar se a variável é usada com .rgb ou similar depois
                 // Procurar por padrões como: var.rgb, var.r, var.g, var.b, etc.
-                std::regex rgbPattern(varName + R"(\s*\.(rgb|r|g|b|rg|rb|gb))");
-                bool usesRgb = std::regex_search(fragmentSource, rgbPattern);
+                // (comentado - não usado atualmente)
+                // std::regex rgbPattern(varName + R"(\s*\.(rgb|r|g|b|rg|rb|gb))");
+                // bool usesRgb = std::regex_search(fragmentSource, rgbPattern);
 
                 // Mudar declaração para vec4 (sempre, já que COMPAT_TEXTURE retorna vec4)
                 // IMPORTANTE: Precisamos preservar COMPAT_TEXTURE na substituição
@@ -618,10 +619,8 @@ bool ShaderEngine::loadPresetPasses()
     if (!textures.empty())
     {
         // Log removido para reduzir verbosidade
-        for (const auto &tex : textures)
-        {
-            // Log removido para reduzir verbosidade
-        }
+        // Textures disponíveis mas não processadas aqui
+        (void)textures;
     }
 
     return true;

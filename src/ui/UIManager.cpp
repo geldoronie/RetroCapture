@@ -17,6 +17,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 UIManager::UIManager()
 {
@@ -41,6 +43,18 @@ bool UIManager::init(GLFWwindow *window)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Configurar nome do arquivo de configuração para usar o nome da aplicação
+    io.IniFilename = "RetroCapture.ini";
+    
+    // Remover apenas o arquivo de configuração antigo (imgui.ini) se existir
+    // O RetroCapture.ini pode ser criado normalmente
+    std::string oldIniPath = "imgui.ini";
+    if (std::filesystem::exists(oldIniPath))
+    {
+        std::filesystem::remove(oldIniPath);
+        LOG_INFO("Arquivo de configuração antigo removido: " + oldIniPath);
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -58,6 +72,9 @@ bool UIManager::init(GLFWwindow *window)
     }
     scanShaders(m_shaderBasePath);
 
+    // Carregar configurações salvas
+    loadConfig();
+
     m_initialized = true;
     LOG_INFO("UIManager inicializado");
     return true;
@@ -68,6 +85,15 @@ void UIManager::shutdown()
     if (!m_initialized)
     {
         return;
+    }
+
+    // Remover apenas o arquivo antigo (imgui.ini) se ainda existir
+    // O RetroCapture.ini pode ser mantido
+    std::string oldIniPath = "imgui.ini";
+    if (std::filesystem::exists(oldIniPath))
+    {
+        std::filesystem::remove(oldIniPath);
+        LOG_INFO("Arquivo de configuração antigo removido no shutdown: " + oldIniPath);
     }
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -118,12 +144,8 @@ void UIManager::render()
         return;
     }
 
-    // Main window
-    ImGui::Begin("RetroCapture Controls", &m_uiVisible,
-                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_MenuBar);
-
-    // Menu bar
-    if (ImGui::BeginMenuBar())
+    // Main menu bar fixo no topo
+    if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
@@ -145,44 +167,92 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Toggle UI", "F12"))
             {
-                m_uiVisible = false;
+                m_uiVisible = !m_uiVisible;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Configuration", nullptr, m_configWindowVisible))
+            {
+                m_configWindowVisible = !m_configWindowVisible;
+                // Quando a janela é aberta, marcar para aplicar posição/tamanho inicial
+                if (m_configWindowVisible)
+                {
+                    m_configWindowJustOpened = true;
+                }
             }
             ImGui::EndMenu();
         }
-        ImGui::EndMenuBar();
+        ImGui::EndMainMenuBar();
     }
 
-    // Tabs
-    if (ImGui::BeginTabBar("MainTabs"))
+    // Renderizar janela de configuração apenas se estiver visível
+    if (m_configWindowVisible)
     {
-        if (ImGui::BeginTabItem("Shaders"))
+        // Aplicar posição e tamanho inicial apenas quando a janela é aberta
+        if (m_configWindowJustOpened)
         {
-            renderShaderPanel();
-            ImGui::EndTabItem();
+            // Obter altura do menu bar para posicionar a janela abaixo dele
+            float menuBarHeight = ImGui::GetFrameHeight();
+            
+            // Obter dimensões da viewport
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImVec2 workPos = viewport->WorkPos;
+            
+            // Definir posição inicial: um pouco abaixo do menu bar
+            ImVec2 initialPos(workPos.x + 10.0f, workPos.y + menuBarHeight + 10.0f);
+            
+            // Definir tamanho inicial menor que 640x480 (usar 600x400 para caber em resoluções menores)
+            ImVec2 initialSize(600.0f, 400.0f);
+            
+            // Configurar posição e tamanho inicial (ignora o que está salvo no .ini)
+            ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
+            
+            m_configWindowJustOpened = false;
         }
+        
+        // Janela flutuante redimensionável
+        // Usar ImGuiWindowFlags_NoSavedSettings para não salvar posição/tamanho no .ini
+        ImGui::Begin("RetroCapture Controls", &m_configWindowVisible,
+                     ImGuiWindowFlags_NoSavedSettings);
 
-        if (ImGui::BeginTabItem("Image"))
+        // Tabs
+        if (ImGui::BeginTabBar("MainTabs"))
         {
-            renderImageControls();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Shaders"))
+            {
+                renderShaderPanel();
+                ImGui::EndTabItem();
+            }
 
-        if (ImGui::BeginTabItem("V4L2"))
-        {
-            renderV4L2Controls();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Image"))
+            {
+                renderImageControls();
+                ImGui::EndTabItem();
+            }
 
-        if (ImGui::BeginTabItem("Info"))
-        {
-            renderInfoPanel();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("V4L2"))
+            {
+                renderV4L2Controls();
+                ImGui::EndTabItem();
+            }
 
-        ImGui::EndTabBar();
+            if (ImGui::BeginTabItem("Info"))
+            {
+                renderInfoPanel();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Streaming"))
+            {
+                renderStreamingPanel();
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+        
+        ImGui::End();
     }
-
-    ImGui::End();
 }
 
 void UIManager::renderShaderPanel()
@@ -199,6 +269,7 @@ void UIManager::renderShaderPanel()
             {
                 m_onShaderChanged("");
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
 
         for (size_t i = 0; i < m_scannedShaders.size(); ++i)
@@ -211,6 +282,7 @@ void UIManager::renderShaderPanel()
                 {
                     m_onShaderChanged(m_scannedShaders[i]);
                 }
+                saveConfig(); // Salvar configuração quando mudar
             }
             if (isSelected)
             {
@@ -356,6 +428,7 @@ void UIManager::renderImageControls()
         {
             m_onBrightnessChanged(brightness);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##brightness"))
@@ -376,6 +449,7 @@ void UIManager::renderImageControls()
         {
             m_onContrastChanged(contrast);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##contrast"))
@@ -398,6 +472,7 @@ void UIManager::renderImageControls()
         {
             m_onMaintainAspectChanged(maintainAspect);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     // Fullscreen
@@ -409,6 +484,7 @@ void UIManager::renderImageControls()
         {
             m_onFullscreenChanged(fullscreen);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     // Monitor Index (usado quando fullscreen está ativo)
@@ -432,6 +508,7 @@ void UIManager::renderImageControls()
         {
             m_onMonitorIndexChanged(monitorIndex);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::PopItemWidth();
     ImGui::SameLine();
@@ -486,6 +563,7 @@ void UIManager::renderV4L2Controls()
                 {
                     m_onDeviceChanged(m_v4l2Devices[i]);
                 }
+                saveConfig(); // Salvar configuração quando mudar
             }
             if (isSelected)
             {
@@ -889,6 +967,342 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
     }
 }
 
+void UIManager::renderStreamingPanel()
+{
+    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
+    ImGui::Separator();
+    
+    // Status
+    ImGui::Text("Status: %s", m_streamingActive ? "Ativo" : "Inativo");
+    if (m_streamingActive) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
+    } else {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
+    }
+    
+    if (m_streamingActive && !m_streamUrl.empty()) {
+        ImGui::Text("URL: %s", m_streamUrl.c_str());
+        ImGui::Text("Clientes conectados: %u", m_streamClientCount);
+    }
+    
+    ImGui::Separator();
+    ImGui::Text("Configurações Básicas");
+    ImGui::Separator();
+    
+    // Controles básicos
+    int port = static_cast<int>(m_streamingPort);
+    if (ImGui::InputInt("Porta", &port, 1, 100)) {
+        if (port >= 1024 && port <= 65535) {
+            m_streamingPort = static_cast<uint16_t>(port);
+            if (m_onStreamingPortChanged) {
+                m_onStreamingPortChanged(m_streamingPort);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+    }
+    
+    // Resolução - Dropdown
+    const char* resolutions[] = { 
+        "Captura (0x0)", 
+        "320x240", 
+        "640x480", 
+        "800x600", 
+        "1024x768", 
+        "1280x720 (HD)", 
+        "1280x1024", 
+        "1920x1080 (Full HD)", 
+        "2560x1440 (2K)", 
+        "3840x2160 (4K)" 
+    };
+    const uint32_t resolutionWidths[] = { 0, 320, 640, 800, 1024, 1280, 1280, 1920, 2560, 3840 };
+    const uint32_t resolutionHeights[] = { 0, 240, 480, 600, 768, 720, 1024, 1080, 1440, 2160 };
+    
+    int currentResIndex = 0;
+    for (int i = 0; i < 10; i++) {
+        if (m_streamingWidth == resolutionWidths[i] && m_streamingHeight == resolutionHeights[i]) {
+            currentResIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10)) {
+        m_streamingWidth = resolutionWidths[currentResIndex];
+        m_streamingHeight = resolutionHeights[currentResIndex];
+        if (m_onStreamingWidthChanged) {
+            m_onStreamingWidthChanged(m_streamingWidth);
+        }
+        if (m_onStreamingHeightChanged) {
+            m_onStreamingHeightChanged(m_streamingHeight);
+        }
+        saveConfig(); // Salvar configuração quando mudar
+    }
+    
+    // FPS - Dropdown
+    const char* fpsOptions[] = { "Captura (0)", "15", "24", "30", "60", "120" };
+    const uint32_t fpsValues[] = { 0, 15, 24, 30, 60, 120 };
+    
+    int currentFpsIndex = 0;
+    for (int i = 0; i < 6; i++) {
+        if (m_streamingFps == fpsValues[i]) {
+            currentFpsIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("FPS", &currentFpsIndex, fpsOptions, 6)) {
+        m_streamingFps = fpsValues[currentFpsIndex];
+        if (m_onStreamingFpsChanged) {
+            m_onStreamingFpsChanged(m_streamingFps);
+        }
+        saveConfig(); // Salvar configuração quando mudar
+    }
+    
+    ImGui::Separator();
+    ImGui::Text("Codecs");
+    ImGui::Separator();
+    
+    // Seleção de codec de vídeo
+    const char* videoCodecs[] = { "h264", "h265", "vp8", "vp9" };
+    int currentVideoCodecIndex = 0;
+    for (int i = 0; i < 4; i++) {
+        if (m_streamingVideoCodec == videoCodecs[i]) {
+            currentVideoCodecIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4)) {
+        m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
+        if (m_onStreamingVideoCodecChanged) {
+            m_onStreamingVideoCodecChanged(m_streamingVideoCodec);
+        }
+        saveConfig(); // Salvar configuração quando mudar
+    }
+    
+    // Seleção de codec de áudio
+    const char* audioCodecs[] = { "aac", "mp3", "opus" };
+    int currentAudioCodecIndex = 0;
+    for (int i = 0; i < 3; i++) {
+        if (m_streamingAudioCodec == audioCodecs[i]) {
+            currentAudioCodecIndex = i;
+            break;
+        }
+    }
+    
+    if (ImGui::Combo("Codec de Áudio", &currentAudioCodecIndex, audioCodecs, 3)) {
+        m_streamingAudioCodec = audioCodecs[currentAudioCodecIndex];
+        if (m_onStreamingAudioCodecChanged) {
+            m_onStreamingAudioCodecChanged(m_streamingAudioCodec);
+        }
+        saveConfig(); // Salvar configuração quando mudar
+    }
+    
+    // Qualidade H.264 (apenas se codec for h264)
+    if (m_streamingVideoCodec == "h264") {
+        const char* h264Presets[] = { 
+            "ultrafast", 
+            "superfast", 
+            "veryfast", 
+            "faster", 
+            "fast", 
+            "medium", 
+            "slow", 
+            "slower", 
+            "veryslow" 
+        };
+        int currentPresetIndex = 2; // Padrão: veryfast
+        for (int i = 0; i < 9; i++) {
+            if (m_streamingH264Preset == h264Presets[i]) {
+                currentPresetIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9)) {
+            m_streamingH264Preset = h264Presets[currentPresetIndex];
+            if (m_onStreamingH264PresetChanged) {
+                m_onStreamingH264PresetChanged(m_streamingH264Preset);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Preset do encoder H.264:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        }
+    }
+    
+    // Qualidade H.265 (apenas se codec for h265)
+    if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc") {
+        const char* h265Presets[] = { 
+            "ultrafast", 
+            "superfast", 
+            "veryfast", 
+            "faster", 
+            "fast", 
+            "medium", 
+            "slow", 
+            "slower", 
+            "veryslow" 
+        };
+        int currentPresetIndex = 2; // Padrão: veryfast
+        for (int i = 0; i < 9; i++) {
+            if (m_streamingH265Preset == h265Presets[i]) {
+                currentPresetIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9)) {
+            m_streamingH265Preset = h265Presets[currentPresetIndex];
+            if (m_onStreamingH265PresetChanged) {
+                m_onStreamingH265PresetChanged(m_streamingH265Preset);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Preset do encoder H.265:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        }
+        
+        // Profile H.265
+        const char* h265Profiles[] = { "main", "main10" };
+        int currentProfileIndex = 0;
+        for (int i = 0; i < 2; i++) {
+            if (m_streamingH265Profile == h265Profiles[i]) {
+                currentProfileIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2)) {
+            m_streamingH265Profile = h265Profiles[currentProfileIndex];
+            if (m_onStreamingH265ProfileChanged) {
+                m_onStreamingH265ProfileChanged(m_streamingH265Profile);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Profile do encoder H.265:\n"
+                              "main: 8-bit, máxima compatibilidade\n"
+                              "main10: 10-bit, melhor qualidade, suporte HDR");
+        }
+        
+        // Level H.265
+        const char* h265Levels[] = { 
+            "auto", "1", "2", "2.1", "3", "3.1", 
+            "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2" 
+        };
+        int currentLevelIndex = 0;
+        for (int i = 0; i < 14; i++) {
+            if (m_streamingH265Level == h265Levels[i]) {
+                currentLevelIndex = i;
+                break;
+            }
+        }
+        
+        if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14)) {
+            m_streamingH265Level = h265Levels[currentLevelIndex];
+            if (m_onStreamingH265LevelChanged) {
+                m_onStreamingH265LevelChanged(m_streamingH265Level);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Level do encoder H.265:\n"
+                              "auto: Detecção automática (recomendado)\n"
+                              "1-6.2: Níveis específicos para compatibilidade\n"
+                              "Níveis mais altos suportam resoluções/bitrates maiores");
+        }
+    }
+    
+    // Configurações VP8 (apenas se codec for vp8)
+    if (m_streamingVideoCodec == "vp8") {
+        int currentSpeed = m_streamingVP8Speed;
+        if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16)) {
+            m_streamingVP8Speed = currentSpeed;
+            if (m_onStreamingVP8SpeedChanged) {
+                m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Speed do encoder VP8:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "16: Mais rápido, menor qualidade\n"
+                              "12: Bom equilíbrio para streaming");
+        }
+    }
+    
+    // Configurações VP9 (apenas se codec for vp9)
+    if (m_streamingVideoCodec == "vp9") {
+        int currentSpeed = m_streamingVP9Speed;
+        if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9)) {
+            m_streamingVP9Speed = currentSpeed;
+            if (m_onStreamingVP9SpeedChanged) {
+                m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Speed do encoder VP9:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "9: Mais rápido, menor qualidade\n"
+                              "6: Bom equilíbrio para streaming");
+        }
+    }
+    
+    ImGui::Separator();
+    ImGui::Text("Bitrates");
+    ImGui::Separator();
+    
+    // Bitrate de vídeo
+    int bitrate = static_cast<int>(m_streamingBitrate);
+    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000)) {
+        if (bitrate >= 0 && bitrate <= 50000) {
+            m_streamingBitrate = static_cast<uint32_t>(bitrate);
+            if (m_onStreamingBitrateChanged) {
+                m_onStreamingBitrateChanged(m_streamingBitrate);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+    }
+    
+    // Bitrate de áudio
+    int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
+    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32)) {
+        if (audioBitrate >= 32 && audioBitrate <= 320) {
+            m_streamingAudioBitrate = static_cast<uint32_t>(audioBitrate);
+            if (m_onStreamingAudioBitrateChanged) {
+                m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+    }
+    
+    ImGui::Separator();
+    
+    // Botão Start/Stop
+    if (m_streamingActive) {
+        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0))) {
+            if (m_onStreamingStartStop) {
+                m_onStreamingStartStop(false);
+            }
+        }
+    } else {
+        if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0))) {
+            if (m_onStreamingStartStop) {
+                m_onStreamingStartStop(true);
+            }
+        }
+    }
+}
+
 void UIManager::scanV4L2Devices()
 {
     m_v4l2Devices = V4L2DeviceScanner::scan();
@@ -903,4 +1317,168 @@ void UIManager::scanShaders(const std::string &basePath)
 {
     m_scannedShaders = ShaderScanner::scan(basePath);
     LOG_INFO("Encontrados " + std::to_string(m_scannedShaders.size()) + " shaders em " + basePath);
+}
+
+std::string UIManager::getConfigPath() const
+{
+    // Usar diretório home do usuário para salvar configurações
+    const char *homeDir = std::getenv("HOME");
+    if (homeDir)
+    {
+        std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+        // Criar diretório se não existir
+        if (!std::filesystem::exists(configDir))
+        {
+            std::filesystem::create_directories(configDir);
+        }
+        return (configDir / "config.json").string();
+    }
+    // Fallback: salvar no diretório atual
+    return "retrocapture_config.json";
+}
+
+void UIManager::loadConfig()
+{
+    std::string configPath = getConfigPath();
+    
+    if (!std::filesystem::exists(configPath))
+    {
+        LOG_INFO("Arquivo de configuração não encontrado: " + configPath + " (usando padrões)");
+        return;
+    }
+
+    try
+    {
+        std::ifstream file(configPath);
+        if (!file.is_open())
+        {
+            LOG_WARN("Não foi possível abrir arquivo de configuração: " + configPath);
+            return;
+        }
+
+        nlohmann::json config;
+        file >> config;
+        file.close();
+
+        // Carregar configurações de streaming
+        if (config.contains("streaming"))
+        {
+            auto &streaming = config["streaming"];
+            if (streaming.contains("port")) m_streamingPort = streaming["port"];
+            if (streaming.contains("width")) m_streamingWidth = streaming["width"];
+            if (streaming.contains("height")) m_streamingHeight = streaming["height"];
+            if (streaming.contains("fps")) m_streamingFps = streaming["fps"];
+            if (streaming.contains("bitrate")) m_streamingBitrate = streaming["bitrate"];
+            if (streaming.contains("audioBitrate")) m_streamingAudioBitrate = streaming["audioBitrate"];
+            if (streaming.contains("videoCodec")) m_streamingVideoCodec = streaming["videoCodec"].get<std::string>();
+            if (streaming.contains("audioCodec")) m_streamingAudioCodec = streaming["audioCodec"].get<std::string>();
+            if (streaming.contains("h264Preset")) m_streamingH264Preset = streaming["h264Preset"].get<std::string>();
+            if (streaming.contains("h265Preset")) m_streamingH265Preset = streaming["h265Preset"].get<std::string>();
+            if (streaming.contains("h265Profile")) m_streamingH265Profile = streaming["h265Profile"].get<std::string>();
+            if (streaming.contains("h265Level")) m_streamingH265Level = streaming["h265Level"].get<std::string>();
+            if (streaming.contains("vp8Speed")) m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
+            if (streaming.contains("vp9Speed")) m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+        }
+
+        // Carregar configurações de imagem
+        if (config.contains("image"))
+        {
+            auto &image = config["image"];
+            if (image.contains("brightness")) m_brightness = image["brightness"];
+            if (image.contains("contrast")) m_contrast = image["contrast"];
+            if (image.contains("maintainAspect")) m_maintainAspect = image["maintainAspect"];
+            if (image.contains("fullscreen")) m_fullscreen = image["fullscreen"];
+            if (image.contains("monitorIndex")) m_monitorIndex = image["monitorIndex"];
+        }
+
+        // Carregar shader atual
+        if (config.contains("shader"))
+        {
+            auto &shader = config["shader"];
+            if (shader.contains("current") && !shader["current"].is_null())
+            {
+                m_currentShader = shader["current"].get<std::string>();
+            }
+        }
+
+        // Carregar dispositivo V4L2
+        if (config.contains("v4l2"))
+        {
+            auto &v4l2 = config["v4l2"];
+            if (v4l2.contains("device") && !v4l2["device"].is_null())
+            {
+                m_currentDevice = v4l2["device"].get<std::string>();
+            }
+        }
+
+        LOG_INFO("Configurações carregadas de: " + configPath);
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Erro ao carregar configurações: " + std::string(e.what()));
+    }
+}
+
+void UIManager::saveConfig()
+{
+    std::string configPath = getConfigPath();
+
+    try
+    {
+        nlohmann::json config;
+
+        // Salvar configurações de streaming
+        config["streaming"] = {
+            {"port", m_streamingPort},
+            {"width", m_streamingWidth},
+            {"height", m_streamingHeight},
+            {"fps", m_streamingFps},
+            {"bitrate", m_streamingBitrate},
+            {"audioBitrate", m_streamingAudioBitrate},
+            {"videoCodec", m_streamingVideoCodec},
+            {"audioCodec", m_streamingAudioCodec},
+            {"h264Preset", m_streamingH264Preset},
+            {"h265Preset", m_streamingH265Preset},
+            {"h265Profile", m_streamingH265Profile},
+            {"h265Level", m_streamingH265Level},
+            {"vp8Speed", m_streamingVP8Speed},
+            {"vp9Speed", m_streamingVP9Speed}
+        };
+
+        // Salvar configurações de imagem
+        config["image"] = {
+            {"brightness", m_brightness},
+            {"contrast", m_contrast},
+            {"maintainAspect", m_maintainAspect},
+            {"fullscreen", m_fullscreen},
+            {"monitorIndex", m_monitorIndex}
+        };
+
+        // Salvar shader atual
+        config["shader"] = {
+            {"current", m_currentShader.empty() ? nullptr : m_currentShader}
+        };
+
+        // Salvar dispositivo V4L2
+        config["v4l2"] = {
+            {"device", m_currentDevice.empty() ? nullptr : m_currentDevice}
+        };
+
+        // Escrever arquivo
+        std::ofstream file(configPath);
+        if (!file.is_open())
+        {
+            LOG_WARN("Não foi possível criar arquivo de configuração: " + configPath);
+            return;
+        }
+
+        file << config.dump(4); // Indentação de 4 espaços para legibilidade
+        file.close();
+
+        LOG_INFO("Configurações salvas em: " + configPath);
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Erro ao salvar configurações: " + std::string(e.what()));
+    }
 }

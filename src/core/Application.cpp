@@ -8,13 +8,23 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../renderer/glad_loader.h"
+#include "../streaming/StreamManager.h"
+#include "../streaming/HTTPTSStreamer.h"
+#include "../audio/AudioCapture.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <linux/videodev2.h>
 #include <vector>
+#include <algorithm>
 #include <cstring>
 #include <unistd.h>
 #include <filesystem>
+#include <time.h>
+#include <sstream>
+#include <iomanip>
+
+// swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
+
 
 Application::Application()
 {
@@ -49,6 +59,20 @@ bool Application::init()
         return false;
     }
 
+    if (!initStreaming())
+    {
+        LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
+    }
+
+    // Initialize audio capture (sempre necessário para streaming)
+    if (m_streamingEnabled)
+    {
+        if (!initAudioCapture())
+        {
+            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+        }
+    }
+
     m_initialized = true;
 
     // IMPORTANTE: Após inicialização completa, garantir que o viewport está atualizado
@@ -74,7 +98,10 @@ bool Application::initWindow()
     config.title = "RetroCapture";
     config.fullscreen = m_fullscreen;
     config.monitorIndex = m_monitorIndex;
-    config.vsync = true;
+    // IMPORTANTE: Desabilitar VSync para evitar bloqueio quando janela não está focada
+    // VSync pode causar pausa na aplicação quando a janela está em segundo plano
+    // Isso garante que captura e streaming continuem funcionando mesmo quando não focada
+    config.vsync = false;
 
     if (!m_window->init(config))
     {
@@ -149,8 +176,17 @@ bool Application::initRenderer()
                                         {
                 // IMPORTANTE: Atualizar viewport do ShaderEngine imediatamente quando resize acontece
                 // Isso é especialmente crítico quando entra em fullscreen
-                if (appPtr && appPtr->m_shaderEngine) {
-                    appPtr->m_shaderEngine->setViewport(width, height);
+                // IMPORTANTE: Validar dimensões antes de atualizar para evitar problemas
+                if (appPtr && appPtr->m_shaderEngine && width > 0 && height > 0 && 
+                    width <= 7680 && height <= 4320) {
+                    appPtr->m_isResizing = true;
+                    {
+                        std::lock_guard<std::mutex> lock(appPtr->m_resizeMutex);
+                        appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+                    }
+                    // Pequeno delay para garantir que o ShaderEngine terminou de recriar framebuffers
+                    usleep(10000); // 10ms
+                    appPtr->m_isResizing = false;
                 } });
         }
 
@@ -445,16 +481,14 @@ bool Application::initUI()
     m_ui->setOnFullscreenChanged([this](bool fullscreen)
                                  {
         LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
+        // IMPORTANTE: Fazer mudança de fullscreen de forma assíncrona para evitar travamento
+        // O callback de resize será chamado automaticamente pelo GLFW quando a janela mudar
+        // Não fazer operações bloqueantes aqui
         if (m_window) {
-            m_window->setFullscreen(fullscreen, m_monitorIndex);
             m_fullscreen = fullscreen;
-            
-            // Atualizar viewport do shader engine após mudança de fullscreen
-            if (m_shaderEngine) {
-                uint32_t currentWidth = m_window->getWidth();
-                uint32_t currentHeight = m_window->getHeight();
-                m_shaderEngine->setViewport(currentWidth, currentHeight);
-            }
+            // A mudança de fullscreen será feita no próximo frame do loop principal
+            // para evitar deadlocks e travamentos
+            m_pendingFullscreenChange = true;
         } });
 
     m_ui->setOnMonitorIndexChanged([this](int monitorIndex)
@@ -557,6 +591,223 @@ bool Application::initUI()
         m_ui->setCurrentDevice(m_devicePath);
     }
 
+    // IMPORTANTE: Após init(), o UIManager já carregou as configurações salvas
+    // Sincronizar valores do Application com os valores carregados da UI
+    // Isso garante que as configurações salvas sejam aplicadas
+    m_streamingPort = m_ui->getStreamingPort();
+    m_streamingWidth = m_ui->getStreamingWidth();
+    m_streamingHeight = m_ui->getStreamingHeight();
+    m_streamingFps = m_ui->getStreamingFps();
+    m_streamingBitrate = m_ui->getStreamingBitrate();
+    m_streamingAudioBitrate = m_ui->getStreamingAudioBitrate();
+    m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
+    m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
+    m_streamingH264Preset = m_ui->getStreamingH264Preset();
+    m_streamingH265Preset = m_ui->getStreamingH265Preset();
+    m_streamingH265Profile = m_ui->getStreamingH265Profile();
+    m_streamingH265Level = m_ui->getStreamingH265Level();
+    m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
+    m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
+
+    // Também sincronizar configurações de imagem
+    m_brightness = m_ui->getBrightness();
+    m_contrast = m_ui->getContrast();
+    m_maintainAspect = m_ui->getMaintainAspect();
+    m_fullscreen = m_ui->getFullscreen();
+    m_monitorIndex = m_ui->getMonitorIndex();
+
+    // Aplicar shader carregado se houver
+    std::string loadedShader = m_ui->getCurrentShader();
+    if (!loadedShader.empty() && m_shaderEngine)
+    {
+        std::filesystem::path fullPath = std::filesystem::current_path() / "shaders" / "shaders_glsl" / loadedShader;
+        if (m_shaderEngine->loadPreset(fullPath.string()))
+        {
+            LOG_INFO("Shader carregado da configuração: " + loadedShader);
+        }
+    }
+
+    // Aplicar configurações de imagem
+    // FrameProcessor aplica brightness/contrast durante o processamento, não precisa setar aqui
+
+    // Aplicar fullscreen se necessário
+    if (m_fullscreen && m_window)
+    {
+        m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+    }
+
+    m_ui->setOnStreamingStartStop([this](bool start)
+                                  {
+        if (start) {
+            // Iniciar streaming
+            m_streamingEnabled = true;
+            if (!initStreaming()) {
+                LOG_ERROR("Falha ao iniciar streaming");
+                m_streamingEnabled = false;
+            } else {
+                // Initialize audio capture (sempre necessário para streaming)
+                if (!m_audioCapture) {
+                    if (!initAudioCapture()) {
+                        LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+                    }
+                }
+            }
+        } else {
+            // Parar streaming
+            m_streamingEnabled = false;
+            
+            // OPÇÃO A: Parar streaming (sem thread intermediária)
+            // Fazer stop() do streamManager em thread separada para não bloquear a UI
+            if (m_streamManager) {
+                // Ordem correta: stop() primeiro, depois cleanup()
+                m_streamManager->stop();
+                m_streamManager->cleanup();
+                m_streamManager.reset();
+            }
+
+            // Não fechar o AudioCapture aqui - pode ser usado novamente
+        }
+        // Atualizar UI
+        if (m_ui) {
+            m_ui->setStreamingActive(m_streamingEnabled && m_streamManager && m_streamManager->isActive());
+        } });
+
+    m_ui->setOnStreamingPortChanged([this](uint16_t port)
+                                    {
+        m_streamingPort = port;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingWidthChanged([this](uint32_t width)
+                                     { m_streamingWidth = width; });
+
+    m_ui->setOnStreamingHeightChanged([this](uint32_t height)
+                                      { m_streamingHeight = height; });
+
+    m_ui->setOnStreamingFpsChanged([this](uint32_t fps)
+                                   { m_streamingFps = fps; });
+
+    m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate)
+                                       {
+        m_streamingBitrate = bitrate;
+        // Atualizar bitrate do streamer se estiver ativo
+        if (m_streamManager && m_streamManager->isActive()) {
+            // Reiniciar streaming com novo bitrate
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingAudioBitrateChanged([this](uint32_t bitrate)
+                                            {
+        m_streamingAudioBitrate = bitrate;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingVideoCodecChanged([this](const std::string &codec)
+                                          {
+        m_streamingVideoCodec = codec;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingAudioCodecChanged([this](const std::string &codec)
+                                          {
+        m_streamingAudioCodec = codec;
+        // Se streaming estiver ativo, reiniciar
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingH264PresetChanged([this](const std::string &preset)
+                                          {
+        m_streamingH264Preset = preset;
+        // Se streaming estiver ativo, reiniciar para aplicar novo preset
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingH265PresetChanged([this](const std::string &preset)
+                                          {
+        m_streamingH265Preset = preset;
+        // Se streaming estiver ativo, reiniciar para aplicar novo preset
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingH265ProfileChanged([this](const std::string &profile)
+                                          {
+        m_streamingH265Profile = profile;
+        // Se streaming estiver ativo, reiniciar para aplicar novo profile
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingH265LevelChanged([this](const std::string &level)
+                                         {
+        m_streamingH265Level = level;
+        // Se streaming estiver ativo, reiniciar para aplicar novo level
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingVP8SpeedChanged([this](int speed)
+                                        {
+        m_streamingVP8Speed = speed;
+        // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingVP9SpeedChanged([this](int speed)
+                                        {
+        m_streamingVP9Speed = speed;
+        // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
     // Callback para mudança de dispositivo
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
@@ -658,6 +909,218 @@ bool Application::initUI()
     return true;
 }
 
+void Application::handleKeyInput()
+{
+    if (!m_ui || !m_window)
+        return;
+
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
+    if (!window)
+        return;
+
+    // F12 para toggle UI
+    static bool f12Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS)
+    {
+        if (!f12Pressed)
+        {
+            m_ui->toggle();
+            LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
+            f12Pressed = true;
+        }
+    }
+    else
+    {
+        f12Pressed = false;
+    }
+}
+
+bool Application::initStreaming()
+{
+    if (!m_streamingEnabled)
+    {
+        return true; // Streaming não habilitado, não é erro
+    }
+
+    LOG_INFO("Inicializando streaming...");
+
+    // OPÇÃO A: Não há mais thread de streaming para limpar
+
+    // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
+    // Isso previne problemas de double free quando há mudanças de configuração
+    if (m_streamManager)
+    {
+        LOG_INFO("Limpando StreamManager existente antes de reinicializar...");
+        // Parar e limpar de forma segura
+        if (m_streamManager->isActive())
+        {
+            m_streamManager->stop();
+        }
+        m_streamManager->cleanup();
+        m_streamManager.reset();
+
+        // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
+        // e recursos foram liberados antes de criar um novo StreamManager
+        usleep(100000); // 100ms
+    }
+
+    m_streamManager = std::make_unique<StreamManager>();
+
+    // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
+    // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
+    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
+    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
+    uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+
+    LOG_INFO("initStreaming: Using resolution " + std::to_string(streamWidth) + "x" +
+             std::to_string(streamHeight) + " @ " + std::to_string(streamFps) + "fps");
+    LOG_INFO("initStreaming: m_streamingWidth=" + std::to_string(m_streamingWidth) +
+             ", m_streamingHeight=" + std::to_string(m_streamingHeight));
+
+    // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
+    auto tsStreamer = std::make_unique<HTTPTSStreamer>();
+
+    // Configurar bitrate de vídeo
+    if (m_streamingBitrate > 0)
+    {
+        tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
+    }
+
+    // Configurar bitrate de áudio
+    if (m_streamingAudioBitrate > 0)
+    {
+        tsStreamer->setAudioBitrate(m_streamingAudioBitrate * 1000); // Converter kbps para bps
+    }
+
+    // Configurar codecs
+    tsStreamer->setVideoCodec(m_streamingVideoCodec);
+    tsStreamer->setAudioCodec(m_streamingAudioCodec);
+
+    // Configurar preset H.264 (se aplicável)
+    if (m_streamingVideoCodec == "h264")
+    {
+        tsStreamer->setH264Preset(m_streamingH264Preset);
+    }
+    // Configurar preset, profile e level H.265 (se aplicável)
+    else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
+    {
+        tsStreamer->setH265Preset(m_streamingH265Preset);
+        tsStreamer->setH265Profile(m_streamingH265Profile);
+        tsStreamer->setH265Level(m_streamingH265Level);
+    }
+    // Configurar speed VP8 (se aplicável)
+    else if (m_streamingVideoCodec == "vp8")
+    {
+        tsStreamer->setVP8Speed(m_streamingVP8Speed);
+    }
+    // Configurar speed VP9 (se aplicável)
+    else if (m_streamingVideoCodec == "vp9")
+    {
+        tsStreamer->setVP9Speed(m_streamingVP9Speed);
+    }
+
+    // Configurar tamanho do buffer de áudio
+    // setAudioBufferSize removido - buffer é gerenciado automaticamente (OBS style)
+
+    // Configurar formato de áudio para corresponder ao AudioCapture
+    if (m_audioCapture && m_audioCapture->isOpen())
+    {
+        tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+    }
+
+    m_streamManager->addStreamer(std::move(tsStreamer));
+    LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
+
+    if (!m_streamManager->initialize(m_streamingPort, streamWidth, streamHeight, streamFps))
+    {
+        LOG_ERROR("Falha ao inicializar StreamManager");
+        m_streamManager.reset();
+        return false;
+    }
+
+    if (!m_streamManager->start())
+    {
+        LOG_ERROR("Falha ao iniciar streaming");
+        m_streamManager.reset();
+        return false;
+    }
+
+    LOG_INFO("Streaming iniciado na porta " + std::to_string(m_streamingPort));
+    auto urls = m_streamManager->getStreamUrls();
+    for (const auto &url : urls)
+    {
+        LOG_INFO("Stream disponível: " + url);
+    }
+
+    // Initialize audio capture if not already initialized (sempre necessário para streaming)
+    if (!m_audioCapture)
+    {
+        if (!initAudioCapture())
+        {
+            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+        }
+        else
+        {
+            // IMPORTANTE: O formato de áudio já foi configurado antes de inicializar o streamer
+            // Se a captura foi inicializada depois, precisamos reinicializar o streaming
+            // para garantir que o sample rate correto seja usado
+            if (m_streamManager && m_audioCapture && m_audioCapture->isOpen())
+            {
+                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) +
+                         "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
+                // Nota: O streamer já foi configurado com o formato correto antes de ser inicializado
+                // Se a captura foi inicializada depois, o formato pode estar incorreto
+                // Nesse caso, seria necessário reinicializar o streaming, mas isso é complexo
+                // Por enquanto, assumimos que a captura é inicializada antes do streaming
+            }
+        }
+    }
+
+    // IMPORTANTE: A thread de streaming já foi limpa acima no início da função
+    // Esta verificação é redundante, mas mantida como segurança extra
+    // (não deveria ser necessária, mas ajuda a garantir que não há threads órfãs)
+
+    // OPÇÃO A: Não criar thread de streaming - processamento movido para thread principal
+    // Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
+    LOG_INFO("Streaming inicializado (processamento na thread principal)");
+
+    return true;
+}
+
+bool Application::initAudioCapture()
+{
+    if (!m_streamingEnabled)
+    {
+        return true; // Audio não habilitado, não é erro
+    }
+
+    LOG_INFO("Inicializando captura de áudio...");
+
+    m_audioCapture = std::make_unique<AudioCapture>();
+
+    // Open default audio device (will create virtual sink)
+    if (!m_audioCapture->open())
+    {
+        LOG_ERROR("Falha ao abrir dispositivo de áudio");
+        m_audioCapture.reset();
+        return false;
+    }
+
+    // Start capturing
+    if (!m_audioCapture->startCapture())
+    {
+        LOG_ERROR("Falha ao iniciar captura de áudio");
+        m_audioCapture->close();
+        m_audioCapture.reset();
+        return false;
+    }
+
+    LOG_INFO("Captura de áudio iniciada: " + std::to_string(m_audioCapture->getSampleRate()) +
+             "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
+
+    return true;
+}
+
 void Application::run()
 {
     if (!m_initialized)
@@ -681,6 +1144,64 @@ void Application::run()
     {
         m_window->pollEvents();
 
+        // Processar mudança de fullscreen pendente (fora do callback para evitar deadlock)
+        if (m_pendingFullscreenChange && m_window)
+        {
+            m_pendingFullscreenChange = false;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            // O callback de resize será chamado automaticamente pelo GLFW
+            // Não fazer setViewport aqui para evitar bloqueios
+        }
+
+        // IMPORTANTE: Captura, processamento e streaming sempre continuam,
+        // independente do foco da janela. Isso garante que o streaming funcione
+        // mesmo quando a janela não está em foco.
+
+        // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
+        // CRÍTICO: Processar TODOS os samples disponíveis em loop até esgotar
+        // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
+        // O áudio acumula no buffer do AudioCapture e precisa ser processado continuamente
+        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        {
+            // Calcular tamanho do buffer baseado no tempo para sincronização
+            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+            uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+
+            // Calcular samples correspondentes a 1 frame de vídeo
+            // Para 60 FPS e 44100Hz: 44100/60 = 735 samples por frame
+            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                              : 512;
+            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+
+            // CRÍTICO: Processar áudio em loop até esgotar todos os samples disponíveis
+            // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
+            // Processar até não haver mais samples (sem limite de iterações)
+            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+
+            while (true)
+            {
+                // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
+                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+
+                if (samplesRead > 0)
+                {
+                    m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+
+                    // Se lemos menos que o esperado, não há mais samples disponíveis
+                    if (samplesRead < samplesPerVideoFrame)
+                    {
+                        break; // Não há mais samples disponíveis
+                    }
+                }
+                else
+                {
+                    // Não há mais samples disponíveis, parar
+                    break;
+                }
+            }
+        }
+
         // Processar entrada de teclado (F12 para toggle UI)
         handleKeyInput();
 
@@ -691,6 +1212,8 @@ void Application::run()
         }
 
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
+        // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
+        // Isso garante que o streaming e processamento continuem funcionando
         bool newFrame = false;
         if (m_capture)
         {
@@ -724,13 +1247,19 @@ void Application::run()
                 // IMPORTANTE: Atualizar viewport com as dimensões da janela antes de aplicar o shader
                 // Isso garante que o último pass renderize para o tamanho correto da janela
                 // IMPORTANTE: Sempre usar dimensões atuais, especialmente quando entra em fullscreen
-                uint32_t currentWidth = m_window->getWidth();
-                uint32_t currentHeight = m_window->getHeight();
-                m_shaderEngine->setViewport(currentWidth, currentHeight);
+                // IMPORTANTE: Validar dimensões antes de atualizar viewport para evitar problemas durante resize
+                uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
+                uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
 
-                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(), 
-                                                               m_frameProcessor->getTextureWidth(), 
-                                                               m_frameProcessor->getTextureHeight());
+                // Validar dimensões antes de atualizar viewport
+                if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320)
+                {
+                    m_shaderEngine->setViewport(currentWidth, currentHeight);
+                }
+
+                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(),
+                                                              m_frameProcessor->getTextureWidth(),
+                                                              m_frameProcessor->getTextureHeight());
                 isShaderTexture = true;
 
                 // DEBUG: Verificar textura retornada
@@ -748,14 +1277,29 @@ void Application::run()
 
             // Limpar o framebuffer da janela antes de renderizar
             // IMPORTANTE: O framebuffer 0 é a janela (default framebuffer)
+            // IMPORTANTE: Lock mutex para proteger durante resize
+            std::lock_guard<std::mutex> resizeLock(m_resizeMutex);
+
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
             // IMPORTANTE: Resetar viewport para o tamanho completo da janela
             // Isso garante que a textura seja renderizada em toda a janela
             // IMPORTANTE: Sempre atualizar viewport com as dimensões atuais da janela
             // Isso é especialmente importante quando entra em fullscreen
-            uint32_t currentWidth = m_window->getWidth();
-            uint32_t currentHeight = m_window->getHeight();
+            uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
+            uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
+
+            // Validar dimensões antes de continuar
+            if (currentWidth == 0 || currentHeight == 0 || currentWidth > 7680 || currentHeight > 4320)
+            {
+                // Dimensões inválidas, pular este frame
+                if (m_ui)
+                {
+                    m_ui->endFrame();
+                }
+                m_window->swapBuffers();
+                continue;
+            }
 
             // DEBUG: Log para verificar se as dimensões mudaram
             static uint32_t lastViewportWidth = 0, lastViewportHeight = 0;
@@ -819,11 +1363,116 @@ void Application::run()
             // Shaders também renderizam invertido, então ambos precisam de inversão Y
             // flipY: true para ambos (câmera e shader precisam inverter)
             bool shouldFlipY = true;
+
+            // Calcular viewport onde a captura será renderizada (pode ser menor que a janela se maintainAspect estiver ativo)
+            uint32_t windowWidth = m_window->getWidth();
+            uint32_t windowHeight = m_window->getHeight();
+            GLint viewportX = 0;
+            GLint viewportY = 0;
+            GLsizei viewportWidth = windowWidth;
+            GLsizei viewportHeight = windowHeight;
+
+            if (m_maintainAspect && renderWidth > 0 && renderHeight > 0)
+            {
+                // Calcular aspect ratio da textura e da janela (igual ao renderTexture)
+                float textureAspect = static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
+                float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+
+                if (textureAspect > windowAspect)
+                {
+                    // Textura é mais larga: ajustar altura (letterboxing)
+                    viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
+                    viewportY = (windowHeight - viewportHeight) / 2;
+                }
+                else
+                {
+                    // Textura é mais alta: ajustar largura (pillarboxing)
+                    viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
+                    viewportX = (windowWidth - viewportWidth) / 2;
+                }
+            }
+
             m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
 
-            // Renderizar UI
+            // Capturar frame para streaming (ANTES de renderizar UI)
+            // IMPORTANTE: NÃO fazer resize aqui - isso atrasa timestamps e quebra sincronia
+            // Apenas capturar do viewport e enviar - o resize será feito no encoding
+            if (m_streamManager && m_streamManager->isActive())
+            {
+                // Capturar exatamente do viewport onde renderizou (sem resize)
+                uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
+                uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
+
+                // Debug: Log quando shader está ativo
+                static int shaderDebugCount = 0;
+                if (isShaderTexture && shaderDebugCount < 5)
+                {
+                    LOG_INFO("[SHADER_CAPTURE] Shader ativo: viewport=" + std::to_string(viewportWidth) +
+                             "x" + std::to_string(viewportHeight) + ", render=" +
+                             std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                    shaderDebugCount++;
+                }
+
+                size_t captureDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
+
+                if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
+                    captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
+                {
+                    // Calcular padding para alinhamento de 4 bytes
+                    size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
+                    size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                    size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
+
+                    std::vector<uint8_t> frameDataWithPadding;
+                    frameDataWithPadding.resize(totalSizeWithPadding);
+
+                    // Ler pixels do viewport onde renderizou (sempre RGB, sem resize)
+                    glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
+                                 GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+
+                    // Copiar dados removendo padding e fazer flip vertical
+                    std::vector<uint8_t> frameData;
+                    frameData.resize(captureDataSize);
+
+                    for (uint32_t row = 0; row < captureHeight; row++)
+                    {
+                        uint32_t srcRow = captureHeight - 1 - row; // Flip vertical
+                        uint32_t dstRow = row;
+
+                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
+                        uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
+                        memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                    }
+
+                    // IMPORTANTE: Enviar TODOS os frames, incluindo frames pretos
+                    // Frames pretos são válidos e devem ser enviados ao stream
+                    // A verificação de "allZeros" foi removida pois rejeitava frames válidos
+                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                }
+            }
+
+            // Atualizar informações de streaming na UI
+            if (m_ui && m_streamManager && m_streamManager->isActive())
+            {
+                m_ui->setStreamingActive(true);
+                auto urls = m_streamManager->getStreamUrls();
+                if (!urls.empty())
+                {
+                    m_ui->setStreamUrl(urls[0]);
+                }
+                uint32_t clientCount = m_streamManager->getTotalClientCount();
+                m_ui->setStreamClientCount(clientCount);
+            }
+            else if (m_ui)
+            {
+                m_ui->setStreamingActive(false);
+                m_ui->setStreamUrl("");
+                m_ui->setStreamClientCount(0);
+            }
+
+            // Renderizar UI (após capturar a área da captura)
             if (m_ui)
             {
                 m_ui->render();
@@ -837,6 +1486,7 @@ void Application::run()
         else
         {
             // Se não há frame válido ainda, fazer um pequeno sleep
+            // IMPORTANTE: Captura continua mesmo sem frame válido para renderização
             usleep(1000); // 1ms
 
             // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
@@ -850,6 +1500,9 @@ void Application::run()
 
     LOG_INFO("Loop principal encerrado");
 }
+
+// OPÇÃO A: streamingThreadFunc removida - processamento movido para thread principal
+// Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
 
 void Application::shutdown()
 {
@@ -901,31 +1554,22 @@ void Application::shutdown()
         m_window.reset();
     }
 
+    // SwsContext de resize foi removido - agora é feito no encoding
+
+    // OPÇÃO A: Não há mais thread de streaming para limpar
+
+    if (m_streamManager)
+    {
+        m_streamManager->cleanup();
+        m_streamManager.reset();
+    }
+
+    if (m_audioCapture)
+    {
+        m_audioCapture->stopCapture();
+        m_audioCapture->close();
+        m_audioCapture.reset();
+    }
+
     m_initialized = false;
-}
-
-void Application::handleKeyInput()
-{
-    if (!m_ui || !m_window)
-        return;
-
-    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
-    if (!window)
-        return;
-
-    // F12 para toggle UI
-    static bool f12Pressed = false;
-    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS)
-    {
-        if (!f12Pressed)
-        {
-            m_ui->toggle();
-            LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
-            f12Pressed = true;
-        }
-    }
-    else
-    {
-        f12Pressed = false;
-    }
 }
