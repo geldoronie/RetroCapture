@@ -598,16 +598,45 @@ bool Application::initUI()
         m_ui->setCurrentDevice(m_devicePath);
     }
 
-    // Callbacks para streaming
-    m_ui->setStreamingPort(m_streamingPort);
-    m_ui->setStreamingWidth(m_streamingWidth);
-    m_ui->setStreamingHeight(m_streamingHeight);
-    m_ui->setStreamingFps(m_streamingFps);
-    m_ui->setStreamingBitrate(m_streamingBitrate);
-    m_ui->setStreamingAudioBitrate(m_streamingAudioBitrate);
-    m_ui->setStreamingVideoCodec(m_streamingVideoCodec);
-    m_ui->setStreamingAudioCodec(m_streamingAudioCodec);
-    m_ui->setStreamingH264Preset(m_streamingH264Preset);
+    // IMPORTANTE: Após init(), o UIManager já carregou as configurações salvas
+    // Sincronizar valores do Application com os valores carregados da UI
+    // Isso garante que as configurações salvas sejam aplicadas
+    m_streamingPort = m_ui->getStreamingPort();
+    m_streamingWidth = m_ui->getStreamingWidth();
+    m_streamingHeight = m_ui->getStreamingHeight();
+    m_streamingFps = m_ui->getStreamingFps();
+    m_streamingBitrate = m_ui->getStreamingBitrate();
+    m_streamingAudioBitrate = m_ui->getStreamingAudioBitrate();
+    m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
+    m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
+    m_streamingH264Preset = m_ui->getStreamingH264Preset();
+    
+    // Também sincronizar configurações de imagem
+    m_brightness = m_ui->getBrightness();
+    m_contrast = m_ui->getContrast();
+    m_maintainAspect = m_ui->getMaintainAspect();
+    m_fullscreen = m_ui->getFullscreen();
+    m_monitorIndex = m_ui->getMonitorIndex();
+    
+    // Aplicar shader carregado se houver
+    std::string loadedShader = m_ui->getCurrentShader();
+    if (!loadedShader.empty() && m_shaderEngine)
+    {
+        std::filesystem::path fullPath = std::filesystem::current_path() / "shaders" / "shaders_glsl" / loadedShader;
+        if (m_shaderEngine->loadPreset(fullPath.string()))
+        {
+            LOG_INFO("Shader carregado da configuração: " + loadedShader);
+        }
+    }
+    
+    // Aplicar configurações de imagem
+    // FrameProcessor aplica brightness/contrast durante o processamento, não precisa setar aqui
+    
+    // Aplicar fullscreen se necessário
+    if (m_fullscreen && m_window)
+    {
+        m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+    }
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {

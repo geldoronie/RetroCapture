@@ -63,6 +63,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# nlohmann/json (header-only JSON library)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
 # Criar target para ImGui
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -148,6 +156,13 @@ target_include_directories(retrocapture PRIVATE
     ${SWRESAMPLE_INCLUDE_DIRS}
     ${PULSE_INCLUDE_DIRS}
 )
+
+# Adicionar include do nlohmann/json (header-only, não precisa linkar)
+# O nlohmann/json é header-only, então precisamos apenas adicionar o diretório de include
+# O FetchContent disponibiliza json_SOURCE_DIR
+if(DEFINED json_SOURCE_DIR)
+    target_include_directories(retrocapture PRIVATE ${json_SOURCE_DIR}/include)
+endif()
 
 # Configuração de build types
 if(NOT CMAKE_BUILD_TYPE)

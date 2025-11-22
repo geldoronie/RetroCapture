@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <nlohmann/json.hpp>
 
 UIManager::UIManager()
 {
@@ -70,6 +71,9 @@ bool UIManager::init(GLFWwindow *window)
         m_shaderBasePath = envShaderPath;
     }
     scanShaders(m_shaderBasePath);
+
+    // Carregar configurações salvas
+    loadConfig();
 
     m_initialized = true;
     LOG_INFO("UIManager inicializado");
@@ -265,6 +269,7 @@ void UIManager::renderShaderPanel()
             {
                 m_onShaderChanged("");
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
 
         for (size_t i = 0; i < m_scannedShaders.size(); ++i)
@@ -277,6 +282,7 @@ void UIManager::renderShaderPanel()
                 {
                     m_onShaderChanged(m_scannedShaders[i]);
                 }
+                saveConfig(); // Salvar configuração quando mudar
             }
             if (isSelected)
             {
@@ -422,6 +428,7 @@ void UIManager::renderImageControls()
         {
             m_onBrightnessChanged(brightness);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##brightness"))
@@ -442,6 +449,7 @@ void UIManager::renderImageControls()
         {
             m_onContrastChanged(contrast);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##contrast"))
@@ -464,6 +472,7 @@ void UIManager::renderImageControls()
         {
             m_onMaintainAspectChanged(maintainAspect);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     // Fullscreen
@@ -475,6 +484,7 @@ void UIManager::renderImageControls()
         {
             m_onFullscreenChanged(fullscreen);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     // Monitor Index (usado quando fullscreen está ativo)
@@ -498,6 +508,7 @@ void UIManager::renderImageControls()
         {
             m_onMonitorIndexChanged(monitorIndex);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::PopItemWidth();
     ImGui::SameLine();
@@ -552,6 +563,7 @@ void UIManager::renderV4L2Controls()
                 {
                     m_onDeviceChanged(m_v4l2Devices[i]);
                 }
+                saveConfig(); // Salvar configuração quando mudar
             }
             if (isSelected)
             {
@@ -987,6 +999,7 @@ void UIManager::renderStreamingPanel()
             if (m_onStreamingPortChanged) {
                 m_onStreamingPortChanged(m_streamingPort);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
     
@@ -1023,6 +1036,7 @@ void UIManager::renderStreamingPanel()
         if (m_onStreamingHeightChanged) {
             m_onStreamingHeightChanged(m_streamingHeight);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     
     // FPS - Dropdown
@@ -1042,6 +1056,7 @@ void UIManager::renderStreamingPanel()
         if (m_onStreamingFpsChanged) {
             m_onStreamingFpsChanged(m_streamingFps);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     
     ImGui::Separator();
@@ -1063,6 +1078,7 @@ void UIManager::renderStreamingPanel()
         if (m_onStreamingVideoCodecChanged) {
             m_onStreamingVideoCodecChanged(m_streamingVideoCodec);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     
     // Seleção de codec de áudio
@@ -1080,6 +1096,7 @@ void UIManager::renderStreamingPanel()
         if (m_onStreamingAudioCodecChanged) {
             m_onStreamingAudioCodecChanged(m_streamingAudioCodec);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     
     // Qualidade H.264 (apenas se codec for h264)
@@ -1108,6 +1125,7 @@ void UIManager::renderStreamingPanel()
             if (m_onStreamingH264PresetChanged) {
                 m_onStreamingH264PresetChanged(m_streamingH264Preset);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Preset do encoder H.264:\n"
@@ -1129,6 +1147,7 @@ void UIManager::renderStreamingPanel()
             if (m_onStreamingBitrateChanged) {
                 m_onStreamingBitrateChanged(m_streamingBitrate);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
     
@@ -1140,6 +1159,7 @@ void UIManager::renderStreamingPanel()
             if (m_onStreamingAudioBitrateChanged) {
                 m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
     
@@ -1175,4 +1195,158 @@ void UIManager::scanShaders(const std::string &basePath)
 {
     m_scannedShaders = ShaderScanner::scan(basePath);
     LOG_INFO("Encontrados " + std::to_string(m_scannedShaders.size()) + " shaders em " + basePath);
+}
+
+std::string UIManager::getConfigPath() const
+{
+    // Usar diretório home do usuário para salvar configurações
+    const char *homeDir = std::getenv("HOME");
+    if (homeDir)
+    {
+        std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+        // Criar diretório se não existir
+        if (!std::filesystem::exists(configDir))
+        {
+            std::filesystem::create_directories(configDir);
+        }
+        return (configDir / "config.json").string();
+    }
+    // Fallback: salvar no diretório atual
+    return "retrocapture_config.json";
+}
+
+void UIManager::loadConfig()
+{
+    std::string configPath = getConfigPath();
+    
+    if (!std::filesystem::exists(configPath))
+    {
+        LOG_INFO("Arquivo de configuração não encontrado: " + configPath + " (usando padrões)");
+        return;
+    }
+
+    try
+    {
+        std::ifstream file(configPath);
+        if (!file.is_open())
+        {
+            LOG_WARN("Não foi possível abrir arquivo de configuração: " + configPath);
+            return;
+        }
+
+        nlohmann::json config;
+        file >> config;
+        file.close();
+
+        // Carregar configurações de streaming
+        if (config.contains("streaming"))
+        {
+            auto &streaming = config["streaming"];
+            if (streaming.contains("port")) m_streamingPort = streaming["port"];
+            if (streaming.contains("width")) m_streamingWidth = streaming["width"];
+            if (streaming.contains("height")) m_streamingHeight = streaming["height"];
+            if (streaming.contains("fps")) m_streamingFps = streaming["fps"];
+            if (streaming.contains("bitrate")) m_streamingBitrate = streaming["bitrate"];
+            if (streaming.contains("audioBitrate")) m_streamingAudioBitrate = streaming["audioBitrate"];
+            if (streaming.contains("videoCodec")) m_streamingVideoCodec = streaming["videoCodec"].get<std::string>();
+            if (streaming.contains("audioCodec")) m_streamingAudioCodec = streaming["audioCodec"].get<std::string>();
+            if (streaming.contains("h264Preset")) m_streamingH264Preset = streaming["h264Preset"].get<std::string>();
+        }
+
+        // Carregar configurações de imagem
+        if (config.contains("image"))
+        {
+            auto &image = config["image"];
+            if (image.contains("brightness")) m_brightness = image["brightness"];
+            if (image.contains("contrast")) m_contrast = image["contrast"];
+            if (image.contains("maintainAspect")) m_maintainAspect = image["maintainAspect"];
+            if (image.contains("fullscreen")) m_fullscreen = image["fullscreen"];
+            if (image.contains("monitorIndex")) m_monitorIndex = image["monitorIndex"];
+        }
+
+        // Carregar shader atual
+        if (config.contains("shader"))
+        {
+            auto &shader = config["shader"];
+            if (shader.contains("current") && !shader["current"].is_null())
+            {
+                m_currentShader = shader["current"].get<std::string>();
+            }
+        }
+
+        // Carregar dispositivo V4L2
+        if (config.contains("v4l2"))
+        {
+            auto &v4l2 = config["v4l2"];
+            if (v4l2.contains("device") && !v4l2["device"].is_null())
+            {
+                m_currentDevice = v4l2["device"].get<std::string>();
+            }
+        }
+
+        LOG_INFO("Configurações carregadas de: " + configPath);
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Erro ao carregar configurações: " + std::string(e.what()));
+    }
+}
+
+void UIManager::saveConfig()
+{
+    std::string configPath = getConfigPath();
+
+    try
+    {
+        nlohmann::json config;
+
+        // Salvar configurações de streaming
+        config["streaming"] = {
+            {"port", m_streamingPort},
+            {"width", m_streamingWidth},
+            {"height", m_streamingHeight},
+            {"fps", m_streamingFps},
+            {"bitrate", m_streamingBitrate},
+            {"audioBitrate", m_streamingAudioBitrate},
+            {"videoCodec", m_streamingVideoCodec},
+            {"audioCodec", m_streamingAudioCodec},
+            {"h264Preset", m_streamingH264Preset}
+        };
+
+        // Salvar configurações de imagem
+        config["image"] = {
+            {"brightness", m_brightness},
+            {"contrast", m_contrast},
+            {"maintainAspect", m_maintainAspect},
+            {"fullscreen", m_fullscreen},
+            {"monitorIndex", m_monitorIndex}
+        };
+
+        // Salvar shader atual
+        config["shader"] = {
+            {"current", m_currentShader.empty() ? nullptr : m_currentShader}
+        };
+
+        // Salvar dispositivo V4L2
+        config["v4l2"] = {
+            {"device", m_currentDevice.empty() ? nullptr : m_currentDevice}
+        };
+
+        // Escrever arquivo
+        std::ofstream file(configPath);
+        if (!file.is_open())
+        {
+            LOG_WARN("Não foi possível criar arquivo de configuração: " + configPath);
+            return;
+        }
+
+        file << config.dump(4); // Indentação de 4 espaços para legibilidade
+        file.close();
+
+        LOG_INFO("Configurações salvas em: " + configPath);
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Erro ao salvar configurações: " + std::string(e.what()));
+    }
 }

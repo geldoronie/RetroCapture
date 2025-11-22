@@ -80,6 +80,25 @@ public:
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
     void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
+    
+    // Streaming info getters (public)
+    uint16_t getStreamingPort() const { return m_streamingPort; }
+    uint32_t getStreamingWidth() const { return m_streamingWidth; }
+    uint32_t getStreamingHeight() const { return m_streamingHeight; }
+    uint32_t getStreamingFps() const { return m_streamingFps; }
+    uint32_t getStreamingBitrate() const { return m_streamingBitrate; }
+    uint32_t getStreamingAudioBitrate() const { return m_streamingAudioBitrate; }
+    std::string getStreamingVideoCodec() const { return m_streamingVideoCodec; }
+    std::string getStreamingAudioCodec() const { return m_streamingAudioCodec; }
+    std::string getStreamingH264Preset() const { return m_streamingH264Preset; }
+    
+    // Image settings getters
+    float getBrightness() const { return m_brightness; }
+    float getContrast() const { return m_contrast; }
+    bool getMaintainAspect() const { return m_maintainAspect; }
+    bool getFullscreen() const { return m_fullscreen; }
+    int getMonitorIndex() const { return m_monitorIndex; }
+    std::string getCurrentShader() const { return m_currentShader; }
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -160,6 +179,11 @@ private:
     // Scanning methods
     void scanShaders(const std::string &basePath);
     void scanV4L2Devices();
+    
+    // Configuration persistence
+    void loadConfig();
+    void saveConfig();
+    std::string getConfigPath() const;
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";
