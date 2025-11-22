@@ -142,6 +142,11 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
 
 bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
 {
+    if (m_stopRequest)
+    {
+        return false;
+    }
+
     if (!samples || !m_active || sampleCount == 0)
     {
         return false;
@@ -182,6 +187,25 @@ bool HTTPTSStreamer::start()
     if (m_active)
     {
         return true; // Já está ativo
+    }
+
+    // Garantir que socket anterior foi fechado completamente
+    // Isso previne "Address already in use" ao reiniciar
+    if (m_serverSocket >= 0)
+    {
+        shutdown(m_serverSocket, SHUT_RDWR);
+        close(m_serverSocket);
+        m_serverSocket = -1;
+        // Aguardar um pouco para o SO liberar a porta
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // Limpar recursos FFmpeg se existirem (pode ter sido parado anteriormente)
+    // Fazer isso de forma segura, verificando se os recursos existem
+    if (m_videoCodecContext || m_audioCodecContext || m_muxerContext)
+    {
+        flushCodecs();
+        cleanupFFmpeg();
     }
 
     // Inicializar FFmpeg primeiro
@@ -234,9 +258,12 @@ bool HTTPTSStreamer::start()
     // Iniciar threads
     m_running = true;
     m_active = true;
+    m_stopRequest = false;
 
     m_serverThread = std::thread(&HTTPTSStreamer::serverThread, this);
+    m_serverThread.detach();
     m_encodingThread = std::thread(&HTTPTSStreamer::encodingThread, this);
+    m_encodingThread.detach();
 
     LOG_INFO("HTTP TS Streamer started on port " + std::to_string(m_port));
     return true;
@@ -251,10 +278,14 @@ void HTTPTSStreamer::stop()
 
     m_running = false;
     m_active = false;
+    m_stopRequest = true;
 
     // Fechar socket do servidor para acordar accept()
+    // IMPORTANTE: Fechar socket ANTES de setar flags para evitar race condition
     if (m_serverSocket >= 0)
     {
+        // Fechar socket de forma que libere a porta imediatamente
+        shutdown(m_serverSocket, SHUT_RDWR); // Desabilitar leitura e escrita
         close(m_serverSocket);
         m_serverSocket = -1;
     }
@@ -270,18 +301,21 @@ void HTTPTSStreamer::stop()
         m_clientCount = 0;
     }
 
-    // Aguardar threads terminarem
-    if (m_serverThread.joinable())
+    // Aguardar um tempo para threads processarem m_stopRequest e terminarem
+    // Como threads são detached, precisamos aguardar um tempo razoável
+    // 500ms deve ser suficiente para threads saírem dos loops
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Invalidar m_muxerContext dentro do mutex para garantir que muxPacket não use recursos inválidos
     {
-        m_serverThread.join();
-    }
-    if (m_encodingThread.joinable())
-    {
-        m_encodingThread.join();
+        std::lock_guard<std::mutex> lock(m_muxMutex);
+        m_muxerContext = nullptr; // Invalidar antes de liberar recursos
     }
 
-    // Limpar FFmpeg
+    // Fazer flush dos codecs para processar pacotes pendentes
     flushCodecs();
+
+    // Limpar recursos FFmpeg (agora seguro, pois m_muxerContext está invalidado)
     cleanupFFmpeg();
 
     LOG_INFO("HTTP TS Streamer stopped");
@@ -386,7 +420,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     // Manter conexão aberta - dados serão enviados via writeToClients
     // Monitorar conexão para detectar desconexão
-    while (m_running)
+    while (!m_stopRequest && m_running)
     {
         char dummy;
         ssize_t result = recv(clientFd, &dummy, 1, MSG_PEEK);
@@ -413,9 +447,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
 int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 {
-    if (!buf || buf_size <= 0)
+    if (!buf || buf_size <= 0 || m_stopRequest)
     {
-        return buf_size; // Dados inválidos, mas retornar sucesso
+        return buf_size; // Retornar sucesso para não bloquear FFmpeg
     }
 
     // Armazenar header do formato se ainda não foi armazenado
@@ -436,9 +470,10 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
     std::lock_guard<std::mutex> lock(m_outputMutex);
 
-    if (m_clientSockets.empty())
+    // Verificar novamente após adquirir o lock
+    if (m_stopRequest || m_clientSockets.empty())
     {
-        // Sem clientes conectados, mas retornar sucesso para não bloquear o FFmpeg
+        // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
         return buf_size;
     }
 
@@ -899,6 +934,14 @@ bool HTTPTSStreamer::initializeMuxers()
 
 void HTTPTSStreamer::cleanupFFmpeg()
 {
+    // Tornar esta função idempotente - pode ser chamada múltiplas vezes sem problemas
+    // Verificar se já está limpo para evitar double free
+    if (!m_videoCodecContext && !m_audioCodecContext && !m_muxerContext &&
+        !m_swsContext && !m_swrContext && !m_videoFrame && !m_audioFrame)
+    {
+        return; // Já está limpo
+    }
+
     AVCodecContext *videoCtx = static_cast<AVCodecContext *>(m_videoCodecContext);
     AVCodecContext *audioCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
     AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
@@ -967,19 +1010,26 @@ void HTTPTSStreamer::cleanupFFmpeg()
     if (videoCtx)
     {
         AVCodecContext *ctx = videoCtx;
+        m_videoCodecContext = nullptr; // Marcar como nullptr ANTES de liberar
         avcodec_free_context(&ctx);
-        m_videoCodecContext = nullptr;
     }
     if (audioCtx)
     {
         AVCodecContext *ctx = audioCtx;
+        m_audioCodecContext = nullptr; // Marcar como nullptr ANTES de liberar
         avcodec_free_context(&ctx);
-        m_audioCodecContext = nullptr;
     }
     if (formatCtx)
     {
-        // Escrever trailer antes de fechar
-        av_write_trailer(formatCtx);
+        // Marcar como nullptr ANTES de liberar para evitar uso após liberação
+        m_muxerContext = nullptr;
+
+        // Escrever trailer antes de fechar (apenas se o formato ainda for válido)
+        // formatCtx pode ter sido parcialmente destruído, então verificar antes
+        if (formatCtx->oformat && formatCtx->pb)
+        {
+            av_write_trailer(formatCtx);
+        }
 
         // Liberar AVIO context
         if (formatCtx->pb)
@@ -992,7 +1042,6 @@ void HTTPTSStreamer::cleanupFFmpeg()
             av_free(const_cast<char *>(formatCtx->url));
         }
         avformat_free_context(formatCtx);
-        m_muxerContext = nullptr;
     }
 }
 
@@ -1720,15 +1769,24 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
 
 bool HTTPTSStreamer::muxPacket(void *packet)
 {
-    if (!packet)
+    if (!packet || m_stopRequest)
     {
         return false;
     }
-    AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
-    if (!formatCtx)
+
+    // Verificar se m_muxerContext ainda é válido (pode ter sido invalidado durante stop)
+    void *muxerCtx = m_muxerContext;
+    if (!muxerCtx)
     {
         return false;
     }
+
+    AVFormatContext *formatCtx = static_cast<AVFormatContext *>(muxerCtx);
+    if (!formatCtx || !formatCtx->pb)
+    {
+        return false;
+    }
+
     AVPacket *pkt = static_cast<AVPacket *>(packet);
 
     // NOTA: O pacote já foi clonado antes de chamar esta função (em encodeVideoFrame/encodeAudioFrame)
@@ -1762,6 +1820,13 @@ bool HTTPTSStreamer::muxPacket(void *packet)
     // O writeCallback também será chamado dentro deste lock, garantindo thread-safety
     {
         std::lock_guard<std::mutex> lock(m_muxMutex);
+
+        // Verificar novamente após adquirir o lock (pode ter mudado durante a espera)
+        if (m_stopRequest || !m_muxerContext || !formatCtx || !formatCtx->pb)
+        {
+            return false;
+        }
+
         int ret = av_interleaved_write_frame(formatCtx, pktCopy);
         if (ret < 0)
         {
@@ -1778,38 +1843,6 @@ bool HTTPTSStreamer::muxPacket(void *packet)
     // Não liberar o pacote aqui - ele será liberado pela função chamadora
     // (encodeVideoFrame ou encodeAudioFrame já fazem isso)
     return true;
-}
-
-void HTTPTSStreamer::serverThread()
-{
-    LOG_INFO("Server thread started, waiting for connections on port " + std::to_string(m_port));
-
-    while (m_running)
-    {
-        struct sockaddr_in clientAddr;
-        socklen_t clientLen = sizeof(clientAddr);
-
-        // Aceitar conexão de cliente
-        int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
-        if (clientFd < 0)
-        {
-            if (m_running)
-            {
-                // Erro ao aceitar (pode ser porque fechamos o socket)
-                if (errno != EBADF && errno != EINVAL)
-                {
-                    LOG_ERROR("Failed to accept client connection: " + std::string(strerror(errno)));
-                }
-            }
-            break; // Sair do loop se não estiver rodando ou se o socket foi fechado
-        }
-
-        // Processar cliente em thread separada
-        std::thread clientThread(&HTTPTSStreamer::handleClient, this, clientFd);
-        clientThread.detach(); // Detach para não precisar fazer join
-    }
-
-    LOG_INFO("Server thread stopped");
 }
 
 int64_t HTTPTSStreamer::getTimestampUs() const
@@ -1965,6 +1998,46 @@ HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
     return zone;
 }
 
+void HTTPTSStreamer::serverThread()
+{
+    LOG_INFO("Server thread started, waiting for connections on port " + std::to_string(m_port));
+
+    while (m_running)
+    {
+
+        if (m_stopRequest)
+        {
+            break;
+        }
+
+        struct sockaddr_in clientAddr;
+        socklen_t clientLen = sizeof(clientAddr);
+
+        // Aceitar conexão de cliente
+        int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+        if (clientFd < 0)
+        {
+            if (m_running)
+            {
+                // Erro ao aceitar (pode ser porque fechamos o socket)
+                if (errno != EBADF && errno != EINVAL)
+                {
+                    LOG_ERROR("Failed to accept client connection: " + std::string(strerror(errno)));
+                }
+            }
+            break; // Sair do loop se não estiver rodando ou se o socket foi fechado
+        }
+
+        // Processar cliente em thread separada
+        std::thread clientThread(&HTTPTSStreamer::handleClient, this, clientFd);
+        clientThread.detach(); // Detach para não precisar fazer join
+    }
+
+    LOG_INFO("Server thread stopped");
+
+    return;
+}
+
 void HTTPTSStreamer::encodingThread()
 {
     // Aguardar um pouco antes de começar para evitar processar frames muito antigos
@@ -1972,6 +2045,11 @@ void HTTPTSStreamer::encodingThread()
 
     while (m_running)
     {
+        if (m_stopRequest)
+        {
+            break;
+        }
+
         bool processedAny = false;
 
         // Processar frames de vídeo disponíveis (sem esperar por sincronização)
@@ -2089,6 +2167,12 @@ void HTTPTSStreamer::encodingThread()
 
         for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
         {
+            // Verificar se parada foi solicitada
+            if (m_stopRequest)
+            {
+                break;
+            }
+
             // Limitar frames por batch para evitar que o codec fique cheio
             if (framesProcessed >= MAX_FRAMES_PER_BATCH)
             {
@@ -2158,6 +2242,12 @@ void HTTPTSStreamer::encodingThread()
             // Processar chunks não processados
             for (auto &audio : m_timestampedAudioBuffer)
             {
+                // Verificar se parada foi solicitada
+                if (m_stopRequest)
+                {
+                    break;
+                }
+
                 if (!audio.processed && audio.samples && audio.sampleCount > 0)
                 {
                     // Tentar encodar o chunk
@@ -2210,4 +2300,8 @@ void HTTPTSStreamer::encodingThread()
         }
         // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }
+
+    LOG_INFO("Encoding thread stopped");
+
+    return;
 }

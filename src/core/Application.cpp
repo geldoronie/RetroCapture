@@ -610,14 +610,14 @@ bool Application::initUI()
     m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
     m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
     m_streamingH264Preset = m_ui->getStreamingH264Preset();
-    
+
     // Também sincronizar configurações de imagem
     m_brightness = m_ui->getBrightness();
     m_contrast = m_ui->getContrast();
     m_maintainAspect = m_ui->getMaintainAspect();
     m_fullscreen = m_ui->getFullscreen();
     m_monitorIndex = m_ui->getMonitorIndex();
-    
+
     // Aplicar shader carregado se houver
     std::string loadedShader = m_ui->getCurrentShader();
     if (!loadedShader.empty() && m_shaderEngine)
@@ -628,10 +628,10 @@ bool Application::initUI()
             LOG_INFO("Shader carregado da configuração: " + loadedShader);
         }
     }
-    
+
     // Aplicar configurações de imagem
     // FrameProcessor aplica brightness/contrast durante o processamento, não precisa setar aqui
-    
+
     // Aplicar fullscreen se necessário
     if (m_fullscreen && m_window)
     {
@@ -661,20 +661,12 @@ bool Application::initUI()
             // OPÇÃO A: Parar streaming (sem thread intermediária)
             // Fazer stop() do streamManager em thread separada para não bloquear a UI
             if (m_streamManager) {
-                auto streamManagerPtr = m_streamManager.get();
-                
-                // Fazer stop e cleanup em thread separada
-                std::thread stopThread([streamManagerPtr]() {
-                    if (streamManagerPtr) {
-                        streamManagerPtr->stop();
-                        streamManagerPtr->cleanup();
-                    }
-                });
-                stopThread.detach();
-                
+                // Ordem correta: stop() primeiro, depois cleanup()
+                m_streamManager->stop();
+                m_streamManager->cleanup();
                 m_streamManager.reset();
             }
-            
+
             // Não fechar o AudioCapture aqui - pode ser usado novamente
         }
         // Atualizar UI

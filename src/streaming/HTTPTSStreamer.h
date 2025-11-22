@@ -154,6 +154,7 @@ private:
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_stopRequest{false}; // Flag para solicitar parada das threads
     std::atomic<bool> m_cleanedUp{false};
 
     // Configuração de buffer temporal
