@@ -33,6 +33,17 @@ void printUsage(const char *programName)
     std::cout << "  --v4l2-sharpness <valor>     Nitidez V4L2 (0 a 6, padrão: não configurar)\n";
     std::cout << "  --v4l2-gamma <valor>         Gama V4L2 (100 a 300, padrão: não configurar)\n";
     std::cout << "  --v4l2-whitebalance <valor>  Balanço de branco V4L2 (2800 a 6500, padrão: não configurar)\n";
+    std::cout << "\nOpções de Streaming:\n";
+    std::cout << "  --stream-enable              Habilitar streaming HTTP MPEG-TS (áudio + vídeo)\n";
+    std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
+    std::cout << "  --stream-width <largura>    Largura do stream (padrão: 640, 0 = captura)\n";
+    std::cout << "  --stream-height <altura>    Altura do stream (padrão: 480, 0 = captura)\n";
+    std::cout << "  --stream-fps <fps>          FPS do stream (padrão: 60, 0 = captura)\n";
+    std::cout << "  --stream-bitrate <kbps>      Bitrate de vídeo em kbps (padrão: 8000)\n";
+    std::cout << "  --stream-audio-bitrate <kbps> Bitrate de áudio em kbps (padrão: 256)\n";
+    std::cout << "  --stream-video-codec <codec> Codec de vídeo: h264, h265, vp8, vp9 (padrão: h264)\n";
+    std::cout << "  --stream-audio-codec <codec> Codec de áudio: aac, mp3, opus (padrão: aac)\n";
+    std::cout << "  --stream-audio-buffer-size <frames> Tamanho do buffer de áudio em frames (padrão: 50)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
@@ -76,6 +87,19 @@ int main(int argc, char *argv[])
     int v4l2Sharpness = -1;
     int v4l2Gamma = -1;
     int v4l2WhiteBalance = -1;
+
+    // Streaming options
+    bool streamingEnabled = false;
+    int streamingPort = 8080;
+    int streamWidth = 640;  // Padrão: 640px (0 = usar resolução de captura)
+    int streamHeight = 480; // Padrão: 480px (0 = usar resolução de captura)
+    int streamFps = 60;     // Padrão: 60fps (0 = usar FPS da captura)
+    int streamBitrate = 8000; // Padrão: 8000 kbps (0 = calcular automaticamente)
+    int streamAudioBitrate = 256; // Padrão: 256 kbps
+    std::string streamVideoCodec = "h264"; // Codec de vídeo
+    std::string streamAudioCodec = "aac";  // Codec de áudio
+    int streamAudioBufferSize = 50; // Tamanho do buffer de áudio em frames
+    int streamQuality = 85; // Qualidade JPEG (1-100) - não usado mais
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -260,6 +284,90 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
+        else if (arg == "--stream-enable")
+        {
+            streamingEnabled = true;
+        }
+        else if (arg == "--stream-port" && i + 1 < argc)
+        {
+            streamingPort = std::stoi(argv[++i]);
+            if (streamingPort < 1024 || streamingPort > 65535)
+            {
+                LOG_ERROR("Porta de streaming inválida. Use um valor entre 1024 e 65535");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-width" && i + 1 < argc)
+        {
+            streamWidth = std::stoi(argv[++i]);
+            if (streamWidth < 1 || streamWidth > 7680)
+            {
+                LOG_ERROR("Largura do stream inválida. Use um valor entre 1 e 7680");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-height" && i + 1 < argc)
+        {
+            streamHeight = std::stoi(argv[++i]);
+            if (streamHeight < 1 || streamHeight > 4320)
+            {
+                LOG_ERROR("Altura do stream inválida. Use um valor entre 1 e 4320");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-fps" && i + 1 < argc)
+        {
+            streamFps = std::stoi(argv[++i]);
+            if (streamFps < 1 || streamFps > 120)
+            {
+                LOG_ERROR("FPS do stream inválido. Use um valor entre 1 e 120");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-bitrate" && i + 1 < argc)
+        {
+            streamBitrate = std::stoi(argv[++i]);
+            if (streamBitrate < 100 || streamBitrate > 50000)
+            {
+                LOG_ERROR("Bitrate do stream inválido. Use um valor entre 100 e 50000 kbps");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-audio-bitrate" && i + 1 < argc)
+        {
+            streamAudioBitrate = std::stoi(argv[++i]);
+            if (streamAudioBitrate < 32 || streamAudioBitrate > 320)
+            {
+                LOG_ERROR("Bitrate de áudio inválido. Use um valor entre 32 e 320 kbps");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-video-codec" && i + 1 < argc)
+        {
+            streamVideoCodec = argv[++i];
+        }
+        else if (arg == "--stream-audio-codec" && i + 1 < argc)
+        {
+            streamAudioCodec = argv[++i];
+        }
+        else if (arg == "--stream-audio-buffer-size" && i + 1 < argc)
+        {
+            streamAudioBufferSize = std::stoi(argv[++i]);
+            if (streamAudioBufferSize < 1 || streamAudioBufferSize > 200)
+            {
+                LOG_ERROR("Tamanho do buffer de áudio inválido. Use um valor entre 1 e 200 frames");
+                return 1;
+            }
+        }
+        else if (arg == "--stream-quality" && i + 1 < argc)
+        {
+            streamQuality = std::stoi(argv[++i]);
+            if (streamQuality < 1 || streamQuality > 100)
+            {
+                LOG_ERROR("Qualidade do stream inválida. Use um valor entre 1 e 100");
+                return 1;
+            }
+        }
         else
         {
             LOG_WARN("Argumento desconhecido: " + arg);
@@ -333,6 +441,20 @@ int main(int argc, char *argv[])
         app.setV4L2Gamma(v4l2Gamma);
     if (v4l2WhiteBalance >= 0)
         app.setV4L2WhiteBalance(v4l2WhiteBalance);
+
+    // Configure streaming
+    app.setStreamingEnabled(streamingEnabled);
+    app.setStreamingPort(streamingPort);
+    // Sempre definir width/height (0 significa usar resolução de captura)
+    app.setStreamingWidth(streamWidth);
+    app.setStreamingHeight(streamHeight);
+    // Sempre definir fps (0 significa usar FPS da captura)
+    app.setStreamingFps(streamFps);
+    // Sempre definir bitrate (0 significa calcular automaticamente)
+    app.setStreamingBitrate(streamBitrate);
+    app.setStreamingAudioBitrate(streamAudioBitrate);
+    app.setStreamingVideoCodec(streamVideoCodec);
+    app.setStreamingAudioCodec(streamAudioCodec);
 
     if (!app.init())
     {
