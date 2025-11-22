@@ -605,6 +605,36 @@ bool HTTPTSStreamer::initializeVideoCodec()
             return false;
         }
     }
+    else if (m_videoCodecName == "vp8" || m_videoCodecName == "libvpx-vp8")
+    {
+        // Para VP8, tentar libvpx-vp8 primeiro
+        codec = avcodec_find_encoder_by_name("libvpx-vp8");
+        if (!codec)
+        {
+            // Fallback: tentar encontrar por ID
+            codec = avcodec_find_encoder(AV_CODEC_ID_VP8);
+        }
+        if (!codec)
+        {
+            LOG_ERROR("VP8 codec not found. Make sure libvpx is installed.");
+            return false;
+        }
+    }
+    else if (m_videoCodecName == "vp9" || m_videoCodecName == "libvpx-vp9")
+    {
+        // Para VP9, tentar libvpx-vp9 primeiro
+        codec = avcodec_find_encoder_by_name("libvpx-vp9");
+        if (!codec)
+        {
+            // Fallback: tentar encontrar por ID
+            codec = avcodec_find_encoder(AV_CODEC_ID_VP9);
+        }
+        if (!codec)
+        {
+            LOG_ERROR("VP9 codec not found. Make sure libvpx is installed.");
+            return false;
+        }
+    }
     else
     {
         // Para outros codecs, tentar por nome
@@ -633,6 +663,13 @@ bool HTTPTSStreamer::initializeVideoCodec()
     codecCtx->bit_rate = m_videoBitrate;
     codecCtx->thread_count = 0;                                // Auto-detect (melhor que fixo)
     codecCtx->thread_type = FF_THREAD_SLICE | FF_THREAD_FRAME; // Usar threading de slice e frame para paralelismo
+
+    // Para codecs que precisam de global header (H.264, H.265, VP8, VP9)
+    if (codec->id == AV_CODEC_ID_H264 || codec->id == AV_CODEC_ID_HEVC ||
+        codec->id == AV_CODEC_ID_VP8 || codec->id == AV_CODEC_ID_VP9)
+    {
+        codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
 
     // Configurar preset rápido para libx264/libx265 (velocidade de encoding)
     AVDictionary *opts = nullptr;
@@ -678,6 +715,40 @@ bool HTTPTSStreamer::initializeVideoCodec()
         av_dict_set_int(&opts, "vbv-bufsize", m_videoBitrate / 10, 0); // 100ms de buffer
         // Desabilitar scenecut para garantir keyframes exatos no intervalo especificado
         av_dict_set_int(&opts, "scenecut", 0, 0);
+    }
+    else if (codec->id == AV_CODEC_ID_VP8)
+    {
+        // Speed/Quality: 0-16 (0 = melhor qualidade, 16 = mais rápido)
+        // Para streaming, usar valores mais altos (mais rápido)
+        av_dict_set_int(&opts, "speed", m_vp8Speed, 0);
+        // Deadline "realtime" para streaming em tempo real (prioriza velocidade)
+        av_dict_set(&opts, "deadline", "realtime", 0);
+        // Lag-in-frames: 0 para baixa latência (sem lookahead)
+        av_dict_set_int(&opts, "lag-in-frames", 0, 0);
+        // Keyframe mínimo e máximo a cada 2 segundos
+        int keyint = static_cast<int>(m_fps * 2);
+        av_dict_set_int(&opts, "keyint_min", keyint, 0);
+        av_dict_set_int(&opts, "keyint_max", keyint, 0);
+        // Threads para paralelismo
+        av_dict_set_int(&opts, "threads", 0, 0); // Auto-detect
+    }
+    else if (codec->id == AV_CODEC_ID_VP9)
+    {
+        // Speed/Quality: 0-9 (0 = melhor qualidade, 9 = mais rápido)
+        // Para streaming, usar valores mais altos (mais rápido)
+        av_dict_set_int(&opts, "speed", m_vp9Speed, 0);
+        // Deadline "realtime" para streaming em tempo real (prioriza velocidade)
+        av_dict_set(&opts, "deadline", "realtime", 0);
+        // Lag-in-frames: 0 para baixa latência (sem lookahead)
+        av_dict_set_int(&opts, "lag-in-frames", 0, 0);
+        // Keyframe mínimo e máximo a cada 2 segundos
+        int keyint = static_cast<int>(m_fps * 2);
+        av_dict_set_int(&opts, "keyint_min", keyint, 0);
+        av_dict_set_int(&opts, "keyint_max", keyint, 0);
+        // Threads para paralelismo
+        av_dict_set_int(&opts, "threads", 0, 0); // Auto-detect
+        // Tile columns para paralelismo (melhora performance)
+        av_dict_set_int(&opts, "tile-columns", 2, 0);
     }
 
     // Abrir codec com opções
@@ -909,6 +980,11 @@ bool HTTPTSStreamer::initializeMuxers()
         avformat_free_context(formatCtx);
         return false;
     }
+
+    // Garantir que codec_type e codec_id estão corretos (importante para VP8/VP9)
+    videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    videoStream->codecpar->codec_id = videoCtx->codec_id;
+
     m_videoStream = videoStream;
 
     // Criar stream de áudio
@@ -930,6 +1006,11 @@ bool HTTPTSStreamer::initializeMuxers()
         avformat_free_context(formatCtx);
         return false;
     }
+
+    // Garantir que codec_type e codec_id estão corretos
+    audioStream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+    audioStream->codecpar->codec_id = audioCtx->codec_id;
+
     m_audioStream = audioStream;
 
     // Configurar callback de escrita
@@ -956,6 +1037,56 @@ bool HTTPTSStreamer::initializeMuxers()
     LOG_INFO("Audio stream time_base: " + std::to_string(audioStream->time_base.num) + "/" +
              std::to_string(audioStream->time_base.den));
     LOG_INFO("Audio sample_rate: " + std::to_string(m_audioSampleRate));
+
+    // Para VP8/VP9, enviar um frame dummy para gerar extradata ANTES de escrever o header
+    // VP8/VP9 não geram extradata automaticamente como H.264, precisamos forçar
+    if (videoCtx->codec_id == AV_CODEC_ID_VP8 || videoCtx->codec_id == AV_CODEC_ID_VP9)
+    {
+        AVFrame *dummyFrame = av_frame_alloc();
+        if (dummyFrame)
+        {
+            dummyFrame->format = videoCtx->pix_fmt;
+            dummyFrame->width = videoCtx->width;
+            dummyFrame->height = videoCtx->height;
+            if (av_frame_get_buffer(dummyFrame, 32) >= 0)
+            {
+                // Preencher com dados YUV válidos (frame preto)
+                // Y = 0 (preto), U = 128 (neutro), V = 128 (neutro)
+                memset(dummyFrame->data[0], 0, dummyFrame->linesize[0] * dummyFrame->height);
+                if (dummyFrame->data[1])
+                    memset(dummyFrame->data[1], 128, dummyFrame->linesize[1] * dummyFrame->height / 2);
+                if (dummyFrame->data[2])
+                    memset(dummyFrame->data[2], 128, dummyFrame->linesize[2] * dummyFrame->height / 2);
+
+                dummyFrame->pts = 0;
+                dummyFrame->flags |= AV_FRAME_FLAG_KEY;
+
+                // Enviar frame dummy para gerar extradata
+                if (avcodec_send_frame(videoCtx, dummyFrame) >= 0)
+                {
+                    AVPacket *pkt = av_packet_alloc();
+                    if (pkt)
+                    {
+                        // Receber e descartar pacotes gerados
+                        while (avcodec_receive_packet(videoCtx, pkt) >= 0)
+                        {
+                            av_packet_unref(pkt);
+                        }
+                        av_packet_free(&pkt);
+                    }
+
+                    // Atualizar codecpar ANTES de escrever o header
+                    if (avcodec_parameters_from_context(videoStream->codecpar, videoCtx) >= 0)
+                    {
+                        // Garantir novamente que codec_type e codec_id estão corretos
+                        videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+                        videoStream->codecpar->codec_id = videoCtx->codec_id;
+                    }
+                }
+            }
+            av_frame_free(&dummyFrame);
+        }
+    }
 
     // Escrever header do formato
     if (avformat_write_header(formatCtx, nullptr) < 0)

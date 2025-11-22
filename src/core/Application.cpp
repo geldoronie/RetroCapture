@@ -613,6 +613,8 @@ bool Application::initUI()
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
+    m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
+    m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
     // Também sincronizar configurações de imagem
     m_brightness = m_ui->getBrightness();
@@ -781,6 +783,30 @@ bool Application::initUI()
                                          {
         m_streamingH265Level = level;
         // Se streaming estiver ativo, reiniciar para aplicar novo level
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingVP8SpeedChanged([this](int speed)
+                                        {
+        m_streamingVP8Speed = speed;
+        // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnStreamingVP9SpeedChanged([this](int speed)
+                                        {
+        m_streamingVP9Speed = speed;
+        // Se streaming estiver ativo, reiniciar para aplicar novo speed
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -988,6 +1014,16 @@ bool Application::initStreaming()
         tsStreamer->setH265Preset(m_streamingH265Preset);
         tsStreamer->setH265Profile(m_streamingH265Profile);
         tsStreamer->setH265Level(m_streamingH265Level);
+    }
+    // Configurar speed VP8 (se aplicável)
+    else if (m_streamingVideoCodec == "vp8")
+    {
+        tsStreamer->setVP8Speed(m_streamingVP8Speed);
+    }
+    // Configurar speed VP9 (se aplicável)
+    else if (m_streamingVideoCodec == "vp9")
+    {
+        tsStreamer->setVP9Speed(m_streamingVP9Speed);
     }
 
     // Configurar tamanho do buffer de áudio

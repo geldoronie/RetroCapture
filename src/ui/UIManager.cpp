@@ -1221,6 +1221,42 @@ void UIManager::renderStreamingPanel()
         }
     }
     
+    // Configurações VP8 (apenas se codec for vp8)
+    if (m_streamingVideoCodec == "vp8") {
+        int currentSpeed = m_streamingVP8Speed;
+        if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16)) {
+            m_streamingVP8Speed = currentSpeed;
+            if (m_onStreamingVP8SpeedChanged) {
+                m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Speed do encoder VP8:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "16: Mais rápido, menor qualidade\n"
+                              "12: Bom equilíbrio para streaming");
+        }
+    }
+    
+    // Configurações VP9 (apenas se codec for vp9)
+    if (m_streamingVideoCodec == "vp9") {
+        int currentSpeed = m_streamingVP9Speed;
+        if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9)) {
+            m_streamingVP9Speed = currentSpeed;
+            if (m_onStreamingVP9SpeedChanged) {
+                m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
+            }
+            saveConfig(); // Salvar configuração quando mudar
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Speed do encoder VP9:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "9: Mais rápido, menor qualidade\n"
+                              "6: Bom equilíbrio para streaming");
+        }
+    }
+    
     ImGui::Separator();
     ImGui::Text("Bitrates");
     ImGui::Separator();
@@ -1340,6 +1376,8 @@ void UIManager::loadConfig()
             if (streaming.contains("h265Preset")) m_streamingH265Preset = streaming["h265Preset"].get<std::string>();
             if (streaming.contains("h265Profile")) m_streamingH265Profile = streaming["h265Profile"].get<std::string>();
             if (streaming.contains("h265Level")) m_streamingH265Level = streaming["h265Level"].get<std::string>();
+            if (streaming.contains("vp8Speed")) m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
+            if (streaming.contains("vp9Speed")) m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
         }
 
         // Carregar configurações de imagem
@@ -1402,7 +1440,9 @@ void UIManager::saveConfig()
             {"h264Preset", m_streamingH264Preset},
             {"h265Preset", m_streamingH265Preset},
             {"h265Profile", m_streamingH265Profile},
-            {"h265Level", m_streamingH265Level}
+            {"h265Level", m_streamingH265Level},
+            {"vp8Speed", m_streamingVP8Speed},
+            {"vp9Speed", m_streamingVP9Speed}
         };
 
         // Salvar configurações de imagem

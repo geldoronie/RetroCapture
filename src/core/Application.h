@@ -77,6 +77,8 @@ public:
     void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
     void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
     void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
+    void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
+    void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
 
 private:
     bool m_initialized = false;
@@ -137,6 +139,8 @@ private:
     std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
     std::string m_streamingH265Profile = "main";     // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
+    int m_streamingVP8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
+    int m_streamingVP9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
