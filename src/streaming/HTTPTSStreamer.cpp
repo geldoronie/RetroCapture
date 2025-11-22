@@ -21,14 +21,6 @@ extern "C"
 #include <libswresample/swresample.h>
 }
 
-// Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
-static int64_t getTimestampUs()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
-}
-
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
 static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
@@ -490,7 +482,6 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     {
         int clientFd = *it;
         size_t totalSent = 0;
-        bool error = false;
 
         // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
         size_t toSend = static_cast<size_t>(buf_size);
@@ -1409,7 +1400,6 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
 
     if (forceKeyframe)
     {
-        videoFrame->key_frame = 1;
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
         // Usar flags do frame para garantir que o codec respeite o keyframe
         videoFrame->flags |= AV_FRAME_FLAG_KEY;
@@ -1435,11 +1425,9 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
                     break;
                 }
 
-                bool receivedAny = false;
                 // Receber TODOS os pacotes pendentes
                 while (avcodec_receive_packet(codecCtx, tempPkt) >= 0)
                 {
-                    receivedAny = true;
                     // CRÍTICO: Clonar pacote ANTES de modificar qualquer coisa
                     // Modificar o pacote original pode corromper dados
                     AVPacket *pktToMux = av_packet_clone(tempPkt);
@@ -1773,7 +1761,6 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
         firstAudioFrameSet = true;
     }
 
-    bool encodedAny = false;
     bool hadError = false;
 
     while (true)
@@ -1844,8 +1831,6 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
                 break;
             }
         }
-
-        encodedAny = true;
 
         // Receber pacotes encodados e muxar/enviar diretamente
         AVPacket *pkt = av_packet_alloc();
@@ -1923,7 +1908,6 @@ bool HTTPTSStreamer::encodeAudioFrame(const int16_t *samples, size_t sampleCount
 
         if (packetCount > 0)
         {
-            encodedAny = true;
         }
     }
 

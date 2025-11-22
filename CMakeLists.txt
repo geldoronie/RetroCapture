@@ -197,6 +197,16 @@ target_link_options(retrocapture PRIVATE
     $<$<CONFIG:MinSizeRel>:>
 )
 
+# Copiar pasta de shaders para o diretório de build
+# Isso garante que o binário encontre os shaders corretamente ao executar
+add_custom_command(TARGET retrocapture POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/shaders"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    COMMENT "Copying shaders directory to build output"
+)
+
 # Instalação
 install(TARGETS retrocapture DESTINATION bin)
 

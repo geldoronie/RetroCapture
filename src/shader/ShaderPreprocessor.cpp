@@ -405,7 +405,7 @@ std::string ShaderPreprocessor::correctOutputSizeType(const std::string& source)
 
 std::string ShaderPreprocessor::buildFinalSource(
     const std::string& code,
-    bool isVertex)
+    bool /* isVertex */)
 {
     // Esta função não é mais usada, mas mantida para compatibilidade
     // A construção final é feita diretamente em preprocess()
@@ -417,10 +417,10 @@ void ShaderPreprocessor::injectCompatibilityCode(
     std::string& fragmentCode,
     const std::string& shaderPath,
     size_t passIndex,
-    uint32_t outputWidth,
-    uint32_t outputHeight,
-    uint32_t inputWidth,
-    uint32_t inputHeight,
+    uint32_t /* outputWidth */,
+    uint32_t /* outputHeight */,
+    uint32_t /* inputWidth */,
+    uint32_t /* inputHeight */,
     const std::vector<ShaderPass>& presetPasses)
 {
     // IMPORTANTE: Para shaders que escalam a altura (como interlacing.glsl com scale_y = 2.0),

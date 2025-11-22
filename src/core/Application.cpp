@@ -25,13 +25,6 @@
 
 // swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
 
-// Função auxiliar para obter timestamp em microssegundos (para depuração de sincronização)
-static int64_t getTimestampUs()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
-}
 
 Application::Application()
 {
