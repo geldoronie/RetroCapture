@@ -87,6 +87,33 @@ public:
     void setHTTPSEnabled(bool enabled);
 
     /**
+     * Set Web Portal title in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalTitle(const std::string &title);
+
+    /**
+     * Set Web Portal image path in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalImagePath(const std::string &path);
+
+    /**
+     * Set Web Portal background image path in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalBackgroundImagePath(const std::string &path);
+
+    /**
+     * Set Web Portal colors in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalColors(
+        const float bg[4], const float text[4], const float primary[4],
+        const float secondary[4], const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4]);
+
+    /**
      * Cleanup all resources
      */
     void cleanup();

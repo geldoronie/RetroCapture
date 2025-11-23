@@ -153,8 +153,22 @@ private:
     bool m_webPortalHTTPSEnabled = false;
     std::string m_webPortalSSLCertPath = "ssl/server.crt";
     std::string m_webPortalSSLKeyPath = "ssl/server.key";
-    std::string m_foundSSLCertPath; // Caminho real do certificado encontrado (após busca)
-    std::string m_foundSSLKeyPath;  // Caminho real da chave encontrada (após busca)
+    std::string m_foundSSLCertPath;                       // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;                        // Caminho real da chave encontrada (após busca)
+    std::string m_webPortalTitle = "RetroCapture Stream"; // Título da página web
+    std::string m_webPortalImagePath;                     // Caminho da imagem para o título (opcional)
+    std::string m_webPortalBackgroundImagePath;           // Caminho da imagem de fundo (opcional)
+
+    // Cores do portal (RGBA, valores 0.0-1.0)
+    float m_webPortalColorBackground[4] = {0.102f, 0.102f, 0.102f, 1.0f};
+    float m_webPortalColorText[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float m_webPortalColorPrimary[4] = {0.290f, 0.620f, 1.0f, 1.0f};
+    float m_webPortalColorSecondary[4] = {0.165f, 0.165f, 0.165f, 1.0f};
+    float m_webPortalColorCardHeader[4] = {0.102f, 0.102f, 0.102f, 1.0f};
+    float m_webPortalColorBorder[4] = {0.4f, 0.4f, 0.4f, 1.0f};
+    float m_webPortalColorSuccess[4] = {0.298f, 0.686f, 0.314f, 1.0f};
+    float m_webPortalColorWarning[4] = {1.0f, 0.596f, 0.0f, 1.0f};
+    float m_webPortalColorDanger[4] = {0.957f, 0.263f, 0.212f, 1.0f};
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

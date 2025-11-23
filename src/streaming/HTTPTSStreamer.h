@@ -64,6 +64,16 @@ public:
     // Web Portal configuration
     void enableWebPortal(bool enable);
     bool isWebPortalEnabled() const { return m_webPortalEnabled; }
+    void setWebPortalTitle(const std::string &title) { m_webPortal.setTitle(title); }
+    void setWebPortalImagePath(const std::string &path) { m_webPortal.setImagePath(path); }
+    void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortal.setBackgroundImagePath(path); }
+    void setWebPortalColors(
+        const float bg[4], const float text[4], const float primary[4],
+        const float secondary[4], const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4])
+    {
+        m_webPortal.setColors(bg, text, primary, secondary, cardHeader, border, success, warning, danger);
+    }
 
     // Obter caminhos dos certificados SSL encontrados
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }

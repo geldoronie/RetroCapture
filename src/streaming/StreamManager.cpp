@@ -217,6 +217,65 @@ void StreamManager::setHTTPSEnabled(bool enabled)
     }
 }
 
+void StreamManager::setWebPortalTitle(const std::string &title)
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalTitle(title);
+            LOG_INFO("Título do Web Portal atualizado: " + title);
+        }
+    }
+}
+
+void StreamManager::setWebPortalImagePath(const std::string &path)
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalImagePath(path);
+            LOG_INFO("Caminho da imagem do Web Portal atualizado: " + (path.empty() ? "(removido)" : path));
+        }
+    }
+}
+
+void StreamManager::setWebPortalBackgroundImagePath(const std::string &path)
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalBackgroundImagePath(path);
+            LOG_INFO("Caminho da imagem de fundo do Web Portal atualizado: " + (path.empty() ? "(removido)" : path));
+        }
+    }
+}
+
+void StreamManager::setWebPortalColors(
+    const float bg[4], const float text[4], const float primary[4],
+    const float secondary[4], const float cardHeader[4], const float border[4],
+    const float success[4], const float warning[4], const float danger[4])
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalColors(bg, text, primary, secondary, cardHeader, border, success, warning, danger);
+            LOG_INFO("Cores do Web Portal atualizadas");
+        }
+    }
+}
+
 void StreamManager::cleanup()
 {
     stop();

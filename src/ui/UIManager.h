@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <cstring>
 #include "../renderer/glad_loader.h"
 
 struct GLFWwindow;
@@ -134,16 +135,45 @@ public:
     void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
     void setFoundSSLCertificatePath(const std::string &path) { m_foundSSLCertPath = path; }
     void setFoundSSLKeyPath(const std::string &path) { m_foundSSLKeyPath = path; }
+    void setWebPortalTitle(const std::string &title) { m_webPortalTitle = title; }
+    void setWebPortalImagePath(const std::string &path) { m_webPortalImagePath = path; }
+    void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortalBackgroundImagePath = path; }
+    void setWebPortalColorBackground(const float color[4]) { if (color) memcpy(m_webPortalColorBackground, color, 4 * sizeof(float)); }
+    void setWebPortalColorText(const float color[4]) { if (color) memcpy(m_webPortalColorText, color, 4 * sizeof(float)); }
+    void setWebPortalColorPrimary(const float color[4]) { if (color) memcpy(m_webPortalColorPrimary, color, 4 * sizeof(float)); }
+    void setWebPortalColorSecondary(const float color[4]) { if (color) memcpy(m_webPortalColorSecondary, color, 4 * sizeof(float)); }
+    void setWebPortalColorCardHeader(const float color[4]) { if (color) memcpy(m_webPortalColorCardHeader, color, 4 * sizeof(float)); }
+    void setWebPortalColorBorder(const float color[4]) { if (color) memcpy(m_webPortalColorBorder, color, 4 * sizeof(float)); }
+    void setWebPortalColorSuccess(const float color[4]) { if (color) memcpy(m_webPortalColorSuccess, color, 4 * sizeof(float)); }
+    void setWebPortalColorWarning(const float color[4]) { if (color) memcpy(m_webPortalColorWarning, color, 4 * sizeof(float)); }
+    void setWebPortalColorDanger(const float color[4]) { if (color) memcpy(m_webPortalColorDanger, color, 4 * sizeof(float)); }
+
     bool getWebPortalEnabled() const { return m_webPortalEnabled; }
     bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
     std::string getWebPortalSSLCertPath() const { return m_webPortalSSLCertPath; }
     std::string getWebPortalSSLKeyPath() const { return m_webPortalSSLKeyPath; }
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
+    std::string getWebPortalTitle() const { return m_webPortalTitle; }
+    std::string getWebPortalImagePath() const { return m_webPortalImagePath; }
+    std::string getWebPortalBackgroundImagePath() const { return m_webPortalBackgroundImagePath; }
+    const float *getWebPortalColorBackground() const { return m_webPortalColorBackground; }
+    const float *getWebPortalColorText() const { return m_webPortalColorText; }
+    const float *getWebPortalColorPrimary() const { return m_webPortalColorPrimary; }
+    const float *getWebPortalColorSecondary() const { return m_webPortalColorSecondary; }
+    const float *getWebPortalColorCardHeader() const { return m_webPortalColorCardHeader; }
+    const float *getWebPortalColorBorder() const { return m_webPortalColorBorder; }
+    const float *getWebPortalColorSuccess() const { return m_webPortalColorSuccess; }
+    const float *getWebPortalColorWarning() const { return m_webPortalColorWarning; }
+    const float *getWebPortalColorDanger() const { return m_webPortalColorDanger; }
     void setOnWebPortalEnabledChanged(std::function<void(bool)> callback) { m_onWebPortalEnabledChanged = callback; }
     void setOnWebPortalHTTPSChanged(std::function<void(bool)> callback) { m_onWebPortalHTTPSChanged = callback; }
     void setOnWebPortalSSLCertPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLCertPathChanged = callback; }
     void setOnWebPortalSSLKeyPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLKeyPathChanged = callback; }
+    void setOnWebPortalTitleChanged(std::function<void(const std::string &)> callback) { m_onWebPortalTitleChanged = callback; }
+    void setOnWebPortalImagePathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalImagePathChanged = callback; }
+    void setOnWebPortalBackgroundImagePathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalBackgroundImagePathChanged = callback; }
+    void setOnWebPortalColorsChanged(std::function<void()> callback) { m_onWebPortalColorsChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -268,10 +298,29 @@ private:
     bool m_webPortalHTTPSEnabled = false;
     std::string m_webPortalSSLCertPath = "ssl/server.crt";
     std::string m_webPortalSSLKeyPath = "ssl/server.key";
-    std::string m_foundSSLCertPath; // Caminho real do certificado encontrado (após busca)
-    std::string m_foundSSLKeyPath;  // Caminho real da chave encontrada (após busca)
+    std::string m_foundSSLCertPath;                       // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;                        // Caminho real da chave encontrada (após busca)
+    std::string m_webPortalTitle = "RetroCapture Stream"; // Título da página web
+    std::string m_webPortalImagePath;                     // Caminho da imagem para o título (opcional)
+    std::string m_webPortalBackgroundImagePath;           // Caminho da imagem de fundo (opcional)
+
+    // Cores do portal (RGBA, valores 0.0-1.0)
+    float m_webPortalColorBackground[4] = {0.102f, 0.102f, 0.102f, 1.0f};
+    float m_webPortalColorText[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float m_webPortalColorPrimary[4] = {0.290f, 0.620f, 1.0f, 1.0f};
+    float m_webPortalColorSecondary[4] = {0.165f, 0.165f, 0.165f, 1.0f};
+    float m_webPortalColorCardHeader[4] = {0.102f, 0.102f, 0.102f, 1.0f};
+    float m_webPortalColorBorder[4] = {0.4f, 0.4f, 0.4f, 1.0f};
+    float m_webPortalColorSuccess[4] = {0.298f, 0.686f, 0.314f, 1.0f};
+    float m_webPortalColorWarning[4] = {1.0f, 0.596f, 0.0f, 1.0f};
+    float m_webPortalColorDanger[4] = {0.957f, 0.263f, 0.212f, 1.0f};
+
     std::function<void(bool)> m_onWebPortalEnabledChanged;
     std::function<void(bool)> m_onWebPortalHTTPSChanged;
     std::function<void(const std::string &)> m_onWebPortalSSLCertPathChanged;
     std::function<void(const std::string &)> m_onWebPortalSSLKeyPathChanged;
+    std::function<void(const std::string &)> m_onWebPortalTitleChanged;
+    std::function<void(const std::string &)> m_onWebPortalImagePathChanged;
+    std::function<void(const std::string &)> m_onWebPortalBackgroundImagePathChanged;
+    std::function<void()> m_onWebPortalColorsChanged;
 };

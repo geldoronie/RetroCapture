@@ -38,6 +38,31 @@ bool UIManager::init(GLFWwindow *window)
 
     m_window = window;
 
+    // IMPORTANTE: Garantir que o contexto OpenGL está ativo antes de inicializar ImGui
+    // O ImGui precisa de um contexto OpenGL válido e ativo para inicializar corretamente
+    if (window)
+    {
+        glfwMakeContextCurrent(window);
+    }
+    else
+    {
+        LOG_ERROR("Janela GLFW inválida para inicializar ImGui");
+        return false;
+    }
+
+    // IMPORTANTE: Verificar se as funções OpenGL foram carregadas antes de inicializar ImGui
+    // O ImGui precisa de glGenVertexArrays que é carregado via loadOpenGLFunctions()
+    // Se não estiver carregado, o ImGui falhará ao tentar criar VAOs
+    if (!glGenVertexArrays)
+    {
+        LOG_ERROR("Funções OpenGL não foram carregadas. Carregando agora...");
+        if (!loadOpenGLFunctions())
+        {
+            LOG_ERROR("Falha ao carregar funções OpenGL para ImGui");
+            return false;
+        }
+    }
+
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1522,6 +1547,90 @@ void UIManager::loadConfig()
                 m_webPortalSSLCertPath = webPortal["sslCertPath"].get<std::string>();
             if (webPortal.contains("sslKeyPath"))
                 m_webPortalSSLKeyPath = webPortal["sslKeyPath"].get<std::string>();
+            if (webPortal.contains("title"))
+                m_webPortalTitle = webPortal["title"].get<std::string>();
+            if (webPortal.contains("imagePath"))
+                m_webPortalImagePath = webPortal["imagePath"].get<std::string>();
+            if (webPortal.contains("backgroundImagePath"))
+                m_webPortalBackgroundImagePath = webPortal["backgroundImagePath"].get<std::string>();
+
+            // Carregar cores
+            if (webPortal.contains("colors"))
+            {
+                auto &colors = webPortal["colors"];
+                if (colors.contains("background"))
+                {
+                    auto &bg = colors["background"];
+                    m_webPortalColorBackground[0] = bg[0];
+                    m_webPortalColorBackground[1] = bg[1];
+                    m_webPortalColorBackground[2] = bg[2];
+                    m_webPortalColorBackground[3] = bg[3];
+                }
+                if (colors.contains("text"))
+                {
+                    auto &txt = colors["text"];
+                    m_webPortalColorText[0] = txt[0];
+                    m_webPortalColorText[1] = txt[1];
+                    m_webPortalColorText[2] = txt[2];
+                    m_webPortalColorText[3] = txt[3];
+                }
+                if (colors.contains("primary"))
+                {
+                    auto &prim = colors["primary"];
+                    m_webPortalColorPrimary[0] = prim[0];
+                    m_webPortalColorPrimary[1] = prim[1];
+                    m_webPortalColorPrimary[2] = prim[2];
+                    m_webPortalColorPrimary[3] = prim[3];
+                }
+                if (colors.contains("secondary"))
+                {
+                    auto &sec = colors["secondary"];
+                    m_webPortalColorSecondary[0] = sec[0];
+                    m_webPortalColorSecondary[1] = sec[1];
+                    m_webPortalColorSecondary[2] = sec[2];
+                    m_webPortalColorSecondary[3] = sec[3];
+                }
+                if (colors.contains("cardHeader"))
+                {
+                    auto &ch = colors["cardHeader"];
+                    m_webPortalColorCardHeader[0] = ch[0];
+                    m_webPortalColorCardHeader[1] = ch[1];
+                    m_webPortalColorCardHeader[2] = ch[2];
+                    m_webPortalColorCardHeader[3] = ch[3];
+                }
+                if (colors.contains("border"))
+                {
+                    auto &b = colors["border"];
+                    m_webPortalColorBorder[0] = b[0];
+                    m_webPortalColorBorder[1] = b[1];
+                    m_webPortalColorBorder[2] = b[2];
+                    m_webPortalColorBorder[3] = b[3];
+                }
+                if (colors.contains("success"))
+                {
+                    auto &s = colors["success"];
+                    m_webPortalColorSuccess[0] = s[0];
+                    m_webPortalColorSuccess[1] = s[1];
+                    m_webPortalColorSuccess[2] = s[2];
+                    m_webPortalColorSuccess[3] = s[3];
+                }
+                if (colors.contains("warning"))
+                {
+                    auto &w = colors["warning"];
+                    m_webPortalColorWarning[0] = w[0];
+                    m_webPortalColorWarning[1] = w[1];
+                    m_webPortalColorWarning[2] = w[2];
+                    m_webPortalColorWarning[3] = w[3];
+                }
+                if (colors.contains("danger"))
+                {
+                    auto &d = colors["danger"];
+                    m_webPortalColorDanger[0] = d[0];
+                    m_webPortalColorDanger[1] = d[1];
+                    m_webPortalColorDanger[2] = d[2];
+                    m_webPortalColorDanger[3] = d[3];
+                }
+            }
         }
 
         // Carregar shader atual
@@ -1590,7 +1699,11 @@ void UIManager::saveConfig()
             {"enabled", m_webPortalEnabled},
             {"httpsEnabled", m_webPortalHTTPSEnabled},
             {"sslCertPath", m_webPortalSSLCertPath},
-            {"sslKeyPath", m_webPortalSSLKeyPath}};
+            {"sslKeyPath", m_webPortalSSLKeyPath},
+            {"title", m_webPortalTitle},
+            {"imagePath", m_webPortalImagePath},
+            {"backgroundImagePath", m_webPortalBackgroundImagePath},
+            {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}}}};
 
         // Salvar shader atual
         config["shader"] = {
@@ -1760,6 +1873,352 @@ void UIManager::renderWebPortalPanel()
     {
         ImGui::Spacing();
         ImGui::TextWrapped("O web portal usará HTTP (não criptografado). Habilite HTTPS para conexões seguras.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Configuração de Personalização
+    ImGui::Text("Personalização do Portal");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Título da página
+    char titleBuffer[256];
+    strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
+    titleBuffer[sizeof(titleBuffer) - 1] = '\0';
+
+    ImGui::Text("Título da Página:");
+    if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
+    {
+        m_webPortalTitle = std::string(titleBuffer);
+        if (m_onWebPortalTitleChanged)
+        {
+            m_onWebPortalTitleChanged(m_webPortalTitle);
+        }
+        saveConfig();
+    }
+
+    ImGui::Spacing();
+
+    // Imagem do título
+    char imagePathBuffer[512];
+    strncpy(imagePathBuffer, m_webPortalImagePath.c_str(), sizeof(imagePathBuffer) - 1);
+    imagePathBuffer[sizeof(imagePathBuffer) - 1] = '\0';
+
+    ImGui::Text("Imagem do Título (opcional):");
+    if (ImGui::InputText("##WebPortalImagePath", imagePathBuffer, sizeof(imagePathBuffer)))
+    {
+        m_webPortalImagePath = std::string(imagePathBuffer);
+        if (m_onWebPortalImagePathChanged)
+        {
+            m_onWebPortalImagePathChanged(m_webPortalImagePath);
+        }
+        saveConfig();
+    }
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Nome do arquivo ou caminho da imagem que substituirá o ícone no título.\n"
+                          "Formatos suportados: PNG, JPG, SVG, etc.\n"
+                          "A imagem será buscada em:\n"
+                          "  - ~/.config/retrocapture/assets/\n"
+                          "  - ./assets/ (diretório do executável)\n"
+                          "  - Caminhos relativos e absolutos\n"
+                          "Deixe vazio para usar o ícone padrão.");
+    }
+
+    // Verificar se arquivo existe (mostrar onde foi encontrado)
+    if (!m_webPortalImagePath.empty())
+    {
+        ImGui::Spacing();
+
+        // Buscar nos locais padrão (similar ao que WebPortal faz)
+        auto findAssetFile = [](const std::string &relativePath) -> std::string
+        {
+            // Se o caminho já é absoluto, verificar diretamente
+            std::filesystem::path testPath(relativePath);
+            if (testPath.is_absolute() && std::filesystem::exists(testPath))
+            {
+                return std::filesystem::absolute(testPath).string();
+            }
+
+            // Extrair apenas o nome do arquivo
+            std::filesystem::path inputPath(relativePath);
+            std::string fileName = inputPath.filename().string();
+
+            // Lista de locais para buscar
+            std::vector<std::string> possiblePaths;
+
+            // 1. Pasta de configuração do usuário
+            const char *homeDir = std::getenv("HOME");
+            if (homeDir)
+            {
+                std::filesystem::path userAssetsDir = std::filesystem::path(homeDir) / ".config" / "retrocapture" / "assets";
+                possiblePaths.push_back((userAssetsDir / fileName).string());
+            }
+
+            // 2. Diretório do executável/assets/
+            char exePath[1024];
+            ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+            if (len != -1)
+            {
+                exePath[len] = '\0';
+                std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+                std::filesystem::path assetsDir = exeDir / "assets";
+                possiblePaths.push_back((assetsDir / fileName).string());
+            }
+
+            // 3. Caminho como fornecido
+            possiblePaths.push_back(relativePath);
+
+            // 4. Diretório atual/assets/
+            possiblePaths.push_back("./assets/" + fileName);
+            possiblePaths.push_back("./assets/" + relativePath);
+
+            // Tentar caminhos
+            for (const auto &path : possiblePaths)
+            {
+                std::filesystem::path fsPath(path);
+                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                {
+                    return std::filesystem::absolute(fsPath).string();
+                }
+            }
+
+            return "";
+        };
+
+        std::string foundPath = findAssetFile(m_webPortalImagePath);
+        if (!foundPath.empty())
+        {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Arquivo de imagem encontrado");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", foundPath.c_str());
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Arquivo não encontrado nos locais padrão");
+            ImGui::TextWrapped("Buscando em:");
+            ImGui::BulletText("~/.config/retrocapture/assets/");
+            ImGui::BulletText("./assets/ (diretório do executável)");
+            ImGui::BulletText("Caminhos relativos e absolutos configurados");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Configuração de Cores e Estilo
+    if (ImGui::CollapsingHeader("Cores e Estilo do Portal", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Spacing();
+
+        // Imagem de fundo
+        char bgImagePathBuffer[512];
+        strncpy(bgImagePathBuffer, m_webPortalBackgroundImagePath.c_str(), sizeof(bgImagePathBuffer) - 1);
+        bgImagePathBuffer[sizeof(bgImagePathBuffer) - 1] = '\0';
+
+        ImGui::Text("Imagem de Fundo (opcional):");
+        if (ImGui::InputText("##WebPortalBackgroundImagePath", bgImagePathBuffer, sizeof(bgImagePathBuffer)))
+        {
+            m_webPortalBackgroundImagePath = std::string(bgImagePathBuffer);
+            if (m_onWebPortalBackgroundImagePathChanged)
+            {
+                m_onWebPortalBackgroundImagePathChanged(m_webPortalBackgroundImagePath);
+            }
+            saveConfig();
+        }
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Caminho para uma imagem de fundo (similar ao perfil da Steam).\n"
+                              "A imagem será buscada em ~/.config/retrocapture/assets/ ou ./assets/\n"
+                              "Deixe vazio para usar cor de fundo sólida.");
+        }
+
+        // Verificar se arquivo existe
+        if (!m_webPortalBackgroundImagePath.empty())
+        {
+            ImGui::Spacing();
+            // Buscar nos locais padrão (similar ao que fazemos para a imagem do título)
+            auto findAssetFile = [](const std::string &relativePath) -> std::string
+            {
+                std::filesystem::path testPath(relativePath);
+                if (testPath.is_absolute() && std::filesystem::exists(testPath))
+                {
+                    return std::filesystem::absolute(testPath).string();
+                }
+
+                std::filesystem::path inputPath(relativePath);
+                std::string fileName = inputPath.filename().string();
+
+                std::vector<std::string> possiblePaths;
+
+                const char *homeDir = std::getenv("HOME");
+                if (homeDir)
+                {
+                    std::filesystem::path userAssetsDir = std::filesystem::path(homeDir) / ".config" / "retrocapture" / "assets";
+                    possiblePaths.push_back((userAssetsDir / fileName).string());
+                }
+
+                char exePath[1024];
+                ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+                if (len != -1)
+                {
+                    exePath[len] = '\0';
+                    std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+                    std::filesystem::path assetsDir = exeDir / "assets";
+                    possiblePaths.push_back((assetsDir / fileName).string());
+                }
+
+                possiblePaths.push_back(relativePath);
+                possiblePaths.push_back("./assets/" + fileName);
+                possiblePaths.push_back("./assets/" + relativePath);
+
+                for (const auto &path : possiblePaths)
+                {
+                    std::filesystem::path fsPath(path);
+                    if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                    {
+                        return std::filesystem::absolute(fsPath).string();
+                    }
+                }
+
+                return "";
+            };
+
+            std::string foundBgPath = findAssetFile(m_webPortalBackgroundImagePath);
+            if (!foundBgPath.empty())
+            {
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Imagem de fundo encontrada");
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Imagem de fundo não encontrada");
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Cores principais
+        ImGui::Text("Cores do Portal:");
+        ImGui::Spacing();
+
+        bool colorsChanged = false;
+
+        if (ImGui::ColorEdit4("Fundo Principal", m_webPortalColorBackground, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Texto Principal", m_webPortalColorText, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Cor Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Fundo dos Cards", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Cabeçalho dos Cards", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Bordas", m_webPortalColorBorder, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Cores de Status:");
+        ImGui::Spacing();
+
+        if (ImGui::ColorEdit4("Sucesso", m_webPortalColorSuccess, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Aviso", m_webPortalColorWarning, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Erro", m_webPortalColorDanger, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (colorsChanged)
+        {
+            if (m_onWebPortalColorsChanged)
+            {
+                m_onWebPortalColorsChanged();
+            }
+            saveConfig();
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Restaurar Cores Padrão"))
+        {
+            // Restaurar valores padrão
+            m_webPortalColorBackground[0] = 0.102f;
+            m_webPortalColorBackground[1] = 0.102f;
+            m_webPortalColorBackground[2] = 0.102f;
+            m_webPortalColorBackground[3] = 1.0f;
+            m_webPortalColorText[0] = 1.0f;
+            m_webPortalColorText[1] = 1.0f;
+            m_webPortalColorText[2] = 1.0f;
+            m_webPortalColorText[3] = 1.0f;
+            m_webPortalColorPrimary[0] = 0.290f;
+            m_webPortalColorPrimary[1] = 0.620f;
+            m_webPortalColorPrimary[2] = 1.0f;
+            m_webPortalColorPrimary[3] = 1.0f;
+            m_webPortalColorSecondary[0] = 0.165f;
+            m_webPortalColorSecondary[1] = 0.165f;
+            m_webPortalColorSecondary[2] = 0.165f;
+            m_webPortalColorSecondary[3] = 1.0f;
+            m_webPortalColorCardHeader[0] = 0.102f;
+            m_webPortalColorCardHeader[1] = 0.102f;
+            m_webPortalColorCardHeader[2] = 0.102f;
+            m_webPortalColorCardHeader[3] = 1.0f;
+            m_webPortalColorBorder[0] = 0.4f;
+            m_webPortalColorBorder[1] = 0.4f;
+            m_webPortalColorBorder[2] = 0.4f;
+            m_webPortalColorBorder[3] = 1.0f;
+            m_webPortalColorSuccess[0] = 0.298f;
+            m_webPortalColorSuccess[1] = 0.686f;
+            m_webPortalColorSuccess[2] = 0.314f;
+            m_webPortalColorSuccess[3] = 1.0f;
+            m_webPortalColorWarning[0] = 1.0f;
+            m_webPortalColorWarning[1] = 0.596f;
+            m_webPortalColorWarning[2] = 0.0f;
+            m_webPortalColorWarning[3] = 1.0f;
+            m_webPortalColorDanger[0] = 0.957f;
+            m_webPortalColorDanger[1] = 0.263f;
+            m_webPortalColorDanger[2] = 0.212f;
+            m_webPortalColorDanger[3] = 1.0f;
+
+            if (m_onWebPortalColorsChanged)
+            {
+                m_onWebPortalColorsChanged();
+            }
+            saveConfig();
+        }
     }
 
     ImGui::Spacing();

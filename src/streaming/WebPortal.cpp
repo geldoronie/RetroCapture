@@ -4,6 +4,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <cstring>
+#include <cstdlib>
+#include <sstream>
+#include <iomanip>
 
 WebPortal::WebPortal()
 {
@@ -19,7 +22,7 @@ WebPortal::WebPortal()
     }
 }
 
-bool WebPortal::isWebPortalRequest(const std::string& request) const
+bool WebPortal::isWebPortalRequest(const std::string &request) const
 {
     // NÃO capturar requisições de stream (deixar para HTTPTSStreamer processar)
     if (request.find("/stream") != std::string::npos ||
@@ -29,7 +32,7 @@ bool WebPortal::isWebPortalRequest(const std::string& request) const
     {
         return false;
     }
-    
+
     // Verificar se é uma requisição para o portal web
     // Aceita tanto "/" quanto "/retrocapture/" ou outros prefixos
     if (request.find("GET / ") != std::string::npos ||
@@ -38,16 +41,20 @@ bool WebPortal::isWebPortalRequest(const std::string& request) const
         request.find("GET /style.css") != std::string::npos ||
         request.find("GET /player.js") != std::string::npos ||
         request.find("GET /favicon.ico") != std::string::npos ||
+        request.find("GET /portal-image") != std::string::npos ||
+        request.find("GET /portal-background") != std::string::npos ||
         request.find("/index.html") != std::string::npos ||
         request.find("/style.css") != std::string::npos ||
-        request.find("/player.js") != std::string::npos)
+        request.find("/player.js") != std::string::npos ||
+        request.find("/portal-image") != std::string::npos ||
+        request.find("/portal-background") != std::string::npos)
     {
         return true;
     }
     return false;
 }
 
-bool WebPortal::handleRequest(int clientFd, const std::string& request) const
+bool WebPortal::handleRequest(int clientFd, const std::string &request) const
 {
     // Ignorar favicon.ico
     if (request.find("GET /favicon.ico") != std::string::npos ||
@@ -59,6 +66,92 @@ bool WebPortal::handleRequest(int clientFd, const std::string& request) const
 
     // Extrair prefixo base (para suporte a proxy reverso)
     std::string basePrefix = extractBasePrefix(request);
+
+    // Verificar se é requisição para imagem do portal
+    if (request.find("GET /portal-image") != std::string::npos ||
+        request.find("/portal-image") != std::string::npos)
+    {
+        if (!m_imagePath.empty())
+        {
+            // Buscar imagem nos locais padrão (assets/)
+            std::string foundImagePath = findAssetFile(m_imagePath);
+
+            if (!foundImagePath.empty() && std::filesystem::exists(foundImagePath))
+            {
+                // Servir a imagem do portal
+                std::string content = readFileContent(foundImagePath);
+                if (!content.empty())
+                {
+                    std::string contentType = getContentType(foundImagePath);
+                    std::ostringstream response;
+                    response << "HTTP/1.1 200 OK\r\n";
+                    response << "Content-Type: " << contentType << "\r\n";
+                    response << "Content-Length: " << content.length() << "\r\n";
+                    response << "Cache-Control: public, max-age=3600\r\n";
+                    response << "Connection: close\r\n";
+                    response << "\r\n";
+                    response << content;
+
+                    std::string responseStr = response.str();
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
+                    if (sent >= 0)
+                    {
+                        LOG_INFO("Portal image served successfully from: " + foundImagePath);
+                        return true;
+                    }
+                }
+            }
+            else
+            {
+                LOG_WARN("Portal image not found: " + m_imagePath + " (searched in assets/)");
+            }
+        }
+        send404(clientFd);
+        return true;
+    }
+
+    // Verificar se é requisição para imagem de fundo do portal
+    if (request.find("GET /portal-background") != std::string::npos ||
+        request.find("/portal-background") != std::string::npos)
+    {
+        if (!m_backgroundImagePath.empty())
+        {
+            // Buscar imagem nos locais padrão (assets/)
+            std::string foundBgPath = findAssetFile(m_backgroundImagePath);
+
+            if (!foundBgPath.empty() && std::filesystem::exists(foundBgPath))
+            {
+                // Servir a imagem de fundo do portal
+                std::string content = readFileContent(foundBgPath);
+                if (!content.empty())
+                {
+                    std::string contentType = getContentType(foundBgPath);
+                    std::ostringstream response;
+                    response << "HTTP/1.1 200 OK\r\n";
+                    response << "Content-Type: " << contentType << "\r\n";
+                    response << "Content-Length: " << content.length() << "\r\n";
+                    response << "Cache-Control: public, max-age=3600\r\n";
+                    response << "Connection: close\r\n";
+                    response << "\r\n";
+                    response << content;
+
+                    std::string responseStr = response.str();
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
+                    if (sent >= 0)
+                    {
+                        LOG_INFO("Portal background image served successfully from: " + foundBgPath);
+                        return true;
+                    }
+                }
+            }
+            else
+            {
+                LOG_WARN("Portal background image not found: " + m_backgroundImagePath + " (searched in assets/)");
+            }
+        }
+        send404(clientFd);
+        return true;
+    }
 
     // PRIMEIRO: Verificar se é arquivo estático (antes de verificar página principal)
     // Isso é importante porque arquivos estáticos têm prioridade
@@ -82,14 +175,14 @@ bool WebPortal::handleRequest(int clientFd, const std::string& request) const
     {
         return serveWebPage(clientFd, basePrefix);
     }
-    
+
     LOG_WARN("No file path extracted from request: " + request.substr(0, std::min(100UL, request.length())));
 
     // Requisição não reconhecida
     return false;
 }
 
-bool WebPortal::serveWebPage(int clientFd, const std::string& basePrefix) const
+bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
 {
     std::string webDir = getWebDirectory();
     std::string indexPath = webDir + "/index.html";
@@ -100,13 +193,125 @@ bool WebPortal::serveWebPage(int clientFd, const std::string& basePrefix) const
         LOG_ERROR("Failed to read index.html, using fallback");
         // Fallback simples se não conseguir ler o arquivo
         std::string streamUrl = basePrefix.empty() ? "/stream" : basePrefix + "/stream";
-        html = "<!DOCTYPE html><html><head><title>RetroCapture Stream</title></head><body><h1>RetroCapture Stream</h1><p>Erro ao carregar página. Stream disponível em: <a href=\"" + streamUrl + "\">" + streamUrl + "</a></p></body></html>";
+        html = "<!DOCTYPE html><html><head><title>" + m_title + "</title></head><body><h1>" + m_title + "</h1><p>Erro ao carregar página. Stream disponível em: <a href=\"" + streamUrl + "\">" + streamUrl + "</a></p></body></html>";
     }
-    else if (!basePrefix.empty())
+    else
     {
-        // Injetar prefixo base nos links relativos
-        html = injectBasePrefix(html, basePrefix);
-        LOG_INFO("Injected base prefix: " + basePrefix);
+        // Substituir título da página
+        std::string titleTag = "<title>" + m_title + "</title>";
+        size_t titlePos = html.find("<title>");
+        if (titlePos != std::string::npos)
+        {
+            size_t titleEnd = html.find("</title>", titlePos);
+            if (titleEnd != std::string::npos)
+            {
+                html.replace(titlePos, titleEnd - titlePos + 8, titleTag);
+            }
+        }
+
+        // Substituir título no header (h1)
+        std::string h1Tag = "<h1 class=\"mb-0\">" + m_title + "</h1>";
+        size_t h1Pos = html.find("<h1 class=\"mb-0\">");
+        if (h1Pos != std::string::npos)
+        {
+            size_t h1End = html.find("</h1>", h1Pos);
+            if (h1End != std::string::npos)
+            {
+                html.replace(h1Pos, h1End - h1Pos + 5, h1Tag);
+            }
+        }
+
+        // Substituir ícone por imagem se especificado
+        if (!m_imagePath.empty())
+        {
+            // Buscar imagem nos locais padrão (assets/)
+            std::string foundImagePath = findAssetFile(m_imagePath);
+
+            if (!foundImagePath.empty() && std::filesystem::exists(foundImagePath))
+            {
+                // Encontrar o ícone Bootstrap (bi-controller)
+                std::string iconTag = "<i class=\"bi bi-controller fs-1 text-primary me-3\"></i>";
+                size_t iconPos = html.find(iconTag);
+                if (iconPos != std::string::npos)
+                {
+                    // Criar tag de imagem
+                    // Usar /portal-image como rota para a imagem (será servida via handleRequest)
+                    std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
+                    std::string imgTag = "<img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" class=\"me-3\" style=\"max-height: 48px; width: auto;\">";
+                    html.replace(iconPos, iconTag.length(), imgTag);
+                }
+            }
+        }
+
+        // IMPORTANTE: Remover meta tag upgrade-insecure-requests se HTTPS não estiver ativo
+        // Essa tag força o navegador a fazer upgrade de HTTP para HTTPS, causando problemas
+        // quando HTTPS está desabilitado e acessando pela rede interna
+        // Verificar se HTTPS está realmente ativo através do HTTPServer
+        bool httpsActive = false;
+        if (m_httpServer)
+        {
+            httpsActive = m_httpServer->isHTTPS();
+        }
+
+        // Se HTTPS não estiver ativo, remover a meta tag upgrade-insecure-requests
+        if (!httpsActive)
+        {
+            // Buscar a meta tag de forma flexível (pode ter espaços diferentes)
+            // Padrão: <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+            size_t metaStart = html.find("<meta");
+            while (metaStart != std::string::npos)
+            {
+                // Encontrar o final da tag meta
+                size_t metaEnd = html.find(">", metaStart);
+                if (metaEnd == std::string::npos)
+                {
+                    break;
+                }
+
+                // Extrair a tag completa
+                std::string metaTag = html.substr(metaStart, metaEnd - metaStart + 1);
+
+                // Verificar se é a tag upgrade-insecure-requests
+                if (metaTag.find("Content-Security-Policy") != std::string::npos &&
+                    metaTag.find("upgrade-insecure-requests") != std::string::npos)
+                {
+                    // Remover a tag (incluindo quebra de linha se houver)
+                    size_t removeStart = metaStart;
+                    size_t removeEnd = metaEnd + 1;
+
+                    // Remover espaços em branco e quebras de linha após a tag
+                    while (removeEnd < html.length() &&
+                           (html[removeEnd] == ' ' || html[removeEnd] == '\t' || html[removeEnd] == '\n' || html[removeEnd] == '\r'))
+                    {
+                        removeEnd++;
+                    }
+
+                    html.erase(removeStart, removeEnd - removeStart);
+                    LOG_INFO("Removida meta tag upgrade-insecure-requests (HTTPS desabilitado)");
+                    break; // Tag encontrada e removida, sair do loop
+                }
+
+                // Procurar próxima tag meta
+                metaStart = html.find("<meta", metaStart + 1);
+            }
+        }
+
+        // Injetar CSS customizado com cores e imagem de fundo
+        std::string customCSS = generateCustomCSS(basePrefix);
+
+        // Inserir CSS customizado antes do fechamento de </head>
+        size_t headEndPos = html.find("</head>");
+        if (headEndPos != std::string::npos)
+        {
+            html.insert(headEndPos, "\n    <style>\n" + customCSS + "\n    </style>");
+        }
+
+        // Aplicar prefixo base se necessário (depois das substituições)
+        if (!basePrefix.empty())
+        {
+            html = injectBasePrefix(html, basePrefix);
+            LOG_INFO("Injected base prefix: " + basePrefix);
+        }
     }
 
     LOG_INFO("Serving web page (HTML size: " + std::to_string(html.length()) + " bytes)");
@@ -134,11 +339,11 @@ bool WebPortal::serveWebPage(int clientFd, const std::string& basePrefix) const
     }
 }
 
-bool WebPortal::serveStaticFile(int clientFd, const std::string& filePath) const
+bool WebPortal::serveStaticFile(int clientFd, const std::string &filePath) const
 {
     std::string webDir = getWebDirectory();
     std::string fullPath = webDir + "/" + filePath;
-    
+
     LOG_INFO("Attempting to serve static file - filePath: " + filePath + ", fullPath: " + fullPath);
 
     std::string content = readFileContent(fullPath);
@@ -186,7 +391,7 @@ void WebPortal::send404(int clientFd) const
     sendData(clientFd, response, strlen(response));
 }
 
-ssize_t WebPortal::sendData(int clientFd, const void* data, size_t size) const
+ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
 {
     if (m_httpServer)
     {
@@ -194,6 +399,242 @@ ssize_t WebPortal::sendData(int clientFd, const void* data, size_t size) const
     }
     // Fallback para send() direto se HTTPServer não estiver configurado
     return send(clientFd, data, size, MSG_NOSIGNAL);
+}
+
+std::string WebPortal::findAssetFile(const std::string &relativePath) const
+{
+    // Função helper para obter diretório de configuração do usuário
+    auto getUserConfigDir = []() -> std::string
+    {
+        const char *homeDir = std::getenv("HOME");
+        if (homeDir)
+        {
+            std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+            return configDir.string();
+        }
+        return "";
+    };
+
+    // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
+    std::filesystem::path testPath(relativePath);
+    if (testPath.is_absolute() && std::filesystem::exists(testPath))
+    {
+        return std::filesystem::absolute(testPath).string();
+    }
+
+    // Extrair apenas o nome do arquivo
+    std::filesystem::path inputPath(relativePath);
+    std::string fileName = inputPath.filename().string();
+
+    // Lista de locais para buscar (em ordem de prioridade)
+    std::vector<std::string> possiblePaths;
+
+    // 1. Pasta de configuração do usuário (~/.config/retrocapture/assets/) - PRIORIDADE ALTA
+    std::string userConfigDir = getUserConfigDir();
+    if (!userConfigDir.empty())
+    {
+        std::filesystem::path userAssetsDir = std::filesystem::path(userConfigDir) / "assets";
+        possiblePaths.push_back((userAssetsDir / fileName).string());
+    }
+
+    // 2. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
+    // No Linux, podemos usar readlink em /proc/self/exe para obter o caminho do executável
+    char exePath[1024];
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len != -1)
+    {
+        exePath[len] = '\0';
+        std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+        std::filesystem::path assetsDir = exeDir / "assets";
+        possiblePaths.push_back((assetsDir / fileName).string());
+    }
+
+    // 3. Caminho como fornecido (pode ser relativo)
+    possiblePaths.push_back(relativePath);
+
+    // 4. Diretório atual/assets/
+    possiblePaths.push_back("./assets/" + fileName);
+    possiblePaths.push_back("./assets/" + relativePath);
+
+    // 5. Diretório atual
+    possiblePaths.push_back("./" + fileName);
+    possiblePaths.push_back("./" + relativePath);
+
+    // Tentar caminhos na ordem de prioridade
+    for (const auto &path : possiblePaths)
+    {
+        std::filesystem::path fsPath(path);
+        if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+        {
+            return std::filesystem::absolute(fsPath).string();
+        }
+    }
+
+    return ""; // Não encontrado
+}
+
+void WebPortal::setColors(
+    const float bg[4], const float text[4], const float primary[4],
+    const float secondary[4], const float cardHeader[4], const float border[4],
+    const float success[4], const float warning[4], const float danger[4])
+{
+    // IMPORTANTE: Verificar ponteiros antes de usar memcpy para evitar corrupção de memória
+    if (bg)
+    {
+        memcpy(m_colorBackground, bg, 4 * sizeof(float));
+    }
+    if (text)
+    {
+        memcpy(m_colorText, text, 4 * sizeof(float));
+    }
+    if (primary)
+    {
+        memcpy(m_colorPrimary, primary, 4 * sizeof(float));
+    }
+    if (secondary)
+    {
+        memcpy(m_colorSecondary, secondary, 4 * sizeof(float));
+    }
+    if (cardHeader)
+    {
+        memcpy(m_colorCardHeader, cardHeader, 4 * sizeof(float));
+    }
+    if (border)
+    {
+        memcpy(m_colorBorder, border, 4 * sizeof(float));
+    }
+    if (success)
+    {
+        memcpy(m_colorSuccess, success, 4 * sizeof(float));
+    }
+    if (warning)
+    {
+        memcpy(m_colorWarning, warning, 4 * sizeof(float));
+    }
+    if (danger)
+    {
+        memcpy(m_colorDanger, danger, 4 * sizeof(float));
+    }
+}
+
+std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
+{
+    std::ostringstream css;
+
+    // Função helper para converter float[4] (0.0-1.0) para string RGB/RGBA
+    auto colorToRGBA = [](const float color[4]) -> std::string
+    {
+        int r = static_cast<int>(color[0] * 255.0f);
+        int g = static_cast<int>(color[1] * 255.0f);
+        int b = static_cast<int>(color[2] * 255.0f);
+        float a = color[3];
+        std::ostringstream ss;
+        ss << "rgba(" << r << ", " << g << ", " << b << ", " << std::fixed << std::setprecision(2) << a << ")";
+        return ss.str();
+    };
+
+    auto colorToRGB = [](const float color[4]) -> std::string
+    {
+        int r = static_cast<int>(color[0] * 255.0f);
+        int g = static_cast<int>(color[1] * 255.0f);
+        int b = static_cast<int>(color[2] * 255.0f);
+        std::ostringstream ss;
+        ss << "rgb(" << r << ", " << g << ", " << b << ")";
+        return ss.str();
+    };
+
+    // Background do body (com imagem de fundo se especificada)
+    css << "body {\n";
+    css << "    background-color: " << colorToRGBA(m_colorBackground) << ";\n";
+
+    if (!m_backgroundImagePath.empty())
+    {
+        // Buscar imagem de fundo nos locais padrão
+        std::string foundBgPath = findAssetFile(m_backgroundImagePath);
+        if (!foundBgPath.empty() && std::filesystem::exists(foundBgPath))
+        {
+            // Usar rota /portal-background para servir a imagem
+            std::string bgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-background";
+            css << "    background-image: url('" << bgUrl << "');\n";
+            css << "    background-size: cover;\n";
+            css << "    background-position: center;\n";
+            css << "    background-repeat: no-repeat;\n";
+            css << "    background-attachment: fixed;\n";
+        }
+    }
+
+    css << "}\n\n";
+
+    // Cores CSS customizadas
+    css << ":root {\n";
+    css << "    --primary-color: " << colorToRGB(m_colorPrimary) << ";\n";
+    css << "    --secondary-color: " << colorToRGB(m_colorSecondary) << ";\n";
+    css << "    --success-color: " << colorToRGB(m_colorSuccess) << ";\n";
+    css << "    --warning-color: " << colorToRGB(m_colorWarning) << ";\n";
+    css << "    --danger-color: " << colorToRGB(m_colorDanger) << ";\n";
+    css << "    --dark-bg: " << colorToRGB(m_colorBackground) << ";\n";
+    css << "    --card-bg: " << colorToRGB(m_colorSecondary) << ";\n";
+    css << "}\n\n";
+
+    // Sobrescrever classes Bootstrap com cores customizadas
+    css << ".bg-dark {\n";
+    css << "    background-color: " << colorToRGBA(m_colorBackground) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".text-light {\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".text-primary {\n";
+    css << "    color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".bg-secondary {\n";
+    css << "    background-color: " << colorToRGBA(m_colorSecondary) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".card.bg-dark, .card-header.bg-dark {\n";
+    css << "    background-color: " << colorToRGBA(m_colorCardHeader) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".border-secondary {\n";
+    css << "    border-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".btn-primary {\n";
+    css << "    background-color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".btn-primary:hover {\n";
+    // Criar cor com transparência para hover (adicionar "dd" para 85% de opacidade em hex)
+    int r = static_cast<int>(m_colorPrimary[0] * 255.0f);
+    int g = static_cast<int>(m_colorPrimary[1] * 255.0f);
+    int b = static_cast<int>(m_colorPrimary[2] * 255.0f);
+    std::ostringstream hoverColor;
+    hoverColor << "rgba(" << r << ", " << g << ", " << b << ", 0.85)";
+    css << "    background-color: " << hoverColor.str() << " !important;\n";
+    css << "    border-color: " << hoverColor.str() << " !important;\n";
+    css << "}\n\n";
+
+    css << ".btn-success {\n";
+    css << "    background-color: " << colorToRGBA(m_colorSuccess) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorSuccess) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".badge.bg-warning {\n";
+    css << "    background-color: " << colorToRGBA(m_colorWarning) << " !important;\n";
+    css << "}\n\n";
+
+    css << "code.text-primary {\n";
+    css << "    color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".text-muted {\n";
+    css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
+    css << "}\n\n";
+
+    return css.str();
 }
 
 std::string WebPortal::getWebDirectory() const
@@ -221,7 +662,7 @@ std::string WebPortal::getWebDirectory() const
     return "./web";
 }
 
-std::string WebPortal::readFileContent(const std::string& filePath) const
+std::string WebPortal::readFileContent(const std::string &filePath) const
 {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open())
@@ -235,12 +676,12 @@ std::string WebPortal::readFileContent(const std::string& filePath) const
     return content.str();
 }
 
-std::string WebPortal::getContentType(const std::string& filePath) const
+std::string WebPortal::getContentType(const std::string &filePath) const
 {
     // Determinar tipo MIME baseado na extensão
     // Usar find ao invés de ends_with para compatibilidade com C++17
     size_t len = filePath.length();
-    
+
     if (len >= 5 && filePath.substr(len - 5) == ".html")
     {
         return "text/html";
@@ -283,12 +724,12 @@ std::string WebPortal::getContentType(const std::string& filePath) const
     }
 }
 
-std::string WebPortal::extractFilePath(const std::string& request) const
+std::string WebPortal::extractFilePath(const std::string &request) const
 {
     // Extrair caminho do arquivo da requisição HTTP
     // Exemplo: "GET /style.css HTTP/1.1" -> "style.css"
     // Exemplo: "GET /retrocapture/style.css HTTP/1.1" -> "style.css" (remove prefixo)
-    
+
     size_t getPos = request.find("GET /");
     if (getPos == std::string::npos)
     {
@@ -311,35 +752,35 @@ std::string WebPortal::extractFilePath(const std::string& request) const
     }
 
     std::string path = request.substr(startPos, endPos - startPos);
-    
+
     // Remover query string se existir
     size_t queryPos = path.find('?');
     if (queryPos != std::string::npos)
     {
         path = path.substr(0, queryPos);
     }
-    
+
     // Verificar se é um arquivo estático conhecido
     bool isStaticFile = (path.find("style.css") != std::string::npos ||
                          path.find("player.js") != std::string::npos ||
                          path.find(".css") != std::string::npos ||
                          path.find(".js") != std::string::npos);
-    
+
     if (!isStaticFile)
     {
         return "";
     }
-    
+
     // Remover barra inicial se existir
     if (!path.empty() && path[0] == '/')
     {
         path = path.substr(1);
     }
-    
+
     // Remover prefixo comum se existir (ex: "retrocapture/style.css" -> "style.css")
     // Isso é necessário porque o nginx pode estar enviando o path completo
     std::vector<std::string> commonPrefixes = {"retrocapture/", "retrocapture"};
-    for (const auto& prefix : commonPrefixes)
+    for (const auto &prefix : commonPrefixes)
     {
         if (path.find(prefix) == 0)
         {
@@ -352,7 +793,7 @@ std::string WebPortal::extractFilePath(const std::string& request) const
             break;
         }
     }
-    
+
     // Extrair apenas o nome do arquivo (sem diretórios extras)
     size_t lastSlash = path.find_last_of('/');
     if (lastSlash != std::string::npos && lastSlash < path.length() - 1)
@@ -363,10 +804,10 @@ std::string WebPortal::extractFilePath(const std::string& request) const
     return path;
 }
 
-std::string WebPortal::extractBasePrefix(const std::string& request) const
+std::string WebPortal::extractBasePrefix(const std::string &request) const
 {
     // Tentar extrair prefixo base de várias formas:
-    
+
     // 1. Do header X-Forwarded-Prefix (padrão para proxy reverso)
     size_t prefixHeaderPos = request.find("X-Forwarded-Prefix:");
     if (prefixHeaderPos != std::string::npos)
@@ -404,7 +845,7 @@ std::string WebPortal::extractBasePrefix(const std::string& request) const
             }
         }
     }
-    
+
     // 2. Do path da requisição (se contiver um prefixo conhecido)
     size_t getPos = request.find("GET /");
     if (getPos != std::string::npos)
@@ -425,25 +866,25 @@ std::string WebPortal::extractBasePrefix(const std::string& request) const
             }
         }
     }
-    
+
     return ""; // Sem prefixo
 }
 
-std::string WebPortal::injectBasePrefix(const std::string& html, const std::string& basePrefix) const
+std::string WebPortal::injectBasePrefix(const std::string &html, const std::string &basePrefix) const
 {
     if (basePrefix.empty())
     {
         return html;
     }
-    
+
     std::string result = html;
-    
+
     // Substituir URLs relativas que começam com /
     // Padrões a substituir:
     // href="/style.css" -> href="/retrocapture/style.css"
     // src="/player.js" -> src="/retrocapture/player.js"
     // href="/stream" -> href="/retrocapture/stream"
-    
+
     std::vector<std::pair<std::string, std::string>> replacements = {
         {"href=\"/style.css\"", "href=\"" + basePrefix + "/style.css\""},
         {"href='/style.css'", "href='" + basePrefix + "/style.css'"},
@@ -454,8 +895,8 @@ std::string WebPortal::injectBasePrefix(const std::string& html, const std::stri
         {"href=\"/stream.m3u8\"", "href=\"" + basePrefix + "/stream.m3u8\""},
         {"href='/stream.m3u8'", "href='" + basePrefix + "/stream.m3u8'"},
     };
-    
-    for (const auto& [oldStr, newStr] : replacements)
+
+    for (const auto &[oldStr, newStr] : replacements)
     {
         size_t pos = 0;
         while ((pos = result.find(oldStr, pos)) != std::string::npos)
@@ -464,11 +905,10 @@ std::string WebPortal::injectBasePrefix(const std::string& html, const std::stri
             pos += newStr.length();
         }
     }
-    
+
     // Também substituir URLs que começam com / mas não são recursos externos
     // Usar regex seria melhor, mas vamos fazer substituições simples
     // Substituir padrões como: "/stream" (mas não "https://" ou "http://")
-    
+
     return result;
 }
-
