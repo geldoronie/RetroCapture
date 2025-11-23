@@ -586,12 +586,122 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     // Verificar tipo de requisição (ANTES de verificar portal web)
     // Isso garante que requisições de stream não sejam capturadas pelo portal
+    // Detectar requisições HLS (com ou sem prefixo base)
     bool isHLSPlaylist = (request.find("/stream.m3u8") != std::string::npos);
     bool isHLSSegment = (request.find("/segment_") != std::string::npos);
     bool isStreamRequest = (request.find("/stream") != std::string::npos &&
                             !isHLSPlaylist &&
                             request.find("/stream.m3u8") == std::string::npos);
     int segmentIndex = -1;
+
+    // Extrair prefixo base para verificar requisições com prefixo
+    // Prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
+    std::string basePrefixForDetection = "";
+
+    // 1. Tentar extrair do header X-Forwarded-Prefix (padrão para proxy reverso)
+    size_t prefixHeaderPos = request.find("X-Forwarded-Prefix:");
+    if (prefixHeaderPos != std::string::npos)
+    {
+        size_t valueStart = request.find(":", prefixHeaderPos) + 1;
+        while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
+        {
+            valueStart++;
+        }
+        size_t valueEnd = request.find("\r\n", valueStart);
+        if (valueEnd == std::string::npos)
+        {
+            valueEnd = request.find("\n", valueStart);
+        }
+        if (valueEnd != std::string::npos)
+        {
+            std::string prefix = request.substr(valueStart, valueEnd - valueStart);
+            // Remover espaços em branco
+            while (!prefix.empty() && (prefix.back() == ' ' || prefix.back() == '\t' || prefix.back() == '\r'))
+            {
+                prefix.pop_back();
+            }
+            if (!prefix.empty())
+            {
+                // Garantir que começa com / mas não termina com /
+                if (prefix[0] != '/')
+                {
+                    prefix = "/" + prefix;
+                }
+                if (prefix.length() > 1 && prefix.back() == '/')
+                {
+                    prefix.pop_back();
+                }
+                basePrefixForDetection = prefix;
+            }
+        }
+    }
+
+    // 2. Se ainda vazio, tentar extrair do path da requisição
+    if (basePrefixForDetection.empty())
+    {
+        size_t getPos = request.find("GET /");
+        if (getPos != std::string::npos)
+        {
+            size_t startPos = getPos + 5;
+            size_t endPos = request.find(" ", startPos);
+            if (endPos == std::string::npos)
+            {
+                endPos = request.find("\r\n", startPos);
+            }
+            if (endPos != std::string::npos)
+            {
+                std::string path = request.substr(startPos, endPos - startPos);
+                // Remover query string
+                size_t queryPos = path.find('?');
+                if (queryPos != std::string::npos)
+                {
+                    path = path.substr(0, queryPos);
+                }
+                // Extrair prefixo se houver (ex: /retrocapture/stream.m3u8 -> /retrocapture)
+                // Verificar se o path tem mais de um segmento (indicando prefixo base)
+                if (path.length() > 1 && path[0] == '/')
+                {
+                    // Contar quantas barras existem
+                    size_t slashCount = 0;
+                    for (char c : path)
+                    {
+                        if (c == '/')
+                            slashCount++;
+                    }
+                    // Se houver mais de uma barra, há um prefixo base
+                    if (slashCount > 1)
+                    {
+                        size_t secondSlash = path.find('/', 1);
+                        if (secondSlash != std::string::npos)
+                        {
+                            basePrefixForDetection = path.substr(0, secondSlash);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Verificar requisições HLS com prefixo base
+    if (!isHLSPlaylist && !basePrefixForDetection.empty())
+    {
+        std::string prefixedPlaylist = basePrefixForDetection + "/stream.m3u8";
+        if (request.find("GET " + prefixedPlaylist) != std::string::npos ||
+            request.find(prefixedPlaylist) != std::string::npos)
+        {
+            isHLSPlaylist = true;
+        }
+    }
+
+    if (!isHLSSegment && !basePrefixForDetection.empty())
+    {
+        std::string prefixedSegment = basePrefixForDetection + "/segment_";
+        if (request.find("GET " + prefixedSegment) != std::string::npos ||
+            request.find(prefixedSegment) != std::string::npos)
+        {
+            isHLSSegment = true;
+        }
+    }
 
     // IMPORTANTE: Verificar portal web APENAS se NÃO for stream/HLS e se Web Portal estiver habilitado
     // Isso previne que stream.m3u8 seja capturado pelo portal e retorne HTML
@@ -608,10 +718,21 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
     }
 
-    // Extrair índice do segmento HLS
+    // Extrair índice do segmento HLS (com ou sem prefixo base)
     if (isHLSSegment)
     {
         size_t segmentPos = request.find("/segment_");
+        if (segmentPos == std::string::npos && !basePrefixForDetection.empty())
+        {
+            // Tentar com prefixo base
+            std::string prefixedSegment = basePrefixForDetection + "/segment_";
+            segmentPos = request.find(prefixedSegment);
+            if (segmentPos != std::string::npos)
+            {
+                segmentPos += basePrefixForDetection.length(); // Ajustar para posição após prefixo
+            }
+        }
+
         if (segmentPos != std::string::npos)
         {
             size_t dotPos = request.find(".ts", segmentPos);
@@ -632,31 +753,130 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     if (isHLSPlaylist)
     {
-        // Extrair prefixo base para incluir nos segmentos do M3U8
-        std::string basePrefix = "";
-        size_t streamPos = request.find("/stream.m3u8");
-        if (streamPos != std::string::npos)
+        // Extrair prefixo base - prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
+        std::string basePrefix = basePrefixForDetection;
+
+        // 1. Tentar extrair do header X-Forwarded-Prefix (padrão para proxy reverso)
+        if (basePrefix.empty())
         {
-            // Extrair path antes de /stream.m3u8
-            size_t pathStart = request.find("GET ");
-            if (pathStart != std::string::npos)
+            size_t prefixHeaderPos = request.find("X-Forwarded-Prefix:");
+            if (prefixHeaderPos != std::string::npos)
             {
-                std::string fullPath = request.substr(pathStart + 4, streamPos - pathStart - 4);
-                // Remover espaços
-                while (!fullPath.empty() && fullPath[0] == ' ')
+                size_t valueStart = request.find(":", prefixHeaderPos) + 1;
+                while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
                 {
-                    fullPath = fullPath.substr(1);
+                    valueStart++;
                 }
-                if (!fullPath.empty() && fullPath[0] == '/')
+                size_t valueEnd = request.find("\r\n", valueStart);
+                if (valueEnd == std::string::npos)
                 {
-                    fullPath = fullPath.substr(1);
+                    valueEnd = request.find("\n", valueStart);
                 }
-                if (!fullPath.empty())
+                if (valueEnd != std::string::npos)
                 {
-                    basePrefix = "/" + fullPath;
+                    std::string prefix = request.substr(valueStart, valueEnd - valueStart);
+                    // Remover espaços em branco
+                    while (!prefix.empty() && (prefix.back() == ' ' || prefix.back() == '\t' || prefix.back() == '\r'))
+                    {
+                        prefix.pop_back();
+                    }
+                    if (!prefix.empty())
+                    {
+                        // Garantir que começa com / mas não termina com /
+                        if (prefix[0] != '/')
+                        {
+                            prefix = "/" + prefix;
+                        }
+                        if (prefix.length() > 1 && prefix.back() == '/')
+                        {
+                            prefix.pop_back();
+                        }
+                        basePrefix = prefix;
+                        LOG_INFO("Extracted basePrefix from X-Forwarded-Prefix header: '" + basePrefix + "'");
+                    }
                 }
             }
         }
+
+        // 1b. Tentar extrair do header X-Forwarded-Uri (alternativa para proxy reverso)
+        if (basePrefix.empty())
+        {
+            size_t uriHeaderPos = request.find("X-Forwarded-Uri:");
+            if (uriHeaderPos == std::string::npos)
+            {
+                uriHeaderPos = request.find("X-Original-URI:");
+            }
+            if (uriHeaderPos != std::string::npos)
+            {
+                size_t valueStart = request.find(":", uriHeaderPos) + 1;
+                while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
+                {
+                    valueStart++;
+                }
+                size_t valueEnd = request.find("\r\n", valueStart);
+                if (valueEnd == std::string::npos)
+                {
+                    valueEnd = request.find("\n", valueStart);
+                }
+                if (valueEnd != std::string::npos)
+                {
+                    std::string uri = request.substr(valueStart, valueEnd - valueStart);
+                    // Remover espaços em branco
+                    while (!uri.empty() && (uri.back() == ' ' || uri.back() == '\t' || uri.back() == '\r'))
+                    {
+                        uri.pop_back();
+                    }
+                    // Extrair prefixo do URI (ex: /retrocapture/stream.m3u8 -> /retrocapture)
+                    if (!uri.empty() && uri[0] == '/')
+                    {
+                        size_t streamPos = uri.find("/stream.m3u8");
+                        if (streamPos != std::string::npos && streamPos > 0)
+                        {
+                            basePrefix = uri.substr(0, streamPos);
+                            LOG_INFO("Extracted basePrefix from X-Forwarded-Uri/X-Original-URI header: '" + basePrefix + "'");
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Se ainda vazio, tentar extrair do path da requisição diretamente
+        if (basePrefix.empty())
+        {
+            size_t streamPos = request.find("/stream.m3u8");
+            if (streamPos != std::string::npos)
+            {
+                size_t pathStart = request.find("GET ");
+                if (pathStart != std::string::npos)
+                {
+                    std::string fullPath = request.substr(pathStart + 4, streamPos - pathStart - 4);
+                    // Remover espaços
+                    while (!fullPath.empty() && fullPath[0] == ' ')
+                    {
+                        fullPath = fullPath.substr(1);
+                    }
+                    // Remover query string se existir
+                    size_t queryPos = fullPath.find('?');
+                    if (queryPos != std::string::npos)
+                    {
+                        fullPath = fullPath.substr(0, queryPos);
+                    }
+                    if (!fullPath.empty() && fullPath[0] == '/')
+                    {
+                        // Extrair prefixo (tudo antes de /stream.m3u8)
+                        // Exemplo: /retrocapture/stream.m3u8 -> /retrocapture
+                        size_t lastSlash = fullPath.rfind('/');
+                        if (lastSlash != std::string::npos && lastSlash > 0)
+                        {
+                            basePrefix = fullPath.substr(0, lastSlash);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Log para debug
+        LOG_INFO("HLS Playlist request - extracted basePrefix: '" + basePrefix + "'");
 
         LOG_INFO("Serving HLS playlist to client (basePrefix: " + basePrefix + ")");
         serveHLSPlaylist(clientFd, basePrefix);
@@ -782,12 +1002,51 @@ void HTTPTSStreamer::hlsSegmentThread()
         // Verificar se há dados suficientes no buffer
         if (m_hlsBuffer.empty())
         {
+            LOG_WARN("HLS segment thread: buffer vazio, pulando criação de segmento (pode indicar problema no stream)");
+            continue;
+        }
+
+        // Validar tamanho mínimo do buffer
+        // Para MPEG-TS, um pacote tem 188 bytes, então precisamos de pelo menos alguns pacotes
+        // Reduzindo o mínimo para 376 bytes (2 pacotes TS) para ser mais tolerante
+        if (m_hlsBuffer.size() < 376) // Mínimo 2 pacotes TS (376 bytes)
+        {
+            LOG_WARN("HLS segment thread: buffer muito pequeno (" + std::to_string(m_hlsBuffer.size()) +
+                     " bytes, mínimo: 376), aguardando mais dados...");
+            // Não limpar o buffer, apenas aguardar mais dados no próximo ciclo
             continue;
         }
 
         // Criar novo segmento
         HLSSegment segment;
-        segment.data = m_hlsBuffer;
+
+        // IMPORTANTE: Para HLS, cada segmento deve ser independente e decodificável
+        // O MPEG-TS já contém PAT/PMT periodicamente, mas para garantir que o primeiro segmento
+        // seja sempre decodificável, adicionamos o header apenas no primeiro segmento
+        if (!m_formatHeader.empty() && m_hlsSegments.empty())
+        {
+            // Primeiro segmento: garantir que comece com header PAT/PMT
+            // Verificar se o buffer já começa com sync byte válido (0x47)
+            if (m_hlsBuffer.size() > 0 && m_hlsBuffer[0] == 0x47)
+            {
+                // Buffer já começa com dados MPEG-TS válidos, usar diretamente
+                segment.data = m_hlsBuffer;
+            }
+            else
+            {
+                // Adicionar header no início do primeiro segmento
+                segment.data = m_formatHeader;
+                segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.end());
+                LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex));
+            }
+        }
+        else
+        {
+            // Segmentos subsequentes: usar o buffer diretamente
+            // O MPEG-TS já contém PAT/PMT periodicamente, então não precisamos adicionar manualmente
+            segment.data = m_hlsBuffer;
+        }
+
         segment.index = m_hlsSegmentIndex++;
         segment.timestampUs = getTimestampUs();
 
@@ -795,16 +1054,22 @@ void HTTPTSStreamer::hlsSegmentThread()
         m_hlsSegments.push_back(segment);
 
         // Manter apenas os últimos HLS_SEGMENT_COUNT segmentos
+        int removedCount = 0;
         while (static_cast<int>(m_hlsSegments.size()) > HLS_SEGMENT_COUNT)
         {
             m_hlsSegments.pop_front();
+            removedCount++;
+        }
+        if (removedCount > 0)
+        {
+            LOG_INFO("Removed " + std::to_string(removedCount) + " old HLS segment(s), keeping " + std::to_string(m_hlsSegments.size()));
         }
 
         // Limpar buffer para próximo segmento
         m_hlsBuffer.clear();
 
         LOG_INFO("HLS segment " + std::to_string(segment.index) + " created (" +
-                 std::to_string(segment.data.size()) + " bytes)");
+                 std::to_string(segment.data.size()) + " bytes, total segments: " + std::to_string(m_hlsSegments.size()) + ")");
     }
 
     LOG_INFO("HLS segment thread stopped");
@@ -818,21 +1083,52 @@ std::string HTTPTSStreamer::generateM3U8Playlist(const std::string &basePrefix) 
     m3u8 << "#EXTM3U\n";
     m3u8 << "#EXT-X-VERSION:3\n";
     m3u8 << "#EXT-X-TARGETDURATION:" << HLS_SEGMENT_DURATION_SEC << "\n";
-    m3u8 << "#EXT-X-MEDIA-SEQUENCE:" << (m_hlsSegmentIndex - static_cast<int>(m_hlsSegments.size())) << "\n";
 
-    std::string segmentPrefix = basePrefix.empty() ? "" : basePrefix;
-    if (!segmentPrefix.empty() && segmentPrefix.back() != '/')
+    // Para live streams, não incluímos EXT-X-PLAYLIST-TYPE (ou usamos EVENT)
+    // Não incluímos EXT-X-ENDLIST para indicar que é uma live stream
+
+    // Calcular MEDIA-SEQUENCE corretamente (índice do primeiro segmento disponível)
+    int mediaSequence = 0;
+    if (!m_hlsSegments.empty())
     {
-        segmentPrefix += "/";
+        mediaSequence = m_hlsSegments.front().index;
+    }
+    else if (m_hlsSegmentIndex > 0)
+    {
+        // Se não há segmentos mas já criamos alguns, usar o próximo índice
+        mediaSequence = m_hlsSegmentIndex;
+    }
+    m3u8 << "#EXT-X-MEDIA-SEQUENCE:" << mediaSequence << "\n";
+
+    // Sempre usar path absoluto começando com /
+    // Se basePrefix estiver vazio, usar "/", senão usar o prefixo com "/" no final
+    std::string segmentPrefix;
+    if (basePrefix.empty())
+    {
+        segmentPrefix = "/";
+    }
+    else
+    {
+        segmentPrefix = basePrefix;
+        if (segmentPrefix.back() != '/')
+        {
+            segmentPrefix += "/";
+        }
     }
 
     for (const auto &segment : m_hlsSegments)
     {
         m3u8 << "#EXTINF:" << HLS_SEGMENT_DURATION_SEC << ".0,\n";
-        m3u8 << segmentPrefix << "segment_" << segment.index << ".ts\n";
+        // Sempre usar path absoluto: /segment_X.ts ou /prefix/segment_X.ts
+        std::string segmentUrl = segmentPrefix + "segment_" + std::to_string(segment.index) + ".ts";
+        m3u8 << segmentUrl << "\n";
     }
 
-    return m3u8.str();
+    std::string playlist = m3u8.str();
+    LOG_INFO("Generated M3U8 playlist with basePrefix: '" + basePrefix + "', segmentPrefix: '" + segmentPrefix + "'");
+    LOG_INFO("First segment URL in playlist: " + (m_hlsSegments.empty() ? "none" : (segmentPrefix + "segment_" + std::to_string(m_hlsSegments.front().index) + ".ts")));
+
+    return playlist;
 }
 
 void HTTPTSStreamer::serveHLSPlaylist(int clientFd, const std::string &basePrefix)
@@ -844,7 +1140,11 @@ void HTTPTSStreamer::serveHLSPlaylist(int clientFd, const std::string &basePrefi
     response << "Content-Type: application/vnd.apple.mpegurl\r\n";
     response << "Content-Length: " << playlist.length() << "\r\n";
     response << "Connection: close\r\n";
-    response << "Cache-Control: no-cache\r\n";
+    response << "Cache-Control: no-cache, no-store, must-revalidate\r\n";
+    response << "Pragma: no-cache\r\n";
+    response << "Expires: 0\r\n";
+    response << "Access-Control-Allow-Origin: *\r\n";
+    response << "Access-Control-Allow-Methods: GET, OPTIONS\r\n";
     response << "\r\n";
     response << playlist;
 
@@ -876,7 +1176,10 @@ void HTTPTSStreamer::serveHLSSegment(int clientFd, int segmentIndex)
         }
     }
 
-    // Segmento não encontrado
+    // Segmento não encontrado - log detalhado para debug
+    LOG_WARN("HLS segment " + std::to_string(segmentIndex) + " not found. Available segments: " +
+             std::to_string(m_hlsSegments.size()) +
+             (m_hlsSegments.empty() ? "" : " (range: " + std::to_string(m_hlsSegments.front().index) + " to " + std::to_string(m_hlsSegments.back().index) + ")"));
     send404(clientFd);
 }
 

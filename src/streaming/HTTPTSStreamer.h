@@ -288,7 +288,7 @@ private:
 
     // HLS (HTTP Live Streaming) support
     static constexpr int HLS_SEGMENT_DURATION_SEC = 2; // Duração de cada segmento em segundos
-    static constexpr int HLS_SEGMENT_COUNT = 5;        // Número de segmentos a manter na playlist
+    static constexpr int HLS_SEGMENT_COUNT = 10;       // Número de segmentos a manter na playlist (aumentado para evitar falhas)
     struct HLSSegment
     {
         std::vector<uint8_t> data;

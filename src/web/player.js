@@ -216,9 +216,9 @@
         // Usar configuração global se disponível, senão usar valores padrão
         const hlsConfig = window.RETROCAPTURE_HLS_CONFIG || {
             lowLatencyMode: true,
-            backBufferLength: 90,
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
+            backBufferLength: 30,
+            maxBufferLength: 10,
+            maxMaxBufferLength: 30,
             enableWorker: true
         };
         
@@ -245,15 +245,81 @@
             });
         });
         
+        // Recarregar a playlist periodicamente para live streams
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+            // A cada segmento carregado, garantir que a playlist seja atualizada
+            // O HLS.js faz isso automaticamente, mas podemos forçar se necessário
+        });
+        
+        // Tratar quando um fragmento não pode ser carregado
+        hls.on(Hls.Events.FRAG_LOADING, (event, data) => {
+            // Log para debug
+            if (data.frag) {
+                console.log('Carregando fragmento:', data.frag.url);
+            }
+        });
+        
         hls.on(Hls.Events.ERROR, (event, data) => {
             console.error('HLS error:', data);
+            
+            // Tratar erros não-fatais primeiro
+            if (!data.fatal) {
+                switch(data.details) {
+                    case 'bufferFullError':
+                        // Buffer cheio - tentar reduzir o buffer ou limpar dados antigos
+                        console.warn('Buffer cheio detectado. Tentando recuperar...');
+                        // Tentar recuperar pausando e retomando o buffer
+                        if (video.buffered && video.buffered.length > 0) {
+                            const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+                            const currentTime = video.currentTime;
+                            // Se o buffer está muito à frente, tentar avançar a reprodução
+                            if (bufferedEnd - currentTime > 10) {
+                                video.currentTime = bufferedEnd - 5; // Avançar para 5s antes do fim do buffer
+                            }
+                        }
+                        // Tentar recuperar o erro de mídia
+                        hls.recoverMediaError();
+                        break;
+                    case 'bufferStalledError':
+                        console.warn('Buffer parado. Aguardando dados...');
+                        // Tentar recarregar a playlist se o buffer estiver parado por muito tempo
+                        setTimeout(() => {
+                            if (video.readyState < 3) { // Se ainda não tem dados suficientes
+                                console.log('Buffer ainda parado, tentando recarregar playlist...');
+                                try {
+                                    hls.startLoad();
+                                } catch(e) {
+                                    console.error('Erro ao recarregar:', e);
+                                }
+                            }
+                        }, 3000); // Aguardar 3 segundos antes de tentar recarregar
+                        break;
+                    case 'bufferSeekOver':
+                        console.warn('Seek além do buffer disponível');
+                        break;
+                    default:
+                        console.warn('Erro não-fatal do HLS:', data.details);
+                        break;
+                }
+                return; // Não processar erros não-fatais como fatais
+            }
+            
+            // Tratar erros fatais
             if (data.fatal) {
                 switch(data.type) {
                     case Hls.ErrorTypes.NETWORK_ERROR:
                         updateStatus('Erro de rede', 'status-error');
-                        showAlert('danger', 'Erro de Rede', 
-                            'Ocorreu um erro de rede ao carregar o stream. Tentando reconectar...');
-                        hls.startLoad();
+                        console.warn('Erro de rede do HLS, tentando reconectar...');
+                        // Tentar recarregar a playlist e continuar
+                        setTimeout(() => {
+                            try {
+                                hls.startLoad();
+                            } catch(e) {
+                                console.error('Erro ao tentar reconectar:', e);
+                                // Se falhar, tentar recarregar completamente
+                                hls.loadSource(absoluteHlsUrl);
+                            }
+                        }, 1000);
                         break;
                     case Hls.ErrorTypes.MEDIA_ERROR:
                         updateStatus('Erro de mídia', 'status-error');
