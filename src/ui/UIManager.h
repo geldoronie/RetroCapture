@@ -85,7 +85,7 @@ public:
     void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
-    
+
     // Streaming info getters (public)
     uint16_t getStreamingPort() const { return m_streamingPort; }
     uint32_t getStreamingWidth() const { return m_streamingWidth; }
@@ -101,7 +101,7 @@ public:
     std::string getStreamingH265Level() const { return m_streamingH265Level; }
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
-    
+
     // Image settings getters
     float getBrightness() const { return m_brightness; }
     float getContrast() const { return m_contrast; }
@@ -128,20 +128,27 @@ public:
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
 
     // Web Portal settings
+    void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
     void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
-    void setWebPortalSSLCertPath(const std::string& path) { m_webPortalSSLCertPath = path; }
-    void setWebPortalSSLKeyPath(const std::string& path) { m_webPortalSSLKeyPath = path; }
+    void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
+    void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
+    void setFoundSSLCertificatePath(const std::string &path) { m_foundSSLCertPath = path; }
+    void setFoundSSLKeyPath(const std::string &path) { m_foundSSLKeyPath = path; }
+    bool getWebPortalEnabled() const { return m_webPortalEnabled; }
     bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
     std::string getWebPortalSSLCertPath() const { return m_webPortalSSLCertPath; }
     std::string getWebPortalSSLKeyPath() const { return m_webPortalSSLKeyPath; }
+    std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
+    std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
+    void setOnWebPortalEnabledChanged(std::function<void(bool)> callback) { m_onWebPortalEnabledChanged = callback; }
     void setOnWebPortalHTTPSChanged(std::function<void(bool)> callback) { m_onWebPortalHTTPSChanged = callback; }
-    void setOnWebPortalSSLCertPathChanged(std::function<void(const std::string&)> callback) { m_onWebPortalSSLCertPathChanged = callback; }
-    void setOnWebPortalSSLKeyPathChanged(std::function<void(const std::string&)> callback) { m_onWebPortalSSLKeyPathChanged = callback; }
+    void setOnWebPortalSSLCertPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLCertPathChanged = callback; }
+    void setOnWebPortalSSLKeyPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLKeyPathChanged = callback; }
 
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
-    bool m_configWindowVisible = true; // Janela de configuração visível por padrão
+    bool m_configWindowVisible = true;    // Janela de configuração visível por padrão
     bool m_configWindowJustOpened = true; // Flag para aplicar posição/tamanho inicial apenas quando aberta
     GLFWwindow *m_window = nullptr;
 
@@ -206,7 +213,7 @@ private:
     // Scanning methods
     void scanShaders(const std::string &basePath);
     void scanV4L2Devices();
-    
+
     // Configuration persistence
     void loadConfig();
     void saveConfig();
@@ -234,8 +241,8 @@ private:
     std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
     std::string m_streamingH265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
-    int m_streamingVP8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
-    int m_streamingVP9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
+    int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -257,10 +264,14 @@ private:
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
 
     // Web Portal settings
+    bool m_webPortalEnabled = true; // Habilitado por padrão
     bool m_webPortalHTTPSEnabled = false;
     std::string m_webPortalSSLCertPath = "ssl/server.crt";
     std::string m_webPortalSSLKeyPath = "ssl/server.key";
+    std::string m_foundSSLCertPath; // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;  // Caminho real da chave encontrada (após busca)
+    std::function<void(bool)> m_onWebPortalEnabledChanged;
     std::function<void(bool)> m_onWebPortalHTTPSChanged;
-    std::function<void(const std::string&)> m_onWebPortalSSLCertPathChanged;
-    std::function<void(const std::string&)> m_onWebPortalSSLKeyPathChanged;
+    std::function<void(const std::string &)> m_onWebPortalSSLCertPathChanged;
+    std::function<void(const std::string &)> m_onWebPortalSSLKeyPathChanged;
 };

@@ -95,6 +95,18 @@ public:
      */
     std::string getBaseUrl(const std::string &hostname, int port) const;
 
+    /**
+     * Obter caminho do certificado SSL atualmente em uso
+     * @return Caminho do certificado, ou string vazia se não configurado
+     */
+    std::string getSSLCertificatePath() const { return m_sslCertPath; }
+
+    /**
+     * Obter caminho da chave privada SSL atualmente em uso
+     * @return Caminho da chave privada, ou string vazia se não configurado
+     */
+    std::string getSSLKeyPath() const { return m_sslKeyPath; }
+
 private:
 #ifdef ENABLE_HTTPS
     bool initializeSSL();
@@ -104,6 +116,8 @@ private:
 
     int m_serverSocket = -1;
     bool m_useSSL = false;
+    std::string m_sslCertPath; // Caminho do certificado SSL em uso
+    std::string m_sslKeyPath;  // Caminho da chave privada SSL em uso
 
 #ifdef ENABLE_HTTPS
     SSL_CTX *m_sslContext = nullptr;

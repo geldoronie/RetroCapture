@@ -1514,6 +1514,8 @@ void UIManager::loadConfig()
         if (config.contains("webPortal"))
         {
             auto &webPortal = config["webPortal"];
+            if (webPortal.contains("enabled"))
+                m_webPortalEnabled = webPortal["enabled"];
             if (webPortal.contains("httpsEnabled"))
                 m_webPortalHTTPSEnabled = webPortal["httpsEnabled"];
             if (webPortal.contains("sslCertPath"))
@@ -1585,6 +1587,7 @@ void UIManager::saveConfig()
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
+            {"enabled", m_webPortalEnabled},
             {"httpsEnabled", m_webPortalHTTPSEnabled},
             {"sslCertPath", m_webPortalSSLCertPath},
             {"sslKeyPath", m_webPortalSSLKeyPath}};
@@ -1622,7 +1625,48 @@ void UIManager::renderWebPortalPanel()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // HTTPS Enable/Disable
+    // Web Portal Enable/Disable
+    bool portalEnabled = m_webPortalEnabled;
+    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
+    {
+        m_webPortalEnabled = portalEnabled;
+        // Se Web Portal for desabilitado, também desabilitar HTTPS
+        if (!portalEnabled && m_webPortalHTTPSEnabled)
+        {
+            m_webPortalHTTPSEnabled = false;
+            if (m_onWebPortalHTTPSChanged)
+            {
+                m_onWebPortalHTTPSChanged(false);
+            }
+        }
+        if (m_onWebPortalEnabledChanged)
+        {
+            m_onWebPortalEnabledChanged(portalEnabled);
+        }
+        saveConfig();
+    }
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Quando desabilitado, apenas o stream direto (/stream) será servido.\n"
+                          "A página web não estará disponível.\n"
+                          "HTTPS será desabilitado automaticamente.");
+    }
+
+    if (!portalEnabled)
+    {
+        ImGui::Spacing();
+        ImGui::TextWrapped("Web Portal desabilitado. Apenas o stream direto está disponível em:");
+        std::string streamUrl = "http://localhost:" + std::to_string(m_streamingPort) + "/stream";
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", streamUrl.c_str());
+        return;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // HTTPS Enable/Disable (só disponível se Web Portal estiver habilitado)
     bool httpsEnabled = m_webPortalHTTPSEnabled;
     if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
@@ -1631,78 +1675,91 @@ void UIManager::renderWebPortalPanel()
         {
             m_onWebPortalHTTPSChanged(httpsEnabled);
         }
+        saveConfig();
     }
 
     if (httpsEnabled)
     {
         ImGui::Spacing();
-        ImGui::Text("SSL/TLS Certificate Configuration");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Mostrar informações básicas do certificado
+        ImGui::Text("SSL/TLS Certificate Information");
         ImGui::Separator();
 
-        // SSL Certificate Path
-        char certPathBuffer[512];
-        strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
-        certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
-
-        ImGui::Text("Certificate Path (.crt or .pem):");
-        if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
+        // Mostrar certificado em uso (se encontrado)
+        if (!m_foundSSLCertPath.empty())
         {
-            m_webPortalSSLCertPath = std::string(certPathBuffer);
-            if (m_onWebPortalSSLCertPathChanged)
-            {
-                m_onWebPortalSSLCertPathChanged(m_webPortalSSLCertPath);
-            }
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ HTTPS Ativo");
+            ImGui::Spacing();
+            ImGui::Text("Certificate in use:");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_foundSSLCertPath.c_str());
+            ImGui::Text("Private key in use:");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_foundSSLKeyPath.c_str());
         }
-
-        // SSL Key Path
-        char keyPathBuffer[512];
-        strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
-        keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
-
-        ImGui::Text("Private Key Path (.key):");
-        if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
+        else
         {
-            m_webPortalSSLKeyPath = std::string(keyPathBuffer);
-            if (m_onWebPortalSSLKeyPathChanged)
-            {
-                m_onWebPortalSSLKeyPathChanged(m_webPortalSSLKeyPath);
-            }
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ HTTPS configurado mas certificado não encontrado");
+            ImGui::TextWrapped("Certificados serão buscados em:");
+            ImGui::BulletText("~/.config/retrocapture/ssl/");
+            ImGui::BulletText("./ssl/ (diretório atual)");
+            ImGui::BulletText("Caminhos relativos e absolutos configurados");
         }
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Help text
-        ImGui::TextWrapped("Note: HTTPS support must be compiled with -DENABLE_HTTPS=ON");
-        ImGui::TextWrapped("Generate certificates using:");
-        ImGui::Text("  openssl genrsa -out ssl/server.key 2048");
-        ImGui::Text("  openssl req -new -x509 -key ssl/server.key -out ssl/server.crt -days 365");
+        // Informações de configuração (colapsável)
+        if (ImGui::CollapsingHeader("Certificate Configuration", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            // SSL Certificate Path
+            char certPathBuffer[512];
+            strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
+            certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
 
-        // Check if files exist
-        ImGui::Spacing();
-        if (std::filesystem::exists(m_webPortalSSLCertPath))
-        {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Certificate file found");
-        }
-        else
-        {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "✗ Certificate file not found");
-        }
+            ImGui::Text("Certificate Path (.crt or .pem):");
+            if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
+            {
+                m_webPortalSSLCertPath = std::string(certPathBuffer);
+                if (m_onWebPortalSSLCertPathChanged)
+                {
+                    m_onWebPortalSSLCertPathChanged(m_webPortalSSLCertPath);
+                }
+                saveConfig();
+            }
 
-        if (std::filesystem::exists(m_webPortalSSLKeyPath))
-        {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Private key file found");
-        }
-        else
-        {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "✗ Private key file not found");
+            // SSL Key Path
+            char keyPathBuffer[512];
+            strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
+            keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
+
+            ImGui::Text("Private Key Path (.key):");
+            if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
+            {
+                m_webPortalSSLKeyPath = std::string(keyPathBuffer);
+                if (m_onWebPortalSSLKeyPathChanged)
+                {
+                    m_onWebPortalSSLKeyPathChanged(m_webPortalSSLKeyPath);
+                }
+                saveConfig();
+            }
+
+            ImGui::Spacing();
+
+            // Help text
+            ImGui::TextWrapped("Note: HTTPS support must be compiled with -DENABLE_HTTPS=ON");
+            ImGui::TextWrapped("Generate certificates using:");
+            ImGui::Text("  openssl genrsa -out ssl/server.key 2048");
+            ImGui::Text("  openssl req -new -x509 -key ssl/server.key -out ssl/server.crt -days 365");
+            ImGui::TextWrapped("Certificados serão buscados automaticamente em ~/.config/retrocapture/ssl/");
         }
     }
     else
     {
         ImGui::Spacing();
-        ImGui::TextWrapped("The web portal will use HTTP (unencrypted). Enable HTTPS for secure connections.");
+        ImGui::TextWrapped("O web portal usará HTTP (não criptografado). Habilite HTTPS para conexões seguras.");
     }
 
     ImGui::Spacing();
@@ -1717,7 +1774,6 @@ void UIManager::renderWebPortalPanel()
 
     if (ImGui::Button("Copy URL"))
     {
-        // TODO: Implement clipboard copy if needed
         ImGui::SetClipboardText(portalUrl.c_str());
     }
 }

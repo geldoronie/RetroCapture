@@ -37,6 +37,9 @@ HTTPServer::~HTTPServer()
 
 bool HTTPServer::setSSLCertificate(const std::string &certPath, const std::string &keyPath)
 {
+    // Armazenar caminhos dos certificados
+    m_sslCertPath = certPath;
+    m_sslKeyPath = keyPath;
 #ifdef ENABLE_HTTPS
     LOG_INFO("setSSLCertificate called with:");
     LOG_INFO("  certPath: " + certPath);

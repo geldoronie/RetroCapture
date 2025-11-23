@@ -728,6 +728,7 @@ bool Application::initUI()
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
     // Carregar configurações do Web Portal
+    m_webPortalEnabled = m_ui->getWebPortalEnabled();
     m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
     m_webPortalSSLCertPath = m_ui->getWebPortalSSLCertPath();
     m_webPortalSSLKeyPath = m_ui->getWebPortalSSLKeyPath();
@@ -927,6 +928,22 @@ bool Application::initUI()
         } });
 
     // Web Portal callbacks
+    m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
+                                       {
+        m_webPortalEnabled = enabled;
+        // Se Web Portal for desabilitado, também desabilitar HTTPS
+        if (!enabled && m_webPortalHTTPSEnabled) {
+            m_webPortalHTTPSEnabled = false;
+            // Atualizar UI para refletir a mudança
+            if (m_ui) {
+                m_ui->setWebPortalHTTPSEnabled(false);
+            }
+        }
+        // Atualizar em tempo real se streaming estiver ativo (sem reiniciar)
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalEnabled(enabled);
+        } });
+
     m_ui->setOnWebPortalHTTPSChanged([this](bool enabled)
                                      {
         m_webPortalHTTPSEnabled = enabled;
@@ -1232,6 +1249,9 @@ bool Application::initStreaming()
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
     }
 
+    // Configurar Web Portal
+    tsStreamer->enableWebPortal(m_webPortalEnabled);
+
     // Configurar HTTPS do Web Portal
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
     {
@@ -1265,6 +1285,12 @@ bool Application::initStreaming()
     {
         LOG_INFO("Stream disponível: " + url);
     }
+
+    // Limpar caminhos encontrados (serão atualizados quando o streaming realmente iniciar)
+    // Os caminhos são encontrados no HTTPTSStreamer::start(), mas não temos acesso direto aqui
+    // Vamos atualizar a UI periodicamente no loop principal
+    m_foundSSLCertPath.clear();
+    m_foundSSLKeyPath.clear();
 
     // Initialize audio capture if not already initialized (sempre necessário para streaming)
     if (!m_audioCapture)
@@ -1679,6 +1705,27 @@ void Application::run()
                 }
                 uint32_t clientCount = m_streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
+
+                // Atualizar informações do certificado SSL se HTTPS estiver ativo
+                // Obter caminhos encontrados do StreamManager
+                std::string foundCert = m_streamManager->getFoundSSLCertificatePath();
+                std::string foundKey = m_streamManager->getFoundSSLKeyPath();
+
+                if (m_webPortalHTTPSEnabled && !foundCert.empty())
+                {
+                    m_foundSSLCertPath = foundCert;
+                    m_foundSSLKeyPath = foundKey;
+                    m_ui->setFoundSSLCertificatePath(foundCert);
+                    m_ui->setFoundSSLKeyPath(foundKey);
+                }
+                else
+                {
+                    // Limpar caminhos encontrados se HTTPS não estiver ativo
+                    m_foundSSLCertPath.clear();
+                    m_foundSSLKeyPath.clear();
+                    m_ui->setFoundSSLCertificatePath("");
+                    m_ui->setFoundSSLKeyPath("");
+                }
             }
             else if (m_ui)
             {

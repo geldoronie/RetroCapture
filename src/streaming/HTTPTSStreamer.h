@@ -61,6 +61,14 @@ public:
     void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
     void setSSLCertificatePath(const std::string &certPath, const std::string &keyPath);
 
+    // Web Portal configuration
+    void enableWebPortal(bool enable);
+    bool isWebPortalEnabled() const { return m_webPortalEnabled; }
+
+    // Obter caminhos dos certificados SSL encontrados
+    std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
+    std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
+
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
 
@@ -229,6 +237,8 @@ private:
     bool m_enableHTTPS = false;
     std::string m_sslCertPath;
     std::string m_sslKeyPath;
+    std::string m_foundSSLCertPath; // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;  // Caminho real da chave encontrada (após busca)
 
     std::atomic<uint32_t> m_clientCount{0};
 
@@ -241,6 +251,7 @@ private:
 
     // Web Portal - responsável por servir a página web
     WebPortal m_webPortal;
+    bool m_webPortalEnabled = true; // Habilitado por padrão
 
     // HLS (HTTP Live Streaming) support
     static constexpr int HLS_SEGMENT_DURATION_SEC = 2; // Duração de cada segmento em segundos

@@ -73,6 +73,17 @@ void HTTPTSStreamer::setAudioFormat(uint32_t sampleRate, uint32_t channels)
     m_audioChannelsCount = channels;
 }
 
+void HTTPTSStreamer::enableWebPortal(bool enable)
+{
+    m_webPortalEnabled = enable;
+    // Se Web Portal for desabilitado, também desabilitar HTTPS
+    if (!enable && m_enableHTTPS)
+    {
+        m_enableHTTPS = false;
+        LOG_INFO("HTTPS desabilitado automaticamente (Web Portal desabilitado)");
+    }
+}
+
 void HTTPTSStreamer::setVideoCodec(const std::string &codecName)
 {
     m_videoCodecName = codecName;
@@ -205,8 +216,9 @@ bool HTTPTSStreamer::start()
         return false;
     }
 
-    // Configurar SSL se habilitado
-    if (m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
+    // Configurar SSL se habilitado E se Web Portal estiver habilitado
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled && m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
     {
         // Função helper para obter diretório de configuração do usuário
         auto getUserConfigDir = []() -> std::string
@@ -343,11 +355,11 @@ bool HTTPTSStreamer::start()
             LOG_INFO("Certificados SSL encontrados:");
             LOG_INFO("  Certificate: " + foundCertPath);
             LOG_INFO("  Private Key: " + foundKeyPath);
-            
+
             // Informar se está usando certificado do diretório de configuração do usuário
             std::string userConfigDir = getUserConfigDir();
-            if (!userConfigDir.empty() && 
-                (foundCertPath.find(userConfigDir) != std::string::npos || 
+            if (!userConfigDir.empty() &&
+                (foundCertPath.find(userConfigDir) != std::string::npos ||
                  foundKeyPath.find(userConfigDir) != std::string::npos))
             {
                 LOG_INFO("  Using user configuration directory: ~/.config/retrocapture/ssl/");
@@ -358,18 +370,30 @@ bool HTTPTSStreamer::start()
                 LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
                 LOG_ERROR("Make sure the certificate and key files are valid PEM format.");
                 m_enableHTTPS = false;
+                m_foundSSLCertPath.clear();
+                m_foundSSLKeyPath.clear();
             }
             else
             {
                 LOG_INFO("HTTPS configurado com sucesso");
+                // Armazenar caminhos encontrados para exibição na UI
+                m_foundSSLCertPath = foundCertPath;
+                m_foundSSLKeyPath = foundKeyPath;
             }
         }
     }
-    else if (m_enableHTTPS)
+    else if (m_webPortalEnabled && m_enableHTTPS)
     {
         LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
         LOG_WARN("Cert path: " + m_sslCertPath + ", Key path: " + m_sslKeyPath);
         m_enableHTTPS = false;
+    }
+
+    // Se Web Portal estiver desabilitado, garantir que HTTPS também esteja desabilitado
+    if (!m_webPortalEnabled && m_enableHTTPS)
+    {
+        m_enableHTTPS = false;
+        LOG_INFO("HTTPS desabilitado (Web Portal desabilitado)");
     }
 
     // Criar servidor HTTP/HTTPS
@@ -395,7 +419,8 @@ bool HTTPTSStreamer::start()
     m_hlsSegmentThread = std::thread(&HTTPTSStreamer::hlsSegmentThread, this);
     m_hlsSegmentThread.detach();
 
-    std::string protocol = m_httpServer.isHTTPS() ? "HTTPS" : "HTTP";
+    // HTTPS só está ativo se Web Portal estiver habilitado
+    std::string protocol = (m_webPortalEnabled && m_httpServer.isHTTPS()) ? "HTTPS" : "HTTP";
     LOG_INFO(protocol + " TS Streamer started on port " + std::to_string(m_port));
     return true;
 }
@@ -404,7 +429,17 @@ void HTTPTSStreamer::setSSLCertificatePath(const std::string &certPath, const st
 {
     m_sslCertPath = certPath;
     m_sslKeyPath = keyPath;
-    m_enableHTTPS = true;
+    // Só habilitar HTTPS se Web Portal estiver habilitado
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled)
+    {
+        m_enableHTTPS = true;
+    }
+    else
+    {
+        m_enableHTTPS = false;
+        LOG_INFO("HTTPS não habilitado (Web Portal desabilitado)");
+    }
 }
 
 void HTTPTSStreamer::stop()
@@ -460,6 +495,12 @@ bool HTTPTSStreamer::isActive() const
 
 std::string HTTPTSStreamer::getStreamUrl() const
 {
+    // HTTPS só está ativo se Web Portal estiver habilitado
+    // Se portal estiver desabilitado, sempre usar HTTP
+    if (!m_webPortalEnabled || !m_enableHTTPS)
+    {
+        return "http://localhost:" + std::to_string(m_port) + "/stream";
+    }
     return m_httpServer.getBaseUrl("localhost", m_port) + "/stream";
 }
 
@@ -494,8 +535,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // Log da requisição para debug (temporário)
     LOG_INFO("HTTP Request received: " + request.substr(0, std::min(100UL, request.length())));
 
-    // Se HTTPS está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
-    if (m_enableHTTPS && !m_httpServer.isClientHTTPS(clientFd))
+    // Se HTTPS está habilitado E Web Portal está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled && m_enableHTTPS && !m_httpServer.isClientHTTPS(clientFd))
     {
         // Extrair o Host da requisição
         std::string host = "localhost";
@@ -551,9 +593,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
                             request.find("/stream.m3u8") == std::string::npos);
     int segmentIndex = -1;
 
-    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream/HLS
+    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream/HLS e se Web Portal estiver habilitado
     // Isso previne que stream.m3u8 seja capturado pelo portal e retorne HTML
-    if (!isHLSPlaylist && !isHLSSegment && !isStreamRequest)
+    if (m_webPortalEnabled && !isHLSPlaylist && !isHLSSegment && !isStreamRequest)
     {
         if (m_webPortal.isWebPortalRequest(request))
         {
@@ -2552,7 +2594,8 @@ HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
 
 void HTTPTSStreamer::serverThread()
 {
-    std::string protocol = m_httpServer.isHTTPS() ? "HTTPS" : "HTTP";
+    // HTTPS só está ativo se Web Portal estiver habilitado
+    std::string protocol = (m_webPortalEnabled && m_httpServer.isHTTPS()) ? "HTTPS" : "HTTP";
     LOG_INFO("Server thread started, waiting for " + protocol + " connections on port " + std::to_string(m_port));
 
     while (m_running)
