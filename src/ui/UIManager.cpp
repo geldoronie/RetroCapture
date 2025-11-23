@@ -1456,7 +1456,7 @@ void UIManager::renderStreamingPanel()
     {
         ImGui::SetTooltip("Tamanho do buffer de retaguarda em segundos.\n"
                           "Valores maiores permitem mais seek backward, mas usam mais memória.\n"
-                          "Padrão: 90 segundos");
+                          "Padrão: 30 segundos (reduzido para evitar bufferFullError)");
     }
 
     // Max Buffer Length
@@ -1474,7 +1474,7 @@ void UIManager::renderStreamingPanel()
     {
         ImGui::SetTooltip("Tamanho máximo do buffer em segundos.\n"
                           "Valores menores reduzem latência, mas podem causar buffering.\n"
-                          "Padrão: 30 segundos");
+                          "Padrão: 10 segundos (otimizado para baixa latência)");
     }
 
     // Max Max Buffer Length
@@ -1492,7 +1492,7 @@ void UIManager::renderStreamingPanel()
     {
         ImGui::SetTooltip("Tamanho máximo absoluto do buffer em segundos.\n"
                           "Limite absoluto que o buffer nunca pode exceder.\n"
-                          "Padrão: 60 segundos");
+                          "Padrão: 30 segundos (reduzido para evitar bufferFullError)");
     }
 
     ImGui::Separator();

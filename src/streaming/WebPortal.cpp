@@ -68,8 +68,25 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     std::string basePrefix = extractBasePrefix(request);
 
     // Verificar se é requisição para imagem do portal
+    // Verificar tanto com quanto sem prefixo base
+    bool isPortalImageRequest = false;
     if (request.find("GET /portal-image") != std::string::npos ||
         request.find("/portal-image") != std::string::npos)
+    {
+        isPortalImageRequest = true;
+    }
+    else if (!basePrefix.empty())
+    {
+        // Verificar se a requisição contém o prefixo + /portal-image
+        std::string prefixedPath = basePrefix + "/portal-image";
+        if (request.find("GET " + prefixedPath) != std::string::npos ||
+            request.find(prefixedPath) != std::string::npos)
+        {
+            isPortalImageRequest = true;
+        }
+    }
+
+    if (isPortalImageRequest)
     {
         if (!m_imagePath.empty())
         {
@@ -111,8 +128,25 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     }
 
     // Verificar se é requisição para imagem de fundo do portal
+    // Verificar tanto com quanto sem prefixo base
+    bool isPortalBackgroundRequest = false;
     if (request.find("GET /portal-background") != std::string::npos ||
         request.find("/portal-background") != std::string::npos)
+    {
+        isPortalBackgroundRequest = true;
+    }
+    else if (!basePrefix.empty())
+    {
+        // Verificar se a requisição contém o prefixo + /portal-background
+        std::string prefixedPath = basePrefix + "/portal-background";
+        if (request.find("GET " + prefixedPath) != std::string::npos ||
+            request.find(prefixedPath) != std::string::npos)
+        {
+            isPortalBackgroundRequest = true;
+        }
+    }
+
+    if (isPortalBackgroundRequest)
     {
         if (!m_backgroundImagePath.empty())
         {
@@ -292,7 +326,8 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
                     if (logoEnd != std::string::npos)
                     {
                         // Criar tag de imagem
-                        std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
+                        // Sempre usar path absoluto começando com /
+                        std::string imgUrl = (basePrefix.empty() ? "" : basePrefix) + "/portal-image";
                         std::string imgTag = "<div class=\"logo-container me-3\" id=\"logoContainer\"><img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" style=\"width: 100%; height: 100%; object-fit: contain; border-radius: 12px;\"></div>";
                         html.replace(logoPos, logoEnd - logoPos + 6, imgTag);
                     }
@@ -304,7 +339,8 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
                     size_t iconPos = html.find(iconTag);
                     if (iconPos != std::string::npos)
                     {
-                        std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
+                        // Sempre usar path absoluto começando com /
+                        std::string imgUrl = (basePrefix.empty() ? "" : basePrefix) + "/portal-image";
                         std::string imgTag = "<img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" class=\"me-3\" style=\"max-height: 48px; width: auto;\">";
                         html.replace(iconPos, iconTag.length(), imgTag);
                     }
@@ -728,7 +764,8 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
         if (!foundBgPath.empty() && std::filesystem::exists(foundBgPath))
         {
             // Usar rota /portal-background para servir a imagem
-            std::string bgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-background";
+            // Sempre usar path absoluto começando com /
+            std::string bgUrl = (basePrefix.empty() ? "" : basePrefix) + "/portal-background";
             css << "    background-image: url('" << bgUrl << "');\n";
             css << "    background-size: cover;\n";
             css << "    background-position: center;\n";
@@ -1187,7 +1224,7 @@ std::string WebPortal::extractBasePrefix(const std::string &request) const
         }
     }
 
-    // 2. Do path da requisição (se contiver um prefixo conhecido)
+    // 2. Do path da requisição (extrair prefixo do path)
     size_t getPos = request.find("GET /");
     if (getPos != std::string::npos)
     {
@@ -1200,10 +1237,35 @@ std::string WebPortal::extractBasePrefix(const std::string &request) const
         if (endPos != std::string::npos)
         {
             std::string path = request.substr(startPos, endPos - startPos);
-            // Verificar se começa com um prefixo conhecido
-            if (path.find("retrocapture/") == 0)
+
+            // Remover query string se existir
+            size_t queryPos = path.find('?');
+            if (queryPos != std::string::npos)
             {
-                return "/retrocapture";
+                path = path.substr(0, queryPos);
+            }
+
+            // Extrair o primeiro segmento do path como prefixo
+            // Exemplo: /retrocapture/index.html -> /retrocapture
+            // Exemplo: /retrocapture/portal-image -> /retrocapture
+            if (path.length() > 1 && path[0] == '/')
+            {
+                size_t secondSlash = path.find('/', 1);
+                if (secondSlash != std::string::npos)
+                {
+                    std::string prefix = path.substr(0, secondSlash);
+                    // Verificar se não é um arquivo (tem extensão)
+                    // Se for um arquivo conhecido, não é prefixo
+                    if (path.find(".html") == std::string::npos &&
+                        path.find(".css") == std::string::npos &&
+                        path.find(".js") == std::string::npos &&
+                        path.find(".png") == std::string::npos &&
+                        path.find(".jpg") == std::string::npos &&
+                        path.find(".ico") == std::string::npos)
+                    {
+                        return prefix;
+                    }
+                }
             }
         }
     }

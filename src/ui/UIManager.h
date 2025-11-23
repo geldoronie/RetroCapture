@@ -361,9 +361,9 @@ private:
 
     // HLS Performance parameters
     bool m_hlsLowLatencyMode = true;       // Modo de baixa latência
-    float m_hlsBackBufferLength = 90.0f;   // Tamanho do buffer de retaguarda em segundos
-    float m_hlsMaxBufferLength = 30.0f;    // Tamanho máximo do buffer em segundos
-    float m_hlsMaxMaxBufferLength = 60.0f; // Tamanho máximo absoluto do buffer em segundos
+    float m_hlsBackBufferLength = 30.0f;   // Tamanho do buffer de retaguarda em segundos (reduzido para evitar bufferFullError)
+    float m_hlsMaxBufferLength = 10.0f;    // Tamanho máximo do buffer em segundos (reduzido para baixa latência)
+    float m_hlsMaxMaxBufferLength = 30.0f; // Tamanho máximo absoluto do buffer em segundos (reduzido)
     bool m_hlsEnableWorker = true;         // Usar Web Worker para processamento
 
     std::function<void(bool)> m_onStreamingStartStop;
