@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <cstdlib>
 #include <time.h>
 #include <fstream>
 #include <sstream>
@@ -207,25 +208,64 @@ bool HTTPTSStreamer::start()
     // Configurar SSL se habilitado
     if (m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
     {
-        // Função helper para encontrar arquivo SSL em vários locais possíveis
-        auto findSSLFile = [](const std::string &relativePath) -> std::string
+        // Função helper para obter diretório de configuração do usuário
+        auto getUserConfigDir = []() -> std::string
         {
-            std::vector<std::string> possiblePaths = {
-                relativePath,                // Caminho como fornecido (pode ser relativo ou absoluto)
-                "./ssl/" + relativePath,     // Diretório atual/ssl/
-                "./" + relativePath,         // Diretório atual
-                "../ssl/" + relativePath,    // Um nível acima/ssl/
-                "../../ssl/" + relativePath, // Dois níveis acima/ssl/
-            };
+            const char *homeDir = std::getenv("HOME");
+            if (homeDir)
+            {
+                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+                return configDir.string();
+            }
+            return "";
+        };
 
-            // Se o caminho já é absoluto, verificar diretamente
+        // Função helper para encontrar arquivo SSL em vários locais possíveis
+        // Prioridade: 1) Caminho absoluto fornecido, 2) ~/.config/retrocapture/ssl/, 3) Diretório atual/ssl/
+        auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
+        {
+            // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
             std::filesystem::path testPath(relativePath);
             if (testPath.is_absolute() && std::filesystem::exists(testPath))
             {
                 return std::filesystem::absolute(testPath).string();
             }
 
-            // Tentar caminhos relativos
+            // Extrair apenas o nome do arquivo
+            std::filesystem::path inputPath(relativePath);
+            std::string fileName = inputPath.filename().string();
+
+            // Lista de locais para buscar (em ordem de prioridade)
+            std::vector<std::string> possiblePaths;
+
+            // 1. Pasta de configuração do usuário (~/.config/retrocapture/ssl/) - PRIORIDADE ALTA
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                possiblePaths.push_back((userSSLDir / fileName).string());
+            }
+
+            // 2. Caminho como fornecido (pode ser relativo)
+            possiblePaths.push_back(relativePath);
+
+            // 3. Diretório atual/ssl/
+            possiblePaths.push_back("./ssl/" + fileName);
+            possiblePaths.push_back("./ssl/" + relativePath);
+
+            // 4. Diretório atual
+            possiblePaths.push_back("./" + fileName);
+            possiblePaths.push_back("./" + relativePath);
+
+            // 5. Um nível acima/ssl/
+            possiblePaths.push_back("../ssl/" + fileName);
+            possiblePaths.push_back("../ssl/" + relativePath);
+
+            // 6. Dois níveis acima/ssl/
+            possiblePaths.push_back("../../ssl/" + fileName);
+            possiblePaths.push_back("../../ssl/" + relativePath);
+
+            // Tentar caminhos na ordem de prioridade
             for (const auto &path : possiblePaths)
             {
                 std::filesystem::path fsPath(path);
@@ -269,15 +309,33 @@ bool HTTPTSStreamer::start()
         if (foundCertPath.empty())
         {
             LOG_ERROR("SSL Certificate file not found: " + m_sslCertPath);
-            LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            else
+            {
+                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            LOG_INFO("Tip: Place certificates in ~/.config/retrocapture/ssl/ for user-specific configuration.");
             m_enableHTTPS = false;
         }
         else if (foundKeyPath.empty())
         {
             LOG_ERROR("SSL Private Key file not found: " + m_sslKeyPath);
-            LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            else
+            {
+                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            LOG_INFO("Tip: Place certificates in ~/.config/retrocapture/ssl/ for user-specific configuration.");
             m_enableHTTPS = false;
         }
         else
@@ -285,6 +343,15 @@ bool HTTPTSStreamer::start()
             LOG_INFO("Certificados SSL encontrados:");
             LOG_INFO("  Certificate: " + foundCertPath);
             LOG_INFO("  Private Key: " + foundKeyPath);
+            
+            // Informar se está usando certificado do diretório de configuração do usuário
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty() && 
+                (foundCertPath.find(userConfigDir) != std::string::npos || 
+                 foundKeyPath.find(userConfigDir) != std::string::npos))
+            {
+                LOG_INFO("  Using user configuration directory: ~/.config/retrocapture/ssl/");
+            }
 
             if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
             {

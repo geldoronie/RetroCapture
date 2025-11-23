@@ -25,7 +25,6 @@
 
 // swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
 
-
 Application::Application()
 {
 }
@@ -222,13 +221,34 @@ bool Application::initCapture()
 {
     m_capture = std::make_unique<VideoCapture>();
 
-    // Abrir dispositivo especificado (ou padrão /dev/video0)
+    // Tentar abrir dispositivo especificado (ou padrão /dev/video0)
+    // Se falhar, ativar modo dummy (gera frames pretos)
     if (!m_capture->open(m_devicePath))
     {
-        LOG_ERROR("Falha ao abrir dispositivo de captura: " + m_devicePath);
-        LOG_INFO("Tente especificar outro dispositivo com --device /dev/videoX");
-        m_capture.reset();
-        return false;
+        LOG_WARN("Falha ao abrir dispositivo de captura: " + m_devicePath);
+        LOG_INFO("Ativando modo dummy: gerando frames pretos na resolução especificada.");
+        LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
+
+        // Ativar modo dummy
+        m_capture->enableDummyMode(true);
+
+        // Configurar formato dummy com resolução padrão
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+        {
+            LOG_ERROR("Falha ao configurar formato dummy");
+            return false;
+        }
+
+        // Iniciar captura dummy
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Falha ao iniciar captura dummy");
+            return false;
+        }
+
+        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
     }
 
     // Configurar formato com parâmetros configuráveis
@@ -239,16 +259,40 @@ bool Application::initCapture()
     {
         LOG_ERROR("Falha ao configurar formato de captura");
         LOG_WARN("Resolução solicitada pode não ser suportada pelo dispositivo");
+
+        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        if (!m_capture->isDummyMode())
+        {
+            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            m_capture->close();
+            m_capture->enableDummyMode(true);
+
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            {
+                if (m_capture->startCapture())
+                {
+                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                    return true;
+                }
+            }
+        }
+
         m_capture->close();
-        m_capture.reset();
-        return false;
+        // Não resetar m_capture - permitir tentar novamente depois
+        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
+        return true; // Continuar sem dispositivo
     }
 
     // Tentar configurar framerate (não é crítico se falhar)
+    // Em modo dummy, isso apenas loga mas não configura dispositivo real
     if (!m_capture->setFramerate(m_captureFps))
     {
-        LOG_WARN("Não foi possível configurar framerate para " + std::to_string(m_captureFps) + "fps");
-        LOG_INFO("Usando framerate padrão do dispositivo");
+        if (!m_capture->isDummyMode())
+        {
+            LOG_WARN("Não foi possível configurar framerate para " + std::to_string(m_captureFps) + "fps");
+            LOG_INFO("Usando framerate padrão do dispositivo");
+        }
     }
 
     // Configurar controles V4L2 se especificados
@@ -319,13 +363,38 @@ bool Application::initCapture()
     if (!m_capture->startCapture())
     {
         LOG_ERROR("Falha ao iniciar captura");
-        m_capture.reset();
-        return false;
+
+        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        if (!m_capture->isDummyMode())
+        {
+            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            m_capture->close();
+            m_capture->enableDummyMode(true);
+
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            {
+                if (m_capture->startCapture())
+                {
+                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                    return true;
+                }
+            }
+        }
+
+        m_capture->close();
+        // Não resetar m_capture - permitir tentar novamente depois
+        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
+        return true; // Continuar sem dispositivo
     }
 
-    LOG_INFO("Captura inicializada: " +
-             std::to_string(m_capture->getWidth()) + "x" +
-             std::to_string(m_capture->getHeight()));
+    // Só logar dimensões se o dispositivo estiver aberto
+    if (m_capture->isOpen())
+    {
+        LOG_INFO("Captura inicializada: " +
+                 std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+    }
 
     return true;
 }
@@ -532,6 +601,32 @@ bool Application::initUI()
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
         LOG_INFO("Resolução alterada via UI: " + std::to_string(width) + "x" + std::to_string(height));
+        // Se não houver dispositivo aberto, ativar modo dummy
+        if (!m_capture || !m_capture->isOpen()) {
+            if (!m_capture) {
+                LOG_WARN("VideoCapture não inicializado. Selecione um dispositivo primeiro.");
+                return;
+            }
+            
+            // Se não estiver em modo dummy, tentar ativar
+            if (!m_capture->isDummyMode()) {
+                LOG_INFO("Nenhum dispositivo aberto. Ativando modo dummy...");
+                m_capture->enableDummyMode(true);
+            }
+            
+            // Configurar formato dummy
+            if (m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+                if (m_capture->startCapture()) {
+                    LOG_INFO("Resolução dummy atualizada: " + std::to_string(width) + "x" + std::to_string(height));
+                    if (m_ui) {
+                        m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                    }
+                    return;
+                }
+            }
+            LOG_WARN("Falha ao configurar resolução dummy. Selecione um dispositivo primeiro.");
+            return;
+        }
         if (reconfigureCapture(width, height, m_captureFps)) {
             // Atualizar textura se necessário (usar valores reais do dispositivo)
             uint32_t actualWidth = m_capture->getWidth();
@@ -561,6 +656,18 @@ bool Application::initUI()
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
         LOG_INFO("Framerate alterado via UI: " + std::to_string(fps) + "fps");
+        // Atualizar FPS na configuração
+        m_captureFps = fps;
+        
+        // Se não houver dispositivo aberto, apenas atualizar configuração (modo dummy não precisa reconfigurar)
+        if (!m_capture || !m_capture->isOpen()) {
+            if (m_capture && m_capture->isDummyMode()) {
+                LOG_INFO("Framerate atualizado para modo dummy: " + std::to_string(fps) + "fps");
+            } else {
+                LOG_WARN("Nenhum dispositivo aberto. FPS será aplicado quando um dispositivo for selecionado.");
+            }
+            return;
+        }
         if (reconfigureCapture(m_captureWidth, m_captureHeight, fps)) {
             m_captureFps = fps;
             // Atualizar informações na UI
@@ -578,17 +685,28 @@ bool Application::initUI()
     m_ui->setMonitorIndex(m_monitorIndex);
 
     // Configurar controles V4L2
-    if (m_capture)
+    if (m_capture && m_capture->isOpen())
     {
         m_ui->setV4L2Controls(m_capture.get());
     }
+    else
+    {
+        // Sem dispositivo, mas ainda permitir seleção
+        m_ui->setV4L2Controls(nullptr);
+    }
 
     // Configurar informações da captura
-    if (m_capture)
+    if (m_capture && m_capture->isOpen())
     {
         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                              m_captureFps, m_devicePath);
         m_ui->setCurrentDevice(m_devicePath);
+    }
+    else
+    {
+        // Sem dispositivo - mostrar "None"
+        m_ui->setCaptureInfo(0, 0, 0, "None");
+        m_ui->setCurrentDevice(""); // String vazia = None
     }
 
     // IMPORTANTE: Após init(), o UIManager já carregou as configurações salvas
@@ -762,11 +880,10 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingH265ProfileChanged([this](const std::string &profile)
-                                          {
+                                           {
         m_streamingH265Profile = profile;
         // Se streaming estiver ativo, reiniciar para aplicar novo profile
         if (m_streamingEnabled && m_streamManager) {
@@ -774,8 +891,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingH265LevelChanged([this](const std::string &level)
                                          {
@@ -786,8 +902,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingVP8SpeedChanged([this](int speed)
                                         {
@@ -798,8 +913,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingVP9SpeedChanged([this](int speed)
                                         {
@@ -810,12 +924,11 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     // Web Portal callbacks
     m_ui->setOnWebPortalHTTPSChanged([this](bool enabled)
-                                    {
+                                     {
         m_webPortalHTTPSEnabled = enabled;
         // Se streaming estiver ativo, reiniciar para aplicar HTTPS
         if (m_streamingEnabled && m_streamManager) {
@@ -823,10 +936,9 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
-    m_ui->setOnWebPortalSSLCertPathChanged([this](const std::string& path)
+    m_ui->setOnWebPortalSSLCertPathChanged([this](const std::string &path)
                                            {
         m_webPortalSSLCertPath = path;
         // Se streaming estiver ativo, reiniciar para aplicar novo certificado
@@ -835,11 +947,10 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
-    m_ui->setOnWebPortalSSLKeyPathChanged([this](const std::string& path)
-                                         {
+    m_ui->setOnWebPortalSSLKeyPathChanged([this](const std::string &path)
+                                          {
         m_webPortalSSLKeyPath = path;
         // Se streaming estiver ativo, reiniciar para aplicar nova chave
         if (m_streamingEnabled && m_streamManager) {
@@ -847,12 +958,50 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     // Callback para mudança de dispositivo
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
+        // Se devicePath estiver vazio, significa "None" - ativar modo dummy
+        if (devicePath.empty())
+        {
+            LOG_INFO("Desconectando dispositivo (None selecionado) - ativando modo dummy");
+            
+            // Fechar dispositivo atual
+            if (m_capture) {
+                m_capture->stopCapture();
+                m_capture->close();
+                // Ativar modo dummy
+                m_capture->enableDummyMode(true);
+                
+                // Configurar formato dummy com resolução atual
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    m_capture->startCapture();
+                    LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                }
+            }
+            
+            // Atualizar caminho do dispositivo
+            m_devicePath = "";
+            
+            // Atualizar informações na UI
+            if (m_ui) {
+                if (m_capture && m_capture->isOpen()) {
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                        m_captureFps, "None (Dummy)");
+                } else {
+                    m_ui->setCaptureInfo(0, 0, 0, "None");
+                }
+                m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando não há dispositivo
+            }
+            
+            LOG_INFO("Modo dummy ativado. Selecione um dispositivo para usar captura real.");
+            return;
+        }
+        
         LOG_INFO("Mudando dispositivo para: " + devicePath);
         
         // Salvar configurações atuais
@@ -860,10 +1009,12 @@ bool Application::initUI()
         uint32_t oldHeight = m_captureHeight;
         uint32_t oldFps = m_captureFps;
         
-        // Fechar dispositivo atual
+        // Fechar dispositivo atual (ou modo dummy)
         if (m_capture) {
             m_capture->stopCapture();
             m_capture->close();
+            // Desativar modo dummy ao tentar abrir dispositivo real
+            m_capture->enableDummyMode(false);
         }
         
         // Atualizar caminho do dispositivo
@@ -877,18 +1028,28 @@ bool Application::initUI()
                 m_capture->startCapture();
                 
                 // Atualizar informações na UI
-                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                    m_captureFps, devicePath);
-                
-                // Recarregar controles V4L2
-                m_ui->setV4L2Controls(m_capture.get());
+                if (m_ui) {
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                        m_captureFps, devicePath);
+                    
+                    // Recarregar controles V4L2
+                    m_ui->setV4L2Controls(m_capture.get());
+                }
                 
                 LOG_INFO("Dispositivo alterado com sucesso");
             } else {
                 LOG_ERROR("Falha ao configurar formato no novo dispositivo");
+                // Fechar dispositivo se falhou
+                m_capture->close();
+                if (m_ui) {
+                    m_ui->setCaptureInfo(0, 0, 0, "Error");
+                }
             }
         } else {
             LOG_ERROR("Falha ao abrir novo dispositivo: " + devicePath);
+            if (m_ui) {
+                m_ui->setCaptureInfo(0, 0, 0, "Error");
+            }
         } });
 
     // Configurar shader atual
@@ -1010,8 +1171,9 @@ bool Application::initStreaming()
 
     // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
     // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
-    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
+    // IMPORTANTE: Verificar se dispositivo está aberto antes de acessar getWidth/getHeight
+    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture && m_capture->isOpen() ? m_capture->getWidth() : m_captureWidth);
+    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture && m_capture->isOpen() ? m_capture->getHeight() : m_captureHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
     LOG_INFO("initStreaming: Using resolution " + std::to_string(streamWidth) + "x" +
@@ -1266,8 +1428,9 @@ void Application::run()
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
         // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
         // Isso garante que o streaming e processamento continuem funcionando
+        // IMPORTANTE: Só tentar capturar se o dispositivo estiver aberto
         bool newFrame = false;
-        if (m_capture)
+        if (m_capture && m_capture->isOpen())
         {
             // Tentar processar frame várias vezes se não temos textura válida
             // Isso é importante após reconfiguração quando a textura foi deletada
