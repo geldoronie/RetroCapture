@@ -148,6 +148,13 @@ private:
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
 
+    // HLS Performance parameters
+    bool m_hlsLowLatencyMode = true;       // Modo de baixa latência
+    float m_hlsBackBufferLength = 90.0f;   // Tamanho do buffer de retaguarda em segundos
+    float m_hlsMaxBufferLength = 30.0f;    // Tamanho máximo do buffer em segundos
+    float m_hlsMaxMaxBufferLength = 60.0f; // Tamanho máximo absoluto do buffer em segundos
+    bool m_hlsEnableWorker = true;         // Usar Web Worker para processamento
+
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão
     bool m_webPortalHTTPSEnabled = false;

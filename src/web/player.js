@@ -212,13 +212,22 @@
         
         video.addEventListener('error', handleVideoError);
     } else if (Hls.isSupported()) {
-        // Usar HLS.js
-        hls = new Hls({
-            enableWorker: true,
+        // Usar HLS.js com parâmetros configuráveis
+        // Usar configuração global se disponível, senão usar valores padrão
+        const hlsConfig = window.RETROCAPTURE_HLS_CONFIG || {
             lowLatencyMode: true,
             backBufferLength: 90,
             maxBufferLength: 30,
-            maxMaxBufferLength: 60
+            maxMaxBufferLength: 60,
+            enableWorker: true
+        };
+        
+        hls = new Hls({
+            enableWorker: hlsConfig.enableWorker,
+            lowLatencyMode: hlsConfig.lowLatencyMode,
+            backBufferLength: hlsConfig.backBufferLength,
+            maxBufferLength: hlsConfig.maxBufferLength,
+            maxMaxBufferLength: hlsConfig.maxMaxBufferLength
         });
         
         const absoluteHlsUrl = window.location.protocol + '//' + window.location.host + hlsUrl;

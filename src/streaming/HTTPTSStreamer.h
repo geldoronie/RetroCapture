@@ -88,6 +88,16 @@ public:
         m_webPortal.setTexts(streamInfo, quickActions, compatibility, status, codec, resolution, streamUrl, copyUrl, openNewTab, supported, format, codecInfo, supportedBrowsers, formatInfo, codecInfoValue, connecting);
     }
 
+    void setHLSParameters(
+        bool lowLatencyMode,
+        float backBufferLength,
+        float maxBufferLength,
+        float maxMaxBufferLength,
+        bool enableWorker)
+    {
+        m_webPortal.setHLSParameters(lowLatencyMode, backBufferLength, maxBufferLength, maxMaxBufferLength, enableWorker);
+    }
+
     // Obter caminhos dos certificados SSL encontrados
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }

@@ -739,6 +739,13 @@ bool Application::initUI()
     m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
+    // Carregar parâmetros HLS
+    m_hlsLowLatencyMode = m_ui->getHLSLowLatencyMode();
+    m_hlsBackBufferLength = m_ui->getHLSBackBufferLength();
+    m_hlsMaxBufferLength = m_ui->getHLSMaxBufferLength();
+    m_hlsMaxMaxBufferLength = m_ui->getHLSMaxMaxBufferLength();
+    m_hlsEnableWorker = m_ui->getHLSEnableWorker();
+
     // Carregar configurações do Web Portal
     m_webPortalEnabled = m_ui->getWebPortalEnabled();
     m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
@@ -1026,6 +1033,72 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
+        } });
+
+    // Callbacks para parâmetros HLS
+    m_ui->setOnHLSLowLatencyModeChanged([this](bool enabled)
+                                        {
+        m_hlsLowLatencyMode = enabled;
+        if (m_streamManager) {
+            m_streamManager->setHLSParameters(
+                m_hlsLowLatencyMode,
+                m_hlsBackBufferLength,
+                m_hlsMaxBufferLength,
+                m_hlsMaxMaxBufferLength,
+                m_hlsEnableWorker
+            );
+        } });
+
+    m_ui->setOnHLSBackBufferLengthChanged([this](float length)
+                                          {
+        m_hlsBackBufferLength = length;
+        if (m_streamManager) {
+            m_streamManager->setHLSParameters(
+                m_hlsLowLatencyMode,
+                m_hlsBackBufferLength,
+                m_hlsMaxBufferLength,
+                m_hlsMaxMaxBufferLength,
+                m_hlsEnableWorker
+            );
+        } });
+
+    m_ui->setOnHLSMaxBufferLengthChanged([this](float length)
+                                         {
+        m_hlsMaxBufferLength = length;
+        if (m_streamManager) {
+            m_streamManager->setHLSParameters(
+                m_hlsLowLatencyMode,
+                m_hlsBackBufferLength,
+                m_hlsMaxBufferLength,
+                m_hlsMaxMaxBufferLength,
+                m_hlsEnableWorker
+            );
+        } });
+
+    m_ui->setOnHLSMaxMaxBufferLengthChanged([this](float length)
+                                            {
+        m_hlsMaxMaxBufferLength = length;
+        if (m_streamManager) {
+            m_streamManager->setHLSParameters(
+                m_hlsLowLatencyMode,
+                m_hlsBackBufferLength,
+                m_hlsMaxBufferLength,
+                m_hlsMaxMaxBufferLength,
+                m_hlsEnableWorker
+            );
+        } });
+
+    m_ui->setOnHLSEnableWorkerChanged([this](bool enabled)
+                                      {
+        m_hlsEnableWorker = enabled;
+        if (m_streamManager) {
+            m_streamManager->setHLSParameters(
+                m_hlsLowLatencyMode,
+                m_hlsBackBufferLength,
+                m_hlsMaxBufferLength,
+                m_hlsMaxMaxBufferLength,
+                m_hlsEnableWorker
+            );
         } });
 
     // Web Portal callbacks
@@ -1503,6 +1576,14 @@ bool Application::initStreaming()
         m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
         m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
         m_webPortalTextConnecting);
+
+    // Configurar parâmetros HLS
+    tsStreamer->setHLSParameters(
+        m_hlsLowLatencyMode,
+        m_hlsBackBufferLength,
+        m_hlsMaxBufferLength,
+        m_hlsMaxMaxBufferLength,
+        m_hlsEnableWorker);
 
     // Configurar HTTPS do Web Portal
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())

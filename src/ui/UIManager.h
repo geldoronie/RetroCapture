@@ -87,6 +87,25 @@ public:
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
 
+    // HLS Performance settings
+    void setHLSLowLatencyMode(bool enabled) { m_hlsLowLatencyMode = enabled; }
+    void setHLSBackBufferLength(float seconds) { m_hlsBackBufferLength = seconds; }
+    void setHLSMaxBufferLength(float seconds) { m_hlsMaxBufferLength = seconds; }
+    void setHLSMaxMaxBufferLength(float seconds) { m_hlsMaxMaxBufferLength = seconds; }
+    void setHLSEnableWorker(bool enabled) { m_hlsEnableWorker = enabled; }
+
+    bool getHLSLowLatencyMode() const { return m_hlsLowLatencyMode; }
+    float getHLSBackBufferLength() const { return m_hlsBackBufferLength; }
+    float getHLSMaxBufferLength() const { return m_hlsMaxBufferLength; }
+    float getHLSMaxMaxBufferLength() const { return m_hlsMaxMaxBufferLength; }
+    bool getHLSEnableWorker() const { return m_hlsEnableWorker; }
+
+    void setOnHLSLowLatencyModeChanged(std::function<void(bool)> callback) { m_onHLSLowLatencyModeChanged = callback; }
+    void setOnHLSBackBufferLengthChanged(std::function<void(float)> callback) { m_onHLSBackBufferLengthChanged = callback; }
+    void setOnHLSMaxBufferLengthChanged(std::function<void(float)> callback) { m_onHLSMaxBufferLengthChanged = callback; }
+    void setOnHLSMaxMaxBufferLengthChanged(std::function<void(float)> callback) { m_onHLSMaxMaxBufferLengthChanged = callback; }
+    void setOnHLSEnableWorkerChanged(std::function<void(bool)> callback) { m_onHLSEnableWorkerChanged = callback; }
+
     // Streaming info getters (public)
     uint16_t getStreamingPort() const { return m_streamingPort; }
     uint32_t getStreamingWidth() const { return m_streamingWidth; }
@@ -340,6 +359,13 @@ private:
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
 
+    // HLS Performance parameters
+    bool m_hlsLowLatencyMode = true;       // Modo de baixa latência
+    float m_hlsBackBufferLength = 90.0f;   // Tamanho do buffer de retaguarda em segundos
+    float m_hlsMaxBufferLength = 30.0f;    // Tamanho máximo do buffer em segundos
+    float m_hlsMaxMaxBufferLength = 60.0f; // Tamanho máximo absoluto do buffer em segundos
+    bool m_hlsEnableWorker = true;         // Usar Web Worker para processamento
+
     std::function<void(bool)> m_onStreamingStartStop;
     std::function<void(uint16_t)> m_onStreamingPortChanged;
     std::function<void(uint32_t)> m_onStreamingWidthChanged;
@@ -355,6 +381,11 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
+    std::function<void(bool)> m_onHLSLowLatencyModeChanged;
+    std::function<void(float)> m_onHLSBackBufferLengthChanged;
+    std::function<void(float)> m_onHLSMaxBufferLengthChanged;
+    std::function<void(float)> m_onHLSMaxMaxBufferLengthChanged;
+    std::function<void(bool)> m_onHLSEnableWorkerChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão

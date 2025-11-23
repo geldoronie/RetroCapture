@@ -375,6 +375,44 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
             html.insert(headEndPos, "\n    <style>\n" + customCSS + "\n    </style>");
         }
 
+        // Injetar parâmetros HLS como variável global JavaScript antes do player.js
+        std::ostringstream hlsConfig;
+        hlsConfig << "\n    <script>\n";
+        hlsConfig << "        window.RETROCAPTURE_HLS_CONFIG = {\n";
+        hlsConfig << "            lowLatencyMode: " << (m_hlsLowLatencyMode ? "true" : "false") << ",\n";
+        hlsConfig << "            backBufferLength: " << m_hlsBackBufferLength << ",\n";
+        hlsConfig << "            maxBufferLength: " << m_hlsMaxBufferLength << ",\n";
+        hlsConfig << "            maxMaxBufferLength: " << m_hlsMaxMaxBufferLength << ",\n";
+        hlsConfig << "            enableWorker: " << (m_hlsEnableWorker ? "true" : "false") << "\n";
+        hlsConfig << "        };\n";
+        hlsConfig << "    </script>\n";
+
+        // Inserir antes do player.js (ou antes de </body> se player.js não for encontrado)
+        size_t playerJsPos = html.find("<script src=\"");
+        if (playerJsPos != std::string::npos)
+        {
+            // Encontrar a tag completa do script player.js
+            size_t playerJsEnd = html.find("</script>", playerJsPos);
+            if (playerJsEnd != std::string::npos)
+            {
+                // Verificar se é realmente o player.js
+                std::string scriptTag = html.substr(playerJsPos, playerJsEnd - playerJsPos);
+                if (scriptTag.find("player.js") != std::string::npos)
+                {
+                    html.insert(playerJsPos, hlsConfig.str());
+                }
+            }
+        }
+        else
+        {
+            // Fallback: inserir antes de </body>
+            size_t bodyEndPos = html.find("</body>");
+            if (bodyEndPos != std::string::npos)
+            {
+                html.insert(bodyEndPos, hlsConfig.str());
+            }
+        }
+
         // Aplicar prefixo base se necessário (depois das substituições)
         if (!basePrefix.empty())
         {
@@ -637,6 +675,20 @@ void WebPortal::setTexts(
     m_textFormatInfo = formatInfo;
     m_textCodecInfoValue = codecInfoValue;
     m_textConnecting = connecting;
+}
+
+void WebPortal::setHLSParameters(
+    bool lowLatencyMode,
+    float backBufferLength,
+    float maxBufferLength,
+    float maxMaxBufferLength,
+    bool enableWorker)
+{
+    m_hlsLowLatencyMode = lowLatencyMode;
+    m_hlsBackBufferLength = backBufferLength;
+    m_hlsMaxBufferLength = maxBufferLength;
+    m_hlsMaxMaxBufferLength = maxMaxBufferLength;
+    m_hlsEnableWorker = enableWorker;
 }
 
 std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const

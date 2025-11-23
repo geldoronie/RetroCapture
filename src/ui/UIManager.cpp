@@ -1404,6 +1404,98 @@ void UIManager::renderStreamingPanel()
     }
 
     ImGui::Separator();
+    ImGui::Text("Desempenho HLS (Web Player)");
+    ImGui::Separator();
+
+    // Modo de baixa latência
+    bool lowLatencyMode = m_hlsLowLatencyMode;
+    if (ImGui::Checkbox("Modo de Baixa Latência", &lowLatencyMode))
+    {
+        m_hlsLowLatencyMode = lowLatencyMode;
+        if (m_onHLSLowLatencyModeChanged)
+        {
+            m_onHLSLowLatencyModeChanged(m_hlsLowLatencyMode);
+        }
+        saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Ativa o modo de baixa latência do HLS.js.\n"
+                          "Reduz a latência do stream, mas pode aumentar o uso de CPU.");
+    }
+
+    // Habilitar Web Worker
+    bool enableWorker = m_hlsEnableWorker;
+    if (ImGui::Checkbox("Usar Web Worker", &enableWorker))
+    {
+        m_hlsEnableWorker = enableWorker;
+        if (m_onHLSEnableWorkerChanged)
+        {
+            m_onHLSEnableWorkerChanged(m_hlsEnableWorker);
+        }
+        saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Usa Web Worker para processamento do HLS.\n"
+                          "Melhora a performance, mas pode não estar disponível em todos os navegadores.");
+    }
+
+    // Back Buffer Length
+    float backBufferLength = m_hlsBackBufferLength;
+    if (ImGui::SliderFloat("Back Buffer (segundos)", &backBufferLength, 10.0f, 300.0f, "%.1f"))
+    {
+        m_hlsBackBufferLength = backBufferLength;
+        if (m_onHLSBackBufferLengthChanged)
+        {
+            m_onHLSBackBufferLengthChanged(m_hlsBackBufferLength);
+        }
+        saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Tamanho do buffer de retaguarda em segundos.\n"
+                          "Valores maiores permitem mais seek backward, mas usam mais memória.\n"
+                          "Padrão: 90 segundos");
+    }
+
+    // Max Buffer Length
+    float maxBufferLength = m_hlsMaxBufferLength;
+    if (ImGui::SliderFloat("Max Buffer (segundos)", &maxBufferLength, 5.0f, 120.0f, "%.1f"))
+    {
+        m_hlsMaxBufferLength = maxBufferLength;
+        if (m_onHLSMaxBufferLengthChanged)
+        {
+            m_onHLSMaxBufferLengthChanged(m_hlsMaxBufferLength);
+        }
+        saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Tamanho máximo do buffer em segundos.\n"
+                          "Valores menores reduzem latência, mas podem causar buffering.\n"
+                          "Padrão: 30 segundos");
+    }
+
+    // Max Max Buffer Length
+    float maxMaxBufferLength = m_hlsMaxMaxBufferLength;
+    if (ImGui::SliderFloat("Max Max Buffer (segundos)", &maxMaxBufferLength, 10.0f, 300.0f, "%.1f"))
+    {
+        m_hlsMaxMaxBufferLength = maxMaxBufferLength;
+        if (m_onHLSMaxMaxBufferLengthChanged)
+        {
+            m_onHLSMaxMaxBufferLengthChanged(m_hlsMaxMaxBufferLength);
+        }
+        saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Tamanho máximo absoluto do buffer em segundos.\n"
+                          "Limite absoluto que o buffer nunca pode exceder.\n"
+                          "Padrão: 60 segundos");
+    }
+
+    ImGui::Separator();
 
     // Botão Start/Stop
     if (m_streamingActive)
@@ -1517,6 +1609,22 @@ void UIManager::loadConfig()
                 m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+
+            // Carregar parâmetros HLS
+            if (streaming.contains("hls"))
+            {
+                auto &hls = streaming["hls"];
+                if (hls.contains("lowLatencyMode"))
+                    m_hlsLowLatencyMode = hls["lowLatencyMode"];
+                if (hls.contains("backBufferLength"))
+                    m_hlsBackBufferLength = hls["backBufferLength"];
+                if (hls.contains("maxBufferLength"))
+                    m_hlsMaxBufferLength = hls["maxBufferLength"];
+                if (hls.contains("maxMaxBufferLength"))
+                    m_hlsMaxMaxBufferLength = hls["maxMaxBufferLength"];
+                if (hls.contains("enableWorker"))
+                    m_hlsEnableWorker = hls["enableWorker"];
+            }
         }
 
         // Carregar configurações de imagem
@@ -1756,7 +1864,8 @@ void UIManager::saveConfig()
             {"h265Profile", m_streamingH265Profile},
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
-            {"vp9Speed", m_streamingVP9Speed}};
+            {"vp9Speed", m_streamingVP9Speed},
+            {"hls", {{"lowLatencyMode", m_hlsLowLatencyMode}, {"backBufferLength", m_hlsBackBufferLength}, {"maxBufferLength", m_hlsMaxBufferLength}, {"maxMaxBufferLength", m_hlsMaxMaxBufferLength}, {"enableWorker", m_hlsEnableWorker}}}};
 
         // Salvar configurações de imagem
         config["image"] = {
