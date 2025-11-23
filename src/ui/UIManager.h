@@ -127,6 +127,17 @@ public:
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
 
+    // Web Portal settings
+    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
+    void setWebPortalSSLCertPath(const std::string& path) { m_webPortalSSLCertPath = path; }
+    void setWebPortalSSLKeyPath(const std::string& path) { m_webPortalSSLKeyPath = path; }
+    bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
+    std::string getWebPortalSSLCertPath() const { return m_webPortalSSLCertPath; }
+    std::string getWebPortalSSLKeyPath() const { return m_webPortalSSLKeyPath; }
+    void setOnWebPortalHTTPSChanged(std::function<void(bool)> callback) { m_onWebPortalHTTPSChanged = callback; }
+    void setOnWebPortalSSLCertPathChanged(std::function<void(const std::string&)> callback) { m_onWebPortalSSLCertPathChanged = callback; }
+    void setOnWebPortalSSLKeyPathChanged(std::function<void(const std::string&)> callback) { m_onWebPortalSSLKeyPathChanged = callback; }
+
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
@@ -190,6 +201,7 @@ private:
     void renderV4L2Controls();
     void renderInfoPanel();
     void renderStreamingPanel();
+    void renderWebPortalPanel();
 
     // Scanning methods
     void scanShaders(const std::string &basePath);
@@ -243,4 +255,12 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
+
+    // Web Portal settings
+    bool m_webPortalHTTPSEnabled = false;
+    std::string m_webPortalSSLCertPath = "ssl/server.crt";
+    std::string m_webPortalSSLKeyPath = "ssl/server.key";
+    std::function<void(bool)> m_onWebPortalHTTPSChanged;
+    std::function<void(const std::string&)> m_onWebPortalSSLCertPathChanged;
+    std::function<void(const std::string&)> m_onWebPortalSSLKeyPathChanged;
 };

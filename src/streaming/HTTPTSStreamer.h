@@ -1,6 +1,8 @@
 #pragma once
 
 #include "IStreamer.h"
+#include "WebPortal.h"
+#include "HTTPServer.h"
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -55,6 +57,10 @@ public:
     void setVP8Speed(int speed) { m_vp8Speed = speed; }
     void setVP9Speed(int speed) { m_vp9Speed = speed; }
 
+    // HTTPS configuration
+    void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
+    void setSSLCertificatePath(const std::string &certPath, const std::string &keyPath);
+
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
 
@@ -106,10 +112,15 @@ public:
 private:
     void serverThread();
     void handleClient(int clientFd);
-    void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
-    SyncZone calculateSyncZone();   // Calcular zona de sincronização entre vídeo e áudio
-    void cleanupOldData();          // Limpar dados antigos baseado em tempo
-    int64_t getTimestampUs() const; // Obter timestamp atual em microssegundos
+    void serveHLSPlaylist(int clientFd, const std::string &basePrefix = "");    // Servir playlist M3U8 para HLS
+    void serveHLSSegment(int clientFd, int segmentIndex);                       // Servir segmento HLS
+    void send404(int clientFd);                                                 // Enviar resposta 404
+    std::string generateM3U8Playlist(const std::string &basePrefix = "") const; // Gerar playlist M3U8 dinâmica
+    void encodingThread();                                                      // Thread para encoding com sincronização baseada em timestamps
+    void hlsSegmentThread();                                                    // Thread para segmentar stream em HLS
+    SyncZone calculateSyncZone();                                               // Calcular zona de sincronização entre vídeo e áudio
+    void cleanupOldData();                                                      // Limpar dados antigos baseado em tempo
+    int64_t getTimestampUs() const;                                             // Obter timestamp atual em microssegundos
     bool initializeFFmpeg();
     bool initializeVideoCodec();
     bool initializeAudioCodec();
@@ -140,8 +151,8 @@ private:
     std::string m_h265Preset = "veryfast"; // Preset H.265 configurável via UI
     std::string m_h265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
-    int m_vp8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
-    int m_vp9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_vp8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
+    int m_vp9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*
@@ -155,7 +166,7 @@ private:
     void *m_swrContext = nullptr; // SwrContext* (int16 to float planar)
     void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo)
     void *m_audioFrame = nullptr; // AVFrame* (para encoding de áudio)
-    
+
     // Cache para dimensões do SwsContext (para recriar quando necessário)
     uint32_t m_swsSrcWidth = 0;
     uint32_t m_swsSrcHeight = 0;
@@ -200,7 +211,7 @@ private:
 
     // Contador de frames para keyframes periódicos
     int64_t m_videoFrameCount = 0;
-    
+
     // Detecção de dessincronização e recuperação
     int m_desyncFrameCount = 0; // Contador de frames dessincronizados consecutivos
 
@@ -213,7 +224,12 @@ private:
     std::thread m_serverThread;
     std::thread m_encodingThread; // Thread única para encoding
 
-    int m_serverSocket = -1;
+    // HTTP/HTTPS Server
+    HTTPServer m_httpServer;
+    bool m_enableHTTPS = false;
+    std::string m_sslCertPath;
+    std::string m_sslKeyPath;
+
     std::atomic<uint32_t> m_clientCount{0};
 
     // Output buffer for clients
@@ -222,4 +238,23 @@ private:
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
+
+    // Web Portal - responsável por servir a página web
+    WebPortal m_webPortal;
+
+    // HLS (HTTP Live Streaming) support
+    static constexpr int HLS_SEGMENT_DURATION_SEC = 2; // Duração de cada segmento em segundos
+    static constexpr int HLS_SEGMENT_COUNT = 5;        // Número de segmentos a manter na playlist
+    struct HLSSegment
+    {
+        std::vector<uint8_t> data;
+        int64_t timestampUs;
+        int index;
+    };
+    mutable std::mutex m_hlsMutex;
+    std::deque<HLSSegment> m_hlsSegments; // Segmentos HLS (circular buffer)
+    std::vector<uint8_t> m_hlsBuffer;     // Buffer para acumular dados MPEG-TS antes de criar segmento
+    int m_hlsSegmentIndex = 0;            // Contador de segmentos
+    int64_t m_hlsLastSegmentTimeUs = 0;   // Timestamp do último segmento criado
+    std::thread m_hlsSegmentThread;       // Thread para criar segmentos
 };

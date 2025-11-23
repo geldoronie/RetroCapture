@@ -9,6 +9,9 @@
 #include <cstring>
 #include <cerrno>
 #include <time.h>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
 
 extern "C"
 {
@@ -181,16 +184,10 @@ bool HTTPTSStreamer::start()
         return true; // Já está ativo
     }
 
-    // Garantir que socket anterior foi fechado completamente
-    // Isso previne "Address already in use" ao reiniciar
-    if (m_serverSocket >= 0)
-    {
-        shutdown(m_serverSocket, SHUT_RDWR);
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        // Aguardar um pouco para o SO liberar a porta
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    // Fechar servidor anterior se existir
+    m_httpServer.closeServer();
+    // Aguardar um pouco para o SO liberar a porta
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Limpar recursos FFmpeg se existirem (pode ter sido parado anteriormente)
     // Fazer isso de forma segura, verificando se os recursos existem
@@ -207,45 +204,117 @@ bool HTTPTSStreamer::start()
         return false;
     }
 
-    // Criar socket do servidor HTTP
-    m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (m_serverSocket < 0)
+    // Configurar SSL se habilitado
+    if (m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
     {
-        LOG_ERROR("Failed to create server socket: " + std::string(strerror(errno)));
+        // Função helper para encontrar arquivo SSL em vários locais possíveis
+        auto findSSLFile = [](const std::string &relativePath) -> std::string
+        {
+            std::vector<std::string> possiblePaths = {
+                relativePath,                // Caminho como fornecido (pode ser relativo ou absoluto)
+                "./ssl/" + relativePath,     // Diretório atual/ssl/
+                "./" + relativePath,         // Diretório atual
+                "../ssl/" + relativePath,    // Um nível acima/ssl/
+                "../../ssl/" + relativePath, // Dois níveis acima/ssl/
+            };
+
+            // Se o caminho já é absoluto, verificar diretamente
+            std::filesystem::path testPath(relativePath);
+            if (testPath.is_absolute() && std::filesystem::exists(testPath))
+            {
+                return std::filesystem::absolute(testPath).string();
+            }
+
+            // Tentar caminhos relativos
+            for (const auto &path : possiblePaths)
+            {
+                std::filesystem::path fsPath(path);
+                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                {
+                    return std::filesystem::absolute(fsPath).string();
+                }
+            }
+
+            return ""; // Não encontrado
+        };
+
+        // Extrair apenas o nome do arquivo do caminho fornecido
+        std::filesystem::path certInputPath(m_sslCertPath);
+        std::filesystem::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename().string();
+        std::string keyFileName = keyInputPath.filename().string();
+
+        // Tentar encontrar os arquivos
+        std::string foundCertPath = findSSLFile(m_sslCertPath);
+        if (foundCertPath.empty())
+        {
+            // Tentar apenas com o nome do arquivo
+            foundCertPath = findSSLFile("ssl/" + certFileName);
+        }
+        if (foundCertPath.empty())
+        {
+            foundCertPath = findSSLFile(certFileName);
+        }
+
+        std::string foundKeyPath = findSSLFile(m_sslKeyPath);
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile("ssl/" + keyFileName);
+        }
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile(keyFileName);
+        }
+
+        if (foundCertPath.empty())
+        {
+            LOG_ERROR("SSL Certificate file not found: " + m_sslCertPath);
+            LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            m_enableHTTPS = false;
+        }
+        else if (foundKeyPath.empty())
+        {
+            LOG_ERROR("SSL Private Key file not found: " + m_sslKeyPath);
+            LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            m_enableHTTPS = false;
+        }
+        else
+        {
+            LOG_INFO("Certificados SSL encontrados:");
+            LOG_INFO("  Certificate: " + foundCertPath);
+            LOG_INFO("  Private Key: " + foundKeyPath);
+
+            if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
+            {
+                LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
+                LOG_ERROR("Make sure the certificate and key files are valid PEM format.");
+                m_enableHTTPS = false;
+            }
+            else
+            {
+                LOG_INFO("HTTPS configurado com sucesso");
+            }
+        }
+    }
+    else if (m_enableHTTPS)
+    {
+        LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+        LOG_WARN("Cert path: " + m_sslCertPath + ", Key path: " + m_sslKeyPath);
+        m_enableHTTPS = false;
+    }
+
+    // Criar servidor HTTP/HTTPS
+    if (!m_httpServer.createServer(m_port))
+    {
+        LOG_ERROR("Failed to create HTTP server");
         cleanupFFmpeg();
         return false;
     }
 
-    // Configurar opções do socket
-    int opt = 1;
-    setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    // Configurar endereço
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(m_port);
-
-    // Fazer bind
-    if (bind(m_serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-    {
-        LOG_ERROR("Failed to bind to port " + std::to_string(m_port) + ": " + std::string(strerror(errno)));
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        cleanupFFmpeg();
-        return false;
-    }
-
-    // Fazer listen
-    if (listen(m_serverSocket, 5) < 0)
-    {
-        LOG_ERROR("Failed to listen on socket: " + std::string(strerror(errno)));
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        cleanupFFmpeg();
-        return false;
-    }
+    // Configurar WebPortal para usar HTTPServer para envio de dados SSL
+    m_webPortal.setHTTPServer(&m_httpServer);
 
     // Iniciar threads
     m_running = true;
@@ -256,9 +325,19 @@ bool HTTPTSStreamer::start()
     m_serverThread.detach();
     m_encodingThread = std::thread(&HTTPTSStreamer::encodingThread, this);
     m_encodingThread.detach();
+    m_hlsSegmentThread = std::thread(&HTTPTSStreamer::hlsSegmentThread, this);
+    m_hlsSegmentThread.detach();
 
-    LOG_INFO("HTTP TS Streamer started on port " + std::to_string(m_port));
+    std::string protocol = m_httpServer.isHTTPS() ? "HTTPS" : "HTTP";
+    LOG_INFO(protocol + " TS Streamer started on port " + std::to_string(m_port));
     return true;
+}
+
+void HTTPTSStreamer::setSSLCertificatePath(const std::string &certPath, const std::string &keyPath)
+{
+    m_sslCertPath = certPath;
+    m_sslKeyPath = keyPath;
+    m_enableHTTPS = true;
 }
 
 void HTTPTSStreamer::stop()
@@ -272,22 +351,16 @@ void HTTPTSStreamer::stop()
     m_active = false;
     m_stopRequest = true;
 
-    // Fechar socket do servidor para acordar accept()
-    // IMPORTANTE: Fechar socket ANTES de setar flags para evitar race condition
-    if (m_serverSocket >= 0)
-    {
-        // Fechar socket de forma que libere a porta imediatamente
-        shutdown(m_serverSocket, SHUT_RDWR); // Desabilitar leitura e escrita
-        close(m_serverSocket);
-        m_serverSocket = -1;
-    }
+    // Fechar servidor HTTP/HTTPS para acordar accept()
+    // IMPORTANTE: Fechar servidor ANTES de setar flags para evitar race condition
+    m_httpServer.closeServer();
 
     // Fechar todos os sockets de clientes
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         for (int clientFd : m_clientSockets)
         {
-            close(clientFd);
+            m_httpServer.closeClient(clientFd);
         }
         m_clientSockets.clear();
         m_clientCount = 0;
@@ -320,7 +393,7 @@ bool HTTPTSStreamer::isActive() const
 
 std::string HTTPTSStreamer::getStreamUrl() const
 {
-    return "http://localhost:" + std::to_string(m_port) + "/stream";
+    return m_httpServer.getBaseUrl("localhost", m_port) + "/stream";
 }
 
 uint32_t HTTPTSStreamer::getClientCount() const
@@ -341,27 +414,162 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     // Ler requisição HTTP
     char buffer[4096];
-    ssize_t bytesRead = recv(clientFd, buffer, sizeof(buffer) - 1, 0);
+    ssize_t bytesRead = m_httpServer.receiveData(clientFd, buffer, sizeof(buffer) - 1);
     if (bytesRead <= 0)
     {
-        close(clientFd);
+        m_httpServer.closeClient(clientFd);
         return;
     }
 
     buffer[bytesRead] = '\0';
     std::string request(buffer);
 
-    // Verificar se é uma requisição GET /stream
-    bool isStreamRequest = (request.find("GET /stream") != std::string::npos);
+    // Log da requisição para debug (temporário)
+    LOG_INFO("HTTP Request received: " + request.substr(0, std::min(100UL, request.length())));
 
-    if (!isStreamRequest)
+    // Se HTTPS está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
+    if (m_enableHTTPS && !m_httpServer.isClientHTTPS(clientFd))
     {
-        // Enviar 404 para requisições que não são /stream
-        const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
-        send(clientFd, response, strlen(response), 0);
-        close(clientFd);
+        // Extrair o Host da requisição
+        std::string host = "localhost";
+        size_t hostPos = request.find("Host: ");
+        if (hostPos != std::string::npos)
+        {
+            size_t hostEnd = request.find("\r\n", hostPos);
+            if (hostEnd != std::string::npos)
+            {
+                host = request.substr(hostPos + 6, hostEnd - hostPos - 6);
+                // Remover porta se presente
+                size_t colonPos = host.find(':');
+                if (colonPos != std::string::npos)
+                {
+                    host = host.substr(0, colonPos);
+                }
+            }
+        }
+
+        // Extrair o path da requisição
+        std::string path = "/";
+        size_t pathStart = request.find("GET ");
+        if (pathStart != std::string::npos)
+        {
+            size_t pathEnd = request.find(" HTTP/", pathStart);
+            if (pathEnd != std::string::npos)
+            {
+                path = request.substr(pathStart + 4, pathEnd - pathStart - 4);
+            }
+        }
+
+        // Enviar redirecionamento 301 para HTTPS
+        std::string redirectUrl = "https://" + host + ":" + std::to_string(m_port) + path;
+        std::string redirectResponse =
+            "HTTP/1.1 301 Moved Permanently\r\n"
+            "Location: " +
+            redirectUrl + "\r\n"
+                          "Connection: close\r\n"
+                          "\r\n";
+
+        LOG_INFO("Redirecting HTTP to HTTPS: " + redirectUrl);
+        m_httpServer.sendData(clientFd, redirectResponse.c_str(), redirectResponse.length());
+        m_httpServer.closeClient(clientFd);
         return;
     }
+
+    // Verificar tipo de requisição (ANTES de verificar portal web)
+    // Isso garante que requisições de stream não sejam capturadas pelo portal
+    bool isHLSPlaylist = (request.find("/stream.m3u8") != std::string::npos);
+    bool isHLSSegment = (request.find("/segment_") != std::string::npos);
+    bool isStreamRequest = (request.find("/stream") != std::string::npos &&
+                            !isHLSPlaylist &&
+                            request.find("/stream.m3u8") == std::string::npos);
+    int segmentIndex = -1;
+
+    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream/HLS
+    // Isso previne que stream.m3u8 seja capturado pelo portal e retorne HTML
+    if (!isHLSPlaylist && !isHLSSegment && !isStreamRequest)
+    {
+        if (m_webPortal.isWebPortalRequest(request))
+        {
+            if (m_webPortal.handleRequest(clientFd, request))
+            {
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+            // Se não foi processada, continuar para outras verificações
+        }
+    }
+
+    // Extrair índice do segmento HLS
+    if (isHLSSegment)
+    {
+        size_t segmentPos = request.find("/segment_");
+        if (segmentPos != std::string::npos)
+        {
+            size_t dotPos = request.find(".ts", segmentPos);
+            if (dotPos != std::string::npos)
+            {
+                std::string segmentStr = request.substr(segmentPos + 9, dotPos - segmentPos - 9);
+                try
+                {
+                    segmentIndex = std::stoi(segmentStr);
+                }
+                catch (...)
+                {
+                    segmentIndex = -1;
+                }
+            }
+        }
+    }
+
+    if (isHLSPlaylist)
+    {
+        // Extrair prefixo base para incluir nos segmentos do M3U8
+        std::string basePrefix = "";
+        size_t streamPos = request.find("/stream.m3u8");
+        if (streamPos != std::string::npos)
+        {
+            // Extrair path antes de /stream.m3u8
+            size_t pathStart = request.find("GET ");
+            if (pathStart != std::string::npos)
+            {
+                std::string fullPath = request.substr(pathStart + 4, streamPos - pathStart - 4);
+                // Remover espaços
+                while (!fullPath.empty() && fullPath[0] == ' ')
+                {
+                    fullPath = fullPath.substr(1);
+                }
+                if (!fullPath.empty() && fullPath[0] == '/')
+                {
+                    fullPath = fullPath.substr(1);
+                }
+                if (!fullPath.empty())
+                {
+                    basePrefix = "/" + fullPath;
+                }
+            }
+        }
+
+        LOG_INFO("Serving HLS playlist to client (basePrefix: " + basePrefix + ")");
+        serveHLSPlaylist(clientFd, basePrefix);
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+    else if (isHLSSegment && segmentIndex >= 0)
+    {
+        LOG_INFO("Serving HLS segment " + std::to_string(segmentIndex) + " to client");
+        serveHLSSegment(clientFd, segmentIndex);
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+    else if (!isStreamRequest)
+    {
+        LOG_INFO("Sending 404 for request: " + request.substr(0, std::min(50UL, request.length())));
+        send404(clientFd);
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+
+    LOG_INFO("Serving MPEG-TS stream to client");
 
     // Enviar headers HTTP para stream MPEG-TS
     std::ostringstream headers;
@@ -373,11 +581,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
     headers << "\r\n";
 
     std::string headerStr = headers.str();
-    ssize_t sent = send(clientFd, headerStr.c_str(), headerStr.length(), MSG_NOSIGNAL);
+    ssize_t sent = m_httpServer.sendData(clientFd, headerStr.c_str(), headerStr.length());
     if (sent < 0)
     {
         // Cliente desconectou ou erro
-        close(clientFd);
+        m_httpServer.closeClient(clientFd);
         return;
     }
 
@@ -388,11 +596,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
         {
             LOG_INFO("Sending MPEG-TS format header to new client (" +
                      std::to_string(m_formatHeader.size()) + " bytes)");
-            ssize_t headerSent = send(clientFd, m_formatHeader.data(), m_formatHeader.size(), MSG_NOSIGNAL);
+            ssize_t headerSent = m_httpServer.sendData(clientFd, m_formatHeader.data(), m_formatHeader.size());
             if (headerSent < 0)
             {
                 LOG_ERROR("Failed to send format header to client");
-                close(clientFd);
+                m_httpServer.closeClient(clientFd);
                 return;
             }
         }
@@ -415,7 +623,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     while (!m_stopRequest && m_running)
     {
         char dummy;
-        ssize_t result = recv(clientFd, &dummy, 1, MSG_PEEK);
+        ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
         if (result <= 0)
         {
             break; // Cliente desconectou
@@ -424,7 +632,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
 
     // Cliente desconectou - remover da lista
-    close(clientFd);
+    m_httpServer.closeClient(clientFd);
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
@@ -435,6 +643,132 @@ void HTTPTSStreamer::handleClient(int clientFd)
             // Log removido para reduzir poluição
         }
     }
+}
+
+void HTTPTSStreamer::send404(int clientFd)
+{
+    const char *response = "HTTP/1.1 404 Not Found\r\n"
+                           "Content-Type: text/plain\r\n"
+                           "Connection: close\r\n"
+                           "\r\n"
+                           "404 Not Found";
+    m_httpServer.sendData(clientFd, response, strlen(response));
+}
+
+void HTTPTSStreamer::hlsSegmentThread()
+{
+    LOG_INFO("HLS segment thread started");
+
+    while (m_running && !m_stopRequest)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(HLS_SEGMENT_DURATION_SEC));
+
+        if (m_stopRequest || !m_running)
+        {
+            break;
+        }
+
+        std::lock_guard<std::mutex> lock(m_hlsMutex);
+
+        // Verificar se há dados suficientes no buffer
+        if (m_hlsBuffer.empty())
+        {
+            continue;
+        }
+
+        // Criar novo segmento
+        HLSSegment segment;
+        segment.data = m_hlsBuffer;
+        segment.index = m_hlsSegmentIndex++;
+        segment.timestampUs = getTimestampUs();
+
+        // Adicionar segmento ao buffer circular
+        m_hlsSegments.push_back(segment);
+
+        // Manter apenas os últimos HLS_SEGMENT_COUNT segmentos
+        while (static_cast<int>(m_hlsSegments.size()) > HLS_SEGMENT_COUNT)
+        {
+            m_hlsSegments.pop_front();
+        }
+
+        // Limpar buffer para próximo segmento
+        m_hlsBuffer.clear();
+
+        LOG_INFO("HLS segment " + std::to_string(segment.index) + " created (" +
+                 std::to_string(segment.data.size()) + " bytes)");
+    }
+
+    LOG_INFO("HLS segment thread stopped");
+}
+
+std::string HTTPTSStreamer::generateM3U8Playlist(const std::string &basePrefix) const
+{
+    std::lock_guard<std::mutex> lock(m_hlsMutex);
+
+    std::ostringstream m3u8;
+    m3u8 << "#EXTM3U\n";
+    m3u8 << "#EXT-X-VERSION:3\n";
+    m3u8 << "#EXT-X-TARGETDURATION:" << HLS_SEGMENT_DURATION_SEC << "\n";
+    m3u8 << "#EXT-X-MEDIA-SEQUENCE:" << (m_hlsSegmentIndex - static_cast<int>(m_hlsSegments.size())) << "\n";
+
+    std::string segmentPrefix = basePrefix.empty() ? "" : basePrefix;
+    if (!segmentPrefix.empty() && segmentPrefix.back() != '/')
+    {
+        segmentPrefix += "/";
+    }
+
+    for (const auto &segment : m_hlsSegments)
+    {
+        m3u8 << "#EXTINF:" << HLS_SEGMENT_DURATION_SEC << ".0,\n";
+        m3u8 << segmentPrefix << "segment_" << segment.index << ".ts\n";
+    }
+
+    return m3u8.str();
+}
+
+void HTTPTSStreamer::serveHLSPlaylist(int clientFd, const std::string &basePrefix)
+{
+    std::string playlist = generateM3U8Playlist(basePrefix);
+
+    std::ostringstream response;
+    response << "HTTP/1.1 200 OK\r\n";
+    response << "Content-Type: application/vnd.apple.mpegurl\r\n";
+    response << "Content-Length: " << playlist.length() << "\r\n";
+    response << "Connection: close\r\n";
+    response << "Cache-Control: no-cache\r\n";
+    response << "\r\n";
+    response << playlist;
+
+    std::string responseStr = response.str();
+    m_httpServer.sendData(clientFd, responseStr.c_str(), responseStr.length());
+}
+
+void HTTPTSStreamer::serveHLSSegment(int clientFd, int segmentIndex)
+{
+    std::lock_guard<std::mutex> lock(m_hlsMutex);
+
+    // Procurar segmento pelo índice
+    for (const auto &segment : m_hlsSegments)
+    {
+        if (segment.index == segmentIndex)
+        {
+            std::ostringstream response;
+            response << "HTTP/1.1 200 OK\r\n";
+            response << "Content-Type: video/mp2t\r\n";
+            response << "Content-Length: " << segment.data.size() << "\r\n";
+            response << "Connection: close\r\n";
+            response << "Cache-Control: public, max-age=3600\r\n";
+            response << "\r\n";
+
+            std::string headerStr = response.str();
+            m_httpServer.sendData(clientFd, headerStr.c_str(), headerStr.length());
+            m_httpServer.sendData(clientFd, segment.data.data(), segment.data.size());
+            return;
+        }
+    }
+
+    // Segmento não encontrado
+    send404(clientFd);
 }
 
 int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
@@ -455,87 +789,84 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             {
                 m_formatHeader.assign(buf, buf + buf_size);
                 m_headerWritten = true;
+                LOG_INFO("MPEG-TS format header captured (" + std::to_string(buf_size) + " bytes)");
             }
         }
     }
 
-    // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
-    std::lock_guard<std::mutex> lock(m_outputMutex);
-
-    // Verificar novamente após adquirir o lock
-    if (m_stopRequest || m_clientSockets.empty())
+    // Acumular dados para HLS
     {
-        // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
-        return buf_size;
+        std::lock_guard<std::mutex> hlsLock(m_hlsMutex);
+        m_hlsBuffer.insert(m_hlsBuffer.end(), buf, buf + buf_size);
     }
 
-    // CRÍTICO: writeCallback é chamado dentro do lock do muxing
-    // Deve ser MUITO rápido para não bloquear o encoding
-    // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
-    // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
-
-    // Enviar dados para todos os clientes conectados
-    // Remover clientes que falharam ao enviar
-    size_t minSent = static_cast<size_t>(buf_size); // Rastrear mínimo enviado a todos os clientes
-    auto it = m_clientSockets.begin();
-    while (it != m_clientSockets.end())
+    // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
     {
-        int clientFd = *it;
-        size_t totalSent = 0;
+        std::lock_guard<std::mutex> lock(m_outputMutex);
 
-        // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
-        size_t toSend = static_cast<size_t>(buf_size);
-        // Limitar tamanho do chunk para evitar problemas
-        if (toSend > 65536)
+        // Verificar novamente após adquirir o lock
+        if (m_stopRequest || m_clientSockets.empty())
         {
-            toSend = 65536;
+            // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
+            return buf_size;
         }
 
-        ssize_t sent = send(clientFd, buf, toSend, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (sent < 0)
+        // CRÍTICO: writeCallback é chamado dentro do lock do muxing
+        // Deve ser MUITO rápido para não bloquear o encoding
+        // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
+        // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
+
+        // Enviar dados para todos os clientes conectados
+        // Remover clientes que falharam ao enviar
+        size_t minSent = static_cast<size_t>(buf_size); // Rastrear mínimo enviado a todos os clientes
+        auto it = m_clientSockets.begin();
+        while (it != m_clientSockets.end())
         {
-            int err = errno;
-            // EPIPE e ECONNRESET são normais quando cliente desconecta
-            // EAGAIN/EWOULDBLOCK significa que o socket não está pronto - pular este cliente
-            if (err != EAGAIN && err != EWOULDBLOCK)
+            int clientFd = *it;
+            size_t totalSent = 0;
+
+            // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
+            size_t toSend = static_cast<size_t>(buf_size);
+            // Limitar tamanho do chunk para evitar problemas
+            if (toSend > 65536)
             {
-                // Erro real - remover cliente
-                close(clientFd);
+                toSend = 65536;
+            }
+
+            ssize_t sent = m_httpServer.sendData(clientFd, buf, toSend);
+            if (sent < 0)
+            {
+                // Erro ao enviar - remover cliente
+                m_httpServer.closeClient(clientFd);
+                it = m_clientSockets.erase(it);
+                m_clientCount = m_clientSockets.size();
+            }
+            else if (sent == 0)
+            {
+                // Cliente fechou a conexão
+                m_httpServer.closeClient(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
             else
             {
-                // Socket não está pronto - este cliente não recebeu nada
-                totalSent = 0;
+                totalSent = static_cast<size_t>(sent);
                 ++it;
             }
-        }
-        else if (sent == 0)
-        {
-            // Cliente fechou a conexão
-            close(clientFd);
-            it = m_clientSockets.erase(it);
-            m_clientCount = m_clientSockets.size();
-        }
-        else
-        {
-            totalSent = static_cast<size_t>(sent);
-            ++it;
+
+            // Atualizar mínimo enviado (se este cliente recebeu menos, usar esse valor)
+            if (totalSent < minSent)
+            {
+                minSent = totalSent;
+            }
         }
 
-        // Atualizar mínimo enviado (se este cliente recebeu menos, usar esse valor)
-        if (totalSent < minSent)
-        {
-            minSent = totalSent;
-        }
+        // CRÍTICO: Sempre retornar buf_size para não bloquear o FFmpeg
+        // O buffer AVIO de 1MB é suficiente para lidar com pequenos atrasos de envio
+        // Retornar menos que buf_size causa retries do FFmpeg que quebram sincronização e causam corrupção
+        // Se alguns clientes não receberam todos os dados, o buffer AVIO vai lidar com isso
+        return buf_size;
     }
-
-    // CRÍTICO: Sempre retornar buf_size para não bloquear o FFmpeg
-    // O buffer AVIO de 1MB é suficiente para lidar com pequenos atrasos de envio
-    // Retornar menos que buf_size causa retries do FFmpeg que quebram sincronização e causam corrupção
-    // Se alguns clientes não receberam todos os dados, o buffer AVIO vai lidar com isso
-    return buf_size;
 }
 
 bool HTTPTSStreamer::initializeFFmpeg()
@@ -2154,32 +2485,28 @@ HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
 
 void HTTPTSStreamer::serverThread()
 {
-    LOG_INFO("Server thread started, waiting for connections on port " + std::to_string(m_port));
+    std::string protocol = m_httpServer.isHTTPS() ? "HTTPS" : "HTTP";
+    LOG_INFO("Server thread started, waiting for " + protocol + " connections on port " + std::to_string(m_port));
 
     while (m_running)
     {
-
         if (m_stopRequest)
         {
             break;
         }
 
-        struct sockaddr_in clientAddr;
-        socklen_t clientLen = sizeof(clientAddr);
-
-        // Aceitar conexão de cliente
-        int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+        // Aceitar conexão de cliente usando HTTPServer
+        int clientFd = m_httpServer.acceptClient();
         if (clientFd < 0)
         {
-            if (m_running)
+            if (m_running && !m_stopRequest)
             {
-                // Erro ao aceitar (pode ser porque fechamos o socket)
-                if (errno != EBADF && errno != EINVAL)
-                {
-                    LOG_ERROR("Failed to accept client connection: " + std::string(strerror(errno)));
-                }
+                // Erro ao aceitar (pode ser porque fechamos o servidor)
+                // Não logar erro se foi fechado intencionalmente
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
-            break; // Sair do loop se não estiver rodando ou se o socket foi fechado
+            break; // Sair do loop se não estiver rodando ou se o servidor foi fechado
         }
 
         // Processar cliente em thread separada

@@ -80,6 +80,11 @@ public:
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
 
+    // Web Portal configuration
+    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
+    void setWebPortalSSLCertPath(const std::string& path) { m_webPortalSSLCertPath = path; }
+    void setWebPortalSSLKeyPath(const std::string& path) { m_webPortalSSLKeyPath = path; }
+
 private:
     bool m_initialized = false;
 
@@ -141,6 +146,11 @@ private:
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_streamingVP8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+
+    // Web Portal settings
+    bool m_webPortalHTTPSEnabled = false;
+    std::string m_webPortalSSLCertPath = "ssl/server.crt";
+    std::string m_webPortalSSLKeyPath = "ssl/server.key";
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;

@@ -609,6 +609,11 @@ bool Application::initUI()
     m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
+    // Carregar configurações do Web Portal
+    m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
+    m_webPortalSSLCertPath = m_ui->getWebPortalSSLCertPath();
+    m_webPortalSSLKeyPath = m_ui->getWebPortalSSLKeyPath();
+
     // Também sincronizar configurações de imagem
     m_brightness = m_ui->getBrightness();
     m_contrast = m_ui->getContrast();
@@ -800,6 +805,43 @@ bool Application::initUI()
                                         {
         m_streamingVP9Speed = speed;
         // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    // Web Portal callbacks
+    m_ui->setOnWebPortalHTTPSChanged([this](bool enabled)
+                                    {
+        m_webPortalHTTPSEnabled = enabled;
+        // Se streaming estiver ativo, reiniciar para aplicar HTTPS
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnWebPortalSSLCertPathChanged([this](const std::string& path)
+                                           {
+        m_webPortalSSLCertPath = path;
+        // Se streaming estiver ativo, reiniciar para aplicar novo certificado
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
+
+    m_ui->setOnWebPortalSSLKeyPathChanged([this](const std::string& path)
+                                         {
+        m_webPortalSSLKeyPath = path;
+        // Se streaming estiver ativo, reiniciar para aplicar nova chave
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1026,6 +1068,16 @@ bool Application::initStreaming()
     if (m_audioCapture && m_audioCapture->isOpen())
     {
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+    }
+
+    // Configurar HTTPS do Web Portal
+    if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
+    {
+        // Os caminhos serão resolvidos no HTTPTSStreamer::start() que busca em vários locais
+        // Aqui apenas passamos os caminhos como configurados na UI
+        tsStreamer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
+        tsStreamer->enableHTTPS(true);
+        LOG_INFO("HTTPS habilitado na configuração. Certificados serão buscados no diretório de execução.");
     }
 
     m_streamManager->addStreamer(std::move(tsStreamer));

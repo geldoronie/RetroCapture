@@ -248,6 +248,12 @@ void UIManager::render()
                 ImGui::EndTabItem();
             }
 
+            if (ImGui::BeginTabItem("Web Portal"))
+            {
+                renderWebPortalPanel();
+                ImGui::EndTabItem();
+            }
+
             ImGui::EndTabBar();
         }
         
@@ -1391,6 +1397,15 @@ void UIManager::loadConfig()
             if (image.contains("monitorIndex")) m_monitorIndex = image["monitorIndex"];
         }
 
+        // Carregar configurações do Web Portal
+        if (config.contains("webPortal"))
+        {
+            auto &webPortal = config["webPortal"];
+            if (webPortal.contains("httpsEnabled")) m_webPortalHTTPSEnabled = webPortal["httpsEnabled"];
+            if (webPortal.contains("sslCertPath")) m_webPortalSSLCertPath = webPortal["sslCertPath"].get<std::string>();
+            if (webPortal.contains("sslKeyPath")) m_webPortalSSLKeyPath = webPortal["sslKeyPath"].get<std::string>();
+        }
+
         // Carregar shader atual
         if (config.contains("shader"))
         {
@@ -1454,6 +1469,13 @@ void UIManager::saveConfig()
             {"monitorIndex", m_monitorIndex}
         };
 
+        // Salvar configurações do Web Portal
+        config["webPortal"] = {
+            {"httpsEnabled", m_webPortalHTTPSEnabled},
+            {"sslCertPath", m_webPortalSSLCertPath},
+            {"sslKeyPath", m_webPortalSSLKeyPath}
+        };
+
         // Salvar shader atual
         config["shader"] = {
             {"current", m_currentShader.empty() ? nullptr : m_currentShader}
@@ -1480,5 +1502,111 @@ void UIManager::saveConfig()
     catch (const std::exception &e)
     {
         LOG_ERROR("Erro ao salvar configurações: " + std::string(e.what()));
+    }
+}
+
+void UIManager::renderWebPortalPanel()
+{
+    ImGui::Text("Web Portal Configuration");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // HTTPS Enable/Disable
+    bool httpsEnabled = m_webPortalHTTPSEnabled;
+    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
+    {
+        m_webPortalHTTPSEnabled = httpsEnabled;
+        if (m_onWebPortalHTTPSChanged)
+        {
+            m_onWebPortalHTTPSChanged(httpsEnabled);
+        }
+    }
+    
+    if (httpsEnabled)
+    {
+        ImGui::Spacing();
+        ImGui::Text("SSL/TLS Certificate Configuration");
+        ImGui::Separator();
+        
+        // SSL Certificate Path
+        char certPathBuffer[512];
+        strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
+        certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
+        
+        ImGui::Text("Certificate Path (.crt or .pem):");
+        if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
+        {
+            m_webPortalSSLCertPath = std::string(certPathBuffer);
+            if (m_onWebPortalSSLCertPathChanged)
+            {
+                m_onWebPortalSSLCertPathChanged(m_webPortalSSLCertPath);
+            }
+        }
+        
+        // SSL Key Path
+        char keyPathBuffer[512];
+        strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
+        keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
+        
+        ImGui::Text("Private Key Path (.key):");
+        if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
+        {
+            m_webPortalSSLKeyPath = std::string(keyPathBuffer);
+            if (m_onWebPortalSSLKeyPathChanged)
+            {
+                m_onWebPortalSSLKeyPathChanged(m_webPortalSSLKeyPath);
+            }
+        }
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Help text
+        ImGui::TextWrapped("Note: HTTPS support must be compiled with -DENABLE_HTTPS=ON");
+        ImGui::TextWrapped("Generate certificates using:");
+        ImGui::Text("  openssl genrsa -out ssl/server.key 2048");
+        ImGui::Text("  openssl req -new -x509 -key ssl/server.key -out ssl/server.crt -days 365");
+        
+        // Check if files exist
+        ImGui::Spacing();
+        if (std::filesystem::exists(m_webPortalSSLCertPath))
+        {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Certificate file found");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "✗ Certificate file not found");
+        }
+        
+        if (std::filesystem::exists(m_webPortalSSLKeyPath))
+        {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Private key file found");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "✗ Private key file not found");
+        }
+    }
+    else
+    {
+        ImGui::Spacing();
+        ImGui::TextWrapped("The web portal will use HTTP (unencrypted). Enable HTTPS for secure connections.");
+    }
+    
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    
+    // Portal URL info
+    ImGui::Text("Portal URL:");
+    std::string protocol = httpsEnabled ? "https" : "http";
+    std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
+    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", portalUrl.c_str());
+    
+    if (ImGui::Button("Copy URL"))
+    {
+        // TODO: Implement clipboard copy if needed
+        ImGui::SetClipboardText(portalUrl.c_str());
     }
 }
