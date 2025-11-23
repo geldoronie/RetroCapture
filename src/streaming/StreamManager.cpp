@@ -231,6 +231,20 @@ void StreamManager::setWebPortalTitle(const std::string &title)
     }
 }
 
+void StreamManager::setWebPortalSubtitle(const std::string &subtitle)
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalSubtitle(subtitle);
+            LOG_INFO("Subtítulo do Web Portal atualizado: " + subtitle);
+        }
+    }
+}
+
 void StreamManager::setWebPortalImagePath(const std::string &path)
 {
     for (auto &streamer : m_streamers)
@@ -261,8 +275,10 @@ void StreamManager::setWebPortalBackgroundImagePath(const std::string &path)
 
 void StreamManager::setWebPortalColors(
     const float bg[4], const float text[4], const float primary[4],
-    const float secondary[4], const float cardHeader[4], const float border[4],
-    const float success[4], const float warning[4], const float danger[4])
+    const float primaryLight[4], const float primaryDark[4],
+    const float secondary[4], const float secondaryHighlight[4],
+    const float cardHeader[4], const float border[4],
+    const float success[4], const float warning[4], const float danger[4], const float info[4])
 {
     for (auto &streamer : m_streamers)
     {
@@ -270,8 +286,28 @@ void StreamManager::setWebPortalColors(
         HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
         if (tsStreamer)
         {
-            tsStreamer->setWebPortalColors(bg, text, primary, secondary, cardHeader, border, success, warning, danger);
+            tsStreamer->setWebPortalColors(bg, text, primary, primaryLight, primaryDark, secondary, secondaryHighlight, cardHeader, border, success, warning, danger, info);
             LOG_INFO("Cores do Web Portal atualizadas");
+        }
+    }
+}
+
+void StreamManager::setWebPortalTexts(
+    const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+    const std::string &status, const std::string &codec, const std::string &resolution,
+    const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+    const std::string &supported, const std::string &format, const std::string &codecInfo,
+    const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+    const std::string &connecting)
+{
+    for (auto &streamer : m_streamers)
+    {
+        // Tentar fazer cast para HTTPTSStreamer
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            tsStreamer->setWebPortalTexts(streamInfo, quickActions, compatibility, status, codec, resolution, streamUrl, copyUrl, openNewTab, supported, format, codecInfo, supportedBrowsers, formatInfo, codecInfoValue, connecting);
+            LOG_INFO("Textos do Web Portal atualizados");
         }
     }
 }

@@ -197,31 +197,84 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
     }
     else
     {
-        // Substituir título da página
-        std::string titleTag = "<title>" + m_title + "</title>";
-        size_t titlePos = html.find("<title>");
-        if (titlePos != std::string::npos)
+        // Substituir título da página (tag <title>)
+        std::string pageTitleTag = "<title>" + m_title + "</title>";
+        size_t pageTitlePos = html.find("<title>");
+        if (pageTitlePos != std::string::npos)
         {
-            size_t titleEnd = html.find("</title>", titlePos);
-            if (titleEnd != std::string::npos)
+            size_t pageTitleEnd = html.find("</title>", pageTitlePos);
+            if (pageTitleEnd != std::string::npos)
             {
-                html.replace(titlePos, titleEnd - titlePos + 8, titleTag);
+                html.replace(pageTitlePos, pageTitleEnd - pageTitlePos + 8, pageTitleTag);
             }
         }
 
-        // Substituir título no header (h1)
-        std::string h1Tag = "<h1 class=\"mb-0\">" + m_title + "</h1>";
-        size_t h1Pos = html.find("<h1 class=\"mb-0\">");
-        if (h1Pos != std::string::npos)
+        // Substituir título no header (novo layout)
+        std::string headerTitleTag = "<h1 class=\"portal-title mb-0\">" + m_title + "</h1>";
+        size_t headerTitlePos = html.find("<h1 class=\"portal-title mb-0\">");
+        if (headerTitlePos == std::string::npos)
         {
-            size_t h1End = html.find("</h1>", h1Pos);
-            if (h1End != std::string::npos)
+            // Fallback para formato antigo
+            headerTitlePos = html.find("<h1 class=\"mb-0\">");
+            if (headerTitlePos != std::string::npos)
             {
-                html.replace(h1Pos, h1End - h1Pos + 5, h1Tag);
+                size_t headerTitleEnd = html.find("</h1>", headerTitlePos);
+                if (headerTitleEnd != std::string::npos)
+                {
+                    html.replace(headerTitlePos, headerTitleEnd - headerTitlePos + 5, headerTitleTag);
+                }
+            }
+        }
+        else
+        {
+            size_t headerTitleEnd = html.find("</h1>", headerTitlePos);
+            if (headerTitleEnd != std::string::npos)
+            {
+                html.replace(headerTitlePos, headerTitleEnd - headerTitlePos + 5, headerTitleTag);
             }
         }
 
-        // Substituir ícone por imagem se especificado
+        // Substituir subtítulo (novo layout)
+        std::string subtitleTag = "<p class=\"portal-subtitle mb-0\">" + m_subtitle + "</p>";
+        size_t subtitlePos = html.find("<p class=\"portal-subtitle mb-0\">");
+        if (subtitlePos == std::string::npos)
+        {
+            // Fallback para formato antigo
+            subtitlePos = html.find("<p class=\"text-muted mb-0\">");
+            if (subtitlePos != std::string::npos)
+            {
+                size_t subtitleEnd = html.find("</p>", subtitlePos);
+                if (subtitleEnd != std::string::npos)
+                {
+                    html.replace(subtitlePos, subtitleEnd - subtitlePos + 4, subtitleTag);
+                }
+            }
+        }
+        else
+        {
+            size_t subtitleEnd = html.find("</p>", subtitlePos);
+            if (subtitleEnd != std::string::npos)
+            {
+                html.replace(subtitlePos, subtitleEnd - subtitlePos + 4, subtitleTag);
+            }
+        }
+
+        // Substituir textos do novo layout moderno
+        replaceTextInHTML(html, "RetroCapture Stream", m_title);
+        replaceTextInHTML(html, "Streaming de vídeo em tempo real", m_subtitle);
+        replaceTextInHTML(html, "Informações do Stream", m_textStreamInfo);
+        replaceTextInHTML(html, "Status", m_textStatus);
+        replaceTextInHTML(html, "Resolução", m_textResolution);
+        replaceTextInHTML(html, "Codec", m_textCodec);
+        replaceTextInHTML(html, "URL do Stream", m_textStreamUrl);
+        replaceTextInHTML(html, "Formato", m_textFormat);
+        replaceTextInHTML(html, "HLS (HTTP Live Streaming)", m_textFormatInfo);
+        replaceTextInHTML(html, "Copiar URL", m_textCopyUrl);
+        replaceTextInHTML(html, "Abrir em Nova Aba", m_textOpenNewTab);
+        replaceTextInHTML(html, "Estatísticas", "Estatísticas");
+        replaceTextInHTML(html, "Conectando...", m_textConnecting);
+
+        // Substituir ícone por imagem se especificado (novo layout)
         if (!m_imagePath.empty())
         {
             // Buscar imagem nos locais padrão (assets/)
@@ -229,16 +282,32 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
 
             if (!foundImagePath.empty() && std::filesystem::exists(foundImagePath))
             {
-                // Encontrar o ícone Bootstrap (bi-controller)
-                std::string iconTag = "<i class=\"bi bi-controller fs-1 text-primary me-3\"></i>";
-                size_t iconPos = html.find(iconTag);
-                if (iconPos != std::string::npos)
+                // Procurar pelo logo-container no novo layout
+                std::string logoContainerStart = "<div class=\"logo-container me-3\" id=\"logoContainer\">";
+                size_t logoPos = html.find(logoContainerStart);
+                if (logoPos != std::string::npos)
                 {
-                    // Criar tag de imagem
-                    // Usar /portal-image como rota para a imagem (será servida via handleRequest)
-                    std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
-                    std::string imgTag = "<img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" class=\"me-3\" style=\"max-height: 48px; width: auto;\">";
-                    html.replace(iconPos, iconTag.length(), imgTag);
+                    // Encontrar o fechamento da div logo-container
+                    size_t logoEnd = html.find("</div>", logoPos + logoContainerStart.length());
+                    if (logoEnd != std::string::npos)
+                    {
+                        // Criar tag de imagem
+                        std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
+                        std::string imgTag = "<div class=\"logo-container me-3\" id=\"logoContainer\"><img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" style=\"width: 100%; height: 100%; object-fit: contain; border-radius: 12px;\"></div>";
+                        html.replace(logoPos, logoEnd - logoPos + 6, imgTag);
+                    }
+                }
+                else
+                {
+                    // Fallback para formato antigo
+                    std::string iconTag = "<i class=\"bi bi-controller fs-1 text-primary me-3\"></i>";
+                    size_t iconPos = html.find(iconTag);
+                    if (iconPos != std::string::npos)
+                    {
+                        std::string imgUrl = (basePrefix.empty() ? "/" : basePrefix) + "portal-image";
+                        std::string imgTag = "<img src=\"" + imgUrl + "\" alt=\"" + m_title + "\" class=\"me-3\" style=\"max-height: 48px; width: auto;\">";
+                        html.replace(iconPos, iconTag.length(), imgTag);
+                    }
                 }
             }
         }
@@ -429,7 +498,16 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     // Lista de locais para buscar (em ordem de prioridade)
     std::vector<std::string> possiblePaths;
 
-    // 1. Pasta de configuração do usuário (~/.config/retrocapture/assets/) - PRIORIDADE ALTA
+    // 1. Variável de ambiente RETROCAPTURE_ASSETS_PATH (para AppImage) - PRIORIDADE MÁXIMA
+    const char *assetsEnvPath = std::getenv("RETROCAPTURE_ASSETS_PATH");
+    if (assetsEnvPath)
+    {
+        std::filesystem::path envAssetsDir(assetsEnvPath);
+        possiblePaths.push_back((envAssetsDir / fileName).string());
+        possiblePaths.push_back((envAssetsDir / relativePath).string());
+    }
+
+    // 2. Pasta de configuração do usuário (~/.config/retrocapture/assets/) - PRIORIDADE ALTA
     std::string userConfigDir = getUserConfigDir();
     if (!userConfigDir.empty())
     {
@@ -437,7 +515,7 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
         possiblePaths.push_back((userAssetsDir / fileName).string());
     }
 
-    // 2. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
+    // 3. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
     // No Linux, podemos usar readlink em /proc/self/exe para obter o caminho do executável
     char exePath[1024];
     ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
@@ -449,14 +527,14 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
         possiblePaths.push_back((assetsDir / fileName).string());
     }
 
-    // 3. Caminho como fornecido (pode ser relativo)
+    // 4. Caminho como fornecido (pode ser relativo)
     possiblePaths.push_back(relativePath);
 
-    // 4. Diretório atual/assets/
+    // 5. Diretório atual/assets/
     possiblePaths.push_back("./assets/" + fileName);
     possiblePaths.push_back("./assets/" + relativePath);
 
-    // 5. Diretório atual
+    // 6. Diretório atual
     possiblePaths.push_back("./" + fileName);
     possiblePaths.push_back("./" + relativePath);
 
@@ -475,8 +553,10 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
 
 void WebPortal::setColors(
     const float bg[4], const float text[4], const float primary[4],
-    const float secondary[4], const float cardHeader[4], const float border[4],
-    const float success[4], const float warning[4], const float danger[4])
+    const float primaryLight[4], const float primaryDark[4],
+    const float secondary[4], const float secondaryHighlight[4],
+    const float cardHeader[4], const float border[4],
+    const float success[4], const float warning[4], const float danger[4], const float info[4])
 {
     // IMPORTANTE: Verificar ponteiros antes de usar memcpy para evitar corrupção de memória
     if (bg)
@@ -491,9 +571,21 @@ void WebPortal::setColors(
     {
         memcpy(m_colorPrimary, primary, 4 * sizeof(float));
     }
+    if (primaryLight)
+    {
+        memcpy(m_colorPrimaryLight, primaryLight, 4 * sizeof(float));
+    }
+    if (primaryDark)
+    {
+        memcpy(m_colorPrimaryDark, primaryDark, 4 * sizeof(float));
+    }
     if (secondary)
     {
         memcpy(m_colorSecondary, secondary, 4 * sizeof(float));
+    }
+    if (secondaryHighlight)
+    {
+        memcpy(m_colorSecondaryHighlight, secondaryHighlight, 4 * sizeof(float));
     }
     if (cardHeader)
     {
@@ -515,6 +607,36 @@ void WebPortal::setColors(
     {
         memcpy(m_colorDanger, danger, 4 * sizeof(float));
     }
+    if (info)
+    {
+        memcpy(m_colorInfo, info, 4 * sizeof(float));
+    }
+}
+
+void WebPortal::setTexts(
+    const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+    const std::string &status, const std::string &codec, const std::string &resolution,
+    const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+    const std::string &supported, const std::string &format, const std::string &codecInfo,
+    const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+    const std::string &connecting)
+{
+    m_textStreamInfo = streamInfo;
+    m_textQuickActions = quickActions;
+    m_textCompatibility = compatibility;
+    m_textStatus = status;
+    m_textCodec = codec;
+    m_textResolution = resolution;
+    m_textStreamUrl = streamUrl;
+    m_textCopyUrl = copyUrl;
+    m_textOpenNewTab = openNewTab;
+    m_textSupported = supported;
+    m_textFormat = format;
+    m_textCodecInfo = codecInfo;
+    m_textSupportedBrowsers = supportedBrowsers;
+    m_textFormatInfo = formatInfo;
+    m_textCodecInfoValue = codecInfoValue;
+    m_textConnecting = connecting;
 }
 
 std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
@@ -565,15 +687,20 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
 
     css << "}\n\n";
 
-    // Cores CSS customizadas
+    // Cores CSS customizadas baseadas no styleguide RetroCapture
     css << ":root {\n";
     css << "    --primary-color: " << colorToRGB(m_colorPrimary) << ";\n";
+    css << "    --primary-light: " << colorToRGB(m_colorPrimaryLight) << ";\n";
+    css << "    --primary-dark: " << colorToRGB(m_colorPrimaryDark) << ";\n";
     css << "    --secondary-color: " << colorToRGB(m_colorSecondary) << ";\n";
+    css << "    --secondary-highlight: " << colorToRGB(m_colorSecondaryHighlight) << ";\n";
     css << "    --success-color: " << colorToRGB(m_colorSuccess) << ";\n";
     css << "    --warning-color: " << colorToRGB(m_colorWarning) << ";\n";
     css << "    --danger-color: " << colorToRGB(m_colorDanger) << ";\n";
+    css << "    --info-color: " << colorToRGB(m_colorInfo) << ";\n";
     css << "    --dark-bg: " << colorToRGB(m_colorBackground) << ";\n";
     css << "    --card-bg: " << colorToRGB(m_colorSecondary) << ";\n";
+    css << "    --text-light: " << colorToRGB(m_colorText) << ";\n";
     css << "}\n\n";
 
     // Sobrescrever classes Bootstrap com cores customizadas
@@ -622,6 +749,16 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
     css << "    border-color: " << colorToRGBA(m_colorSuccess) << " !important;\n";
     css << "}\n\n";
 
+    css << ".btn-success:hover {\n";
+    int rSucc = static_cast<int>(m_colorSuccess[0] * 255.0f);
+    int gSucc = static_cast<int>(m_colorSuccess[1] * 255.0f);
+    int bSucc = static_cast<int>(m_colorSuccess[2] * 255.0f);
+    std::ostringstream hoverSuccess;
+    hoverSuccess << "rgba(" << rSucc << ", " << gSucc << ", " << bSucc << ", 0.85)";
+    css << "    background-color: " << hoverSuccess.str() << " !important;\n";
+    css << "    border-color: " << hoverSuccess.str() << " !important;\n";
+    css << "}\n\n";
+
     css << ".badge.bg-warning {\n";
     css << "    background-color: " << colorToRGBA(m_colorWarning) << " !important;\n";
     css << "}\n\n";
@@ -634,7 +771,159 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
     css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
     css << "}\n\n";
 
+    // Aplicar cores do styleguide em elementos específicos
+    css << ".text-info, .bi-info-circle {\n";
+    css << "    color: " << colorToRGBA(m_colorInfo) << " !important;\n";
+    css << "}\n\n";
+
+    // Estilos para o novo layout moderno
+    css << ".portal-header {\n";
+    css << "    background-color: " << colorToRGBA(m_colorCardHeader) << " !important;\n";
+    css << "    border-bottom-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".portal-title {\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".portal-subtitle {\n";
+    css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
+    css << "}\n\n";
+
+    css << ".logo-container {\n";
+    css << "    background: linear-gradient(135deg, " << colorToRGB(m_colorPrimary) << ", " << colorToRGB(m_colorPrimaryLight) << ") !important;\n";
+    css << "}\n\n";
+
+    css << ".btn-icon {\n";
+    css << "    background-color: " << colorToRGBA(m_colorCardHeader) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".btn-icon:hover {\n";
+    css << "    background-color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".stat-card {\n";
+    css << "    background-color: " << colorToRGBA(m_colorCardHeader) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".stat-card:hover {\n";
+    css << "    border-color: " << colorToRGBA(m_colorPrimary) << " !important;\n";
+    css << "    box-shadow: 0 8px 24px " << colorToRGB(m_colorPrimary) << "1a !important;\n";
+    css << "}\n\n";
+
+    css << ".stat-icon {\n";
+    css << "    background: linear-gradient(135deg, " << colorToRGB(m_colorPrimaryDark) << ", " << colorToRGB(m_colorPrimary) << ") !important;\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".stat-label {\n";
+    css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
+    css << "}\n\n";
+
+    css << ".stat-value {\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".info-panel {\n";
+    css << "    background-color: " << colorToRGBA(m_colorCardHeader) << " !important;\n";
+    css << "    border-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".panel-header {\n";
+    css << "    background-color: " << colorToRGBA(m_colorBackground) << " !important;\n";
+    css << "    border-bottom-color: " << colorToRGBA(m_colorBorder) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".panel-header h5 {\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".info-label {\n";
+    css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
+    css << "}\n\n";
+
+    css << ".info-value {\n";
+    css << "    color: " << colorToRGBA(m_colorText) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".info-value code {\n";
+    css << "    background-color: rgba(" << static_cast<int>(m_colorPrimary[0] * 255.0f) << ", " << static_cast<int>(m_colorPrimary[1] * 255.0f) << ", " << static_cast<int>(m_colorPrimary[2] * 255.0f) << ", 0.15) !important;\n";
+    css << "    border-color: rgba(" << static_cast<int>(m_colorPrimary[0] * 255.0f) << ", " << static_cast<int>(m_colorPrimary[1] * 255.0f) << ", " << static_cast<int>(m_colorPrimary[2] * 255.0f) << ", 0.3) !important;\n";
+    css << "    color: " << colorToRGBA(m_colorPrimaryLight) << " !important;\n";
+    css << "}\n\n";
+
+    // Status colors
+    css << ".status-connecting {\n";
+    css << "    color: " << colorToRGBA(m_colorWarning) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".status-playing {\n";
+    css << "    color: " << colorToRGBA(m_colorSuccess) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".status-error {\n";
+    css << "    color: " << colorToRGBA(m_colorDanger) << " !important;\n";
+    css << "}\n\n";
+
+    css << ".status-paused {\n";
+    css << "    color: " << colorToRGB(m_colorText) << "88 !important;\n";
+    css << "}\n\n";
+
+    // Efeito de brilho fosfórico (CRT Glow) nas bordas dos cards
+    css << ".stat-card, .info-panel {\n";
+    css << "    box-shadow: 0 0 10px " << colorToRGB(m_colorPrimary) << "1a, 0 0 20px " << colorToRGB(m_colorPrimary) << "0f !important;\n";
+    css << "}\n\n";
+
+    // Hover states com Primary Light
+    css << ".stat-card:hover, .info-panel:hover {\n";
+    css << "    box-shadow: 0 0 15px " << colorToRGB(m_colorPrimaryLight) << "2a, 0 0 30px " << colorToRGB(m_colorPrimaryLight) << "1a !important;\n";
+    css << "}\n\n";
+
     return css.str();
+}
+
+void WebPortal::replaceTextInHTML(std::string &html, const std::string &oldText, const std::string &newText) const
+{
+    if (oldText == newText)
+    {
+        return; // Não precisa substituir se for igual
+    }
+
+    size_t pos = 0;
+    while ((pos = html.find(oldText, pos)) != std::string::npos)
+    {
+        // Verificar se não está dentro de uma tag HTML (para evitar substituir atributos)
+        // Procurar para trás para ver se estamos dentro de <...>
+        bool insideTag = false;
+        size_t checkPos = pos;
+        while (checkPos > 0 && checkPos < html.length())
+        {
+            if (html[checkPos] == '>')
+            {
+                break; // Encontrou fim de tag antes do texto
+            }
+            if (html[checkPos] == '<')
+            {
+                insideTag = true;
+                break; // Estamos dentro de uma tag
+            }
+            checkPos--;
+        }
+
+        if (!insideTag)
+        {
+            html.replace(pos, oldText.length(), newText);
+            pos += newText.length();
+        }
+        else
+        {
+            pos += oldText.length();
+        }
+    }
 }
 
 std::string WebPortal::getWebDirectory() const

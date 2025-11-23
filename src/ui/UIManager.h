@@ -138,15 +138,51 @@ public:
     void setWebPortalTitle(const std::string &title) { m_webPortalTitle = title; }
     void setWebPortalImagePath(const std::string &path) { m_webPortalImagePath = path; }
     void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortalBackgroundImagePath = path; }
-    void setWebPortalColorBackground(const float color[4]) { if (color) memcpy(m_webPortalColorBackground, color, 4 * sizeof(float)); }
-    void setWebPortalColorText(const float color[4]) { if (color) memcpy(m_webPortalColorText, color, 4 * sizeof(float)); }
-    void setWebPortalColorPrimary(const float color[4]) { if (color) memcpy(m_webPortalColorPrimary, color, 4 * sizeof(float)); }
-    void setWebPortalColorSecondary(const float color[4]) { if (color) memcpy(m_webPortalColorSecondary, color, 4 * sizeof(float)); }
-    void setWebPortalColorCardHeader(const float color[4]) { if (color) memcpy(m_webPortalColorCardHeader, color, 4 * sizeof(float)); }
-    void setWebPortalColorBorder(const float color[4]) { if (color) memcpy(m_webPortalColorBorder, color, 4 * sizeof(float)); }
-    void setWebPortalColorSuccess(const float color[4]) { if (color) memcpy(m_webPortalColorSuccess, color, 4 * sizeof(float)); }
-    void setWebPortalColorWarning(const float color[4]) { if (color) memcpy(m_webPortalColorWarning, color, 4 * sizeof(float)); }
-    void setWebPortalColorDanger(const float color[4]) { if (color) memcpy(m_webPortalColorDanger, color, 4 * sizeof(float)); }
+    void setWebPortalColorBackground(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorBackground, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorText(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorText, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorPrimary(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorPrimary, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorSecondary(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorSecondary, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorCardHeader(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorCardHeader, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorBorder(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorBorder, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorSuccess(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorSuccess, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorWarning(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorWarning, color, 4 * sizeof(float));
+    }
+    void setWebPortalColorDanger(const float color[4])
+    {
+        if (color)
+            memcpy(m_webPortalColorDanger, color, 4 * sizeof(float));
+    }
 
     bool getWebPortalEnabled() const { return m_webPortalEnabled; }
     bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
@@ -155,25 +191,52 @@ public:
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
     std::string getWebPortalTitle() const { return m_webPortalTitle; }
+    std::string getWebPortalSubtitle() const { return m_webPortalSubtitle; }
     std::string getWebPortalImagePath() const { return m_webPortalImagePath; }
     std::string getWebPortalBackgroundImagePath() const { return m_webPortalBackgroundImagePath; }
+
+    // Getters para textos editáveis
+    std::string getWebPortalTextStreamInfo() const { return m_webPortalTextStreamInfo; }
+    std::string getWebPortalTextQuickActions() const { return m_webPortalTextQuickActions; }
+    std::string getWebPortalTextCompatibility() const { return m_webPortalTextCompatibility; }
+    std::string getWebPortalTextStatus() const { return m_webPortalTextStatus; }
+    std::string getWebPortalTextCodec() const { return m_webPortalTextCodec; }
+    std::string getWebPortalTextResolution() const { return m_webPortalTextResolution; }
+    std::string getWebPortalTextStreamUrl() const { return m_webPortalTextStreamUrl; }
+    std::string getWebPortalTextCopyUrl() const { return m_webPortalTextCopyUrl; }
+    std::string getWebPortalTextOpenNewTab() const { return m_webPortalTextOpenNewTab; }
+    std::string getWebPortalTextSupported() const { return m_webPortalTextSupported; }
+    std::string getWebPortalTextFormat() const { return m_webPortalTextFormat; }
+    std::string getWebPortalTextCodecInfo() const { return m_webPortalTextCodecInfo; }
+    std::string getWebPortalTextSupportedBrowsers() const { return m_webPortalTextSupportedBrowsers; }
+    std::string getWebPortalTextFormatInfo() const { return m_webPortalTextFormatInfo; }
+    std::string getWebPortalTextCodecInfoValue() const { return m_webPortalTextCodecInfoValue; }
+    std::string getWebPortalTextConnecting() const { return m_webPortalTextConnecting; }
+
+    // Getters para cores
     const float *getWebPortalColorBackground() const { return m_webPortalColorBackground; }
     const float *getWebPortalColorText() const { return m_webPortalColorText; }
     const float *getWebPortalColorPrimary() const { return m_webPortalColorPrimary; }
+    const float *getWebPortalColorPrimaryLight() const { return m_webPortalColorPrimaryLight; }
+    const float *getWebPortalColorPrimaryDark() const { return m_webPortalColorPrimaryDark; }
     const float *getWebPortalColorSecondary() const { return m_webPortalColorSecondary; }
+    const float *getWebPortalColorSecondaryHighlight() const { return m_webPortalColorSecondaryHighlight; }
     const float *getWebPortalColorCardHeader() const { return m_webPortalColorCardHeader; }
     const float *getWebPortalColorBorder() const { return m_webPortalColorBorder; }
     const float *getWebPortalColorSuccess() const { return m_webPortalColorSuccess; }
     const float *getWebPortalColorWarning() const { return m_webPortalColorWarning; }
     const float *getWebPortalColorDanger() const { return m_webPortalColorDanger; }
+    const float *getWebPortalColorInfo() const { return m_webPortalColorInfo; }
     void setOnWebPortalEnabledChanged(std::function<void(bool)> callback) { m_onWebPortalEnabledChanged = callback; }
     void setOnWebPortalHTTPSChanged(std::function<void(bool)> callback) { m_onWebPortalHTTPSChanged = callback; }
     void setOnWebPortalSSLCertPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLCertPathChanged = callback; }
     void setOnWebPortalSSLKeyPathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSSLKeyPathChanged = callback; }
     void setOnWebPortalTitleChanged(std::function<void(const std::string &)> callback) { m_onWebPortalTitleChanged = callback; }
+    void setOnWebPortalSubtitleChanged(std::function<void(const std::string &)> callback) { m_onWebPortalSubtitleChanged = callback; }
     void setOnWebPortalImagePathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalImagePathChanged = callback; }
     void setOnWebPortalBackgroundImagePathChanged(std::function<void(const std::string &)> callback) { m_onWebPortalBackgroundImagePathChanged = callback; }
     void setOnWebPortalColorsChanged(std::function<void()> callback) { m_onWebPortalColorsChanged = callback; }
+    void setOnWebPortalTextsChanged(std::function<void()> callback) { m_onWebPortalTextsChanged = callback; }
 
 private:
     bool m_initialized = false;
@@ -298,29 +361,67 @@ private:
     bool m_webPortalHTTPSEnabled = false;
     std::string m_webPortalSSLCertPath = "ssl/server.crt";
     std::string m_webPortalSSLKeyPath = "ssl/server.key";
-    std::string m_foundSSLCertPath;                       // Caminho real do certificado encontrado (após busca)
-    std::string m_foundSSLKeyPath;                        // Caminho real da chave encontrada (após busca)
-    std::string m_webPortalTitle = "RetroCapture Stream"; // Título da página web
-    std::string m_webPortalImagePath;                     // Caminho da imagem para o título (opcional)
-    std::string m_webPortalBackgroundImagePath;           // Caminho da imagem de fundo (opcional)
+    std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
+    std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
+    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
+    std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
-    // Cores do portal (RGBA, valores 0.0-1.0)
-    float m_webPortalColorBackground[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_webPortalColorText[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    float m_webPortalColorPrimary[4] = {0.290f, 0.620f, 1.0f, 1.0f};
-    float m_webPortalColorSecondary[4] = {0.165f, 0.165f, 0.165f, 1.0f};
-    float m_webPortalColorCardHeader[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_webPortalColorBorder[4] = {0.4f, 0.4f, 0.4f, 1.0f};
-    float m_webPortalColorSuccess[4] = {0.298f, 0.686f, 0.314f, 1.0f};
-    float m_webPortalColorWarning[4] = {1.0f, 0.596f, 0.0f, 1.0f};
-    float m_webPortalColorDanger[4] = {0.957f, 0.263f, 0.212f, 1.0f};
+    // Textos editáveis dos cards
+    std::string m_webPortalTextStreamInfo = "Informações do Stream";
+    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextCompatibility = "Compatibilidade";
+    std::string m_webPortalTextStatus = "Status";
+    std::string m_webPortalTextCodec = "Codec";
+    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextStreamUrl = "URL do Stream";
+    std::string m_webPortalTextCopyUrl = "Copiar URL";
+    std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
+    std::string m_webPortalTextSupported = "Suportado";
+    std::string m_webPortalTextFormat = "Formato";
+    std::string m_webPortalTextCodecInfo = "Codec";
+    std::string m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+    std::string m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
+    std::string m_webPortalTextCodecInfoValue = "H.264/AAC";
+    std::string m_webPortalTextConnecting = "Conectando...";
+
+    // Cores do portal baseadas no styleguide RetroCapture (RGBA, valores 0.0-1.0)
+    // Primary - Retro Teal #0A7A83
+    float m_webPortalColorPrimary[4] = {0.039f, 0.478f, 0.514f, 1.0f};
+    // Primary Light - Mint Screen Glow #6FC4C0
+    float m_webPortalColorPrimaryLight[4] = {0.435f, 0.769f, 0.753f, 1.0f};
+    // Primary Dark - Deep Retro #0F3E42
+    float m_webPortalColorPrimaryDark[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Secondary - Cyan Oscilloscope #47B3CE
+    float m_webPortalColorSecondary[4] = {0.278f, 0.702f, 0.808f, 1.0f};
+    // Secondary Highlight - Phosphor Glow #C9F2E7
+    float m_webPortalColorSecondaryHighlight[4] = {0.788f, 0.949f, 0.906f, 1.0f};
+    // Dark Background #1D1F21
+    float m_webPortalColorBackground[4] = {0.114f, 0.122f, 0.129f, 1.0f};
+    // Text Light #F8F8F2
+    float m_webPortalColorText[4] = {0.973f, 0.973f, 0.949f, 1.0f};
+    // Card Header (usa Primary Dark)
+    float m_webPortalColorCardHeader[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Border (usa Primary com transparência)
+    float m_webPortalColorBorder[4] = {0.039f, 0.478f, 0.514f, 0.5f};
+    // Success #45D6A4
+    float m_webPortalColorSuccess[4] = {0.271f, 0.839f, 0.643f, 1.0f};
+    // Warning #F3C93E
+    float m_webPortalColorWarning[4] = {0.953f, 0.788f, 0.243f, 1.0f};
+    // Error #D9534F
+    float m_webPortalColorDanger[4] = {0.851f, 0.325f, 0.310f, 1.0f};
+    // Info #4CBCE6
+    float m_webPortalColorInfo[4] = {0.298f, 0.737f, 0.902f, 1.0f};
 
     std::function<void(bool)> m_onWebPortalEnabledChanged;
     std::function<void(bool)> m_onWebPortalHTTPSChanged;
     std::function<void(const std::string &)> m_onWebPortalSSLCertPathChanged;
     std::function<void(const std::string &)> m_onWebPortalSSLKeyPathChanged;
     std::function<void(const std::string &)> m_onWebPortalTitleChanged;
+    std::function<void(const std::string &)> m_onWebPortalSubtitleChanged;
     std::function<void(const std::string &)> m_onWebPortalImagePathChanged;
     std::function<void(const std::string &)> m_onWebPortalBackgroundImagePathChanged;
     std::function<void()> m_onWebPortalColorsChanged;
+    std::function<void()> m_onWebPortalTextsChanged;
 };

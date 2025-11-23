@@ -65,14 +65,27 @@ public:
     void enableWebPortal(bool enable);
     bool isWebPortalEnabled() const { return m_webPortalEnabled; }
     void setWebPortalTitle(const std::string &title) { m_webPortal.setTitle(title); }
+    void setWebPortalSubtitle(const std::string &subtitle) { m_webPortal.setSubtitle(subtitle); }
     void setWebPortalImagePath(const std::string &path) { m_webPortal.setImagePath(path); }
     void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortal.setBackgroundImagePath(path); }
     void setWebPortalColors(
         const float bg[4], const float text[4], const float primary[4],
-        const float secondary[4], const float cardHeader[4], const float border[4],
-        const float success[4], const float warning[4], const float danger[4])
+        const float primaryLight[4], const float primaryDark[4],
+        const float secondary[4], const float secondaryHighlight[4],
+        const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4], const float info[4])
     {
-        m_webPortal.setColors(bg, text, primary, secondary, cardHeader, border, success, warning, danger);
+        m_webPortal.setColors(bg, text, primary, primaryLight, primaryDark, secondary, secondaryHighlight, cardHeader, border, success, warning, danger, info);
+    }
+    void setWebPortalTexts(
+        const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+        const std::string &status, const std::string &codec, const std::string &resolution,
+        const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+        const std::string &supported, const std::string &format, const std::string &codecInfo,
+        const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+        const std::string &connecting)
+    {
+        m_webPortal.setTexts(streamInfo, quickActions, compatibility, status, codec, resolution, streamUrl, copyUrl, openNewTab, supported, format, codecInfo, supportedBrowsers, formatInfo, codecInfoValue, connecting);
     }
 
     // Obter caminhos dos certificados SSL encontrados

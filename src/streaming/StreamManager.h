@@ -93,6 +93,12 @@ public:
     void setWebPortalTitle(const std::string &title);
 
     /**
+     * Set Web Portal subtitle in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalSubtitle(const std::string &subtitle);
+
+    /**
      * Set Web Portal image path in HTTPTSStreamer (if available)
      * This can be called while streaming is active
      */
@@ -110,8 +116,22 @@ public:
      */
     void setWebPortalColors(
         const float bg[4], const float text[4], const float primary[4],
-        const float secondary[4], const float cardHeader[4], const float border[4],
-        const float success[4], const float warning[4], const float danger[4]);
+        const float primaryLight[4], const float primaryDark[4],
+        const float secondary[4], const float secondaryHighlight[4],
+        const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4], const float info[4]);
+
+    /**
+     * Set Web Portal texts in HTTPTSStreamer (if available)
+     * This can be called while streaming is active
+     */
+    void setWebPortalTexts(
+        const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+        const std::string &status, const std::string &codec, const std::string &resolution,
+        const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+        const std::string &supported, const std::string &format, const std::string &codecInfo,
+        const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+        const std::string &connecting);
 
     /**
      * Cleanup all resources

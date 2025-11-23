@@ -37,6 +37,23 @@ public:
     void setTitle(const std::string &title) { m_title = title; }
 
     /**
+     * Define o subtítulo da página web
+     * @param subtitle Subtítulo da página
+     */
+    void setSubtitle(const std::string &subtitle) { m_subtitle = subtitle; }
+
+    /**
+     * Define textos editáveis do portal
+     */
+    void setTexts(
+        const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+        const std::string &status, const std::string &codec, const std::string &resolution,
+        const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+        const std::string &supported, const std::string &format, const std::string &codecInfo,
+        const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+        const std::string &connecting);
+
+    /**
      * Define o caminho da imagem para o título (opcional)
      * @param imagePath Caminho da imagem (vazio para usar ícone padrão)
      */
@@ -62,8 +79,10 @@ public:
      */
     void setColors(
         const float bg[4], const float text[4], const float primary[4],
-        const float secondary[4], const float cardHeader[4], const float border[4],
-        const float success[4], const float warning[4], const float danger[4]);
+        const float primaryLight[4], const float primaryDark[4],
+        const float secondary[4], const float secondaryHighlight[4],
+        const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4], const float info[4]);
 
     /**
      * Processa uma requisição HTTP e determina se é uma requisição do portal web
@@ -169,19 +188,63 @@ private:
      */
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
-    HTTPServer *m_httpServer = nullptr;
-    std::string m_title = "RetroCapture Stream"; // Título da página web
-    std::string m_imagePath;                     // Caminho da imagem para o título (opcional)
-    std::string m_backgroundImagePath;           // Caminho da imagem de fundo (opcional)
+    /**
+     * Substitui texto no HTML de forma segura
+     * @param html HTML onde substituir (modificado in-place)
+     * @param oldText Texto antigo a ser substituído
+     * @param newText Novo texto
+     */
+    void replaceTextInHTML(std::string &html, const std::string &oldText, const std::string &newText) const;
 
-    // Cores do portal (RGBA, valores 0.0-1.0)
-    float m_colorBackground[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_colorText[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    float m_colorPrimary[4] = {0.290f, 0.620f, 1.0f, 1.0f};
-    float m_colorSecondary[4] = {0.165f, 0.165f, 0.165f, 1.0f};
-    float m_colorCardHeader[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_colorBorder[4] = {0.4f, 0.4f, 0.4f, 1.0f};
-    float m_colorSuccess[4] = {0.298f, 0.686f, 0.314f, 1.0f};
-    float m_colorWarning[4] = {1.0f, 0.596f, 0.0f, 1.0f};
-    float m_colorDanger[4] = {0.957f, 0.263f, 0.212f, 1.0f};
+    HTTPServer *m_httpServer = nullptr;
+    std::string m_title = "RetroCapture Stream";                 // Título da página web
+    std::string m_subtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_imagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
+    std::string m_backgroundImagePath;                           // Caminho da imagem de fundo (opcional)
+
+    // Textos editáveis
+    std::string m_textStreamInfo = "Informações do Stream";
+    std::string m_textQuickActions = "Ações Rápidas";
+    std::string m_textCompatibility = "Compatibilidade";
+    std::string m_textStatus = "Status";
+    std::string m_textCodec = "Codec";
+    std::string m_textResolution = "Resolução";
+    std::string m_textStreamUrl = "URL do Stream";
+    std::string m_textCopyUrl = "Copiar URL";
+    std::string m_textOpenNewTab = "Abrir em Nova Aba";
+    std::string m_textSupported = "Suportado";
+    std::string m_textFormat = "Formato";
+    std::string m_textCodecInfo = "Codec";
+    std::string m_textSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+    std::string m_textFormatInfo = "HLS (HTTP Live Streaming)";
+    std::string m_textCodecInfoValue = "H.264/AAC";
+    std::string m_textConnecting = "Conectando...";
+
+    // Cores do portal baseadas no styleguide RetroCapture (RGBA, valores 0.0-1.0)
+    // Primary - Retro Teal #0A7A83
+    float m_colorPrimary[4] = {0.039f, 0.478f, 0.514f, 1.0f};
+    // Primary Light - Mint Screen Glow #6FC4C0
+    float m_colorPrimaryLight[4] = {0.435f, 0.769f, 0.753f, 1.0f};
+    // Primary Dark - Deep Retro #0F3E42
+    float m_colorPrimaryDark[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Secondary - Cyan Oscilloscope #47B3CE
+    float m_colorSecondary[4] = {0.278f, 0.702f, 0.808f, 1.0f};
+    // Secondary Highlight - Phosphor Glow #C9F2E7
+    float m_colorSecondaryHighlight[4] = {0.788f, 0.949f, 0.906f, 1.0f};
+    // Dark Background #1D1F21
+    float m_colorBackground[4] = {0.114f, 0.122f, 0.129f, 1.0f};
+    // Text Light #F8F8F2
+    float m_colorText[4] = {0.973f, 0.973f, 0.949f, 1.0f};
+    // Card Header (usa Primary Dark)
+    float m_colorCardHeader[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Border (usa Primary com transparência)
+    float m_colorBorder[4] = {0.039f, 0.478f, 0.514f, 0.5f};
+    // Success #45D6A4
+    float m_colorSuccess[4] = {0.271f, 0.839f, 0.643f, 1.0f};
+    // Warning #F3C93E
+    float m_colorWarning[4] = {0.953f, 0.788f, 0.243f, 1.0f};
+    // Error #D9534F
+    float m_colorDanger[4] = {0.851f, 0.325f, 0.310f, 1.0f};
+    // Info #4CBCE6
+    float m_colorInfo[4] = {0.298f, 0.737f, 0.902f, 1.0f};
 };

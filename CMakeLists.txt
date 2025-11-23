@@ -59,6 +59,7 @@ pkg_check_modules(PULSE REQUIRED libpulse)
 # OpenSSL for HTTPS support - sempre habilitado se disponível
 # Tentar encontrar OpenSSL primeiro
 find_package(OpenSSL QUIET)
+
 if(OpenSSL_FOUND)
     set(ENABLE_HTTPS ON)
     set(HTTPS_ENABLED TRUE)
@@ -68,6 +69,7 @@ if(OpenSSL_FOUND)
 else()
     # Tentar via pkg-config como fallback
     pkg_check_modules(OPENSSL QUIET openssl)
+
     if(OPENSSL_FOUND)
         set(ENABLE_HTTPS ON)
         set(HTTPS_ENABLED TRUE)
@@ -264,6 +266,16 @@ add_custom_command(TARGET retrocapture POST_BUILD
     "${CMAKE_SOURCE_DIR}/ssl"
     "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ssl"
     COMMENT "Copying ssl directory to build output"
+)
+
+# Copiar pasta assets para o diretório de build
+# Isso garante que a aplicação encontre as imagens (logo, etc.) corretamente
+add_custom_command(TARGET retrocapture POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/assets"
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets"
+    COMMENT "Copying assets directory to build output"
 )
 
 # Copiar certificados placeholder da raiz para ssl/ se existirem

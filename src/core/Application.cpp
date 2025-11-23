@@ -745,8 +745,27 @@ bool Application::initUI()
     m_webPortalSSLCertPath = m_ui->getWebPortalSSLCertPath();
     m_webPortalSSLKeyPath = m_ui->getWebPortalSSLKeyPath();
     m_webPortalTitle = m_ui->getWebPortalTitle();
+    m_webPortalSubtitle = m_ui->getWebPortalSubtitle();
     m_webPortalImagePath = m_ui->getWebPortalImagePath();
     m_webPortalBackgroundImagePath = m_ui->getWebPortalBackgroundImagePath();
+
+    // Carregar textos editáveis
+    m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
+    m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
+    m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
+    m_webPortalTextStatus = m_ui->getWebPortalTextStatus();
+    m_webPortalTextCodec = m_ui->getWebPortalTextCodec();
+    m_webPortalTextResolution = m_ui->getWebPortalTextResolution();
+    m_webPortalTextStreamUrl = m_ui->getWebPortalTextStreamUrl();
+    m_webPortalTextCopyUrl = m_ui->getWebPortalTextCopyUrl();
+    m_webPortalTextOpenNewTab = m_ui->getWebPortalTextOpenNewTab();
+    m_webPortalTextSupported = m_ui->getWebPortalTextSupported();
+    m_webPortalTextFormat = m_ui->getWebPortalTextFormat();
+    m_webPortalTextCodecInfo = m_ui->getWebPortalTextCodecInfo();
+    m_webPortalTextSupportedBrowsers = m_ui->getWebPortalTextSupportedBrowsers();
+    m_webPortalTextFormatInfo = m_ui->getWebPortalTextFormatInfo();
+    m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
+    m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
 
     // Carregar cores (com verificação de segurança)
     const float *bg = m_ui->getWebPortalColorBackground();
@@ -764,10 +783,25 @@ bool Application::initUI()
     {
         memcpy(m_webPortalColorPrimary, prim, 4 * sizeof(float));
     }
+    const float *primLight = m_ui->getWebPortalColorPrimaryLight();
+    if (primLight)
+    {
+        memcpy(m_webPortalColorPrimaryLight, primLight, 4 * sizeof(float));
+    }
+    const float *primDark = m_ui->getWebPortalColorPrimaryDark();
+    if (primDark)
+    {
+        memcpy(m_webPortalColorPrimaryDark, primDark, 4 * sizeof(float));
+    }
     const float *sec = m_ui->getWebPortalColorSecondary();
     if (sec)
     {
         memcpy(m_webPortalColorSecondary, sec, 4 * sizeof(float));
+    }
+    const float *secHighlight = m_ui->getWebPortalColorSecondaryHighlight();
+    if (secHighlight)
+    {
+        memcpy(m_webPortalColorSecondaryHighlight, secHighlight, 4 * sizeof(float));
     }
     const float *ch = m_ui->getWebPortalColorCardHeader();
     if (ch)
@@ -793,6 +827,11 @@ bool Application::initUI()
     if (dang)
     {
         memcpy(m_webPortalColorDanger, dang, 4 * sizeof(float));
+    }
+    const float *inf = m_ui->getWebPortalColorInfo();
+    if (inf)
+    {
+        memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
     }
 
     // Também sincronizar configurações de imagem
@@ -1047,6 +1086,14 @@ bool Application::initUI()
             m_streamManager->setWebPortalTitle(title);
         } });
 
+    m_ui->setOnWebPortalSubtitleChanged([this](const std::string &subtitle)
+                                        {
+        m_webPortalSubtitle = subtitle;
+        // Atualizar em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalSubtitle(subtitle);
+        } });
+
     m_ui->setOnWebPortalImagePathChanged([this](const std::string &path)
                                          {
         m_webPortalImagePath = path;
@@ -1080,9 +1127,21 @@ bool Application::initUI()
             if (prim) {
                 memcpy(m_webPortalColorPrimary, prim, 4 * sizeof(float));
             }
+            const float* primLight = m_ui->getWebPortalColorPrimaryLight();
+            if (primLight) {
+                memcpy(m_webPortalColorPrimaryLight, primLight, 4 * sizeof(float));
+            }
+            const float* primDark = m_ui->getWebPortalColorPrimaryDark();
+            if (primDark) {
+                memcpy(m_webPortalColorPrimaryDark, primDark, 4 * sizeof(float));
+            }
             const float* sec = m_ui->getWebPortalColorSecondary();
             if (sec) {
                 memcpy(m_webPortalColorSecondary, sec, 4 * sizeof(float));
+            }
+            const float* secHighlight = m_ui->getWebPortalColorSecondaryHighlight();
+            if (secHighlight) {
+                memcpy(m_webPortalColorSecondaryHighlight, secHighlight, 4 * sizeof(float));
             }
             const float* ch = m_ui->getWebPortalColorCardHeader();
             if (ch) {
@@ -1104,12 +1163,50 @@ bool Application::initUI()
             if (dang) {
                 memcpy(m_webPortalColorDanger, dang, 4 * sizeof(float));
             }
+            const float* inf = m_ui->getWebPortalColorInfo();
+            if (inf) {
+                memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
+            }
             
             // Atualizar no StreamManager
             m_streamManager->setWebPortalColors(
                 m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
-                m_webPortalColorSecondary, m_webPortalColorCardHeader, m_webPortalColorBorder,
-                m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger);
+                m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+                m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+                m_webPortalColorCardHeader, m_webPortalColorBorder,
+                m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+        } });
+
+    m_ui->setOnWebPortalTextsChanged([this]()
+                                     {
+        // Atualizar textos em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager && m_ui) {
+            // Sincronizar textos da UI para Application
+            m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
+            m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
+            m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
+            m_webPortalTextStatus = m_ui->getWebPortalTextStatus();
+            m_webPortalTextCodec = m_ui->getWebPortalTextCodec();
+            m_webPortalTextResolution = m_ui->getWebPortalTextResolution();
+            m_webPortalTextStreamUrl = m_ui->getWebPortalTextStreamUrl();
+            m_webPortalTextCopyUrl = m_ui->getWebPortalTextCopyUrl();
+            m_webPortalTextOpenNewTab = m_ui->getWebPortalTextOpenNewTab();
+            m_webPortalTextSupported = m_ui->getWebPortalTextSupported();
+            m_webPortalTextFormat = m_ui->getWebPortalTextFormat();
+            m_webPortalTextCodecInfo = m_ui->getWebPortalTextCodecInfo();
+            m_webPortalTextSupportedBrowsers = m_ui->getWebPortalTextSupportedBrowsers();
+            m_webPortalTextFormatInfo = m_ui->getWebPortalTextFormatInfo();
+            m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
+            m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
+            
+            // Atualizar no StreamManager
+            m_streamManager->setWebPortalTexts(
+                m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+                m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+                m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+                m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+                m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+                m_webPortalTextConnecting);
         } });
 
     // Callback para mudança de dispositivo
@@ -1387,14 +1484,25 @@ bool Application::initStreaming()
     // Configurar Web Portal
     tsStreamer->enableWebPortal(m_webPortalEnabled);
     tsStreamer->setWebPortalTitle(m_webPortalTitle);
+    tsStreamer->setWebPortalSubtitle(m_webPortalSubtitle);
     tsStreamer->setWebPortalImagePath(m_webPortalImagePath);
     tsStreamer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);
     // IMPORTANTE: Passar cores apenas se arrays estiverem inicializados corretamente
     // Os arrays são inicializados com valores padrão no construtor, então são sempre válidos
     tsStreamer->setWebPortalColors(
         m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
-        m_webPortalColorSecondary, m_webPortalColorCardHeader, m_webPortalColorBorder,
-        m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger);
+        m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+        m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+        m_webPortalColorCardHeader, m_webPortalColorBorder,
+        m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+    // Configurar textos editáveis
+    tsStreamer->setWebPortalTexts(
+        m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+        m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+        m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+        m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+        m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+        m_webPortalTextConnecting);
 
     // Configurar HTTPS do Web Portal
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())

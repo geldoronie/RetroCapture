@@ -1549,10 +1549,50 @@ void UIManager::loadConfig()
                 m_webPortalSSLKeyPath = webPortal["sslKeyPath"].get<std::string>();
             if (webPortal.contains("title"))
                 m_webPortalTitle = webPortal["title"].get<std::string>();
+            if (webPortal.contains("subtitle"))
+                m_webPortalSubtitle = webPortal["subtitle"].get<std::string>();
             if (webPortal.contains("imagePath"))
                 m_webPortalImagePath = webPortal["imagePath"].get<std::string>();
             if (webPortal.contains("backgroundImagePath"))
                 m_webPortalBackgroundImagePath = webPortal["backgroundImagePath"].get<std::string>();
+
+            // Carregar textos editáveis
+            if (webPortal.contains("texts"))
+            {
+                auto &texts = webPortal["texts"];
+                if (texts.contains("streamInfo"))
+                    m_webPortalTextStreamInfo = texts["streamInfo"].get<std::string>();
+                if (texts.contains("quickActions"))
+                    m_webPortalTextQuickActions = texts["quickActions"].get<std::string>();
+                if (texts.contains("compatibility"))
+                    m_webPortalTextCompatibility = texts["compatibility"].get<std::string>();
+                if (texts.contains("status"))
+                    m_webPortalTextStatus = texts["status"].get<std::string>();
+                if (texts.contains("codec"))
+                    m_webPortalTextCodec = texts["codec"].get<std::string>();
+                if (texts.contains("resolution"))
+                    m_webPortalTextResolution = texts["resolution"].get<std::string>();
+                if (texts.contains("streamUrl"))
+                    m_webPortalTextStreamUrl = texts["streamUrl"].get<std::string>();
+                if (texts.contains("copyUrl"))
+                    m_webPortalTextCopyUrl = texts["copyUrl"].get<std::string>();
+                if (texts.contains("openNewTab"))
+                    m_webPortalTextOpenNewTab = texts["openNewTab"].get<std::string>();
+                if (texts.contains("supported"))
+                    m_webPortalTextSupported = texts["supported"].get<std::string>();
+                if (texts.contains("format"))
+                    m_webPortalTextFormat = texts["format"].get<std::string>();
+                if (texts.contains("codecInfo"))
+                    m_webPortalTextCodecInfo = texts["codecInfo"].get<std::string>();
+                if (texts.contains("supportedBrowsers"))
+                    m_webPortalTextSupportedBrowsers = texts["supportedBrowsers"].get<std::string>();
+                if (texts.contains("formatInfo"))
+                    m_webPortalTextFormatInfo = texts["formatInfo"].get<std::string>();
+                if (texts.contains("codecInfoValue"))
+                    m_webPortalTextCodecInfoValue = texts["codecInfoValue"].get<std::string>();
+                if (texts.contains("connecting"))
+                    m_webPortalTextConnecting = texts["connecting"].get<std::string>();
+            }
 
             // Carregar cores
             if (webPortal.contains("colors"))
@@ -1582,6 +1622,22 @@ void UIManager::loadConfig()
                     m_webPortalColorPrimary[2] = prim[2];
                     m_webPortalColorPrimary[3] = prim[3];
                 }
+                if (colors.contains("primaryLight"))
+                {
+                    auto &primLight = colors["primaryLight"];
+                    m_webPortalColorPrimaryLight[0] = primLight[0];
+                    m_webPortalColorPrimaryLight[1] = primLight[1];
+                    m_webPortalColorPrimaryLight[2] = primLight[2];
+                    m_webPortalColorPrimaryLight[3] = primLight[3];
+                }
+                if (colors.contains("primaryDark"))
+                {
+                    auto &primDark = colors["primaryDark"];
+                    m_webPortalColorPrimaryDark[0] = primDark[0];
+                    m_webPortalColorPrimaryDark[1] = primDark[1];
+                    m_webPortalColorPrimaryDark[2] = primDark[2];
+                    m_webPortalColorPrimaryDark[3] = primDark[3];
+                }
                 if (colors.contains("secondary"))
                 {
                     auto &sec = colors["secondary"];
@@ -1589,6 +1645,14 @@ void UIManager::loadConfig()
                     m_webPortalColorSecondary[1] = sec[1];
                     m_webPortalColorSecondary[2] = sec[2];
                     m_webPortalColorSecondary[3] = sec[3];
+                }
+                if (colors.contains("secondaryHighlight"))
+                {
+                    auto &secHighlight = colors["secondaryHighlight"];
+                    m_webPortalColorSecondaryHighlight[0] = secHighlight[0];
+                    m_webPortalColorSecondaryHighlight[1] = secHighlight[1];
+                    m_webPortalColorSecondaryHighlight[2] = secHighlight[2];
+                    m_webPortalColorSecondaryHighlight[3] = secHighlight[3];
                 }
                 if (colors.contains("cardHeader"))
                 {
@@ -1629,6 +1693,14 @@ void UIManager::loadConfig()
                     m_webPortalColorDanger[1] = d[1];
                     m_webPortalColorDanger[2] = d[2];
                     m_webPortalColorDanger[3] = d[3];
+                }
+                if (colors.contains("info"))
+                {
+                    auto &inf = colors["info"];
+                    m_webPortalColorInfo[0] = inf[0];
+                    m_webPortalColorInfo[1] = inf[1];
+                    m_webPortalColorInfo[2] = inf[2];
+                    m_webPortalColorInfo[3] = inf[3];
                 }
             }
         }
@@ -1701,9 +1773,11 @@ void UIManager::saveConfig()
             {"sslCertPath", m_webPortalSSLCertPath},
             {"sslKeyPath", m_webPortalSSLKeyPath},
             {"title", m_webPortalTitle},
+            {"subtitle", m_webPortalSubtitle},
             {"imagePath", m_webPortalImagePath},
             {"backgroundImagePath", m_webPortalBackgroundImagePath},
-            {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}}}};
+            {"texts", {{"streamInfo", m_webPortalTextStreamInfo}, {"quickActions", m_webPortalTextQuickActions}, {"compatibility", m_webPortalTextCompatibility}, {"status", m_webPortalTextStatus}, {"codec", m_webPortalTextCodec}, {"resolution", m_webPortalTextResolution}, {"streamUrl", m_webPortalTextStreamUrl}, {"copyUrl", m_webPortalTextCopyUrl}, {"openNewTab", m_webPortalTextOpenNewTab}, {"supported", m_webPortalTextSupported}, {"format", m_webPortalTextFormat}, {"codecInfo", m_webPortalTextCodecInfo}, {"supportedBrowsers", m_webPortalTextSupportedBrowsers}, {"formatInfo", m_webPortalTextFormatInfo}, {"codecInfoValue", m_webPortalTextCodecInfoValue}, {"connecting", m_webPortalTextConnecting}}},
+            {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"primaryLight", {m_webPortalColorPrimaryLight[0], m_webPortalColorPrimaryLight[1], m_webPortalColorPrimaryLight[2], m_webPortalColorPrimaryLight[3]}}, {"primaryDark", {m_webPortalColorPrimaryDark[0], m_webPortalColorPrimaryDark[1], m_webPortalColorPrimaryDark[2], m_webPortalColorPrimaryDark[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"secondaryHighlight", {m_webPortalColorSecondaryHighlight[0], m_webPortalColorSecondaryHighlight[1], m_webPortalColorSecondaryHighlight[2], m_webPortalColorSecondaryHighlight[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}, {"info", {m_webPortalColorInfo[0], m_webPortalColorInfo[1], m_webPortalColorInfo[2], m_webPortalColorInfo[3]}}}}};
 
         // Salvar shader atual
         config["shader"] = {
@@ -1900,6 +1974,24 @@ void UIManager::renderWebPortalPanel()
         if (m_onWebPortalTitleChanged)
         {
             m_onWebPortalTitleChanged(m_webPortalTitle);
+        }
+        saveConfig();
+    }
+
+    ImGui::Spacing();
+
+    // Subtítulo da página
+    char subtitleBuffer[256];
+    strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
+    subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
+
+    ImGui::Text("Subtítulo da Página:");
+    if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
+    {
+        m_webPortalSubtitle = std::string(subtitleBuffer);
+        if (m_onWebPortalSubtitleChanged)
+        {
+            m_onWebPortalSubtitleChanged(m_webPortalSubtitle);
         }
         saveConfig();
     }
@@ -2124,12 +2216,27 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Cor Primária (Retro Teal)", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Fundo dos Cards", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Cor Primária Light (Mint Glow)", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Cor Primária Dark (Deep Retro)", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Cor Secundária (Cyan)", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
+        if (ImGui::ColorEdit4("Cor Secundária Highlight (Phosphor)", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -2163,6 +2270,11 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
+        if (ImGui::ColorEdit4("Info", m_webPortalColorInfo, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        {
+            colorsChanged = true;
+        }
+
         if (colorsChanged)
         {
             if (m_onWebPortalColorsChanged)
@@ -2173,49 +2285,289 @@ void UIManager::renderWebPortalPanel()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Restaurar Cores Padrão"))
+        if (ImGui::Button("Restaurar Cores Padrão (Styleguide RetroCapture)"))
         {
-            // Restaurar valores padrão
-            m_webPortalColorBackground[0] = 0.102f;
-            m_webPortalColorBackground[1] = 0.102f;
-            m_webPortalColorBackground[2] = 0.102f;
+            // Restaurar valores padrão do styleguide RetroCapture
+            // Dark Background #1D1F21
+            m_webPortalColorBackground[0] = 0.114f;
+            m_webPortalColorBackground[1] = 0.122f;
+            m_webPortalColorBackground[2] = 0.129f;
             m_webPortalColorBackground[3] = 1.0f;
-            m_webPortalColorText[0] = 1.0f;
-            m_webPortalColorText[1] = 1.0f;
-            m_webPortalColorText[2] = 1.0f;
+            // Text Light #F8F8F2
+            m_webPortalColorText[0] = 0.973f;
+            m_webPortalColorText[1] = 0.973f;
+            m_webPortalColorText[2] = 0.949f;
             m_webPortalColorText[3] = 1.0f;
-            m_webPortalColorPrimary[0] = 0.290f;
-            m_webPortalColorPrimary[1] = 0.620f;
-            m_webPortalColorPrimary[2] = 1.0f;
+            // Primary - Retro Teal #0A7A83
+            m_webPortalColorPrimary[0] = 0.039f;
+            m_webPortalColorPrimary[1] = 0.478f;
+            m_webPortalColorPrimary[2] = 0.514f;
             m_webPortalColorPrimary[3] = 1.0f;
-            m_webPortalColorSecondary[0] = 0.165f;
-            m_webPortalColorSecondary[1] = 0.165f;
-            m_webPortalColorSecondary[2] = 0.165f;
+            // Primary Light - Mint Screen Glow #6FC4C0
+            m_webPortalColorPrimaryLight[0] = 0.435f;
+            m_webPortalColorPrimaryLight[1] = 0.769f;
+            m_webPortalColorPrimaryLight[2] = 0.753f;
+            m_webPortalColorPrimaryLight[3] = 1.0f;
+            // Primary Dark - Deep Retro #0F3E42
+            m_webPortalColorPrimaryDark[0] = 0.059f;
+            m_webPortalColorPrimaryDark[1] = 0.243f;
+            m_webPortalColorPrimaryDark[2] = 0.259f;
+            m_webPortalColorPrimaryDark[3] = 1.0f;
+            // Secondary - Cyan Oscilloscope #47B3CE
+            m_webPortalColorSecondary[0] = 0.278f;
+            m_webPortalColorSecondary[1] = 0.702f;
+            m_webPortalColorSecondary[2] = 0.808f;
             m_webPortalColorSecondary[3] = 1.0f;
-            m_webPortalColorCardHeader[0] = 0.102f;
-            m_webPortalColorCardHeader[1] = 0.102f;
-            m_webPortalColorCardHeader[2] = 0.102f;
+            // Secondary Highlight - Phosphor Glow #C9F2E7
+            m_webPortalColorSecondaryHighlight[0] = 0.788f;
+            m_webPortalColorSecondaryHighlight[1] = 0.949f;
+            m_webPortalColorSecondaryHighlight[2] = 0.906f;
+            m_webPortalColorSecondaryHighlight[3] = 1.0f;
+            // Card Header (usa Primary Dark)
+            m_webPortalColorCardHeader[0] = 0.059f;
+            m_webPortalColorCardHeader[1] = 0.243f;
+            m_webPortalColorCardHeader[2] = 0.259f;
             m_webPortalColorCardHeader[3] = 1.0f;
-            m_webPortalColorBorder[0] = 0.4f;
-            m_webPortalColorBorder[1] = 0.4f;
-            m_webPortalColorBorder[2] = 0.4f;
-            m_webPortalColorBorder[3] = 1.0f;
-            m_webPortalColorSuccess[0] = 0.298f;
-            m_webPortalColorSuccess[1] = 0.686f;
-            m_webPortalColorSuccess[2] = 0.314f;
+            // Border (usa Primary com transparência)
+            m_webPortalColorBorder[0] = 0.039f;
+            m_webPortalColorBorder[1] = 0.478f;
+            m_webPortalColorBorder[2] = 0.514f;
+            m_webPortalColorBorder[3] = 0.5f;
+            // Success #45D6A4
+            m_webPortalColorSuccess[0] = 0.271f;
+            m_webPortalColorSuccess[1] = 0.839f;
+            m_webPortalColorSuccess[2] = 0.643f;
             m_webPortalColorSuccess[3] = 1.0f;
-            m_webPortalColorWarning[0] = 1.0f;
-            m_webPortalColorWarning[1] = 0.596f;
-            m_webPortalColorWarning[2] = 0.0f;
+            // Warning #F3C93E
+            m_webPortalColorWarning[0] = 0.953f;
+            m_webPortalColorWarning[1] = 0.788f;
+            m_webPortalColorWarning[2] = 0.243f;
             m_webPortalColorWarning[3] = 1.0f;
-            m_webPortalColorDanger[0] = 0.957f;
-            m_webPortalColorDanger[1] = 0.263f;
-            m_webPortalColorDanger[2] = 0.212f;
+            // Error #D9534F
+            m_webPortalColorDanger[0] = 0.851f;
+            m_webPortalColorDanger[1] = 0.325f;
+            m_webPortalColorDanger[2] = 0.310f;
             m_webPortalColorDanger[3] = 1.0f;
+            // Info #4CBCE6
+            m_webPortalColorInfo[0] = 0.298f;
+            m_webPortalColorInfo[1] = 0.737f;
+            m_webPortalColorInfo[2] = 0.902f;
+            m_webPortalColorInfo[3] = 1.0f;
 
             if (m_onWebPortalColorsChanged)
             {
                 m_onWebPortalColorsChanged();
+            }
+            saveConfig();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Configuração de Textos Editáveis
+    if (ImGui::CollapsingHeader("Textos Editáveis do Portal", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Spacing();
+        ImGui::Text("Textos dos Cards:");
+        ImGui::Spacing();
+
+        bool textsChanged = false;
+
+        // Subtítulo
+        char subtitleBuffer[256];
+        strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
+        subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
+        if (ImGui::InputText("Subtítulo", subtitleBuffer, sizeof(subtitleBuffer)))
+        {
+            m_webPortalSubtitle = std::string(subtitleBuffer);
+            textsChanged = true;
+        }
+
+        ImGui::Spacing();
+
+        // Títulos dos cards
+        char streamInfoBuffer[256];
+        strncpy(streamInfoBuffer, m_webPortalTextStreamInfo.c_str(), sizeof(streamInfoBuffer) - 1);
+        streamInfoBuffer[sizeof(streamInfoBuffer) - 1] = '\0';
+        if (ImGui::InputText("Título: Informações do Stream", streamInfoBuffer, sizeof(streamInfoBuffer)))
+        {
+            m_webPortalTextStreamInfo = std::string(streamInfoBuffer);
+            textsChanged = true;
+        }
+
+        char quickActionsBuffer[256];
+        strncpy(quickActionsBuffer, m_webPortalTextQuickActions.c_str(), sizeof(quickActionsBuffer) - 1);
+        quickActionsBuffer[sizeof(quickActionsBuffer) - 1] = '\0';
+        if (ImGui::InputText("Título: Ações Rápidas", quickActionsBuffer, sizeof(quickActionsBuffer)))
+        {
+            m_webPortalTextQuickActions = std::string(quickActionsBuffer);
+            textsChanged = true;
+        }
+
+        char compatibilityBuffer[256];
+        strncpy(compatibilityBuffer, m_webPortalTextCompatibility.c_str(), sizeof(compatibilityBuffer) - 1);
+        compatibilityBuffer[sizeof(compatibilityBuffer) - 1] = '\0';
+        if (ImGui::InputText("Título: Compatibilidade", compatibilityBuffer, sizeof(compatibilityBuffer)))
+        {
+            m_webPortalTextCompatibility = std::string(compatibilityBuffer);
+            textsChanged = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Labels dos Campos:");
+        ImGui::Spacing();
+
+        char statusBuffer[128];
+        strncpy(statusBuffer, m_webPortalTextStatus.c_str(), sizeof(statusBuffer) - 1);
+        statusBuffer[sizeof(statusBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: Status", statusBuffer, sizeof(statusBuffer)))
+        {
+            m_webPortalTextStatus = std::string(statusBuffer);
+            textsChanged = true;
+        }
+
+        char codecBuffer[128];
+        strncpy(codecBuffer, m_webPortalTextCodec.c_str(), sizeof(codecBuffer) - 1);
+        codecBuffer[sizeof(codecBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: Codec", codecBuffer, sizeof(codecBuffer)))
+        {
+            m_webPortalTextCodec = std::string(codecBuffer);
+            textsChanged = true;
+        }
+
+        char resolutionBuffer[128];
+        strncpy(resolutionBuffer, m_webPortalTextResolution.c_str(), sizeof(resolutionBuffer) - 1);
+        resolutionBuffer[sizeof(resolutionBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: Resolução", resolutionBuffer, sizeof(resolutionBuffer)))
+        {
+            m_webPortalTextResolution = std::string(resolutionBuffer);
+            textsChanged = true;
+        }
+
+        char streamUrlBuffer[128];
+        strncpy(streamUrlBuffer, m_webPortalTextStreamUrl.c_str(), sizeof(streamUrlBuffer) - 1);
+        streamUrlBuffer[sizeof(streamUrlBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: URL do Stream", streamUrlBuffer, sizeof(streamUrlBuffer)))
+        {
+            m_webPortalTextStreamUrl = std::string(streamUrlBuffer);
+            textsChanged = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Textos dos Botões:");
+        ImGui::Spacing();
+
+        char copyUrlBuffer[128];
+        strncpy(copyUrlBuffer, m_webPortalTextCopyUrl.c_str(), sizeof(copyUrlBuffer) - 1);
+        copyUrlBuffer[sizeof(copyUrlBuffer) - 1] = '\0';
+        if (ImGui::InputText("Botão: Copiar URL", copyUrlBuffer, sizeof(copyUrlBuffer)))
+        {
+            m_webPortalTextCopyUrl = std::string(copyUrlBuffer);
+            textsChanged = true;
+        }
+
+        char openNewTabBuffer[128];
+        strncpy(openNewTabBuffer, m_webPortalTextOpenNewTab.c_str(), sizeof(openNewTabBuffer) - 1);
+        openNewTabBuffer[sizeof(openNewTabBuffer) - 1] = '\0';
+        if (ImGui::InputText("Botão: Abrir em Nova Aba", openNewTabBuffer, sizeof(openNewTabBuffer)))
+        {
+            m_webPortalTextOpenNewTab = std::string(openNewTabBuffer);
+            textsChanged = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Textos de Informação:");
+        ImGui::Spacing();
+
+        char supportedBuffer[256];
+        strncpy(supportedBuffer, m_webPortalTextSupported.c_str(), sizeof(supportedBuffer) - 1);
+        supportedBuffer[sizeof(supportedBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: Suportado", supportedBuffer, sizeof(supportedBuffer)))
+        {
+            m_webPortalTextSupported = std::string(supportedBuffer);
+            textsChanged = true;
+        }
+
+        char formatBuffer[128];
+        strncpy(formatBuffer, m_webPortalTextFormat.c_str(), sizeof(formatBuffer) - 1);
+        formatBuffer[sizeof(formatBuffer) - 1] = '\0';
+        if (ImGui::InputText("Label: Formato", formatBuffer, sizeof(formatBuffer)))
+        {
+            m_webPortalTextFormat = std::string(formatBuffer);
+            textsChanged = true;
+        }
+
+        char browsersBuffer[256];
+        strncpy(browsersBuffer, m_webPortalTextSupportedBrowsers.c_str(), sizeof(browsersBuffer) - 1);
+        browsersBuffer[sizeof(browsersBuffer) - 1] = '\0';
+        if (ImGui::InputText("Navegadores Suportados", browsersBuffer, sizeof(browsersBuffer)))
+        {
+            m_webPortalTextSupportedBrowsers = std::string(browsersBuffer);
+            textsChanged = true;
+        }
+
+        char formatInfoBuffer[256];
+        strncpy(formatInfoBuffer, m_webPortalTextFormatInfo.c_str(), sizeof(formatInfoBuffer) - 1);
+        formatInfoBuffer[sizeof(formatInfoBuffer) - 1] = '\0';
+        if (ImGui::InputText("Info: Formato", formatInfoBuffer, sizeof(formatInfoBuffer)))
+        {
+            m_webPortalTextFormatInfo = std::string(formatInfoBuffer);
+            textsChanged = true;
+        }
+
+        char codecInfoValueBuffer[128];
+        strncpy(codecInfoValueBuffer, m_webPortalTextCodecInfoValue.c_str(), sizeof(codecInfoValueBuffer) - 1);
+        codecInfoValueBuffer[sizeof(codecInfoValueBuffer) - 1] = '\0';
+        if (ImGui::InputText("Info: Codec", codecInfoValueBuffer, sizeof(codecInfoValueBuffer)))
+        {
+            m_webPortalTextCodecInfoValue = std::string(codecInfoValueBuffer);
+            textsChanged = true;
+        }
+
+        char connectingBuffer[128];
+        strncpy(connectingBuffer, m_webPortalTextConnecting.c_str(), sizeof(connectingBuffer) - 1);
+        connectingBuffer[sizeof(connectingBuffer) - 1] = '\0';
+        if (ImGui::InputText("Status: Conectando", connectingBuffer, sizeof(connectingBuffer)))
+        {
+            m_webPortalTextConnecting = std::string(connectingBuffer);
+            textsChanged = true;
+        }
+
+        if (textsChanged)
+        {
+            if (m_onWebPortalTextsChanged)
+            {
+                m_onWebPortalTextsChanged();
+            }
+            saveConfig();
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Restaurar Textos Padrão"))
+        {
+            m_webPortalSubtitle = "Streaming de vídeo em tempo real";
+            m_webPortalTextStreamInfo = "Informações do Stream";
+            m_webPortalTextQuickActions = "Ações Rápidas";
+            m_webPortalTextCompatibility = "Compatibilidade";
+            m_webPortalTextStatus = "Status";
+            m_webPortalTextCodec = "Codec";
+            m_webPortalTextResolution = "Resolução";
+            m_webPortalTextStreamUrl = "URL do Stream";
+            m_webPortalTextCopyUrl = "Copiar URL";
+            m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
+            m_webPortalTextSupported = "Suportado";
+            m_webPortalTextFormat = "Formato";
+            m_webPortalTextCodecInfo = "Codec";
+            m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+            m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
+            m_webPortalTextCodecInfoValue = "H.264/AAC";
+            m_webPortalTextConnecting = "Conectando...";
+
+            if (m_onWebPortalTextsChanged)
+            {
+                m_onWebPortalTextsChanged();
             }
             saveConfig();
         }

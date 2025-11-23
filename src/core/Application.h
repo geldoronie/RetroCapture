@@ -153,22 +153,58 @@ private:
     bool m_webPortalHTTPSEnabled = false;
     std::string m_webPortalSSLCertPath = "ssl/server.crt";
     std::string m_webPortalSSLKeyPath = "ssl/server.key";
-    std::string m_foundSSLCertPath;                       // Caminho real do certificado encontrado (após busca)
-    std::string m_foundSSLKeyPath;                        // Caminho real da chave encontrada (após busca)
-    std::string m_webPortalTitle = "RetroCapture Stream"; // Título da página web
-    std::string m_webPortalImagePath;                     // Caminho da imagem para o título (opcional)
-    std::string m_webPortalBackgroundImagePath;           // Caminho da imagem de fundo (opcional)
+    std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
+    std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
+    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
+    std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
-    // Cores do portal (RGBA, valores 0.0-1.0)
-    float m_webPortalColorBackground[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_webPortalColorText[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    float m_webPortalColorPrimary[4] = {0.290f, 0.620f, 1.0f, 1.0f};
-    float m_webPortalColorSecondary[4] = {0.165f, 0.165f, 0.165f, 1.0f};
-    float m_webPortalColorCardHeader[4] = {0.102f, 0.102f, 0.102f, 1.0f};
-    float m_webPortalColorBorder[4] = {0.4f, 0.4f, 0.4f, 1.0f};
-    float m_webPortalColorSuccess[4] = {0.298f, 0.686f, 0.314f, 1.0f};
-    float m_webPortalColorWarning[4] = {1.0f, 0.596f, 0.0f, 1.0f};
-    float m_webPortalColorDanger[4] = {0.957f, 0.263f, 0.212f, 1.0f};
+    // Textos editáveis dos cards
+    std::string m_webPortalTextStreamInfo = "Informações do Stream";
+    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextCompatibility = "Compatibilidade";
+    std::string m_webPortalTextStatus = "Status";
+    std::string m_webPortalTextCodec = "Codec";
+    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextStreamUrl = "URL do Stream";
+    std::string m_webPortalTextCopyUrl = "Copiar URL";
+    std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
+    std::string m_webPortalTextSupported = "Suportado";
+    std::string m_webPortalTextFormat = "Formato";
+    std::string m_webPortalTextCodecInfo = "Codec";
+    std::string m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+    std::string m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
+    std::string m_webPortalTextCodecInfoValue = "H.264/AAC";
+    std::string m_webPortalTextConnecting = "Conectando...";
+
+    // Cores do portal baseadas no styleguide RetroCapture (RGBA, valores 0.0-1.0)
+    // Primary - Retro Teal #0A7A83
+    float m_webPortalColorPrimary[4] = {0.039f, 0.478f, 0.514f, 1.0f};
+    // Primary Light - Mint Screen Glow #6FC4C0
+    float m_webPortalColorPrimaryLight[4] = {0.435f, 0.769f, 0.753f, 1.0f};
+    // Primary Dark - Deep Retro #0F3E42
+    float m_webPortalColorPrimaryDark[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Secondary - Cyan Oscilloscope #47B3CE
+    float m_webPortalColorSecondary[4] = {0.278f, 0.702f, 0.808f, 1.0f};
+    // Secondary Highlight - Phosphor Glow #C9F2E7
+    float m_webPortalColorSecondaryHighlight[4] = {0.788f, 0.949f, 0.906f, 1.0f};
+    // Dark Background #1D1F21
+    float m_webPortalColorBackground[4] = {0.114f, 0.122f, 0.129f, 1.0f};
+    // Text Light #F8F8F2
+    float m_webPortalColorText[4] = {0.973f, 0.973f, 0.949f, 1.0f};
+    // Card Header (usa Primary Dark)
+    float m_webPortalColorCardHeader[4] = {0.059f, 0.243f, 0.259f, 1.0f};
+    // Border (usa Primary com transparência)
+    float m_webPortalColorBorder[4] = {0.039f, 0.478f, 0.514f, 0.5f};
+    // Success #45D6A4
+    float m_webPortalColorSuccess[4] = {0.271f, 0.839f, 0.643f, 1.0f};
+    // Warning #F3C93E
+    float m_webPortalColorWarning[4] = {0.953f, 0.788f, 0.243f, 1.0f};
+    // Error #D9534F
+    float m_webPortalColorDanger[4] = {0.851f, 0.325f, 0.310f, 1.0f};
+    // Info #4CBCE6
+    float m_webPortalColorInfo[4] = {0.298f, 0.737f, 0.902f, 1.0f};
 
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
