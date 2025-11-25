@@ -1008,12 +1008,61 @@ void HTTPTSStreamer::hlsSegmentThread()
 
         // Validar tamanho mínimo do buffer
         // Para MPEG-TS, um pacote tem 188 bytes, então precisamos de pelo menos alguns pacotes
-        // Reduzindo o mínimo para 376 bytes (2 pacotes TS) para ser mais tolerante
-        if (m_hlsBuffer.size() < 376) // Mínimo 2 pacotes TS (376 bytes)
+        if (m_hlsBuffer.size() < 188) // Mínimo 1 pacote TS (188 bytes)
         {
             LOG_WARN("HLS segment thread: buffer muito pequeno (" + std::to_string(m_hlsBuffer.size()) +
-                     " bytes, mínimo: 376), aguardando mais dados...");
-            // Não limpar o buffer, apenas aguardar mais dados no próximo ciclo
+                     " bytes, mínimo: 188), aguardando mais dados...");
+            continue;
+        }
+
+        // IMPORTANTE: Validar e alinhar o buffer para garantir segmentos válidos
+        // Procurar pelo primeiro sync byte (0x47) válido no buffer
+        size_t syncBytePos = 0;
+        bool foundSync = false;
+        for (size_t i = 0; i < std::min(m_hlsBuffer.size(), static_cast<size_t>(188 * 10)); ++i)
+        {
+            if (m_hlsBuffer[i] == 0x47)
+            {
+                // Verificar se é um sync byte válido (verificar alinhamento a cada 188 bytes)
+                bool isValidSync = true;
+                for (size_t j = 1; j < 5 && (i + j * 188) < m_hlsBuffer.size(); ++j)
+                {
+                    if (m_hlsBuffer[i + j * 188] != 0x47)
+                    {
+                        isValidSync = false;
+                        break;
+                    }
+                }
+                if (isValidSync)
+                {
+                    syncBytePos = i;
+                    foundSync = true;
+                    break;
+                }
+            }
+        }
+
+        if (!foundSync)
+        {
+            LOG_WARN("HLS segment thread: não encontrado sync byte válido (0x47) no buffer, descartando " +
+                     std::to_string(m_hlsBuffer.size()) + " bytes");
+            m_hlsBuffer.clear();
+            continue;
+        }
+
+        // Remover dados antes do primeiro sync byte válido
+        if (syncBytePos > 0)
+        {
+            LOG_WARN("HLS segment thread: removendo " + std::to_string(syncBytePos) +
+                     " bytes inválidos antes do sync byte");
+            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + syncBytePos);
+        }
+
+        // Alinhar o tamanho do buffer para múltiplos de 188 bytes (tamanho de um pacote TS)
+        size_t alignedSize = (m_hlsBuffer.size() / 188) * 188;
+        if (alignedSize < 188)
+        {
+            LOG_WARN("HLS segment thread: buffer muito pequeno após alinhamento, aguardando mais dados...");
             continue;
         }
 
@@ -1021,30 +1070,75 @@ void HTTPTSStreamer::hlsSegmentThread()
         HLSSegment segment;
 
         // IMPORTANTE: Para HLS, cada segmento deve ser independente e decodificável
-        // O MPEG-TS já contém PAT/PMT periodicamente, mas para garantir que o primeiro segmento
-        // seja sempre decodificável, adicionamos o header apenas no primeiro segmento
+        // Garantir que cada segmento comece com dados válidos e tenha PAT/PMT periodicamente
+
+        // Verificar se o buffer alinhado começa com sync byte válido ANTES de criar o segmento
+        if (m_hlsBuffer.empty() || m_hlsBuffer[0] != 0x47)
+        {
+            LOG_ERROR("HLS segment thread: buffer não começa com sync byte válido após alinhamento! Descarte.");
+            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+            continue;
+        }
+
         if (!m_formatHeader.empty() && m_hlsSegments.empty())
         {
             // Primeiro segmento: garantir que comece com header PAT/PMT
-            // Verificar se o buffer já começa com sync byte válido (0x47)
-            if (m_hlsBuffer.size() > 0 && m_hlsBuffer[0] == 0x47)
+            // Mas só adicionar se o header não estiver vazio e for válido
+            if (m_formatHeader.size() > 0 && m_formatHeader[0] == 0x47)
             {
-                // Buffer já começa com dados MPEG-TS válidos, usar diretamente
-                segment.data = m_hlsBuffer;
+                segment.data = m_formatHeader;
+                // Adicionar apenas dados alinhados
+                segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+                LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex) +
+                         " (header: " + std::to_string(m_formatHeader.size()) +
+                         " bytes, data: " + std::to_string(alignedSize) + " bytes)");
             }
             else
             {
-                // Adicionar header no início do primeiro segmento
-                segment.data = m_formatHeader;
-                segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.end());
-                LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex));
+                // Se o header não for válido, usar apenas os dados do buffer
+                LOG_WARN("Format header inválido, usando apenas dados do buffer para primeiro segmento");
+                segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
             }
         }
         else
         {
-            // Segmentos subsequentes: usar o buffer diretamente
-            // O MPEG-TS já contém PAT/PMT periodicamente, então não precisamos adicionar manualmente
-            segment.data = m_hlsBuffer;
+            // Segmentos subsequentes: usar apenas dados alinhados
+            // O MPEG-TS já contém PAT/PMT periodicamente, mas garantimos alinhamento
+            segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+        }
+
+        // Validação final: garantir que o segmento começa com sync byte válido
+        if (segment.data.empty() || segment.data[0] != 0x47)
+        {
+            LOG_ERROR("HLS segment thread: segmento criado não começa com sync byte válido! Descarte.");
+            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+            continue;
+        }
+
+        // Validar que o segmento tem tamanho mínimo e é múltiplo de 188 bytes
+        if (segment.data.size() < 188 || (segment.data.size() % 188 != 0))
+        {
+            LOG_WARN("HLS segment thread: segmento não é múltiplo de 188 bytes (tamanho: " +
+                     std::to_string(segment.data.size()) + "), ajustando...");
+            // Ajustar para múltiplo de 188 bytes
+            size_t adjustedSize = (segment.data.size() / 188) * 188;
+            if (adjustedSize < 188)
+            {
+                LOG_ERROR("Segmento muito pequeno após ajuste, descartando");
+                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+                continue;
+            }
+            segment.data.resize(adjustedSize);
+        }
+
+        // Remover dados usados do buffer (manter apenas o que não foi alinhado)
+        m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+
+        // Validar tamanho mínimo do segmento antes de criar
+        if (segment.data.size() < 188)
+        {
+            LOG_WARN("HLS segment thread: segmento muito pequeno após processamento, descartando");
+            continue;
         }
 
         segment.index = m_hlsSegmentIndex++;
@@ -1065,8 +1159,8 @@ void HTTPTSStreamer::hlsSegmentThread()
             LOG_INFO("Removed " + std::to_string(removedCount) + " old HLS segment(s), keeping " + std::to_string(m_hlsSegments.size()));
         }
 
-        // Limpar buffer para próximo segmento
-        m_hlsBuffer.clear();
+        // O buffer já foi parcialmente limpo acima (dados alinhados foram removidos)
+        // Manter apenas os dados não alinhados para o próximo segmento
 
         LOG_INFO("HLS segment " + std::to_string(segment.index) + " created (" +
                  std::to_string(segment.data.size()) + " bytes, total segments: " + std::to_string(m_hlsSegments.size()) + ")");
@@ -1167,6 +1261,12 @@ void HTTPTSStreamer::serveHLSSegment(int clientFd, int segmentIndex)
             response << "Content-Length: " << segment.data.size() << "\r\n";
             response << "Connection: close\r\n";
             response << "Cache-Control: public, max-age=3600\r\n";
+            // Headers CORS completos para Chrome
+            response << "Access-Control-Allow-Origin: *\r\n";
+            response << "Access-Control-Allow-Methods: GET, OPTIONS\r\n";
+            response << "Access-Control-Allow-Headers: Range, Content-Type\r\n";
+            response << "Access-Control-Expose-Headers: Content-Length, Content-Range\r\n";
+            response << "Accept-Ranges: bytes\r\n";
             response << "\r\n";
 
             std::string headerStr = response.str();

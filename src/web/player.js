@@ -20,6 +20,11 @@
     const alertContainer = document.getElementById('alertContainer');
     const streamLink = document.getElementById('streamLink');
     
+    // Detectar navegador para ajustar comportamento (deve estar no escopo global)
+    const isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
+    const isFirefox = /Firefox/.test(navigator.userAgent);
+    console.log('Navegador detectado:', isChrome ? 'Chrome' : (isFirefox ? 'Firefox' : 'Outro'));
+    
     let hls = null;
     let statsInterval = null;
     let playbackStartTime = null;
@@ -43,11 +48,39 @@
         status.className = 'stat-value ' + className;
         statusIcon.className = 'bi bi-circle-fill ' + className;
         
-        // Atualizar overlay
-        if (className === 'status-playing' || className === 'status-paused') {
+        // Atualizar overlay baseado no estado do vídeo
+        const minReadyState = isChrome ? 3 : 2;
+        const isVideoReady = video.readyState >= minReadyState && video.buffered.length > 0;
+        
+        if (className === 'status-playing') {
+            // Vídeo está reproduzindo - esconder overlay
             videoOverlay.classList.add('hidden');
-        } else {
+        } else if (className === 'status-paused' && isVideoReady) {
+            // Vídeo está pausado mas pronto - mostrar botão de play
+            showPlayButton();
+        } else if (className === 'status-connecting' && isVideoReady) {
+            // Status "Pronto" mas vídeo está pronto - esconder overlay ou mostrar botão
+            if (video.paused) {
+                showPlayButton();
+            } else {
+                videoOverlay.classList.add('hidden');
+            }
+        } else if (!isVideoReady) {
+            // Vídeo ainda não está pronto - mostrar overlay de carregamento
             videoOverlay.classList.remove('hidden');
+            videoOverlay.innerHTML = `
+                <div class="overlay-content">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Carregando...</span>
+                    </div>
+                    <p class="mt-3 mb-0">${text}</p>
+                </div>
+            `;
+        } else {
+            // Outros casos - esconder overlay se vídeo está pronto
+            if (isVideoReady) {
+                videoOverlay.classList.add('hidden');
+            }
         }
     }
     
@@ -180,6 +213,40 @@
         });
     }
     
+    function showPlayButton() {
+        // Mostrar botão de play no overlay se o vídeo estiver pausado e pronto
+        const minReadyState = isChrome ? 3 : 2;
+        if (video.paused && video.readyState >= minReadyState && video.buffered.length > 0) {
+            const overlay = videoOverlay;
+            if (overlay) {
+                overlay.classList.remove('hidden');
+                overlay.innerHTML = `
+                    <div class="overlay-content">
+                        <button id="playButton" class="btn btn-primary btn-lg">
+                            <i class="bi bi-play-fill me-2"></i>Reproduzir Stream
+                        </button>
+                        <p class="mt-3 mb-0 text-muted">Clique para iniciar a reprodução</p>
+                    </div>
+                `;
+                
+                // Adicionar event listener ao botão (não usar onclick inline)
+                const playButton = document.getElementById('playButton');
+                if (playButton) {
+                    playButton.addEventListener('click', () => {
+                        video.play().then(() => {
+                            console.log('Reprodução iniciada pelo botão');
+                            updateStatus('Reproduzindo', 'status-playing');
+                        }).catch(e => {
+                            console.error('Erro ao reproduzir:', e);
+                            showAlert('danger', 'Erro ao Reproduzir', 
+                                'Não foi possível iniciar a reprodução. Tente novamente.');
+                        });
+                    });
+                }
+            }
+        }
+    }
+    
     // Verificar se HLS.js está disponível
     if (typeof Hls === 'undefined') {
         updateStatus('HLS.js não carregado', 'status-error');
@@ -222,45 +289,237 @@
             enableWorker: true
         };
         
+        // Configuração do HLS.js com opções específicas para compatibilidade com Chrome
         hls = new Hls({
+            debug: false,
             enableWorker: hlsConfig.enableWorker,
             lowLatencyMode: hlsConfig.lowLatencyMode,
             backBufferLength: hlsConfig.backBufferLength,
             maxBufferLength: hlsConfig.maxBufferLength,
-            maxMaxBufferLength: hlsConfig.maxMaxBufferLength
+            maxMaxBufferLength: hlsConfig.maxMaxBufferLength,
+            // Configurações adicionais para Chrome
+            startLevel: -1, // Deixar HLS.js escolher o nível inicial
+            capLevelToPlayerSize: false,
+            // Forçar reload da playlist periodicamente
+            manifestLoadingTimeOut: 20000,
+            manifestLoadingMaxRetry: 3,
+            levelLoadingTimeOut: 10000,
+            fragLoadingTimeOut: 20000,
+            // Configurações de buffer para Chrome
+            maxBufferHole: 0.5, // Tolerância para gaps no buffer
+            highBufferWatchdogPeriod: 2, // Verificar buffer alto a cada 2s
+            nudgeOffset: 0.1, // Offset para ajuste de sincronização
+            nudgeMaxRetry: 3
         });
         
         const absoluteHlsUrl = window.location.protocol + '//' + window.location.host + hlsUrl;
-        hls.loadSource(absoluteHlsUrl);
-        hls.attachMedia(video);
+        console.log('Carregando HLS stream:', absoluteHlsUrl);
         
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            updateStatus('Pronto', 'status-connecting');
-            updateStats();
-            hideAlert();
+        // IMPORTANTE: Ordem de inicialização diferente para Chrome vs Firefox
+        // Chrome é mais rigoroso e precisa de uma sequência específica
+        if (isChrome) {
+            // Para Chrome: anexar mídia primeiro, depois carregar fonte, depois iniciar
+            hls.attachMedia(video);
             
-            video.play().catch(err => {
-                console.log('Autoplay bloqueado:', err);
-                updateStatus('Clique para reproduzir', 'status-paused');
+            // Registrar eventos ANTES de loadSource no Chrome
+            // (alguns eventos podem não ser disparados se registrados depois)
+            setupHLSEvents();
+            
+            // Carregar fonte
+            hls.loadSource(absoluteHlsUrl);
+            
+            // Chrome precisa de startLoad explícito, mas não imediatamente
+            // Aguardar um pouco para garantir que tudo está pronto
+            setTimeout(() => {
+                try {
+                    if (hls.media) {
+                        hls.startLoad();
+                        console.log('Chrome: startLoad() chamado após loadSource');
+                    }
+                } catch(e) {
+                    console.warn('Chrome: Erro ao chamar startLoad inicial:', e);
+                }
+            }, 200);
+        } else {
+            // Para Firefox e outros: ordem mais flexível
+            hls.attachMedia(video);
+            hls.loadSource(absoluteHlsUrl);
+            
+            // Registrar eventos (Firefox é mais tolerante com a ordem)
+            setupHLSEvents();
+            
+            // Firefox geralmente inicia automaticamente, mas podemos forçar se necessário
+            setTimeout(() => {
+                try {
+                    if (hls.media && !hls.media.readyState) {
+                        hls.startLoad();
+                        console.log('Firefox: startLoad() chamado');
+                    }
+                } catch(e) {
+                    console.warn('Firefox: Erro ao chamar startLoad:', e);
+                }
+            }, 100);
+        }
+        
+        // Função para configurar eventos do HLS (separada para reutilização)
+        function setupHLSEvents() {
+        
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                console.log('MANIFEST_PARSED:', data);
+                updateStatus('Pronto', 'status-connecting');
+                updateStats();
+                hideAlert();
+                
+                // Não esconder overlay ainda - aguardar dados no buffer
+                // O overlay será escondido quando BUFFER_APPENDED ou canplay for disparado
+                
+                // Chrome pode precisar de startLoad explícito após MANIFEST_PARSED
+                // Firefox geralmente não precisa
+                if (isChrome) {
+                    try {
+                        // Pequeno delay para garantir que tudo está processado
+                        setTimeout(() => {
+                            if (hls.media) {
+                                hls.startLoad();
+                                console.log('Chrome: startLoad() chamado após MANIFEST_PARSED');
+                            }
+                        }, 50);
+                    } catch(e) {
+                        console.warn('Erro ao chamar startLoad após MANIFEST_PARSED:', e);
+                    }
+                }
             });
+        
+        // Evento quando há dados suficientes no buffer para começar a reproduzir
+        hls.on(Hls.Events.BUFFER_APPENDING, () => {
+            console.log('BUFFER_APPENDING - dados sendo adicionados ao buffer');
         });
         
-        // Recarregar a playlist periodicamente para live streams
-        hls.on(Hls.Events.FRAG_LOADED, () => {
-            // A cada segmento carregado, garantir que a playlist seja atualizada
-            // O HLS.js faz isso automaticamente, mas podemos forçar se necessário
-        });
-        
-        // Tratar quando um fragmento não pode ser carregado
-        hls.on(Hls.Events.FRAG_LOADING, (event, data) => {
-            // Log para debug
-            if (data.frag) {
-                console.log('Carregando fragmento:', data.frag.url);
+        // Evento quando o buffer está pronto
+        hls.on(Hls.Events.BUFFER_APPENDED, (event, data) => {
+            console.log('BUFFER_APPENDED - dados adicionados ao buffer:', data);
+            console.log('Video readyState:', video.readyState, 'paused:', video.paused, 'buffered:', video.buffered.length);
+            
+            // Atualizar overlay quando há dados suficientes
+            const minReadyState = isChrome ? 3 : 2;
+            if (video.readyState >= minReadyState && video.buffered.length > 0) {
+                // Vídeo está pronto - esconder overlay de carregamento ou mostrar botão de play
+                if (video.paused) {
+                    showPlayButton();
+                } else {
+                    videoOverlay.classList.add('hidden');
+                }
+            }
+            
+            // Tentar reproduzir quando há dados no buffer
+            if (video.readyState >= minReadyState && video.paused) {
+                console.log('Buffer pronto (readyState >= ' + minReadyState + '), tentando reproduzir...');
+                const playPromise = video.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        console.log('Reprodução iniciada com sucesso após buffer');
+                        updateStatus('Reproduzindo', 'status-playing');
+                    }).catch(err => {
+                        console.log('Autoplay bloqueado após buffer:', err);
+                        updateStatus('Clique para reproduzir', 'status-paused');
+                        // Mostrar botão de play se autoplay falhar
+                        showPlayButton();
+                    });
+                }
+            } else if (video.readyState >= 2 && video.paused) {
+                console.log('Buffer parcial (readyState >= 2), aguardando mais dados...');
             }
         });
         
-        hls.on(Hls.Events.ERROR, (event, data) => {
-            console.error('HLS error:', data);
+            // Evento quando o nível é carregado (importante para live streams)
+            hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
+                console.log('LEVEL_LOADED:', data);
+                console.log('Playlist carregada, níveis disponíveis:', data.details?.levels?.length || 0);
+                
+                // Chrome pode precisar de startLoad após LEVEL_LOADED
+                // Firefox geralmente não precisa
+                if (isChrome && hls.media && video.readyState >= 2) {
+                    try {
+                        hls.startLoad();
+                        console.log('Chrome: startLoad() chamado após LEVEL_LOADED');
+                    } catch(e) {
+                        console.warn('Erro ao chamar startLoad após LEVEL_LOADED:', e);
+                    }
+                }
+            });
+        
+            // Evento quando um fragmento é carregado com sucesso
+            hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
+                if (data.frag) {
+                    console.log('FRAG_LOADED:', data.frag.url, 'tipo:', data.frag.type);
+                    
+                    // Tentar reproduzir quando o primeiro fragmento é carregado
+                    // Chrome precisa de readyState >= 3, Firefox pode funcionar com >= 2
+                    const minReadyState = isChrome ? 3 : 2;
+                    if (video.readyState >= minReadyState && video.paused) {
+                        const playPromise = video.play();
+                        if (playPromise !== undefined) {
+                            playPromise.then(() => {
+                                console.log('Reprodução iniciada após FRAG_LOADED');
+                                updateStatus('Reproduzindo', 'status-playing');
+                            }).catch(err => {
+                                console.log('Autoplay bloqueado após FRAG_LOADED:', err);
+                            });
+                        }
+                    }
+                    
+                    // Forçar atualização da playlist periodicamente para live streams
+                    // Chrome precisa disso mais frequentemente
+                    if (hls.levels && hls.levels.length > 0) {
+                        const now = Date.now();
+                        const reloadInterval = isChrome ? 5000 : 10000; // Chrome a cada 5s, Firefox a cada 10s
+                        if (!window.lastPlaylistReload || (now - window.lastPlaylistReload) > reloadInterval) {
+                            try {
+                                if (isChrome) {
+                                    hls.startLoad();
+                                }
+                                window.lastPlaylistReload = now;
+                            } catch(e) {
+                                console.warn('Erro ao recarregar playlist:', e);
+                            }
+                        }
+                    }
+                }
+            });
+        
+            // Tratar quando um fragmento está sendo carregado
+            hls.on(Hls.Events.FRAG_LOADING, (event, data) => {
+                // Log para debug
+                if (data.frag) {
+                    console.log('Carregando fragmento:', data.frag.url);
+                }
+            });
+            
+            // Tratar quando um fragmento é analisado (parsed)
+            hls.on(Hls.Events.FRAG_PARSED, (event, data) => {
+                // Fragmento foi parseado com sucesso
+                if (data.frag) {
+                    console.log('FRAG_PARSED:', data.frag.url, 'tipo:', data.frag.type);
+                    
+                    // Tentar reproduzir quando fragmentos são parseados
+                    // Chrome precisa de readyState >= 3, Firefox pode funcionar com >= 2
+                    const minReadyState = isChrome ? 3 : 2;
+                    if (video.readyState >= minReadyState && video.paused) {
+                        const playPromise = video.play();
+                        if (playPromise !== undefined) {
+                            playPromise.then(() => {
+                                console.log('Reprodução iniciada após FRAG_PARSED');
+                                updateStatus('Reproduzindo', 'status-playing');
+                            }).catch(err => {
+                                // Ignorar erros de autoplay aqui
+                            });
+                        }
+                    }
+                }
+            });
+            
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                console.error('HLS error:', data);
             
             // Tratar erros não-fatais primeiro
             if (!data.fatal) {
@@ -323,9 +582,38 @@
                         break;
                     case Hls.ErrorTypes.MEDIA_ERROR:
                         updateStatus('Erro de mídia', 'status-error');
-                        showAlert('danger', 'Erro de Mídia', 
-                            'Ocorreu um erro ao decodificar o stream. Tentando recuperar...');
-                        hls.recoverMediaError();
+                        console.error('Erro de mídia detalhado:', data);
+                        
+                        // Verificar tipo específico de erro de mídia
+                        if (data.details) {
+                            if (data.details.includes('demuxer') || data.details.includes('parse') || data.details.includes('format')) {
+                                showAlert('danger', 'Erro de Formato', 
+                                    'Ocorreu um erro ao processar o formato do stream. Isso pode indicar um problema com os segmentos. Tente recarregar a página.');
+                                console.error('Erro de formato/demuxer detectado:', data.details);
+                            } else {
+                                showAlert('danger', 'Erro de Mídia', 
+                                    'Ocorreu um erro ao decodificar o stream. Tentando recuperar...');
+                            }
+                        } else {
+                            showAlert('danger', 'Erro de Mídia', 
+                                'Ocorreu um erro ao decodificar o stream. Tentando recuperar...');
+                        }
+                        
+                        // Tentar recuperar
+                        try {
+                            hls.recoverMediaError();
+                        } catch(e) {
+                            console.error('Erro ao tentar recuperar:', e);
+                            // Se falhar, tentar recarregar completamente
+                            setTimeout(() => {
+                                try {
+                                    hls.loadSource(absoluteHlsUrl);
+                                    hls.startLoad();
+                                } catch(err) {
+                                    console.error('Erro ao recarregar stream:', err);
+                                }
+                            }, 1000);
+                        }
                         break;
                     default:
                         updateStatus('Erro fatal', 'status-error');
@@ -335,9 +623,165 @@
                         break;
                 }
             }
-        });
+            });
+        } // Fim de setupHLSEvents()
+        
+        // Forçar tentativa de reprodução após alguns segundos se ainda estiver pausado
+        let playAttemptInterval = null;
+        let playAttemptCount = 0;
+        const maxPlayAttempts = 10; // Limitar tentativas
+        
+        const attemptPlay = () => {
+            playAttemptCount++;
+            console.log(`Tentativa de reprodução #${playAttemptCount} - readyState: ${video.readyState}, paused: ${video.paused}, buffered: ${video.buffered.length}`);
+            
+            // Chrome precisa de readyState >= 3, Firefox pode funcionar com >= 2
+            const minReadyState = isChrome ? 3 : 2;
+            if (video.paused && video.readyState >= minReadyState && video.buffered.length > 0) {
+                const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+                if (bufferedEnd > 0.5) { // Pelo menos 0.5s de buffer
+                    console.log('Tentativa automática de reprodução - buffer:', bufferedEnd.toFixed(2), 's, readyState:', video.readyState);
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        playPromise.then(() => {
+                            console.log('Reprodução iniciada na tentativa automática #' + playAttemptCount);
+                            updateStatus('Reproduzindo', 'status-playing');
+                            if (playAttemptInterval) {
+                                clearInterval(playAttemptInterval);
+                                playAttemptInterval = null;
+                            }
+                        }).catch(err => {
+                            console.log('Autoplay ainda bloqueado na tentativa #' + playAttemptCount + ':', err.name, err.message);
+                            if (playAttemptCount >= maxPlayAttempts) {
+                                console.log('Máximo de tentativas atingido, mostrando botão de play');
+                                showPlayButton();
+                                if (playAttemptInterval) {
+                                    clearInterval(playAttemptInterval);
+                                    playAttemptInterval = null;
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    console.log('Buffer insuficiente para reprodução:', bufferedEnd.toFixed(2), 's');
+                }
+            } else {
+                console.log('Condições não atendidas - readyState:', video.readyState, 'paused:', video.paused, 'buffered:', video.buffered.length);
+            }
+        };
+        
+        // Tentar reproduzir a cada 2 segundos se ainda estiver pausado
+        setTimeout(() => {
+            if (video.paused) {
+                playAttemptInterval = setInterval(attemptPlay, 2000);
+                console.log('Iniciado intervalo de tentativas de reprodução (máximo', maxPlayAttempts, 'tentativas)');
+            }
+        }, 3000);
+        
+        // Também tentar quando o usuário interagir com a página (permite autoplay)
+        document.addEventListener('click', () => {
+            const minReadyState = isChrome ? 3 : 2;
+            if (video.paused && video.readyState >= minReadyState && video.buffered.length > 0) {
+                console.log('Interação do usuário detectada, tentando reproduzir...');
+                video.play().then(() => {
+                    console.log('Reprodução iniciada após interação do usuário');
+                    updateStatus('Reproduzindo', 'status-playing');
+                }).catch(err => {
+                    console.log('Erro ao reproduzir após interação:', err);
+                });
+            }
+        }, { once: true });
+        
+        // Evento quando há dados suficientes para começar a reproduzir
+        video.addEventListener('canplay', () => {
+            console.log('canplay event - vídeo pode começar a reproduzir, readyState:', video.readyState);
+            console.log('Buffered ranges:', video.buffered.length);
+            if (video.buffered.length > 0) {
+                console.log('Buffered start:', video.buffered.start(0), 'end:', video.buffered.end(0));
+            }
+            
+            // Vídeo está pronto - atualizar overlay
+            const minReadyState = isChrome ? 3 : 2;
+            if (video.readyState >= minReadyState && video.buffered.length > 0) {
+                if (video.paused) {
+                    // Mostrar botão de play se pausado
+                    showPlayButton();
+                } else {
+                    // Esconder overlay se reproduzindo
+                    videoOverlay.classList.add('hidden');
+                }
+            }
+            
+            if (video.paused) {
+                console.log('Tentando reproduzir no evento canplay...');
+                const playPromise = video.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        console.log('Reprodução iniciada após canplay');
+                        updateStatus('Reproduzindo', 'status-playing');
+                    }).catch(err => {
+                        console.log('Autoplay bloqueado no canplay:', err.name, err.message);
+                        updateStatus('Clique para reproduzir', 'status-paused');
+                        showPlayButton();
+                    });
+                }
+            }
+        }, { once: false });
+        
+        video.addEventListener('canplaythrough', () => {
+            console.log('canplaythrough event - vídeo pode reproduzir sem interrupção, readyState:', video.readyState);
+            
+            // Vídeo está completamente pronto - esconder overlay de carregamento
+            if (video.paused) {
+                // Mostrar botão de play se pausado
+                showPlayButton();
+            } else {
+                // Esconder overlay se reproduzindo
+                videoOverlay.classList.add('hidden');
+            }
+            
+            if (video.paused) {
+                console.log('Tentando reproduzir no evento canplaythrough...');
+                const playPromise = video.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        console.log('Reprodução iniciada após canplaythrough');
+                        updateStatus('Reproduzindo', 'status-playing');
+                    }).catch(err => {
+                        console.log('Autoplay bloqueado no canplaythrough:', err.name, err.message);
+                    });
+                }
+            }
+        }, { once: false });
+        
+        // Verificação periódica para esconder overlay quando vídeo estiver pronto
+        // Isso garante que o overlay seja escondido mesmo se os eventos não forem disparados
+        const overlayCheckInterval = setInterval(() => {
+            const minReadyState = isChrome ? 3 : 2;
+            if (video.readyState >= minReadyState && video.buffered.length > 0) {
+                if (video.paused) {
+                    // Se pausado mas pronto, mostrar botão de play
+                    if (!videoOverlay.classList.contains('hidden') || 
+                        !videoOverlay.querySelector('button')) {
+                        showPlayButton();
+                    }
+                } else {
+                    // Se reproduzindo, esconder overlay
+                    if (!videoOverlay.classList.contains('hidden')) {
+                        videoOverlay.classList.add('hidden');
+                    }
+                }
+                // Limpar intervalo se vídeo está pronto e reproduzindo
+                if (!video.paused) {
+                    clearInterval(overlayCheckInterval);
+                }
+            }
+        }, 500); // Verificar a cada 500ms
         
         video.addEventListener('play', () => {
+            // Sempre esconder overlay quando começar a reproduzir
+            videoOverlay.classList.add('hidden');
+            clearInterval(overlayCheckInterval);
             updateStatus('Reproduzindo', 'status-playing');
             hideAlert();
             playbackStartTime = Date.now();
