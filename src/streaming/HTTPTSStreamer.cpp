@@ -112,39 +112,8 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     // Capturar timestamp de captura (quando o frame chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Adicionar frame com timestamp ao buffer temporal
-    // OTIMIZAÇÃO: Usar move semantics para evitar cópia desnecessária
-    TimestampedFrame frame;
-    frame.data = std::make_shared<std::vector<uint8_t>>(width * height * 3);
-    frame.data->assign(data, data + width * height * 3); // Cópia necessária, mas otimizada
-    frame.width = width;
-    frame.height = height;
-    frame.captureTimestampUs = captureTimestampUs;
-    frame.processed = false;
-
-    {
-        std::lock_guard<std::mutex> lock(m_videoBufferMutex);
-        if (m_timestampedVideoBuffer.empty())
-        {
-            m_firstVideoTimestampUs = captureTimestampUs; // Primeiro frame define o início
-        }
-        m_timestampedVideoBuffer.push_back(std::move(frame));
-        m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
-
-        // OTIMIZAÇÃO: Limpar dados antigos apenas ocasionalmente (não a cada frame)
-        // Limpar apenas se o buffer estiver muito grande para evitar overhead
-        // CRÍTICO: Reduzir frequência de cleanup para evitar perda de frames
-        static size_t cleanupCounter = 0;
-        // Aumentar threshold para buffer maior (30 segundos de frames baseado no FPS configurado)
-        const size_t maxFramesFor30Seconds = static_cast<size_t>(m_fps * 30);
-        if (++cleanupCounter >= 60 || m_timestampedVideoBuffer.size() > maxFramesFor30Seconds)
-        {
-            cleanupOldData();
-            cleanupCounter = 0;
-        }
-    }
-
-    return true;
+    // Adicionar frame ao StreamSynchronizer
+    return m_streamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 
 bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
@@ -162,31 +131,8 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
     // Capturar timestamp de captura (quando o áudio chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Calcular duração deste chunk de áudio
-    int64_t durationUs = (sampleCount * 1000000LL) / (m_audioSampleRate * m_audioChannelsCount);
-
-    // Adicionar áudio com timestamp ao buffer temporal
-    TimestampedAudio audio;
-    audio.samples = std::make_shared<std::vector<int16_t>>(samples, samples + sampleCount);
-    audio.sampleCount = sampleCount;
-    audio.captureTimestampUs = captureTimestampUs;
-    audio.durationUs = durationUs;
-    audio.processed = false;
-
-    {
-        std::lock_guard<std::mutex> lock(m_audioBufferMutex);
-        if (m_timestampedAudioBuffer.empty())
-        {
-            m_firstAudioTimestampUs = captureTimestampUs; // Primeiro chunk define o início
-        }
-        m_timestampedAudioBuffer.push_back(audio);
-        m_latestAudioTimestampUs = std::max(m_latestAudioTimestampUs, captureTimestampUs);
-
-        // Limpar dados antigos se necessário (baseado em tempo)
-        cleanupOldData();
-    }
-
-    return true;
+    // Adicionar áudio ao StreamSynchronizer
+    return m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
 }
 
 bool HTTPTSStreamer::start()
@@ -198,21 +144,20 @@ bool HTTPTSStreamer::start()
 
     // Fechar servidor anterior se existir
     m_httpServer.closeServer();
-    // Aguardar um pouco para o SO liberar a porta
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Aguardar um pouco para o SO liberar a porta (reduzido ao mínimo para evitar bloqueio)
+    // Esta operação já está em thread separada, mas ainda pode bloquear brevemente
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    // Limpar recursos FFmpeg se existirem (pode ter sido parado anteriormente)
-    // Fazer isso de forma segura, verificando se os recursos existem
-    if (m_videoCodecContext || m_audioCodecContext || m_muxerContext)
+    // Limpar recursos de encoding se existirem (pode ter sido parado anteriormente)
+    if (m_mediaEncoder.isInitialized() || m_mediaMuxer.isInitialized())
     {
-        flushCodecs();
-        cleanupFFmpeg();
+        cleanupEncoding();
     }
 
-    // Inicializar FFmpeg primeiro
-    if (!initializeFFmpeg())
+    // Inicializar encoding primeiro
+    if (!initializeEncoding())
     {
-        LOG_ERROR("Failed to initialize FFmpeg");
+        LOG_ERROR("Failed to initialize encoding");
         return false;
     }
 
@@ -400,7 +345,7 @@ bool HTTPTSStreamer::start()
     if (!m_httpServer.createServer(m_port))
     {
         LOG_ERROR("Failed to create HTTP server");
-        cleanupFFmpeg();
+        cleanupEncoding();
         return false;
     }
 
@@ -470,20 +415,11 @@ void HTTPTSStreamer::stop()
 
     // Aguardar um tempo para threads processarem m_stopRequest e terminarem
     // Como threads são detached, precisamos aguardar um tempo razoável
-    // 500ms deve ser suficiente para threads saírem dos loops
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Invalidar m_muxerContext dentro do mutex para garantir que muxPacket não use recursos inválidos
-    {
-        std::lock_guard<std::mutex> lock(m_muxMutex);
-        m_muxerContext = nullptr; // Invalidar antes de liberar recursos
-    }
-
-    // Fazer flush dos codecs para processar pacotes pendentes
-    flushCodecs();
-
-    // Limpar recursos FFmpeg (agora seguro, pois m_muxerContext está invalidado)
-    cleanupFFmpeg();
+    // Limpar recursos de encoding
+    cleanupEncoding();
 
     LOG_INFO("HTTP TS Streamer stopped");
 }
@@ -1008,61 +944,12 @@ void HTTPTSStreamer::hlsSegmentThread()
 
         // Validar tamanho mínimo do buffer
         // Para MPEG-TS, um pacote tem 188 bytes, então precisamos de pelo menos alguns pacotes
-        if (m_hlsBuffer.size() < 188) // Mínimo 1 pacote TS (188 bytes)
+        // Reduzindo o mínimo para 376 bytes (2 pacotes TS) para ser mais tolerante
+        if (m_hlsBuffer.size() < 376) // Mínimo 2 pacotes TS (376 bytes)
         {
             LOG_WARN("HLS segment thread: buffer muito pequeno (" + std::to_string(m_hlsBuffer.size()) +
-                     " bytes, mínimo: 188), aguardando mais dados...");
-            continue;
-        }
-
-        // IMPORTANTE: Validar e alinhar o buffer para garantir segmentos válidos
-        // Procurar pelo primeiro sync byte (0x47) válido no buffer
-        size_t syncBytePos = 0;
-        bool foundSync = false;
-        for (size_t i = 0; i < std::min(m_hlsBuffer.size(), static_cast<size_t>(188 * 10)); ++i)
-        {
-            if (m_hlsBuffer[i] == 0x47)
-            {
-                // Verificar se é um sync byte válido (verificar alinhamento a cada 188 bytes)
-                bool isValidSync = true;
-                for (size_t j = 1; j < 5 && (i + j * 188) < m_hlsBuffer.size(); ++j)
-                {
-                    if (m_hlsBuffer[i + j * 188] != 0x47)
-                    {
-                        isValidSync = false;
-                        break;
-                    }
-                }
-                if (isValidSync)
-                {
-                    syncBytePos = i;
-                    foundSync = true;
-                    break;
-                }
-            }
-        }
-
-        if (!foundSync)
-        {
-            LOG_WARN("HLS segment thread: não encontrado sync byte válido (0x47) no buffer, descartando " +
-                     std::to_string(m_hlsBuffer.size()) + " bytes");
-            m_hlsBuffer.clear();
-            continue;
-        }
-
-        // Remover dados antes do primeiro sync byte válido
-        if (syncBytePos > 0)
-        {
-            LOG_WARN("HLS segment thread: removendo " + std::to_string(syncBytePos) +
-                     " bytes inválidos antes do sync byte");
-            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + syncBytePos);
-        }
-
-        // Alinhar o tamanho do buffer para múltiplos de 188 bytes (tamanho de um pacote TS)
-        size_t alignedSize = (m_hlsBuffer.size() / 188) * 188;
-        if (alignedSize < 188)
-        {
-            LOG_WARN("HLS segment thread: buffer muito pequeno após alinhamento, aguardando mais dados...");
+                     " bytes, mínimo: 376), aguardando mais dados...");
+            // Não limpar o buffer, apenas aguardar mais dados no próximo ciclo
             continue;
         }
 
@@ -1070,75 +957,44 @@ void HTTPTSStreamer::hlsSegmentThread()
         HLSSegment segment;
 
         // IMPORTANTE: Para HLS, cada segmento deve ser independente e decodificável
-        // Garantir que cada segmento comece com dados válidos e tenha PAT/PMT periodicamente
-
-        // Verificar se o buffer alinhado começa com sync byte válido ANTES de criar o segmento
-        if (m_hlsBuffer.empty() || m_hlsBuffer[0] != 0x47)
+        // CRÍTICO: O primeiro segmento DEVE ter o header PAT/PMT completo para que o HLS.js
+        // identifique os codecs corretamente. Sem isso, gera bufferAddCodecError fatal.
         {
-            LOG_ERROR("HLS segment thread: buffer não começa com sync byte válido após alinhamento! Descarte.");
-            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-            continue;
-        }
-
-        if (!m_formatHeader.empty() && m_hlsSegments.empty())
-        {
-            // Primeiro segmento: garantir que comece com header PAT/PMT
-            // Mas só adicionar se o header não estiver vazio e for válido
-            if (m_formatHeader.size() > 0 && m_formatHeader[0] == 0x47)
+            std::lock_guard<std::mutex> headerLock(m_headerMutex);
+            if (m_hlsSegments.empty())
             {
-                segment.data = m_formatHeader;
-                // Adicionar apenas dados alinhados
-                segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-                LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex) +
-                         " (header: " + std::to_string(m_formatHeader.size()) +
-                         " bytes, data: " + std::to_string(alignedSize) + " bytes)");
+                // Primeiro segmento: aguardar header estar completo antes de criar
+                // O header precisa ter pelo menos alguns pacotes PAT/PMT para ser válido
+                if (m_headerWritten && !m_formatHeader.empty() && m_formatHeader.size() >= 376)
+                {
+                    // Header completo disponível: adicionar no início do primeiro segmento
+                    segment.data = m_formatHeader;
+                    segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.end());
+                    LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex) +
+                             " (header: " + std::to_string(m_formatHeader.size()) +
+                             " bytes, buffer: " + std::to_string(m_hlsBuffer.size()) + " bytes)");
+                }
+                else
+                {
+                    // Header não está completo ainda - aguardar mais um ciclo
+                    static int logCount = 0;
+                    if (logCount < 3)
+                    {
+                        std::string logMsg = std::string("HLS segment thread: aguardando header completo antes de criar primeiro segmento ") +
+                                             std::string("(header size: ") + std::to_string(m_formatHeader.size()) +
+                                             std::string(", written: ") + std::to_string(m_headerWritten ? 1 : 0) + ")";
+                        LOG_WARN(logMsg);
+                        logCount++;
+                    }
+                    continue; // Não criar segmento ainda
+                }
             }
             else
             {
-                // Se o header não for válido, usar apenas os dados do buffer
-                LOG_WARN("Format header inválido, usando apenas dados do buffer para primeiro segmento");
-                segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
+                // Segmentos subsequentes: usar o buffer diretamente
+                // O MPEG-TS já contém PAT/PMT periodicamente, então não precisamos adicionar manualmente
+                segment.data = m_hlsBuffer;
             }
-        }
-        else
-        {
-            // Segmentos subsequentes: usar apenas dados alinhados
-            // O MPEG-TS já contém PAT/PMT periodicamente, mas garantimos alinhamento
-            segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-        }
-
-        // Validação final: garantir que o segmento começa com sync byte válido
-        if (segment.data.empty() || segment.data[0] != 0x47)
-        {
-            LOG_ERROR("HLS segment thread: segmento criado não começa com sync byte válido! Descarte.");
-            m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-            continue;
-        }
-
-        // Validar que o segmento tem tamanho mínimo e é múltiplo de 188 bytes
-        if (segment.data.size() < 188 || (segment.data.size() % 188 != 0))
-        {
-            LOG_WARN("HLS segment thread: segmento não é múltiplo de 188 bytes (tamanho: " +
-                     std::to_string(segment.data.size()) + "), ajustando...");
-            // Ajustar para múltiplo de 188 bytes
-            size_t adjustedSize = (segment.data.size() / 188) * 188;
-            if (adjustedSize < 188)
-            {
-                LOG_ERROR("Segmento muito pequeno após ajuste, descartando");
-                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-                continue;
-            }
-            segment.data.resize(adjustedSize);
-        }
-
-        // Remover dados usados do buffer (manter apenas o que não foi alinhado)
-        m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + alignedSize);
-
-        // Validar tamanho mínimo do segmento antes de criar
-        if (segment.data.size() < 188)
-        {
-            LOG_WARN("HLS segment thread: segmento muito pequeno após processamento, descartando");
-            continue;
         }
 
         segment.index = m_hlsSegmentIndex++;
@@ -1159,8 +1015,8 @@ void HTTPTSStreamer::hlsSegmentThread()
             LOG_INFO("Removed " + std::to_string(removedCount) + " old HLS segment(s), keeping " + std::to_string(m_hlsSegments.size()));
         }
 
-        // O buffer já foi parcialmente limpo acima (dados alinhados foram removidos)
-        // Manter apenas os dados não alinhados para o próximo segmento
+        // Limpar buffer para próximo segmento
+        m_hlsBuffer.clear();
 
         LOG_INFO("HLS segment " + std::to_string(segment.index) + " created (" +
                  std::to_string(segment.data.size()) + " bytes, total segments: " + std::to_string(m_hlsSegments.size()) + ")");
@@ -1290,19 +1146,14 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         return buf_size; // Retornar sucesso para não bloquear FFmpeg
     }
 
-    // Armazenar header do formato se ainda não foi armazenado
+    // Header do formato é capturado automaticamente pelo MediaMuxer
+    // Apenas sincronizar se necessário
     {
         std::lock_guard<std::mutex> headerLock(m_headerMutex);
-        if (!m_headerWritten && buf_size > 0)
+        if (!m_headerWritten && m_mediaMuxer.isHeaderWritten())
         {
-            // Primeiros bytes são geralmente o header do formato
-            // Para MPEG-TS, o header geralmente tem alguns KB
-            if (buf_size < 64 * 1024) // Se for menor que 64KB, provavelmente é o header
-            {
-                m_formatHeader.assign(buf, buf + buf_size);
-                m_headerWritten = true;
-                LOG_INFO("MPEG-TS format header captured (" + std::to_string(buf_size) + " bytes)");
-            }
+            m_formatHeader = m_mediaMuxer.getFormatHeader();
+            m_headerWritten = true;
         }
     }
 
@@ -1328,24 +1179,19 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
         // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
 
-        // Enviar dados para todos os clientes conectados
-        // Remover clientes que falharam ao enviar
-        size_t minSent = static_cast<size_t>(buf_size); // Rastrear mínimo enviado a todos os clientes
+        // CRÍTICO: Enviar TODOS os dados para cada cliente
+        // Não limitar o tamanho do chunk - isso pode causar corrupção se apenas parte dos dados for enviada
+        // O sendData deve lidar com buffers grandes internamente
         auto it = m_clientSockets.begin();
         while (it != m_clientSockets.end())
         {
             int clientFd = *it;
-            size_t totalSent = 0;
 
-            // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
-            size_t toSend = static_cast<size_t>(buf_size);
-            // Limitar tamanho do chunk para evitar problemas
-            if (toSend > 65536)
-            {
-                toSend = 65536;
-            }
-
-            ssize_t sent = m_httpServer.sendData(clientFd, buf, toSend);
+            // CRÍTICO: Enviar TODOS os dados de uma vez
+            // Não limitar o tamanho - isso pode causar corrupção se apenas parte dos dados for enviada
+            // Se o sendData não conseguir enviar tudo, ele retornará o número de bytes enviados
+            // Mas não devemos limitar artificialmente o tamanho
+            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
             if (sent < 0)
             {
                 // Erro ao enviar - remover cliente
@@ -1360,16 +1206,22 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
+            else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
+            {
+                // CRÍTICO: Se não enviou tudo, tentar enviar o restante
+                // Mas isso pode bloquear o callback, então vamos apenas remover o cliente
+                // O buffer AVIO de 1MB deve lidar com pequenos atrasos
+                // Se o cliente não consegue receber os dados rápido o suficiente, é melhor removê-lo
+                LOG_WARN("writeToClients: Client " + std::to_string(clientFd) + " only received " +
+                         std::to_string(sent) + " of " + std::to_string(buf_size) + " bytes. Removing client.");
+                m_httpServer.closeClient(clientFd);
+                it = m_clientSockets.erase(it);
+                m_clientCount = m_clientSockets.size();
+            }
             else
             {
-                totalSent = static_cast<size_t>(sent);
+                // Enviou tudo com sucesso
                 ++it;
-            }
-
-            // Atualizar mínimo enviado (se este cliente recebeu menos, usar esse valor)
-            if (totalSent < minSent)
-            {
-                minSent = totalSent;
             }
         }
 
@@ -1381,26 +1233,101 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     }
 }
 
-bool HTTPTSStreamer::initializeFFmpeg()
+bool HTTPTSStreamer::initializeEncoding()
 {
-    // Initialize the FFmpeg codecs
-    if (!initializeVideoCodec())
+    // Configurar StreamSynchronizer
+    m_streamSynchronizer.setMaxBufferTime(30 * 1000000LL); // 30 segundos
+    m_streamSynchronizer.setSyncTolerance(50 * 1000LL);    // 50ms
+
+    // Configurar MediaEncoder
+    MediaEncoder::VideoConfig videoConfig;
+    videoConfig.width = m_width;
+    videoConfig.height = m_height;
+    videoConfig.fps = m_fps;
+    videoConfig.bitrate = m_videoBitrate;
+    videoConfig.codec = m_videoCodecName;
+    videoConfig.preset = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? m_h264Preset : m_h265Preset;
+    videoConfig.profile = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? "baseline" : "";
+    videoConfig.h265Profile = m_h265Profile;
+    videoConfig.h265Level = m_h265Level;
+    videoConfig.vp8Speed = m_vp8Speed;
+    videoConfig.vp9Speed = m_vp9Speed;
+
+    MediaEncoder::AudioConfig audioConfig;
+    audioConfig.sampleRate = m_audioSampleRate;
+    audioConfig.channels = m_audioChannelsCount;
+    audioConfig.bitrate = m_audioBitrate;
+    audioConfig.codec = m_audioCodecName;
+
+    if (!m_mediaEncoder.initialize(videoConfig, audioConfig))
     {
-        LOG_ERROR("Failed to initialize video codec");
+        LOG_ERROR("Failed to initialize MediaEncoder");
         return false;
     }
-    if (!initializeAudioCodec())
+
+    // Configurar MediaMuxer com callback de escrita
+    auto writeCallback = [this](const uint8_t *data, size_t size) -> int
     {
-        LOG_ERROR("Failed to initialize audio codec");
+        return this->writeToClients(data, size);
+    };
+
+    if (!m_mediaMuxer.initialize(videoConfig, audioConfig,
+                                 m_mediaEncoder.getVideoCodecContext(),
+                                 m_mediaEncoder.getAudioCodecContext(),
+                                 writeCallback))
+    {
+        LOG_ERROR("Failed to initialize MediaMuxer");
+        m_mediaEncoder.cleanup();
         return false;
     }
-    // Initialize the FFmpeg muxers
-    if (!initializeMuxers())
-    {
-        LOG_ERROR("Failed to initialize muxers");
-        return false;
-    }
+
+    // Capturar header do formato após primeira escrita
+    // O header será capturado automaticamente pelo MediaMuxer quando o primeiro pacote for muxado
+
+    LOG_INFO("Encoding initialized successfully");
     return true;
+}
+
+void HTTPTSStreamer::cleanupEncoding()
+{
+    // Flush encoder para processar frames pendentes
+    if (m_mediaEncoder.isInitialized())
+    {
+        std::vector<MediaEncoder::EncodedPacket> packets;
+        m_mediaEncoder.flush(packets);
+
+        // Muxar pacotes pendentes
+        for (const auto &packet : packets)
+        {
+            m_mediaMuxer.muxPacket(packet);
+        }
+    }
+
+    // Flush muxer
+    if (m_mediaMuxer.isInitialized())
+    {
+        m_mediaMuxer.flush();
+    }
+
+    // Limpar recursos
+    m_mediaMuxer.cleanup();
+    m_mediaEncoder.cleanup();
+    m_streamSynchronizer.clear();
+
+    // Capturar header do formato se disponível
+    {
+        std::lock_guard<std::mutex> lock(m_headerMutex);
+        if (m_mediaMuxer.isHeaderWritten())
+        {
+            m_formatHeader = m_mediaMuxer.getFormatHeader();
+            m_headerWritten = true;
+        }
+        else
+        {
+            m_formatHeader.clear();
+            m_headerWritten = false;
+        }
+    }
 }
 
 bool HTTPTSStreamer::initializeVideoCodec()
@@ -1479,6 +1406,7 @@ bool HTTPTSStreamer::initializeVideoCodec()
             return false;
         }
     }
+
     AVCodecContext *codecCtx = avcodec_alloc_context3(codec);
     if (!codecCtx)
     {
@@ -2851,148 +2779,8 @@ int64_t HTTPTSStreamer::getTimestampUs() const
 
 void HTTPTSStreamer::cleanupOldData()
 {
-    // Limpar dados antigos baseado em tempo (não em quantidade)
-    // Remover apenas dados que estão fora da janela temporal máxima
-    // OTIMIZAÇÃO: Se detectamos dessincronização, ser mais agressivo em descartar frames antigos
-    // para permitir recuperação mais rápida pulando para o tempo atual
-
-    // Calcular timestamp mais antigo permitido (janela temporal)
-    // Reduzir janela se há dessincronização para permitir recuperação mais rápida
-    int64_t bufferTimeUs = MAX_BUFFER_TIME_US;
-    if (m_desyncFrameCount > 0)
-    {
-        // Reduzir janela pela metade quando há dessincronização
-        bufferTimeUs = MAX_BUFFER_TIME_US / 2;
-    }
-
-    int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - bufferTimeUs;
-    int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - bufferTimeUs;
-
-    // CRÍTICO: NÃO descartar frames não processados normalmente - isso causa perda de frames!
-    // Remover apenas frames processados que estão fora da janela temporal
-    // EXCEÇÃO: Se há dessincronização, descartar frames não processados muito antigos
-    // para permitir recuperação mais rápida pulando para o tempo atual
-    while (!m_timestampedVideoBuffer.empty())
-    {
-        const auto &frame = m_timestampedVideoBuffer.front();
-
-        // Se está dentro da janela temporal, manter (mesmo que processado)
-        if (frame.captureTimestampUs >= oldestAllowedVideoUs)
-        {
-            break;
-        }
-
-        // Se há dessincronização, descartar frames não processados muito antigos
-        // para permitir recuperação mais rápida pulando para o tempo atual
-        if (m_desyncFrameCount > 0 && !frame.processed)
-        {
-            LOG_WARN("Descartando frame não processado antigo devido a dessincronização (timestamp: " +
-                     std::to_string(frame.captureTimestampUs) + " us, atual: " +
-                     std::to_string(m_latestVideoTimestampUs) + " us)");
-            m_timestampedVideoBuffer.pop_front();
-            continue;
-        }
-
-        // CRÍTICO: NÃO descartar frames não processados normalmente - eles ainda precisam ser encodados!
-        // Apenas descartar frames que já foram processados E estão muito antigos
-        if (frame.processed)
-        {
-            // Frame processado e antigo - seguro descartar
-            m_timestampedVideoBuffer.pop_front();
-        }
-        else
-        {
-            // Frame não processado - MANTER mesmo que antigo!
-            // Isso pode acontecer se o encoding está lento, mas não devemos perder frames
-            // Continuar processando frames antigos até que sejam encodados
-            break;
-        }
-    }
-
-    // Mesma lógica para áudio
-    while (!m_timestampedAudioBuffer.empty())
-    {
-        const auto &audio = m_timestampedAudioBuffer.front();
-
-        if (audio.captureTimestampUs >= oldestAllowedAudioUs)
-        {
-            break;
-        }
-
-        m_timestampedAudioBuffer.pop_front();
-    }
-}
-
-HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
-{
-    std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-    std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-
-    if (m_timestampedVideoBuffer.empty() || m_timestampedAudioBuffer.empty())
-    {
-        return SyncZone::invalid();
-    }
-
-    // Encontrar sobreposição temporal entre buffers
-    int64_t videoStartUs = m_timestampedVideoBuffer.front().captureTimestampUs;
-    int64_t videoEndUs = m_timestampedVideoBuffer.back().captureTimestampUs;
-
-    int64_t audioStartUs = m_timestampedAudioBuffer.front().captureTimestampUs;
-    int64_t audioEndUs = m_timestampedAudioBuffer.back().captureTimestampUs;
-
-    // Calcular sobreposição
-    int64_t overlapStartUs = std::max(videoStartUs, audioStartUs);
-    int64_t overlapEndUs = std::min(videoEndUs, audioEndUs);
-
-    // Verificar se há sobreposição (qualquer sobreposição é suficiente para começar a processar)
-    if (overlapEndUs <= overlapStartUs)
-    {
-        return SyncZone::invalid(); // Não há sobreposição temporal
-    }
-
-    // Zona sincronizada: processar desde o início da sobreposição até o final
-    // Para 60fps, precisamos processar imediatamente, não esperar por uma zona "segura"
-    int64_t zoneStartUs = overlapStartUs;
-    int64_t zoneEndUs = overlapEndUs;
-
-    // Encontrar índices correspondentes nos buffers
-    size_t videoStartIdx = 0;
-    size_t videoEndIdx = 0;
-    for (size_t i = 0; i < m_timestampedVideoBuffer.size(); i++)
-    {
-        if (m_timestampedVideoBuffer[i].captureTimestampUs >= zoneStartUs && videoStartIdx == 0)
-        {
-            videoStartIdx = i;
-        }
-        if (m_timestampedVideoBuffer[i].captureTimestampUs <= zoneEndUs)
-        {
-            videoEndIdx = i + 1;
-        }
-    }
-
-    size_t audioStartIdx = 0;
-    size_t audioEndIdx = 0;
-    for (size_t i = 0; i < m_timestampedAudioBuffer.size(); i++)
-    {
-        if (m_timestampedAudioBuffer[i].captureTimestampUs >= zoneStartUs && audioStartIdx == 0)
-        {
-            audioStartIdx = i;
-        }
-        if (m_timestampedAudioBuffer[i].captureTimestampUs <= zoneEndUs)
-        {
-            audioEndIdx = i + 1;
-        }
-    }
-
-    SyncZone zone;
-    zone.startTimeUs = zoneStartUs;
-    zone.endTimeUs = zoneEndUs;
-    zone.videoStartIdx = videoStartIdx;
-    zone.videoEndIdx = videoEndIdx;
-    zone.audioStartIdx = audioStartIdx;
-    zone.audioEndIdx = audioEndIdx;
-
-    return zone;
+    // StreamSynchronizer já faz cleanup internamente
+    m_streamSynchronizer.cleanupOldData();
 }
 
 void HTTPTSStreamer::serverThread()
@@ -3046,253 +2834,98 @@ void HTTPTSStreamer::encodingThread()
 
         bool processedAny = false;
 
-        // Processar frames de vídeo disponíveis (sem esperar por sincronização)
-        // OTIMIZAÇÃO CRÍTICA: Copiar dados para fora do lock e fazer encoding sem lock
-        // Isso evita bloquear outras threads durante o encoding (que pode ser lento)
-        std::vector<std::tuple<std::shared_ptr<std::vector<uint8_t>>, uint32_t, uint32_t, int64_t, size_t>> framesToProcess;
-        size_t totalFrames = 0;
+        // Limpar dados antigos do StreamSynchronizer
+        m_streamSynchronizer.cleanupOldData();
 
+        // Calcular zona de sincronização
+        StreamSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
+
+        if (syncZone.isValid())
         {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            totalFrames = m_timestampedVideoBuffer.size();
+            // Obter frames de vídeo da zona sincronizada
+            auto videoFrames = m_streamSynchronizer.getVideoFrames(syncZone);
 
-            // CRÍTICO: Se há dessincronização ou muitos frames acumulados, pular frames antigos
-            // para permitir recuperação mais rápida
-            const size_t MAX_BUFFER_FRAMES = static_cast<size_t>(m_fps * 2); // Máximo 2 segundos de frames
-            bool shouldSkipOldFrames = false;
-
-            // Verificar se há dessincronização ou buffer muito grande
+            // Processar frames de vídeo
+            for (const auto &frame : videoFrames)
             {
-                std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
-                if (m_desyncFrameCount > 0 || totalFrames > MAX_BUFFER_FRAMES)
-                {
-                    shouldSkipOldFrames = true;
-                }
-            }
-
-            if (shouldSkipOldFrames && totalFrames > 10)
-            {
-                // Pular frames antigos não processados - manter apenas os mais recentes
-                // Calcular quantos frames manter (últimos 0.5 segundos para recuperação mais rápida)
-                size_t framesToKeep = static_cast<size_t>(m_fps / 2); // Apenas 0.5 segundo
-                if (totalFrames > framesToKeep)
-                {
-                    size_t framesToSkip = totalFrames - framesToKeep;
-                    int64_t currentTimeUs = getTimestampUs();
-
-                    LOG_WARN("Pulando " + std::to_string(framesToSkip) + " frames antigos devido a " +
-                             (m_desyncFrameCount > 0 ? "dessincronização" : "buffer grande") +
-                             " (total: " + std::to_string(totalFrames) + " frames, mantendo últimos " +
-                             std::to_string(framesToKeep) + " frames)");
-
-                    // Remover frames antigos não processados
-                    size_t skipped = 0;
-                    while (!m_timestampedVideoBuffer.empty() && skipped < framesToSkip)
-                    {
-                        auto &frame = m_timestampedVideoBuffer.front();
-                        // Pular apenas frames não processados que estão muito atrás no tempo
-                        // Ser mais agressivo: pular se está mais de 0.5 segundos atrás
-                        if (!frame.processed &&
-                            (currentTimeUs - frame.captureTimestampUs) > 500000) // Mais de 0.5 segundo atrás
-                        {
-                            m_timestampedVideoBuffer.pop_front();
-                            skipped++;
-                        }
-                        else
-                        {
-                            // Se chegamos em frames processados ou recentes, parar
-                            break;
-                        }
-                    }
-
-                    if (skipped > 0)
-                    {
-                        LOG_INFO("Pulados " + std::to_string(skipped) + " frames antigos, buffer agora tem " +
-                                 std::to_string(m_timestampedVideoBuffer.size()) + " frames");
-                        // Resetar contador de dessincronização após pular frames
-                        {
-                            std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
-                            m_desyncFrameCount = 0;
-                        }
-                    }
-
-                    // Atualizar totalFrames após pular
-                    totalFrames = m_timestampedVideoBuffer.size();
-                }
-            }
-
-            // CRÍTICO: Processar TODOS os frames disponíveis, não limitar!
-            // Limitar frames causa acúmulo e perda de frames
-            // Para 60 FPS, precisamos processar todos os frames o mais rápido possível
-            const size_t MAX_FRAMES_PER_ITERATION = totalFrames; // Processar TODOS os frames disponíveis
-
-            // Copiar dados dos frames não processados para fora do lock
-            size_t framesCopied = 0;
-            for (size_t i = 0; i < m_timestampedVideoBuffer.size() && framesCopied < MAX_FRAMES_PER_ITERATION; i++)
-            {
-                auto &frame = m_timestampedVideoBuffer[i];
-                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
-                {
-                    // Copiar referência aos dados (shared_ptr já gerencia memória)
-                    framesToProcess.push_back({frame.data, frame.width, frame.height, frame.captureTimestampUs, i});
-                    framesCopied++;
-                }
-            }
-        }
-
-        // Processar frames FORA do lock (encoding pode ser lento)
-        // OTIMIZAÇÃO: Batch dinâmico baseado no tamanho da fila para melhor throughput
-        // Se há muitos frames acumulados, processar mais agressivamente
-        std::vector<size_t> processedIndices;
-        size_t MAX_FRAMES_PER_BATCH;
-        if (totalFrames > 50)
-        {
-            MAX_FRAMES_PER_BATCH = 20; // Muitos frames acumulados - processar mais agressivamente
-        }
-        else if (totalFrames > 20)
-        {
-            MAX_FRAMES_PER_BATCH = 15; // Fila média - processar moderadamente
-        }
-        else
-        {
-            MAX_FRAMES_PER_BATCH = 10; // Fila pequena - processar normalmente
-        }
-        size_t framesProcessed = 0;
-
-        for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
-        {
-            // Verificar se parada foi solicitada
-            if (m_stopRequest)
-            {
-                break;
-            }
-
-            // Limitar frames por batch para evitar que o codec fique cheio
-            if (framesProcessed >= MAX_FRAMES_PER_BATCH)
-            {
-                break; // Processar o resto na próxima iteração
-            }
-
-            // Tentar encodar o frame (sem lock)
-            bool encodeSuccess = encodeVideoFrame(data->data(), width, height, timestamp);
-
-            // Guardar índice se sucesso (marcar depois em batch)
-            if (encodeSuccess)
-            {
-                processedIndices.push_back(bufferIndex);
-                processedAny = true;
-                framesProcessed++;
-            }
-            else
-            {
-                // Se falhou (provavelmente EAGAIN - codec cheio), parar e tentar novamente na próxima iteração
-                // Isso evita que muitos frames falhem de uma vez
-                break;
-            }
-        }
-
-        // Marcar todos os frames processados de uma vez (lock único)
-        if (!processedIndices.empty())
-        {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            for (size_t idx : processedIndices)
-            {
-                if (idx < m_timestampedVideoBuffer.size())
-                {
-                    auto &frame = m_timestampedVideoBuffer[idx];
-                    if (!frame.processed)
-                    {
-                        frame.processed = true;
-                    }
-                }
-            }
-        }
-
-        // OTIMIZAÇÃO: Remover frames processados em batch (mais eficiente que pop_front individual)
-        // IMPORTANTE: Só remover se houver muitos frames processados para evitar remover frames importantes
-        {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            // Contar quantos frames processados existem no início
-            size_t processedCount = 0;
-            while (processedCount < m_timestampedVideoBuffer.size() &&
-                   m_timestampedVideoBuffer[processedCount].processed)
-            {
-                processedCount++;
-            }
-            // Remover todos de uma vez, mas apenas se houver pelo menos 5 frames processados
-            // Isso evita remover frames muito cedo que podem ser necessários para sincronização
-            if (processedCount >= 5)
-            {
-                m_timestampedVideoBuffer.erase(m_timestampedVideoBuffer.begin(),
-                                               m_timestampedVideoBuffer.begin() + processedCount);
-            }
-        }
-
-        // Processar chunks de áudio disponíveis (sem esperar por sincronização)
-        // IMPORTANTE: Só marcar como processado se o encoding foi bem-sucedido
-        {
-            std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-
-            // Processar chunks não processados
-            for (auto &audio : m_timestampedAudioBuffer)
-            {
-                // Verificar se parada foi solicitada
                 if (m_stopRequest)
                 {
                     break;
                 }
 
-                if (!audio.processed && audio.samples && audio.sampleCount > 0)
+                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
                 {
-                    // Tentar encodar o chunk
-                    bool encodeSuccess = encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
-
-                    // SÓ marcar como processado se o encoding foi bem-sucedido
-                    if (encodeSuccess)
+                    // Encodar frame usando MediaEncoder
+                    std::vector<MediaEncoder::EncodedPacket> packets;
+                    if (m_mediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                                   frame.captureTimestampUs, packets))
                     {
-                        audio.processed = true; // Marcar como processado apenas se sucesso
+                        // Muxar pacotes usando MediaMuxer
+                        for (const auto &packet : packets)
+                        {
+                            m_mediaMuxer.muxPacket(packet);
+                        }
                         processedAny = true;
-                    }
-                    else
-                    {
-                        // Encoding falhou - NÃO marcar como processado, manter no buffer
-                        // Áudio geralmente não falha, mas manter consistência
                     }
                 }
             }
 
-            // Remover chunks processados do início
-            while (!m_timestampedAudioBuffer.empty() && m_timestampedAudioBuffer.front().processed)
+            // Obter chunks de áudio da zona sincronizada
+            auto audioChunks = m_streamSynchronizer.getAudioChunks(syncZone);
+
+            // Processar chunks de áudio
+            for (const auto &chunk : audioChunks)
             {
-                m_timestampedAudioBuffer.pop_front();
+                if (m_stopRequest)
+                {
+                    break;
+                }
+
+                if (!chunk.processed && chunk.samples && chunk.sampleCount > 0)
+                {
+                    // Encodar áudio usando MediaEncoder
+                    std::vector<MediaEncoder::EncodedPacket> packets;
+                    if (m_mediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
+                                                   chunk.captureTimestampUs, packets))
+                    {
+                        // Muxar pacotes usando MediaMuxer
+                        for (const auto &packet : packets)
+                        {
+                            m_mediaMuxer.muxPacket(packet);
+                        }
+                        processedAny = true;
+                    }
+                }
+            }
+
+            // Marcar dados como processados
+            m_streamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+            m_streamSynchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
+
+            // Capturar header do formato se disponível
+            {
+                std::lock_guard<std::mutex> lock(m_headerMutex);
+                if (!m_headerWritten && m_mediaMuxer.isHeaderWritten())
+                {
+                    m_formatHeader = m_mediaMuxer.getFormatHeader();
+                    m_headerWritten = true;
+                }
             }
         }
 
-        // Se processamos algo, continuar imediatamente (sem sleep) para máxima velocidade
         // Se não processamos nada, verificar se há dados pendentes antes de dormir
         if (!processedAny)
         {
-            // Verificar se há frames ou áudio pendentes antes de dormir
-            bool hasPendingData = false;
-            {
-                std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-                hasPendingData = !m_timestampedVideoBuffer.empty();
-            }
-            if (!hasPendingData)
-            {
-                std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-                hasPendingData = !m_timestampedAudioBuffer.empty();
-            }
+            bool hasPendingData = (m_streamSynchronizer.getVideoBufferSize() > 0 ||
+                                   m_streamSynchronizer.getAudioBufferSize() > 0);
 
             if (!hasPendingData)
             {
                 // Só dormir se realmente não há dados para processar
                 std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1µs - mínimo possível
             }
-            // Se há dados pendentes mas não processamos, continuar imediatamente (pode ser codec ocupado)
-            // Não fazer sleep - tentar processar novamente imediatamente
+            // Se processamos, não dormir - continuar imediatamente para processar mais frames
         }
-        // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }
 
     LOG_INFO("Encoding thread stopped");

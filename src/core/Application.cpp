@@ -22,6 +22,8 @@
 #include <time.h>
 #include <sstream>
 #include <iomanip>
+#include <thread>
+#include <chrono>
 
 // swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
 
@@ -870,39 +872,70 @@ bool Application::initUI()
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
+        // CRÍTICO: Este callback é executado na thread principal (ImGui render thread)
+        // NÃO fazer NENHUMA operação bloqueante aqui - apenas marcar flag e criar thread
+        // NÃO acessar m_streamManager ou outros recursos compartilhados aqui
+        
+        LOG_INFO("[CALLBACK] Streaming " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        
         if (start) {
-            // Iniciar streaming
+            // Apenas marcar flag - thread separada fará todo o trabalho
             m_streamingEnabled = true;
-            if (!initStreaming()) {
-                LOG_ERROR("Falha ao iniciar streaming");
-                m_streamingEnabled = false;
-            } else {
-                // Initialize audio capture (sempre necessário para streaming)
-                if (!m_audioCapture) {
-                    if (!initAudioCapture()) {
-                        LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+            
+            // Criar thread separada imediatamente - não esperar nada
+            std::thread([this]() {
+                // Todas as operações bloqueantes devem estar aqui, na thread separada
+                bool success = false;
+                try {
+                    if (initStreaming()) {
+                        // Initialize audio capture (sempre necessário para streaming)
+                        if (!m_audioCapture) {
+                            if (!initAudioCapture()) {
+                                LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+                            }
+                        }
+                        success = true;
+                    } else {
+                        LOG_ERROR("Falha ao iniciar streaming");
+                        m_streamingEnabled = false;
                     }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao iniciar streaming: " + std::string(e.what()));
+                    m_streamingEnabled = false;
                 }
-            }
+                
+                // Atualizar UI após inicialização (pode ser chamado de qualquer thread)
+                // IMPORTANTE: Verificar se m_streamManager existe antes de chamar isActive()
+                if (m_ui) {
+                    bool active = success && m_streamManager && m_streamManager->isActive();
+                    m_ui->setStreamingActive(active);
+                }
+            }).detach();
         } else {
-            // Parar streaming
+            // Parar streaming também em thread separada para não bloquear a UI
             m_streamingEnabled = false;
             
-            // OPÇÃO A: Parar streaming (sem thread intermediária)
-            // Fazer stop() do streamManager em thread separada para não bloquear a UI
-            if (m_streamManager) {
-                // Ordem correta: stop() primeiro, depois cleanup()
-                m_streamManager->stop();
-                m_streamManager->cleanup();
-                m_streamManager.reset();
-            }
-
-            // Não fechar o AudioCapture aqui - pode ser usado novamente
+            // Criar thread separada imediatamente - não esperar nada
+            std::thread([this]() {
+                try {
+                    if (m_streamManager) {
+                        // Ordem correta: stop() primeiro, depois cleanup()
+                        m_streamManager->stop();
+                        m_streamManager->cleanup();
+                        m_streamManager.reset();
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao parar streaming: " + std::string(e.what()));
+                }
+                
+                // Atualizar UI após parar
+                if (m_ui) {
+                    m_ui->setStreamingActive(false);
+                }
+            }).detach();
         }
-        // Atualizar UI
-        if (m_ui) {
-            m_ui->setStreamingActive(m_streamingEnabled && m_streamManager && m_streamManager->isActive());
-        } });
+        
+        LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
 
     m_ui->setOnStreamingPortChanged([this](uint16_t port)
                                     {
@@ -1467,12 +1500,14 @@ bool Application::initStreaming()
         return true; // Streaming não habilitado, não é erro
     }
 
-    LOG_INFO("Inicializando streaming...");
+    // Log removido para reduzir ruído - streaming já loga internamente
 
     // OPÇÃO A: Não há mais thread de streaming para limpar
 
     // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
     // Isso previne problemas de double free quando há mudanças de configuração
+    // CRÍTICO: Estas operações já estão em uma thread separada, mas ainda podem bloquear
+    // Reduzir ao mínimo necessário e evitar esperas longas
     if (m_streamManager)
     {
         LOG_INFO("Limpando StreamManager existente antes de reinicializar...");
@@ -1486,7 +1521,8 @@ bool Application::initStreaming()
 
         // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
         // e recursos foram liberados antes de criar um novo StreamManager
-        usleep(100000); // 100ms
+        // Reduzir tempo de espera ao mínimo - threads detached devem terminar rapidamente
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Reduzido para 10ms
     }
 
     m_streamManager = std::make_unique<StreamManager>();
@@ -1731,11 +1767,12 @@ void Application::run()
         // mesmo quando a janela não está em foco.
 
         // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
-        // CRÍTICO: Processar TODOS os samples disponíveis em loop até esgotar
+        // Processar TODOS os samples disponíveis em loop até esgotar
         // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
         // O áudio acumula no buffer do AudioCapture e precisa ser processado continuamente
         if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
         {
+
             // Calcular tamanho do buffer baseado no tempo para sincronização
             uint32_t audioSampleRate = m_audioCapture->getSampleRate();
             uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
@@ -1747,12 +1784,16 @@ void Application::run()
                                               : 512;
             samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
 
-            // CRÍTICO: Processar áudio em loop até esgotar todos os samples disponíveis
+            // Processar áudio em loop até esgotar todos os samples disponíveis
             // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
-            // Processar até não haver mais samples (sem limite de iterações)
+            // IMPORTANTE: Adicionar limite de iterações para evitar loop infinito que travaria a thread principal
             std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
 
-            while (true)
+            // Limite de iterações para evitar loop infinito (processar no máximo 10 frames de áudio por ciclo)
+            const int maxIterations = 10;
+            int iteration = 0;
+
+            while (iteration < maxIterations)
             {
                 // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
                 size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
@@ -1771,6 +1812,19 @@ void Application::run()
                 {
                     // Não há mais samples disponíveis, parar
                     break;
+                }
+
+                iteration++;
+            }
+
+            // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
+            if (iteration >= maxIterations)
+            {
+                static int logCount = 0;
+                if (logCount < 3)
+                {
+                    LOG_WARN("Áudio acumulado: processando em chunks para evitar bloqueio da thread principal");
+                    logCount++;
                 }
             }
         }
@@ -2028,21 +2082,22 @@ void Application::run()
             }
 
             // Atualizar informações de streaming na UI
-            if (m_ui && m_streamManager && m_streamManager->isActive())
+            // IMPORTANTE: Fazer cópia local do ponteiro para evitar race condition
+            auto streamManager = m_streamManager.get(); // Cópia local do ponteiro raw
+            if (m_ui && streamManager && streamManager->isActive())
             {
                 m_ui->setStreamingActive(true);
-                auto urls = m_streamManager->getStreamUrls();
+                auto urls = streamManager->getStreamUrls();
                 if (!urls.empty())
                 {
                     m_ui->setStreamUrl(urls[0]);
                 }
-                uint32_t clientCount = m_streamManager->getTotalClientCount();
+                uint32_t clientCount = streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
 
                 // Atualizar informações do certificado SSL se HTTPS estiver ativo
-                // Obter caminhos encontrados do StreamManager
-                std::string foundCert = m_streamManager->getFoundSSLCertificatePath();
-                std::string foundKey = m_streamManager->getFoundSSLKeyPath();
+                std::string foundCert = streamManager->getFoundSSLCertificatePath();
+                std::string foundKey = streamManager->getFoundSSLKeyPath();
 
                 if (m_webPortalHTTPSEnabled && !foundCert.empty())
                 {

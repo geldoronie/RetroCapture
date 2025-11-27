@@ -3,6 +3,9 @@
 #include "IStreamer.h"
 #include "WebPortal.h"
 #include "HTTPServer.h"
+#include "../encoding/MediaEncoder.h"
+#include "../encoding/MediaMuxer.h"
+#include "../encoding/StreamSynchronizer.h"
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -105,23 +108,23 @@ public:
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
 
-    // Estruturas para dados com timestamp de captura (declaradas antes de private para uso nas funções)
+private:
+    // Estruturas para buffers temporais ordenados por timestamp
     struct TimestampedFrame
     {
         std::shared_ptr<std::vector<uint8_t>> data;
         uint32_t width;
         uint32_t height;
-        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
-        bool processed = false;     // Flag para marcar se já foi processado e enviado
+        int64_t captureTimestampUs;
+        bool processed = false;
     };
 
     struct TimestampedAudio
     {
         std::shared_ptr<std::vector<int16_t>> samples;
         size_t sampleCount;
-        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
-        int64_t durationUs;         // Duração deste chunk em microssegundos
-        bool processed = false;     // Flag para marcar se já foi processado e enviado
+        int64_t captureTimestampUs;
+        bool processed = false;
     };
 
     // Zona de sincronização
@@ -159,9 +162,10 @@ private:
     std::string generateM3U8Playlist(const std::string &basePrefix = "") const; // Gerar playlist M3U8 dinâmica
     void encodingThread();                                                      // Thread para encoding com sincronização baseada em timestamps
     void hlsSegmentThread();                                                    // Thread para segmentar stream em HLS
-    SyncZone calculateSyncZone();                                               // Calcular zona de sincronização entre vídeo e áudio
     void cleanupOldData();                                                      // Limpar dados antigos baseado em tempo
     int64_t getTimestampUs() const;                                             // Obter timestamp atual em microssegundos
+    bool initializeEncoding();                                                  // Inicializar MediaEncoder e MediaMuxer
+    void cleanupEncoding();                                                     // Limpar MediaEncoder e MediaMuxer
     bool initializeFFmpeg();
     bool initializeVideoCodec();
     bool initializeAudioCodec();
@@ -213,6 +217,11 @@ private:
     uint32_t m_swsSrcHeight = 0;
     uint32_t m_swsDstWidth = 0;
     uint32_t m_swsDstHeight = 0;
+
+    // Novas classes de encoding/muxing
+    MediaEncoder m_mediaEncoder;
+    MediaMuxer m_mediaMuxer;
+    StreamSynchronizer m_streamSynchronizer;
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
