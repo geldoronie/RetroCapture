@@ -68,6 +68,8 @@ public:
     void setSyncTolerance(int64_t toleranceUs) { m_syncToleranceUs = toleranceUs; }
     void setMaxBufferTime(int64_t maxTimeUs) { m_maxBufferTimeUs = maxTimeUs; }
     void setMinBufferTime(int64_t minTimeUs) { m_minBufferTimeUs = minTimeUs; }
+    void setMaxVideoBufferSize(size_t size) { m_maxVideoBufferSize = size; }
+    void setMaxAudioBufferSize(size_t size) { m_maxAudioBufferSize = size; }
 
     // Adicionar frame de vídeo
     bool addVideoFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs);
@@ -105,9 +107,11 @@ private:
     int64_t getTimestampUs() const;
 
     // Parâmetros de sincronização
-    int64_t m_syncToleranceUs = 50 * 1000LL;    // 50ms de tolerância
-    int64_t m_maxBufferTimeUs = 30 * 1000000LL; // 30 segundos máximo
-    int64_t m_minBufferTimeUs = 0;              // 0ms - processar imediatamente
+    int64_t m_syncToleranceUs = 50 * 1000LL;   // 50ms de tolerância
+    int64_t m_maxBufferTimeUs = 5 * 1000000LL; // 5 segundos máximo (padrão, configurável)
+    int64_t m_minBufferTimeUs = 0;             // 0ms - processar imediatamente
+    size_t m_maxVideoBufferSize = 10;          // Máximo de frames no buffer (padrão, configurável)
+    size_t m_maxAudioBufferSize = 20;          // Máximo de chunks no buffer (padrão, configurável)
 
     // Buffers temporais ordenados por timestamp
     mutable std::mutex m_videoBufferMutex;

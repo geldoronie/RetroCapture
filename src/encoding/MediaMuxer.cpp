@@ -41,7 +41,8 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
                             const MediaEncoder::AudioConfig &audioConfig,
                             void *videoCodecContext,
                             void *audioCodecContext,
-                            WriteCallback writeCallback)
+                            WriteCallback writeCallback,
+                            size_t avioBufferSize)
 {
     if (m_initialized)
     {
@@ -62,7 +63,10 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
     m_videoCodecContext = videoCodecContext;
     m_audioCodecContext = audioCodecContext;
 
-    if (!initializeStreams(videoCodecContext, audioCodecContext))
+    // Armazenar tamanho do buffer AVIO
+    m_avioBufferSize = (avioBufferSize > 0) ? avioBufferSize : (256 * 1024); // 256KB padrão se 0
+
+    if (!initializeStreams(videoCodecContext, audioCodecContext, m_avioBufferSize))
     {
         cleanup();
         return false;
@@ -72,7 +76,7 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
     return true;
 }
 
-bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecContext)
+bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecContext, size_t avioBufferSize)
 {
     AVCodecContext *videoCtx = static_cast<AVCodecContext *>(videoCodecContext);
     AVCodecContext *audioCtx = static_cast<AVCodecContext *>(audioCodecContext);
@@ -107,9 +111,10 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         return false;
     }
 
-    // Configurar callback de escrita
+    // Configurar callback de escrita com tamanho configurável
+    const size_t bufferSize = avioBufferSize; // Tamanho já validado em initialize()
     formatCtx->pb = avio_alloc_context(
-        static_cast<unsigned char *>(av_malloc(1024 * 1024)), 1024 * 1024,
+        static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
         1, this, nullptr, writeCallback, nullptr);
     if (!formatCtx->pb)
     {

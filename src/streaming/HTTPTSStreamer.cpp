@@ -85,6 +85,17 @@ void HTTPTSStreamer::setVideoCodec(const std::string &codecName)
     m_videoCodecName = codecName;
 }
 
+void HTTPTSStreamer::setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
+                                     int64_t maxBufferTimeSeconds, size_t maxHLSBufferSize,
+                                     size_t avioBufferSize)
+{
+    m_maxVideoBufferSize = maxVideoBufferSize;
+    m_maxAudioBufferSize = maxAudioBufferSize;
+    m_maxBufferTimeSeconds = maxBufferTimeSeconds;
+    m_maxHLSBufferSize = maxHLSBufferSize;
+    m_avioBufferSize = avioBufferSize;
+}
+
 void HTTPTSStreamer::setAudioCodec(const std::string &codecName)
 {
     m_audioCodecName = codecName;
@@ -1084,9 +1095,18 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         }
     }
 
-    // Acumular dados para HLS
+    // Acumular dados para HLS (com limite de tamanho para evitar vazamento de memória)
     {
         std::lock_guard<std::mutex> hlsLock(m_hlsMutex);
+        if (m_hlsBuffer.size() + buf_size > m_maxHLSBufferSize)
+        {
+            // Buffer muito grande - limpar dados antigos mantendo apenas os últimos 512KB
+            size_t keepSize = 512 * 1024;
+            if (m_hlsBuffer.size() > keepSize)
+            {
+                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);
+            }
+        }
         m_hlsBuffer.insert(m_hlsBuffer.end(), buf, buf + buf_size);
     }
 
@@ -1137,9 +1157,11 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 
 bool HTTPTSStreamer::initializeEncoding()
 {
-    // Configurar StreamSynchronizer
-    m_streamSynchronizer.setMaxBufferTime(30 * 1000000LL); // 30 segundos
-    m_streamSynchronizer.setSyncTolerance(50 * 1000LL);    // 50ms
+    // Configurar StreamSynchronizer com valores configuráveis
+    m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
+    m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
+    m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
+    m_streamSynchronizer.setSyncTolerance(50 * 1000LL); // 50ms
 
     // Configurar MediaEncoder
     MediaEncoder::VideoConfig videoConfig;
@@ -1176,7 +1198,8 @@ bool HTTPTSStreamer::initializeEncoding()
     if (!m_mediaMuxer.initialize(videoConfig, audioConfig,
                                  m_mediaEncoder.getVideoCodecContext(),
                                  m_mediaEncoder.getAudioCodecContext(),
-                                 writeCallback))
+                                 writeCallback,
+                                 m_avioBufferSize))
     {
         LOG_ERROR("Failed to initialize MediaMuxer");
         m_mediaEncoder.cleanup();
@@ -1673,12 +1696,9 @@ bool HTTPTSStreamer::initializeMuxers()
 
     m_audioStream = audioStream;
 
-    // Configurar callback de escrita
-    // Aumentar buffer para 1MB para reduzir chamadas ao callback e evitar corrupção
-    // Buffer maior = menos fragmentação = menos chance de corrupção
-    // Buffer grande também permite que writeCallback seja mais rápido (pode pular clientes lentos)
+    // Configurar callback de escrita com tamanho configurável
     formatCtx->pb = avio_alloc_context(
-        static_cast<unsigned char *>(av_malloc(1024 * 1024)), 1024 * 1024,
+        static_cast<unsigned char *>(av_malloc(m_avioBufferSize)), m_avioBufferSize,
         1, this, nullptr, writeCallback, nullptr);
     if (!formatCtx->pb)
     {

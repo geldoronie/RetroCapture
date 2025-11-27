@@ -52,6 +52,14 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
         {
             m_firstVideoTimestampUs = captureTimestampUs;
         }
+
+        // Limitar tamanho do buffer para evitar vazamento de memória
+        while (m_videoBuffer.size() >= m_maxVideoBufferSize)
+        {
+            // Remover frame mais antigo (mesmo que não processado)
+            m_videoBuffer.pop_front();
+        }
+
         m_videoBuffer.push_back(std::move(frame));
         m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
     }
@@ -89,14 +97,18 @@ bool StreamSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCoun
         {
             m_firstAudioTimestampUs = captureTimestampUs;
         }
+
+        // Limitar tamanho do buffer para evitar vazamento de memória
+        while (m_audioBuffer.size() >= m_maxAudioBufferSize)
+        {
+            // Remover chunk mais antigo (mesmo que não processado)
+            m_audioBuffer.pop_front();
+        }
+
         m_audioBuffer.push_back(audio);
         m_latestAudioTimestampUs = std::max(m_latestAudioTimestampUs, captureTimestampUs);
     }
 
-    // CRÍTICO: Limpar dados antigos FORA do lock para evitar deadlock
-    // cleanupOldData() precisa adquirir m_videoBufferMutex, e se a thread de streaming
-    // já está segurando esse lock e tentando adquirir m_audioBufferMutex, teríamos deadlock
-    // Chamar cleanupOldData() fora do lock evita esse problema
     cleanupOldData();
 
     return true;
@@ -235,23 +247,22 @@ void StreamSynchronizer::cleanupOldData()
     int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - m_maxBufferTimeUs;
     int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - m_maxBufferTimeUs;
 
-    // Remover apenas frames processados que estão fora da janela temporal
+    // Remover frames processados que estão fora da janela temporal
+    // Se o buffer estiver muito grande, remover também frames não processados antigos
     {
         std::lock_guard<std::mutex> lock(m_videoBufferMutex);
         while (!m_videoBuffer.empty())
         {
             const auto &frame = m_videoBuffer.front();
-            if (frame.captureTimestampUs >= oldestAllowedVideoUs)
-            {
-                break;
-            }
-            if (frame.processed)
+            bool isOld = frame.captureTimestampUs < oldestAllowedVideoUs;
+            bool isBufferTooLarge = m_videoBuffer.size() > m_maxVideoBufferSize / 2;
+
+            if (isOld && (frame.processed || isBufferTooLarge))
             {
                 m_videoBuffer.pop_front();
             }
             else
             {
-                // Frame não processado - manter mesmo que antigo
                 break;
             }
         }
@@ -263,11 +274,10 @@ void StreamSynchronizer::cleanupOldData()
         while (!m_audioBuffer.empty())
         {
             const auto &audio = m_audioBuffer.front();
-            if (audio.captureTimestampUs >= oldestAllowedAudioUs)
-            {
-                break;
-            }
-            if (audio.processed)
+            bool isOld = audio.captureTimestampUs < oldestAllowedAudioUs;
+            bool isBufferTooLarge = m_audioBuffer.size() > m_maxAudioBufferSize / 2;
+
+            if (isOld && (audio.processed || isBufferTooLarge))
             {
                 m_audioBuffer.pop_front();
             }

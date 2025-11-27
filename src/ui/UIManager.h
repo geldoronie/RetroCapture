@@ -87,6 +87,19 @@ public:
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
 
+    // Buffer settings
+    void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
+    void setStreamingMaxAudioBufferSize(size_t size) { m_streamingMaxAudioBufferSize = size; }
+    void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingMaxBufferTimeSeconds = seconds; }
+    void setStreamingMaxHLSBufferSize(size_t size) { m_streamingMaxHLSBufferSize = size; }
+    void setStreamingAVIOBufferSize(size_t size) { m_streamingAVIOBufferSize = size; }
+
+    size_t getStreamingMaxVideoBufferSize() const { return m_streamingMaxVideoBufferSize; }
+    size_t getStreamingMaxAudioBufferSize() const { return m_streamingMaxAudioBufferSize; }
+    int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingMaxBufferTimeSeconds; }
+    size_t getStreamingMaxHLSBufferSize() const { return m_streamingMaxHLSBufferSize; }
+    size_t getStreamingAVIOBufferSize() const { return m_streamingAVIOBufferSize; }
+
     // HLS Performance settings
     void setHLSLowLatencyMode(bool enabled) { m_hlsLowLatencyMode = enabled; }
     void setHLSBackBufferLength(float seconds) { m_hlsBackBufferLength = seconds; }
@@ -358,6 +371,13 @@ private:
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
+
+    // Buffer configuration (para economizar memória, especialmente em ARM)
+    size_t m_streamingMaxVideoBufferSize = 10;            // Máximo de frames no buffer de vídeo
+    size_t m_streamingMaxAudioBufferSize = 20;            // Máximo de chunks no buffer de áudio
+    int64_t m_streamingMaxBufferTimeSeconds = 5;          // Tempo máximo de buffer em segundos
+    size_t m_streamingMaxHLSBufferSize = 2 * 1024 * 1024; // 2MB máximo para buffer HLS
+    size_t m_streamingAVIOBufferSize = 256 * 1024;        // 256KB para buffer AVIO do FFmpeg
 
     // HLS Performance parameters
     bool m_hlsLowLatencyMode = true;       // Modo de baixa latência

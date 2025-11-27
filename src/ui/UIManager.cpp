@@ -1610,6 +1610,22 @@ void UIManager::loadConfig()
             if (streaming.contains("vp9Speed"))
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
 
+            // Carregar configurações de buffer
+            if (streaming.contains("buffer"))
+            {
+                auto &buffer = streaming["buffer"];
+                if (buffer.contains("maxVideoBufferSize"))
+                    m_streamingMaxVideoBufferSize = buffer["maxVideoBufferSize"].get<size_t>();
+                if (buffer.contains("maxAudioBufferSize"))
+                    m_streamingMaxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
+                if (buffer.contains("maxBufferTimeSeconds"))
+                    m_streamingMaxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
+                if (buffer.contains("maxHLSBufferSize"))
+                    m_streamingMaxHLSBufferSize = buffer["maxHLSBufferSize"].get<size_t>();
+                if (buffer.contains("avioBufferSize"))
+                    m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
+            }
+
             // Carregar parâmetros HLS
             if (streaming.contains("hls"))
             {
@@ -1865,7 +1881,8 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
-            {"hls", {{"lowLatencyMode", m_hlsLowLatencyMode}, {"backBufferLength", m_hlsBackBufferLength}, {"maxBufferLength", m_hlsMaxBufferLength}, {"maxMaxBufferLength", m_hlsMaxMaxBufferLength}, {"enableWorker", m_hlsEnableWorker}}}};
+            {"hls", {{"lowLatencyMode", m_hlsLowLatencyMode}, {"backBufferLength", m_hlsBackBufferLength}, {"maxBufferLength", m_hlsMaxBufferLength}, {"maxMaxBufferLength", m_hlsMaxMaxBufferLength}, {"enableWorker", m_hlsEnableWorker}}},
+            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"maxHLSBufferSize", m_streamingMaxHLSBufferSize}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
         // Salvar configurações de imagem
         config["image"] = {

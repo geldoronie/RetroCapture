@@ -24,11 +24,13 @@ public:
 
     // Inicializar muxer com configurações, codec contexts e callback
     // Os codec contexts são necessários para configurar os streams corretamente
+    // avioBufferSize: tamanho do buffer AVIO (padrão: 256KB se 0)
     bool initialize(const MediaEncoder::VideoConfig &videoConfig,
                     const MediaEncoder::AudioConfig &audioConfig,
                     void *videoCodecContext, // AVCodecContext* do MediaEncoder
                     void *audioCodecContext, // AVCodecContext* do MediaEncoder
-                    WriteCallback writeCallback);
+                    WriteCallback writeCallback,
+                    size_t avioBufferSize = 0); // 0 = usar padrão (256KB)
 
     // Muxar um pacote codificado
     bool muxPacket(const MediaEncoder::EncodedPacket &packet);
@@ -56,7 +58,7 @@ public:
 
 private:
     // Inicializar streams no muxer
-    bool initializeStreams(void *videoCodecContext, void *audioCodecContext);
+    bool initializeStreams(void *videoCodecContext, void *audioCodecContext, size_t avioBufferSize);
 
     // Converter PTS/DTS do time_base do codec para time_base do stream
     void convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &pts, int64_t &dts);
@@ -69,6 +71,7 @@ private:
     MediaEncoder::AudioConfig m_audioConfig;
     WriteCallback m_writeCallback;
     bool m_initialized = false;
+    size_t m_avioBufferSize = 256 * 1024; // Tamanho do buffer AVIO (padrão: 256KB)
 
     // Muxer context (void* para evitar incluir headers FFmpeg no .h)
     void *m_muxerContext = nullptr; // AVFormatContext*

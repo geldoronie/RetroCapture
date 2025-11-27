@@ -12,6 +12,7 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <cstddef>
 #include <queue>
 #include <deque>
 #include <utility>
@@ -52,6 +53,11 @@ public:
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);
     void setVideoCodec(const std::string &codecName);
+
+    // Configurar parâmetros de buffer (para economizar memória)
+    void setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
+                         int64_t maxBufferTimeSeconds, size_t maxHLSBufferSize,
+                         size_t avioBufferSize);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
     void setH265Preset(const std::string &preset) { m_h265Preset = preset; }
@@ -228,10 +234,15 @@ private:
     std::atomic<bool> m_stopRequest{false}; // Flag para solicitar parada das threads
     std::atomic<bool> m_cleanedUp{false};
 
-    // Configuração de buffer temporal
-    static constexpr int64_t MAX_BUFFER_TIME_US = 30 * 1000000LL; // 30 segundos máximo - buffer grande para evitar perda de frames
-    static constexpr int64_t MIN_BUFFER_TIME_US = 0;              // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
-    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;     // 50ms de tolerância para sincronização
+    // Configuração de buffer temporal (configurável via setBufferConfig)
+    int64_t m_maxBufferTimeSeconds = 5;          // Tempo máximo de buffer em segundos (padrão: 5s)
+    size_t m_maxVideoBufferSize = 10;            // Máximo de frames no buffer (padrão: 10)
+    size_t m_maxAudioBufferSize = 20;            // Máximo de chunks no buffer (padrão: 20)
+    size_t m_maxHLSBufferSize = 2 * 1024 * 1024; // 2MB máximo para buffer HLS (padrão)
+    size_t m_avioBufferSize = 256 * 1024;        // 256KB para buffer AVIO (padrão)
+
+    static constexpr int64_t MIN_BUFFER_TIME_US = 0;          // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
+    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL; // 50ms de tolerância para sincronização
 
     // Buffers temporais ordenados por timestamp de captura
     std::mutex m_videoBufferMutex;
@@ -296,8 +307,9 @@ private:
     bool m_webPortalEnabled = true; // Habilitado por padrão
 
     // HLS (HTTP Live Streaming) support
-    static constexpr int HLS_SEGMENT_DURATION_SEC = 2; // Duração de cada segmento em segundos
-    static constexpr int HLS_SEGMENT_COUNT = 10;       // Número de segmentos a manter na playlist (aumentado para evitar falhas)
+    static constexpr int HLS_SEGMENT_DURATION_SEC = 2;             // Duração de cada segmento em segundos
+    static constexpr int HLS_SEGMENT_COUNT = 10;                   // Número de segmentos a manter na playlist (aumentado para evitar falhas)
+    static constexpr size_t MAX_HLS_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB máximo para buffer HLS
     struct HLSSegment
     {
         std::vector<uint8_t> data;

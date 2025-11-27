@@ -742,6 +742,8 @@ bool Application::initUI()
     m_hlsMaxMaxBufferLength = m_ui->getHLSMaxMaxBufferLength();
     m_hlsEnableWorker = m_ui->getHLSEnableWorker();
 
+    // Carregar configurações de buffer (já carregadas pelo UIManager do arquivo de config)
+
     // Carregar configurações do Web Portal
     m_webPortalEnabled = m_ui->getWebPortalEnabled();
     m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
@@ -1582,6 +1584,14 @@ bool Application::initStreaming()
     {
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
     }
+
+    // Configurar parâmetros de buffer (carregados da configuração)
+    tsStreamer->setBufferConfig(
+        m_ui->getStreamingMaxVideoBufferSize(),
+        m_ui->getStreamingMaxAudioBufferSize(),
+        m_ui->getStreamingMaxBufferTimeSeconds(),
+        m_ui->getStreamingMaxHLSBufferSize(),
+        m_ui->getStreamingAVIOBufferSize());
 
     // Configurar Web Portal
     tsStreamer->enableWebPortal(m_webPortalEnabled);
