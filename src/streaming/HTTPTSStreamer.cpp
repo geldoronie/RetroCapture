@@ -61,9 +61,6 @@ bool HTTPTSStreamer::initialize(uint16_t port, uint32_t width, uint32_t height, 
     m_height = height;
     m_fps = fps;
 
-    LOG_INFO("HTTPTSStreamer::initialize: " + std::to_string(width) + "x" + std::to_string(height) +
-             " @ " + std::to_string(fps) + "fps, port=" + std::to_string(port));
-
     return true;
 }
 
@@ -80,7 +77,6 @@ void HTTPTSStreamer::enableWebPortal(bool enable)
     if (!enable && m_enableHTTPS)
     {
         m_enableHTTPS = false;
-        LOG_INFO("HTTPS desabilitado automaticamente (Web Portal desabilitado)");
     }
 }
 
@@ -276,7 +272,6 @@ bool HTTPTSStreamer::start()
                 LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
             }
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
-            LOG_INFO("Tip: Place certificates in ~/.config/retrocapture/ssl/ for user-specific configuration.");
             m_enableHTTPS = false;
         }
         else if (foundKeyPath.empty())
@@ -292,35 +287,19 @@ bool HTTPTSStreamer::start()
                 LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
             }
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
-            LOG_INFO("Tip: Place certificates in ~/.config/retrocapture/ssl/ for user-specific configuration.");
             m_enableHTTPS = false;
         }
         else
         {
-            LOG_INFO("Certificados SSL encontrados:");
-            LOG_INFO("  Certificate: " + foundCertPath);
-            LOG_INFO("  Private Key: " + foundKeyPath);
-
-            // Informar se está usando certificado do diretório de configuração do usuário
-            std::string userConfigDir = getUserConfigDir();
-            if (!userConfigDir.empty() &&
-                (foundCertPath.find(userConfigDir) != std::string::npos ||
-                 foundKeyPath.find(userConfigDir) != std::string::npos))
-            {
-                LOG_INFO("  Using user configuration directory: ~/.config/retrocapture/ssl/");
-            }
-
             if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
             {
                 LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
-                LOG_ERROR("Make sure the certificate and key files are valid PEM format.");
                 m_enableHTTPS = false;
                 m_foundSSLCertPath.clear();
                 m_foundSSLKeyPath.clear();
             }
             else
             {
-                LOG_INFO("HTTPS configurado com sucesso");
                 // Armazenar caminhos encontrados para exibição na UI
                 m_foundSSLCertPath = foundCertPath;
                 m_foundSSLKeyPath = foundKeyPath;
@@ -338,7 +317,6 @@ bool HTTPTSStreamer::start()
     if (!m_webPortalEnabled && m_enableHTTPS)
     {
         m_enableHTTPS = false;
-        LOG_INFO("HTTPS desabilitado (Web Portal desabilitado)");
     }
 
     // Criar servidor HTTP/HTTPS
@@ -364,9 +342,6 @@ bool HTTPTSStreamer::start()
     m_hlsSegmentThread = std::thread(&HTTPTSStreamer::hlsSegmentThread, this);
     m_hlsSegmentThread.detach();
 
-    // HTTPS só está ativo se Web Portal estiver habilitado
-    std::string protocol = (m_webPortalEnabled && m_httpServer.isHTTPS()) ? "HTTPS" : "HTTP";
-    LOG_INFO(protocol + " TS Streamer started on port " + std::to_string(m_port));
     return true;
 }
 
@@ -383,7 +358,6 @@ void HTTPTSStreamer::setSSLCertificatePath(const std::string &certPath, const st
     else
     {
         m_enableHTTPS = false;
-        LOG_INFO("HTTPS não habilitado (Web Portal desabilitado)");
     }
 }
 
@@ -468,9 +442,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
     buffer[bytesRead] = '\0';
     std::string request(buffer);
 
-    // Log da requisição para debug (temporário)
-    LOG_INFO("HTTP Request received: " + request.substr(0, std::min(100UL, request.length())));
-
     // Se HTTPS está habilitado E Web Portal está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
     // HTTPS só faz sentido se o Web Portal estiver ativo
     if (m_webPortalEnabled && m_enableHTTPS && !m_httpServer.isClientHTTPS(clientFd))
@@ -514,7 +485,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
                           "Connection: close\r\n"
                           "\r\n";
 
-        LOG_INFO("Redirecting HTTP to HTTPS: " + redirectUrl);
         m_httpServer.sendData(clientFd, redirectResponse.c_str(), redirectResponse.length());
         m_httpServer.closeClient(clientFd);
         return;
@@ -728,7 +698,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
                             prefix.pop_back();
                         }
                         basePrefix = prefix;
-                        LOG_INFO("Extracted basePrefix from X-Forwarded-Prefix header: '" + basePrefix + "'");
                     }
                 }
             }
@@ -769,7 +738,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
                         if (streamPos != std::string::npos && streamPos > 0)
                         {
                             basePrefix = uri.substr(0, streamPos);
-                            LOG_INFO("Extracted basePrefix from X-Forwarded-Uri/X-Original-URI header: '" + basePrefix + "'");
                         }
                     }
                 }
@@ -811,30 +779,22 @@ void HTTPTSStreamer::handleClient(int clientFd)
             }
         }
 
-        // Log para debug
-        LOG_INFO("HLS Playlist request - extracted basePrefix: '" + basePrefix + "'");
-
-        LOG_INFO("Serving HLS playlist to client (basePrefix: " + basePrefix + ")");
         serveHLSPlaylist(clientFd, basePrefix);
         m_httpServer.closeClient(clientFd);
         return;
     }
     else if (isHLSSegment && segmentIndex >= 0)
     {
-        LOG_INFO("Serving HLS segment " + std::to_string(segmentIndex) + " to client");
         serveHLSSegment(clientFd, segmentIndex);
         m_httpServer.closeClient(clientFd);
         return;
     }
     else if (!isStreamRequest)
     {
-        LOG_INFO("Sending 404 for request: " + request.substr(0, std::min(50UL, request.length())));
         send404(clientFd);
         m_httpServer.closeClient(clientFd);
         return;
     }
-
-    LOG_INFO("Serving MPEG-TS stream to client");
 
     // Enviar headers HTTP para stream MPEG-TS
     std::ostringstream headers;
@@ -859,8 +819,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
         std::lock_guard<std::mutex> headerLock(m_headerMutex);
         if (m_headerWritten && !m_formatHeader.empty())
         {
-            LOG_INFO("Sending MPEG-TS format header to new client (" +
-                     std::to_string(m_formatHeader.size()) + " bytes)");
             ssize_t headerSent = m_httpServer.sendData(clientFd, m_formatHeader.data(), m_formatHeader.size());
             if (headerSent < 0)
             {
@@ -922,7 +880,6 @@ void HTTPTSStreamer::send404(int clientFd)
 
 void HTTPTSStreamer::hlsSegmentThread()
 {
-    LOG_INFO("HLS segment thread started");
 
     while (m_running && !m_stopRequest)
     {
@@ -938,18 +895,11 @@ void HTTPTSStreamer::hlsSegmentThread()
         // Verificar se há dados suficientes no buffer
         if (m_hlsBuffer.empty())
         {
-            LOG_WARN("HLS segment thread: buffer vazio, pulando criação de segmento (pode indicar problema no stream)");
             continue;
         }
 
-        // Validar tamanho mínimo do buffer
-        // Para MPEG-TS, um pacote tem 188 bytes, então precisamos de pelo menos alguns pacotes
-        // Reduzindo o mínimo para 376 bytes (2 pacotes TS) para ser mais tolerante
-        if (m_hlsBuffer.size() < 376) // Mínimo 2 pacotes TS (376 bytes)
+        if (m_hlsBuffer.size() < 376)
         {
-            LOG_WARN("HLS segment thread: buffer muito pequeno (" + std::to_string(m_hlsBuffer.size()) +
-                     " bytes, mínimo: 376), aguardando mais dados...");
-            // Não limpar o buffer, apenas aguardar mais dados no próximo ciclo
             continue;
         }
 
@@ -970,29 +920,14 @@ void HTTPTSStreamer::hlsSegmentThread()
                     // Header completo disponível: adicionar no início do primeiro segmento
                     segment.data = m_formatHeader;
                     segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.end());
-                    LOG_INFO("Added format header to first HLS segment " + std::to_string(m_hlsSegmentIndex) +
-                             " (header: " + std::to_string(m_formatHeader.size()) +
-                             " bytes, buffer: " + std::to_string(m_hlsBuffer.size()) + " bytes)");
                 }
                 else
                 {
-                    // Header não está completo ainda - aguardar mais um ciclo
-                    static int logCount = 0;
-                    if (logCount < 3)
-                    {
-                        std::string logMsg = std::string("HLS segment thread: aguardando header completo antes de criar primeiro segmento ") +
-                                             std::string("(header size: ") + std::to_string(m_formatHeader.size()) +
-                                             std::string(", written: ") + std::to_string(m_headerWritten ? 1 : 0) + ")";
-                        LOG_WARN(logMsg);
-                        logCount++;
-                    }
-                    continue; // Não criar segmento ainda
+                    continue;
                 }
             }
             else
             {
-                // Segmentos subsequentes: usar o buffer diretamente
-                // O MPEG-TS já contém PAT/PMT periodicamente, então não precisamos adicionar manualmente
                 segment.data = m_hlsBuffer;
             }
         }
@@ -1012,17 +947,11 @@ void HTTPTSStreamer::hlsSegmentThread()
         }
         if (removedCount > 0)
         {
-            LOG_INFO("Removed " + std::to_string(removedCount) + " old HLS segment(s), keeping " + std::to_string(m_hlsSegments.size()));
         }
 
         // Limpar buffer para próximo segmento
         m_hlsBuffer.clear();
-
-        LOG_INFO("HLS segment " + std::to_string(segment.index) + " created (" +
-                 std::to_string(segment.data.size()) + " bytes, total segments: " + std::to_string(m_hlsSegments.size()) + ")");
     }
-
-    LOG_INFO("HLS segment thread stopped");
 }
 
 std::string HTTPTSStreamer::generateM3U8Playlist(const std::string &basePrefix) const
@@ -1075,8 +1004,6 @@ std::string HTTPTSStreamer::generateM3U8Playlist(const std::string &basePrefix) 
     }
 
     std::string playlist = m3u8.str();
-    LOG_INFO("Generated M3U8 playlist with basePrefix: '" + basePrefix + "', segmentPrefix: '" + segmentPrefix + "'");
-    LOG_INFO("First segment URL in playlist: " + (m_hlsSegments.empty() ? "none" : (segmentPrefix + "segment_" + std::to_string(m_hlsSegments.front().index) + ".ts")));
 
     return playlist;
 }
@@ -1174,61 +1101,36 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             return buf_size;
         }
 
-        // CRÍTICO: writeCallback é chamado dentro do lock do muxing
-        // Deve ser MUITO rápido para não bloquear o encoding
-        // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
-        // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
-
-        // CRÍTICO: Enviar TODOS os dados para cada cliente
-        // Não limitar o tamanho do chunk - isso pode causar corrupção se apenas parte dos dados for enviada
-        // O sendData deve lidar com buffers grandes internamente
         auto it = m_clientSockets.begin();
         while (it != m_clientSockets.end())
         {
             int clientFd = *it;
 
-            // CRÍTICO: Enviar TODOS os dados de uma vez
-            // Não limitar o tamanho - isso pode causar corrupção se apenas parte dos dados for enviada
-            // Se o sendData não conseguir enviar tudo, ele retornará o número de bytes enviados
-            // Mas não devemos limitar artificialmente o tamanho
             ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
             if (sent < 0)
             {
-                // Erro ao enviar - remover cliente
                 m_httpServer.closeClient(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
             else if (sent == 0)
             {
-                // Cliente fechou a conexão
                 m_httpServer.closeClient(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
             else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
             {
-                // CRÍTICO: Se não enviou tudo, tentar enviar o restante
-                // Mas isso pode bloquear o callback, então vamos apenas remover o cliente
-                // O buffer AVIO de 1MB deve lidar com pequenos atrasos
-                // Se o cliente não consegue receber os dados rápido o suficiente, é melhor removê-lo
-                LOG_WARN("writeToClients: Client " + std::to_string(clientFd) + " only received " +
-                         std::to_string(sent) + " of " + std::to_string(buf_size) + " bytes. Removing client.");
                 m_httpServer.closeClient(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
             else
             {
-                // Enviou tudo com sucesso
                 ++it;
             }
         }
 
-        // CRÍTICO: Sempre retornar buf_size para não bloquear o FFmpeg
-        // O buffer AVIO de 1MB é suficiente para lidar com pequenos atrasos de envio
-        // Retornar menos que buf_size causa retries do FFmpeg que quebram sincronização e causam corrupção
-        // Se alguns clientes não receberam todos os dados, o buffer AVIO vai lidar com isso
         return buf_size;
     }
 }
@@ -1281,10 +1183,6 @@ bool HTTPTSStreamer::initializeEncoding()
         return false;
     }
 
-    // Capturar header do formato após primeira escrita
-    // O header será capturado automaticamente pelo MediaMuxer quando o primeiro pacote for muxado
-
-    LOG_INFO("Encoding initialized successfully");
     return true;
 }
 
@@ -2785,9 +2683,6 @@ void HTTPTSStreamer::cleanupOldData()
 
 void HTTPTSStreamer::serverThread()
 {
-    // HTTPS só está ativo se Web Portal estiver habilitado
-    std::string protocol = (m_webPortalEnabled && m_httpServer.isHTTPS()) ? "HTTPS" : "HTTP";
-    LOG_INFO("Server thread started, waiting for " + protocol + " connections on port " + std::to_string(m_port));
 
     while (m_running)
     {
@@ -2814,8 +2709,6 @@ void HTTPTSStreamer::serverThread()
         std::thread clientThread(&HTTPTSStreamer::handleClient, this, clientFd);
         clientThread.detach(); // Detach para não precisar fazer join
     }
-
-    LOG_INFO("Server thread stopped");
 
     return;
 }
@@ -2927,8 +2820,6 @@ void HTTPTSStreamer::encodingThread()
             // Se processamos, não dormir - continuar imediatamente para processar mais frames
         }
     }
-
-    LOG_INFO("Encoding thread stopped");
 
     return;
 }

@@ -141,13 +141,10 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         return false;
     }
 
-    // Garantir que codec_type e codec_id estão corretos
     videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
     videoStream->codecpar->codec_id = videoCtx->codec_id;
     videoStream->time_base = videoCtx->time_base;
 
-    // CRÍTICO: Garantir que width e height estão definidos no codecpar
-    // Isso é necessário para o decoder identificar o stream corretamente
     if (videoStream->codecpar->width == 0 || videoStream->codecpar->height == 0)
     {
         videoStream->codecpar->width = videoCtx->width;
@@ -292,17 +289,13 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         return false;
     }
 
-    // CRÍTICO: Copiar dados do pacote de forma segura
-    // Validar tamanho antes de copiar para evitar corrupção
     if (packet.data.empty() || packet.data.size() > static_cast<size_t>(INT_MAX))
     {
-        LOG_ERROR("MediaMuxer: Invalid packet data size: " + std::to_string(packet.data.size()));
+        LOG_ERROR("MediaMuxer: Invalid packet data size");
         av_packet_free(&pkt);
         return false;
     }
 
-    // CRÍTICO: Usar av_buffer_alloc para criar buffer gerenciado pelo FFmpeg
-    // Isso garante que o FFmpeg gerencie a memória corretamente e previne corrupção
     AVBufferRef *buf = av_buffer_alloc(packet.data.size());
     if (!buf)
     {
@@ -311,57 +304,20 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         return false;
     }
 
-    // Copiar dados para o buffer gerenciado pelo FFmpeg
     memcpy(buf->data, packet.data.data(), packet.data.size());
 
-    // CRÍTICO: Validar que os dados foram copiados corretamente
-    // Para H.264, verificar também o formato dos NAL units (devem começar com 0x00 0x00 0x00 0x01 ou 0x00 0x00 0x01)
     if (packet.data.size() > 0)
     {
-        // Verificar primeiros e últimos bytes para detectar corrupção básica
         if (buf->data[0] != packet.data[0] ||
             (packet.data.size() > 1 && buf->data[packet.data.size() - 1] != packet.data[packet.data.size() - 1]))
         {
-            LOG_ERROR("MediaMuxer: Data corruption detected in packet copy! Discarding packet.");
+            LOG_ERROR("MediaMuxer: Data corruption in packet copy");
             av_buffer_unref(&buf);
             av_packet_free(&pkt);
             return false;
         }
-
-        // Para pacotes de vídeo H.264, validar formato básico dos NAL units
-        if (packet.isVideo && packet.data.size() >= 4)
-        {
-            // Verificar se começa com start code (0x00 0x00 0x00 0x01 ou 0x00 0x00 0x01)
-            bool hasValidStartCode = false;
-            if (packet.data[0] == 0x00 && packet.data[1] == 0x00)
-            {
-                if ((packet.data[2] == 0x00 && packet.data[3] == 0x01) ||
-                    (packet.data[2] == 0x01))
-                {
-                    hasValidStartCode = true;
-                }
-            }
-
-            // Se não tem start code válido, pode ser formato AVCC (sem start codes)
-            // Nesse caso, o primeiro byte deve ser o tipo de NAL unit (bits 0-4)
-            if (!hasValidStartCode)
-            {
-                uint8_t nalType = packet.data[0] & 0x1F;
-                // Tipos válidos de NAL unit: 1-23 para H.264
-                if (nalType == 0 || nalType > 23)
-                {
-                    LOG_WARN("MediaMuxer: Suspicious NAL unit type: " + std::to_string(nalType) +
-                             " (first bytes: " + std::to_string(packet.data[0]) + " " +
-                             std::to_string(packet.data[1]) + " " + std::to_string(packet.data[2]) +
-                             " " + std::to_string(packet.data[3]) + ")");
-                }
-            }
-        }
     }
 
-    // CRÍTICO: Associar o buffer ao pacote corretamente
-    // O av_buffer_alloc já criou um AVBufferRef, precisamos apenas associá-lo ao pacote
-    // Usar av_buffer_ref para incrementar a referência antes de associar
     pkt->buf = av_buffer_ref(buf);
     if (!pkt->buf)
     {
@@ -371,41 +327,18 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         return false;
     }
 
-    // CRÍTICO: Configurar data e size do pacote
-    // IMPORTANTE: Após av_buffer_ref, o pkt->buf já tem sua própria referência
-    // Mas precisamos garantir que pkt->data aponte para os dados corretos
-    // O buf->data pode ser inválido após av_buffer_unref, então usar pkt->buf->data
     pkt->data = pkt->buf->data;
     pkt->size = static_cast<int>(packet.data.size());
-
-    // Validar que os dados estão corretos após associar
-    if (pkt->size > 0 && pkt->data)
-    {
-        // Verificar se os dados foram preservados corretamente
-        if (pkt->data[0] != packet.data[0] ||
-            (pkt->size > 1 && pkt->data[pkt->size - 1] != packet.data[packet.data.size() - 1]))
-        {
-            LOG_ERROR("MediaMuxer: Data corruption detected after buffer association! Discarding packet.");
-            av_packet_free(&pkt);
-            return false;
-        }
-    }
-
-    // Liberar a referência original (o pacote agora tem sua própria via pkt->buf)
     av_buffer_unref(&buf);
 
-    // Configurar PTS/DTS
     pkt->pts = (packet.pts != -1) ? packet.pts : AV_NOPTS_VALUE;
     pkt->dts = (packet.dts != -1) ? packet.dts : AV_NOPTS_VALUE;
 
-    // CRÍTICO: Configurar flag de keyframe para vídeo
-    // Isso é essencial para MPEG-TS saber quando enviar SPS/PPS e marcar corretamente os pacotes
     if (packet.isVideo && packet.isKeyframe)
     {
         pkt->flags |= AV_PKT_FLAG_KEY;
     }
 
-    // Configurar stream_index
     if (packet.isVideo)
     {
         AVStream *videoStream = static_cast<AVStream *>(m_videoStream);
@@ -433,10 +366,8 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         }
     }
 
-    // Converter PTS/DTS do time_base do codec para time_base do stream
     convertPTS(packet, pkt->pts, pkt->dts);
 
-    // Garantir que DTS seja válido
     if (pkt->dts == AV_NOPTS_VALUE)
     {
         if (pkt->pts != AV_NOPTS_VALUE)
@@ -451,35 +382,21 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         }
     }
 
-    // Garantir DTS <= PTS
     if (pkt->pts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
     {
         pkt->dts = pkt->pts;
     }
 
-    // CRÍTICO: Garantir monotonicidade no muxer APÓS conversão
-    // Mas não forçar saltos muito grandes - isso causa DTS discontinuity
-    // O ensureMonotonicPTS deve apenas garantir que não há regressão, não criar saltos grandes
     ensureMonotonicPTS(pkt->pts, pkt->dts, packet.isVideo);
 
-    // CRÍTICO: Proteger av_interleaved_write_frame com mutex (não é thread-safe)
-    // Isso previne corrupção de pacotes quando múltiplas threads tentam muxar simultaneamente
-    // IMPORTANTE: O writeCallback será chamado DENTRO deste lock, então deve ser MUITO rápido
-    // Se o callback bloquear por muito tempo, pode causar corrupção de dados no FFmpeg
     {
         std::lock_guard<std::mutex> lock(m_muxMutex);
-
-        // Muxar pacote
-        // O FFmpeg chamará o writeCallback durante esta operação
-        // O callback DEVE ser rápido para não bloquear o FFmpeg e causar corrupção
         int ret = av_interleaved_write_frame(formatCtx, pkt);
         if (ret < 0)
         {
             char errbuf[256];
             av_strerror(ret, errbuf, sizeof(errbuf));
-            LOG_ERROR("MediaMuxer: Failed to write packet (stream=" + std::to_string(pkt->stream_index) +
-                      ", pts=" + std::to_string(pkt->pts) + ", dts=" + std::to_string(pkt->dts) +
-                      ", size=" + std::to_string(pkt->size) + "): " + std::string(errbuf));
+            LOG_ERROR("MediaMuxer: Failed to write packet: " + std::string(errbuf));
             av_packet_free(&pkt);
             return false;
         }
@@ -491,10 +408,6 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
 
 void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &pts, int64_t &dts)
 {
-    // CRÍTICO: PTS/DTS vêm do MediaEncoder no time_base do codec
-    // Precisamos converter para o time_base do stream no muxer
-    // SEM essa conversão, os timestamps estão errados e causam corrupção no MPEG-TS
-
     AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
     if (!formatCtx)
     {
@@ -507,29 +420,22 @@ void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &
         return;
     }
 
-    // Obter time_base do codec
     AVCodecContext *codecCtx = packet.isVideo ? static_cast<AVCodecContext *>(m_videoCodecContext) : static_cast<AVCodecContext *>(m_audioCodecContext);
-
     if (!codecCtx)
     {
         return;
     }
 
-    // Verificar se os time_bases são diferentes antes de converter
-    // Se forem iguais, não precisa converter (evita erros de arredondamento e DTS discontinuity)
     AVRational codecTimeBase = codecCtx->time_base;
     AVRational streamTimeBase = stream->time_base;
 
-    bool needsConversion = (codecTimeBase.num != streamTimeBase.num ||
-                            codecTimeBase.den != streamTimeBase.den);
+    bool needsConversion = (codecTimeBase.num != streamTimeBase.num || codecTimeBase.den != streamTimeBase.den);
 
-    // Converter PTS do time_base do codec para time_base do stream
     if (pts != AV_NOPTS_VALUE && pts != -1 && needsConversion)
     {
         pts = av_rescale_q(pts, codecTimeBase, streamTimeBase);
     }
 
-    // Converter DTS do time_base do codec para time_base do stream
     if (dts != AV_NOPTS_VALUE && dts != -1 && needsConversion)
     {
         dts = av_rescale_q(dts, codecTimeBase, streamTimeBase);
@@ -546,34 +452,17 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
     {
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            // CRÍTICO: Apenas corrigir se houver regressão pequena (erro de arredondamento)
-            // Não forçar saltos grandes que causam DTS discontinuity
             if (m_lastVideoPTS >= 0 && pts < m_lastVideoPTS)
             {
-                // Se a diferença for muito grande, pode ser um problema de conversão
-                // Nesse caso, usar o último PTS + incremento mínimo
-                int64_t diff = m_lastVideoPTS - pts;
-                if (diff > 1000) // Se a diferença for muito grande, pode ser erro de conversão
-                {
-                    LOG_WARN("MediaMuxer: Large PTS regression detected: " + std::to_string(diff) +
-                             " (last=" + std::to_string(m_lastVideoPTS) + ", current=" + std::to_string(pts) + ")");
-                }
-                pts = m_lastVideoPTS + 1; // Incremento mínimo
+                pts = m_lastVideoPTS + 1;
             }
             m_lastVideoPTS = pts;
         }
         if (dts != AV_NOPTS_VALUE_LOCAL)
         {
-            // Mesma lógica para DTS
             if (m_lastVideoDTS >= 0 && dts < m_lastVideoDTS)
             {
-                int64_t diff = m_lastVideoDTS - dts;
-                if (diff > 1000)
-                {
-                    LOG_WARN("MediaMuxer: Large DTS regression detected: " + std::to_string(diff) +
-                             " (last=" + std::to_string(m_lastVideoDTS) + ", current=" + std::to_string(dts) + ")");
-                }
-                dts = m_lastVideoDTS + 1; // Incremento mínimo
+                dts = m_lastVideoDTS + 1;
             }
             m_lastVideoDTS = dts;
         }

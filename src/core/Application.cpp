@@ -302,14 +302,12 @@ bool Application::initCapture()
     {
         if (m_capture->setBrightness(m_v4l2Brightness))
         {
-            LOG_INFO("Brilho V4L2 configurado: " + std::to_string(m_v4l2Brightness));
         }
     }
     if (m_v4l2Contrast >= 0)
     {
         if (m_capture->setContrast(m_v4l2Contrast))
         {
-            LOG_INFO("Contraste V4L2 configurado: " + std::to_string(m_v4l2Contrast));
         }
     }
     if (m_v4l2Saturation >= 0)
@@ -323,14 +321,12 @@ bool Application::initCapture()
     {
         if (m_capture->setHue(m_v4l2Hue))
         {
-            LOG_INFO("Matiz V4L2 configurado: " + std::to_string(m_v4l2Hue));
         }
     }
     if (m_v4l2Gain >= 0)
     {
         if (m_capture->setGain(m_v4l2Gain))
         {
-            LOG_INFO("Ganho V4L2 configurado: " + std::to_string(m_v4l2Gain));
         }
     }
     if (m_v4l2Exposure >= 0)
@@ -351,14 +347,12 @@ bool Application::initCapture()
     {
         if (m_capture->setGamma(m_v4l2Gamma))
         {
-            LOG_INFO("Gama V4L2 configurado: " + std::to_string(m_v4l2Gamma));
         }
     }
     if (m_v4l2WhiteBalance >= 0)
     {
         if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance))
         {
-            LOG_INFO("Balanço de branco V4L2 configurado: " + std::to_string(m_v4l2WhiteBalance));
         }
     }
 
@@ -1463,7 +1457,6 @@ bool Application::initUI()
             }
         } });
 
-    LOG_INFO("UIManager inicializado");
     return true;
 }
 
@@ -1668,30 +1661,7 @@ bool Application::initStreaming()
         {
             LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
         }
-        else
-        {
-            // IMPORTANTE: O formato de áudio já foi configurado antes de inicializar o streamer
-            // Se a captura foi inicializada depois, precisamos reinicializar o streaming
-            // para garantir que o sample rate correto seja usado
-            if (m_streamManager && m_audioCapture && m_audioCapture->isOpen())
-            {
-                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) +
-                         "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
-                // Nota: O streamer já foi configurado com o formato correto antes de ser inicializado
-                // Se a captura foi inicializada depois, o formato pode estar incorreto
-                // Nesse caso, seria necessário reinicializar o streaming, mas isso é complexo
-                // Por enquanto, assumimos que a captura é inicializada antes do streaming
-            }
-        }
     }
-
-    // IMPORTANTE: A thread de streaming já foi limpa acima no início da função
-    // Esta verificação é redundante, mas mantida como segurança extra
-    // (não deveria ser necessária, mas ajuda a garantir que não há threads órfãs)
-
-    // OPÇÃO A: Não criar thread de streaming - processamento movido para thread principal
-    // Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
-    LOG_INFO("Streaming inicializado (processamento na thread principal)");
 
     return true;
 }
@@ -1702,8 +1672,6 @@ bool Application::initAudioCapture()
     {
         return true; // Audio não habilitado, não é erro
     }
-
-    LOG_INFO("Inicializando captura de áudio...");
 
     m_audioCapture = std::make_unique<AudioCapture>();
 
@@ -2024,31 +1992,15 @@ void Application::run()
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
 
-            // Capturar frame para streaming (ANTES de renderizar UI)
-            // IMPORTANTE: NÃO fazer resize aqui - isso atrasa timestamps e quebra sincronia
-            // Apenas capturar do viewport e enviar - o resize será feito no encoding
             if (m_streamManager && m_streamManager->isActive())
             {
-                // Capturar exatamente do viewport onde renderizou (sem resize)
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
                 uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
-
-                // Debug: Log quando shader está ativo
-                static int shaderDebugCount = 0;
-                if (isShaderTexture && shaderDebugCount < 5)
-                {
-                    LOG_INFO("[SHADER_CAPTURE] Shader ativo: viewport=" + std::to_string(viewportWidth) +
-                             "x" + std::to_string(viewportHeight) + ", render=" +
-                             std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
-                    shaderDebugCount++;
-                }
-
                 size_t captureDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
 
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    // Calcular padding para alinhamento de 4 bytes
                     size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
                     size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
                     size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
@@ -2056,11 +2008,9 @@ void Application::run()
                     std::vector<uint8_t> frameDataWithPadding;
                     frameDataWithPadding.resize(totalSizeWithPadding);
 
-                    // Ler pixels do viewport onde renderizou (sempre RGB, sem resize)
                     glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
                                  GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
-                    // Copiar dados removendo padding e fazer flip vertical
                     std::vector<uint8_t> frameData;
                     frameData.resize(captureDataSize);
 
@@ -2074,16 +2024,11 @@ void Application::run()
                         memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                     }
 
-                    // IMPORTANTE: Enviar TODOS os frames, incluindo frames pretos
-                    // Frames pretos são válidos e devem ser enviados ao stream
-                    // A verificação de "allZeros" foi removida pois rejeitava frames válidos
                     m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
                 }
             }
 
-            // Atualizar informações de streaming na UI
-            // IMPORTANTE: Fazer cópia local do ponteiro para evitar race condition
-            auto streamManager = m_streamManager.get(); // Cópia local do ponteiro raw
+            auto streamManager = m_streamManager.get();
             if (m_ui && streamManager && streamManager->isActive())
             {
                 m_ui->setStreamingActive(true);

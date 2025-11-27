@@ -26,29 +26,23 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
         return false;
     }
 
-    // CRÍTICO: Validar tamanho antes de copiar
-    // RGB24 = 3 bytes por pixel, total = width * height * 3
     size_t expectedSize = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    if (expectedSize == 0 || expectedSize > 100 * 1024 * 1024) // Máximo 100MB por frame
+    if (expectedSize == 0 || expectedSize > 100 * 1024 * 1024)
     {
-        LOG_ERROR("StreamSynchronizer: Invalid frame size: " + std::to_string(width) + "x" + std::to_string(height));
+        LOG_ERROR("StreamSynchronizer: Invalid frame size");
         return false;
     }
 
     TimestampedFrame frame;
-    // CRÍTICO: Copiar dados RGB24 (3 bytes por pixel, sem padding)
-    // O código assume que os dados vêm sem padding/stride do Application.cpp
     frame.data = std::make_shared<std::vector<uint8_t>>(data, data + expectedSize);
     frame.width = width;
     frame.height = height;
     frame.captureTimestampUs = captureTimestampUs;
     frame.processed = false;
 
-    // Validar que a cópia foi bem-sucedida (verificar primeiros e últimos bytes)
     if (frame.data->size() != expectedSize)
     {
-        LOG_ERROR("StreamSynchronizer: Frame data size mismatch: expected " +
-                  std::to_string(expectedSize) + ", got " + std::to_string(frame.data->size()));
+        LOG_ERROR("StreamSynchronizer: Frame data size mismatch");
         return false;
     }
 
@@ -62,10 +56,6 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
         m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
     }
 
-    // CRÍTICO: Limpar dados antigos FORA do lock para evitar deadlock
-    // cleanupOldData() precisa adquirir m_audioBufferMutex, e se a thread principal
-    // já está segurando esse lock e tentando adquirir m_videoBufferMutex, teríamos deadlock
-    // Chamar cleanupOldData() fora do lock evita esse problema
     static size_t cleanupCounter = 0;
     if (++cleanupCounter >= 60)
     {
