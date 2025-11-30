@@ -891,10 +891,20 @@ void HTTPTSStreamer::send404(int clientFd)
 
 void HTTPTSStreamer::hlsSegmentThread()
 {
+    // Aguardar um pouco para ter dados iniciais
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    const int TS_PACKET_SIZE = 188;
+    // Tamanho mínimo para criar segmento: reduzido para criar mais rapidamente
+    const size_t SEGMENT_SIZE_MIN = 256 * 1024; // 256KB mínimo (reduzido para criar segmentos mais rapidamente)
+    // Tamanho alvo baseado em bitrate
+    const size_t SEGMENT_SIZE_TARGET = std::max(static_cast<size_t>((m_videoBitrate / 8) * HLS_SEGMENT_DURATION_SEC),
+                                                static_cast<size_t>(512 * 1024)); // Alvo: ~500KB
 
     while (m_running && !m_stopRequest)
     {
-        std::this_thread::sleep_for(std::chrono::seconds(HLS_SEGMENT_DURATION_SEC));
+        // Verificar a cada 500ms (criar segmentos mais frequentemente para melhor fluidez)
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         if (m_stopRequest || !m_running)
         {
@@ -909,7 +919,17 @@ void HTTPTSStreamer::hlsSegmentThread()
             continue;
         }
 
-        if (m_hlsBuffer.size() < 376)
+        // Verificar se há dados suficientes para criar segmento
+        if (m_hlsBuffer.size() < SEGMENT_SIZE_MIN)
+        {
+            continue;
+        }
+
+        // Calcular tamanho do segmento (alinhado a múltiplos de 188 bytes)
+        size_t segmentSize = std::min(SEGMENT_SIZE_TARGET, m_hlsBuffer.size());
+        segmentSize = (segmentSize / TS_PACKET_SIZE) * TS_PACKET_SIZE; // Alinhar para baixo
+
+        if (segmentSize < SEGMENT_SIZE_MIN)
         {
             continue;
         }
@@ -930,7 +950,9 @@ void HTTPTSStreamer::hlsSegmentThread()
                 {
                     // Header completo disponível: adicionar no início do primeiro segmento
                     segment.data = m_formatHeader;
-                    segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.end());
+                    // Adicionar apenas os dados necessários (não todo o buffer)
+                    size_t firstSegmentSize = std::min(segmentSize, m_hlsBuffer.size());
+                    segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.begin() + firstSegmentSize);
                 }
                 else
                 {
@@ -939,7 +961,8 @@ void HTTPTSStreamer::hlsSegmentThread()
             }
             else
             {
-                segment.data = m_hlsBuffer;
+                // Segmentos subsequentes: copiar apenas os dados necessários
+                segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + segmentSize);
             }
         }
 
@@ -960,8 +983,20 @@ void HTTPTSStreamer::hlsSegmentThread()
         {
         }
 
-        // Limpar buffer para próximo segmento
-        m_hlsBuffer.clear();
+        // Remover dados usados do buffer (manter o restante para continuidade)
+        m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + segmentSize);
+
+        // Limpar buffer apenas se ficar muito grande (evitar vazamento de memória)
+        const size_t MAX_HLS_BUFFER_SIZE = 20 * 1024 * 1024; // 20MB máximo
+        if (m_hlsBuffer.size() > MAX_HLS_BUFFER_SIZE)
+        {
+            // Manter apenas os últimos 10MB
+            size_t keepSize = 10 * 1024 * 1024;
+            if (m_hlsBuffer.size() > keepSize)
+            {
+                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);
+            }
+        }
     }
 }
 
@@ -1098,10 +1133,11 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     // Acumular dados para HLS (com limite de tamanho para evitar vazamento de memória)
     {
         std::lock_guard<std::mutex> hlsLock(m_hlsMutex);
-        if (m_hlsBuffer.size() + buf_size > m_maxHLSBufferSize)
+        // Usar MAX_HLS_BUFFER_SIZE do header (20MB) para permitir mais continuidade
+        if (m_hlsBuffer.size() + buf_size > MAX_HLS_BUFFER_SIZE)
         {
-            // Buffer muito grande - limpar dados antigos mantendo apenas os últimos 512KB
-            size_t keepSize = 512 * 1024;
+            // Buffer muito grande - limpar dados antigos mantendo apenas os últimos 10MB
+            size_t keepSize = 10 * 1024 * 1024; // 10MB (aumentado de 512KB)
             if (m_hlsBuffer.size() > keepSize)
             {
                 m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);
@@ -2738,6 +2774,10 @@ void HTTPTSStreamer::encodingThread()
     // Aguardar um pouco antes de começar para evitar processar frames muito antigos
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    // Contador para limpeza menos frequente (a cada 10 iterações)
+    int cleanupCounter = 0;
+    const int CLEANUP_INTERVAL = 10;
+
     while (m_running)
     {
         if (m_stopRequest)
@@ -2747,8 +2787,19 @@ void HTTPTSStreamer::encodingThread()
 
         bool processedAny = false;
 
-        // Limpar dados antigos do StreamSynchronizer
-        m_streamSynchronizer.cleanupOldData();
+        // Limpar dados antigos do StreamSynchronizer apenas ocasionalmente (não a cada iteração)
+        // Isso evita remover dados muito agressivamente antes de serem processados
+        cleanupCounter++;
+        if (cleanupCounter >= CLEANUP_INTERVAL)
+        {
+            m_streamSynchronizer.cleanupOldData();
+            cleanupCounter = 0;
+        }
+
+        // Verificar se há backlog (muitos frames pendentes)
+        size_t videoBufferSize = m_streamSynchronizer.getVideoBufferSize();
+        size_t audioBufferSize = m_streamSynchronizer.getAudioBufferSize();
+        bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
         // Calcular zona de sincronização
         StreamSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
@@ -2758,10 +2809,20 @@ void HTTPTSStreamer::encodingThread()
             // Obter frames de vídeo da zona sincronizada
             auto videoFrames = m_streamSynchronizer.getVideoFrames(syncZone);
 
-            // Processar frames de vídeo
+            // Processar frames de vídeo (com controle de taxa para evitar aceleração)
+            // Aumentar limite quando há backlog para evitar perda de frames
+            size_t framesProcessed = 0;
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2; // Mais frames quando há backlog
+
             for (const auto &frame : videoFrames)
             {
                 if (m_stopRequest)
+                {
+                    break;
+                }
+
+                // Limitar número de frames processados por iteração
+                if (framesProcessed >= MAX_FRAMES_PER_ITERATION)
                 {
                     break;
                 }
@@ -2779,6 +2840,7 @@ void HTTPTSStreamer::encodingThread()
                             m_mediaMuxer.muxPacket(packet);
                         }
                         processedAny = true;
+                        framesProcessed++;
                     }
                 }
             }
@@ -2786,10 +2848,20 @@ void HTTPTSStreamer::encodingThread()
             // Obter chunks de áudio da zona sincronizada
             auto audioChunks = m_streamSynchronizer.getAudioChunks(syncZone);
 
-            // Processar chunks de áudio
+            // Processar chunks de áudio (com limite para evitar aceleração)
+            // Aumentar limite quando há backlog para evitar perda de chunks
+            size_t chunksProcessed = 0;
+            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3; // Mais chunks quando há backlog
+
             for (const auto &chunk : audioChunks)
             {
                 if (m_stopRequest)
+                {
+                    break;
+                }
+
+                // Limitar número de chunks processados por iteração
+                if (chunksProcessed >= MAX_CHUNKS_PER_ITERATION)
                 {
                     break;
                 }
@@ -2807,6 +2879,7 @@ void HTTPTSStreamer::encodingThread()
                             m_mediaMuxer.muxPacket(packet);
                         }
                         processedAny = true;
+                        chunksProcessed++;
                     }
                 }
             }
@@ -2826,18 +2899,40 @@ void HTTPTSStreamer::encodingThread()
             }
         }
 
-        // Se não processamos nada, verificar se há dados pendentes antes de dormir
-        if (!processedAny)
+        // Adicionar delay mínimo entre iterações para evitar aceleração
+        // Reduzir ou remover delay quando há backlog para processar mais rápido
+        if (processedAny)
         {
-            bool hasPendingData = (m_streamSynchronizer.getVideoBufferSize() > 0 ||
-                                   m_streamSynchronizer.getAudioBufferSize() > 0);
+            if (hasBacklog)
+            {
+                // Quando há backlog, delay mínimo para não consumir 100% CPU mas processar rápido
+                std::this_thread::sleep_for(std::chrono::microseconds(100)); // 100µs apenas
+            }
+            else
+            {
+                // Sem backlog: delay baseado no FPS para manter taxa natural
+                // Para 60 FPS: ~16.67ms por frame, mas processamos 2 frames, então ~8ms
+                int64_t frameTimeUs = 1000000LL / static_cast<int64_t>(m_fps); // Tempo por frame em microssegundos
+                int64_t delayUs = frameTimeUs / 2;                             // Delay proporcional (já que processamos 2 frames)
+                std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+            }
+        }
+        else
+        {
+            // Se não processamos nada, verificar se há dados pendentes antes de dormir
+            bool hasPendingData = (videoBufferSize > 0 || audioBufferSize > 0);
 
             if (!hasPendingData)
             {
                 // Só dormir se realmente não há dados para processar
-                std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1µs - mínimo possível
+                std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 1ms quando não há dados
             }
-            // Se processamos, não dormir - continuar imediatamente para processar mais frames
+            else
+            {
+                // Há dados mas não processamos (possivelmente aguardando sincronização)
+                // Delay mínimo para não consumir CPU mas continuar tentando
+                std::this_thread::sleep_for(std::chrono::microseconds(500)); // 500µs quando há dados mas não processou
+            }
         }
     }
 

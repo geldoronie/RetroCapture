@@ -64,12 +64,9 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
         m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
     }
 
-    static size_t cleanupCounter = 0;
-    if (++cleanupCounter >= 60)
-    {
-        cleanupOldData();
-        cleanupCounter = 0;
-    }
+    // Não chamar cleanupOldData() aqui - deixar para o encodingThread fazer ocasionalmente
+    // Isso evita remover dados muito agressivamente antes de serem processados
+    // cleanupOldData() será chamado periodicamente pelo encodingThread
 
     return true;
 }
@@ -109,7 +106,9 @@ bool StreamSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCoun
         m_latestAudioTimestampUs = std::max(m_latestAudioTimestampUs, captureTimestampUs);
     }
 
-    cleanupOldData();
+    // Não chamar cleanupOldData() aqui - deixar para o encodingThread fazer ocasionalmente
+    // Isso evita remover dados muito agressivamente antes de serem processados
+    // cleanupOldData() será chamado periodicamente pelo encodingThread
 
     return true;
 }
@@ -136,9 +135,28 @@ StreamSynchronizer::SyncZone StreamSynchronizer::calculateSyncZone()
     int64_t overlapEndUs = std::min(videoEndUs, audioEndUs);
 
     // Verificar se há sobreposição
-    if (overlapEndUs <= overlapStartUs)
+    // Usar tolerância para permitir processamento mesmo com pequeno descompasso
+    // Isso evita perda de frames quando há pequena diferença temporal
+    int64_t overlapDuration = overlapEndUs - overlapStartUs;
+    int64_t toleranceUs = m_syncToleranceUs; // 50ms por padrão
+
+    // Se não há sobreposição direta, verificar se estão próximos o suficiente
+    if (overlapDuration <= 0)
     {
-        return SyncZone::invalid();
+        // Calcular gap entre os buffers
+        int64_t gapUs = (videoStartUs > audioEndUs) ? (videoStartUs - audioEndUs) : (audioStartUs - videoEndUs);
+
+        // Se o gap é pequeno (dentro da tolerância), permitir processamento
+        if (gapUs <= toleranceUs && gapUs >= 0)
+        {
+            // Criar zona de sincronização mesmo sem sobreposição direta
+            overlapStartUs = std::min(videoStartUs, audioStartUs);
+            overlapEndUs = std::max(videoEndUs, audioEndUs);
+        }
+        else
+        {
+            return SyncZone::invalid();
+        }
     }
 
     // Zona sincronizada: processar desde o início da sobreposição até o final
@@ -247,17 +265,19 @@ void StreamSynchronizer::cleanupOldData()
     int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - m_maxBufferTimeUs;
     int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - m_maxBufferTimeUs;
 
-    // Remover frames processados que estão fora da janela temporal
-    // Se o buffer estiver muito grande, remover também frames não processados antigos
+    // Remover apenas frames processados que estão fora da janela temporal
+    // NÃO remover frames não processados mesmo se o buffer estiver grande
+    // Isso evita perder dados antes de serem processados (causando skips)
     {
         std::lock_guard<std::mutex> lock(m_videoBufferMutex);
         while (!m_videoBuffer.empty())
         {
             const auto &frame = m_videoBuffer.front();
             bool isOld = frame.captureTimestampUs < oldestAllowedVideoUs;
-            bool isBufferTooLarge = m_videoBuffer.size() > m_maxVideoBufferSize / 2;
 
-            if (isOld && (frame.processed || isBufferTooLarge))
+            // Apenas remover se estiver antigo E já processado
+            // Não remover frames não processados para evitar skips
+            if (isOld && frame.processed)
             {
                 m_videoBuffer.pop_front();
             }
@@ -268,16 +288,17 @@ void StreamSynchronizer::cleanupOldData()
         }
     }
 
-    // Mesma lógica para áudio
+    // Mesma lógica para áudio - apenas remover chunks processados antigos
     {
         std::lock_guard<std::mutex> lock(m_audioBufferMutex);
         while (!m_audioBuffer.empty())
         {
             const auto &audio = m_audioBuffer.front();
             bool isOld = audio.captureTimestampUs < oldestAllowedAudioUs;
-            bool isBufferTooLarge = m_audioBuffer.size() > m_maxAudioBufferSize / 2;
 
-            if (isOld && (audio.processed || isBufferTooLarge))
+            // Apenas remover se estiver antigo E já processado
+            // Não remover chunks não processados para evitar skips de áudio
+            if (isOld && audio.processed)
             {
                 m_audioBuffer.pop_front();
             }
