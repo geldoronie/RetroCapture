@@ -213,11 +213,12 @@ private:
     std::string m_backgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Parâmetros HLS
-    bool m_hlsLowLatencyMode = true;       // Modo de baixa latência
-    float m_hlsBackBufferLength = 30.0f;   // Tamanho do buffer de retaguarda em segundos (reduzido para evitar bufferFullError)
-    float m_hlsMaxBufferLength = 10.0f;    // Tamanho máximo do buffer em segundos (reduzido para baixa latência)
-    float m_hlsMaxMaxBufferLength = 30.0f; // Tamanho máximo absoluto do buffer em segundos (reduzido)
-    bool m_hlsEnableWorker = true;         // Usar Web Worker para processamento
+    // HLS Performance parameters - alinhados com valores padrão da UI
+    bool m_hlsLowLatencyMode = false;      // Desabilitado por padrão: permite mais prefetch e buffer maior
+    float m_hlsBackBufferLength = 40.0f;   // 40s = 20 segmentos de 2s (alinhado com HLS_SEGMENT_COUNT)
+    float m_hlsMaxBufferLength = 30.0f;    // 30s = 15 segmentos de 2s (buffer maior para fluidez)
+    float m_hlsMaxMaxBufferLength = 60.0f; // 60s = 30 segmentos de 2s (buffer máximo generoso)
+    bool m_hlsEnableWorker = false;        // Desabilitado por padrão: mais compatível com Chrome
 
     // Textos editáveis
     std::string m_textStreamInfo = "Informações do Stream";

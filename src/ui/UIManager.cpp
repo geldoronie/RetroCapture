@@ -1455,8 +1455,9 @@ void UIManager::renderStreamingPanel()
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Tamanho do buffer de retaguarda em segundos.\n"
+                          "Com segmentos de 2s: 40s = 20 segmentos (alinhado com HLS_SEGMENT_COUNT).\n"
                           "Valores maiores permitem mais seek backward, mas usam mais memória.\n"
-                          "Padrão: 30 segundos (reduzido para evitar bufferFullError)");
+                          "Padrão: 40 segundos (otimizado para segmentos de 2s)");
     }
 
     // Max Buffer Length
@@ -1473,13 +1474,14 @@ void UIManager::renderStreamingPanel()
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Tamanho máximo do buffer em segundos.\n"
+                          "Com segmentos de 2s: 30s = 15 segmentos (recomendado para fluidez).\n"
                           "Valores menores reduzem latência, mas podem causar buffering.\n"
-                          "Padrão: 10 segundos (otimizado para baixa latência)");
+                          "Padrão: 30 segundos (otimizado para fluidez com segmentos de 2s)");
     }
 
     // Max Max Buffer Length
     float maxMaxBufferLength = m_hlsMaxMaxBufferLength;
-    if (ImGui::SliderFloat("Max Max Buffer (segundos)", &maxMaxBufferLength, 10.0f, 300.0f, "%.1f"))
+    if (ImGui::SliderFloat("Max Max Buffer (segundos)", &maxMaxBufferLength, 20.0f, 300.0f, "%.1f"))
     {
         m_hlsMaxMaxBufferLength = maxMaxBufferLength;
         if (m_onHLSMaxMaxBufferLengthChanged)
@@ -1491,8 +1493,9 @@ void UIManager::renderStreamingPanel()
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Tamanho máximo absoluto do buffer em segundos.\n"
+                          "Com segmentos de 2s: 60s = 30 segmentos (buffer generoso para fluidez).\n"
                           "Limite absoluto que o buffer nunca pode exceder.\n"
-                          "Padrão: 30 segundos (reduzido para evitar bufferFullError)");
+                          "Padrão: 60 segundos (otimizado para segmentos de 2s)");
     }
 
     ImGui::Separator();

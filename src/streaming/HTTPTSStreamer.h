@@ -307,9 +307,13 @@ private:
     bool m_webPortalEnabled = true; // Habilitado por padrão
 
     // HLS (HTTP Live Streaming) support
-    static constexpr int HLS_SEGMENT_DURATION_SEC = 2;             // Duração de cada segmento em segundos
-    static constexpr int HLS_SEGMENT_COUNT = 10;                   // Número de segmentos a manter na playlist (aumentado para evitar falhas)
-    static constexpr size_t MAX_HLS_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB máximo para buffer HLS
+    // IMPORTANTE: Segmentos menores (2-3s) são essenciais para fluidez
+    // - Segmentos menores = mais frequentes = menos espera entre segmentos
+    // - Com bitrate de 2Mbps: segmento de 2s = ~500KB, segmento de 10s = ~2.5MB
+    // - Buffer deve ser grande o suficiente para múltiplos segmentos
+    static constexpr int HLS_SEGMENT_DURATION_SEC = 2;              // 2 segundos: segmentos pequenos e frequentes para fluidez
+    static constexpr int HLS_SEGMENT_COUNT = 20;                    // 20 segmentos: mais opções na playlist para o player
+    static constexpr size_t MAX_HLS_BUFFER_SIZE = 20 * 1024 * 1024; // 20MB: suficiente para ~40 segmentos de 2s (2Mbps)
     struct HLSSegment
     {
         std::vector<uint8_t> data;
@@ -320,6 +324,6 @@ private:
     std::deque<HLSSegment> m_hlsSegments; // Segmentos HLS (circular buffer)
     std::vector<uint8_t> m_hlsBuffer;     // Buffer para acumular dados MPEG-TS antes de criar segmento
     int m_hlsSegmentIndex = 0;            // Contador de segmentos
-    int64_t m_hlsLastSegmentTimeUs = 0;   // Timestamp do último segmento criado
+    int64_t m_lastSegmentTimeUs = 0;      // Timestamp do último segmento criado (para criação baseada em tempo)
     std::thread m_hlsSegmentThread;       // Thread para criar segmentos
 };

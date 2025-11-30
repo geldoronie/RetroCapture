@@ -895,16 +895,24 @@ void HTTPTSStreamer::hlsSegmentThread()
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     const int TS_PACKET_SIZE = 188;
-    // Tamanho mínimo para criar segmento: reduzido para criar mais rapidamente
-    const size_t SEGMENT_SIZE_MIN = 256 * 1024; // 256KB mínimo (reduzido para criar segmentos mais rapidamente)
-    // Tamanho alvo baseado em bitrate
+    // Tamanho mínimo para criar segmento: reduzido para criar segmentos mais rapidamente
+    // Com 2Mbps e 2s: (2,000,000 / 8) * 2 = 500KB por segmento, mas aceitamos menos para criar mais rápido
+    const size_t SEGMENT_SIZE_MIN = 64 * 1024; // 64KB mínimo (muito reduzido para criar segmentos rapidamente)
+    // Tamanho alvo baseado em bitrate e duração do segmento
+    // Para 2Mbps e 2s: ~500KB, mas aceitamos menos se necessário
     const size_t SEGMENT_SIZE_TARGET = std::max(static_cast<size_t>((m_videoBitrate / 8) * HLS_SEGMENT_DURATION_SEC),
-                                                static_cast<size_t>(512 * 1024)); // Alvo: ~500KB
+                                                static_cast<size_t>(128 * 1024)); // Alvo: baseado em bitrate, mínimo 128KB
+
+    // Tempo mínimo entre segmentos (baseado na duração do segmento)
+    const int64_t MIN_SEGMENT_INTERVAL_US = HLS_SEGMENT_DURATION_SEC * 1000000LL; // 2 segundos em microssegundos
+    // Tempo máximo para forçar criação de segmento (mesmo se pequeno)
+    const int64_t MAX_SEGMENT_INTERVAL_US = (HLS_SEGMENT_DURATION_SEC + 1) * 1000000LL; // 3 segundos máximo
 
     while (m_running && !m_stopRequest)
     {
-        // Verificar a cada 500ms (criar segmentos mais frequentemente para melhor fluidez)
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // Verificar a cada 100ms para segmentos de 2 segundos (mais frequente)
+        // Isso permite detecção muito rápida de quando criar novos segmentos
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         if (m_stopRequest || !m_running)
         {
@@ -913,25 +921,85 @@ void HTTPTSStreamer::hlsSegmentThread()
 
         std::lock_guard<std::mutex> lock(m_hlsMutex);
 
-        // Verificar se há dados suficientes no buffer
+        // Verificar se há dados no buffer
         if (m_hlsBuffer.empty())
         {
             continue;
         }
 
-        // Verificar se há dados suficientes para criar segmento
-        if (m_hlsBuffer.size() < SEGMENT_SIZE_MIN)
+        // Obter timestamp atual
+        int64_t currentTimeUs = getTimestampUs();
+        bool shouldCreateSegment = false;
+        size_t segmentSize = 0;
+
+        // Decidir se deve criar segmento baseado em:
+        // 1. Tempo desde último segmento (garantir criação regular)
+        // 2. Tamanho do buffer (criar se houver dados suficientes)
+
+        if (m_lastSegmentTimeUs == 0)
+        {
+            // Primeiro segmento: aguardar dados mínimos
+            if (m_hlsBuffer.size() >= SEGMENT_SIZE_MIN)
+            {
+                shouldCreateSegment = true;
+            }
+        }
+        else
+        {
+            int64_t timeSinceLastSegment = currentTimeUs - m_lastSegmentTimeUs;
+
+            // Forçar criação se passou tempo máximo (garantir regularidade)
+            if (timeSinceLastSegment >= MAX_SEGMENT_INTERVAL_US)
+            {
+                shouldCreateSegment = true;
+                // Usar pelo menos 64KB mesmo que seja pequeno
+                segmentSize = std::max(SEGMENT_SIZE_MIN, std::min(static_cast<size_t>(128 * 1024), m_hlsBuffer.size()));
+            }
+            // Criar se passou tempo mínimo E há dados suficientes
+            else if (timeSinceLastSegment >= MIN_SEGMENT_INTERVAL_US && m_hlsBuffer.size() >= SEGMENT_SIZE_MIN)
+            {
+                shouldCreateSegment = true;
+            }
+        }
+
+        if (!shouldCreateSegment)
         {
             continue;
         }
 
         // Calcular tamanho do segmento (alinhado a múltiplos de 188 bytes)
-        size_t segmentSize = std::min(SEGMENT_SIZE_TARGET, m_hlsBuffer.size());
+        if (segmentSize == 0)
+        {
+            segmentSize = std::min(SEGMENT_SIZE_TARGET, m_hlsBuffer.size());
+        }
         segmentSize = (segmentSize / TS_PACKET_SIZE) * TS_PACKET_SIZE; // Alinhar para baixo
 
+        // Garantir tamanho mínimo
         if (segmentSize < SEGMENT_SIZE_MIN)
         {
-            continue;
+            segmentSize = (SEGMENT_SIZE_MIN / TS_PACKET_SIZE) * TS_PACKET_SIZE;
+            if (segmentSize < SEGMENT_SIZE_MIN)
+            {
+                segmentSize = SEGMENT_SIZE_MIN;
+            }
+        }
+
+        // Verificar se há dados suficientes
+        if (m_hlsBuffer.size() < segmentSize)
+        {
+            // Se forçando criação por tempo, usar o que temos
+            if (m_lastSegmentTimeUs > 0 && (currentTimeUs - m_lastSegmentTimeUs) >= MAX_SEGMENT_INTERVAL_US)
+            {
+                segmentSize = (m_hlsBuffer.size() / TS_PACKET_SIZE) * TS_PACKET_SIZE;
+                if (segmentSize < TS_PACKET_SIZE)
+                {
+                    continue; // Não há nem um pacote TS completo
+                }
+            }
+            else
+            {
+                continue;
+            }
         }
 
         // Criar novo segmento
@@ -967,7 +1035,8 @@ void HTTPTSStreamer::hlsSegmentThread()
         }
 
         segment.index = m_hlsSegmentIndex++;
-        segment.timestampUs = getTimestampUs();
+        segment.timestampUs = currentTimeUs;
+        m_lastSegmentTimeUs = currentTimeUs; // Atualizar timestamp do último segmento
 
         // Adicionar segmento ao buffer circular
         m_hlsSegments.push_back(segment);
@@ -987,10 +1056,10 @@ void HTTPTSStreamer::hlsSegmentThread()
         m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + segmentSize);
 
         // Limpar buffer apenas se ficar muito grande (evitar vazamento de memória)
-        const size_t MAX_HLS_BUFFER_SIZE = 20 * 1024 * 1024; // 20MB máximo
+        // Usar a constante do header para consistência
         if (m_hlsBuffer.size() > MAX_HLS_BUFFER_SIZE)
         {
-            // Manter apenas os últimos 10MB
+            // Manter apenas os últimos 10MB (~20 segmentos de 2s)
             size_t keepSize = 10 * 1024 * 1024;
             if (m_hlsBuffer.size() > keepSize)
             {
@@ -1063,7 +1132,10 @@ void HTTPTSStreamer::serveHLSPlaylist(int clientFd, const std::string &basePrefi
     response << "Content-Type: application/vnd.apple.mpegurl\r\n";
     response << "Content-Length: " << playlist.length() << "\r\n";
     response << "Connection: close\r\n";
+    // Para live streams, a playlist deve ser sempre atualizada
+    // Usar max-age muito curto para forçar atualização frequente
     response << "Cache-Control: no-cache, no-store, must-revalidate\r\n";
+    response << "X-Content-Type-Options: nosniff\r\n";
     response << "Pragma: no-cache\r\n";
     response << "Expires: 0\r\n";
     response << "Access-Control-Allow-Origin: *\r\n";
@@ -1134,10 +1206,12 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     {
         std::lock_guard<std::mutex> hlsLock(m_hlsMutex);
         // Usar MAX_HLS_BUFFER_SIZE do header (20MB) para permitir mais continuidade
+        // Com segmentos de 2s e 2Mbps: cada segmento ~500KB, então 20MB = ~40 segmentos
         if (m_hlsBuffer.size() + buf_size > MAX_HLS_BUFFER_SIZE)
         {
             // Buffer muito grande - limpar dados antigos mantendo apenas os últimos 10MB
-            size_t keepSize = 10 * 1024 * 1024; // 10MB (aumentado de 512KB)
+            // Isso mantém ~20 segmentos de 2s disponíveis mesmo após limpeza
+            size_t keepSize = 10 * 1024 * 1024; // 10MB (mantém ~20 segmentos de 2s)
             if (m_hlsBuffer.size() > keepSize)
             {
                 m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);

@@ -290,26 +290,46 @@
         };
         
         // Configuração do HLS.js com opções específicas para compatibilidade com Chrome
+        // Configurações otimizadas para requisições mais agressivas e prefetch
         hls = new Hls({
             debug: false,
             enableWorker: hlsConfig.enableWorker,
-            lowLatencyMode: hlsConfig.lowLatencyMode,
+            lowLatencyMode: false, // Desabilitar low latency para permitir mais prefetch
             backBufferLength: hlsConfig.backBufferLength,
-            maxBufferLength: hlsConfig.maxBufferLength,
-            maxMaxBufferLength: hlsConfig.maxMaxBufferLength,
+            maxBufferLength: 30, // Aumentar buffer máximo para permitir mais prefetch
+            maxMaxBufferLength: 60, // Aumentar ainda mais para continuidade
             // Configurações adicionais para Chrome
             startLevel: -1, // Deixar HLS.js escolher o nível inicial
             capLevelToPlayerSize: false,
-            // Forçar reload da playlist periodicamente
+            // Forçar reload da playlist periodicamente (mais frequente)
             manifestLoadingTimeOut: 20000,
             manifestLoadingMaxRetry: 3,
+            manifestLoadingRetryDelay: 100, // Reduzir delay entre retries
             levelLoadingTimeOut: 10000,
+            levelLoadingRetryDelay: 100, // Reduzir delay entre retries
             fragLoadingTimeOut: 20000,
+            fragLoadingRetryDelay: 100, // Reduzir delay entre retries
             // Configurações de buffer para Chrome
             maxBufferHole: 0.5, // Tolerância para gaps no buffer
             highBufferWatchdogPeriod: 2, // Verificar buffer alto a cada 2s
             nudgeOffset: 0.1, // Offset para ajuste de sincronização
-            nudgeMaxRetry: 3
+            nudgeMaxRetry: 3,
+            // Configurações de prefetch agressivo
+            startFragPrefetch: true, // Prefetch do primeiro fragmento
+            testBandwidth: true, // Testar largura de banda
+            progressive: false, // Não usar modo progressivo (melhor para live)
+            // Configurações de requisições paralelas
+            maxBufferSize: 60 * 1000 * 1000, // 60MB de buffer máximo
+            liveSyncDurationCount: 3, // Sincronizar com 3 segmentos
+            liveMaxLatencyDurationCount: Infinity, // Sem limite de latência máxima
+            liveDurationInfinity: true, // Duração infinita para live streams
+            // Atualizar playlist mais frequentemente
+            liveBackBufferLength: Infinity, // Manter todo o buffer disponível
+            // Configurações de ABR (Adaptive Bitrate) para melhor continuidade
+            abrEwmaDefaultEstimate: 500000, // Estimativa inicial de bitrate
+            abrBandWidthFactor: 0.95, // Fator de largura de banda
+            abrBandWidthUpFactor: 0.7, // Fator para aumentar bitrate
+            abrMaxWithRealBitrate: false // Não limitar com bitrate real
         });
         
         const absoluteHlsUrl = window.location.protocol + '//' + window.location.host + hlsUrl;
@@ -469,15 +489,15 @@
                     }
                     
                     // Forçar atualização da playlist periodicamente para live streams
-                    // Chrome precisa disso mais frequentemente
+                    // Mais frequente para garantir que novos segmentos sejam detectados rapidamente
                     if (hls.levels && hls.levels.length > 0) {
                         const now = Date.now();
-                        const reloadInterval = isChrome ? 5000 : 10000; // Chrome a cada 5s, Firefox a cada 10s
+                        const reloadInterval = 2000; // Atualizar a cada 2 segundos (mais agressivo)
                         if (!window.lastPlaylistReload || (now - window.lastPlaylistReload) > reloadInterval) {
                             try {
-                                if (isChrome) {
-                                    hls.startLoad();
-                                }
+                                // Forçar reload da playlist para detectar novos segmentos
+                                hls.startLoad();
+                                console.log('Playlist reload forçado para detectar novos segmentos');
                                 window.lastPlaylistReload = now;
                             } catch(e) {
                                 console.warn('Erro ao recarregar playlist:', e);
