@@ -56,7 +56,7 @@ public:
 
     // Configurar parâmetros de buffer (para economizar memória)
     void setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
-                         int64_t maxBufferTimeSeconds, size_t maxHLSBufferSize,
+                         int64_t maxBufferTimeSeconds,
                          size_t avioBufferSize);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
@@ -95,16 +95,6 @@ public:
         const std::string &connecting)
     {
         m_webPortal.setTexts(streamInfo, quickActions, compatibility, status, codec, resolution, streamUrl, copyUrl, openNewTab, supported, format, codecInfo, supportedBrowsers, formatInfo, codecInfoValue, connecting);
-    }
-
-    void setHLSParameters(
-        bool lowLatencyMode,
-        float backBufferLength,
-        float maxBufferLength,
-        float maxMaxBufferLength,
-        bool enableWorker)
-    {
-        m_webPortal.setHLSParameters(lowLatencyMode, backBufferLength, maxBufferLength, maxMaxBufferLength, enableWorker);
     }
 
     // Obter caminhos dos certificados SSL encontrados
@@ -162,16 +152,12 @@ private:
 private:
     void serverThread();
     void handleClient(int clientFd);
-    void serveHLSPlaylist(int clientFd, const std::string &basePrefix = "");    // Servir playlist M3U8 para HLS
-    void serveHLSSegment(int clientFd, int segmentIndex);                       // Servir segmento HLS
-    void send404(int clientFd);                                                 // Enviar resposta 404
-    std::string generateM3U8Playlist(const std::string &basePrefix = "") const; // Gerar playlist M3U8 dinâmica
-    void encodingThread();                                                      // Thread para encoding com sincronização baseada em timestamps
-    void hlsSegmentThread();                                                    // Thread para segmentar stream em HLS
-    void cleanupOldData();                                                      // Limpar dados antigos baseado em tempo
-    int64_t getTimestampUs() const;                                             // Obter timestamp atual em microssegundos
-    bool initializeEncoding();                                                  // Inicializar MediaEncoder e MediaMuxer
-    void cleanupEncoding();                                                     // Limpar MediaEncoder e MediaMuxer
+    void send404(int clientFd);     // Enviar resposta 404
+    void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
+    void cleanupOldData();          // Limpar dados antigos baseado em tempo
+    int64_t getTimestampUs() const; // Obter timestamp atual em microssegundos
+    bool initializeEncoding();      // Inicializar MediaEncoder e MediaMuxer
+    void cleanupEncoding();         // Limpar MediaEncoder e MediaMuxer
     bool initializeFFmpeg();
     bool initializeVideoCodec();
     bool initializeAudioCodec();
@@ -235,11 +221,10 @@ private:
     std::atomic<bool> m_cleanedUp{false};
 
     // Configuração de buffer temporal (configurável via setBufferConfig)
-    int64_t m_maxBufferTimeSeconds = 5;          // Tempo máximo de buffer em segundos (padrão: 5s)
-    size_t m_maxVideoBufferSize = 10;            // Máximo de frames no buffer (padrão: 10)
-    size_t m_maxAudioBufferSize = 20;            // Máximo de chunks no buffer (padrão: 20)
-    size_t m_maxHLSBufferSize = 2 * 1024 * 1024; // 2MB máximo para buffer HLS (padrão)
-    size_t m_avioBufferSize = 256 * 1024;        // 256KB para buffer AVIO (padrão)
+    int64_t m_maxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (padrão: 5s)
+    size_t m_maxVideoBufferSize = 10;     // Máximo de frames no buffer (padrão: 10)
+    size_t m_maxAudioBufferSize = 20;     // Máximo de chunks no buffer (padrão: 20)
+    size_t m_avioBufferSize = 256 * 1024; // 256KB para buffer AVIO (padrão)
 
     static constexpr int64_t MIN_BUFFER_TIME_US = 0;          // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
     static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL; // 50ms de tolerância para sincronização
@@ -305,25 +290,4 @@ private:
     // Web Portal - responsável por servir a página web
     WebPortal m_webPortal;
     bool m_webPortalEnabled = true; // Habilitado por padrão
-
-    // HLS (HTTP Live Streaming) support
-    // IMPORTANTE: Segmentos menores (2-3s) são essenciais para fluidez
-    // - Segmentos menores = mais frequentes = menos espera entre segmentos
-    // - Com bitrate de 2Mbps: segmento de 2s = ~500KB, segmento de 10s = ~2.5MB
-    // - Buffer deve ser grande o suficiente para múltiplos segmentos
-    static constexpr int HLS_SEGMENT_DURATION_SEC = 2;              // 2 segundos: segmentos pequenos e frequentes para fluidez
-    static constexpr int HLS_SEGMENT_COUNT = 20;                    // 20 segmentos: mais opções na playlist para o player
-    static constexpr size_t MAX_HLS_BUFFER_SIZE = 20 * 1024 * 1024; // 20MB: suficiente para ~40 segmentos de 2s (2Mbps)
-    struct HLSSegment
-    {
-        std::vector<uint8_t> data;
-        int64_t timestampUs;
-        int index;
-    };
-    mutable std::mutex m_hlsMutex;
-    std::deque<HLSSegment> m_hlsSegments; // Segmentos HLS (circular buffer)
-    std::vector<uint8_t> m_hlsBuffer;     // Buffer para acumular dados MPEG-TS antes de criar segmento
-    int m_hlsSegmentIndex = 0;            // Contador de segmentos
-    int64_t m_lastSegmentTimeUs = 0;      // Timestamp do último segmento criado (para criação baseada em tempo)
-    std::thread m_hlsSegmentThread;       // Thread para criar segmentos
 };

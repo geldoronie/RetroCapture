@@ -1377,125 +1377,125 @@ void UIManager::renderStreamingPanel()
     int bitrate = static_cast<int>(m_streamingBitrate);
     if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
-        if (bitrate >= 0 && bitrate <= 50000)
+        // Limites: 0 (auto) ou 100-100000 kbps
+        if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
         {
             m_streamingBitrate = static_cast<uint32_t>(bitrate);
             if (m_onStreamingBitrateChanged)
             {
                 m_onStreamingBitrateChanged(m_streamingBitrate);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Bitrate de vídeo em kbps.\n"
+                          "0 = automático (baseado na resolução/FPS)\n"
+                          "100-100000 kbps: valores válidos\n"
+                          "Recomendado: 2000-8000 kbps para streaming");
     }
 
     // Bitrate de áudio
     int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
     if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32))
     {
-        if (audioBitrate >= 32 && audioBitrate <= 320)
+        // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
+        if (audioBitrate >= 64 && audioBitrate <= 320)
         {
             m_streamingAudioBitrate = static_cast<uint32_t>(audioBitrate);
             if (m_onStreamingAudioBitrateChanged)
             {
                 m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Bitrate de áudio em kbps.\n"
+                          "64-320 kbps: valores válidos\n"
+                          "Recomendado: 128-256 kbps para boa qualidade");
     }
 
     ImGui::Separator();
-    ImGui::Text("Desempenho HLS (Web Player)");
+    ImGui::Text("Buffer (Avançado)");
     ImGui::Separator();
 
-    // Modo de baixa latência
-    bool lowLatencyMode = m_hlsLowLatencyMode;
-    if (ImGui::Checkbox("Modo de Baixa Latência", &lowLatencyMode))
+    // Max Video Buffer Size
+    int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
+    if (ImGui::SliderInt("Max Frames no Buffer", &maxVideoBuffer, 1, 50))
     {
-        m_hlsLowLatencyMode = lowLatencyMode;
-        if (m_onHLSLowLatencyModeChanged)
+        m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
+        if (m_onStreamingMaxVideoBufferSizeChanged)
         {
-            m_onHLSLowLatencyModeChanged(m_hlsLowLatencyMode);
+            m_onStreamingMaxVideoBufferSizeChanged(m_streamingMaxVideoBufferSize);
         }
         saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Ativa o modo de baixa latência do HLS.js.\n"
-                          "Reduz a latência do stream, mas pode aumentar o uso de CPU.");
+        ImGui::SetTooltip("Máximo de frames de vídeo no buffer.\n"
+                          "1-50 frames: valores válidos\n"
+                          "Padrão: 10 frames\n"
+                          "Valores maiores = mais memória, menos risco de perda de frames");
     }
 
-    // Habilitar Web Worker
-    bool enableWorker = m_hlsEnableWorker;
-    if (ImGui::Checkbox("Usar Web Worker", &enableWorker))
+    // Max Audio Buffer Size
+    int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
+    if (ImGui::SliderInt("Max Chunks no Buffer", &maxAudioBuffer, 5, 100))
     {
-        m_hlsEnableWorker = enableWorker;
-        if (m_onHLSEnableWorkerChanged)
+        m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
+        if (m_onStreamingMaxAudioBufferSizeChanged)
         {
-            m_onHLSEnableWorkerChanged(m_hlsEnableWorker);
+            m_onStreamingMaxAudioBufferSizeChanged(m_streamingMaxAudioBufferSize);
         }
         saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Usa Web Worker para processamento do HLS.\n"
-                          "Melhora a performance, mas pode não estar disponível em todos os navegadores.");
+        ImGui::SetTooltip("Máximo de chunks de áudio no buffer.\n"
+                          "5-100 chunks: valores válidos\n"
+                          "Padrão: 20 chunks\n"
+                          "Valores maiores = mais memória, melhor sincronização");
     }
 
-    // Back Buffer Length
-    float backBufferLength = m_hlsBackBufferLength;
-    if (ImGui::SliderFloat("Back Buffer (segundos)", &backBufferLength, 10.0f, 300.0f, "%.1f"))
+    // Max Buffer Time
+    int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
+    if (ImGui::SliderInt("Max Tempo de Buffer (segundos)", &maxBufferTime, 1, 30))
     {
-        m_hlsBackBufferLength = backBufferLength;
-        if (m_onHLSBackBufferLengthChanged)
+        m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
+        if (m_onStreamingMaxBufferTimeSecondsChanged)
         {
-            m_onHLSBackBufferLengthChanged(m_hlsBackBufferLength);
+            m_onStreamingMaxBufferTimeSecondsChanged(m_streamingMaxBufferTimeSeconds);
         }
         saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tamanho do buffer de retaguarda em segundos.\n"
-                          "Com segmentos de 2s: 40s = 20 segmentos (alinhado com HLS_SEGMENT_COUNT).\n"
-                          "Valores maiores permitem mais seek backward, mas usam mais memória.\n"
-                          "Padrão: 40 segundos (otimizado para segmentos de 2s)");
+        ImGui::SetTooltip("Tempo máximo de buffer em segundos.\n"
+                          "1-30 segundos: valores válidos\n"
+                          "Padrão: 5 segundos\n"
+                          "Controla quanto tempo de vídeo/áudio pode ser armazenado antes de processar");
     }
 
-    // Max Buffer Length
-    float maxBufferLength = m_hlsMaxBufferLength;
-    if (ImGui::SliderFloat("Max Buffer (segundos)", &maxBufferLength, 5.0f, 120.0f, "%.1f"))
+    // AVIO Buffer Size
+    int avioBuffer = static_cast<int>(m_streamingAVIOBufferSize / 1024); // Converter para KB
+    if (ImGui::SliderInt("AVIO Buffer (KB)", &avioBuffer, 64, 1024))
     {
-        m_hlsMaxBufferLength = maxBufferLength;
-        if (m_onHLSMaxBufferLengthChanged)
+        m_streamingAVIOBufferSize = static_cast<size_t>(avioBuffer * 1024);
+        if (m_onStreamingAVIOBufferSizeChanged)
         {
-            m_onHLSMaxBufferLengthChanged(m_hlsMaxBufferLength);
+            m_onStreamingAVIOBufferSizeChanged(m_streamingAVIOBufferSize);
         }
         saveConfig();
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tamanho máximo do buffer em segundos.\n"
-                          "Com segmentos de 2s: 30s = 15 segmentos (recomendado para fluidez).\n"
-                          "Valores menores reduzem latência, mas podem causar buffering.\n"
-                          "Padrão: 30 segundos (otimizado para fluidez com segmentos de 2s)");
-    }
-
-    // Max Max Buffer Length
-    float maxMaxBufferLength = m_hlsMaxMaxBufferLength;
-    if (ImGui::SliderFloat("Max Max Buffer (segundos)", &maxMaxBufferLength, 20.0f, 300.0f, "%.1f"))
-    {
-        m_hlsMaxMaxBufferLength = maxMaxBufferLength;
-        if (m_onHLSMaxMaxBufferLengthChanged)
-        {
-            m_onHLSMaxMaxBufferLengthChanged(m_hlsMaxMaxBufferLength);
-        }
-        saveConfig();
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Tamanho máximo absoluto do buffer em segundos.\n"
-                          "Com segmentos de 2s: 60s = 30 segmentos (buffer generoso para fluidez).\n"
-                          "Limite absoluto que o buffer nunca pode exceder.\n"
-                          "Padrão: 60 segundos (otimizado para segmentos de 2s)");
+        ImGui::SetTooltip("Tamanho do buffer AVIO do FFmpeg em KB.\n"
+                          "64-1024 KB: valores válidos\n"
+                          "Padrão: 256 KB\n"
+                          "Buffer interno do FFmpeg para I/O de streaming");
     }
 
     ImGui::Separator();
@@ -1623,26 +1623,8 @@ void UIManager::loadConfig()
                     m_streamingMaxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
                 if (buffer.contains("maxBufferTimeSeconds"))
                     m_streamingMaxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
-                if (buffer.contains("maxHLSBufferSize"))
-                    m_streamingMaxHLSBufferSize = buffer["maxHLSBufferSize"].get<size_t>();
                 if (buffer.contains("avioBufferSize"))
                     m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
-            }
-
-            // Carregar parâmetros HLS
-            if (streaming.contains("hls"))
-            {
-                auto &hls = streaming["hls"];
-                if (hls.contains("lowLatencyMode"))
-                    m_hlsLowLatencyMode = hls["lowLatencyMode"];
-                if (hls.contains("backBufferLength"))
-                    m_hlsBackBufferLength = hls["backBufferLength"];
-                if (hls.contains("maxBufferLength"))
-                    m_hlsMaxBufferLength = hls["maxBufferLength"];
-                if (hls.contains("maxMaxBufferLength"))
-                    m_hlsMaxMaxBufferLength = hls["maxMaxBufferLength"];
-                if (hls.contains("enableWorker"))
-                    m_hlsEnableWorker = hls["enableWorker"];
             }
         }
 
@@ -1884,8 +1866,7 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
-            {"hls", {{"lowLatencyMode", m_hlsLowLatencyMode}, {"backBufferLength", m_hlsBackBufferLength}, {"maxBufferLength", m_hlsMaxBufferLength}, {"maxMaxBufferLength", m_hlsMaxMaxBufferLength}, {"enableWorker", m_hlsEnableWorker}}},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"maxHLSBufferSize", m_streamingMaxHLSBufferSize}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
+            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
         // Salvar configurações de imagem
         config["image"] = {
@@ -1937,16 +1918,15 @@ void UIManager::saveConfig()
 
 void UIManager::renderWebPortalPanel()
 {
-    ImGui::Text("Web Portal Configuration");
+    ImGui::Text("Web Portal");
     ImGui::Separator();
     ImGui::Spacing();
 
     // Web Portal Enable/Disable
     bool portalEnabled = m_webPortalEnabled;
-    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
+    if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
     {
         m_webPortalEnabled = portalEnabled;
-        // Se Web Portal for desabilitado, também desabilitar HTTPS
         if (!portalEnabled && m_webPortalHTTPSEnabled)
         {
             m_webPortalHTTPSEnabled = false;
@@ -1962,19 +1942,11 @@ void UIManager::renderWebPortalPanel()
         saveConfig();
     }
 
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Quando desabilitado, apenas o stream direto (/stream) será servido.\n"
-                          "A página web não estará disponível.\n"
-                          "HTTPS será desabilitado automaticamente.");
-    }
-
     if (!portalEnabled)
     {
         ImGui::Spacing();
-        ImGui::TextWrapped("Web Portal desabilitado. Apenas o stream direto está disponível em:");
         std::string streamUrl = "http://localhost:" + std::to_string(m_streamingPort) + "/stream";
-        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", streamUrl.c_str());
+        ImGui::Text("Stream direto: %s", streamUrl.c_str());
         return;
     }
 
@@ -1982,9 +1954,9 @@ void UIManager::renderWebPortalPanel()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // HTTPS Enable/Disable (só disponível se Web Portal estiver habilitado)
+    // HTTPS Enable/Disable
     bool httpsEnabled = m_webPortalHTTPSEnabled;
-    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
+    if (ImGui::Checkbox("Habilitar HTTPS", &httpsEnabled))
     {
         m_webPortalHTTPSEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
@@ -1997,45 +1969,26 @@ void UIManager::renderWebPortalPanel()
     if (httpsEnabled)
     {
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
-        // Mostrar informações básicas do certificado
-        ImGui::Text("SSL/TLS Certificate Information");
-        ImGui::Separator();
-
-        // Mostrar certificado em uso (se encontrado)
         if (!m_foundSSLCertPath.empty())
         {
             ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ HTTPS Ativo");
-            ImGui::Spacing();
-            ImGui::Text("Certificate in use:");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_foundSSLCertPath.c_str());
-            ImGui::Text("Private key in use:");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_foundSSLKeyPath.c_str());
+            ImGui::Text("Certificado: %s", m_foundSSLCertPath.c_str());
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ HTTPS configurado mas certificado não encontrado");
-            ImGui::TextWrapped("Certificados serão buscados em:");
-            ImGui::BulletText("~/.config/retrocapture/ssl/");
-            ImGui::BulletText("./ssl/ (diretório atual)");
-            ImGui::BulletText("Caminhos relativos e absolutos configurados");
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificado não encontrado");
         }
 
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
-        // Informações de configuração (colapsável)
-        if (ImGui::CollapsingHeader("Certificate Configuration", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Configuração de Certificado"))
         {
-            // SSL Certificate Path
             char certPathBuffer[512];
             strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
             certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
 
-            ImGui::Text("Certificate Path (.crt or .pem):");
+            ImGui::Text("Caminho do Certificado:");
             if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
             {
                 m_webPortalSSLCertPath = std::string(certPathBuffer);
@@ -2046,12 +1999,11 @@ void UIManager::renderWebPortalPanel()
                 saveConfig();
             }
 
-            // SSL Key Path
             char keyPathBuffer[512];
             strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
             keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
 
-            ImGui::Text("Private Key Path (.key):");
+            ImGui::Text("Caminho da Chave Privada:");
             if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
             {
                 m_webPortalSSLKeyPath = std::string(keyPathBuffer);
@@ -2061,42 +2013,23 @@ void UIManager::renderWebPortalPanel()
                 }
                 saveConfig();
             }
-
-            ImGui::Spacing();
-
-            // Help text
-            ImGui::TextWrapped("Note: HTTPS support must be compiled with -DENABLE_HTTPS=ON");
-            ImGui::TextWrapped("Generate certificates using:");
-            ImGui::Text("  openssl genrsa -out ssl/server.key 2048");
-            ImGui::Text("  openssl req -new -x509 -key ssl/server.key -out ssl/server.crt -days 365");
-            ImGui::TextWrapped("Certificados serão buscados automaticamente em ~/.config/retrocapture/ssl/");
         }
     }
-    else
-    {
-        ImGui::Spacing();
-        ImGui::TextWrapped("O web portal usará HTTP (não criptografado). Habilite HTTPS para conexões seguras.");
-    }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::Spacing();
+    // Personalização
+    ImGui::Text("Personalização");
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Configuração de Personalização
-    ImGui::Text("Personalização do Portal");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Título da página
+    // Título
     char titleBuffer[256];
     strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-
-    ImGui::Text("Título da Página:");
+    ImGui::Text("Título:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
         m_webPortalTitle = std::string(titleBuffer);
@@ -2109,12 +2042,11 @@ void UIManager::renderWebPortalPanel()
 
     ImGui::Spacing();
 
-    // Subtítulo da página
+    // Subtítulo
     char subtitleBuffer[256];
     strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-
-    ImGui::Text("Subtítulo da Página:");
+    ImGui::Text("Subtítulo:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
         m_webPortalSubtitle = std::string(subtitleBuffer);
@@ -2126,117 +2058,11 @@ void UIManager::renderWebPortalPanel()
     }
 
     ImGui::Spacing();
-
-    // Imagem do título
-    char imagePathBuffer[512];
-    strncpy(imagePathBuffer, m_webPortalImagePath.c_str(), sizeof(imagePathBuffer) - 1);
-    imagePathBuffer[sizeof(imagePathBuffer) - 1] = '\0';
-
-    ImGui::Text("Imagem do Título (opcional):");
-    if (ImGui::InputText("##WebPortalImagePath", imagePathBuffer, sizeof(imagePathBuffer)))
-    {
-        m_webPortalImagePath = std::string(imagePathBuffer);
-        if (m_onWebPortalImagePathChanged)
-        {
-            m_onWebPortalImagePathChanged(m_webPortalImagePath);
-        }
-        saveConfig();
-    }
-
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Nome do arquivo ou caminho da imagem que substituirá o ícone no título.\n"
-                          "Formatos suportados: PNG, JPG, SVG, etc.\n"
-                          "A imagem será buscada em:\n"
-                          "  - ~/.config/retrocapture/assets/\n"
-                          "  - ./assets/ (diretório do executável)\n"
-                          "  - Caminhos relativos e absolutos\n"
-                          "Deixe vazio para usar o ícone padrão.");
-    }
-
-    // Verificar se arquivo existe (mostrar onde foi encontrado)
-    if (!m_webPortalImagePath.empty())
-    {
-        ImGui::Spacing();
-
-        // Buscar nos locais padrão (similar ao que WebPortal faz)
-        auto findAssetFile = [](const std::string &relativePath) -> std::string
-        {
-            // Se o caminho já é absoluto, verificar diretamente
-            std::filesystem::path testPath(relativePath);
-            if (testPath.is_absolute() && std::filesystem::exists(testPath))
-            {
-                return std::filesystem::absolute(testPath).string();
-            }
-
-            // Extrair apenas o nome do arquivo
-            std::filesystem::path inputPath(relativePath);
-            std::string fileName = inputPath.filename().string();
-
-            // Lista de locais para buscar
-            std::vector<std::string> possiblePaths;
-
-            // 1. Pasta de configuração do usuário
-            const char *homeDir = std::getenv("HOME");
-            if (homeDir)
-            {
-                std::filesystem::path userAssetsDir = std::filesystem::path(homeDir) / ".config" / "retrocapture" / "assets";
-                possiblePaths.push_back((userAssetsDir / fileName).string());
-            }
-
-            // 2. Diretório do executável/assets/
-            char exePath[1024];
-            ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-            if (len != -1)
-            {
-                exePath[len] = '\0';
-                std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
-                std::filesystem::path assetsDir = exeDir / "assets";
-                possiblePaths.push_back((assetsDir / fileName).string());
-            }
-
-            // 3. Caminho como fornecido
-            possiblePaths.push_back(relativePath);
-
-            // 4. Diretório atual/assets/
-            possiblePaths.push_back("./assets/" + fileName);
-            possiblePaths.push_back("./assets/" + relativePath);
-
-            // Tentar caminhos
-            for (const auto &path : possiblePaths)
-            {
-                std::filesystem::path fsPath(path);
-                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
-                {
-                    return std::filesystem::absolute(fsPath).string();
-                }
-            }
-
-            return "";
-        };
-
-        std::string foundPath = findAssetFile(m_webPortalImagePath);
-        if (!foundPath.empty())
-        {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Arquivo de imagem encontrado");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", foundPath.c_str());
-        }
-        else
-        {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Arquivo não encontrado nos locais padrão");
-            ImGui::TextWrapped("Buscando em:");
-            ImGui::BulletText("~/.config/retrocapture/assets/");
-            ImGui::BulletText("./assets/ (diretório do executável)");
-            ImGui::BulletText("Caminhos relativos e absolutos configurados");
-        }
-    }
-
-    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Configuração de Cores e Estilo
-    if (ImGui::CollapsingHeader("Cores e Estilo do Portal", ImGuiTreeNodeFlags_DefaultOpen))
+    // Configurações avançadas (colapsável)
+    if (ImGui::CollapsingHeader("Avançado"))
     {
         ImGui::Spacing();
 
@@ -2244,8 +2070,7 @@ void UIManager::renderWebPortalPanel()
         char bgImagePathBuffer[512];
         strncpy(bgImagePathBuffer, m_webPortalBackgroundImagePath.c_str(), sizeof(bgImagePathBuffer) - 1);
         bgImagePathBuffer[sizeof(bgImagePathBuffer) - 1] = '\0';
-
-        ImGui::Text("Imagem de Fundo (opcional):");
+        ImGui::Text("Imagem de Fundo:");
         if (ImGui::InputText("##WebPortalBackgroundImagePath", bgImagePathBuffer, sizeof(bgImagePathBuffer)))
         {
             m_webPortalBackgroundImagePath = std::string(bgImagePathBuffer);
@@ -2256,121 +2081,52 @@ void UIManager::renderWebPortalPanel()
             saveConfig();
         }
 
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Caminho para uma imagem de fundo (similar ao perfil da Steam).\n"
-                              "A imagem será buscada em ~/.config/retrocapture/assets/ ou ./assets/\n"
-                              "Deixe vazio para usar cor de fundo sólida.");
-        }
-
-        // Verificar se arquivo existe
-        if (!m_webPortalBackgroundImagePath.empty())
-        {
-            ImGui::Spacing();
-            // Buscar nos locais padrão (similar ao que fazemos para a imagem do título)
-            auto findAssetFile = [](const std::string &relativePath) -> std::string
-            {
-                std::filesystem::path testPath(relativePath);
-                if (testPath.is_absolute() && std::filesystem::exists(testPath))
-                {
-                    return std::filesystem::absolute(testPath).string();
-                }
-
-                std::filesystem::path inputPath(relativePath);
-                std::string fileName = inputPath.filename().string();
-
-                std::vector<std::string> possiblePaths;
-
-                const char *homeDir = std::getenv("HOME");
-                if (homeDir)
-                {
-                    std::filesystem::path userAssetsDir = std::filesystem::path(homeDir) / ".config" / "retrocapture" / "assets";
-                    possiblePaths.push_back((userAssetsDir / fileName).string());
-                }
-
-                char exePath[1024];
-                ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-                if (len != -1)
-                {
-                    exePath[len] = '\0';
-                    std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
-                    std::filesystem::path assetsDir = exeDir / "assets";
-                    possiblePaths.push_back((assetsDir / fileName).string());
-                }
-
-                possiblePaths.push_back(relativePath);
-                possiblePaths.push_back("./assets/" + fileName);
-                possiblePaths.push_back("./assets/" + relativePath);
-
-                for (const auto &path : possiblePaths)
-                {
-                    std::filesystem::path fsPath(path);
-                    if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
-                    {
-                        return std::filesystem::absolute(fsPath).string();
-                    }
-                }
-
-                return "";
-            };
-
-            std::string foundBgPath = findAssetFile(m_webPortalBackgroundImagePath);
-            if (!foundBgPath.empty())
-            {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Imagem de fundo encontrada");
-            }
-            else
-            {
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Imagem de fundo não encontrada");
-            }
-        }
-
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Cores principais
-        ImGui::Text("Cores do Portal:");
+        // Cores
+        ImGui::Text("Cores:");
         ImGui::Spacing();
 
         bool colorsChanged = false;
 
-        if (ImGui::ColorEdit4("Fundo Principal", m_webPortalColorBackground, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Fundo", m_webPortalColorBackground, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Texto Principal", m_webPortalColorText, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Texto", m_webPortalColorText, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Primária (Retro Teal)", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Primária Light (Mint Glow)", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Primária Dark (Deep Retro)", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Secundária (Cyan)", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secundária", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cor Secundária Highlight (Phosphor)", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secundária Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cabeçalho dos Cards", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Cabeçalho", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -2380,8 +2136,6 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
-        ImGui::Spacing();
-        ImGui::Text("Cores de Status:");
         ImGui::Spacing();
 
         if (ImGui::ColorEdit4("Sucesso", m_webPortalColorSuccess, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
@@ -2414,7 +2168,7 @@ void UIManager::renderWebPortalPanel()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Restaurar Cores Padrão (Styleguide RetroCapture)"))
+        if (ImGui::Button("Restaurar Cores Padrão"))
         {
             // Restaurar valores padrão do styleguide RetroCapture
             // Dark Background #1D1F21
@@ -2495,225 +2249,8 @@ void UIManager::renderWebPortalPanel()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Configuração de Textos Editáveis
-    if (ImGui::CollapsingHeader("Textos Editáveis do Portal", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        ImGui::Spacing();
-        ImGui::Text("Textos dos Cards:");
-        ImGui::Spacing();
-
-        bool textsChanged = false;
-
-        // Subtítulo
-        char subtitleBuffer[256];
-        strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
-        subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-        if (ImGui::InputText("Subtítulo", subtitleBuffer, sizeof(subtitleBuffer)))
-        {
-            m_webPortalSubtitle = std::string(subtitleBuffer);
-            textsChanged = true;
-        }
-
-        ImGui::Spacing();
-
-        // Títulos dos cards
-        char streamInfoBuffer[256];
-        strncpy(streamInfoBuffer, m_webPortalTextStreamInfo.c_str(), sizeof(streamInfoBuffer) - 1);
-        streamInfoBuffer[sizeof(streamInfoBuffer) - 1] = '\0';
-        if (ImGui::InputText("Título: Informações do Stream", streamInfoBuffer, sizeof(streamInfoBuffer)))
-        {
-            m_webPortalTextStreamInfo = std::string(streamInfoBuffer);
-            textsChanged = true;
-        }
-
-        char quickActionsBuffer[256];
-        strncpy(quickActionsBuffer, m_webPortalTextQuickActions.c_str(), sizeof(quickActionsBuffer) - 1);
-        quickActionsBuffer[sizeof(quickActionsBuffer) - 1] = '\0';
-        if (ImGui::InputText("Título: Ações Rápidas", quickActionsBuffer, sizeof(quickActionsBuffer)))
-        {
-            m_webPortalTextQuickActions = std::string(quickActionsBuffer);
-            textsChanged = true;
-        }
-
-        char compatibilityBuffer[256];
-        strncpy(compatibilityBuffer, m_webPortalTextCompatibility.c_str(), sizeof(compatibilityBuffer) - 1);
-        compatibilityBuffer[sizeof(compatibilityBuffer) - 1] = '\0';
-        if (ImGui::InputText("Título: Compatibilidade", compatibilityBuffer, sizeof(compatibilityBuffer)))
-        {
-            m_webPortalTextCompatibility = std::string(compatibilityBuffer);
-            textsChanged = true;
-        }
-
-        ImGui::Spacing();
-        ImGui::Text("Labels dos Campos:");
-        ImGui::Spacing();
-
-        char statusBuffer[128];
-        strncpy(statusBuffer, m_webPortalTextStatus.c_str(), sizeof(statusBuffer) - 1);
-        statusBuffer[sizeof(statusBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: Status", statusBuffer, sizeof(statusBuffer)))
-        {
-            m_webPortalTextStatus = std::string(statusBuffer);
-            textsChanged = true;
-        }
-
-        char codecBuffer[128];
-        strncpy(codecBuffer, m_webPortalTextCodec.c_str(), sizeof(codecBuffer) - 1);
-        codecBuffer[sizeof(codecBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: Codec", codecBuffer, sizeof(codecBuffer)))
-        {
-            m_webPortalTextCodec = std::string(codecBuffer);
-            textsChanged = true;
-        }
-
-        char resolutionBuffer[128];
-        strncpy(resolutionBuffer, m_webPortalTextResolution.c_str(), sizeof(resolutionBuffer) - 1);
-        resolutionBuffer[sizeof(resolutionBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: Resolução", resolutionBuffer, sizeof(resolutionBuffer)))
-        {
-            m_webPortalTextResolution = std::string(resolutionBuffer);
-            textsChanged = true;
-        }
-
-        char streamUrlBuffer[128];
-        strncpy(streamUrlBuffer, m_webPortalTextStreamUrl.c_str(), sizeof(streamUrlBuffer) - 1);
-        streamUrlBuffer[sizeof(streamUrlBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: URL do Stream", streamUrlBuffer, sizeof(streamUrlBuffer)))
-        {
-            m_webPortalTextStreamUrl = std::string(streamUrlBuffer);
-            textsChanged = true;
-        }
-
-        ImGui::Spacing();
-        ImGui::Text("Textos dos Botões:");
-        ImGui::Spacing();
-
-        char copyUrlBuffer[128];
-        strncpy(copyUrlBuffer, m_webPortalTextCopyUrl.c_str(), sizeof(copyUrlBuffer) - 1);
-        copyUrlBuffer[sizeof(copyUrlBuffer) - 1] = '\0';
-        if (ImGui::InputText("Botão: Copiar URL", copyUrlBuffer, sizeof(copyUrlBuffer)))
-        {
-            m_webPortalTextCopyUrl = std::string(copyUrlBuffer);
-            textsChanged = true;
-        }
-
-        char openNewTabBuffer[128];
-        strncpy(openNewTabBuffer, m_webPortalTextOpenNewTab.c_str(), sizeof(openNewTabBuffer) - 1);
-        openNewTabBuffer[sizeof(openNewTabBuffer) - 1] = '\0';
-        if (ImGui::InputText("Botão: Abrir em Nova Aba", openNewTabBuffer, sizeof(openNewTabBuffer)))
-        {
-            m_webPortalTextOpenNewTab = std::string(openNewTabBuffer);
-            textsChanged = true;
-        }
-
-        ImGui::Spacing();
-        ImGui::Text("Textos de Informação:");
-        ImGui::Spacing();
-
-        char supportedBuffer[256];
-        strncpy(supportedBuffer, m_webPortalTextSupported.c_str(), sizeof(supportedBuffer) - 1);
-        supportedBuffer[sizeof(supportedBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: Suportado", supportedBuffer, sizeof(supportedBuffer)))
-        {
-            m_webPortalTextSupported = std::string(supportedBuffer);
-            textsChanged = true;
-        }
-
-        char formatBuffer[128];
-        strncpy(formatBuffer, m_webPortalTextFormat.c_str(), sizeof(formatBuffer) - 1);
-        formatBuffer[sizeof(formatBuffer) - 1] = '\0';
-        if (ImGui::InputText("Label: Formato", formatBuffer, sizeof(formatBuffer)))
-        {
-            m_webPortalTextFormat = std::string(formatBuffer);
-            textsChanged = true;
-        }
-
-        char browsersBuffer[256];
-        strncpy(browsersBuffer, m_webPortalTextSupportedBrowsers.c_str(), sizeof(browsersBuffer) - 1);
-        browsersBuffer[sizeof(browsersBuffer) - 1] = '\0';
-        if (ImGui::InputText("Navegadores Suportados", browsersBuffer, sizeof(browsersBuffer)))
-        {
-            m_webPortalTextSupportedBrowsers = std::string(browsersBuffer);
-            textsChanged = true;
-        }
-
-        char formatInfoBuffer[256];
-        strncpy(formatInfoBuffer, m_webPortalTextFormatInfo.c_str(), sizeof(formatInfoBuffer) - 1);
-        formatInfoBuffer[sizeof(formatInfoBuffer) - 1] = '\0';
-        if (ImGui::InputText("Info: Formato", formatInfoBuffer, sizeof(formatInfoBuffer)))
-        {
-            m_webPortalTextFormatInfo = std::string(formatInfoBuffer);
-            textsChanged = true;
-        }
-
-        char codecInfoValueBuffer[128];
-        strncpy(codecInfoValueBuffer, m_webPortalTextCodecInfoValue.c_str(), sizeof(codecInfoValueBuffer) - 1);
-        codecInfoValueBuffer[sizeof(codecInfoValueBuffer) - 1] = '\0';
-        if (ImGui::InputText("Info: Codec", codecInfoValueBuffer, sizeof(codecInfoValueBuffer)))
-        {
-            m_webPortalTextCodecInfoValue = std::string(codecInfoValueBuffer);
-            textsChanged = true;
-        }
-
-        char connectingBuffer[128];
-        strncpy(connectingBuffer, m_webPortalTextConnecting.c_str(), sizeof(connectingBuffer) - 1);
-        connectingBuffer[sizeof(connectingBuffer) - 1] = '\0';
-        if (ImGui::InputText("Status: Conectando", connectingBuffer, sizeof(connectingBuffer)))
-        {
-            m_webPortalTextConnecting = std::string(connectingBuffer);
-            textsChanged = true;
-        }
-
-        if (textsChanged)
-        {
-            if (m_onWebPortalTextsChanged)
-            {
-                m_onWebPortalTextsChanged();
-            }
-            saveConfig();
-        }
-
-        ImGui::Spacing();
-        if (ImGui::Button("Restaurar Textos Padrão"))
-        {
-            m_webPortalSubtitle = "Streaming de vídeo em tempo real";
-            m_webPortalTextStreamInfo = "Informações do Stream";
-            m_webPortalTextQuickActions = "Ações Rápidas";
-            m_webPortalTextCompatibility = "Compatibilidade";
-            m_webPortalTextStatus = "Status";
-            m_webPortalTextCodec = "Codec";
-            m_webPortalTextResolution = "Resolução";
-            m_webPortalTextStreamUrl = "URL do Stream";
-            m_webPortalTextCopyUrl = "Copiar URL";
-            m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
-            m_webPortalTextSupported = "Suportado";
-            m_webPortalTextFormat = "Formato";
-            m_webPortalTextCodecInfo = "Codec";
-            m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
-            m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
-            m_webPortalTextCodecInfoValue = "H.264/AAC";
-            m_webPortalTextConnecting = "Conectando...";
-
-            if (m_onWebPortalTextsChanged)
-            {
-                m_onWebPortalTextsChanged();
-            }
-            saveConfig();
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Portal URL info
-    ImGui::Text("Portal URL:");
+    // Portal URL
     std::string protocol = httpsEnabled ? "https" : "http";
     std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
-    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", portalUrl.c_str());
-
-    if (ImGui::Button("Copy URL"))
-    {
-        ImGui::SetClipboardText(portalUrl.c_str());
-    }
+    ImGui::Text("URL: %s", portalUrl.c_str());
 }

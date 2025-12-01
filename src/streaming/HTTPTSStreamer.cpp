@@ -86,13 +86,12 @@ void HTTPTSStreamer::setVideoCodec(const std::string &codecName)
 }
 
 void HTTPTSStreamer::setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
-                                     int64_t maxBufferTimeSeconds, size_t maxHLSBufferSize,
+                                     int64_t maxBufferTimeSeconds,
                                      size_t avioBufferSize)
 {
     m_maxVideoBufferSize = maxVideoBufferSize;
     m_maxAudioBufferSize = maxAudioBufferSize;
     m_maxBufferTimeSeconds = maxBufferTimeSeconds;
-    m_maxHLSBufferSize = maxHLSBufferSize;
     m_avioBufferSize = avioBufferSize;
 }
 
@@ -350,8 +349,6 @@ bool HTTPTSStreamer::start()
     m_serverThread.detach();
     m_encodingThread = std::thread(&HTTPTSStreamer::encodingThread, this);
     m_encodingThread.detach();
-    m_hlsSegmentThread = std::thread(&HTTPTSStreamer::hlsSegmentThread, this);
-    m_hlsSegmentThread.detach();
 
     return true;
 }
@@ -503,13 +500,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     // Verificar tipo de requisição (ANTES de verificar portal web)
     // Isso garante que requisições de stream não sejam capturadas pelo portal
-    // Detectar requisições HLS (com ou sem prefixo base)
-    bool isHLSPlaylist = (request.find("/stream.m3u8") != std::string::npos);
-    bool isHLSSegment = (request.find("/segment_") != std::string::npos);
-    bool isStreamRequest = (request.find("/stream") != std::string::npos &&
-                            !isHLSPlaylist &&
-                            request.find("/stream.m3u8") == std::string::npos);
-    int segmentIndex = -1;
+    bool isStreamRequest = (request.find("/stream") != std::string::npos);
 
     // Extrair prefixo base para verificar requisições com prefixo
     // Prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
@@ -599,30 +590,8 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
     }
 
-    // Verificar requisições HLS com prefixo base
-    if (!isHLSPlaylist && !basePrefixForDetection.empty())
-    {
-        std::string prefixedPlaylist = basePrefixForDetection + "/stream.m3u8";
-        if (request.find("GET " + prefixedPlaylist) != std::string::npos ||
-            request.find(prefixedPlaylist) != std::string::npos)
-        {
-            isHLSPlaylist = true;
-        }
-    }
-
-    if (!isHLSSegment && !basePrefixForDetection.empty())
-    {
-        std::string prefixedSegment = basePrefixForDetection + "/segment_";
-        if (request.find("GET " + prefixedSegment) != std::string::npos ||
-            request.find(prefixedSegment) != std::string::npos)
-        {
-            isHLSSegment = true;
-        }
-    }
-
-    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream/HLS e se Web Portal estiver habilitado
-    // Isso previne que stream.m3u8 seja capturado pelo portal e retorne HTML
-    if (m_webPortalEnabled && !isHLSPlaylist && !isHLSSegment && !isStreamRequest)
+    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream e se Web Portal estiver habilitado
+    if (m_webPortalEnabled && !isStreamRequest)
     {
         if (m_webPortal.isWebPortalRequest(request))
         {
@@ -635,172 +604,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
     }
 
-    // Extrair índice do segmento HLS (com ou sem prefixo base)
-    if (isHLSSegment)
-    {
-        size_t segmentPos = request.find("/segment_");
-        if (segmentPos == std::string::npos && !basePrefixForDetection.empty())
-        {
-            // Tentar com prefixo base
-            std::string prefixedSegment = basePrefixForDetection + "/segment_";
-            segmentPos = request.find(prefixedSegment);
-            if (segmentPos != std::string::npos)
-            {
-                segmentPos += basePrefixForDetection.length(); // Ajustar para posição após prefixo
-            }
-        }
-
-        if (segmentPos != std::string::npos)
-        {
-            size_t dotPos = request.find(".ts", segmentPos);
-            if (dotPos != std::string::npos)
-            {
-                std::string segmentStr = request.substr(segmentPos + 9, dotPos - segmentPos - 9);
-                try
-                {
-                    segmentIndex = std::stoi(segmentStr);
-                }
-                catch (...)
-                {
-                    segmentIndex = -1;
-                }
-            }
-        }
-    }
-
-    if (isHLSPlaylist)
-    {
-        // Extrair prefixo base - prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
-        std::string basePrefix = basePrefixForDetection;
-
-        // 1. Tentar extrair do header X-Forwarded-Prefix (padrão para proxy reverso)
-        if (basePrefix.empty())
-        {
-            size_t prefixHeaderPos = request.find("X-Forwarded-Prefix:");
-            if (prefixHeaderPos != std::string::npos)
-            {
-                size_t valueStart = request.find(":", prefixHeaderPos) + 1;
-                while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
-                {
-                    valueStart++;
-                }
-                size_t valueEnd = request.find("\r\n", valueStart);
-                if (valueEnd == std::string::npos)
-                {
-                    valueEnd = request.find("\n", valueStart);
-                }
-                if (valueEnd != std::string::npos)
-                {
-                    std::string prefix = request.substr(valueStart, valueEnd - valueStart);
-                    // Remover espaços em branco
-                    while (!prefix.empty() && (prefix.back() == ' ' || prefix.back() == '\t' || prefix.back() == '\r'))
-                    {
-                        prefix.pop_back();
-                    }
-                    if (!prefix.empty())
-                    {
-                        // Garantir que começa com / mas não termina com /
-                        if (prefix[0] != '/')
-                        {
-                            prefix = "/" + prefix;
-                        }
-                        if (prefix.length() > 1 && prefix.back() == '/')
-                        {
-                            prefix.pop_back();
-                        }
-                        basePrefix = prefix;
-                    }
-                }
-            }
-        }
-
-        // 1b. Tentar extrair do header X-Forwarded-Uri (alternativa para proxy reverso)
-        if (basePrefix.empty())
-        {
-            size_t uriHeaderPos = request.find("X-Forwarded-Uri:");
-            if (uriHeaderPos == std::string::npos)
-            {
-                uriHeaderPos = request.find("X-Original-URI:");
-            }
-            if (uriHeaderPos != std::string::npos)
-            {
-                size_t valueStart = request.find(":", uriHeaderPos) + 1;
-                while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
-                {
-                    valueStart++;
-                }
-                size_t valueEnd = request.find("\r\n", valueStart);
-                if (valueEnd == std::string::npos)
-                {
-                    valueEnd = request.find("\n", valueStart);
-                }
-                if (valueEnd != std::string::npos)
-                {
-                    std::string uri = request.substr(valueStart, valueEnd - valueStart);
-                    // Remover espaços em branco
-                    while (!uri.empty() && (uri.back() == ' ' || uri.back() == '\t' || uri.back() == '\r'))
-                    {
-                        uri.pop_back();
-                    }
-                    // Extrair prefixo do URI (ex: /retrocapture/stream.m3u8 -> /retrocapture)
-                    if (!uri.empty() && uri[0] == '/')
-                    {
-                        size_t streamPos = uri.find("/stream.m3u8");
-                        if (streamPos != std::string::npos && streamPos > 0)
-                        {
-                            basePrefix = uri.substr(0, streamPos);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Se ainda vazio, tentar extrair do path da requisição diretamente
-        if (basePrefix.empty())
-        {
-            size_t streamPos = request.find("/stream.m3u8");
-            if (streamPos != std::string::npos)
-            {
-                size_t pathStart = request.find("GET ");
-                if (pathStart != std::string::npos)
-                {
-                    std::string fullPath = request.substr(pathStart + 4, streamPos - pathStart - 4);
-                    // Remover espaços
-                    while (!fullPath.empty() && fullPath[0] == ' ')
-                    {
-                        fullPath = fullPath.substr(1);
-                    }
-                    // Remover query string se existir
-                    size_t queryPos = fullPath.find('?');
-                    if (queryPos != std::string::npos)
-                    {
-                        fullPath = fullPath.substr(0, queryPos);
-                    }
-                    if (!fullPath.empty() && fullPath[0] == '/')
-                    {
-                        // Extrair prefixo (tudo antes de /stream.m3u8)
-                        // Exemplo: /retrocapture/stream.m3u8 -> /retrocapture
-                        size_t lastSlash = fullPath.rfind('/');
-                        if (lastSlash != std::string::npos && lastSlash > 0)
-                        {
-                            basePrefix = fullPath.substr(0, lastSlash);
-                        }
-                    }
-                }
-            }
-        }
-
-        serveHLSPlaylist(clientFd, basePrefix);
-        m_httpServer.closeClient(clientFd);
-        return;
-    }
-    else if (isHLSSegment && segmentIndex >= 0)
-    {
-        serveHLSSegment(clientFd, segmentIndex);
-        m_httpServer.closeClient(clientFd);
-        return;
-    }
-    else if (!isStreamRequest)
+    if (!isStreamRequest)
     {
         send404(clientFd);
         m_httpServer.closeClient(clientFd);
@@ -889,301 +693,6 @@ void HTTPTSStreamer::send404(int clientFd)
     m_httpServer.sendData(clientFd, response, strlen(response));
 }
 
-void HTTPTSStreamer::hlsSegmentThread()
-{
-    // Aguardar um pouco para ter dados iniciais
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    const int TS_PACKET_SIZE = 188;
-    // Tamanho mínimo para criar segmento: reduzido para criar segmentos mais rapidamente
-    // Com 2Mbps e 2s: (2,000,000 / 8) * 2 = 500KB por segmento, mas aceitamos menos para criar mais rápido
-    const size_t SEGMENT_SIZE_MIN = 64 * 1024; // 64KB mínimo (muito reduzido para criar segmentos rapidamente)
-    // Tamanho alvo baseado em bitrate e duração do segmento
-    // Para 2Mbps e 2s: ~500KB, mas aceitamos menos se necessário
-    const size_t SEGMENT_SIZE_TARGET = std::max(static_cast<size_t>((m_videoBitrate / 8) * HLS_SEGMENT_DURATION_SEC),
-                                                static_cast<size_t>(128 * 1024)); // Alvo: baseado em bitrate, mínimo 128KB
-
-    // Tempo mínimo entre segmentos (baseado na duração do segmento)
-    const int64_t MIN_SEGMENT_INTERVAL_US = HLS_SEGMENT_DURATION_SEC * 1000000LL; // 2 segundos em microssegundos
-    // Tempo máximo para forçar criação de segmento (mesmo se pequeno)
-    const int64_t MAX_SEGMENT_INTERVAL_US = (HLS_SEGMENT_DURATION_SEC + 1) * 1000000LL; // 3 segundos máximo
-
-    while (m_running && !m_stopRequest)
-    {
-        // Verificar a cada 100ms para segmentos de 2 segundos (mais frequente)
-        // Isso permite detecção muito rápida de quando criar novos segmentos
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        if (m_stopRequest || !m_running)
-        {
-            break;
-        }
-
-        std::lock_guard<std::mutex> lock(m_hlsMutex);
-
-        // Verificar se há dados no buffer
-        if (m_hlsBuffer.empty())
-        {
-            continue;
-        }
-
-        // Obter timestamp atual
-        int64_t currentTimeUs = getTimestampUs();
-        bool shouldCreateSegment = false;
-        size_t segmentSize = 0;
-
-        // Decidir se deve criar segmento baseado em:
-        // 1. Tempo desde último segmento (garantir criação regular)
-        // 2. Tamanho do buffer (criar se houver dados suficientes)
-
-        if (m_lastSegmentTimeUs == 0)
-        {
-            // Primeiro segmento: aguardar dados mínimos
-            if (m_hlsBuffer.size() >= SEGMENT_SIZE_MIN)
-            {
-                shouldCreateSegment = true;
-            }
-        }
-        else
-        {
-            int64_t timeSinceLastSegment = currentTimeUs - m_lastSegmentTimeUs;
-
-            // Forçar criação se passou tempo máximo (garantir regularidade)
-            if (timeSinceLastSegment >= MAX_SEGMENT_INTERVAL_US)
-            {
-                shouldCreateSegment = true;
-                // Usar pelo menos 64KB mesmo que seja pequeno
-                segmentSize = std::max(SEGMENT_SIZE_MIN, std::min(static_cast<size_t>(128 * 1024), m_hlsBuffer.size()));
-            }
-            // Criar se passou tempo mínimo E há dados suficientes
-            else if (timeSinceLastSegment >= MIN_SEGMENT_INTERVAL_US && m_hlsBuffer.size() >= SEGMENT_SIZE_MIN)
-            {
-                shouldCreateSegment = true;
-            }
-        }
-
-        if (!shouldCreateSegment)
-        {
-            continue;
-        }
-
-        // Calcular tamanho do segmento (alinhado a múltiplos de 188 bytes)
-        if (segmentSize == 0)
-        {
-            segmentSize = std::min(SEGMENT_SIZE_TARGET, m_hlsBuffer.size());
-        }
-        segmentSize = (segmentSize / TS_PACKET_SIZE) * TS_PACKET_SIZE; // Alinhar para baixo
-
-        // Garantir tamanho mínimo
-        if (segmentSize < SEGMENT_SIZE_MIN)
-        {
-            segmentSize = (SEGMENT_SIZE_MIN / TS_PACKET_SIZE) * TS_PACKET_SIZE;
-            if (segmentSize < SEGMENT_SIZE_MIN)
-            {
-                segmentSize = SEGMENT_SIZE_MIN;
-            }
-        }
-
-        // Verificar se há dados suficientes
-        if (m_hlsBuffer.size() < segmentSize)
-        {
-            // Se forçando criação por tempo, usar o que temos
-            if (m_lastSegmentTimeUs > 0 && (currentTimeUs - m_lastSegmentTimeUs) >= MAX_SEGMENT_INTERVAL_US)
-            {
-                segmentSize = (m_hlsBuffer.size() / TS_PACKET_SIZE) * TS_PACKET_SIZE;
-                if (segmentSize < TS_PACKET_SIZE)
-                {
-                    continue; // Não há nem um pacote TS completo
-                }
-            }
-            else
-            {
-                continue;
-            }
-        }
-
-        // Criar novo segmento
-        HLSSegment segment;
-
-        // IMPORTANTE: Para HLS, cada segmento deve ser independente e decodificável
-        // CRÍTICO: O primeiro segmento DEVE ter o header PAT/PMT completo para que o HLS.js
-        // identifique os codecs corretamente. Sem isso, gera bufferAddCodecError fatal.
-        {
-            std::lock_guard<std::mutex> headerLock(m_headerMutex);
-            if (m_hlsSegments.empty())
-            {
-                // Primeiro segmento: aguardar header estar completo antes de criar
-                // O header precisa ter pelo menos alguns pacotes PAT/PMT para ser válido
-                if (m_headerWritten && !m_formatHeader.empty() && m_formatHeader.size() >= 376)
-                {
-                    // Header completo disponível: adicionar no início do primeiro segmento
-                    segment.data = m_formatHeader;
-                    // Adicionar apenas os dados necessários (não todo o buffer)
-                    size_t firstSegmentSize = std::min(segmentSize, m_hlsBuffer.size());
-                    segment.data.insert(segment.data.end(), m_hlsBuffer.begin(), m_hlsBuffer.begin() + firstSegmentSize);
-                }
-                else
-                {
-                    continue;
-                }
-            }
-            else
-            {
-                // Segmentos subsequentes: copiar apenas os dados necessários
-                segment.data.assign(m_hlsBuffer.begin(), m_hlsBuffer.begin() + segmentSize);
-            }
-        }
-
-        segment.index = m_hlsSegmentIndex++;
-        segment.timestampUs = currentTimeUs;
-        m_lastSegmentTimeUs = currentTimeUs; // Atualizar timestamp do último segmento
-
-        // Adicionar segmento ao buffer circular
-        m_hlsSegments.push_back(segment);
-
-        // Manter apenas os últimos HLS_SEGMENT_COUNT segmentos
-        int removedCount = 0;
-        while (static_cast<int>(m_hlsSegments.size()) > HLS_SEGMENT_COUNT)
-        {
-            m_hlsSegments.pop_front();
-            removedCount++;
-        }
-        if (removedCount > 0)
-        {
-        }
-
-        // Remover dados usados do buffer (manter o restante para continuidade)
-        m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.begin() + segmentSize);
-
-        // Limpar buffer apenas se ficar muito grande (evitar vazamento de memória)
-        // Usar a constante do header para consistência
-        if (m_hlsBuffer.size() > MAX_HLS_BUFFER_SIZE)
-        {
-            // Manter apenas os últimos 10MB (~20 segmentos de 2s)
-            size_t keepSize = 10 * 1024 * 1024;
-            if (m_hlsBuffer.size() > keepSize)
-            {
-                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);
-            }
-        }
-    }
-}
-
-std::string HTTPTSStreamer::generateM3U8Playlist(const std::string &basePrefix) const
-{
-    std::lock_guard<std::mutex> lock(m_hlsMutex);
-
-    std::ostringstream m3u8;
-    m3u8 << "#EXTM3U\n";
-    m3u8 << "#EXT-X-VERSION:3\n";
-    m3u8 << "#EXT-X-TARGETDURATION:" << HLS_SEGMENT_DURATION_SEC << "\n";
-
-    // Para live streams, não incluímos EXT-X-PLAYLIST-TYPE (ou usamos EVENT)
-    // Não incluímos EXT-X-ENDLIST para indicar que é uma live stream
-
-    // Calcular MEDIA-SEQUENCE corretamente (índice do primeiro segmento disponível)
-    int mediaSequence = 0;
-    if (!m_hlsSegments.empty())
-    {
-        mediaSequence = m_hlsSegments.front().index;
-    }
-    else if (m_hlsSegmentIndex > 0)
-    {
-        // Se não há segmentos mas já criamos alguns, usar o próximo índice
-        mediaSequence = m_hlsSegmentIndex;
-    }
-    m3u8 << "#EXT-X-MEDIA-SEQUENCE:" << mediaSequence << "\n";
-
-    // Sempre usar path absoluto começando com /
-    // Se basePrefix estiver vazio, usar "/", senão usar o prefixo com "/" no final
-    std::string segmentPrefix;
-    if (basePrefix.empty())
-    {
-        segmentPrefix = "/";
-    }
-    else
-    {
-        segmentPrefix = basePrefix;
-        if (segmentPrefix.back() != '/')
-        {
-            segmentPrefix += "/";
-        }
-    }
-
-    for (const auto &segment : m_hlsSegments)
-    {
-        m3u8 << "#EXTINF:" << HLS_SEGMENT_DURATION_SEC << ".0,\n";
-        // Sempre usar path absoluto: /segment_X.ts ou /prefix/segment_X.ts
-        std::string segmentUrl = segmentPrefix + "segment_" + std::to_string(segment.index) + ".ts";
-        m3u8 << segmentUrl << "\n";
-    }
-
-    std::string playlist = m3u8.str();
-
-    return playlist;
-}
-
-void HTTPTSStreamer::serveHLSPlaylist(int clientFd, const std::string &basePrefix)
-{
-    std::string playlist = generateM3U8Playlist(basePrefix);
-
-    std::ostringstream response;
-    response << "HTTP/1.1 200 OK\r\n";
-    response << "Content-Type: application/vnd.apple.mpegurl\r\n";
-    response << "Content-Length: " << playlist.length() << "\r\n";
-    response << "Connection: close\r\n";
-    // Para live streams, a playlist deve ser sempre atualizada
-    // Usar max-age muito curto para forçar atualização frequente
-    response << "Cache-Control: no-cache, no-store, must-revalidate\r\n";
-    response << "X-Content-Type-Options: nosniff\r\n";
-    response << "Pragma: no-cache\r\n";
-    response << "Expires: 0\r\n";
-    response << "Access-Control-Allow-Origin: *\r\n";
-    response << "Access-Control-Allow-Methods: GET, OPTIONS\r\n";
-    response << "\r\n";
-    response << playlist;
-
-    std::string responseStr = response.str();
-    m_httpServer.sendData(clientFd, responseStr.c_str(), responseStr.length());
-}
-
-void HTTPTSStreamer::serveHLSSegment(int clientFd, int segmentIndex)
-{
-    std::lock_guard<std::mutex> lock(m_hlsMutex);
-
-    // Procurar segmento pelo índice
-    for (const auto &segment : m_hlsSegments)
-    {
-        if (segment.index == segmentIndex)
-        {
-            std::ostringstream response;
-            response << "HTTP/1.1 200 OK\r\n";
-            response << "Content-Type: video/mp2t\r\n";
-            response << "Content-Length: " << segment.data.size() << "\r\n";
-            response << "Connection: close\r\n";
-            response << "Cache-Control: public, max-age=3600\r\n";
-            // Headers CORS completos para Chrome
-            response << "Access-Control-Allow-Origin: *\r\n";
-            response << "Access-Control-Allow-Methods: GET, OPTIONS\r\n";
-            response << "Access-Control-Allow-Headers: Range, Content-Type\r\n";
-            response << "Access-Control-Expose-Headers: Content-Length, Content-Range\r\n";
-            response << "Accept-Ranges: bytes\r\n";
-            response << "\r\n";
-
-            std::string headerStr = response.str();
-            m_httpServer.sendData(clientFd, headerStr.c_str(), headerStr.length());
-            m_httpServer.sendData(clientFd, segment.data.data(), segment.data.size());
-            return;
-        }
-    }
-
-    // Segmento não encontrado - log detalhado para debug
-    LOG_WARN("HLS segment " + std::to_string(segmentIndex) + " not found. Available segments: " +
-             std::to_string(m_hlsSegments.size()) +
-             (m_hlsSegments.empty() ? "" : " (range: " + std::to_string(m_hlsSegments.front().index) + " to " + std::to_string(m_hlsSegments.back().index) + ")"));
-    send404(clientFd);
-}
-
 int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 {
     if (!buf || buf_size <= 0 || m_stopRequest)
@@ -1200,24 +709,6 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             m_formatHeader = m_mediaMuxer.getFormatHeader();
             m_headerWritten = true;
         }
-    }
-
-    // Acumular dados para HLS (com limite de tamanho para evitar vazamento de memória)
-    {
-        std::lock_guard<std::mutex> hlsLock(m_hlsMutex);
-        // Usar MAX_HLS_BUFFER_SIZE do header (20MB) para permitir mais continuidade
-        // Com segmentos de 2s e 2Mbps: cada segmento ~500KB, então 20MB = ~40 segmentos
-        if (m_hlsBuffer.size() + buf_size > MAX_HLS_BUFFER_SIZE)
-        {
-            // Buffer muito grande - limpar dados antigos mantendo apenas os últimos 10MB
-            // Isso mantém ~20 segmentos de 2s disponíveis mesmo após limpeza
-            size_t keepSize = 10 * 1024 * 1024; // 10MB (mantém ~20 segmentos de 2s)
-            if (m_hlsBuffer.size() > keepSize)
-            {
-                m_hlsBuffer.erase(m_hlsBuffer.begin(), m_hlsBuffer.end() - keepSize);
-            }
-        }
-        m_hlsBuffer.insert(m_hlsBuffer.end(), buf, buf + buf_size);
     }
 
     // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)

@@ -736,11 +736,10 @@ bool Application::initUI()
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
     // Carregar parâmetros HLS
-    m_hlsLowLatencyMode = m_ui->getHLSLowLatencyMode();
-    m_hlsBackBufferLength = m_ui->getHLSBackBufferLength();
-    m_hlsMaxBufferLength = m_ui->getHLSMaxBufferLength();
-    m_hlsMaxMaxBufferLength = m_ui->getHLSMaxMaxBufferLength();
-    m_hlsEnableWorker = m_ui->getHLSEnableWorker();
+    m_streamingMaxVideoBufferSize = m_ui->getStreamingMaxVideoBufferSize();
+    m_streamingMaxAudioBufferSize = m_ui->getStreamingMaxAudioBufferSize();
+    m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();
+    m_streamingAVIOBufferSize = m_ui->getStreamingAVIOBufferSize();
 
     // Carregar configurações de buffer (já carregadas pelo UIManager do arquivo de config)
 
@@ -919,6 +918,7 @@ bool Application::initUI()
                         m_streamManager->stop();
                         m_streamManager->cleanup();
                         m_streamManager.reset();
+                        m_currentStreamer = nullptr; // Limpar referência ao streamer
                     }
                 } catch (const std::exception& e) {
                     LOG_ERROR("Exceção ao parar streaming: " + std::string(e.what()));
@@ -1064,70 +1064,49 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    // Callbacks para parâmetros HLS
-    m_ui->setOnHLSLowLatencyModeChanged([this](bool enabled)
-                                        {
-        m_hlsLowLatencyMode = enabled;
-        if (m_streamManager) {
-            m_streamManager->setHLSParameters(
-                m_hlsLowLatencyMode,
-                m_hlsBackBufferLength,
-                m_hlsMaxBufferLength,
-                m_hlsMaxMaxBufferLength,
-                m_hlsEnableWorker
-            );
+    // Callbacks para configurações de buffer
+    m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
+                                                  {
+        m_streamingMaxVideoBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
         } });
 
-    m_ui->setOnHLSBackBufferLengthChanged([this](float length)
-                                          {
-        m_hlsBackBufferLength = length;
-        if (m_streamManager) {
-            m_streamManager->setHLSParameters(
-                m_hlsLowLatencyMode,
-                m_hlsBackBufferLength,
-                m_hlsMaxBufferLength,
-                m_hlsMaxMaxBufferLength,
-                m_hlsEnableWorker
-            );
+    m_ui->setOnStreamingMaxAudioBufferSizeChanged([this](size_t size)
+                                                  {
+        m_streamingMaxAudioBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
         } });
 
-    m_ui->setOnHLSMaxBufferLengthChanged([this](float length)
-                                         {
-        m_hlsMaxBufferLength = length;
-        if (m_streamManager) {
-            m_streamManager->setHLSParameters(
-                m_hlsLowLatencyMode,
-                m_hlsBackBufferLength,
-                m_hlsMaxBufferLength,
-                m_hlsMaxMaxBufferLength,
-                m_hlsEnableWorker
-            );
+    m_ui->setOnStreamingMaxBufferTimeSecondsChanged([this](int64_t seconds)
+                                                    {
+        m_streamingMaxBufferTimeSeconds = seconds;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
         } });
 
-    m_ui->setOnHLSMaxMaxBufferLengthChanged([this](float length)
-                                            {
-        m_hlsMaxMaxBufferLength = length;
-        if (m_streamManager) {
-            m_streamManager->setHLSParameters(
-                m_hlsLowLatencyMode,
-                m_hlsBackBufferLength,
-                m_hlsMaxBufferLength,
-                m_hlsMaxMaxBufferLength,
-                m_hlsEnableWorker
-            );
-        } });
-
-    m_ui->setOnHLSEnableWorkerChanged([this](bool enabled)
-                                      {
-        m_hlsEnableWorker = enabled;
-        if (m_streamManager) {
-            m_streamManager->setHLSParameters(
-                m_hlsLowLatencyMode,
-                m_hlsBackBufferLength,
-                m_hlsMaxBufferLength,
-                m_hlsMaxMaxBufferLength,
-                m_hlsEnableWorker
-            );
+    m_ui->setOnStreamingAVIOBufferSizeChanged([this](size_t size)
+                                              {
+        m_streamingAVIOBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
         } });
 
     // Web Portal callbacks
@@ -1513,6 +1492,7 @@ bool Application::initStreaming()
         }
         m_streamManager->cleanup();
         m_streamManager.reset();
+        m_currentStreamer = nullptr; // Limpar referência ao streamer
 
         // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
         // e recursos foram liberados antes de criar um novo StreamManager
@@ -1590,7 +1570,6 @@ bool Application::initStreaming()
         m_ui->getStreamingMaxVideoBufferSize(),
         m_ui->getStreamingMaxAudioBufferSize(),
         m_ui->getStreamingMaxBufferTimeSeconds(),
-        m_ui->getStreamingMaxHLSBufferSize(),
         m_ui->getStreamingAVIOBufferSize());
 
     // Configurar Web Portal
@@ -1616,14 +1595,6 @@ bool Application::initStreaming()
         m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
         m_webPortalTextConnecting);
 
-    // Configurar parâmetros HLS
-    tsStreamer->setHLSParameters(
-        m_hlsLowLatencyMode,
-        m_hlsBackBufferLength,
-        m_hlsMaxBufferLength,
-        m_hlsMaxMaxBufferLength,
-        m_hlsEnableWorker);
-
     // Configurar HTTPS do Web Portal
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
     {
@@ -1634,6 +1605,8 @@ bool Application::initStreaming()
         LOG_INFO("HTTPS habilitado na configuração. Certificados serão buscados no diretório de execução.");
     }
 
+    // Armazenar referência ao streamer antes de movê-lo para o StreamManager
+    m_currentStreamer = tsStreamer.get();
     m_streamManager->addStreamer(std::move(tsStreamer));
     LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
 

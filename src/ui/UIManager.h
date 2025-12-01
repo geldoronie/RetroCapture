@@ -91,33 +91,12 @@ public:
     void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
     void setStreamingMaxAudioBufferSize(size_t size) { m_streamingMaxAudioBufferSize = size; }
     void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingMaxBufferTimeSeconds = seconds; }
-    void setStreamingMaxHLSBufferSize(size_t size) { m_streamingMaxHLSBufferSize = size; }
     void setStreamingAVIOBufferSize(size_t size) { m_streamingAVIOBufferSize = size; }
 
     size_t getStreamingMaxVideoBufferSize() const { return m_streamingMaxVideoBufferSize; }
     size_t getStreamingMaxAudioBufferSize() const { return m_streamingMaxAudioBufferSize; }
     int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingMaxBufferTimeSeconds; }
-    size_t getStreamingMaxHLSBufferSize() const { return m_streamingMaxHLSBufferSize; }
     size_t getStreamingAVIOBufferSize() const { return m_streamingAVIOBufferSize; }
-
-    // HLS Performance settings
-    void setHLSLowLatencyMode(bool enabled) { m_hlsLowLatencyMode = enabled; }
-    void setHLSBackBufferLength(float seconds) { m_hlsBackBufferLength = seconds; }
-    void setHLSMaxBufferLength(float seconds) { m_hlsMaxBufferLength = seconds; }
-    void setHLSMaxMaxBufferLength(float seconds) { m_hlsMaxMaxBufferLength = seconds; }
-    void setHLSEnableWorker(bool enabled) { m_hlsEnableWorker = enabled; }
-
-    bool getHLSLowLatencyMode() const { return m_hlsLowLatencyMode; }
-    float getHLSBackBufferLength() const { return m_hlsBackBufferLength; }
-    float getHLSMaxBufferLength() const { return m_hlsMaxBufferLength; }
-    float getHLSMaxMaxBufferLength() const { return m_hlsMaxMaxBufferLength; }
-    bool getHLSEnableWorker() const { return m_hlsEnableWorker; }
-
-    void setOnHLSLowLatencyModeChanged(std::function<void(bool)> callback) { m_onHLSLowLatencyModeChanged = callback; }
-    void setOnHLSBackBufferLengthChanged(std::function<void(float)> callback) { m_onHLSBackBufferLengthChanged = callback; }
-    void setOnHLSMaxBufferLengthChanged(std::function<void(float)> callback) { m_onHLSMaxBufferLengthChanged = callback; }
-    void setOnHLSMaxMaxBufferLengthChanged(std::function<void(float)> callback) { m_onHLSMaxMaxBufferLengthChanged = callback; }
-    void setOnHLSEnableWorkerChanged(std::function<void(bool)> callback) { m_onHLSEnableWorkerChanged = callback; }
 
     // Streaming info getters (public)
     uint16_t getStreamingPort() const { return m_streamingPort; }
@@ -159,6 +138,10 @@ public:
     void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
+    void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
+    void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
+    void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
+    void setOnStreamingAVIOBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingAVIOBufferSizeChanged = callback; }
 
     // Web Portal settings
     void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
@@ -373,20 +356,10 @@ private:
     uint32_t m_streamClientCount = 0;
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
-    size_t m_streamingMaxVideoBufferSize = 10;            // Máximo de frames no buffer de vídeo
-    size_t m_streamingMaxAudioBufferSize = 20;            // Máximo de chunks no buffer de áudio
-    int64_t m_streamingMaxBufferTimeSeconds = 5;          // Tempo máximo de buffer em segundos
-    size_t m_streamingMaxHLSBufferSize = 2 * 1024 * 1024; // 2MB máximo para buffer HLS
-    size_t m_streamingAVIOBufferSize = 256 * 1024;        // 256KB para buffer AVIO do FFmpeg
-
-    // HLS Performance parameters
-    // Ajustados para segmentos de 2 segundos: valores maiores permitem mais fluidez
-    // Com segmentos de 2s: Back Buffer de 40s = 20 segmentos, Max Buffer de 30s = 15 segmentos
-    bool m_hlsLowLatencyMode = false;      // Desabilitado por padrão: permite mais prefetch e buffer maior
-    float m_hlsBackBufferLength = 40.0f;   // 40s = 20 segmentos de 2s (alinhado com HLS_SEGMENT_COUNT)
-    float m_hlsMaxBufferLength = 30.0f;    // 30s = 15 segmentos de 2s (buffer maior para fluidez)
-    float m_hlsMaxMaxBufferLength = 60.0f; // 60s = 30 segmentos de 2s (buffer máximo generoso)
-    bool m_hlsEnableWorker = false;        // Desabilitado por padrão: mais compatível com Chrome
+    size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)
+    size_t m_streamingMaxAudioBufferSize = 20;     // Máximo de chunks no buffer de áudio (5-100)
+    int64_t m_streamingMaxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (1-30)
+    size_t m_streamingAVIOBufferSize = 256 * 1024; // 256KB para buffer AVIO do FFmpeg (64KB-1MB)
 
     std::function<void(bool)> m_onStreamingStartStop;
     std::function<void(uint16_t)> m_onStreamingPortChanged;
@@ -403,11 +376,10 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
-    std::function<void(bool)> m_onHLSLowLatencyModeChanged;
-    std::function<void(float)> m_onHLSBackBufferLengthChanged;
-    std::function<void(float)> m_onHLSMaxBufferLengthChanged;
-    std::function<void(float)> m_onHLSMaxMaxBufferLengthChanged;
-    std::function<void(bool)> m_onHLSEnableWorkerChanged;
+    std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
+    std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
+    std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;
+    std::function<void(size_t)> m_onStreamingAVIOBufferSizeChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão

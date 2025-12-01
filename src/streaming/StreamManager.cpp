@@ -312,25 +312,6 @@ void StreamManager::setWebPortalTexts(
     }
 }
 
-void StreamManager::setHLSParameters(
-    bool lowLatencyMode,
-    float backBufferLength,
-    float maxBufferLength,
-    float maxMaxBufferLength,
-    bool enableWorker)
-{
-    for (auto &streamer : m_streamers)
-    {
-        // Tentar fazer cast para HTTPTSStreamer
-        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
-        if (tsStreamer)
-        {
-            tsStreamer->setHLSParameters(lowLatencyMode, backBufferLength, maxBufferLength, maxMaxBufferLength, enableWorker);
-            LOG_INFO("Parâmetros HLS atualizados");
-        }
-    }
-}
-
 void StreamManager::cleanup()
 {
     stop();

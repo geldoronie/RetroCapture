@@ -134,17 +134,6 @@ public:
         const std::string &connecting);
 
     /**
-     * Set HLS performance parameters in HTTPTSStreamer (if available)
-     * This can be called while streaming is active
-     */
-    void setHLSParameters(
-        bool lowLatencyMode,
-        float backBufferLength,
-        float maxBufferLength,
-        float maxMaxBufferLength,
-        bool enableWorker);
-
-    /**
      * Cleanup all resources
      */
     void cleanup();
