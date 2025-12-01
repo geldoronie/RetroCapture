@@ -255,9 +255,9 @@ void UIManager::render()
                 ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("V4L2"))
+            if (ImGui::BeginTabItem("Source"))
             {
-                renderV4L2Controls();
+                renderSourcePanel();
                 ImGui::EndTabItem();
             }
 
@@ -550,6 +550,41 @@ void UIManager::renderImageControls()
         {
             m_onMonitorIndexChanged(-1);
         }
+    }
+}
+
+void UIManager::renderSourcePanel()
+{
+    ImGui::Text("Source Type:");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Dropdown para seleção do tipo de fonte
+    const char *sourceTypeNames[] = {"None", "V4L2"};
+    int currentSourceType = static_cast<int>(m_sourceType);
+
+    if (ImGui::Combo("##sourceType", &currentSourceType, sourceTypeNames, IM_ARRAYSIZE(sourceTypeNames)))
+    {
+        m_sourceType = static_cast<SourceType>(currentSourceType);
+        if (m_onSourceTypeChanged)
+        {
+            m_onSourceTypeChanged(m_sourceType);
+        }
+        saveConfig();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Renderizar controles específicos da fonte selecionada
+    if (m_sourceType == SourceType::V4L2)
+    {
+        renderV4L2Controls();
+    }
+    else if (m_sourceType == SourceType::None)
+    {
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
 }
 
@@ -1824,6 +1859,17 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar configurações de fonte
+        if (config.contains("source"))
+        {
+            auto &source = config["source"];
+            if (source.contains("type"))
+            {
+                int sourceTypeInt = source["type"].get<int>();
+                m_sourceType = static_cast<SourceType>(sourceTypeInt);
+            }
+        }
+
         // Carregar dispositivo V4L2
         if (config.contains("v4l2"))
         {
@@ -1892,6 +1938,10 @@ void UIManager::saveConfig()
         // Salvar shader atual
         config["shader"] = {
             {"current", m_currentShader.empty() ? nullptr : m_currentShader}};
+
+        // Salvar configurações de fonte
+        config["source"] = {
+            {"type", static_cast<int>(m_sourceType)}};
 
         // Salvar dispositivo V4L2
         config["v4l2"] = {

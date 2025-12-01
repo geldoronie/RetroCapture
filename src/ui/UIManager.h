@@ -55,6 +55,16 @@ public:
         m_onV4L2ControlChanged = callback;
     }
     void setOnDeviceChanged(std::function<void(const std::string &)> callback) { m_onDeviceChanged = callback; }
+
+    // Source type enum (declared early for use in callbacks)
+    enum class SourceType
+    {
+        None = 0,
+        V4L2 = 1
+    };
+
+    void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
+    SourceType getSourceType() const { return m_sourceType; }
     void setCurrentDevice(const std::string &device) { m_currentDevice = device; }
     void refreshV4L2Devices();
 
@@ -297,10 +307,14 @@ private:
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 
-    // Device selection
+    // Source selection
+    SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2
+
+    // Device selection (V4L2)
     std::vector<std::string> m_v4l2Devices;
     std::string m_currentDevice;
     std::function<void(const std::string &)> m_onDeviceChanged;
+    std::function<void(SourceType)> m_onSourceTypeChanged;
 
     // Capture info
     uint32_t m_captureWidth = 0;
@@ -313,6 +327,7 @@ private:
     // UI helpers
     void renderShaderPanel();
     void renderImageControls();
+    void renderSourcePanel();
     void renderV4L2Controls();
     void renderInfoPanel();
     void renderStreamingPanel();

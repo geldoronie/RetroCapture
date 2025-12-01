@@ -692,15 +692,41 @@ bool Application::initUI()
     m_ui->setFullscreen(m_fullscreen);
     m_ui->setMonitorIndex(m_monitorIndex);
 
-    // Configurar controles V4L2
-    if (m_capture && m_capture->isOpen())
+    // Verificar tipo de fonte inicial e configurar adequadamente
+    if (m_ui->getSourceType() == UIManager::SourceType::None)
     {
-        m_ui->setV4L2Controls(m_capture.get());
+        // Se None estiver selecionado, garantir que modo dummy está ativo
+        if (m_capture)
+        {
+            if (!m_capture->isDummyMode() || !m_capture->isOpen())
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->enableDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    if (m_capture->startCapture())
+                    {
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                             m_captureFps, "None (Dummy)");
+                    }
+                }
+            }
+        }
+        m_ui->setV4L2Controls(nullptr);
     }
     else
     {
-        // Sem dispositivo, mas ainda permitir seleção
-        m_ui->setV4L2Controls(nullptr);
+        // Configurar controles V4L2 se houver dispositivo aberto
+        if (m_capture && m_capture->isOpen())
+        {
+            m_ui->setV4L2Controls(m_capture.get());
+        }
+        else
+        {
+            // Sem dispositivo, mas ainda permitir seleção
+            m_ui->setV4L2Controls(nullptr);
+        }
     }
 
     // Configurar informações da captura
@@ -1290,7 +1316,103 @@ bool Application::initUI()
                 m_webPortalTextConnecting);
         } });
 
-    // Callback para mudança de dispositivo
+    // Callback para mudança de tipo de fonte
+    m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
+                                 {
+        LOG_INFO("Tipo de fonte alterado via UI");
+        
+        if (sourceType == UIManager::SourceType::None)
+        {
+            LOG_INFO("Fonte None selecionada - ativando modo dummy");
+            
+            // Fechar dispositivo atual se houver
+            if (m_capture) {
+                m_capture->stopCapture();
+                m_capture->close();
+                // Ativar modo dummy
+                m_capture->enableDummyMode(true);
+                
+                // Configurar formato dummy com resolução atual
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    if (m_capture->startCapture())
+                    {
+                        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                                 std::to_string(m_capture->getHeight()));
+                        
+                        // Atualizar informações na UI
+                        if (m_ui) {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
+                        }
+                    }
+                }
+            }
+        }
+        else if (sourceType == UIManager::SourceType::V4L2)
+        {
+            LOG_INFO("Fonte V4L2 selecionada");
+            // Se já houver um dispositivo selecionado, tentar reabrir
+            if (!m_devicePath.empty() && m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->enableDummyMode(false);
+                
+                if (m_capture->open(m_devicePath))
+                {
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        m_capture->setFramerate(m_captureFps);
+                        if (m_capture->startCapture())
+                        {
+                            if (m_ui) {
+                                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                    m_captureFps, m_devicePath);
+                                m_ui->setV4L2Controls(m_capture.get());
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Se falhar ao abrir dispositivo, voltar para modo dummy
+                    LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
+                    m_capture->enableDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        if (m_capture->startCapture() && m_ui)
+                        {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr);
+                        }
+                    }
+                }
+            }
+            else if (m_capture)
+            {
+                // Se não houver dispositivo selecionado mas V4L2 foi escolhido, manter em modo dummy
+                LOG_INFO("Nenhum dispositivo V4L2 selecionado - mantendo modo dummy");
+                if (!m_capture->isOpen() || !m_capture->isDummyMode())
+                {
+                    m_capture->stopCapture();
+                    m_capture->close();
+                    m_capture->enableDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        if (m_capture->startCapture() && m_ui)
+                        {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr);
+                        }
+                    }
+                }
+            }
+        } });
+
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
         // Se devicePath estiver vazio, significa "None" - ativar modo dummy
