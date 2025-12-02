@@ -305,6 +305,10 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleSetStreamingSettings(clientFd, body);
     }
+    else if (path == "/api/v1/streaming/control")
+    {
+        return handleSetStreamingControl(clientFd, body);
+    }
     else if (path == "/api/v1/v4l2/control")
     {
         return handleSetV4L2Control(clientFd, body);
@@ -846,6 +850,55 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         response << "{\"success\": " << jsonBool(updated) << "}";
         sendJSONResponse(clientFd, 200, response.str());
         return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleSetStreamingControl(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+
+        if (!json.contains("action"))
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'action' field. Use 'start' or 'stop'");
+            return true;
+        }
+
+        std::string action = json["action"].get<std::string>();
+
+        if (action == "start")
+        {
+            m_uiManager->triggerStreamingStartStop(true);
+            std::ostringstream response;
+            response << "{\"success\": true, \"action\": \"start\", \"message\": \"Streaming iniciado\"}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else if (action == "stop")
+        {
+            m_uiManager->triggerStreamingStartStop(false);
+            std::ostringstream response;
+            response << "{\"success\": true, \"action\": \"stop\", \"message\": \"Streaming parado\"}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Invalid 'action' value. Use 'start' or 'stop'");
+            return true;
+        }
     }
     catch (const std::exception &e)
     {

@@ -115,6 +115,7 @@ private:
     bool handleSetCaptureFPS(int clientFd, const std::string &body);
     bool handleSetImageSettings(int clientFd, const std::string &body);
     bool handleSetStreamingSettings(int clientFd, const std::string &body);
+    bool handleSetStreamingControl(int clientFd, const std::string &body);
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
 

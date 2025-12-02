@@ -105,8 +105,78 @@ async function loadStatus() {
                 streamLink.href = status.streamUrl;
             }
         }
+        
+        // Atualizar botão de streaming
+        updateStreamingButton(isActive);
     } catch (error) {
         console.error('Erro ao carregar status:', error);
+    }
+}
+
+/**
+ * Atualiza o botão de iniciar/parar streaming
+ */
+function updateStreamingButton(isActive) {
+    const btn = document.getElementById('streamingStartStopBtn');
+    const text = document.getElementById('streamingStartStopText');
+    
+    if (!btn || !text) return;
+    
+    if (isActive) {
+        btn.className = 'btn btn-danger btn-lg w-100';
+        text.innerHTML = '<i class="bi bi-stop-circle me-2"></i>Parar Streaming';
+    } else {
+        btn.className = 'btn btn-primary btn-lg w-100';
+        text.innerHTML = '<i class="bi bi-broadcast me-2"></i>Iniciar Streaming';
+    }
+}
+
+/**
+ * Alterna o streaming (inicia ou para)
+ */
+async function toggleStreaming() {
+    try {
+        const status = await api.getStatus();
+        const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
+        const action = isActive ? 'stop' : 'start';
+        
+        const btn = document.getElementById('streamingStartStopBtn');
+        const text = document.getElementById('streamingStartStopText');
+        if (btn) {
+            btn.disabled = true;
+            if (text) {
+                text.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processando...';
+            }
+        }
+        
+        const result = await api.setStreamingControl(action);
+        
+        if (result.success) {
+            // Aguardar um pouco e recarregar o status para atualizar a UI
+            setTimeout(async () => {
+                await loadStatus();
+                const btn = document.getElementById('streamingStartStopBtn');
+                if (btn) {
+                    btn.disabled = false;
+                }
+            }, 1000);
+        } else {
+            throw new Error(result.message || 'Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming');
+        }
+    } catch (error) {
+        console.error('Erro ao alternar streaming:', error);
+        const status = await api.getStatus();
+        const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
+        const action = isActive ? 'stop' : 'start';
+        showAlert('Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming: ' + error.message, 'danger');
+        
+        const btn = document.getElementById('streamingStartStopBtn');
+        if (btn) {
+            btn.disabled = false;
+        }
+        
+        // Recarregar status para restaurar o estado do botão
+        await loadStatus();
     }
 }
 
@@ -941,6 +1011,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Atualizar status a cada 2 segundos
     statusUpdateInterval = setInterval(loadStatus, 2000);
+    
+    // Inicializar botão de streaming com estado atual
+    setTimeout(() => {
+        loadStatus();
+    }, 500);
     
     // Event listeners para sliders
     document.getElementById('brightness').addEventListener('input', function() {

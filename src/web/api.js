@@ -141,6 +141,11 @@ class RetroCaptureAPI {
     async setV4L2Device(device) {
         return await this.request('POST', '/v4l2/device', { device });
     }
+
+    async setStreamingControl(action) {
+        // action deve ser 'start' ou 'stop'
+        return await this.request('POST', '/streaming/control', { action });
+    }
 }
 
 // Instância global da API
