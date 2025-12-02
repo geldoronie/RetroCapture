@@ -304,7 +304,7 @@ async function updateV4L2DeviceSource() {
             await loadCapture();
         }
         
-        showAlert(device ? 'Dispositivo V4L2 atualizado!' : 'Dispositivo V4L2 removido (None)', 'success');
+        // Atualização em tempo real - sem alerta
     } catch (error) {
         showAlert('Erro ao atualizar dispositivo V4L2: ' + error.message, 'danger');
     }
@@ -379,8 +379,6 @@ async function updateV4L2CaptureSettings() {
             await api.setCaptureFPS(fps);
         }
         
-        showAlert('Configurações de captura atualizadas!', 'success');
-        
         // Atualizar status bar
         const captureResolutionEl = document.getElementById('captureResolution');
         const captureFPSEl = document.getElementById('captureFPS');
@@ -388,10 +386,8 @@ async function updateV4L2CaptureSettings() {
             captureResolutionEl.textContent = `${width}x${height}`;
         }
         if (captureFPSEl) {
-            captureFPSEl.textContent = fps;
+            captureFPSEl.textContent = `${fps} FPS`;
         }
-        
-        await loadCapture();
     } catch (error) {
         showAlert('Erro ao atualizar configurações: ' + error.message, 'danger');
     }
@@ -419,7 +415,7 @@ async function updateSource() {
     try {
         const sourceType = parseInt(document.getElementById('sourceType').value);
         await api.setSource(sourceType);
-        showAlert('Fonte atualizada com sucesso!', 'success');
+        // Atualização em tempo real - sem alerta
         
         // Atualizar UI imediatamente
         updateSourceUI(sourceType);
@@ -561,7 +557,7 @@ function updateShaderParameterValue(name, value) {
 async function updateShaderParameter(name, value) {
     try {
         await api.setShaderParameter(name, parseFloat(value));
-        showAlert(`Parâmetro ${name} atualizado!`, 'success');
+        // Atualização em tempo real - sem alerta
     } catch (error) {
         showAlert(`Erro ao atualizar parâmetro ${name}: ` + error.message, 'danger');
     }
@@ -576,10 +572,11 @@ async function updateShader() {
         const shaderName = select ? select.value.trim() : '';
         
         await api.setShader(shaderName);
-        showAlert(shaderName ? 'Shader atualizado com sucesso!' : 'Shader removido (None)', 'success');
+        // Atualizar shader atual e parâmetros
         await loadShader();
     } catch (error) {
-        showAlert('Erro ao atualizar shader: ' + error.message, 'danger');
+        console.error('Erro ao atualizar shader:', error);
+        // Não mostrar alerta para atualizações em tempo real
     }
 }
 
@@ -687,10 +684,10 @@ async function updateImageSettings() {
         };
         
         await api.setImageSettings(settings);
-        showAlert('Configurações de imagem atualizadas!', 'success');
-        await loadImageSettings();
+        // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
-        showAlert('Erro ao atualizar configurações: ' + error.message, 'danger');
+        console.error('Erro ao atualizar configurações de imagem:', error);
+        // Não mostrar alerta para atualizações em tempo real
     }
 }
 
@@ -854,10 +851,10 @@ async function updateStreamingSettings() {
         }
         
         await api.setStreamingSettings(settings);
-        showAlert('Configurações de streaming atualizadas!', 'success');
-        await loadStreamingSettings();
+        // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
-        showAlert('Erro ao atualizar configurações: ' + error.message, 'danger');
+        console.error('Erro ao atualizar configurações de streaming:', error);
+        // Não mostrar alerta para atualizações em tempo real
     }
 }
 
@@ -911,7 +908,7 @@ async function updateV4L2Device() {
         
         await api.setV4L2Device(device);
         appState.v4l2.currentDevice = device;
-        showAlert('Dispositivo V4L2 atualizado!', 'success');
+        // Atualização em tempo real - sem alerta
     } catch (error) {
         showAlert('Erro ao atualizar dispositivo V4L2: ' + error.message, 'danger');
     }
@@ -978,5 +975,155 @@ document.addEventListener('DOMContentLoaded', function() {
             updateShaderParameter(name, value);
         }, 500);
     };
+    
+    // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
+    
+    // Resolução/FPS de captura (V4L2) - atualização em tempo real com debounce
+    let captureSettingsTimeout = null;
+    const v4l2CaptureWidth = document.getElementById('v4l2CaptureWidth');
+    const v4l2CaptureHeight = document.getElementById('v4l2CaptureHeight');
+    const v4l2CaptureFPS = document.getElementById('v4l2CaptureFPS');
+    
+    function updateCaptureSettingsDebounced() {
+        clearTimeout(captureSettingsTimeout);
+        captureSettingsTimeout = setTimeout(() => {
+            updateV4L2CaptureSettings();
+        }, 500);
+    }
+    
+    if (v4l2CaptureWidth) {
+        v4l2CaptureWidth.addEventListener('input', updateCaptureSettingsDebounced);
+        v4l2CaptureWidth.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (v4l2CaptureHeight) {
+        v4l2CaptureHeight.addEventListener('input', updateCaptureSettingsDebounced);
+        v4l2CaptureHeight.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (v4l2CaptureFPS) {
+        v4l2CaptureFPS.addEventListener('input', updateCaptureSettingsDebounced);
+        v4l2CaptureFPS.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    
+    // Shader select - atualização em tempo real
+    const shaderSelect = document.getElementById('shaderSelect');
+    if (shaderSelect) {
+        shaderSelect.addEventListener('change', function() {
+            updateShader();
+        });
+    }
+    
+    // Image settings - atualização em tempo real com debounce
+    let imageSettingsTimeout = null;
+    function updateImageSettingsDebounced() {
+        clearTimeout(imageSettingsTimeout);
+        imageSettingsTimeout = setTimeout(() => {
+            updateImageSettings();
+        }, 500);
+    }
+    
+    const brightness = document.getElementById('brightness');
+    const contrast = document.getElementById('contrast');
+    const maintainAspect = document.getElementById('maintainAspect');
+    const fullscreen = document.getElementById('fullscreen');
+    const monitorIndex = document.getElementById('monitorIndex');
+    
+    if (brightness) {
+        brightness.addEventListener('input', updateImageSettingsDebounced);
+        brightness.addEventListener('change', updateImageSettingsDebounced);
+    }
+    if (contrast) {
+        contrast.addEventListener('input', updateImageSettingsDebounced);
+        contrast.addEventListener('change', updateImageSettingsDebounced);
+    }
+    if (maintainAspect) {
+        maintainAspect.addEventListener('change', updateImageSettingsDebounced);
+    }
+    if (fullscreen) {
+        fullscreen.addEventListener('change', updateImageSettingsDebounced);
+    }
+    if (monitorIndex) {
+        monitorIndex.addEventListener('input', updateImageSettingsDebounced);
+        monitorIndex.addEventListener('change', updateImageSettingsDebounced);
+    }
+    
+    // Streaming settings - atualização em tempo real com debounce
+    let streamingSettingsTimeout = null;
+    function updateStreamingSettingsDebounced() {
+        clearTimeout(streamingSettingsTimeout);
+        streamingSettingsTimeout = setTimeout(() => {
+            updateStreamingSettings();
+        }, 500);
+    }
+    
+    const streamingPort = document.getElementById('streamingPort');
+    const streamingBitrate = document.getElementById('streamingBitrate');
+    const streamingAudioBitrate = document.getElementById('streamingAudioBitrate');
+    const streamingWidth = document.getElementById('streamingWidth');
+    const streamingHeight = document.getElementById('streamingHeight');
+    const streamingFPS = document.getElementById('streamingFPS');
+    const streamingAudioCodec = document.getElementById('streamingAudioCodec');
+    
+    if (streamingPort) {
+        streamingPort.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingPort.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingBitrate) {
+        streamingBitrate.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingBitrate.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingAudioBitrate) {
+        streamingAudioBitrate.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingAudioBitrate.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingWidth) {
+        streamingWidth.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingWidth.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingHeight) {
+        streamingHeight.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingHeight.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingFPS) {
+        streamingFPS.addEventListener('input', updateStreamingSettingsDebounced);
+        streamingFPS.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (streamingVideoCodec) {
+        streamingVideoCodec.addEventListener('change', function() {
+            updateCodecSpecificControls(this.value);
+            updateStreamingSettingsDebounced();
+        });
+    }
+    if (streamingAudioCodec) {
+        streamingAudioCodec.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    
+    // Codec-specific controls - atualização em tempo real com debounce
+    const h264Preset = document.getElementById('streamingH264Preset');
+    const h265Preset = document.getElementById('streamingH265Preset');
+    const h265Profile = document.getElementById('streamingH265Profile');
+    const h265Level = document.getElementById('streamingH265Level');
+    const vp8Speed = document.getElementById('streamingVP8Speed');
+    const vp9Speed = document.getElementById('streamingVP9Speed');
+    
+    if (h264Preset) {
+        h264Preset.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (h265Preset) {
+        h265Preset.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (h265Profile) {
+        h265Profile.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (h265Level) {
+        h265Level.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (vp8Speed) {
+        vp8Speed.addEventListener('input', updateStreamingSettingsDebounced);
+        vp8Speed.addEventListener('change', updateStreamingSettingsDebounced);
+    }
+    if (vp9Speed) {
+        vp9Speed.addEventListener('input', updateStreamingSettingsDebounced);
+        vp9Speed.addEventListener('change', updateStreamingSettingsDebounced);
+    }
     
 });

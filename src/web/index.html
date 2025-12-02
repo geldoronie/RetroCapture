@@ -212,12 +212,6 @@
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(3840, 2160)">3840x2160</button>
                                                     </div>
                                                 </div>
-                                                
-                                                <div class="col-12">
-                                                    <button class="btn btn-primary btn-sm" onclick="updateV4L2CaptureSettings()">
-                                                        <i class="bi bi-check-circle me-2"></i>Atualizar Resolução/FPS
-                                                    </button>
-                                                </div>
                                             </div>
                                             
                                             <div class="col-12">
@@ -253,10 +247,7 @@
                                             </select>
                                         </div>
                                         <div class="col-12">
-                                            <button class="btn btn-primary" onclick="updateShader()">
-                                                <i class="bi bi-check-circle me-2"></i>Atualizar Shader
-                                            </button>
-                                            <button class="btn btn-secondary ms-2" onclick="loadShaderList()">
+                                            <button class="btn btn-secondary btn-sm" onclick="loadShaderList()">
                                                 <i class="bi bi-arrow-clockwise me-2"></i>Atualizar Lista
                                             </button>
                                         </div>
@@ -304,11 +295,6 @@
                                             <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">
                                             <small class="form-text text-muted">-1 = Monitor primário, 0+ = Monitor específico</small>
                                         </div>
-                                        <div class="col-12">
-                                            <button class="btn btn-primary" onclick="updateImageSettings()">
-                                                <i class="bi bi-check-circle me-2"></i>Atualizar Configurações
-                                            </button>
-                                        </div>
                                     </div>
                                 </div>
 
@@ -354,11 +340,6 @@
                                                 <option value="aac">AAC</option>
                                                 <option value="opus">Opus</option>
                                             </select>
-                                        </div>
-                                        <div class="col-12">
-                                            <button class="btn btn-primary" onclick="updateStreamingSettings()">
-                                                <i class="bi bi-check-circle me-2"></i>Atualizar Configurações
-                                            </button>
                                         </div>
                                     </div>
                                 </div>
