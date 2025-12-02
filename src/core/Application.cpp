@@ -903,6 +903,11 @@ bool Application::initUI()
             // Apenas marcar flag - thread separada fará todo o trabalho
             m_streamingEnabled = true;
             
+            // Atualizar status imediatamente para "iniciando" (será atualizado novamente quando realmente iniciar)
+            if (m_ui) {
+                m_ui->setStreamingActive(false); // Ainda não está ativo, mas está iniciando
+            }
+            
             // Criar thread separada imediatamente - não esperar nada
             std::thread([this]() {
                 // Todas as operações bloqueantes devem estar aqui, na thread separada
@@ -936,6 +941,13 @@ bool Application::initUI()
             // Parar streaming também em thread separada para não bloquear a UI
             m_streamingEnabled = false;
             
+            // Atualizar status imediatamente quando parar
+            if (m_ui) {
+                m_ui->setStreamingActive(false);
+                m_ui->setStreamUrl("");
+                m_ui->setStreamClientCount(0);
+            }
+            
             // Criar thread separada imediatamente - não esperar nada
             std::thread([this]() {
                 try {
@@ -950,9 +962,11 @@ bool Application::initUI()
                     LOG_ERROR("Exceção ao parar streaming: " + std::string(e.what()));
                 }
                 
-                // Atualizar UI após parar
+                // Garantir que o status está atualizado após parar
                 if (m_ui) {
                     m_ui->setStreamingActive(false);
+                    m_ui->setStreamUrl("");
+                    m_ui->setStreamClientCount(0);
                 }
                 
                 // Se o portal web estava habilitado, reiniciar o portal independente

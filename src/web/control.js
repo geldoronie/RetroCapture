@@ -11,7 +11,7 @@ let appState = {
     image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
-    status: { active: false, url: '', clientCount: 0 }
+    status: { streamingActive: false, active: false, streamUrl: '', url: '', clientCount: 0 }
 };
 
 // Atualizar estado periodicamente
@@ -89,11 +89,22 @@ async function loadStatus() {
         const status = await api.getStatus();
         appState.status = status;
         
-        document.getElementById('streamStatus').textContent = status.active ? 'Ativo' : 'Inativo';
-        document.getElementById('streamStatusIcon').className = status.active 
+        // A API retorna 'streamingActive', não 'active'
+        const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
+        
+        document.getElementById('streamStatus').textContent = isActive ? 'Ativo' : 'Inativo';
+        document.getElementById('streamStatusIcon').className = isActive 
             ? 'bi bi-broadcast text-success' 
             : 'bi bi-broadcast text-secondary';
         document.getElementById('clientCount').textContent = status.clientCount || 0;
+        
+        // Atualizar URL do stream se disponível
+        if (status.streamUrl) {
+            const streamLink = document.getElementById('streamLink');
+            if (streamLink) {
+                streamLink.href = status.streamUrl;
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar status:', error);
     }
