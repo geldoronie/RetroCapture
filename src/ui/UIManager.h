@@ -5,12 +5,16 @@
 #include <cstdint>
 #include <functional>
 #include <cstring>
+#include <memory>
 #include "../renderer/glad_loader.h"
 
 struct GLFWwindow;
 
 class VideoCapture;
 class ShaderEngine;
+
+// Forward declaration
+class UIConfiguration;
 
 class UIManager
 {
@@ -40,7 +44,10 @@ public:
 
     // Parâmetros de shader
     void setShaderEngine(ShaderEngine *engine) { m_shaderEngine = engine; }
+    ShaderEngine *getShaderEngine() const { return m_shaderEngine; }
     void setOnSavePreset(std::function<void(const std::string &, bool)> callback) { m_onSavePreset = callback; }
+    const std::function<void(const std::string &, bool)> &getOnSavePreset() const { return m_onSavePreset; }
+    const std::vector<std::string> &getScannedShaders() const { return m_scannedShaders; }
 
     void setBrightness(float brightness)
     {
@@ -105,6 +112,9 @@ public:
         V4L2 = 1
     };
 
+    // Source type setter (para uso pelas classes de abas)
+    void setSourceType(SourceType sourceType);
+
     void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
     SourceType getSourceType() const { return m_sourceType; }
     void setCurrentDevice(const std::string &device)
@@ -117,7 +127,7 @@ public:
     }
     std::string getCurrentDevice() const { return m_currentDevice; }
 
-    // Métodos auxiliares para disparar callbacks via API
+    // Métodos auxiliares para disparar callbacks via API (tornados públicos para uso pelas classes de abas)
     void triggerSourceTypeChange(SourceType sourceType)
     {
         m_sourceType = sourceType;
@@ -129,6 +139,8 @@ public:
 
     void triggerResolutionChange(uint32_t width, uint32_t height)
     {
+        m_captureWidth = width;
+        m_captureHeight = height;
         if (m_onResolutionChanged)
         {
             m_onResolutionChanged(width, height);
@@ -137,6 +149,7 @@ public:
 
     void triggerFramerateChange(uint32_t fps)
     {
+        m_captureFps = fps;
         if (m_onFramerateChanged)
         {
             m_onFramerateChanged(fps);
@@ -148,6 +161,15 @@ public:
         if (m_onV4L2ControlChanged)
         {
             m_onV4L2ControlChanged(name, value);
+        }
+    }
+
+    void triggerDeviceChange(const std::string &device)
+    {
+        m_currentDevice = device;
+        if (m_onDeviceChanged)
+        {
+            m_onDeviceChanged(device);
         }
     }
 
@@ -220,6 +242,27 @@ public:
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
 
+    // Streaming setters com callbacks (para uso pelas classes de abas)
+    void triggerStreamingPortChange(uint16_t port);
+    void triggerStreamingWidthChange(uint32_t width);
+    void triggerStreamingHeightChange(uint32_t height);
+    void triggerStreamingFpsChange(uint32_t fps);
+    void triggerStreamingBitrateChange(uint32_t bitrate);
+    void triggerStreamingAudioBitrateChange(uint32_t bitrate);
+    void triggerStreamingVideoCodecChange(const std::string &codec);
+    void triggerStreamingAudioCodecChange(const std::string &codec);
+    void triggerStreamingH264PresetChange(const std::string &preset);
+    void triggerStreamingH265PresetChange(const std::string &preset);
+    void triggerStreamingH265ProfileChange(const std::string &profile);
+    void triggerStreamingH265LevelChange(const std::string &level);
+    void triggerStreamingVP8SpeedChange(int speed);
+    void triggerStreamingVP9SpeedChange(int speed);
+    void triggerStreamingMaxVideoBufferSizeChange(size_t size);
+    void triggerStreamingMaxAudioBufferSizeChange(size_t size);
+    void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
+    void triggerStreamingAVIOBufferSizeChange(size_t size);
+    void triggerStreamingStartStop(bool start);
+
     // Image settings getters
     float getBrightness() const { return m_brightness; }
     float getContrast() const { return m_contrast; }
@@ -233,6 +276,8 @@ public:
     uint32_t getCaptureWidth() const { return m_captureWidth; }
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getCaptureFps() const { return m_captureFps; }
+    std::string getCaptureDevice() const { return m_captureDevice; }
+    VideoCapture *getCapture() const { return m_capture; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -379,11 +424,57 @@ public:
     bool getWebPortalActive() const { return m_webPortalActive; }
     void setOnWebPortalStartStop(std::function<void(bool)> callback) { m_onWebPortalStartStop = callback; }
 
+    // Web Portal setters com callbacks (para uso pelas classes de abas)
+    void triggerWebPortalEnabledChange(bool enabled);
+    void triggerWebPortalHTTPSChange(bool enabled);
+    void triggerWebPortalStartStop(bool start);
+    void triggerWebPortalTitleChange(const std::string &title);
+    void triggerWebPortalSubtitleChange(const std::string &subtitle);
+    void triggerWebPortalSSLCertPathChange(const std::string &path);
+    void triggerWebPortalSSLKeyPathChange(const std::string &path);
+    void triggerWebPortalBackgroundImagePathChange(const std::string &path);
+    void triggerWebPortalColorsChange();
+    void triggerWebPortalTextsChange();
+
+    // Getters para cores editáveis (retornam ponteiros não-const)
+    float *getWebPortalColorBackgroundEditable() { return m_webPortalColorBackground; }
+    float *getWebPortalColorTextEditable() { return m_webPortalColorText; }
+    float *getWebPortalColorPrimaryEditable() { return m_webPortalColorPrimary; }
+    float *getWebPortalColorPrimaryLightEditable() { return m_webPortalColorPrimaryLight; }
+    float *getWebPortalColorPrimaryDarkEditable() { return m_webPortalColorPrimaryDark; }
+    float *getWebPortalColorSecondaryEditable() { return m_webPortalColorSecondary; }
+    float *getWebPortalColorSecondaryHighlightEditable() { return m_webPortalColorSecondaryHighlight; }
+    float *getWebPortalColorCardHeaderEditable() { return m_webPortalColorCardHeader; }
+    float *getWebPortalColorBorderEditable() { return m_webPortalColorBorder; }
+    float *getWebPortalColorSuccessEditable() { return m_webPortalColorSuccess; }
+    float *getWebPortalColorWarningEditable() { return m_webPortalColorWarning; }
+    float *getWebPortalColorDangerEditable() { return m_webPortalColorDanger; }
+    float *getWebPortalColorInfoEditable() { return m_webPortalColorInfo; }
+
+    // Getters para textos editáveis (retornam referências não-const)
+    std::string &getWebPortalTextStreamInfoEditable() { return m_webPortalTextStreamInfo; }
+    std::string &getWebPortalTextQuickActionsEditable() { return m_webPortalTextQuickActions; }
+    std::string &getWebPortalTextCompatibilityEditable() { return m_webPortalTextCompatibility; }
+    std::string &getWebPortalTextStatusEditable() { return m_webPortalTextStatus; }
+    std::string &getWebPortalTextCodecEditable() { return m_webPortalTextCodec; }
+    std::string &getWebPortalTextResolutionEditable() { return m_webPortalTextResolution; }
+    std::string &getWebPortalTextStreamUrlEditable() { return m_webPortalTextStreamUrl; }
+    std::string &getWebPortalTextCopyUrlEditable() { return m_webPortalTextCopyUrl; }
+    std::string &getWebPortalTextOpenNewTabEditable() { return m_webPortalTextOpenNewTab; }
+    std::string &getWebPortalTextSupportedEditable() { return m_webPortalTextSupported; }
+    std::string &getWebPortalTextFormatEditable() { return m_webPortalTextFormat; }
+    std::string &getWebPortalTextCodecInfoEditable() { return m_webPortalTextCodecInfo; }
+    std::string &getWebPortalTextSupportedBrowsersEditable() { return m_webPortalTextSupportedBrowsers; }
+    std::string &getWebPortalTextFormatInfoEditable() { return m_webPortalTextFormatInfo; }
+    std::string &getWebPortalTextCodecInfoValueEditable() { return m_webPortalTextCodecInfoValue; }
+    std::string &getWebPortalTextConnectingEditable() { return m_webPortalTextConnecting; }
+
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
-    bool m_configWindowVisible = true;    // Janela de configuração visível por padrão
-    bool m_configWindowJustOpened = true; // Flag para aplicar posição/tamanho inicial apenas quando aberta
+
+    // UI Configuration window (refatorado)
+    std::unique_ptr<class UIConfiguration> m_configWindow;
     GLFWwindow *m_window = nullptr;
 
     // Shader selection
@@ -431,23 +522,25 @@ private:
     std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
     std::function<void(uint32_t)> m_onFramerateChanged;
 
-    // UI helpers
+    // UI helpers (tornados públicos para uso pelas classes de abas)
+public:
     void renderShaderPanel();
-    void renderImageControls();
+    void renderImageControls(); // Mantido temporariamente para compatibilidade
     void renderSourcePanel();
     void renderV4L2Controls();
     void renderInfoPanel();
     void renderStreamingPanel();
     void renderWebPortalPanel();
 
-    // Scanning methods
+    // Configuration persistence (tornados públicos para uso pelas classes de abas)
+    void saveConfig();
+    void loadConfig();
+    std::string getConfigPath() const;
+
+private:
+    // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
     void scanV4L2Devices();
-
-    // Configuration persistence
-    void loadConfig();
-    void saveConfig();
-    std::string getConfigPath() const;
 
     std::vector<std::string> m_scannedShaders;
     std::string m_shaderBasePath = "shaders/shaders_glsl";

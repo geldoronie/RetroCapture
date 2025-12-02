@@ -1,4 +1,5 @@
 #include "UIManager.h"
+#include "UIConfiguration.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #include "../utils/V4L2DeviceScanner.h"
@@ -21,11 +22,14 @@
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
+    : m_configWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
+    // Destruir janela de configuração antes de shutdown
+    m_configWindow.reset();
     shutdown();
 }
 
@@ -99,6 +103,11 @@ bool UIManager::init(GLFWwindow *window)
 
     // Carregar configurações salvas
     loadConfig();
+
+    // Criar janela de configuração
+    m_configWindow = std::make_unique<UIConfiguration>(this);
+    m_configWindow->setVisible(true);    // Visível por padrão
+    m_configWindow->setJustOpened(true); // Marcar como recém-aberta
 
     m_initialized = true;
     LOG_INFO("UIManager inicializado");
@@ -195,13 +204,12 @@ void UIManager::render()
                 m_uiVisible = !m_uiVisible;
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Configuration", nullptr, m_configWindowVisible))
+            if (m_configWindow)
             {
-                m_configWindowVisible = !m_configWindowVisible;
-                // Quando a janela é aberta, marcar para aplicar posição/tamanho inicial
-                if (m_configWindowVisible)
+                bool visible = m_configWindow->isVisible();
+                if (ImGui::MenuItem("Configuration", nullptr, visible))
                 {
-                    m_configWindowJustOpened = true;
+                    m_configWindow->setVisible(!visible);
                 }
             }
             ImGui::EndMenu();
@@ -209,80 +217,10 @@ void UIManager::render()
         ImGui::EndMainMenuBar();
     }
 
-    // Renderizar janela de configuração apenas se estiver visível
-    if (m_configWindowVisible)
+    // Renderizar janela de configuração
+    if (m_configWindow)
     {
-        // Aplicar posição e tamanho inicial apenas quando a janela é aberta
-        if (m_configWindowJustOpened)
-        {
-            // Obter altura do menu bar para posicionar a janela abaixo dele
-            float menuBarHeight = ImGui::GetFrameHeight();
-
-            // Obter dimensões da viewport
-            ImGuiViewport *viewport = ImGui::GetMainViewport();
-            ImVec2 workPos = viewport->WorkPos;
-
-            // Definir posição inicial: um pouco abaixo do menu bar
-            ImVec2 initialPos(workPos.x + 10.0f, workPos.y + menuBarHeight + 10.0f);
-
-            // Definir tamanho inicial menor que 640x480 (usar 600x400 para caber em resoluções menores)
-            ImVec2 initialSize(600.0f, 400.0f);
-
-            // Configurar posição e tamanho inicial (ignora o que está salvo no .ini)
-            ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
-            ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
-
-            m_configWindowJustOpened = false;
-        }
-
-        // Janela flutuante redimensionável
-        // Usar ImGuiWindowFlags_NoSavedSettings para não salvar posição/tamanho no .ini
-        ImGui::Begin("RetroCapture Controls", &m_configWindowVisible,
-                     ImGuiWindowFlags_NoSavedSettings);
-
-        // Tabs
-        if (ImGui::BeginTabBar("MainTabs"))
-        {
-            if (ImGui::BeginTabItem("Shaders"))
-            {
-                renderShaderPanel();
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Image"))
-            {
-                renderImageControls();
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Source"))
-            {
-                renderSourcePanel();
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Info"))
-            {
-                renderInfoPanel();
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Streaming"))
-            {
-                renderStreamingPanel();
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Web Portal"))
-            {
-                renderWebPortalPanel();
-                ImGui::EndTabItem();
-            }
-
-            ImGui::EndTabBar();
-        }
-
-        ImGui::End();
+        m_configWindow->render();
     }
 }
 
@@ -1566,6 +1504,309 @@ void UIManager::scanV4L2Devices()
 void UIManager::refreshV4L2Devices()
 {
     scanV4L2Devices();
+}
+
+void UIManager::setSourceType(SourceType sourceType)
+{
+    m_sourceType = sourceType;
+    if (m_onSourceTypeChanged)
+    {
+        m_onSourceTypeChanged(sourceType);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingPortChange(uint16_t port)
+{
+    m_streamingPort = port;
+    if (m_onStreamingPortChanged)
+    {
+        m_onStreamingPortChanged(port);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingWidthChange(uint32_t width)
+{
+    m_streamingWidth = width;
+    if (m_onStreamingWidthChanged)
+    {
+        m_onStreamingWidthChanged(width);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingHeightChange(uint32_t height)
+{
+    m_streamingHeight = height;
+    if (m_onStreamingHeightChanged)
+    {
+        m_onStreamingHeightChanged(height);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingFpsChange(uint32_t fps)
+{
+    m_streamingFps = fps;
+    if (m_onStreamingFpsChanged)
+    {
+        m_onStreamingFpsChanged(fps);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingBitrateChange(uint32_t bitrate)
+{
+    m_streamingBitrate = bitrate;
+    if (m_onStreamingBitrateChanged)
+    {
+        m_onStreamingBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingAudioBitrateChange(uint32_t bitrate)
+{
+    m_streamingAudioBitrate = bitrate;
+    if (m_onStreamingAudioBitrateChanged)
+    {
+        m_onStreamingAudioBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingVideoCodecChange(const std::string &codec)
+{
+    m_streamingVideoCodec = codec;
+    if (m_onStreamingVideoCodecChanged)
+    {
+        m_onStreamingVideoCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingAudioCodecChange(const std::string &codec)
+{
+    m_streamingAudioCodec = codec;
+    if (m_onStreamingAudioCodecChanged)
+    {
+        m_onStreamingAudioCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingH264PresetChange(const std::string &preset)
+{
+    m_streamingH264Preset = preset;
+    if (m_onStreamingH264PresetChanged)
+    {
+        m_onStreamingH264PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingH265PresetChange(const std::string &preset)
+{
+    m_streamingH265Preset = preset;
+    if (m_onStreamingH265PresetChanged)
+    {
+        m_onStreamingH265PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingH265ProfileChange(const std::string &profile)
+{
+    m_streamingH265Profile = profile;
+    if (m_onStreamingH265ProfileChanged)
+    {
+        m_onStreamingH265ProfileChanged(profile);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingH265LevelChange(const std::string &level)
+{
+    m_streamingH265Level = level;
+    if (m_onStreamingH265LevelChanged)
+    {
+        m_onStreamingH265LevelChanged(level);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingVP8SpeedChange(int speed)
+{
+    m_streamingVP8Speed = speed;
+    if (m_onStreamingVP8SpeedChanged)
+    {
+        m_onStreamingVP8SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingVP9SpeedChange(int speed)
+{
+    m_streamingVP9Speed = speed;
+    if (m_onStreamingVP9SpeedChanged)
+    {
+        m_onStreamingVP9SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
+{
+    m_streamingMaxVideoBufferSize = size;
+    if (m_onStreamingMaxVideoBufferSizeChanged)
+    {
+        m_onStreamingMaxVideoBufferSizeChanged(size);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingMaxAudioBufferSizeChange(size_t size)
+{
+    m_streamingMaxAudioBufferSize = size;
+    if (m_onStreamingMaxAudioBufferSizeChanged)
+    {
+        m_onStreamingMaxAudioBufferSizeChanged(size);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds)
+{
+    m_streamingMaxBufferTimeSeconds = seconds;
+    if (m_onStreamingMaxBufferTimeSecondsChanged)
+    {
+        m_onStreamingMaxBufferTimeSecondsChanged(seconds);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingAVIOBufferSizeChange(size_t size)
+{
+    m_streamingAVIOBufferSize = size;
+    if (m_onStreamingAVIOBufferSizeChanged)
+    {
+        m_onStreamingAVIOBufferSizeChanged(size);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingStartStop(bool start)
+{
+    if (m_onStreamingStartStop)
+    {
+        m_onStreamingStartStop(start);
+    }
+}
+
+void UIManager::triggerWebPortalEnabledChange(bool enabled)
+{
+    m_webPortalEnabled = enabled;
+    if (!enabled && m_webPortalHTTPSEnabled)
+    {
+        m_webPortalHTTPSEnabled = false;
+        if (m_onWebPortalHTTPSChanged)
+        {
+            m_onWebPortalHTTPSChanged(false);
+        }
+    }
+    if (m_onWebPortalEnabledChanged)
+    {
+        m_onWebPortalEnabledChanged(enabled);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalHTTPSChange(bool enabled)
+{
+    m_webPortalHTTPSEnabled = enabled;
+    if (m_onWebPortalHTTPSChanged)
+    {
+        m_onWebPortalHTTPSChanged(enabled);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalStartStop(bool start)
+{
+    m_webPortalActive = start;
+    if (m_onWebPortalStartStop)
+    {
+        m_onWebPortalStartStop(start);
+    }
+}
+
+void UIManager::triggerWebPortalTitleChange(const std::string &title)
+{
+    m_webPortalTitle = title;
+    if (m_onWebPortalTitleChanged)
+    {
+        m_onWebPortalTitleChanged(title);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalSubtitleChange(const std::string &subtitle)
+{
+    m_webPortalSubtitle = subtitle;
+    if (m_onWebPortalSubtitleChanged)
+    {
+        m_onWebPortalSubtitleChanged(subtitle);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalSSLCertPathChange(const std::string &path)
+{
+    m_webPortalSSLCertPath = path;
+    if (m_onWebPortalSSLCertPathChanged)
+    {
+        m_onWebPortalSSLCertPathChanged(path);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalSSLKeyPathChange(const std::string &path)
+{
+    m_webPortalSSLKeyPath = path;
+    if (m_onWebPortalSSLKeyPathChanged)
+    {
+        m_onWebPortalSSLKeyPathChanged(path);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalBackgroundImagePathChange(const std::string &path)
+{
+    m_webPortalBackgroundImagePath = path;
+    if (m_onWebPortalBackgroundImagePathChanged)
+    {
+        m_onWebPortalBackgroundImagePathChanged(path);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalColorsChange()
+{
+    if (m_onWebPortalColorsChanged)
+    {
+        m_onWebPortalColorsChanged();
+    }
+    saveConfig();
+}
+
+void UIManager::triggerWebPortalTextsChange()
+{
+    if (m_onWebPortalTextsChanged)
+    {
+        m_onWebPortalTextsChanged();
+    }
+    saveConfig();
 }
 
 void UIManager::scanShaders(const std::string &basePath)
