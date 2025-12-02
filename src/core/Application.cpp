@@ -954,6 +954,12 @@ bool Application::initUI()
                 if (m_ui) {
                     m_ui->setStreamingActive(false);
                 }
+                
+                // Se o portal web estava habilitado, reiniciar o portal independente
+                if (m_webPortalEnabled && !m_webPortalActive) {
+                    LOG_INFO("Reiniciando Portal Web independente após parar streaming...");
+                    initWebPortal();
+                }
             }).detach();
         }
         
@@ -1316,6 +1322,46 @@ bool Application::initUI()
                 m_webPortalTextConnecting);
         } });
 
+    // Web Portal Start/Stop callback (independent from streaming)
+    m_ui->setOnWebPortalStartStop([this](bool start)
+                                  {
+        LOG_INFO("[CALLBACK] Portal Web " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        
+        if (start) {
+            // Criar thread separada para iniciar portal
+            std::thread([this]() {
+                try {
+                    if (!initWebPortal()) {
+                        LOG_ERROR("Falha ao iniciar portal web");
+                        if (m_ui) {
+                            m_ui->setWebPortalActive(false);
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao iniciar portal web: " + std::string(e.what()));
+                    if (m_ui) {
+                        m_ui->setWebPortalActive(false);
+                    }
+                }
+            }).detach();
+        } else {
+            // Parar portal em thread separada
+            std::thread([this]() {
+                try {
+                    stopWebPortal();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao parar portal web: " + std::string(e.what()));
+                }
+                
+                // Atualizar UI após parar
+                if (m_ui) {
+                    m_ui->setWebPortalActive(false);
+                }
+            }).detach();
+        }
+        
+        LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
+
     // Callback para mudança de tipo de fonte
     m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
                                  {
@@ -1596,6 +1642,14 @@ bool Application::initStreaming()
         return true; // Streaming não habilitado, não é erro
     }
 
+    // Se o portal web estiver ativo independentemente, pará-lo antes de iniciar streaming
+    // O streaming incluirá o portal web se estiver habilitado
+    if (m_webPortalActive && m_webPortalServer)
+    {
+        LOG_INFO("Parando Portal Web independente antes de iniciar streaming...");
+        stopWebPortal();
+    }
+
     // Log removido para reduzir ruído - streaming já loga internamente
 
     // OPÇÃO A: Não há mais thread de streaming para limpar
@@ -1773,6 +1827,111 @@ bool Application::initStreaming()
     }
 
     return true;
+}
+
+bool Application::initWebPortal()
+{
+    if (m_webPortalActive && m_webPortalServer)
+    {
+        LOG_INFO("Portal Web já está ativo");
+        return true;
+    }
+
+    if (!m_webPortalEnabled)
+    {
+        LOG_WARN("Portal Web está desabilitado na configuração");
+        return false;
+    }
+
+    LOG_INFO("Iniciando Portal Web independente...");
+
+    // Criar HTTPTSStreamer apenas para o portal (sem streaming)
+    m_webPortalServer = std::make_unique<HTTPTSStreamer>();
+
+    // Configurar Web Portal
+    m_webPortalServer->enableWebPortal(true);
+    m_webPortalServer->setWebPortalTitle(m_webPortalTitle);
+    m_webPortalServer->setWebPortalSubtitle(m_webPortalSubtitle);
+    m_webPortalServer->setWebPortalImagePath(m_webPortalImagePath);
+    m_webPortalServer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);
+    m_webPortalServer->setWebPortalColors(
+        m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
+        m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+        m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+        m_webPortalColorCardHeader, m_webPortalColorBorder,
+        m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+    m_webPortalServer->setWebPortalTexts(
+        m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+        m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+        m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+        m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+        m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+        m_webPortalTextConnecting);
+
+    // Configurar API Controller
+    m_webPortalServer->setApplicationForAPI(this);
+    m_webPortalServer->setUIManagerForAPI(m_ui.get());
+
+    // Configurar HTTPS
+    if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
+    {
+        m_webPortalServer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
+        m_webPortalServer->enableHTTPS(true);
+        LOG_INFO("HTTPS habilitado para Portal Web. Certificados serão buscados no diretório de execução.");
+    }
+
+    // Inicializar com dimensões dummy (não usadas para portal sem streaming)
+    if (!m_webPortalServer->initialize(m_streamingPort, 640, 480, 30))
+    {
+        LOG_ERROR("Falha ao inicializar Portal Web");
+        m_webPortalServer.reset();
+        return false;
+    }
+
+    // Iniciar apenas o servidor HTTP (sem encoding thread)
+    if (!m_webPortalServer->startWebPortalServer())
+    {
+        LOG_ERROR("Falha ao iniciar servidor HTTP do Portal Web");
+        m_webPortalServer.reset();
+        return false;
+    }
+
+    m_webPortalActive = true;
+    LOG_INFO("Portal Web iniciado na porta " + std::to_string(m_streamingPort));
+    std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
+                            std::string("localhost:") + std::to_string(m_streamingPort);
+    LOG_INFO("Portal Web disponível: " + portalUrl);
+
+    // Atualizar UI
+    if (m_ui)
+    {
+        m_ui->setWebPortalActive(true);
+    }
+
+    return true;
+}
+
+void Application::stopWebPortal()
+{
+    if (!m_webPortalActive || !m_webPortalServer)
+    {
+        return;
+    }
+
+    LOG_INFO("Parando Portal Web...");
+
+    // Parar servidor HTTP
+    m_webPortalServer->stop();
+    m_webPortalServer.reset();
+    m_webPortalActive = false;
+
+    LOG_INFO("Portal Web parado");
+
+    // Atualizar UI
+    if (m_ui)
+    {
+        m_ui->setWebPortalActive(false);
+    }
 }
 
 bool Application::initAudioCapture()

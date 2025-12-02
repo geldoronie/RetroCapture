@@ -356,6 +356,160 @@ bool HTTPTSStreamer::start()
     return true;
 }
 
+bool HTTPTSStreamer::startWebPortalServer()
+{
+    // Este método inicia apenas o servidor HTTP/HTTPS sem o encoding thread
+    // Usado quando o portal web está ativo mas o streaming não está
+
+    if (m_active)
+    {
+        LOG_WARN("Servidor HTTP já está ativo");
+        return true;
+    }
+
+    LOG_INFO("Iniciando servidor HTTP/HTTPS para Portal Web...");
+
+    // Configurar HTTPS se necessário (mesma lógica do start())
+    if (m_enableHTTPS && m_webPortalEnabled)
+    {
+        // Lambda para buscar arquivos SSL (mesma lógica do start())
+        auto getUserConfigDir = []() -> std::string
+        {
+            const char *homeDir = std::getenv("HOME");
+            if (homeDir)
+            {
+                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+                if (std::filesystem::exists(configDir))
+                {
+                    return configDir.string();
+                }
+            }
+            return "";
+        };
+
+        auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
+        {
+            if (relativePath.empty())
+                return "";
+
+            std::filesystem::path inputPath(relativePath);
+            std::string fileName = inputPath.filename().string();
+
+            // Lista de locais para buscar (em ordem de prioridade)
+            std::vector<std::string> possiblePaths;
+
+            // 1. Pasta de configuração do usuário (~/.config/retrocapture/ssl/) - PRIORIDADE ALTA
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                possiblePaths.push_back((userSSLDir / fileName).string());
+            }
+
+            // 2. Caminho como fornecido (pode ser relativo)
+            possiblePaths.push_back(relativePath);
+
+            // 3. Diretório atual/ssl/
+            possiblePaths.push_back("./ssl/" + fileName);
+            possiblePaths.push_back("./ssl/" + relativePath);
+
+            // 4. Diretório atual
+            possiblePaths.push_back("./" + fileName);
+            possiblePaths.push_back("./" + relativePath);
+
+            // 5. Um nível acima/ssl/
+            possiblePaths.push_back("../ssl/" + fileName);
+            possiblePaths.push_back("../ssl/" + relativePath);
+
+            // 6. Dois níveis acima/ssl/
+            possiblePaths.push_back("../../ssl/" + fileName);
+            possiblePaths.push_back("../../ssl/" + relativePath);
+
+            // Tentar caminhos na ordem de prioridade
+            for (const auto &path : possiblePaths)
+            {
+                std::filesystem::path fsPath(path);
+                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                {
+                    return std::filesystem::absolute(fsPath).string();
+                }
+            }
+
+            return ""; // Não encontrado
+        };
+
+        // Extrair apenas o nome do arquivo do caminho fornecido
+        std::filesystem::path certInputPath(m_sslCertPath);
+        std::filesystem::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename().string();
+        std::string keyFileName = keyInputPath.filename().string();
+
+        // Buscar certificados SSL
+        std::string foundCertPath = findSSLFile(m_sslCertPath);
+        if (foundCertPath.empty())
+        {
+            foundCertPath = findSSLFile("ssl/" + certFileName);
+            if (foundCertPath.empty())
+            {
+                foundCertPath = findSSLFile(certFileName);
+            }
+        }
+
+        std::string foundKeyPath = findSSLFile(m_sslKeyPath);
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile("ssl/" + keyFileName);
+            if (foundKeyPath.empty())
+            {
+                foundKeyPath = findSSLFile(keyFileName);
+            }
+        }
+
+        if (foundCertPath.empty() || foundKeyPath.empty())
+        {
+            LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+            m_enableHTTPS = false;
+        }
+        else
+        {
+            if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
+            {
+                LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
+                m_enableHTTPS = false;
+            }
+            else
+            {
+                m_foundSSLCertPath = foundCertPath;
+                m_foundSSLKeyPath = foundKeyPath;
+            }
+        }
+    }
+
+    // Criar servidor HTTP/HTTPS
+    if (!m_httpServer.createServer(m_port))
+    {
+        LOG_ERROR("Failed to create HTTP server");
+        return false;
+    }
+
+    // Configurar WebPortal para usar HTTPServer
+    m_webPortal.setHTTPServer(&m_httpServer);
+
+    // Configurar APIController para usar HTTPServer
+    m_apiController.setHTTPServer(&m_httpServer);
+
+    // Iniciar apenas a thread do servidor (sem encoding thread)
+    m_running = true;
+    m_active = true;
+    m_stopRequest = false;
+
+    m_serverThread = std::thread(&HTTPTSStreamer::serverThread, this);
+    m_serverThread.detach();
+
+    LOG_INFO("Servidor HTTP/HTTPS iniciado na porta " + std::to_string(m_port) + " (Portal Web apenas)");
+    return true;
+}
+
 void HTTPTSStreamer::setSSLCertificatePath(const std::string &certPath, const std::string &keyPath)
 {
     m_sslCertPath = certPath;

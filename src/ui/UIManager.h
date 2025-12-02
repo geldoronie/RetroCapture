@@ -374,6 +374,11 @@ public:
     void setOnWebPortalColorsChanged(std::function<void()> callback) { m_onWebPortalColorsChanged = callback; }
     void setOnWebPortalTextsChanged(std::function<void()> callback) { m_onWebPortalTextsChanged = callback; }
 
+    // Web Portal active state (independent from streaming)
+    void setWebPortalActive(bool active) { m_webPortalActive = active; }
+    bool getWebPortalActive() const { return m_webPortalActive; }
+    void setOnWebPortalStartStop(std::function<void(bool)> callback) { m_onWebPortalStartStop = callback; }
+
 private:
     bool m_initialized = false;
     bool m_uiVisible = true;
@@ -566,4 +571,8 @@ private:
     std::function<void(const std::string &)> m_onWebPortalBackgroundImagePathChanged;
     std::function<void()> m_onWebPortalColorsChanged;
     std::function<void()> m_onWebPortalTextsChanged;
+    std::function<void(bool)> m_onWebPortalStartStop;
+
+    // Web Portal active state (independent from streaming)
+    bool m_webPortalActive = false;
 };

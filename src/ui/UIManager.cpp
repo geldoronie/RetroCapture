@@ -1972,7 +1972,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Web Portal Enable/Disable
+    // Web Portal Enable/Disable (configuração)
     bool portalEnabled = m_webPortalEnabled;
     if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
     {
@@ -1998,6 +1998,41 @@ void UIManager::renderWebPortalPanel()
         std::string streamUrl = "http://localhost:" + std::to_string(m_streamingPort) + "/stream";
         ImGui::Text("Stream direto: %s", streamUrl.c_str());
         return;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Botão Start/Stop do Portal Web (independente do streaming)
+    if (m_webPortalActive)
+    {
+        if (ImGui::Button("Parar Portal Web", ImVec2(-1, 0)))
+        {
+            m_webPortalActive = false;
+            if (m_onWebPortalStartStop)
+            {
+                m_onWebPortalStartStop(false);
+            }
+        }
+        ImGui::Spacing();
+        std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
+                                std::string("localhost:") + std::to_string(m_streamingPort);
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Portal Web Ativo");
+        ImGui::Text("URL: %s", portalUrl.c_str());
+    }
+    else
+    {
+        if (ImGui::Button("Iniciar Portal Web", ImVec2(-1, 0)))
+        {
+            m_webPortalActive = true;
+            if (m_onWebPortalStartStop)
+            {
+                m_onWebPortalStartStop(true);
+            }
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Portal Web Inativo");
     }
 
     ImGui::Spacing();

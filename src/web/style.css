@@ -2,6 +2,7 @@
 
 :root {
     --primary-color: #0A7A83;
+    --primary: #0A7A83;
     --primary-light: #6FC4C0;
     --primary-dark: #0F3E42;
     --secondary-color: #47B3CE;
@@ -494,22 +495,60 @@ body {
 .form-label {
     color: var(--text-primary);
     font-weight: 500;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
     font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-/* Range Sliders */
+.form-label .badge {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Bootstrap spacing utilities */
+.ms-2 {
+    margin-left: 0.5rem !important;
+}
+
+.me-2 {
+    margin-right: 0.5rem !important;
+}
+
+/* Range Sliders - Base Bootstrap com cores ajustadas */
 .form-range {
     width: 100%;
-    height: 0.5rem;
-    background: var(--surface-elevated);
-    border-radius: 0.25rem;
-    outline: none;
+    height: 1.5rem;
+    padding: 0;
+    background-color: transparent;
     -webkit-appearance: none;
     appearance: none;
-    margin: 0;
-    padding: 0;
-    position: relative;
+    margin: 0.5rem 0;
+    cursor: pointer;
+}
+
+.form-range:focus {
+    outline: 0;
+}
+
+.form-range:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 1px var(--background), 0 0 0 0.25rem rgba(10, 122, 131, 0.25);
+}
+
+.form-range:focus::-moz-range-thumb {
+    box-shadow: 0 0 0 1px var(--background), 0 0 0 0.25rem rgba(10, 122, 131, 0.25);
+}
+
+/* WebKit/Blink (Chrome, Safari, Edge) */
+.form-range::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 0.5rem;
+    color: transparent;
+    cursor: pointer;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-color: transparent;
+    border-radius: 1rem;
 }
 
 .form-range::-webkit-slider-thumb {
@@ -517,50 +556,77 @@ body {
     appearance: none;
     width: 1.25rem;
     height: 1.25rem;
-    background: var(--primary);
-    border-radius: 50%;
+    background-color: var(--primary);
+    border: 2px solid var(--text-primary);
+    border-radius: 1rem;
     cursor: pointer;
-    transition: all 0.2s ease;
-    border: 2px solid var(--surface);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     margin-top: -0.375rem;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
 .form-range::-webkit-slider-thumb:hover {
-    background: var(--primary-light);
-    transform: scale(1.1);
-    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+    background-color: var(--primary-light);
+    border-color: var(--text-primary);
+    box-shadow: 0 4px 8px rgba(10, 122, 131, 0.5);
+    transform: scale(1.15);
 }
 
-.form-range::-webkit-slider-runnable-track {
+.form-range::-webkit-slider-thumb:active {
+    background-color: var(--primary-dark);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+/* Firefox */
+.form-range::-moz-range-track {
     width: 100%;
     height: 0.5rem;
-    background: var(--surface-elevated);
-    border-radius: 0.25rem;
+    color: transparent;
+    cursor: pointer;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-color: transparent;
+    border-radius: 1rem;
 }
 
 .form-range::-moz-range-thumb {
     width: 1.25rem;
     height: 1.25rem;
-    background: var(--primary);
-    border-radius: 50%;
+    background-color: var(--primary);
+    border: 2px solid var(--text-primary);
+    border-radius: 1rem;
     cursor: pointer;
-    border: 2px solid var(--surface);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    transition: all 0.2s ease;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    -moz-appearance: none;
+    appearance: none;
 }
 
 .form-range::-moz-range-thumb:hover {
-    background: var(--primary-light);
-    transform: scale(1.1);
-    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+    background-color: var(--primary-light);
+    border-color: var(--text-primary);
+    box-shadow: 0 4px 8px rgba(10, 122, 131, 0.5);
+    transform: scale(1.15);
 }
 
-.form-range::-moz-range-track {
-    width: 100%;
-    height: 0.5rem;
-    background: var(--surface-elevated);
-    border-radius: 0.25rem;
+.form-range::-moz-range-thumb:active {
+    background-color: var(--primary-dark);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.form-range:disabled {
+    pointer-events: none;
+    filter: none;
+    opacity: 0.5;
+}
+
+.form-range:disabled::-webkit-slider-thumb {
+    background-color: rgba(255, 255, 255, 0.3);
+    cursor: default;
+}
+
+.form-range:disabled::-moz-range-thumb {
+    background-color: rgba(255, 255, 255, 0.3);
+    cursor: default;
 }
 
 /* Input Groups */
@@ -569,12 +635,43 @@ body {
     border: 1px solid var(--border);
     color: var(--text-primary);
     border-radius: 8px;
+    font-weight: 500;
+    min-width: 80px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Badges para valores dos sliders */
+.badge {
+    display: inline-block;
+    padding: 0.35em 0.65em;
+    font-size: 0.75em;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.25rem;
+}
+
+.badge.bg-primary {
+    background-color: var(--primary) !important;
+    color: var(--text-primary);
 }
 
 .input-group .form-range {
     border-radius: 8px 0 0 8px;
     flex: 1;
     margin: 0;
+    padding: 0.5rem 0;
+}
+
+/* Ajustar altura do input-group quando contém form-range */
+.input-group:has(.form-range) {
+    align-items: center;
+    min-height: 2.5rem;
 }
 
 .input-group .input-group-text {

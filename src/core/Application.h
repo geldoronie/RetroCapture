@@ -164,6 +164,10 @@ private:
     // Referência ao streamer atual para atualização de configurações em tempo real
     HTTPTSStreamer *m_currentStreamer = nullptr;
 
+    // Portal Web independente (servidor HTTP sem streaming)
+    std::unique_ptr<HTTPTSStreamer> m_webPortalServer;
+    bool m_webPortalActive = false;
+
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão
     bool m_webPortalHTTPSEnabled = false;
@@ -235,6 +239,8 @@ private:
     bool initRenderer();
     bool initUI();
     bool initStreaming();
+    bool initWebPortal();
+    void stopWebPortal();
     bool initAudioCapture();
     void handleKeyInput();
 };

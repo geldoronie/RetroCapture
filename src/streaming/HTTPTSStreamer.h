@@ -45,6 +45,7 @@ public:
     std::string getType() const override { return "HTTP MPEG-TS"; }
     bool initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps) override;
     bool start() override;
+    bool startWebPortalServer(); // Inicia apenas o servidor HTTP (sem encoding) para portal web
     void stop() override;
     bool isActive() const override;
     bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) override;
