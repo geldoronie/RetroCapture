@@ -21,6 +21,9 @@ class StreamManager;
 class AudioCapture;
 class HTTPTSStreamer;
 
+// Forward declaration for API
+struct ShaderParameter;
+
 class Application
 {
 public:
@@ -86,6 +89,9 @@ public:
     void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
     void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
     void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
+
+    // API access methods
+    ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
 
 private:
     bool m_initialized = false;

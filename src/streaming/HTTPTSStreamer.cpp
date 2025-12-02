@@ -340,6 +340,9 @@ bool HTTPTSStreamer::start()
     // Configurar WebPortal para usar HTTPServer para envio de dados SSL
     m_webPortal.setHTTPServer(&m_httpServer);
 
+    // Configurar APIController para usar HTTPServer
+    m_apiController.setHTTPServer(&m_httpServer);
+
     // Iniciar threads
     m_running = true;
     m_active = true;
@@ -588,6 +591,17 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 }
             }
         }
+    }
+
+    // Verificar API REST primeiro (antes do Web Portal)
+    if (m_apiController.isAPIRequest(request))
+    {
+        if (m_apiController.handleRequest(clientFd, request))
+        {
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+        // Se não foi processada, continuar para outras verificações
     }
 
     // IMPORTANTE: Verificar portal web APENAS se NÃO for stream e se Web Portal estiver habilitado

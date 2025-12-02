@@ -1697,6 +1697,10 @@ bool Application::initStreaming()
     // Configurar Web Portal
     tsStreamer->enableWebPortal(m_webPortalEnabled);
     tsStreamer->setWebPortalTitle(m_webPortalTitle);
+
+    // Configurar API Controller
+    tsStreamer->setApplicationForAPI(this);
+    tsStreamer->setUIManagerForAPI(m_ui.get());
     tsStreamer->setWebPortalSubtitle(m_webPortalSubtitle);
     tsStreamer->setWebPortalImagePath(m_webPortalImagePath);
     tsStreamer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);

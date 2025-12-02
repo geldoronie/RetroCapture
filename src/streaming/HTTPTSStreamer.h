@@ -3,6 +3,7 @@
 #include "IStreamer.h"
 #include "WebPortal.h"
 #include "HTTPServer.h"
+#include "APIController.h"
 #include "../encoding/MediaEncoder.h"
 #include "../encoding/MediaMuxer.h"
 #include "../encoding/StreamSynchronizer.h"
@@ -23,6 +24,10 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+
+// Forward declarations
+class Application;
+class UIManager;
 /**
  * HTTP MPEG-TS streamer implementation.
  *
@@ -100,6 +105,10 @@ public:
     // Obter caminhos dos certificados SSL encontrados
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
+
+    // API Controller configuration
+    void setApplicationForAPI(Application *application) { m_apiController.setApplication(application); }
+    void setUIManagerForAPI(UIManager *uiManager) { m_apiController.setUIManager(uiManager); }
 
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
@@ -290,4 +299,7 @@ private:
     // Web Portal - responsável por servir a página web
     WebPortal m_webPortal;
     bool m_webPortalEnabled = true; // Habilitado por padrão
+
+    // API Controller - responsável por servir a API REST
+    APIController m_apiController;
 };
