@@ -28,24 +28,66 @@ public:
 
     // Callbacks para interação
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
-    void setCurrentShader(const std::string &shader) { m_currentShader = shader; }
+    void setCurrentShader(const std::string &shader)
+    {
+        m_currentShader = shader;
+        if (m_onShaderChanged)
+        {
+            m_onShaderChanged(shader);
+        }
+    }
     void setOnShaderChanged(std::function<void(const std::string &)> callback) { m_onShaderChanged = callback; }
 
     // Parâmetros de shader
     void setShaderEngine(ShaderEngine *engine) { m_shaderEngine = engine; }
     void setOnSavePreset(std::function<void(const std::string &, bool)> callback) { m_onSavePreset = callback; }
 
-    void setBrightness(float brightness) { m_brightness = brightness; }
-    void setContrast(float contrast) { m_contrast = contrast; }
+    void setBrightness(float brightness)
+    {
+        m_brightness = brightness;
+        if (m_onBrightnessChanged)
+        {
+            m_onBrightnessChanged(brightness);
+        }
+    }
+    void setContrast(float contrast)
+    {
+        m_contrast = contrast;
+        if (m_onContrastChanged)
+        {
+            m_onContrastChanged(contrast);
+        }
+    }
     void setOnBrightnessChanged(std::function<void(float)> callback) { m_onBrightnessChanged = callback; }
     void setOnContrastChanged(std::function<void(float)> callback) { m_onContrastChanged = callback; }
 
-    void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
+    void setMaintainAspect(bool maintain)
+    {
+        m_maintainAspect = maintain;
+        if (m_onMaintainAspectChanged)
+        {
+            m_onMaintainAspectChanged(maintain);
+        }
+    }
     void setOnMaintainAspectChanged(std::function<void(bool)> callback) { m_onMaintainAspectChanged = callback; }
 
-    void setFullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
+    void setFullscreen(bool fullscreen)
+    {
+        m_fullscreen = fullscreen;
+        if (m_onFullscreenChanged)
+        {
+            m_onFullscreenChanged(fullscreen);
+        }
+    }
     void setOnFullscreenChanged(std::function<void(bool)> callback) { m_onFullscreenChanged = callback; }
-    void setMonitorIndex(int index) { m_monitorIndex = index; }
+    void setMonitorIndex(int index)
+    {
+        m_monitorIndex = index;
+        if (m_onMonitorIndexChanged)
+        {
+            m_onMonitorIndexChanged(index);
+        }
+    }
     void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
 
     // Controles V4L2
@@ -65,7 +107,61 @@ public:
 
     void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
     SourceType getSourceType() const { return m_sourceType; }
-    void setCurrentDevice(const std::string &device) { m_currentDevice = device; }
+    void setCurrentDevice(const std::string &device)
+    {
+        m_currentDevice = device;
+        if (m_onDeviceChanged)
+        {
+            m_onDeviceChanged(device);
+        }
+    }
+    std::string getCurrentDevice() const { return m_currentDevice; }
+
+    // Métodos auxiliares para disparar callbacks via API
+    void triggerSourceTypeChange(SourceType sourceType)
+    {
+        m_sourceType = sourceType;
+        if (m_onSourceTypeChanged)
+        {
+            m_onSourceTypeChanged(sourceType);
+        }
+    }
+
+    void triggerResolutionChange(uint32_t width, uint32_t height)
+    {
+        if (m_onResolutionChanged)
+        {
+            m_onResolutionChanged(width, height);
+        }
+    }
+
+    void triggerFramerateChange(uint32_t fps)
+    {
+        if (m_onFramerateChanged)
+        {
+            m_onFramerateChanged(fps);
+        }
+    }
+
+    void triggerV4L2ControlChange(const std::string &name, int32_t value)
+    {
+        if (m_onV4L2ControlChanged)
+        {
+            m_onV4L2ControlChanged(name, value);
+        }
+    }
+
+    // V4L2Control struct - public for API access
+    struct V4L2Control
+    {
+        std::string name;
+        int32_t value;
+        int32_t min;
+        int32_t max;
+        int32_t step;
+        bool available;
+    };
+
     void refreshV4L2Devices();
 
     // Informações da captura
@@ -131,6 +227,21 @@ public:
     bool getFullscreen() const { return m_fullscreen; }
     int getMonitorIndex() const { return m_monitorIndex; }
     std::string getCurrentShader() const { return m_currentShader; }
+    const std::vector<std::string> &getShaderList() const { return m_scannedShaders; }
+
+    // Capture info getters
+    uint32_t getCaptureWidth() const { return m_captureWidth; }
+    uint32_t getCaptureHeight() const { return m_captureHeight; }
+    uint32_t getCaptureFps() const { return m_captureFps; }
+
+    // Streaming status getters
+    bool getStreamingActive() const { return m_streamingActive; }
+    std::string getStreamUrl() const { return m_streamUrl; }
+    uint32_t getStreamClientCount() const { return m_streamClientCount; }
+
+    // V4L2 getters
+    const std::vector<std::string> &getV4L2Devices() const { return m_v4l2Devices; }
+    const std::vector<V4L2Control> &getV4L2Controls() const { return m_v4l2Controls; }
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -295,15 +406,6 @@ private:
 
     // V4L2 Controls
     VideoCapture *m_capture = nullptr;
-    struct V4L2Control
-    {
-        std::string name;
-        int32_t value;
-        int32_t min;
-        int32_t max;
-        int32_t step;
-        bool available;
-    };
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RetroCapture Stream</title>
+    <title>RetroCapture Control Panel</title>
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Bootstrap Icons -->
@@ -12,24 +12,24 @@
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <!-- Header Minimalista -->
+    <!-- Header -->
     <header class="portal-header">
         <div class="container-fluid px-4 py-3">
             <div class="d-flex align-items-center justify-content-between">
                 <div class="d-flex align-items-center">
-                    <div class="logo-container me-3" id="logoContainer">
+                    <div class="logo-container me-3">
                         <i class="bi bi-controller fs-2"></i>
                     </div>
                     <div>
-                        <h1 class="portal-title mb-0">RetroCapture Stream</h1>
-                        <p class="portal-subtitle mb-0">Streaming de vídeo em tempo real</p>
+                        <h1 class="portal-title mb-0">RetroCapture Control Panel</h1>
+                        <p class="portal-subtitle mb-0">Controle remoto da aplicação</p>
                     </div>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn-icon" onclick="copyStreamUrl()" title="Copiar URL">
+                    <button class="btn btn-icon" onclick="copyStreamUrl()" title="Copiar URL do Stream">
                         <i class="bi bi-clipboard"></i>
                     </button>
-                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-icon" title="Abrir em Nova Aba">
+                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-icon" title="Abrir Stream em Nova Aba">
                         <i class="bi bi-box-arrow-up-right"></i>
                     </a>
                 </div>
@@ -37,40 +37,326 @@
         </div>
     </header>
 
+    <!-- Alert Container -->
+    <div class="alert-container" id="alertContainer"></div>
+
     <!-- Main Content -->
     <main class="portal-main">
         <div class="container-fluid px-4 py-4">
-            <div class="row">
-                <div class="col-12 col-lg-8 mx-auto">
+            <!-- Status Bar -->
+            <div class="row mb-4">
+                <div class="col-12">
                     <div class="card">
-                        <div class="card-body text-center py-5">
-                            <i class="bi bi-play-circle fs-1 text-primary mb-3"></i>
-                            <h2 class="card-title mb-3">Stream Disponível</h2>
-                            <p class="card-text text-muted mb-4">
-                                O stream está disponível via URL direta. Use um player compatível com MPEG-TS
-                                (como VLC, ffplay, ou outros players de streaming) para reproduzir.
-                            </p>
-                            <div class="mb-4">
-                                <label class="form-label fw-bold">URL do Stream:</label>
-                                <div class="input-group">
-                                    <input type="text" class="form-control" id="streamUrl" 
-                                           value="http://127.0.0.1:8080/stream" readonly>
-                                    <button class="btn btn-primary" onclick="copyStreamUrl()">
-                                        <i class="bi bi-clipboard me-2"></i>Copiar
-                                    </button>
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <i class="bi bi-broadcast" id="streamStatusIcon"></i>
+                                        </div>
+                                        <div class="stat-content">
+                                            <div class="stat-label">Streaming</div>
+                                            <div class="stat-value" id="streamStatus">Desconhecido</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <i class="bi bi-people"></i>
+                                        </div>
+                                        <div class="stat-content">
+                                            <div class="stat-label">Clientes</div>
+                                            <div class="stat-value" id="clientCount">0</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <i class="bi bi-camera-video"></i>
+                                        </div>
+                                        <div class="stat-content">
+                                            <div class="stat-label">Resolução</div>
+                                            <div class="stat-value" id="captureResolution">-</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-card">
+                                        <div class="stat-icon">
+                                            <i class="bi bi-speedometer2"></i>
+                                        </div>
+                                        <div class="stat-content">
+                                            <div class="stat-label">FPS</div>
+                                            <div class="stat-value" id="captureFPS">-</div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="alert alert-info">
-                                <i class="bi bi-info-circle me-2"></i>
-                                <strong>Como usar:</strong> Abra a URL acima em um player compatível com MPEG-TS.
-                                <br>
-                                <small>Exemplo: <code>ffplay http://127.0.0.1:8080/stream</code> ou <code>vlc http://127.0.0.1:8080/stream</code></small>
-                            </div>
-                            <div class="mt-4">
-                                <a href="/stream" target="_blank" class="btn btn-primary btn-lg">
-                                    <i class="bi bi-box-arrow-up-right me-2"></i>
-                                    Abrir Stream em Nova Aba
-                                </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Tabs -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <ul class="nav nav-tabs card-header-tabs" id="controlTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="source-tab" data-bs-toggle="tab" data-bs-target="#source" type="button" role="tab">
+                                        <i class="bi bi-hdd me-2"></i>Source
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="shader-tab" data-bs-toggle="tab" data-bs-target="#shader" type="button" role="tab">
+                                        <i class="bi bi-palette me-2"></i>Shader
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="image-tab" data-bs-toggle="tab" data-bs-target="#image" type="button" role="tab">
+                                        <i class="bi bi-image me-2"></i>Image
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="streaming-tab" data-bs-toggle="tab" data-bs-target="#streaming" type="button" role="tab">
+                                        <i class="bi bi-broadcast me-2"></i>Streaming
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="card-body">
+                            <div class="tab-content" id="controlTabsContent">
+                                <!-- Source Tab -->
+                                <div class="tab-pane fade show active" id="source" role="tabpanel">
+                                    <div class="row g-3">
+                                        <div class="col-12">
+                                            <h6>Source Type</h6>
+                                            <select class="form-select" id="sourceType">
+                                                <option value="0">None</option>
+                                                <option value="1">V4L2</option>
+                                            </select>
+                                            <small class="form-text text-muted mt-1">A mudança é aplicada automaticamente ao selecionar</small>
+                                        </div>
+                                        
+                                        <!-- V4L2 Controls - Aparece apenas quando V4L2 está selecionado -->
+                                        <div id="v4l2ControlsContainer" style="display: none;">
+                                            <div class="col-12">
+                                                <hr>
+                                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                                    <h6 class="mb-0">V4L2 Device</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshV4L2Devices()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="v4l2Device">
+                                                    <option value="">Carregando...</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">Selecione um dispositivo V4L2 ou "None (No device)" para desabilitar</small>
+                                            </div>
+                                            
+                                            <div class="col-12" id="v4l2CaptureInfo" style="display: none;">
+                                                <hr>
+                                                <h6>Capture Resolution & Framerate</h6>
+                                                
+                                                <!-- Resolução Manual -->
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">Width</label>
+                                                        <input type="number" class="form-control" id="v4l2CaptureWidth" min="1" max="7680">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">Height</label>
+                                                        <input type="number" class="form-control" id="v4l2CaptureHeight" min="1" max="4320">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">FPS</label>
+                                                        <input type="number" class="form-control" id="v4l2CaptureFPS" min="1" max="240">
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Quick FPS -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">Quick FPS:</label>
+                                                    <div class="btn-group" role="group">
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(120)">120</button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Resoluções 4:3 -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">4:3 Resolutions:</label>
+                                                    <div class="d-flex flex-wrap gap-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(320, 240)">320x240</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1024, 768)">1024x768</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 960)">1280x960</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1600, 1200)">1600x1200</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2048, 1536)">2048x1536</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1920)">2560x1920</button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Resoluções 16:9 -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">16:9 Resolutions:</label>
+                                                    <div class="d-flex flex-wrap gap-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1440)">2560x1440</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(3840, 2160)">3840x2160</button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="col-12">
+                                                    <button class="btn btn-primary btn-sm" onclick="updateV4L2CaptureSettings()">
+                                                        <i class="bi bi-check-circle me-2"></i>Atualizar Resolução/FPS
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="col-12">
+                                                <hr>
+                                                <h6>V4L2 Controls</h6>
+                                                <div id="v4l2ControlsInSource" class="row g-3">
+                                                    <div class="col-12 text-muted">Nenhum dispositivo conectado. Selecione um dispositivo acima para ver os controles.</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- None Source Message -->
+                                        <div id="noneSourceMessage" class="col-12">
+                                            <div class="alert alert-info">
+                                                <i class="bi bi-info-circle me-2"></i>
+                                                Nenhuma fonte selecionada. Selecione um tipo de fonte acima.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Shader Tab -->
+                                <div class="tab-pane fade" id="shader" role="tabpanel">
+                                    <div class="row g-3">
+                                        <div class="col-md-12">
+                                            <label class="form-label">Shader Atual</label>
+                                            <input type="text" class="form-control" id="currentShader" readonly>
+                                        </div>
+                                        <div class="col-md-12">
+                                            <label class="form-label">Selecionar Shader</label>
+                                            <select class="form-select" id="shaderSelect">
+                                                <option value="">Carregando shaders...</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12">
+                                            <button class="btn btn-primary" onclick="updateShader()">
+                                                <i class="bi bi-check-circle me-2"></i>Atualizar Shader
+                                            </button>
+                                            <button class="btn btn-secondary ms-2" onclick="loadShaderList()">
+                                                <i class="bi bi-arrow-clockwise me-2"></i>Atualizar Lista
+                                            </button>
+                                        </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6>Parâmetros do Shader</h6>
+                                            <div id="shaderParameters" class="row g-3">
+                                                <div class="col-12 text-muted">Nenhum shader ativo ou sem parâmetros</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Image Tab -->
+                                <div class="tab-pane fade" id="image" role="tabpanel">
+                                    <div class="row g-3">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Brilho: <span id="brightnessValue">0.0</span></label>
+                                            <input type="range" class="form-range" id="brightness" min="-1.0" max="1.0" step="0.01" value="0.0">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Contraste: <span id="contrastValue">1.0</span></label>
+                                            <input type="range" class="form-range" id="contrast" min="0.0" max="2.0" step="0.01" value="1.0">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-check form-switch mt-4">
+                                                <input class="form-check-input" type="checkbox" id="maintainAspect">
+                                                <label class="form-check-label" for="maintainAspect">Manter Proporção</label>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-check form-switch mt-4">
+                                                <input class="form-check-input" type="checkbox" id="fullscreen">
+                                                <label class="form-check-label" for="fullscreen">Tela Cheia</label>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Índice do Monitor</label>
+                                            <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">
+                                            <small class="form-text text-muted">-1 = Monitor primário, 0+ = Monitor específico</small>
+                                        </div>
+                                        <div class="col-12">
+                                            <button class="btn btn-primary" onclick="updateImageSettings()">
+                                                <i class="bi bi-check-circle me-2"></i>Atualizar Configurações
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Streaming Tab -->
+                                <div class="tab-pane fade" id="streaming" role="tabpanel">
+                                    <div class="row g-3">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Porta</label>
+                                            <input type="number" class="form-control" id="streamingPort" min="1" max="65535">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Bitrate de Vídeo (bps)</label>
+                                            <input type="number" class="form-control" id="streamingBitrate" min="1000" step="1000">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Bitrate de Áudio (bps)</label>
+                                            <input type="number" class="form-control" id="streamingAudioBitrate" min="1000" step="1000">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Largura</label>
+                                            <input type="number" class="form-control" id="streamingWidth" min="1">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Altura</label>
+                                            <input type="number" class="form-control" id="streamingHeight" min="1">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">FPS</label>
+                                            <input type="number" class="form-control" id="streamingFPS" min="1" max="120">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Codec de Vídeo</label>
+                                            <select class="form-select" id="streamingVideoCodec">
+                                                <option value="h264">H.264</option>
+                                                <option value="h265">H.265</option>
+                                                <option value="vp8">VP8</option>
+                                                <option value="vp9">VP9</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Codec de Áudio</label>
+                                            <select class="form-select" id="streamingAudioCodec">
+                                                <option value="aac">AAC</option>
+                                                <option value="opus">Opus</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12">
+                                            <button class="btn btn-primary" onclick="updateStreamingSettings()">
+                                                <i class="bi bi-check-circle me-2"></i>Atualizar Configurações
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
                             </div>
                         </div>
                     </div>
@@ -81,34 +367,9 @@
 
     <!-- Bootstrap 5 JS Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        function copyStreamUrl() {
-            const urlInput = document.getElementById('streamUrl');
-            urlInput.select();
-            urlInput.setSelectionRange(0, 99999); // Para mobile
-            document.execCommand('copy');
-            
-            // Feedback visual
-            const btn = event.target.closest('button');
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="bi bi-check me-2"></i>Copiado!';
-            btn.classList.add('btn-success');
-            btn.classList.remove('btn-primary');
-            
-            setTimeout(() => {
-                btn.innerHTML = originalText;
-                btn.classList.remove('btn-success');
-                btn.classList.add('btn-primary');
-            }, 2000);
-        }
-        
-        // Atualizar URL do stream baseado na URL atual
-        window.addEventListener('DOMContentLoaded', function() {
-            const currentUrl = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '');
-            const streamUrl = currentUrl + '/stream';
-            document.getElementById('streamUrl').value = streamUrl;
-            document.getElementById('streamLink').href = streamUrl;
-        });
-    </script>
+    <!-- API Client -->
+    <script src="/api.js"></script>
+    <!-- Main Script -->
+    <script src="/control.js"></script>
 </body>
 </html>
