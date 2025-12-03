@@ -45,13 +45,7 @@ pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_check_modules(SWSCALE REQUIRED libswscale)
 pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 
-# HTTP server for MJPEG streaming
-pkg_check_modules(MICROHTTPD QUIET libmicrohttpd)
-
-if(NOT MICROHTTPD_FOUND)
-    # Fallback: use simple socket-based HTTP server
-    message(STATUS "libmicrohttpd not found, will use simple HTTP server")
-endif()
+# HTTP server implementado internamente (HTTPServer.cpp)
 
 # PulseAudio for audio capture
 pkg_check_modules(PULSE REQUIRED libpulse)

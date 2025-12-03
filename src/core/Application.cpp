@@ -761,7 +761,7 @@ bool Application::initUI()
     m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
-    // Carregar parâmetros HLS
+    // Carregar parâmetros de buffer de streaming
     m_streamingMaxVideoBufferSize = m_ui->getStreamingMaxVideoBufferSize();
     m_streamingMaxAudioBufferSize = m_ui->getStreamingMaxAudioBufferSize();
     m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();

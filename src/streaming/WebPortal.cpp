@@ -27,7 +27,6 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
     // NÃO capturar requisições de stream (deixar para HTTPTSStreamer processar)
     if (request.find("/stream") != std::string::npos ||
         request.find("/segment_") != std::string::npos ||
-        request.find(".m3u8") != std::string::npos ||
         request.find(".ts") != std::string::npos)
     {
         return false;
@@ -41,7 +40,6 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("GET /style.css") != std::string::npos ||
         request.find("GET /api.js") != std::string::npos ||
         request.find("GET /control.js") != std::string::npos ||
-        request.find("GET /player.js") != std::string::npos ||
         request.find("GET /manifest.json") != std::string::npos ||
         request.find("GET /service-worker.js") != std::string::npos ||
         request.find("GET /favicon.ico") != std::string::npos ||
@@ -52,7 +50,6 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("/style.css") != std::string::npos ||
         request.find("/api.js") != std::string::npos ||
         request.find("/control.js") != std::string::npos ||
-        request.find("/player.js") != std::string::npos ||
         request.find("/manifest.json") != std::string::npos ||
         request.find("/service-worker.js") != std::string::npos ||
         request.find("/portal-image") != std::string::npos ||
@@ -312,7 +309,7 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
         replaceTextInHTML(html, "Codec", m_textCodec);
         replaceTextInHTML(html, "URL do Stream", m_textStreamUrl);
         replaceTextInHTML(html, "Formato", m_textFormat);
-        replaceTextInHTML(html, "HLS (HTTP Live Streaming)", m_textFormatInfo);
+        replaceTextInHTML(html, "MPEG-TS (HTTP Live Streaming)", m_textFormatInfo);
         replaceTextInHTML(html, "Copiar URL", m_textCopyUrl);
         replaceTextInHTML(html, "Abrir em Nova Aba", m_textOpenNewTab);
         replaceTextInHTML(html, "Estatísticas", "Estatísticas");
@@ -421,43 +418,7 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
             html.insert(headEndPos, "\n    <style>\n" + customCSS + "\n    </style>");
         }
 
-        // Injetar parâmetros HLS como variável global JavaScript antes do player.js
-        std::ostringstream hlsConfig;
-        hlsConfig << "\n    <script>\n";
-        hlsConfig << "        window.RETROCAPTURE_HLS_CONFIG = {\n";
-        hlsConfig << "            lowLatencyMode: " << (m_hlsLowLatencyMode ? "true" : "false") << ",\n";
-        hlsConfig << "            backBufferLength: " << m_hlsBackBufferLength << ",\n";
-        hlsConfig << "            maxBufferLength: " << m_hlsMaxBufferLength << ",\n";
-        hlsConfig << "            maxMaxBufferLength: " << m_hlsMaxMaxBufferLength << ",\n";
-        hlsConfig << "            enableWorker: " << (m_hlsEnableWorker ? "true" : "false") << "\n";
-        hlsConfig << "        };\n";
-        hlsConfig << "    </script>\n";
-
-        // Inserir antes do player.js (ou antes de </body> se player.js não for encontrado)
-        size_t playerJsPos = html.find("<script src=\"");
-        if (playerJsPos != std::string::npos)
-        {
-            // Encontrar a tag completa do script player.js
-            size_t playerJsEnd = html.find("</script>", playerJsPos);
-            if (playerJsEnd != std::string::npos)
-            {
-                // Verificar se é realmente o player.js
-                std::string scriptTag = html.substr(playerJsPos, playerJsEnd - playerJsPos);
-                if (scriptTag.find("player.js") != std::string::npos)
-                {
-                    html.insert(playerJsPos, hlsConfig.str());
-                }
-            }
-        }
-        else
-        {
-            // Fallback: inserir antes de </body>
-            size_t bodyEndPos = html.find("</body>");
-            if (bodyEndPos != std::string::npos)
-            {
-                html.insert(bodyEndPos, hlsConfig.str());
-            }
-        }
+        // Código HLS removido - player.js não existe mais, usando MPEG-TS streaming
 
         // Aplicar prefixo base se necessário (depois das substituições)
         if (!basePrefix.empty())
@@ -721,20 +682,6 @@ void WebPortal::setTexts(
     m_textFormatInfo = formatInfo;
     m_textCodecInfoValue = codecInfoValue;
     m_textConnecting = connecting;
-}
-
-void WebPortal::setHLSParameters(
-    bool lowLatencyMode,
-    float backBufferLength,
-    float maxBufferLength,
-    float maxMaxBufferLength,
-    bool enableWorker)
-{
-    m_hlsLowLatencyMode = lowLatencyMode;
-    m_hlsBackBufferLength = backBufferLength;
-    m_hlsMaxBufferLength = maxBufferLength;
-    m_hlsMaxMaxBufferLength = maxMaxBufferLength;
-    m_hlsEnableWorker = enableWorker;
 }
 
 std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
@@ -1154,7 +1101,6 @@ std::string WebPortal::extractFilePath(const std::string &request) const
 
     // Verificar se é um arquivo estático conhecido
     bool isStaticFile = (path.find("style.css") != std::string::npos ||
-                         path.find("player.js") != std::string::npos ||
                          path.find(".css") != std::string::npos ||
                          path.find(".js") != std::string::npos);
 
@@ -1299,18 +1245,13 @@ std::string WebPortal::injectBasePrefix(const std::string &html, const std::stri
     // Substituir URLs relativas que começam com /
     // Padrões a substituir:
     // href="/style.css" -> href="/retrocapture/style.css"
-    // src="/player.js" -> src="/retrocapture/player.js"
     // href="/stream" -> href="/retrocapture/stream"
 
     std::vector<std::pair<std::string, std::string>> replacements = {
         {"href=\"/style.css\"", "href=\"" + basePrefix + "/style.css\""},
         {"href='/style.css'", "href='" + basePrefix + "/style.css'"},
-        {"src=\"/player.js\"", "src=\"" + basePrefix + "/player.js\""},
-        {"src='/player.js'", "src='" + basePrefix + "/player.js'"},
         {"href=\"/stream\"", "href=\"" + basePrefix + "/stream\""},
         {"href='/stream'", "href='" + basePrefix + "/stream'"},
-        {"href=\"/stream.m3u8\"", "href=\"" + basePrefix + "/stream.m3u8\""},
-        {"href='/stream.m3u8'", "href='" + basePrefix + "/stream.m3u8'"},
     };
 
     for (const auto &[oldStr, newStr] : replacements)

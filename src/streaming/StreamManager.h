@@ -9,7 +9,7 @@
 /**
  * Manages video streaming to remote clients.
  *
- * Supports multiple streaming protocols (HTTP MJPEG, etc.)
+ * Supports multiple streaming protocols (HTTP MPEG-TS, etc.)
  * and handles frame distribution to active streamers.
  */
 class StreamManager

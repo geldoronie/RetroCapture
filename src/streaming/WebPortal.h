@@ -54,16 +54,6 @@ public:
         const std::string &connecting);
 
     /**
-     * Define parâmetros de desempenho do HLS
-     */
-    void setHLSParameters(
-        bool lowLatencyMode,
-        float backBufferLength,
-        float maxBufferLength,
-        float maxMaxBufferLength,
-        bool enableWorker);
-
-    /**
      * Define o caminho da imagem para o título (opcional)
      * @param imagePath Caminho da imagem (vazio para usar ícone padrão)
      */
@@ -211,14 +201,6 @@ private:
     std::string m_subtitle = "Streaming de vídeo em tempo real"; // Subtítulo
     std::string m_imagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_backgroundImagePath;                           // Caminho da imagem de fundo (opcional)
-
-    // Parâmetros HLS
-    // HLS Performance parameters - alinhados com valores padrão da UI
-    bool m_hlsLowLatencyMode = false;      // Desabilitado por padrão: permite mais prefetch e buffer maior
-    float m_hlsBackBufferLength = 40.0f;   // 40s = 20 segmentos de 2s (alinhado com HLS_SEGMENT_COUNT)
-    float m_hlsMaxBufferLength = 30.0f;    // 30s = 15 segmentos de 2s (buffer maior para fluidez)
-    float m_hlsMaxMaxBufferLength = 60.0f; // 60s = 30 segmentos de 2s (buffer máximo generoso)
-    bool m_hlsEnableWorker = false;        // Desabilitado por padrão: mais compatível com Chrome
 
     // Textos editáveis
     std::string m_textStreamInfo = "Informações do Stream";
