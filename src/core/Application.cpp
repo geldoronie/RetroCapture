@@ -2034,9 +2034,15 @@ void Application::run()
         // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
         // Processar TODOS os samples disponíveis em loop até esgotar
         // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
-        // O áudio acumula no buffer do AudioCapture e precisa ser processado continuamente
-        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        // IMPORTANTE: Processar mainloop do PulseAudio sempre que áudio estiver aberto
+        // Isso é crítico para evitar que o PulseAudio trave o áudio do sistema
+        // O mainloop precisa ser processado regularmente, mesmo sem streaming ativo
+        if (m_audioCapture && m_audioCapture->isOpen())
         {
+            // Processar mainloop do PulseAudio para evitar bloqueio do áudio do sistema
+            // Isso deve ser feito sempre, não apenas quando streaming está ativo
+            if (m_streamManager && m_streamManager->isActive())
+            {
 
             // Calcular tamanho do buffer baseado no tempo para sincronização
             uint32_t audioSampleRate = m_audioCapture->getSampleRate();
@@ -2082,15 +2088,25 @@ void Application::run()
                 iteration++;
             }
 
-            // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
-            if (iteration >= maxIterations)
-            {
-                static int logCount = 0;
-                if (logCount < 3)
+                // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
+                if (iteration >= maxIterations)
                 {
-                    LOG_WARN("Áudio acumulado: processando em chunks para evitar bloqueio da thread principal");
-                    logCount++;
+                    static int logCount = 0;
+                    if (logCount < 3)
+                    {
+                        LOG_WARN("Áudio acumulado: processando em chunks para evitar bloqueio da thread principal");
+                        logCount++;
+                    }
                 }
+            }
+            else
+            {
+                // Streaming não está ativo, mas ainda precisamos processar o mainloop
+                // para evitar que o PulseAudio trave o áudio do sistema
+                // Ler e descartar samples para manter o buffer limpo
+                const size_t maxSamples = 4096; // Buffer temporário
+                std::vector<int16_t> tempBuffer(maxSamples);
+                m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
         }
 
