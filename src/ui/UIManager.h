@@ -200,6 +200,10 @@ public:
     void setStreamingActive(bool active) { m_streamingActive = active; }
     void setStreamUrl(const std::string &url) { m_streamUrl = url; }
     void setStreamClientCount(uint32_t count) { m_streamClientCount = count; }
+    void setCanStartStreaming(bool canStart) { m_canStartStreaming = canStart; }
+    void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
+    void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
+    bool isStreamingProcessing() const { return m_streamingProcessing; }
     void setStreamingPort(uint16_t port) { m_streamingPort = port; }
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -283,6 +287,8 @@ public:
     bool getStreamingActive() const { return m_streamingActive; }
     std::string getStreamUrl() const { return m_streamUrl; }
     uint32_t getStreamClientCount() const { return m_streamClientCount; }
+    bool canStartStreaming() const { return m_canStartStreaming; }
+    int64_t getStreamingCooldownRemainingMs() const { return m_streamingCooldownRemainingMs; }
 
     // V4L2 getters
     const std::vector<std::string> &getV4L2Devices() const { return m_v4l2Devices; }
@@ -569,6 +575,9 @@ private:
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
+    bool m_canStartStreaming = true;            // Pode iniciar streaming (não está em cooldown)
+    int64_t m_streamingCooldownRemainingMs = 0; // Tempo restante de cooldown em ms
+    bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
     size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)

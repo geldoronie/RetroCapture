@@ -58,6 +58,11 @@ namespace
         return std::to_string(value);
     }
 
+    std::string jsonNumber(int64_t value)
+    {
+        return std::to_string(value);
+    }
+
     std::string jsonNumber(float value)
     {
         std::ostringstream oss;
@@ -594,6 +599,8 @@ bool APIController::handleGETStatus(int clientFd)
     std::ostringstream json;
     json << "{"
          << "\"streamingActive\": " << jsonBool(m_uiManager->getStreamingActive()) << ", "
+         << "\"streamingCanStart\": " << jsonBool(m_uiManager->canStartStreaming()) << ", "
+         << "\"streamingCooldownRemainingMs\": " << jsonNumber(m_uiManager->getStreamingCooldownRemainingMs()) << ", "
          << "\"streamUrl\": " << jsonString(m_uiManager->getStreamUrl()) << ", "
          << "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
          << "}";
@@ -880,6 +887,18 @@ bool APIController::handleSetStreamingControl(int clientFd, const std::string &b
 
         if (action == "start")
         {
+            // Verificar se pode iniciar (não está em cooldown)
+            if (!m_uiManager->canStartStreaming())
+            {
+                int64_t cooldownMs = m_uiManager->getStreamingCooldownRemainingMs();
+                int cooldownSeconds = static_cast<int>(cooldownMs / 1000);
+                std::ostringstream response;
+                response << "{\"success\": false, \"action\": \"start\", \"message\": \"Streaming ainda em cooldown. Aguarde "
+                         << cooldownSeconds << " segundos\", \"cooldownRemainingMs\": " << cooldownMs << "}";
+                sendJSONResponse(clientFd, 429, response.str()); // 429 = Too Many Requests
+                return true;
+            }
+
             m_uiManager->triggerStreamingStartStop(true);
             std::ostringstream response;
             response << "{\"success\": true, \"action\": \"start\", \"message\": \"Streaming iniciado\"}";

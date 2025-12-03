@@ -900,6 +900,18 @@ bool Application::initUI()
         LOG_INFO("[CALLBACK] Streaming " + std::string(start ? "START" : "STOP") + " - criando thread...");
         
         if (start) {
+            // Verificar se pode iniciar (não está em cooldown)
+            if (m_ui && !m_ui->canStartStreaming()) {
+                int64_t cooldownMs = m_ui->getStreamingCooldownRemainingMs();
+                int cooldownSeconds = static_cast<int>(cooldownMs / 1000);
+                LOG_WARN("Tentativa de iniciar streaming bloqueada - ainda em cooldown. Aguarde " + 
+                         std::to_string(cooldownSeconds) + " segundos");
+                if (m_ui) {
+                    m_ui->setStreamingProcessing(false); // Resetar flag se bloqueado
+                }
+                return; // Não iniciar se estiver em cooldown
+            }
+            
             // Apenas marcar flag - thread separada fará todo o trabalho
             m_streamingEnabled = true;
             
@@ -935,6 +947,7 @@ bool Application::initUI()
                 if (m_ui) {
                     bool active = success && m_streamManager && m_streamManager->isActive();
                     m_ui->setStreamingActive(active);
+                    m_ui->setStreamingProcessing(false); // Processamento concluído
                 }
             }).detach();
         } else {
@@ -967,6 +980,7 @@ bool Application::initUI()
                     m_ui->setStreamingActive(false);
                     m_ui->setStreamUrl("");
                     m_ui->setStreamClientCount(0);
+                    m_ui->setStreamingProcessing(false); // Processamento concluído
                 }
                 
                 // NÃO reiniciar o portal web automaticamente quando o streaming para.
@@ -2325,6 +2339,10 @@ void Application::run()
                 uint32_t clientCount = streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
 
+                // Atualizar cooldown (se ativo, pode iniciar e não há cooldown)
+                m_ui->setCanStartStreaming(true);
+                m_ui->setStreamingCooldownRemainingMs(0);
+
                 // Atualizar informações do certificado SSL se HTTPS estiver ativo
                 std::string foundCert = streamManager->getFoundSSLCertificatePath();
                 std::string foundKey = streamManager->getFoundSSLKeyPath();
@@ -2350,6 +2368,21 @@ void Application::run()
                 m_ui->setStreamingActive(false);
                 m_ui->setStreamUrl("");
                 m_ui->setStreamClientCount(0);
+
+                // Atualizar cooldown do StreamManager se disponível
+                if (streamManager)
+                {
+                    bool canStart = streamManager->canStartStreaming();
+                    int64_t cooldownMs = streamManager->getStreamingCooldownRemainingMs();
+                    m_ui->setCanStartStreaming(canStart);
+                    m_ui->setStreamingCooldownRemainingMs(cooldownMs);
+                }
+                else
+                {
+                    // Se não há StreamManager, pode iniciar
+                    m_ui->setCanStartStreaming(true);
+                    m_ui->setStreamingCooldownRemainingMs(0);
+                }
             }
 
             // Renderizar UI (após capturar a área da captura)

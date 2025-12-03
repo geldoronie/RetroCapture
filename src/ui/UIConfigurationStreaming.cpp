@@ -459,18 +459,57 @@ void UIConfigurationStreaming::renderStartStopButton()
 {
     // Botão Start/Stop
     bool active = m_uiManager->getStreamingActive();
-    if (active)
+    bool processing = m_uiManager->isStreamingProcessing();
+    int64_t cooldownMs = m_uiManager->getStreamingCooldownRemainingMs();
+
+    // Desabilitar botão se estiver processando (start/stop em andamento)
+    if (processing)
+    {
+        ImGui::BeginDisabled();
+        if (active)
+        {
+            ImGui::Button("Parando...", ImVec2(-1, 0));
+        }
+        else
+        {
+            ImGui::Button("Iniciando...", ImVec2(-1, 0));
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Aguarde o processo terminar");
+        }
+    }
+    else if (active)
     {
         if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
         {
+            m_uiManager->setStreamingProcessing(true); // Marcar como processando
             m_uiManager->triggerStreamingStartStop(false);
         }
     }
     else
     {
-        if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+        // Desabilitar botão se estiver em cooldown
+        if (cooldownMs > 0)
         {
-            m_uiManager->triggerStreamingStartStop(true);
+            ImGui::BeginDisabled();
+            float cooldownSeconds = cooldownMs / 1000.0f;
+            std::string label = "Aguardando (" + std::to_string(static_cast<int>(cooldownSeconds)) + "s)";
+            ImGui::Button(label.c_str(), ImVec2(-1, 0));
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Aguarde o cooldown terminar antes de iniciar o streaming novamente");
+            }
+        }
+        else
+        {
+            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+            {
+                m_uiManager->setStreamingProcessing(true); // Marcar como processando
+                m_uiManager->triggerStreamingStartStop(true);
+            }
         }
     }
 }

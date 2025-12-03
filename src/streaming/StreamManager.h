@@ -63,6 +63,16 @@ public:
     uint32_t getTotalClientCount() const;
 
     /**
+     * Check if streaming can be started (not in cooldown)
+     */
+    bool canStartStreaming() const;
+
+    /**
+     * Get remaining cooldown time in milliseconds
+     */
+    int64_t getStreamingCooldownRemainingMs() const;
+
+    /**
      * Get found SSL certificate path from HTTPTSStreamer (if available)
      * Returns empty string if not found or not using HTTPS
      */

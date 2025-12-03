@@ -1474,23 +1474,59 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Botão Start/Stop
-    if (m_streamingActive)
+    // Desabilitar botão se estiver processando (start/stop em andamento)
+    if (m_streamingProcessing)
+    {
+        ImGui::BeginDisabled();
+        if (m_streamingActive)
+        {
+            ImGui::Button("Parando...", ImVec2(-1, 0));
+        }
+        else
+        {
+            ImGui::Button("Iniciando...", ImVec2(-1, 0));
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Aguarde o processo terminar");
+        }
+    }
+    else if (m_streamingActive)
     {
         if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
         {
             if (m_onStreamingStartStop)
             {
+                m_streamingProcessing = true; // Marcar como processando
                 m_onStreamingStartStop(false);
             }
         }
     }
     else
     {
-        if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+        // Desabilitar botão se estiver em cooldown
+        if (m_streamingCooldownRemainingMs > 0)
         {
-            if (m_onStreamingStartStop)
+            ImGui::BeginDisabled();
+            float cooldownSeconds = m_streamingCooldownRemainingMs / 1000.0f;
+            std::string label = "Aguardando (" + std::to_string(static_cast<int>(cooldownSeconds)) + "s)";
+            ImGui::Button(label.c_str(), ImVec2(-1, 0));
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
             {
-                m_onStreamingStartStop(true);
+                ImGui::SetTooltip("Aguarde o cooldown terminar antes de iniciar o streaming novamente");
+            }
+        }
+        else
+        {
+            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+            {
+                if (m_onStreamingStartStop)
+                {
+                    m_streamingProcessing = true; // Marcar como processando
+                    m_onStreamingStartStop(true);
+                }
             }
         }
     }

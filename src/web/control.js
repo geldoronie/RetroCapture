@@ -106,8 +106,10 @@ async function loadStatus() {
             }
         }
         
-        // Atualizar botão de streaming
-        updateStreamingButton(isActive);
+        // Atualizar botão de streaming com informações de cooldown
+        const canStart = status.streamingCanStart !== undefined ? status.streamingCanStart : true;
+        const cooldownMs = status.streamingCooldownRemainingMs !== undefined ? status.streamingCooldownRemainingMs : 0;
+        updateStreamingButton(isActive, canStart, cooldownMs);
     } catch (error) {
         console.error('Erro ao carregar status:', error);
     }
@@ -116,7 +118,7 @@ async function loadStatus() {
 /**
  * Atualiza o botão de iniciar/parar streaming
  */
-function updateStreamingButton(isActive) {
+function updateStreamingButton(isActive, canStart, cooldownMs) {
     const btn = document.getElementById('streamingStartStopBtn');
     const text = document.getElementById('streamingStartStopText');
     
@@ -124,10 +126,30 @@ function updateStreamingButton(isActive) {
     
     if (isActive) {
         btn.className = 'btn btn-danger btn-lg w-100';
+        btn.disabled = false;
+        btn.style.pointerEvents = 'auto';
+        btn.style.cursor = 'pointer';
         text.innerHTML = '<i class="bi bi-stop-circle me-2"></i>Parar Streaming';
+        btn.title = '';
     } else {
-        btn.className = 'btn btn-primary btn-lg w-100';
-        text.innerHTML = '<i class="bi bi-broadcast me-2"></i>Iniciar Streaming';
+        if (cooldownMs > 0 || !canStart) {
+            // Em cooldown - desabilitar botão completamente e mostrar tempo restante
+            btn.className = 'btn btn-secondary btn-lg w-100';
+            btn.disabled = true;
+            btn.style.pointerEvents = 'none'; // Garantir que não é clicável
+            btn.style.cursor = 'not-allowed';
+            const cooldownSeconds = Math.ceil((cooldownMs || 0) / 1000);
+            text.innerHTML = '<i class="bi bi-clock me-2"></i>Aguardando (' + cooldownSeconds + 's)';
+            btn.title = 'Aguarde o cooldown terminar antes de iniciar o streaming novamente';
+        } else {
+            // Pode iniciar
+            btn.className = 'btn btn-primary btn-lg w-100';
+            btn.disabled = false;
+            btn.style.pointerEvents = 'auto';
+            btn.style.cursor = 'pointer';
+            text.innerHTML = '<i class="bi bi-broadcast me-2"></i>Iniciar Streaming';
+            btn.title = '';
+        }
     }
 }
 
@@ -139,6 +161,15 @@ async function toggleStreaming() {
         const status = await api.getStatus();
         const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
         const action = isActive ? 'stop' : 'start';
+        
+        // Verificar cooldown antes de tentar iniciar
+        if (action === 'start' && !status.streamingCanStart) {
+            const cooldownMs = status.streamingCooldownRemainingMs || 0;
+            const cooldownSeconds = Math.ceil(cooldownMs / 1000);
+            showAlert('Streaming ainda em cooldown. Aguarde ' + cooldownSeconds + ' segundos antes de iniciar novamente.', 'warning');
+            await loadStatus(); // Recarregar status para atualizar o botão
+            return;
+        }
         
         const btn = document.getElementById('streamingStartStopBtn');
         const text = document.getElementById('streamingStartStopText');
@@ -165,10 +196,16 @@ async function toggleStreaming() {
         }
     } catch (error) {
         console.error('Erro ao alternar streaming:', error);
-        const status = await api.getStatus();
-        const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
-        const action = isActive ? 'stop' : 'start';
-        showAlert('Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming: ' + error.message, 'danger');
+        
+        // Verificar se o erro é de cooldown
+        if (error.message && error.message.includes('cooldown')) {
+            showAlert(error.message, 'warning');
+        } else {
+            const status = await api.getStatus();
+            const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
+            const action = isActive ? 'stop' : 'start';
+            showAlert('Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming: ' + error.message, 'danger');
+        }
         
         const btn = document.getElementById('streamingStartStopBtn');
         if (btn) {

@@ -148,6 +148,22 @@ bool HTTPTSStreamer::start()
         return true; // Já está ativo
     }
 
+    // Verificar se ainda está em cooldown após parar
+    if (!canStart())
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+        auto remaining = STOP_COOLDOWN_MS - elapsed;
+        LOG_WARN("Streaming ainda em cooldown. Aguarde " + std::to_string(remaining / 1000) + " segundos");
+        return false;
+    }
+
+    // Resetar stopTime quando iniciar com sucesso
+    {
+        std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+        m_stopTime = std::chrono::steady_clock::time_point();
+    }
+
     // Fechar servidor anterior se existir
     m_httpServer.closeServer();
     // Aguardar um pouco para o SO liberar a porta (reduzido ao mínimo para evitar bloqueio)
@@ -557,8 +573,11 @@ void HTTPTSStreamer::stop()
     // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
     std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
-    // Limpar recursos de encoding
-    // cleanupEncoding();
+    // Registrar timestamp de quando parou para cooldown
+    {
+        std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+        m_stopTime = std::chrono::steady_clock::now();
+    }
 
     LOG_INFO("HTTP TS Streamer stopped");
 }
@@ -566,6 +585,49 @@ void HTTPTSStreamer::stop()
 bool HTTPTSStreamer::isActive() const
 {
     return m_active;
+}
+
+bool HTTPTSStreamer::canStart() const
+{
+    // Se está ativo, pode "iniciar" (já está iniciado)
+    if (m_active)
+    {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+
+    // Se nunca parou ou já passou o cooldown, pode iniciar
+    if (m_stopTime == std::chrono::steady_clock::time_point())
+    {
+        return true;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+    return elapsed >= STOP_COOLDOWN_MS;
+}
+
+int64_t HTTPTSStreamer::getCooldownRemainingMs() const
+{
+    // Se está ativo, não há cooldown
+    if (m_active)
+    {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+
+    // Se nunca parou, não há cooldown
+    if (m_stopTime == std::chrono::steady_clock::time_point())
+    {
+        return 0;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+    auto remaining = STOP_COOLDOWN_MS - elapsed;
+    return remaining > 0 ? remaining : 0;
 }
 
 std::string HTTPTSStreamer::getStreamUrl() const

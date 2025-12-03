@@ -48,6 +48,8 @@ public:
     bool startWebPortalServer(); // Inicia apenas o servidor HTTP (sem encoding) para portal web
     void stop() override;
     bool isActive() const override;
+    bool canStart() const;                  // Verifica se pode iniciar (não está em cooldown)
+    int64_t getCooldownRemainingMs() const; // Retorna tempo restante de cooldown em ms
     bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) override;
     bool pushAudio(const int16_t *samples, size_t sampleCount) override;
     std::string getStreamUrl() const override;
@@ -229,6 +231,11 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequest{false}; // Flag para solicitar parada das threads
     std::atomic<bool> m_cleanedUp{false};
+
+    // Cooldown após parar streaming (10 segundos)
+    mutable std::mutex m_stopTimeMutex; // Proteger acesso ao m_stopTime
+    std::chrono::steady_clock::time_point m_stopTime;
+    static constexpr int64_t STOP_COOLDOWN_MS = 10000; // 10 segundos
 
     // Configuração de buffer temporal (configurável via setBufferConfig)
     int64_t m_maxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (padrão: 5s)

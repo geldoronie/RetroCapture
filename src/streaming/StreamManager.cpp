@@ -154,6 +154,50 @@ uint32_t StreamManager::getTotalClientCount() const
     return total;
 }
 
+bool StreamManager::canStartStreaming() const
+{
+    // Se já está ativo, pode "iniciar" (já está iniciado)
+    if (m_active)
+    {
+        return true;
+    }
+
+    // Verificar cooldown no HTTPTSStreamer se disponível
+    for (const auto &streamer : m_streamers)
+    {
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            return tsStreamer->canStart();
+        }
+    }
+
+    // Se não há streamer, pode iniciar
+    return true;
+}
+
+int64_t StreamManager::getStreamingCooldownRemainingMs() const
+{
+    // Se está ativo, não há cooldown
+    if (m_active)
+    {
+        return 0;
+    }
+
+    // Verificar cooldown no HTTPTSStreamer se disponível
+    for (const auto &streamer : m_streamers)
+    {
+        HTTPTSStreamer *tsStreamer = dynamic_cast<HTTPTSStreamer *>(streamer.get());
+        if (tsStreamer)
+        {
+            return tsStreamer->getCooldownRemainingMs();
+        }
+    }
+
+    // Se não há streamer, não há cooldown
+    return 0;
+}
+
 std::string StreamManager::getFoundSSLCertificatePath() const
 {
     for (const auto &streamer : m_streamers)
