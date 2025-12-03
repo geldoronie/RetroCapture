@@ -17,6 +17,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 #include <unistd.h>
 #include <filesystem>
 #include <time.h>
@@ -537,7 +538,15 @@ bool Application::initUI()
                 m_shaderEngine->disableShader();
                 LOG_INFO("Shader desabilitado");
             } else {
-                std::filesystem::path fullPath = std::filesystem::current_path() / "shaders" / "shaders_glsl" / shaderPath;
+                // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
+                const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+                std::filesystem::path shaderBasePath;
+                if (envShaderPath && std::filesystem::exists(envShaderPath)) {
+                    shaderBasePath = std::filesystem::path(envShaderPath);
+                } else {
+                    shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+                }
+                std::filesystem::path fullPath = shaderBasePath / shaderPath;
                 if (m_shaderEngine->loadPreset(fullPath.string())) {
                     LOG_INFO("Shader carregado via UI: " + shaderPath);
                 } else {
@@ -875,7 +884,15 @@ bool Application::initUI()
     std::string loadedShader = m_ui->getCurrentShader();
     if (!loadedShader.empty() && m_shaderEngine)
     {
-        std::filesystem::path fullPath = std::filesystem::current_path() / "shaders" / "shaders_glsl" / loadedShader;
+        // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
+        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        std::filesystem::path shaderBasePath;
+        if (envShaderPath && std::filesystem::exists(envShaderPath)) {
+            shaderBasePath = std::filesystem::path(envShaderPath);
+        } else {
+            shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+        }
+        std::filesystem::path fullPath = shaderBasePath / loadedShader;
         if (m_shaderEngine->loadPreset(fullPath.string()))
         {
             LOG_INFO("Shader carregado da configuração: " + loadedShader);
