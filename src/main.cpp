@@ -1,7 +1,9 @@
 #include "core/Application.h"
+#include "ui/UIManager.h"
 #include "utils/Logger.h"
 #include <iostream>
 #include <string>
+#include <algorithm>
 
 void printUsage(const char *programName)
 {
@@ -10,7 +12,7 @@ void printUsage(const char *programName)
     std::cout << "  --shader <caminho>     Carregar shader GLSL simples (.glsl)\n";
     std::cout << "  --preset <caminho>     Carregar preset com múltiplos passes (.glslp)\n";
     std::cout << "\nOpções de Captura:\n";
-    std::cout << "  --device <caminho>     Dispositivo de captura (padrão: /dev/video0)\n";
+    std::cout << "  --source <tipo>        Tipo de fonte: none, v4l2 (padrão: v4l2)\n";
     std::cout << "  --width <valor>        Largura da captura (padrão: 1920)\n";
     std::cout << "  --height <valor>       Altura da captura (padrão: 1080)\n";
     std::cout << "  --fps <valor>          Framerate da captura (padrão: 60)\n";
@@ -23,7 +25,8 @@ void printUsage(const char *programName)
     std::cout << "\nOpções de Ajuste:\n";
     std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
     std::cout << "  --contrast <valor>     Contraste geral (0.0-5.0, padrão: 1.0)\n";
-    std::cout << "\nControles V4L2 (hardware):\n";
+    std::cout << "\nControles V4L2 (hardware) - apenas quando --source v4l2:\n";
+    std::cout << "  --v4l2-device <caminho>     Dispositivo de captura V4L2 (padrão: /dev/video0)\n";
     std::cout << "  --v4l2-brightness <valor>    Brilho V4L2 (-100 a 100, padrão: não configurar)\n";
     std::cout << "  --v4l2-contrast <valor>      Contraste V4L2 (-100 a 100, padrão: não configurar)\n";
     std::cout << "  --v4l2-saturation <valor>    Saturação V4L2 (-100 a 100, padrão: não configurar)\n";
@@ -43,13 +46,19 @@ void printUsage(const char *programName)
     std::cout << "  --stream-audio-bitrate <kbps> Bitrate de áudio em kbps (padrão: 256)\n";
     std::cout << "  --stream-video-codec <codec> Codec de vídeo: h264, h265, vp8, vp9 (padrão: h264)\n";
     std::cout << "  --stream-audio-codec <codec> Codec de áudio: aac, mp3, opus (padrão: aac)\n";
-    std::cout << "  --stream-audio-buffer-size <frames> Tamanho do buffer de áudio em frames (padrão: 50)\n";
+    std::cout << "\nOpções de Web Portal:\n";
+    std::cout << "  --web-portal-enable              Habilitar web portal (padrão: habilitado)\n";
+    std::cout << "  --web-portal-disable             Desabilitar web portal\n";
+    std::cout << "  --web-portal-port <porta>       Porta do web portal (padrão: 8080, mesma do streaming)\n";
+    std::cout << "  --web-portal-https               Habilitar HTTPS no web portal\n";
+    std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
+    std::cout << "  --web-portal-ssl-key <caminho>    Caminho da chave SSL (padrão: ssl/server.key)\n";
     std::cout << "\nOutras:\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
-    std::cout << "  " << programName << " --device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
+    std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
-    std::cout << "  " << programName << " --device /dev/video1 --width 3840 --height 2160 --fps 60\n";
+    std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video1 --width 3840 --height 2160 --fps 60\n";
     std::cout << "  " << programName << " --window-width 1280 --window-height 720 --brightness 1.2\n";
     std::cout << "  " << programName << " --window-width 800 --window-height 600 --maintain-aspect\n";
     std::cout << "  " << programName << " --fullscreen --maintain-aspect\n";
@@ -65,6 +74,7 @@ int main(int argc, char *argv[])
 
     std::string shaderPath;
     std::string presetPath;
+    std::string sourceType = "v4l2"; // Padrão: v4l2 (mesmo padrão do UIManager)
     std::string devicePath = "/dev/video0";
     int captureWidth = 1920;
     int captureHeight = 1080;
@@ -91,15 +101,20 @@ int main(int argc, char *argv[])
     // Streaming options
     bool streamingEnabled = false;
     int streamingPort = 8080;
-    int streamWidth = 640;  // Padrão: 640px (0 = usar resolução de captura)
-    int streamHeight = 480; // Padrão: 480px (0 = usar resolução de captura)
-    int streamFps = 60;     // Padrão: 60fps (0 = usar FPS da captura)
-    int streamBitrate = 8000; // Padrão: 8000 kbps (0 = calcular automaticamente)
-    int streamAudioBitrate = 256; // Padrão: 256 kbps
+    int streamWidth = 640;                 // Padrão: 640px (0 = usar resolução de captura)
+    int streamHeight = 480;                // Padrão: 480px (0 = usar resolução de captura)
+    int streamFps = 60;                    // Padrão: 60fps (0 = usar FPS da captura)
+    int streamBitrate = 8000;              // Padrão: 8000 kbps (0 = calcular automaticamente)
+    int streamAudioBitrate = 256;          // Padrão: 256 kbps
     std::string streamVideoCodec = "h264"; // Codec de vídeo
     std::string streamAudioCodec = "aac";  // Codec de áudio
-    int streamAudioBufferSize = 50; // Tamanho do buffer de áudio em frames
-    int streamQuality = 85; // Qualidade JPEG (1-100) - não usado mais
+
+    // Web Portal options
+    bool webPortalEnabled = true; // Habilitado por padrão
+    int webPortalPort = 8080;     // Porta do web portal (mesma do streaming por padrão)
+    bool webPortalHTTPSEnabled = false;
+    std::string webPortalSSLCertPath = "ssl/server.crt";
+    std::string webPortalSSLKeyPath = "ssl/server.key";
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -119,7 +134,18 @@ int main(int argc, char *argv[])
         {
             presetPath = argv[++i];
         }
-        else if (arg == "--device" && i + 1 < argc)
+        else if (arg == "--source" && i + 1 < argc)
+        {
+            sourceType = argv[++i];
+            // Converter para minúsculas para comparação case-insensitive
+            std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
+            if (sourceType != "none" && sourceType != "v4l2")
+            {
+                LOG_ERROR("Tipo de fonte inválido. Use 'none' ou 'v4l2'");
+                return 1;
+            }
+        }
+        else if (arg == "--v4l2-device" && i + 1 < argc)
         {
             devicePath = argv[++i];
         }
@@ -350,23 +376,34 @@ int main(int argc, char *argv[])
         {
             streamAudioCodec = argv[++i];
         }
-        else if (arg == "--stream-audio-buffer-size" && i + 1 < argc)
+        else if (arg == "--web-portal-enable")
         {
-            streamAudioBufferSize = std::stoi(argv[++i]);
-            if (streamAudioBufferSize < 1 || streamAudioBufferSize > 200)
+            webPortalEnabled = true;
+        }
+        else if (arg == "--web-portal-disable")
+        {
+            webPortalEnabled = false;
+        }
+        else if (arg == "--web-portal-port" && i + 1 < argc)
+        {
+            webPortalPort = std::stoi(argv[++i]);
+            if (webPortalPort < 1024 || webPortalPort > 65535)
             {
-                LOG_ERROR("Tamanho do buffer de áudio inválido. Use um valor entre 1 e 200 frames");
+                LOG_ERROR("Porta do web portal inválida. Use um valor entre 1024 e 65535");
                 return 1;
             }
         }
-        else if (arg == "--stream-quality" && i + 1 < argc)
+        else if (arg == "--web-portal-https")
         {
-            streamQuality = std::stoi(argv[++i]);
-            if (streamQuality < 1 || streamQuality > 100)
-            {
-                LOG_ERROR("Qualidade do stream inválida. Use um valor entre 1 e 100");
-                return 1;
-            }
+            webPortalHTTPSEnabled = true;
+        }
+        else if (arg == "--web-portal-ssl-cert" && i + 1 < argc)
+        {
+            webPortalSSLCertPath = argv[++i];
+        }
+        else if (arg == "--web-portal-ssl-key" && i + 1 < argc)
+        {
+            webPortalSSLKeyPath = argv[++i];
         }
         else
         {
@@ -376,8 +413,15 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Determinar se a fonte é V4L2
+    bool isV4L2Source = (sourceType == "v4l2");
+
     LOG_INFO("Inicializando aplicação...");
-    LOG_INFO("Dispositivo: " + devicePath);
+    LOG_INFO("Tipo de fonte: " + sourceType);
+    if (isV4L2Source)
+    {
+        LOG_INFO("Dispositivo V4L2: " + devicePath);
+    }
     LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
@@ -393,6 +437,15 @@ int main(int argc, char *argv[])
     LOG_INFO("Manter proporção: " + std::string(maintainAspect ? "sim" : "não"));
     LOG_INFO("Brilho: " + std::to_string(brightness));
     LOG_INFO("Contraste: " + std::to_string(contrast));
+    if (streamingEnabled)
+    {
+        LOG_INFO("Streaming: habilitado na porta " + std::to_string(streamingPort));
+    }
+    LOG_INFO("Web Portal: " + std::string(webPortalEnabled ? "habilitado" : "desabilitado"));
+    if (webPortalHTTPSEnabled)
+    {
+        LOG_INFO("HTTPS: habilitado (cert: " + webPortalSSLCertPath + ", key: " + webPortalSSLKeyPath + ")");
+    }
 
     Application app;
 
@@ -408,8 +461,7 @@ int main(int argc, char *argv[])
         LOG_INFO("Shader especificado: " + shaderPath);
     }
 
-    // Configurar dispositivo e parâmetros de captura
-    app.setDevicePath(devicePath);
+    // Configurar parâmetros de captura
     app.setResolution(captureWidth, captureHeight);
     app.setFramerate(captureFps);
     app.setWindowSize(windowWidth, windowHeight);
@@ -422,25 +474,43 @@ int main(int argc, char *argv[])
     app.setBrightness(brightness);
     app.setContrast(contrast);
 
-    // Configurar controles V4L2 se especificados
-    if (v4l2Brightness >= 0)
-        app.setV4L2Brightness(v4l2Brightness);
-    if (v4l2Contrast >= 0)
-        app.setV4L2Contrast(v4l2Contrast);
-    if (v4l2Saturation >= 0)
-        app.setV4L2Saturation(v4l2Saturation);
-    if (v4l2Hue >= 0)
-        app.setV4L2Hue(v4l2Hue);
-    if (v4l2Gain >= 0)
-        app.setV4L2Gain(v4l2Gain);
-    if (v4l2Exposure >= 0)
-        app.setV4L2Exposure(v4l2Exposure);
-    if (v4l2Sharpness >= 0)
-        app.setV4L2Sharpness(v4l2Sharpness);
-    if (v4l2Gamma >= 0)
-        app.setV4L2Gamma(v4l2Gamma);
-    if (v4l2WhiteBalance >= 0)
-        app.setV4L2WhiteBalance(v4l2WhiteBalance);
+    // Configurar dispositivo e controles V4L2 apenas se a fonte for V4L2
+    if (isV4L2Source)
+    {
+        // Configurar dispositivo V4L2
+        app.setDevicePath(devicePath);
+
+        // Configurar controles V4L2 se especificados
+        if (v4l2Brightness >= 0)
+            app.setV4L2Brightness(v4l2Brightness);
+        if (v4l2Contrast >= 0)
+            app.setV4L2Contrast(v4l2Contrast);
+        if (v4l2Saturation >= 0)
+            app.setV4L2Saturation(v4l2Saturation);
+        if (v4l2Hue >= 0)
+            app.setV4L2Hue(v4l2Hue);
+        if (v4l2Gain >= 0)
+            app.setV4L2Gain(v4l2Gain);
+        if (v4l2Exposure >= 0)
+            app.setV4L2Exposure(v4l2Exposure);
+        if (v4l2Sharpness >= 0)
+            app.setV4L2Sharpness(v4l2Sharpness);
+        if (v4l2Gamma >= 0)
+            app.setV4L2Gamma(v4l2Gamma);
+        if (v4l2WhiteBalance >= 0)
+            app.setV4L2WhiteBalance(v4l2WhiteBalance);
+    }
+    else
+    {
+        // Se não for V4L2, avisar sobre parâmetros V4L2 ignorados
+        bool hasV4L2Params = (v4l2Brightness >= 0 || v4l2Contrast >= 0 || v4l2Saturation >= 0 ||
+                              v4l2Hue >= 0 || v4l2Gain >= 0 || v4l2Exposure >= 0 ||
+                              v4l2Sharpness >= 0 || v4l2Gamma >= 0 || v4l2WhiteBalance >= 0);
+        if (hasV4L2Params || devicePath != "/dev/video0")
+        {
+            LOG_WARN("Parâmetros V4L2 ou --v4l2-device especificados mas fonte não é V4L2. Parâmetros serão ignorados.");
+        }
+    }
 
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
@@ -456,11 +526,29 @@ int main(int argc, char *argv[])
     app.setStreamingVideoCodec(streamVideoCodec);
     app.setStreamingAudioCodec(streamAudioCodec);
 
+    // Configure Web Portal
+    app.setWebPortalEnabled(webPortalEnabled);
+    // A porta do web portal é a mesma do streaming (ambos usam o mesmo servidor HTTP)
+    // Se especificada uma porta diferente para o portal, usar essa porta para o servidor
+    if (webPortalPort != streamingPort)
+    {
+        app.setStreamingPort(webPortalPort);
+        LOG_INFO("Porta do web portal: " + std::to_string(webPortalPort));
+    }
+    app.setWebPortalHTTPSEnabled(webPortalHTTPSEnabled);
+    app.setWebPortalSSLCertPath(webPortalSSLCertPath);
+    app.setWebPortalSSLKeyPath(webPortalSSLKeyPath);
+
     if (!app.init())
     {
         LOG_ERROR("Falha ao inicializar aplicação");
         return 1;
     }
+
+    // Configurar source type após inicialização (para acessar UIManager)
+    UIManager::SourceType sourceTypeEnum = (sourceType == "v4l2") ? UIManager::SourceType::V4L2 : UIManager::SourceType::None;
+    app.getUIManager()->setSourceType(sourceTypeEnum);
+    LOG_INFO("Tipo de fonte: " + sourceType);
 
     app.run();
     app.shutdown();

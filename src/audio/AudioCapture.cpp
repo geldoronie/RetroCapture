@@ -401,14 +401,19 @@ void AudioCapture::stopCapture() {
 }
 
 size_t AudioCapture::getSamples(int16_t* buffer, size_t maxSamples) {
-    if (!m_isOpen || !buffer || maxSamples == 0) {
-        return 0;
-    }
-    
-    // Processar eventos do PulseAudio
+    // IMPORTANTE: Processar mainloop mesmo se não estiver aberto ou buffer inválido
+    // Isso é crítico para evitar que o PulseAudio trave o áudio do sistema
     if (m_mainloop) {
         int ret = 0;
-        pa_mainloop_iterate(m_mainloop, 0, &ret);
+        // Processar múltiplas iterações para garantir que eventos sejam processados
+        // Isso evita acúmulo de eventos e bloqueio do áudio
+        for (int i = 0; i < 5; i++) {
+            pa_mainloop_iterate(m_mainloop, 0, &ret);
+        }
+    }
+    
+    if (!m_isOpen || !buffer || maxSamples == 0) {
+        return 0;
     }
     
     // Copiar samples do buffer (thread-safe)
