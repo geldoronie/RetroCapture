@@ -74,7 +74,6 @@ public:
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
     void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
     void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
-    void setStreamingQuality(int quality) { m_streamingQuality = quality; }
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
     void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
@@ -92,6 +91,7 @@ public:
 
     // API access methods
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
+    UIManager *getUIManager() { return m_ui.get(); }
 
 private:
     bool m_initialized = false;
@@ -145,7 +145,6 @@ private:
     uint32_t m_streamingFps = 60;                   // 0 = usar FPS da captura
     uint32_t m_streamingBitrate = 8000;             // 0 = calcular automaticamente (vídeo)
     uint32_t m_streamingAudioBitrate = 256;         // 256 kbps (áudio)
-    int m_streamingQuality = 85;                    // Qualidade JPEG (1-100) - não usado mais, mantido para compatibilidade
     std::string m_streamingVideoCodec = "h264";     // Codec de vídeo: "h264", "h265", "vp8", "vp9"
     std::string m_streamingAudioCodec = "aac";      // Codec de áudio: "aac", "mp3", "opus"
     std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
