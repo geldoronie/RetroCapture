@@ -39,15 +39,25 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("GET / HTTP/") != std::string::npos ||
         request.find("GET /index.html") != std::string::npos ||
         request.find("GET /style.css") != std::string::npos ||
+        request.find("GET /api.js") != std::string::npos ||
+        request.find("GET /control.js") != std::string::npos ||
         request.find("GET /player.js") != std::string::npos ||
+        request.find("GET /manifest.json") != std::string::npos ||
+        request.find("GET /service-worker.js") != std::string::npos ||
         request.find("GET /favicon.ico") != std::string::npos ||
         request.find("GET /portal-image") != std::string::npos ||
         request.find("GET /portal-background") != std::string::npos ||
+        request.find("GET /icon-") != std::string::npos ||
         request.find("/index.html") != std::string::npos ||
         request.find("/style.css") != std::string::npos ||
+        request.find("/api.js") != std::string::npos ||
+        request.find("/control.js") != std::string::npos ||
         request.find("/player.js") != std::string::npos ||
+        request.find("/manifest.json") != std::string::npos ||
+        request.find("/service-worker.js") != std::string::npos ||
         request.find("/portal-image") != std::string::npos ||
-        request.find("/portal-background") != std::string::npos)
+        request.find("/portal-background") != std::string::npos ||
+        request.find("/icon-") != std::string::npos)
     {
         return true;
     }
@@ -1075,6 +1085,10 @@ std::string WebPortal::getContentType(const std::string &filePath) const
     else if (len >= 3 && filePath.substr(len - 3) == ".js")
     {
         return "application/javascript";
+    }
+    else if (len >= 5 && filePath.substr(len - 5) == ".json")
+    {
+        return "application/json";
     }
     else if (len >= 4 && filePath.substr(len - 4) == ".png")
     {
