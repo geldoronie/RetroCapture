@@ -1,0 +1,152 @@
+/**
+ * RetroCapture API Client
+ * Cliente JavaScript para comunicação com a API REST do RetroCapture
+ */
+
+class RetroCaptureAPI {
+    constructor(baseUrl = '') {
+        this.baseUrl = baseUrl;
+        this.apiPrefix = '/api/v1';
+    }
+
+    /**
+     * Faz uma requisição HTTP para a API
+     */
+    async request(method, endpoint, data = null) {
+        const url = this.baseUrl + this.apiPrefix + endpoint;
+        const options = {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        };
+
+        if (data && (method === 'POST' || method === 'PUT')) {
+            options.body = JSON.stringify(data);
+        }
+
+        try {
+            const response = await fetch(url, options);
+            const text = await response.text();
+            
+            if (!response.ok) {
+                let errorMessage = `HTTP ${response.status}`;
+                try {
+                    const errorJson = JSON.parse(text);
+                    if (errorJson.message) {
+                        errorMessage = errorJson.message;
+                    }
+                } catch (e) {
+                    errorMessage = text || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
+            // Tentar parsear como JSON, se falhar retornar texto
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                return text;
+            }
+        } catch (error) {
+            console.error(`API Error [${method} ${endpoint}]:`, error);
+            throw error;
+        }
+    }
+
+    // ========== GET Methods ==========
+
+    async getSource() {
+        return await this.request('GET', '/source');
+    }
+
+    async getShader() {
+        return await this.request('GET', '/shader');
+    }
+
+    async getShaderList() {
+        return await this.request('GET', '/shader/list');
+    }
+
+    async getShaderParameters() {
+        return await this.request('GET', '/shader/parameters');
+    }
+
+    async getCaptureResolution() {
+        return await this.request('GET', '/capture/resolution');
+    }
+
+    async getCaptureFPS() {
+        return await this.request('GET', '/capture/fps');
+    }
+
+    async getImageSettings() {
+        return await this.request('GET', '/image/settings');
+    }
+
+    async getStreamingSettings() {
+        return await this.request('GET', '/streaming/settings');
+    }
+
+    async getV4L2Devices() {
+        return await this.request('GET', '/v4l2/devices');
+    }
+
+    async refreshV4L2Devices() {
+        return await this.request('GET', '/v4l2/devices/refresh');
+    }
+
+    async getV4L2Controls() {
+        return await this.request('GET', '/v4l2/controls');
+    }
+
+    async getStatus() {
+        return await this.request('GET', '/status');
+    }
+
+    // ========== SET Methods ==========
+
+    async setSource(sourceType) {
+        return await this.request('POST', '/source', { type: sourceType });
+    }
+
+    async setShader(shaderName) {
+        return await this.request('POST', '/shader', { shader: shaderName });
+    }
+
+    async setShaderParameter(name, value) {
+        return await this.request('POST', '/shader/parameter', { name, value });
+    }
+
+    async setCaptureResolution(width, height) {
+        return await this.request('POST', '/capture/resolution', { width, height });
+    }
+
+    async setCaptureFPS(fps) {
+        return await this.request('POST', '/capture/fps', { fps });
+    }
+
+    async setImageSettings(settings) {
+        return await this.request('POST', '/image/settings', settings);
+    }
+
+    async setStreamingSettings(settings) {
+        return await this.request('POST', '/streaming/settings', settings);
+    }
+
+    async setV4L2Control(name, value) {
+        return await this.request('POST', '/v4l2/control', { name, value });
+    }
+
+    async setV4L2Device(device) {
+        return await this.request('POST', '/v4l2/device', { device });
+    }
+
+    async setStreamingControl(action) {
+        // action deve ser 'start' ou 'stop'
+        return await this.request('POST', '/streaming/control', { action });
+    }
+}
+
+// Instância global da API
+const api = new RetroCaptureAPI();

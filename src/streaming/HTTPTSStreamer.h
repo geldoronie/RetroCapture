@@ -1,12 +1,19 @@
 #pragma once
 
 #include "IStreamer.h"
+#include "WebPortal.h"
+#include "HTTPServer.h"
+#include "APIController.h"
+#include "../encoding/MediaEncoder.h"
+#include "../encoding/MediaMuxer.h"
+#include "../encoding/StreamSynchronizer.h"
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <cstddef>
 #include <queue>
 #include <deque>
 #include <utility>
@@ -17,6 +24,10 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+
+// Forward declarations
+class Application;
+class UIManager;
 /**
  * HTTP MPEG-TS streamer implementation.
  *
@@ -34,8 +45,11 @@ public:
     std::string getType() const override { return "HTTP MPEG-TS"; }
     bool initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps) override;
     bool start() override;
+    bool startWebPortalServer(); // Inicia apenas o servidor HTTP (sem encoding) para portal web
     void stop() override;
     bool isActive() const override;
+    bool canStart() const;                  // Verifica se pode iniciar (não está em cooldown)
+    int64_t getCooldownRemainingMs() const; // Retorna tempo restante de cooldown em ms
     bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) override;
     bool pushAudio(const int16_t *samples, size_t sampleCount) override;
     std::string getStreamUrl() const override;
@@ -47,6 +61,11 @@ public:
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);
     void setVideoCodec(const std::string &codecName);
+
+    // Configurar parâmetros de buffer (para economizar memória)
+    void setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
+                         int64_t maxBufferTimeSeconds,
+                         size_t avioBufferSize);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
     void setH265Preset(const std::string &preset) { m_h265Preset = preset; }
@@ -55,26 +74,65 @@ public:
     void setVP8Speed(int speed) { m_vp8Speed = speed; }
     void setVP9Speed(int speed) { m_vp9Speed = speed; }
 
+    // HTTPS configuration
+    void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
+    void setSSLCertificatePath(const std::string &certPath, const std::string &keyPath);
+
+    // Web Portal configuration
+    void enableWebPortal(bool enable);
+    bool isWebPortalEnabled() const { return m_webPortalEnabled; }
+    void setWebPortalTitle(const std::string &title) { m_webPortal.setTitle(title); }
+    void setWebPortalSubtitle(const std::string &subtitle) { m_webPortal.setSubtitle(subtitle); }
+    void setWebPortalImagePath(const std::string &path) { m_webPortal.setImagePath(path); }
+    void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortal.setBackgroundImagePath(path); }
+    void setWebPortalColors(
+        const float bg[4], const float text[4], const float primary[4],
+        const float primaryLight[4], const float primaryDark[4],
+        const float secondary[4], const float secondaryHighlight[4],
+        const float cardHeader[4], const float border[4],
+        const float success[4], const float warning[4], const float danger[4], const float info[4])
+    {
+        m_webPortal.setColors(bg, text, primary, primaryLight, primaryDark, secondary, secondaryHighlight, cardHeader, border, success, warning, danger, info);
+    }
+    void setWebPortalTexts(
+        const std::string &streamInfo, const std::string &quickActions, const std::string &compatibility,
+        const std::string &status, const std::string &codec, const std::string &resolution,
+        const std::string &streamUrl, const std::string &copyUrl, const std::string &openNewTab,
+        const std::string &supported, const std::string &format, const std::string &codecInfo,
+        const std::string &supportedBrowsers, const std::string &formatInfo, const std::string &codecInfoValue,
+        const std::string &connecting)
+    {
+        m_webPortal.setTexts(streamInfo, quickActions, compatibility, status, codec, resolution, streamUrl, copyUrl, openNewTab, supported, format, codecInfo, supportedBrowsers, formatInfo, codecInfoValue, connecting);
+    }
+
+    // Obter caminhos dos certificados SSL encontrados
+    std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
+    std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
+
+    // API Controller configuration
+    void setApplicationForAPI(Application *application) { m_apiController.setApplication(application); }
+    void setUIManagerForAPI(UIManager *uiManager) { m_apiController.setUIManager(uiManager); }
+
     // Public for static callback
     int writeToClients(const uint8_t *buf, int buf_size);
 
-    // Estruturas para dados com timestamp de captura (declaradas antes de private para uso nas funções)
+private:
+    // Estruturas para buffers temporais ordenados por timestamp
     struct TimestampedFrame
     {
         std::shared_ptr<std::vector<uint8_t>> data;
         uint32_t width;
         uint32_t height;
-        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
-        bool processed = false;     // Flag para marcar se já foi processado e enviado
+        int64_t captureTimestampUs;
+        bool processed = false;
     };
 
     struct TimestampedAudio
     {
         std::shared_ptr<std::vector<int16_t>> samples;
         size_t sampleCount;
-        int64_t captureTimestampUs; // Timestamp absoluto de captura (CLOCK_MONOTONIC)
-        int64_t durationUs;         // Duração deste chunk em microssegundos
-        bool processed = false;     // Flag para marcar se já foi processado e enviado
+        int64_t captureTimestampUs;
+        bool processed = false;
     };
 
     // Zona de sincronização
@@ -106,10 +164,12 @@ public:
 private:
     void serverThread();
     void handleClient(int clientFd);
+    void send404(int clientFd);     // Enviar resposta 404
     void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
-    SyncZone calculateSyncZone();   // Calcular zona de sincronização entre vídeo e áudio
     void cleanupOldData();          // Limpar dados antigos baseado em tempo
     int64_t getTimestampUs() const; // Obter timestamp atual em microssegundos
+    bool initializeEncoding();      // Inicializar MediaEncoder e MediaMuxer
+    void cleanupEncoding();         // Limpar MediaEncoder e MediaMuxer
     bool initializeFFmpeg();
     bool initializeVideoCodec();
     bool initializeAudioCodec();
@@ -140,8 +200,8 @@ private:
     std::string m_h265Preset = "veryfast"; // Preset H.265 configurável via UI
     std::string m_h265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
-    int m_vp8Speed = 12;                    // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
-    int m_vp9Speed = 6;                     // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_vp8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
+    int m_vp9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*
@@ -155,22 +215,36 @@ private:
     void *m_swrContext = nullptr; // SwrContext* (int16 to float planar)
     void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo)
     void *m_audioFrame = nullptr; // AVFrame* (para encoding de áudio)
-    
+
     // Cache para dimensões do SwsContext (para recriar quando necessário)
     uint32_t m_swsSrcWidth = 0;
     uint32_t m_swsSrcHeight = 0;
     uint32_t m_swsDstWidth = 0;
     uint32_t m_swsDstHeight = 0;
 
+    // Novas classes de encoding/muxing
+    MediaEncoder m_mediaEncoder;
+    MediaMuxer m_mediaMuxer;
+    StreamSynchronizer m_streamSynchronizer;
+
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequest{false}; // Flag para solicitar parada das threads
     std::atomic<bool> m_cleanedUp{false};
 
-    // Configuração de buffer temporal
-    static constexpr int64_t MAX_BUFFER_TIME_US = 30 * 1000000LL; // 30 segundos máximo - buffer grande para evitar perda de frames
-    static constexpr int64_t MIN_BUFFER_TIME_US = 0;              // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
-    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL;     // 50ms de tolerância para sincronização
+    // Cooldown após parar streaming (10 segundos)
+    mutable std::mutex m_stopTimeMutex; // Proteger acesso ao m_stopTime
+    std::chrono::steady_clock::time_point m_stopTime;
+    static constexpr int64_t STOP_COOLDOWN_MS = 10000; // 10 segundos
+
+    // Configuração de buffer temporal (configurável via setBufferConfig)
+    int64_t m_maxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (padrão: 5s)
+    size_t m_maxVideoBufferSize = 10;     // Máximo de frames no buffer (padrão: 10)
+    size_t m_maxAudioBufferSize = 20;     // Máximo de chunks no buffer (padrão: 20)
+    size_t m_avioBufferSize = 256 * 1024; // 256KB para buffer AVIO (padrão)
+
+    static constexpr int64_t MIN_BUFFER_TIME_US = 0;          // 0ms - processar imediatamente quando há qualquer sobreposição (para 60fps)
+    static constexpr int64_t SYNC_TOLERANCE_US = 50 * 1000LL; // 50ms de tolerância para sincronização
 
     // Buffers temporais ordenados por timestamp de captura
     std::mutex m_videoBufferMutex;
@@ -200,7 +274,7 @@ private:
 
     // Contador de frames para keyframes periódicos
     int64_t m_videoFrameCount = 0;
-    
+
     // Detecção de dessincronização e recuperação
     int m_desyncFrameCount = 0; // Contador de frames dessincronizados consecutivos
 
@@ -213,7 +287,14 @@ private:
     std::thread m_serverThread;
     std::thread m_encodingThread; // Thread única para encoding
 
-    int m_serverSocket = -1;
+    // HTTP/HTTPS Server
+    HTTPServer m_httpServer;
+    bool m_enableHTTPS = false;
+    std::string m_sslCertPath;
+    std::string m_sslKeyPath;
+    std::string m_foundSSLCertPath; // Caminho real do certificado encontrado (após busca)
+    std::string m_foundSSLKeyPath;  // Caminho real da chave encontrada (após busca)
+
     std::atomic<uint32_t> m_clientCount{0};
 
     // Output buffer for clients
@@ -222,4 +303,11 @@ private:
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
+
+    // Web Portal - responsável por servir a página web
+    WebPortal m_webPortal;
+    bool m_webPortalEnabled = true; // Habilitado por padrão
+
+    // API Controller - responsável por servir a API REST
+    APIController m_apiController;
 };

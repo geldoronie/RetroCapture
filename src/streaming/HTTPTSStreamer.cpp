@@ -8,7 +8,11 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <cstdlib>
 #include <time.h>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
 
 extern "C"
 {
@@ -57,9 +61,6 @@ bool HTTPTSStreamer::initialize(uint16_t port, uint32_t width, uint32_t height, 
     m_height = height;
     m_fps = fps;
 
-    LOG_INFO("HTTPTSStreamer::initialize: " + std::to_string(width) + "x" + std::to_string(height) +
-             " @ " + std::to_string(fps) + "fps, port=" + std::to_string(port));
-
     return true;
 }
 
@@ -69,9 +70,29 @@ void HTTPTSStreamer::setAudioFormat(uint32_t sampleRate, uint32_t channels)
     m_audioChannelsCount = channels;
 }
 
+void HTTPTSStreamer::enableWebPortal(bool enable)
+{
+    m_webPortalEnabled = enable;
+    // Se Web Portal for desabilitado, também desabilitar HTTPS
+    if (!enable && m_enableHTTPS)
+    {
+        m_enableHTTPS = false;
+    }
+}
+
 void HTTPTSStreamer::setVideoCodec(const std::string &codecName)
 {
     m_videoCodecName = codecName;
+}
+
+void HTTPTSStreamer::setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioBufferSize,
+                                     int64_t maxBufferTimeSeconds,
+                                     size_t avioBufferSize)
+{
+    m_maxVideoBufferSize = maxVideoBufferSize;
+    m_maxAudioBufferSize = maxAudioBufferSize;
+    m_maxBufferTimeSeconds = maxBufferTimeSeconds;
+    m_avioBufferSize = avioBufferSize;
 }
 
 void HTTPTSStreamer::setAudioCodec(const std::string &codecName)
@@ -97,39 +118,8 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     // Capturar timestamp de captura (quando o frame chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Adicionar frame com timestamp ao buffer temporal
-    // OTIMIZAÇÃO: Usar move semantics para evitar cópia desnecessária
-    TimestampedFrame frame;
-    frame.data = std::make_shared<std::vector<uint8_t>>(width * height * 3);
-    frame.data->assign(data, data + width * height * 3); // Cópia necessária, mas otimizada
-    frame.width = width;
-    frame.height = height;
-    frame.captureTimestampUs = captureTimestampUs;
-    frame.processed = false;
-
-    {
-        std::lock_guard<std::mutex> lock(m_videoBufferMutex);
-        if (m_timestampedVideoBuffer.empty())
-        {
-            m_firstVideoTimestampUs = captureTimestampUs; // Primeiro frame define o início
-        }
-        m_timestampedVideoBuffer.push_back(std::move(frame));
-        m_latestVideoTimestampUs = std::max(m_latestVideoTimestampUs, captureTimestampUs);
-
-        // OTIMIZAÇÃO: Limpar dados antigos apenas ocasionalmente (não a cada frame)
-        // Limpar apenas se o buffer estiver muito grande para evitar overhead
-        // CRÍTICO: Reduzir frequência de cleanup para evitar perda de frames
-        static size_t cleanupCounter = 0;
-        // Aumentar threshold para buffer maior (30 segundos de frames baseado no FPS configurado)
-        const size_t maxFramesFor30Seconds = static_cast<size_t>(m_fps * 30);
-        if (++cleanupCounter >= 60 || m_timestampedVideoBuffer.size() > maxFramesFor30Seconds)
-        {
-            cleanupOldData();
-            cleanupCounter = 0;
-        }
-    }
-
-    return true;
+    // Adicionar frame ao StreamSynchronizer
+    return m_streamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 
 bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
@@ -147,31 +137,8 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
     // Capturar timestamp de captura (quando o áudio chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Calcular duração deste chunk de áudio
-    int64_t durationUs = (sampleCount * 1000000LL) / (m_audioSampleRate * m_audioChannelsCount);
-
-    // Adicionar áudio com timestamp ao buffer temporal
-    TimestampedAudio audio;
-    audio.samples = std::make_shared<std::vector<int16_t>>(samples, samples + sampleCount);
-    audio.sampleCount = sampleCount;
-    audio.captureTimestampUs = captureTimestampUs;
-    audio.durationUs = durationUs;
-    audio.processed = false;
-
-    {
-        std::lock_guard<std::mutex> lock(m_audioBufferMutex);
-        if (m_timestampedAudioBuffer.empty())
-        {
-            m_firstAudioTimestampUs = captureTimestampUs; // Primeiro chunk define o início
-        }
-        m_timestampedAudioBuffer.push_back(audio);
-        m_latestAudioTimestampUs = std::max(m_latestAudioTimestampUs, captureTimestampUs);
-
-        // Limpar dados antigos se necessário (baseado em tempo)
-        cleanupOldData();
-    }
-
-    return true;
+    // Adicionar áudio ao StreamSynchronizer
+    return m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
 }
 
 bool HTTPTSStreamer::start()
@@ -181,71 +148,216 @@ bool HTTPTSStreamer::start()
         return true; // Já está ativo
     }
 
-    // Garantir que socket anterior foi fechado completamente
-    // Isso previne "Address already in use" ao reiniciar
-    if (m_serverSocket >= 0)
+    // Verificar se ainda está em cooldown após parar
+    if (!canStart())
     {
-        shutdown(m_serverSocket, SHUT_RDWR);
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        // Aguardar um pouco para o SO liberar a porta
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Limpar recursos FFmpeg se existirem (pode ter sido parado anteriormente)
-    // Fazer isso de forma segura, verificando se os recursos existem
-    if (m_videoCodecContext || m_audioCodecContext || m_muxerContext)
-    {
-        flushCodecs();
-        cleanupFFmpeg();
-    }
-
-    // Inicializar FFmpeg primeiro
-    if (!initializeFFmpeg())
-    {
-        LOG_ERROR("Failed to initialize FFmpeg");
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+        auto remaining = STOP_COOLDOWN_MS - elapsed;
+        LOG_WARN("Streaming ainda em cooldown. Aguarde " + std::to_string(remaining / 1000) + " segundos");
         return false;
     }
 
-    // Criar socket do servidor HTTP
-    m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (m_serverSocket < 0)
+    // Resetar stopTime quando iniciar com sucesso
     {
-        LOG_ERROR("Failed to create server socket: " + std::string(strerror(errno)));
-        cleanupFFmpeg();
+        std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+        m_stopTime = std::chrono::steady_clock::time_point();
+    }
+
+    // Fechar servidor anterior se existir
+    m_httpServer.closeServer();
+    // Aguardar um pouco para o SO liberar a porta (reduzido ao mínimo para evitar bloqueio)
+    // Esta operação já está em thread separada, mas ainda pode bloquear brevemente
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Limpar recursos de encoding se existirem (pode ter sido parado anteriormente)
+    if (m_mediaEncoder.isInitialized() || m_mediaMuxer.isInitialized())
+    {
+        cleanupEncoding();
+    }
+
+    // Inicializar encoding primeiro
+    if (!initializeEncoding())
+    {
+        LOG_ERROR("Failed to initialize encoding");
         return false;
     }
 
-    // Configurar opções do socket
-    int opt = 1;
-    setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    // Configurar endereço
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(m_port);
-
-    // Fazer bind
-    if (bind(m_serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    // Configurar SSL se habilitado E se Web Portal estiver habilitado
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled && m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
     {
-        LOG_ERROR("Failed to bind to port " + std::to_string(m_port) + ": " + std::string(strerror(errno)));
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        cleanupFFmpeg();
+        // Função helper para obter diretório de configuração do usuário
+        auto getUserConfigDir = []() -> std::string
+        {
+            const char *homeDir = std::getenv("HOME");
+            if (homeDir)
+            {
+                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+                return configDir.string();
+            }
+            return "";
+        };
+
+        // Função helper para encontrar arquivo SSL em vários locais possíveis
+        // Prioridade: 1) Caminho absoluto fornecido, 2) ~/.config/retrocapture/ssl/, 3) Diretório atual/ssl/
+        auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
+        {
+            // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
+            std::filesystem::path testPath(relativePath);
+            if (testPath.is_absolute() && std::filesystem::exists(testPath))
+            {
+                return std::filesystem::absolute(testPath).string();
+            }
+
+            // Extrair apenas o nome do arquivo
+            std::filesystem::path inputPath(relativePath);
+            std::string fileName = inputPath.filename().string();
+
+            // Lista de locais para buscar (em ordem de prioridade)
+            std::vector<std::string> possiblePaths;
+
+            // 1. Pasta de configuração do usuário (~/.config/retrocapture/ssl/) - PRIORIDADE ALTA
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                possiblePaths.push_back((userSSLDir / fileName).string());
+            }
+
+            // 2. Caminho como fornecido (pode ser relativo)
+            possiblePaths.push_back(relativePath);
+
+            // 3. Diretório atual/ssl/
+            possiblePaths.push_back("./ssl/" + fileName);
+            possiblePaths.push_back("./ssl/" + relativePath);
+
+            // 4. Diretório atual
+            possiblePaths.push_back("./" + fileName);
+            possiblePaths.push_back("./" + relativePath);
+
+            // 5. Um nível acima/ssl/
+            possiblePaths.push_back("../ssl/" + fileName);
+            possiblePaths.push_back("../ssl/" + relativePath);
+
+            // 6. Dois níveis acima/ssl/
+            possiblePaths.push_back("../../ssl/" + fileName);
+            possiblePaths.push_back("../../ssl/" + relativePath);
+
+            // Tentar caminhos na ordem de prioridade
+            for (const auto &path : possiblePaths)
+            {
+                std::filesystem::path fsPath(path);
+                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                {
+                    return std::filesystem::absolute(fsPath).string();
+                }
+            }
+
+            return ""; // Não encontrado
+        };
+
+        // Extrair apenas o nome do arquivo do caminho fornecido
+        std::filesystem::path certInputPath(m_sslCertPath);
+        std::filesystem::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename().string();
+        std::string keyFileName = keyInputPath.filename().string();
+
+        // Tentar encontrar os arquivos
+        std::string foundCertPath = findSSLFile(m_sslCertPath);
+        if (foundCertPath.empty())
+        {
+            // Tentar apenas com o nome do arquivo
+            foundCertPath = findSSLFile("ssl/" + certFileName);
+        }
+        if (foundCertPath.empty())
+        {
+            foundCertPath = findSSLFile(certFileName);
+        }
+
+        std::string foundKeyPath = findSSLFile(m_sslKeyPath);
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile("ssl/" + keyFileName);
+        }
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile(keyFileName);
+        }
+
+        if (foundCertPath.empty())
+        {
+            LOG_ERROR("SSL Certificate file not found: " + m_sslCertPath);
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            else
+            {
+                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            m_enableHTTPS = false;
+        }
+        else if (foundKeyPath.empty())
+        {
+            LOG_ERROR("SSL Private Key file not found: " + m_sslKeyPath);
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            else
+            {
+                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
+            }
+            LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
+            m_enableHTTPS = false;
+        }
+        else
+        {
+            if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
+            {
+                LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
+                m_enableHTTPS = false;
+                m_foundSSLCertPath.clear();
+                m_foundSSLKeyPath.clear();
+            }
+            else
+            {
+                // Armazenar caminhos encontrados para exibição na UI
+                m_foundSSLCertPath = foundCertPath;
+                m_foundSSLKeyPath = foundKeyPath;
+            }
+        }
+    }
+    else if (m_webPortalEnabled && m_enableHTTPS)
+    {
+        LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+        LOG_WARN("Cert path: " + m_sslCertPath + ", Key path: " + m_sslKeyPath);
+        m_enableHTTPS = false;
+    }
+
+    // Se Web Portal estiver desabilitado, garantir que HTTPS também esteja desabilitado
+    if (!m_webPortalEnabled && m_enableHTTPS)
+    {
+        m_enableHTTPS = false;
+    }
+
+    // Criar servidor HTTP/HTTPS
+    if (!m_httpServer.createServer(m_port))
+    {
+        LOG_ERROR("Failed to create HTTP server");
+        cleanupEncoding();
         return false;
     }
 
-    // Fazer listen
-    if (listen(m_serverSocket, 5) < 0)
-    {
-        LOG_ERROR("Failed to listen on socket: " + std::string(strerror(errno)));
-        close(m_serverSocket);
-        m_serverSocket = -1;
-        cleanupFFmpeg();
-        return false;
-    }
+    // Configurar WebPortal para usar HTTPServer para envio de dados SSL
+    m_webPortal.setHTTPServer(&m_httpServer);
+
+    // Configurar APIController para usar HTTPServer
+    m_apiController.setHTTPServer(&m_httpServer);
 
     // Iniciar threads
     m_running = true;
@@ -257,8 +369,177 @@ bool HTTPTSStreamer::start()
     m_encodingThread = std::thread(&HTTPTSStreamer::encodingThread, this);
     m_encodingThread.detach();
 
-    LOG_INFO("HTTP TS Streamer started on port " + std::to_string(m_port));
     return true;
+}
+
+bool HTTPTSStreamer::startWebPortalServer()
+{
+    // Este método inicia apenas o servidor HTTP/HTTPS sem o encoding thread
+    // Usado quando o portal web está ativo mas o streaming não está
+
+    if (m_active)
+    {
+        LOG_WARN("Servidor HTTP já está ativo");
+        return true;
+    }
+
+    LOG_INFO("Iniciando servidor HTTP/HTTPS para Portal Web...");
+
+    // Configurar HTTPS se necessário (mesma lógica do start())
+    if (m_enableHTTPS && m_webPortalEnabled)
+    {
+        // Lambda para buscar arquivos SSL (mesma lógica do start())
+        auto getUserConfigDir = []() -> std::string
+        {
+            const char *homeDir = std::getenv("HOME");
+            if (homeDir)
+            {
+                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+                if (std::filesystem::exists(configDir))
+                {
+                    return configDir.string();
+                }
+            }
+            return "";
+        };
+
+        auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
+        {
+            if (relativePath.empty())
+                return "";
+
+            std::filesystem::path inputPath(relativePath);
+            std::string fileName = inputPath.filename().string();
+
+            // Lista de locais para buscar (em ordem de prioridade)
+            std::vector<std::string> possiblePaths;
+
+            // 1. Pasta de configuração do usuário (~/.config/retrocapture/ssl/) - PRIORIDADE ALTA
+            std::string userConfigDir = getUserConfigDir();
+            if (!userConfigDir.empty())
+            {
+                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                possiblePaths.push_back((userSSLDir / fileName).string());
+            }
+
+            // 2. Caminho como fornecido (pode ser relativo)
+            possiblePaths.push_back(relativePath);
+
+            // 3. Diretório atual/ssl/
+            possiblePaths.push_back("./ssl/" + fileName);
+            possiblePaths.push_back("./ssl/" + relativePath);
+
+            // 4. Diretório atual
+            possiblePaths.push_back("./" + fileName);
+            possiblePaths.push_back("./" + relativePath);
+
+            // 5. Um nível acima/ssl/
+            possiblePaths.push_back("../ssl/" + fileName);
+            possiblePaths.push_back("../ssl/" + relativePath);
+
+            // 6. Dois níveis acima/ssl/
+            possiblePaths.push_back("../../ssl/" + fileName);
+            possiblePaths.push_back("../../ssl/" + relativePath);
+
+            // Tentar caminhos na ordem de prioridade
+            for (const auto &path : possiblePaths)
+            {
+                std::filesystem::path fsPath(path);
+                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                {
+                    return std::filesystem::absolute(fsPath).string();
+                }
+            }
+
+            return ""; // Não encontrado
+        };
+
+        // Extrair apenas o nome do arquivo do caminho fornecido
+        std::filesystem::path certInputPath(m_sslCertPath);
+        std::filesystem::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename().string();
+        std::string keyFileName = keyInputPath.filename().string();
+
+        // Buscar certificados SSL
+        std::string foundCertPath = findSSLFile(m_sslCertPath);
+        if (foundCertPath.empty())
+        {
+            foundCertPath = findSSLFile("ssl/" + certFileName);
+            if (foundCertPath.empty())
+            {
+                foundCertPath = findSSLFile(certFileName);
+            }
+        }
+
+        std::string foundKeyPath = findSSLFile(m_sslKeyPath);
+        if (foundKeyPath.empty())
+        {
+            foundKeyPath = findSSLFile("ssl/" + keyFileName);
+            if (foundKeyPath.empty())
+            {
+                foundKeyPath = findSSLFile(keyFileName);
+            }
+        }
+
+        if (foundCertPath.empty() || foundKeyPath.empty())
+        {
+            LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+            m_enableHTTPS = false;
+        }
+        else
+        {
+            if (!m_httpServer.setSSLCertificate(foundCertPath, foundKeyPath))
+            {
+                LOG_ERROR("Failed to configure SSL certificate. Continuing with HTTP only.");
+                m_enableHTTPS = false;
+            }
+            else
+            {
+                m_foundSSLCertPath = foundCertPath;
+                m_foundSSLKeyPath = foundKeyPath;
+            }
+        }
+    }
+
+    // Criar servidor HTTP/HTTPS
+    if (!m_httpServer.createServer(m_port))
+    {
+        LOG_ERROR("Failed to create HTTP server");
+        return false;
+    }
+
+    // Configurar WebPortal para usar HTTPServer
+    m_webPortal.setHTTPServer(&m_httpServer);
+
+    // Configurar APIController para usar HTTPServer
+    m_apiController.setHTTPServer(&m_httpServer);
+
+    // Iniciar apenas a thread do servidor (sem encoding thread)
+    m_running = true;
+    m_active = true;
+    m_stopRequest = false;
+
+    m_serverThread = std::thread(&HTTPTSStreamer::serverThread, this);
+    m_serverThread.detach();
+
+    LOG_INFO("Servidor HTTP/HTTPS iniciado na porta " + std::to_string(m_port) + " (Portal Web apenas)");
+    return true;
+}
+
+void HTTPTSStreamer::setSSLCertificatePath(const std::string &certPath, const std::string &keyPath)
+{
+    m_sslCertPath = certPath;
+    m_sslKeyPath = keyPath;
+    // Só habilitar HTTPS se Web Portal estiver habilitado
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled)
+    {
+        m_enableHTTPS = true;
+    }
+    else
+    {
+        m_enableHTTPS = false;
+    }
 }
 
 void HTTPTSStreamer::stop()
@@ -272,22 +553,16 @@ void HTTPTSStreamer::stop()
     m_active = false;
     m_stopRequest = true;
 
-    // Fechar socket do servidor para acordar accept()
-    // IMPORTANTE: Fechar socket ANTES de setar flags para evitar race condition
-    if (m_serverSocket >= 0)
-    {
-        // Fechar socket de forma que libere a porta imediatamente
-        shutdown(m_serverSocket, SHUT_RDWR); // Desabilitar leitura e escrita
-        close(m_serverSocket);
-        m_serverSocket = -1;
-    }
+    // Fechar servidor HTTP/HTTPS para acordar accept()
+    // IMPORTANTE: Fechar servidor ANTES de setar flags para evitar race condition
+    m_httpServer.closeServer();
 
     // Fechar todos os sockets de clientes
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         for (int clientFd : m_clientSockets)
         {
-            close(clientFd);
+            m_httpServer.closeClient(clientFd);
         }
         m_clientSockets.clear();
         m_clientCount = 0;
@@ -295,20 +570,14 @@ void HTTPTSStreamer::stop()
 
     // Aguardar um tempo para threads processarem m_stopRequest e terminarem
     // Como threads são detached, precisamos aguardar um tempo razoável
-    // 500ms deve ser suficiente para threads saírem dos loops
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
+    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
-    // Invalidar m_muxerContext dentro do mutex para garantir que muxPacket não use recursos inválidos
+    // Registrar timestamp de quando parou para cooldown
     {
-        std::lock_guard<std::mutex> lock(m_muxMutex);
-        m_muxerContext = nullptr; // Invalidar antes de liberar recursos
+        std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+        m_stopTime = std::chrono::steady_clock::now();
     }
-
-    // Fazer flush dos codecs para processar pacotes pendentes
-    flushCodecs();
-
-    // Limpar recursos FFmpeg (agora seguro, pois m_muxerContext está invalidado)
-    cleanupFFmpeg();
 
     LOG_INFO("HTTP TS Streamer stopped");
 }
@@ -318,9 +587,58 @@ bool HTTPTSStreamer::isActive() const
     return m_active;
 }
 
+bool HTTPTSStreamer::canStart() const
+{
+    // Se está ativo, pode "iniciar" (já está iniciado)
+    if (m_active)
+    {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+
+    // Se nunca parou ou já passou o cooldown, pode iniciar
+    if (m_stopTime == std::chrono::steady_clock::time_point())
+    {
+        return true;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+    return elapsed >= STOP_COOLDOWN_MS;
+}
+
+int64_t HTTPTSStreamer::getCooldownRemainingMs() const
+{
+    // Se está ativo, não há cooldown
+    if (m_active)
+    {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(m_stopTimeMutex);
+
+    // Se nunca parou, não há cooldown
+    if (m_stopTime == std::chrono::steady_clock::time_point())
+    {
+        return 0;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stopTime).count();
+    auto remaining = STOP_COOLDOWN_MS - elapsed;
+    return remaining > 0 ? remaining : 0;
+}
+
 std::string HTTPTSStreamer::getStreamUrl() const
 {
-    return "http://localhost:" + std::to_string(m_port) + "/stream";
+    // HTTPS só está ativo se Web Portal estiver habilitado
+    // Se portal estiver desabilitado, sempre usar HTTP
+    if (!m_webPortalEnabled || !m_enableHTTPS)
+    {
+        return "http://localhost:" + std::to_string(m_port) + "/stream";
+    }
+    return m_httpServer.getBaseUrl("localhost", m_port) + "/stream";
 }
 
 uint32_t HTTPTSStreamer::getClientCount() const
@@ -341,25 +659,185 @@ void HTTPTSStreamer::handleClient(int clientFd)
 
     // Ler requisição HTTP
     char buffer[4096];
-    ssize_t bytesRead = recv(clientFd, buffer, sizeof(buffer) - 1, 0);
+    ssize_t bytesRead = m_httpServer.receiveData(clientFd, buffer, sizeof(buffer) - 1);
     if (bytesRead <= 0)
     {
-        close(clientFd);
+        m_httpServer.closeClient(clientFd);
         return;
     }
 
     buffer[bytesRead] = '\0';
     std::string request(buffer);
 
-    // Verificar se é uma requisição GET /stream
-    bool isStreamRequest = (request.find("GET /stream") != std::string::npos);
+    // Se HTTPS está habilitado E Web Portal está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
+    // HTTPS só faz sentido se o Web Portal estiver ativo
+    if (m_webPortalEnabled && m_enableHTTPS && !m_httpServer.isClientHTTPS(clientFd))
+    {
+        // Extrair o Host da requisição
+        std::string host = "localhost";
+        size_t hostPos = request.find("Host: ");
+        if (hostPos != std::string::npos)
+        {
+            size_t hostEnd = request.find("\r\n", hostPos);
+            if (hostEnd != std::string::npos)
+            {
+                host = request.substr(hostPos + 6, hostEnd - hostPos - 6);
+                // Remover porta se presente
+                size_t colonPos = host.find(':');
+                if (colonPos != std::string::npos)
+                {
+                    host = host.substr(0, colonPos);
+                }
+            }
+        }
+
+        // Extrair o path da requisição
+        std::string path = "/";
+        size_t pathStart = request.find("GET ");
+        if (pathStart != std::string::npos)
+        {
+            size_t pathEnd = request.find(" HTTP/", pathStart);
+            if (pathEnd != std::string::npos)
+            {
+                path = request.substr(pathStart + 4, pathEnd - pathStart - 4);
+            }
+        }
+
+        // Enviar redirecionamento 301 para HTTPS
+        std::string redirectUrl = "https://" + host + ":" + std::to_string(m_port) + path;
+        std::string redirectResponse =
+            "HTTP/1.1 301 Moved Permanently\r\n"
+            "Location: " +
+            redirectUrl + "\r\n"
+                          "Connection: close\r\n"
+                          "\r\n";
+
+        m_httpServer.sendData(clientFd, redirectResponse.c_str(), redirectResponse.length());
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+
+    // Verificar tipo de requisição (ANTES de verificar portal web)
+    // Isso garante que requisições de stream não sejam capturadas pelo portal
+    bool isStreamRequest = (request.find("/stream") != std::string::npos);
+
+    // Extrair prefixo base para verificar requisições com prefixo
+    // Prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
+    std::string basePrefixForDetection = "";
+
+    // 1. Tentar extrair do header X-Forwarded-Prefix (padrão para proxy reverso)
+    size_t prefixHeaderPos = request.find("X-Forwarded-Prefix:");
+    if (prefixHeaderPos != std::string::npos)
+    {
+        size_t valueStart = request.find(":", prefixHeaderPos) + 1;
+        while (valueStart < request.length() && (request[valueStart] == ' ' || request[valueStart] == '\t'))
+        {
+            valueStart++;
+        }
+        size_t valueEnd = request.find("\r\n", valueStart);
+        if (valueEnd == std::string::npos)
+        {
+            valueEnd = request.find("\n", valueStart);
+        }
+        if (valueEnd != std::string::npos)
+        {
+            std::string prefix = request.substr(valueStart, valueEnd - valueStart);
+            // Remover espaços em branco
+            while (!prefix.empty() && (prefix.back() == ' ' || prefix.back() == '\t' || prefix.back() == '\r'))
+            {
+                prefix.pop_back();
+            }
+            if (!prefix.empty())
+            {
+                // Garantir que começa com / mas não termina com /
+                if (prefix[0] != '/')
+                {
+                    prefix = "/" + prefix;
+                }
+                if (prefix.length() > 1 && prefix.back() == '/')
+                {
+                    prefix.pop_back();
+                }
+                basePrefixForDetection = prefix;
+            }
+        }
+    }
+
+    // 2. Se ainda vazio, tentar extrair do path da requisição
+    if (basePrefixForDetection.empty())
+    {
+        size_t getPos = request.find("GET /");
+        if (getPos != std::string::npos)
+        {
+            size_t startPos = getPos + 5;
+            size_t endPos = request.find(" ", startPos);
+            if (endPos == std::string::npos)
+            {
+                endPos = request.find("\r\n", startPos);
+            }
+            if (endPos != std::string::npos)
+            {
+                std::string path = request.substr(startPos, endPos - startPos);
+                // Remover query string
+                size_t queryPos = path.find('?');
+                if (queryPos != std::string::npos)
+                {
+                    path = path.substr(0, queryPos);
+                }
+                // Extrair prefixo se houver (ex: /retrocapture/stream.m3u8 -> /retrocapture)
+                // Verificar se o path tem mais de um segmento (indicando prefixo base)
+                if (path.length() > 1 && path[0] == '/')
+                {
+                    // Contar quantas barras existem
+                    size_t slashCount = 0;
+                    for (char c : path)
+                    {
+                        if (c == '/')
+                            slashCount++;
+                    }
+                    // Se houver mais de uma barra, há um prefixo base
+                    if (slashCount > 1)
+                    {
+                        size_t secondSlash = path.find('/', 1);
+                        if (secondSlash != std::string::npos)
+                        {
+                            basePrefixForDetection = path.substr(0, secondSlash);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Verificar API REST primeiro (antes do Web Portal)
+    if (m_apiController.isAPIRequest(request))
+    {
+        if (m_apiController.handleRequest(clientFd, request))
+        {
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+        // Se não foi processada, continuar para outras verificações
+    }
+
+    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream e se Web Portal estiver habilitado
+    if (m_webPortalEnabled && !isStreamRequest)
+    {
+        if (m_webPortal.isWebPortalRequest(request))
+        {
+            if (m_webPortal.handleRequest(clientFd, request))
+            {
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+            // Se não foi processada, continuar para outras verificações
+        }
+    }
 
     if (!isStreamRequest)
     {
-        // Enviar 404 para requisições que não são /stream
-        const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
-        send(clientFd, response, strlen(response), 0);
-        close(clientFd);
+        send404(clientFd);
+        m_httpServer.closeClient(clientFd);
         return;
     }
 
@@ -373,11 +851,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
     headers << "\r\n";
 
     std::string headerStr = headers.str();
-    ssize_t sent = send(clientFd, headerStr.c_str(), headerStr.length(), MSG_NOSIGNAL);
+    ssize_t sent = m_httpServer.sendData(clientFd, headerStr.c_str(), headerStr.length());
     if (sent < 0)
     {
         // Cliente desconectou ou erro
-        close(clientFd);
+        m_httpServer.closeClient(clientFd);
         return;
     }
 
@@ -386,13 +864,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
         std::lock_guard<std::mutex> headerLock(m_headerMutex);
         if (m_headerWritten && !m_formatHeader.empty())
         {
-            LOG_INFO("Sending MPEG-TS format header to new client (" +
-                     std::to_string(m_formatHeader.size()) + " bytes)");
-            ssize_t headerSent = send(clientFd, m_formatHeader.data(), m_formatHeader.size(), MSG_NOSIGNAL);
+            ssize_t headerSent = m_httpServer.sendData(clientFd, m_formatHeader.data(), m_formatHeader.size());
             if (headerSent < 0)
             {
                 LOG_ERROR("Failed to send format header to client");
-                close(clientFd);
+                m_httpServer.closeClient(clientFd);
                 return;
             }
         }
@@ -415,7 +891,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     while (!m_stopRequest && m_running)
     {
         char dummy;
-        ssize_t result = recv(clientFd, &dummy, 1, MSG_PEEK);
+        ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
         if (result <= 0)
         {
             break; // Cliente desconectou
@@ -424,7 +900,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
 
     // Cliente desconectou - remover da lista
-    close(clientFd);
+    m_httpServer.closeClient(clientFd);
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
@@ -437,6 +913,16 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
 }
 
+void HTTPTSStreamer::send404(int clientFd)
+{
+    const char *response = "HTTP/1.1 404 Not Found\r\n"
+                           "Content-Type: text/plain\r\n"
+                           "Connection: close\r\n"
+                           "\r\n"
+                           "404 Not Found";
+    m_httpServer.sendData(clientFd, response, strlen(response));
+}
+
 int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 {
     if (!buf || buf_size <= 0 || m_stopRequest)
@@ -444,120 +930,156 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         return buf_size; // Retornar sucesso para não bloquear FFmpeg
     }
 
-    // Armazenar header do formato se ainda não foi armazenado
+    // Header do formato é capturado automaticamente pelo MediaMuxer
+    // Apenas sincronizar se necessário
     {
         std::lock_guard<std::mutex> headerLock(m_headerMutex);
-        if (!m_headerWritten && buf_size > 0)
+        if (!m_headerWritten && m_mediaMuxer.isHeaderWritten())
         {
-            // Primeiros bytes são geralmente o header do formato
-            // Para MPEG-TS, o header geralmente tem alguns KB
-            if (buf_size < 64 * 1024) // Se for menor que 64KB, provavelmente é o header
-            {
-                m_formatHeader.assign(buf, buf + buf_size);
-                m_headerWritten = true;
-            }
+            m_formatHeader = m_mediaMuxer.getFormatHeader();
+            m_headerWritten = true;
         }
     }
 
     // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
-    std::lock_guard<std::mutex> lock(m_outputMutex);
-
-    // Verificar novamente após adquirir o lock
-    if (m_stopRequest || m_clientSockets.empty())
     {
-        // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
-        return buf_size;
-    }
+        std::lock_guard<std::mutex> lock(m_outputMutex);
 
-    // CRÍTICO: writeCallback é chamado dentro do lock do muxing
-    // Deve ser MUITO rápido para não bloquear o encoding
-    // IMPORTANTE: Retornar apenas buf_size se TODOS os clientes receberam TODOS os dados
-    // Retornar menos que buf_size faz o FFmpeg tentar novamente, o que pode causar corrupção
-
-    // Enviar dados para todos os clientes conectados
-    // Remover clientes que falharam ao enviar
-    size_t minSent = static_cast<size_t>(buf_size); // Rastrear mínimo enviado a todos os clientes
-    auto it = m_clientSockets.begin();
-    while (it != m_clientSockets.end())
-    {
-        int clientFd = *it;
-        size_t totalSent = 0;
-
-        // Tentar enviar tudo de uma vez (sem loop de retries para ser mais rápido)
-        size_t toSend = static_cast<size_t>(buf_size);
-        // Limitar tamanho do chunk para evitar problemas
-        if (toSend > 65536)
+        // Verificar novamente após adquirir o lock
+        if (m_stopRequest || m_clientSockets.empty())
         {
-            toSend = 65536;
+            // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
+            return buf_size;
         }
 
-        ssize_t sent = send(clientFd, buf, toSend, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (sent < 0)
+        auto it = m_clientSockets.begin();
+        while (it != m_clientSockets.end())
         {
-            int err = errno;
-            // EPIPE e ECONNRESET são normais quando cliente desconecta
-            // EAGAIN/EWOULDBLOCK significa que o socket não está pronto - pular este cliente
-            if (err != EAGAIN && err != EWOULDBLOCK)
+            int clientFd = *it;
+
+            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
+            if (sent < 0)
             {
-                // Erro real - remover cliente
-                close(clientFd);
+                m_httpServer.closeClient(clientFd);
+                it = m_clientSockets.erase(it);
+                m_clientCount = m_clientSockets.size();
+            }
+            else if (sent == 0)
+            {
+                m_httpServer.closeClient(clientFd);
+                it = m_clientSockets.erase(it);
+                m_clientCount = m_clientSockets.size();
+            }
+            else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
+            {
+                m_httpServer.closeClient(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
             else
             {
-                // Socket não está pronto - este cliente não recebeu nada
-                totalSent = 0;
                 ++it;
             }
         }
-        else if (sent == 0)
+
+        return buf_size;
+    }
+}
+
+bool HTTPTSStreamer::initializeEncoding()
+{
+    // Configurar StreamSynchronizer com valores configuráveis
+    m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
+    m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
+    m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
+    m_streamSynchronizer.setSyncTolerance(50 * 1000LL); // 50ms
+
+    // Configurar MediaEncoder
+    MediaEncoder::VideoConfig videoConfig;
+    videoConfig.width = m_width;
+    videoConfig.height = m_height;
+    videoConfig.fps = m_fps;
+    videoConfig.bitrate = m_videoBitrate;
+    videoConfig.codec = m_videoCodecName;
+    videoConfig.preset = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? m_h264Preset : m_h265Preset;
+    videoConfig.profile = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? "baseline" : "";
+    videoConfig.h265Profile = m_h265Profile;
+    videoConfig.h265Level = m_h265Level;
+    videoConfig.vp8Speed = m_vp8Speed;
+    videoConfig.vp9Speed = m_vp9Speed;
+
+    MediaEncoder::AudioConfig audioConfig;
+    audioConfig.sampleRate = m_audioSampleRate;
+    audioConfig.channels = m_audioChannelsCount;
+    audioConfig.bitrate = m_audioBitrate;
+    audioConfig.codec = m_audioCodecName;
+
+    if (!m_mediaEncoder.initialize(videoConfig, audioConfig))
+    {
+        LOG_ERROR("Failed to initialize MediaEncoder");
+        return false;
+    }
+
+    // Configurar MediaMuxer com callback de escrita
+    auto writeCallback = [this](const uint8_t *data, size_t size) -> int
+    {
+        return this->writeToClients(data, size);
+    };
+
+    if (!m_mediaMuxer.initialize(videoConfig, audioConfig,
+                                 m_mediaEncoder.getVideoCodecContext(),
+                                 m_mediaEncoder.getAudioCodecContext(),
+                                 writeCallback,
+                                 m_avioBufferSize))
+    {
+        LOG_ERROR("Failed to initialize MediaMuxer");
+        m_mediaEncoder.cleanup();
+        return false;
+    }
+
+    return true;
+}
+
+void HTTPTSStreamer::cleanupEncoding()
+{
+    // Flush encoder para processar frames pendentes
+    if (m_mediaEncoder.isInitialized())
+    {
+        std::vector<MediaEncoder::EncodedPacket> packets;
+        m_mediaEncoder.flush(packets);
+
+        // Muxar pacotes pendentes
+        for (const auto &packet : packets)
         {
-            // Cliente fechou a conexão
-            close(clientFd);
-            it = m_clientSockets.erase(it);
-            m_clientCount = m_clientSockets.size();
+            m_mediaMuxer.muxPacket(packet);
+        }
+    }
+
+    // Flush muxer
+    if (m_mediaMuxer.isInitialized())
+    {
+        m_mediaMuxer.flush();
+    }
+
+    // Limpar recursos
+    m_mediaMuxer.cleanup();
+    m_mediaEncoder.cleanup();
+    m_streamSynchronizer.clear();
+
+    // Capturar header do formato se disponível
+    {
+        std::lock_guard<std::mutex> lock(m_headerMutex);
+        if (m_mediaMuxer.isHeaderWritten())
+        {
+            m_formatHeader = m_mediaMuxer.getFormatHeader();
+            m_headerWritten = true;
         }
         else
         {
-            totalSent = static_cast<size_t>(sent);
-            ++it;
-        }
-
-        // Atualizar mínimo enviado (se este cliente recebeu menos, usar esse valor)
-        if (totalSent < minSent)
-        {
-            minSent = totalSent;
+            m_formatHeader.clear();
+            m_headerWritten = false;
         }
     }
-
-    // CRÍTICO: Sempre retornar buf_size para não bloquear o FFmpeg
-    // O buffer AVIO de 1MB é suficiente para lidar com pequenos atrasos de envio
-    // Retornar menos que buf_size causa retries do FFmpeg que quebram sincronização e causam corrupção
-    // Se alguns clientes não receberam todos os dados, o buffer AVIO vai lidar com isso
-    return buf_size;
-}
-
-bool HTTPTSStreamer::initializeFFmpeg()
-{
-    // Initialize the FFmpeg codecs
-    if (!initializeVideoCodec())
-    {
-        LOG_ERROR("Failed to initialize video codec");
-        return false;
-    }
-    if (!initializeAudioCodec())
-    {
-        LOG_ERROR("Failed to initialize audio codec");
-        return false;
-    }
-    // Initialize the FFmpeg muxers
-    if (!initializeMuxers())
-    {
-        LOG_ERROR("Failed to initialize muxers");
-        return false;
-    }
-    return true;
 }
 
 bool HTTPTSStreamer::initializeVideoCodec()
@@ -636,6 +1158,7 @@ bool HTTPTSStreamer::initializeVideoCodec()
             return false;
         }
     }
+
     AVCodecContext *codecCtx = avcodec_alloc_context3(codec);
     if (!codecCtx)
     {
@@ -1004,12 +1527,9 @@ bool HTTPTSStreamer::initializeMuxers()
 
     m_audioStream = audioStream;
 
-    // Configurar callback de escrita
-    // Aumentar buffer para 1MB para reduzir chamadas ao callback e evitar corrupção
-    // Buffer maior = menos fragmentação = menos chance de corrupção
-    // Buffer grande também permite que writeCallback seja mais rápido (pode pular clientes lentos)
+    // Configurar callback de escrita com tamanho configurável
     formatCtx->pb = avio_alloc_context(
-        static_cast<unsigned char *>(av_malloc(1024 * 1024)), 1024 * 1024,
+        static_cast<unsigned char *>(av_malloc(m_avioBufferSize)), m_avioBufferSize,
         1, this, nullptr, writeCallback, nullptr);
     if (!formatCtx->pb)
     {
@@ -2008,186 +2528,38 @@ int64_t HTTPTSStreamer::getTimestampUs() const
 
 void HTTPTSStreamer::cleanupOldData()
 {
-    // Limpar dados antigos baseado em tempo (não em quantidade)
-    // Remover apenas dados que estão fora da janela temporal máxima
-    // OTIMIZAÇÃO: Se detectamos dessincronização, ser mais agressivo em descartar frames antigos
-    // para permitir recuperação mais rápida pulando para o tempo atual
-
-    // Calcular timestamp mais antigo permitido (janela temporal)
-    // Reduzir janela se há dessincronização para permitir recuperação mais rápida
-    int64_t bufferTimeUs = MAX_BUFFER_TIME_US;
-    if (m_desyncFrameCount > 0)
-    {
-        // Reduzir janela pela metade quando há dessincronização
-        bufferTimeUs = MAX_BUFFER_TIME_US / 2;
-    }
-
-    int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - bufferTimeUs;
-    int64_t oldestAllowedAudioUs = m_latestAudioTimestampUs - bufferTimeUs;
-
-    // CRÍTICO: NÃO descartar frames não processados normalmente - isso causa perda de frames!
-    // Remover apenas frames processados que estão fora da janela temporal
-    // EXCEÇÃO: Se há dessincronização, descartar frames não processados muito antigos
-    // para permitir recuperação mais rápida pulando para o tempo atual
-    while (!m_timestampedVideoBuffer.empty())
-    {
-        const auto &frame = m_timestampedVideoBuffer.front();
-
-        // Se está dentro da janela temporal, manter (mesmo que processado)
-        if (frame.captureTimestampUs >= oldestAllowedVideoUs)
-        {
-            break;
-        }
-
-        // Se há dessincronização, descartar frames não processados muito antigos
-        // para permitir recuperação mais rápida pulando para o tempo atual
-        if (m_desyncFrameCount > 0 && !frame.processed)
-        {
-            LOG_WARN("Descartando frame não processado antigo devido a dessincronização (timestamp: " +
-                     std::to_string(frame.captureTimestampUs) + " us, atual: " +
-                     std::to_string(m_latestVideoTimestampUs) + " us)");
-            m_timestampedVideoBuffer.pop_front();
-            continue;
-        }
-
-        // CRÍTICO: NÃO descartar frames não processados normalmente - eles ainda precisam ser encodados!
-        // Apenas descartar frames que já foram processados E estão muito antigos
-        if (frame.processed)
-        {
-            // Frame processado e antigo - seguro descartar
-            m_timestampedVideoBuffer.pop_front();
-        }
-        else
-        {
-            // Frame não processado - MANTER mesmo que antigo!
-            // Isso pode acontecer se o encoding está lento, mas não devemos perder frames
-            // Continuar processando frames antigos até que sejam encodados
-            break;
-        }
-    }
-
-    // Mesma lógica para áudio
-    while (!m_timestampedAudioBuffer.empty())
-    {
-        const auto &audio = m_timestampedAudioBuffer.front();
-
-        if (audio.captureTimestampUs >= oldestAllowedAudioUs)
-        {
-            break;
-        }
-
-        m_timestampedAudioBuffer.pop_front();
-    }
-}
-
-HTTPTSStreamer::SyncZone HTTPTSStreamer::calculateSyncZone()
-{
-    std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-    std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-
-    if (m_timestampedVideoBuffer.empty() || m_timestampedAudioBuffer.empty())
-    {
-        return SyncZone::invalid();
-    }
-
-    // Encontrar sobreposição temporal entre buffers
-    int64_t videoStartUs = m_timestampedVideoBuffer.front().captureTimestampUs;
-    int64_t videoEndUs = m_timestampedVideoBuffer.back().captureTimestampUs;
-
-    int64_t audioStartUs = m_timestampedAudioBuffer.front().captureTimestampUs;
-    int64_t audioEndUs = m_timestampedAudioBuffer.back().captureTimestampUs;
-
-    // Calcular sobreposição
-    int64_t overlapStartUs = std::max(videoStartUs, audioStartUs);
-    int64_t overlapEndUs = std::min(videoEndUs, audioEndUs);
-
-    // Verificar se há sobreposição (qualquer sobreposição é suficiente para começar a processar)
-    if (overlapEndUs <= overlapStartUs)
-    {
-        return SyncZone::invalid(); // Não há sobreposição temporal
-    }
-
-    // Zona sincronizada: processar desde o início da sobreposição até o final
-    // Para 60fps, precisamos processar imediatamente, não esperar por uma zona "segura"
-    int64_t zoneStartUs = overlapStartUs;
-    int64_t zoneEndUs = overlapEndUs;
-
-    // Encontrar índices correspondentes nos buffers
-    size_t videoStartIdx = 0;
-    size_t videoEndIdx = 0;
-    for (size_t i = 0; i < m_timestampedVideoBuffer.size(); i++)
-    {
-        if (m_timestampedVideoBuffer[i].captureTimestampUs >= zoneStartUs && videoStartIdx == 0)
-        {
-            videoStartIdx = i;
-        }
-        if (m_timestampedVideoBuffer[i].captureTimestampUs <= zoneEndUs)
-        {
-            videoEndIdx = i + 1;
-        }
-    }
-
-    size_t audioStartIdx = 0;
-    size_t audioEndIdx = 0;
-    for (size_t i = 0; i < m_timestampedAudioBuffer.size(); i++)
-    {
-        if (m_timestampedAudioBuffer[i].captureTimestampUs >= zoneStartUs && audioStartIdx == 0)
-        {
-            audioStartIdx = i;
-        }
-        if (m_timestampedAudioBuffer[i].captureTimestampUs <= zoneEndUs)
-        {
-            audioEndIdx = i + 1;
-        }
-    }
-
-    SyncZone zone;
-    zone.startTimeUs = zoneStartUs;
-    zone.endTimeUs = zoneEndUs;
-    zone.videoStartIdx = videoStartIdx;
-    zone.videoEndIdx = videoEndIdx;
-    zone.audioStartIdx = audioStartIdx;
-    zone.audioEndIdx = audioEndIdx;
-
-    return zone;
+    // StreamSynchronizer já faz cleanup internamente
+    m_streamSynchronizer.cleanupOldData();
 }
 
 void HTTPTSStreamer::serverThread()
 {
-    LOG_INFO("Server thread started, waiting for connections on port " + std::to_string(m_port));
 
     while (m_running)
     {
-
         if (m_stopRequest)
         {
             break;
         }
 
-        struct sockaddr_in clientAddr;
-        socklen_t clientLen = sizeof(clientAddr);
-
-        // Aceitar conexão de cliente
-        int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+        // Aceitar conexão de cliente usando HTTPServer
+        int clientFd = m_httpServer.acceptClient();
         if (clientFd < 0)
         {
-            if (m_running)
+            if (m_running && !m_stopRequest)
             {
-                // Erro ao aceitar (pode ser porque fechamos o socket)
-                if (errno != EBADF && errno != EINVAL)
-                {
-                    LOG_ERROR("Failed to accept client connection: " + std::string(strerror(errno)));
-                }
+                // Erro ao aceitar (pode ser porque fechamos o servidor)
+                // Não logar erro se foi fechado intencionalmente
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
-            break; // Sair do loop se não estiver rodando ou se o socket foi fechado
+            break; // Sair do loop se não estiver rodando ou se o servidor foi fechado
         }
 
         // Processar cliente em thread separada
         std::thread clientThread(&HTTPTSStreamer::handleClient, this, clientFd);
         clientThread.detach(); // Detach para não precisar fazer join
     }
-
-    LOG_INFO("Server thread stopped");
 
     return;
 }
@@ -2196,6 +2568,10 @@ void HTTPTSStreamer::encodingThread()
 {
     // Aguardar um pouco antes de começar para evitar processar frames muito antigos
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Contador para limpeza menos frequente (a cada 10 iterações)
+    int cleanupCounter = 0;
+    const int CLEANUP_INTERVAL = 10;
 
     while (m_running)
     {
@@ -2206,256 +2582,154 @@ void HTTPTSStreamer::encodingThread()
 
         bool processedAny = false;
 
-        // Processar frames de vídeo disponíveis (sem esperar por sincronização)
-        // OTIMIZAÇÃO CRÍTICA: Copiar dados para fora do lock e fazer encoding sem lock
-        // Isso evita bloquear outras threads durante o encoding (que pode ser lento)
-        std::vector<std::tuple<std::shared_ptr<std::vector<uint8_t>>, uint32_t, uint32_t, int64_t, size_t>> framesToProcess;
-        size_t totalFrames = 0;
-
+        // Limpar dados antigos do StreamSynchronizer apenas ocasionalmente (não a cada iteração)
+        // Isso evita remover dados muito agressivamente antes de serem processados
+        cleanupCounter++;
+        if (cleanupCounter >= CLEANUP_INTERVAL)
         {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            totalFrames = m_timestampedVideoBuffer.size();
-
-            // CRÍTICO: Se há dessincronização ou muitos frames acumulados, pular frames antigos
-            // para permitir recuperação mais rápida
-            const size_t MAX_BUFFER_FRAMES = static_cast<size_t>(m_fps * 2); // Máximo 2 segundos de frames
-            bool shouldSkipOldFrames = false;
-
-            // Verificar se há dessincronização ou buffer muito grande
-            {
-                std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
-                if (m_desyncFrameCount > 0 || totalFrames > MAX_BUFFER_FRAMES)
-                {
-                    shouldSkipOldFrames = true;
-                }
-            }
-
-            if (shouldSkipOldFrames && totalFrames > 10)
-            {
-                // Pular frames antigos não processados - manter apenas os mais recentes
-                // Calcular quantos frames manter (últimos 0.5 segundos para recuperação mais rápida)
-                size_t framesToKeep = static_cast<size_t>(m_fps / 2); // Apenas 0.5 segundo
-                if (totalFrames > framesToKeep)
-                {
-                    size_t framesToSkip = totalFrames - framesToKeep;
-                    int64_t currentTimeUs = getTimestampUs();
-
-                    LOG_WARN("Pulando " + std::to_string(framesToSkip) + " frames antigos devido a " +
-                             (m_desyncFrameCount > 0 ? "dessincronização" : "buffer grande") +
-                             " (total: " + std::to_string(totalFrames) + " frames, mantendo últimos " +
-                             std::to_string(framesToKeep) + " frames)");
-
-                    // Remover frames antigos não processados
-                    size_t skipped = 0;
-                    while (!m_timestampedVideoBuffer.empty() && skipped < framesToSkip)
-                    {
-                        auto &frame = m_timestampedVideoBuffer.front();
-                        // Pular apenas frames não processados que estão muito atrás no tempo
-                        // Ser mais agressivo: pular se está mais de 0.5 segundos atrás
-                        if (!frame.processed &&
-                            (currentTimeUs - frame.captureTimestampUs) > 500000) // Mais de 0.5 segundo atrás
-                        {
-                            m_timestampedVideoBuffer.pop_front();
-                            skipped++;
-                        }
-                        else
-                        {
-                            // Se chegamos em frames processados ou recentes, parar
-                            break;
-                        }
-                    }
-
-                    if (skipped > 0)
-                    {
-                        LOG_INFO("Pulados " + std::to_string(skipped) + " frames antigos, buffer agora tem " +
-                                 std::to_string(m_timestampedVideoBuffer.size()) + " frames");
-                        // Resetar contador de dessincronização após pular frames
-                        {
-                            std::lock_guard<std::mutex> ptsLock(m_ptsMutex);
-                            m_desyncFrameCount = 0;
-                        }
-                    }
-
-                    // Atualizar totalFrames após pular
-                    totalFrames = m_timestampedVideoBuffer.size();
-                }
-            }
-
-            // CRÍTICO: Processar TODOS os frames disponíveis, não limitar!
-            // Limitar frames causa acúmulo e perda de frames
-            // Para 60 FPS, precisamos processar todos os frames o mais rápido possível
-            const size_t MAX_FRAMES_PER_ITERATION = totalFrames; // Processar TODOS os frames disponíveis
-
-            // Copiar dados dos frames não processados para fora do lock
-            size_t framesCopied = 0;
-            for (size_t i = 0; i < m_timestampedVideoBuffer.size() && framesCopied < MAX_FRAMES_PER_ITERATION; i++)
-            {
-                auto &frame = m_timestampedVideoBuffer[i];
-                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
-                {
-                    // Copiar referência aos dados (shared_ptr já gerencia memória)
-                    framesToProcess.push_back({frame.data, frame.width, frame.height, frame.captureTimestampUs, i});
-                    framesCopied++;
-                }
-            }
+            m_streamSynchronizer.cleanupOldData();
+            cleanupCounter = 0;
         }
 
-        // Processar frames FORA do lock (encoding pode ser lento)
-        // OTIMIZAÇÃO: Batch dinâmico baseado no tamanho da fila para melhor throughput
-        // Se há muitos frames acumulados, processar mais agressivamente
-        std::vector<size_t> processedIndices;
-        size_t MAX_FRAMES_PER_BATCH;
-        if (totalFrames > 50)
+        // Verificar se há backlog (muitos frames pendentes)
+        size_t videoBufferSize = m_streamSynchronizer.getVideoBufferSize();
+        size_t audioBufferSize = m_streamSynchronizer.getAudioBufferSize();
+        bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
+
+        // Calcular zona de sincronização
+        StreamSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
+
+        if (syncZone.isValid())
         {
-            MAX_FRAMES_PER_BATCH = 20; // Muitos frames acumulados - processar mais agressivamente
-        }
-        else if (totalFrames > 20)
-        {
-            MAX_FRAMES_PER_BATCH = 15; // Fila média - processar moderadamente
-        }
-        else
-        {
-            MAX_FRAMES_PER_BATCH = 10; // Fila pequena - processar normalmente
-        }
-        size_t framesProcessed = 0;
+            // Obter frames de vídeo da zona sincronizada
+            auto videoFrames = m_streamSynchronizer.getVideoFrames(syncZone);
 
-        for (const auto &[data, width, height, timestamp, bufferIndex] : framesToProcess)
-        {
-            // Verificar se parada foi solicitada
-            if (m_stopRequest)
-            {
-                break;
-            }
+            // Processar frames de vídeo (com controle de taxa para evitar aceleração)
+            // Aumentar limite quando há backlog para evitar perda de frames
+            size_t framesProcessed = 0;
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2; // Mais frames quando há backlog
 
-            // Limitar frames por batch para evitar que o codec fique cheio
-            if (framesProcessed >= MAX_FRAMES_PER_BATCH)
+            for (const auto &frame : videoFrames)
             {
-                break; // Processar o resto na próxima iteração
-            }
-
-            // Tentar encodar o frame (sem lock)
-            bool encodeSuccess = encodeVideoFrame(data->data(), width, height, timestamp);
-
-            // Guardar índice se sucesso (marcar depois em batch)
-            if (encodeSuccess)
-            {
-                processedIndices.push_back(bufferIndex);
-                processedAny = true;
-                framesProcessed++;
-            }
-            else
-            {
-                // Se falhou (provavelmente EAGAIN - codec cheio), parar e tentar novamente na próxima iteração
-                // Isso evita que muitos frames falhem de uma vez
-                break;
-            }
-        }
-
-        // Marcar todos os frames processados de uma vez (lock único)
-        if (!processedIndices.empty())
-        {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            for (size_t idx : processedIndices)
-            {
-                if (idx < m_timestampedVideoBuffer.size())
-                {
-                    auto &frame = m_timestampedVideoBuffer[idx];
-                    if (!frame.processed)
-                    {
-                        frame.processed = true;
-                    }
-                }
-            }
-        }
-
-        // OTIMIZAÇÃO: Remover frames processados em batch (mais eficiente que pop_front individual)
-        // IMPORTANTE: Só remover se houver muitos frames processados para evitar remover frames importantes
-        {
-            std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-            // Contar quantos frames processados existem no início
-            size_t processedCount = 0;
-            while (processedCount < m_timestampedVideoBuffer.size() &&
-                   m_timestampedVideoBuffer[processedCount].processed)
-            {
-                processedCount++;
-            }
-            // Remover todos de uma vez, mas apenas se houver pelo menos 5 frames processados
-            // Isso evita remover frames muito cedo que podem ser necessários para sincronização
-            if (processedCount >= 5)
-            {
-                m_timestampedVideoBuffer.erase(m_timestampedVideoBuffer.begin(),
-                                               m_timestampedVideoBuffer.begin() + processedCount);
-            }
-        }
-
-        // Processar chunks de áudio disponíveis (sem esperar por sincronização)
-        // IMPORTANTE: Só marcar como processado se o encoding foi bem-sucedido
-        {
-            std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-
-            // Processar chunks não processados
-            for (auto &audio : m_timestampedAudioBuffer)
-            {
-                // Verificar se parada foi solicitada
                 if (m_stopRequest)
                 {
                     break;
                 }
 
-                if (!audio.processed && audio.samples && audio.sampleCount > 0)
+                // Limitar número de frames processados por iteração
+                if (framesProcessed >= MAX_FRAMES_PER_ITERATION)
                 {
-                    // Tentar encodar o chunk
-                    bool encodeSuccess = encodeAudioFrame(audio.samples->data(), audio.sampleCount, audio.captureTimestampUs);
+                    break;
+                }
 
-                    // SÓ marcar como processado se o encoding foi bem-sucedido
-                    if (encodeSuccess)
+                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
+                {
+                    // Encodar frame usando MediaEncoder
+                    std::vector<MediaEncoder::EncodedPacket> packets;
+                    if (m_mediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                                   frame.captureTimestampUs, packets))
                     {
-                        audio.processed = true; // Marcar como processado apenas se sucesso
+                        // Muxar pacotes usando MediaMuxer
+                        for (const auto &packet : packets)
+                        {
+                            m_mediaMuxer.muxPacket(packet);
+                        }
                         processedAny = true;
-                    }
-                    else
-                    {
-                        // Encoding falhou - NÃO marcar como processado, manter no buffer
-                        // Áudio geralmente não falha, mas manter consistência
+                        framesProcessed++;
                     }
                 }
             }
 
-            // Remover chunks processados do início
-            while (!m_timestampedAudioBuffer.empty() && m_timestampedAudioBuffer.front().processed)
+            // Obter chunks de áudio da zona sincronizada
+            auto audioChunks = m_streamSynchronizer.getAudioChunks(syncZone);
+
+            // Processar chunks de áudio (com limite para evitar aceleração)
+            // Aumentar limite quando há backlog para evitar perda de chunks
+            size_t chunksProcessed = 0;
+            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3; // Mais chunks quando há backlog
+
+            for (const auto &chunk : audioChunks)
             {
-                m_timestampedAudioBuffer.pop_front();
+                if (m_stopRequest)
+                {
+                    break;
+                }
+
+                // Limitar número de chunks processados por iteração
+                if (chunksProcessed >= MAX_CHUNKS_PER_ITERATION)
+                {
+                    break;
+                }
+
+                if (!chunk.processed && chunk.samples && chunk.sampleCount > 0)
+                {
+                    // Encodar áudio usando MediaEncoder
+                    std::vector<MediaEncoder::EncodedPacket> packets;
+                    if (m_mediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
+                                                   chunk.captureTimestampUs, packets))
+                    {
+                        // Muxar pacotes usando MediaMuxer
+                        for (const auto &packet : packets)
+                        {
+                            m_mediaMuxer.muxPacket(packet);
+                        }
+                        processedAny = true;
+                        chunksProcessed++;
+                    }
+                }
+            }
+
+            // Marcar dados como processados
+            m_streamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+            m_streamSynchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
+
+            // Capturar header do formato se disponível
+            {
+                std::lock_guard<std::mutex> lock(m_headerMutex);
+                if (!m_headerWritten && m_mediaMuxer.isHeaderWritten())
+                {
+                    m_formatHeader = m_mediaMuxer.getFormatHeader();
+                    m_headerWritten = true;
+                }
             }
         }
 
-        // Se processamos algo, continuar imediatamente (sem sleep) para máxima velocidade
-        // Se não processamos nada, verificar se há dados pendentes antes de dormir
-        if (!processedAny)
+        // Adicionar delay mínimo entre iterações para evitar aceleração
+        // Reduzir ou remover delay quando há backlog para processar mais rápido
+        if (processedAny)
         {
-            // Verificar se há frames ou áudio pendentes antes de dormir
-            bool hasPendingData = false;
+            if (hasBacklog)
             {
-                std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
-                hasPendingData = !m_timestampedVideoBuffer.empty();
+                // Quando há backlog, delay mínimo para não consumir 100% CPU mas processar rápido
+                std::this_thread::sleep_for(std::chrono::microseconds(100)); // 100µs apenas
             }
-            if (!hasPendingData)
+            else
             {
-                std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
-                hasPendingData = !m_timestampedAudioBuffer.empty();
+                // Sem backlog: delay baseado no FPS para manter taxa natural
+                // Para 60 FPS: ~16.67ms por frame, mas processamos 2 frames, então ~8ms
+                int64_t frameTimeUs = 1000000LL / static_cast<int64_t>(m_fps); // Tempo por frame em microssegundos
+                int64_t delayUs = frameTimeUs / 2;                             // Delay proporcional (já que processamos 2 frames)
+                std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
             }
+        }
+        else
+        {
+            // Se não processamos nada, verificar se há dados pendentes antes de dormir
+            bool hasPendingData = (videoBufferSize > 0 || audioBufferSize > 0);
 
             if (!hasPendingData)
             {
                 // Só dormir se realmente não há dados para processar
-                std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1µs - mínimo possível
+                std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 1ms quando não há dados
             }
-            // Se há dados pendentes mas não processamos, continuar imediatamente (pode ser codec ocupado)
-            // Não fazer sleep - tentar processar novamente imediatamente
+            else
+            {
+                // Há dados mas não processamos (possivelmente aguardando sincronização)
+                // Delay mínimo para não consumir CPU mas continuar tentando
+                std::this_thread::sleep_for(std::chrono::microseconds(500)); // 500µs quando há dados mas não processou
+            }
         }
-        // Se processamos, não dormir - continuar imediatamente para processar mais frames e alcançar 60 FPS
     }
-
-    LOG_INFO("Encoding thread stopped");
 
     return;
 }

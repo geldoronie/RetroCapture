@@ -41,6 +41,7 @@ mkdir -p "$APP_DIR/usr/lib"
 mkdir -p "$APP_DIR/usr/share/applications"
 mkdir -p "$APP_DIR/usr/share/icons/hicolor/256x256/apps"
 mkdir -p "$APP_DIR/usr/share/retrocapture/shaders"
+mkdir -p "$APP_DIR/usr/share/retrocapture/assets"
 
 # Copiar executável
 echo "Copiando executável..."
@@ -55,6 +56,15 @@ else
     echo "Aviso: Diretório shaders/shaders_glsl não encontrado"
 fi
 
+# Copiar assets (logo, etc.)
+echo "Copiando assets..."
+if [ -d "assets" ]; then
+    cp -r assets/* "$APP_DIR/usr/share/retrocapture/assets/" 2>/dev/null || true
+    echo "Assets copiados: $(du -sh "$APP_DIR/usr/share/retrocapture/assets" 2>/dev/null | cut -f1 || echo 'N/A')"
+else
+    echo "Aviso: Diretório assets não encontrado"
+fi
+
 # Criar AppRun
 echo "Criando AppRun..."
 cat > "$APP_DIR/AppRun" << 'EOF'
@@ -64,6 +74,8 @@ export PATH="${HERE}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
 # Definir caminho base para shaders (dentro da AppImage)
 export RETROCAPTURE_SHADER_PATH="${HERE}/usr/share/retrocapture/shaders/shaders_glsl"
+# Definir caminho base para assets (dentro da AppImage)
+export RETROCAPTURE_ASSETS_PATH="${HERE}/usr/share/retrocapture/assets"
 exec "${HERE}/usr/bin/retrocapture" "$@"
 EOF
 chmod +x "$APP_DIR/AppRun"
@@ -100,7 +112,7 @@ fi
 LINUXDEPLOY=""
 if command -v linuxdeploy &> /dev/null; then
     LINUXDEPLOY="linuxdeploy"
-elif command -v linuxdeploy-x86_64.AppImage &> /dev/null; then
+    elif command -v linuxdeploy-x86_64.AppImage &> /dev/null; then
     LINUXDEPLOY="linuxdeploy-x86_64.AppImage"
 else
     echo ""
@@ -122,7 +134,7 @@ fi
 APPIMAGETOOL=""
 if command -v appimagetool &> /dev/null; then
     APPIMAGETOOL="appimagetool"
-elif [ -f "appimagetool-x86_64.AppImage" ]; then
+    elif [ -f "appimagetool-x86_64.AppImage" ]; then
     APPIMAGETOOL="./appimagetool-x86_64.AppImage"
 fi
 
@@ -140,24 +152,24 @@ if [ -n "$LINUXDEPLOY" ]; then
     # Executar linuxdeploy para copiar bibliotecas
     if [ -n "$ICON_ARG" ]; then
         $LINUXDEPLOY \
-            --appdir "$APP_DIR" \
-            --executable "$APP_DIR/usr/bin/retrocapture" \
-            --desktop-file "$APP_DIR/usr/share/applications/retrocapture.desktop" \
-            $ICON_ARG \
-            --output appimage 2>&1 || {
+        --appdir "$APP_DIR" \
+        --executable "$APP_DIR/usr/bin/retrocapture" \
+        --desktop-file "$APP_DIR/usr/share/applications/retrocapture.desktop" \
+        $ICON_ARG \
+        --output appimage 2>&1 || {
             echo "Tentando sem ícone..."
             $LINUXDEPLOY \
-                --appdir "$APP_DIR" \
-                --executable "$APP_DIR/usr/bin/retrocapture" \
-                --desktop-file "$APP_DIR/usr/share/applications/retrocapture.desktop" \
-                --output appimage 2>&1 || true
-        }
-    else
-        $LINUXDEPLOY \
             --appdir "$APP_DIR" \
             --executable "$APP_DIR/usr/bin/retrocapture" \
             --desktop-file "$APP_DIR/usr/share/applications/retrocapture.desktop" \
             --output appimage 2>&1 || true
+        }
+    else
+        $LINUXDEPLOY \
+        --appdir "$APP_DIR" \
+        --executable "$APP_DIR/usr/bin/retrocapture" \
+        --desktop-file "$APP_DIR/usr/share/applications/retrocapture.desktop" \
+        --output appimage 2>&1 || true
     fi
     
     # Renomear AppImage gerado

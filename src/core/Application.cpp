@@ -22,9 +22,10 @@
 #include <time.h>
 #include <sstream>
 #include <iomanip>
+#include <thread>
+#include <chrono>
 
 // swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
-
 
 Application::Application()
 {
@@ -222,13 +223,34 @@ bool Application::initCapture()
 {
     m_capture = std::make_unique<VideoCapture>();
 
-    // Abrir dispositivo especificado (ou padrão /dev/video0)
+    // Tentar abrir dispositivo especificado (ou padrão /dev/video0)
+    // Se falhar, ativar modo dummy (gera frames pretos)
     if (!m_capture->open(m_devicePath))
     {
-        LOG_ERROR("Falha ao abrir dispositivo de captura: " + m_devicePath);
-        LOG_INFO("Tente especificar outro dispositivo com --device /dev/videoX");
-        m_capture.reset();
-        return false;
+        LOG_WARN("Falha ao abrir dispositivo de captura: " + m_devicePath);
+        LOG_INFO("Ativando modo dummy: gerando frames pretos na resolução especificada.");
+        LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
+
+        // Ativar modo dummy
+        m_capture->enableDummyMode(true);
+
+        // Configurar formato dummy com resolução padrão
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+        {
+            LOG_ERROR("Falha ao configurar formato dummy");
+            return false;
+        }
+
+        // Iniciar captura dummy
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Falha ao iniciar captura dummy");
+            return false;
+        }
+
+        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
     }
 
     // Configurar formato com parâmetros configuráveis
@@ -239,16 +261,40 @@ bool Application::initCapture()
     {
         LOG_ERROR("Falha ao configurar formato de captura");
         LOG_WARN("Resolução solicitada pode não ser suportada pelo dispositivo");
+
+        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        if (!m_capture->isDummyMode())
+        {
+            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            m_capture->close();
+            m_capture->enableDummyMode(true);
+
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            {
+                if (m_capture->startCapture())
+                {
+                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                    return true;
+                }
+            }
+        }
+
         m_capture->close();
-        m_capture.reset();
-        return false;
+        // Não resetar m_capture - permitir tentar novamente depois
+        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
+        return true; // Continuar sem dispositivo
     }
 
     // Tentar configurar framerate (não é crítico se falhar)
+    // Em modo dummy, isso apenas loga mas não configura dispositivo real
     if (!m_capture->setFramerate(m_captureFps))
     {
-        LOG_WARN("Não foi possível configurar framerate para " + std::to_string(m_captureFps) + "fps");
-        LOG_INFO("Usando framerate padrão do dispositivo");
+        if (!m_capture->isDummyMode())
+        {
+            LOG_WARN("Não foi possível configurar framerate para " + std::to_string(m_captureFps) + "fps");
+            LOG_INFO("Usando framerate padrão do dispositivo");
+        }
     }
 
     // Configurar controles V4L2 se especificados
@@ -256,14 +302,12 @@ bool Application::initCapture()
     {
         if (m_capture->setBrightness(m_v4l2Brightness))
         {
-            LOG_INFO("Brilho V4L2 configurado: " + std::to_string(m_v4l2Brightness));
         }
     }
     if (m_v4l2Contrast >= 0)
     {
         if (m_capture->setContrast(m_v4l2Contrast))
         {
-            LOG_INFO("Contraste V4L2 configurado: " + std::to_string(m_v4l2Contrast));
         }
     }
     if (m_v4l2Saturation >= 0)
@@ -277,14 +321,12 @@ bool Application::initCapture()
     {
         if (m_capture->setHue(m_v4l2Hue))
         {
-            LOG_INFO("Matiz V4L2 configurado: " + std::to_string(m_v4l2Hue));
         }
     }
     if (m_v4l2Gain >= 0)
     {
         if (m_capture->setGain(m_v4l2Gain))
         {
-            LOG_INFO("Ganho V4L2 configurado: " + std::to_string(m_v4l2Gain));
         }
     }
     if (m_v4l2Exposure >= 0)
@@ -305,27 +347,50 @@ bool Application::initCapture()
     {
         if (m_capture->setGamma(m_v4l2Gamma))
         {
-            LOG_INFO("Gama V4L2 configurado: " + std::to_string(m_v4l2Gamma));
         }
     }
     if (m_v4l2WhiteBalance >= 0)
     {
         if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance))
         {
-            LOG_INFO("Balanço de branco V4L2 configurado: " + std::to_string(m_v4l2WhiteBalance));
         }
     }
 
     if (!m_capture->startCapture())
     {
         LOG_ERROR("Falha ao iniciar captura");
-        m_capture.reset();
-        return false;
+
+        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        if (!m_capture->isDummyMode())
+        {
+            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            m_capture->close();
+            m_capture->enableDummyMode(true);
+
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            {
+                if (m_capture->startCapture())
+                {
+                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                    return true;
+                }
+            }
+        }
+
+        m_capture->close();
+        // Não resetar m_capture - permitir tentar novamente depois
+        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
+        return true; // Continuar sem dispositivo
     }
 
-    LOG_INFO("Captura inicializada: " +
-             std::to_string(m_capture->getWidth()) + "x" +
-             std::to_string(m_capture->getHeight()));
+    // Só logar dimensões se o dispositivo estiver aberto
+    if (m_capture->isOpen())
+    {
+        LOG_INFO("Captura inicializada: " +
+                 std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+    }
 
     return true;
 }
@@ -434,6 +499,18 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
 bool Application::initUI()
 {
+    // IMPORTANTE: Garantir que o contexto OpenGL está ativo antes de inicializar ImGui
+    // O ImGui precisa de um contexto OpenGL válido para inicializar corretamente
+    if (m_window)
+    {
+        m_window->makeCurrent();
+    }
+    else
+    {
+        LOG_ERROR("Janela não disponível para inicializar UI");
+        return false;
+    }
+
     m_ui = std::make_unique<UIManager>();
 
     // Obter GLFWwindow* do WindowManager
@@ -532,6 +609,32 @@ bool Application::initUI()
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
         LOG_INFO("Resolução alterada via UI: " + std::to_string(width) + "x" + std::to_string(height));
+        // Se não houver dispositivo aberto, ativar modo dummy
+        if (!m_capture || !m_capture->isOpen()) {
+            if (!m_capture) {
+                LOG_WARN("VideoCapture não inicializado. Selecione um dispositivo primeiro.");
+                return;
+            }
+            
+            // Se não estiver em modo dummy, tentar ativar
+            if (!m_capture->isDummyMode()) {
+                LOG_INFO("Nenhum dispositivo aberto. Ativando modo dummy...");
+                m_capture->enableDummyMode(true);
+            }
+            
+            // Configurar formato dummy
+            if (m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+                if (m_capture->startCapture()) {
+                    LOG_INFO("Resolução dummy atualizada: " + std::to_string(width) + "x" + std::to_string(height));
+                    if (m_ui) {
+                        m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                    }
+                    return;
+                }
+            }
+            LOG_WARN("Falha ao configurar resolução dummy. Selecione um dispositivo primeiro.");
+            return;
+        }
         if (reconfigureCapture(width, height, m_captureFps)) {
             // Atualizar textura se necessário (usar valores reais do dispositivo)
             uint32_t actualWidth = m_capture->getWidth();
@@ -561,6 +664,18 @@ bool Application::initUI()
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
         LOG_INFO("Framerate alterado via UI: " + std::to_string(fps) + "fps");
+        // Atualizar FPS na configuração
+        m_captureFps = fps;
+        
+        // Se não houver dispositivo aberto, apenas atualizar configuração (modo dummy não precisa reconfigurar)
+        if (!m_capture || !m_capture->isOpen()) {
+            if (m_capture && m_capture->isDummyMode()) {
+                LOG_INFO("Framerate atualizado para modo dummy: " + std::to_string(fps) + "fps");
+            } else {
+                LOG_WARN("Nenhum dispositivo aberto. FPS será aplicado quando um dispositivo for selecionado.");
+            }
+            return;
+        }
         if (reconfigureCapture(m_captureWidth, m_captureHeight, fps)) {
             m_captureFps = fps;
             // Atualizar informações na UI
@@ -577,18 +692,55 @@ bool Application::initUI()
     m_ui->setFullscreen(m_fullscreen);
     m_ui->setMonitorIndex(m_monitorIndex);
 
-    // Configurar controles V4L2
-    if (m_capture)
+    // Verificar tipo de fonte inicial e configurar adequadamente
+    if (m_ui->getSourceType() == UIManager::SourceType::None)
     {
-        m_ui->setV4L2Controls(m_capture.get());
+        // Se None estiver selecionado, garantir que modo dummy está ativo
+        if (m_capture)
+        {
+            if (!m_capture->isDummyMode() || !m_capture->isOpen())
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->enableDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    if (m_capture->startCapture())
+                    {
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                             m_captureFps, "None (Dummy)");
+                    }
+                }
+            }
+        }
+        m_ui->setV4L2Controls(nullptr);
+    }
+    else
+    {
+        // Configurar controles V4L2 se houver dispositivo aberto
+        if (m_capture && m_capture->isOpen())
+        {
+            m_ui->setV4L2Controls(m_capture.get());
+        }
+        else
+        {
+            // Sem dispositivo, mas ainda permitir seleção
+            m_ui->setV4L2Controls(nullptr);
+        }
     }
 
     // Configurar informações da captura
-    if (m_capture)
+    if (m_capture && m_capture->isOpen())
     {
         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                              m_captureFps, m_devicePath);
         m_ui->setCurrentDevice(m_devicePath);
+    }
+    else
+    {
+        // Sem dispositivo - mostrar "None"
+        m_ui->setCaptureInfo(0, 0, 0, "None");
+        m_ui->setCurrentDevice(""); // String vazia = None
     }
 
     // IMPORTANTE: Após init(), o UIManager já carregou as configurações salvas
@@ -608,6 +760,109 @@ bool Application::initUI()
     m_streamingH265Level = m_ui->getStreamingH265Level();
     m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
+
+    // Carregar parâmetros de buffer de streaming
+    m_streamingMaxVideoBufferSize = m_ui->getStreamingMaxVideoBufferSize();
+    m_streamingMaxAudioBufferSize = m_ui->getStreamingMaxAudioBufferSize();
+    m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();
+    m_streamingAVIOBufferSize = m_ui->getStreamingAVIOBufferSize();
+
+    // Carregar configurações de buffer (já carregadas pelo UIManager do arquivo de config)
+
+    // Carregar configurações do Web Portal
+    m_webPortalEnabled = m_ui->getWebPortalEnabled();
+    m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
+    m_webPortalSSLCertPath = m_ui->getWebPortalSSLCertPath();
+    m_webPortalSSLKeyPath = m_ui->getWebPortalSSLKeyPath();
+    m_webPortalTitle = m_ui->getWebPortalTitle();
+    m_webPortalSubtitle = m_ui->getWebPortalSubtitle();
+    m_webPortalImagePath = m_ui->getWebPortalImagePath();
+    m_webPortalBackgroundImagePath = m_ui->getWebPortalBackgroundImagePath();
+
+    // Carregar textos editáveis
+    m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
+    m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
+    m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
+    m_webPortalTextStatus = m_ui->getWebPortalTextStatus();
+    m_webPortalTextCodec = m_ui->getWebPortalTextCodec();
+    m_webPortalTextResolution = m_ui->getWebPortalTextResolution();
+    m_webPortalTextStreamUrl = m_ui->getWebPortalTextStreamUrl();
+    m_webPortalTextCopyUrl = m_ui->getWebPortalTextCopyUrl();
+    m_webPortalTextOpenNewTab = m_ui->getWebPortalTextOpenNewTab();
+    m_webPortalTextSupported = m_ui->getWebPortalTextSupported();
+    m_webPortalTextFormat = m_ui->getWebPortalTextFormat();
+    m_webPortalTextCodecInfo = m_ui->getWebPortalTextCodecInfo();
+    m_webPortalTextSupportedBrowsers = m_ui->getWebPortalTextSupportedBrowsers();
+    m_webPortalTextFormatInfo = m_ui->getWebPortalTextFormatInfo();
+    m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
+    m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
+
+    // Carregar cores (com verificação de segurança)
+    const float *bg = m_ui->getWebPortalColorBackground();
+    if (bg)
+    {
+        memcpy(m_webPortalColorBackground, bg, 4 * sizeof(float));
+    }
+    const float *txt = m_ui->getWebPortalColorText();
+    if (txt)
+    {
+        memcpy(m_webPortalColorText, txt, 4 * sizeof(float));
+    }
+    const float *prim = m_ui->getWebPortalColorPrimary();
+    if (prim)
+    {
+        memcpy(m_webPortalColorPrimary, prim, 4 * sizeof(float));
+    }
+    const float *primLight = m_ui->getWebPortalColorPrimaryLight();
+    if (primLight)
+    {
+        memcpy(m_webPortalColorPrimaryLight, primLight, 4 * sizeof(float));
+    }
+    const float *primDark = m_ui->getWebPortalColorPrimaryDark();
+    if (primDark)
+    {
+        memcpy(m_webPortalColorPrimaryDark, primDark, 4 * sizeof(float));
+    }
+    const float *sec = m_ui->getWebPortalColorSecondary();
+    if (sec)
+    {
+        memcpy(m_webPortalColorSecondary, sec, 4 * sizeof(float));
+    }
+    const float *secHighlight = m_ui->getWebPortalColorSecondaryHighlight();
+    if (secHighlight)
+    {
+        memcpy(m_webPortalColorSecondaryHighlight, secHighlight, 4 * sizeof(float));
+    }
+    const float *ch = m_ui->getWebPortalColorCardHeader();
+    if (ch)
+    {
+        memcpy(m_webPortalColorCardHeader, ch, 4 * sizeof(float));
+    }
+    const float *bord = m_ui->getWebPortalColorBorder();
+    if (bord)
+    {
+        memcpy(m_webPortalColorBorder, bord, 4 * sizeof(float));
+    }
+    const float *succ = m_ui->getWebPortalColorSuccess();
+    if (succ)
+    {
+        memcpy(m_webPortalColorSuccess, succ, 4 * sizeof(float));
+    }
+    const float *warn = m_ui->getWebPortalColorWarning();
+    if (warn)
+    {
+        memcpy(m_webPortalColorWarning, warn, 4 * sizeof(float));
+    }
+    const float *dang = m_ui->getWebPortalColorDanger();
+    if (dang)
+    {
+        memcpy(m_webPortalColorDanger, dang, 4 * sizeof(float));
+    }
+    const float *inf = m_ui->getWebPortalColorInfo();
+    if (inf)
+    {
+        memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
+    }
 
     // Também sincronizar configurações de imagem
     m_brightness = m_ui->getBrightness();
@@ -638,39 +893,106 @@ bool Application::initUI()
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
+        // CRÍTICO: Este callback é executado na thread principal (ImGui render thread)
+        // NÃO fazer NENHUMA operação bloqueante aqui - apenas marcar flag e criar thread
+        // NÃO acessar m_streamManager ou outros recursos compartilhados aqui
+        
+        LOG_INFO("[CALLBACK] Streaming " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        
         if (start) {
-            // Iniciar streaming
-            m_streamingEnabled = true;
-            if (!initStreaming()) {
-                LOG_ERROR("Falha ao iniciar streaming");
-                m_streamingEnabled = false;
-            } else {
-                // Initialize audio capture (sempre necessário para streaming)
-                if (!m_audioCapture) {
-                    if (!initAudioCapture()) {
-                        LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
-                    }
+            // Verificar se pode iniciar (não está em cooldown)
+            if (m_ui && !m_ui->canStartStreaming()) {
+                int64_t cooldownMs = m_ui->getStreamingCooldownRemainingMs();
+                int cooldownSeconds = static_cast<int>(cooldownMs / 1000);
+                LOG_WARN("Tentativa de iniciar streaming bloqueada - ainda em cooldown. Aguarde " + 
+                         std::to_string(cooldownSeconds) + " segundos");
+                if (m_ui) {
+                    m_ui->setStreamingProcessing(false); // Resetar flag se bloqueado
                 }
+                return; // Não iniciar se estiver em cooldown
             }
+            
+            // Apenas marcar flag - thread separada fará todo o trabalho
+            m_streamingEnabled = true;
+            
+            // Atualizar status imediatamente para "iniciando" (será atualizado novamente quando realmente iniciar)
+            if (m_ui) {
+                m_ui->setStreamingActive(false); // Ainda não está ativo, mas está iniciando
+            }
+            
+            // Criar thread separada imediatamente - não esperar nada
+            std::thread([this]() {
+                // Todas as operações bloqueantes devem estar aqui, na thread separada
+                bool success = false;
+                try {
+                    if (initStreaming()) {
+                        // Initialize audio capture (sempre necessário para streaming)
+                        if (!m_audioCapture) {
+                            if (!initAudioCapture()) {
+                                LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+                            }
+                        }
+                        success = true;
+                    } else {
+                        LOG_ERROR("Falha ao iniciar streaming");
+                        m_streamingEnabled = false;
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao iniciar streaming: " + std::string(e.what()));
+                    m_streamingEnabled = false;
+                }
+                
+                // Atualizar UI após inicialização (pode ser chamado de qualquer thread)
+                // IMPORTANTE: Verificar se m_streamManager existe antes de chamar isActive()
+                if (m_ui) {
+                    bool active = success && m_streamManager && m_streamManager->isActive();
+                    m_ui->setStreamingActive(active);
+                    m_ui->setStreamingProcessing(false); // Processamento concluído
+                }
+            }).detach();
         } else {
-            // Parar streaming
+            // Parar streaming também em thread separada para não bloquear a UI
             m_streamingEnabled = false;
             
-            // OPÇÃO A: Parar streaming (sem thread intermediária)
-            // Fazer stop() do streamManager em thread separada para não bloquear a UI
-            if (m_streamManager) {
-                // Ordem correta: stop() primeiro, depois cleanup()
-                m_streamManager->stop();
-                m_streamManager->cleanup();
-                m_streamManager.reset();
+            // Atualizar status imediatamente quando parar
+            if (m_ui) {
+                m_ui->setStreamingActive(false);
+                m_ui->setStreamUrl("");
+                m_ui->setStreamClientCount(0);
             }
-
-            // Não fechar o AudioCapture aqui - pode ser usado novamente
+            
+            // Criar thread separada imediatamente - não esperar nada
+            std::thread([this]() {
+                try {
+                    if (m_streamManager) {
+                        // Ordem correta: stop() primeiro, depois cleanup()
+                        m_streamManager->stop();
+                        m_streamManager->cleanup();
+                        m_streamManager.reset();
+                        m_currentStreamer = nullptr; // Limpar referência ao streamer
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao parar streaming: " + std::string(e.what()));
+                }
+                
+                // Garantir que o status está atualizado após parar
+                if (m_ui) {
+                    m_ui->setStreamingActive(false);
+                    m_ui->setStreamUrl("");
+                    m_ui->setStreamClientCount(0);
+                    m_ui->setStreamingProcessing(false); // Processamento concluído
+                }
+                
+                // NÃO reiniciar o portal web automaticamente quando o streaming para.
+                // O portal web pode estar habilitado mas não necessariamente precisa
+                // estar rodando independentemente. Se o usuário quiser o portal ativo,
+                // ele pode iniciá-lo manualmente pela UI.
+                // A reinicialização automática causava problemas quando o portal
+                // não estava ativo antes do streaming começar.
+            }).detach();
         }
-        // Atualizar UI
-        if (m_ui) {
-            m_ui->setStreamingActive(m_streamingEnabled && m_streamManager && m_streamManager->isActive());
-        } });
+        
+        LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
 
     m_ui->setOnStreamingPortChanged([this](uint16_t port)
                                     {
@@ -757,11 +1079,10 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingH265ProfileChanged([this](const std::string &profile)
-                                          {
+                                           {
         m_streamingH265Profile = profile;
         // Se streaming estiver ativo, reiniciar para aplicar novo profile
         if (m_streamingEnabled && m_streamManager) {
@@ -769,8 +1090,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingH265LevelChanged([this](const std::string &level)
                                          {
@@ -781,8 +1101,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingVP8SpeedChanged([this](int speed)
                                         {
@@ -793,8 +1112,7 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
     m_ui->setOnStreamingVP9SpeedChanged([this](int speed)
                                         {
@@ -805,12 +1123,412 @@ bool Application::initUI()
             m_streamManager->cleanup();
             m_streamManager.reset();
             initStreaming();
-        }
-    });
+        } });
 
-    // Callback para mudança de dispositivo
+    // Callbacks para configurações de buffer
+    m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
+                                                  {
+        m_streamingMaxVideoBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
+        } });
+
+    m_ui->setOnStreamingMaxAudioBufferSizeChanged([this](size_t size)
+                                                  {
+        m_streamingMaxAudioBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
+        } });
+
+    m_ui->setOnStreamingMaxBufferTimeSecondsChanged([this](int64_t seconds)
+                                                    {
+        m_streamingMaxBufferTimeSeconds = seconds;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
+        } });
+
+    m_ui->setOnStreamingAVIOBufferSizeChanged([this](size_t size)
+                                              {
+        m_streamingAVIOBufferSize = size;
+        if (m_currentStreamer) {
+            m_currentStreamer->setBufferConfig(
+                m_streamingMaxVideoBufferSize,
+                m_streamingMaxAudioBufferSize,
+                m_streamingMaxBufferTimeSeconds,
+                m_streamingAVIOBufferSize);
+        } });
+
+    // Web Portal callbacks
+    m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
+                                       {
+        m_webPortalEnabled = enabled;
+        // Se Web Portal for desabilitado, também desabilitar HTTPS
+        if (!enabled && m_webPortalHTTPSEnabled) {
+            m_webPortalHTTPSEnabled = false;
+            // Atualizar UI para refletir a mudança
+            if (m_ui) {
+                m_ui->setWebPortalHTTPSEnabled(false);
+            }
+        }
+        // Atualizar em tempo real se streaming estiver ativo (sem reiniciar)
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalEnabled(enabled);
+        } });
+
+    m_ui->setOnWebPortalHTTPSChanged([this](bool enabled)
+                                     {
+        m_webPortalHTTPSEnabled = enabled;
+        // Se streaming estiver ativo, reiniciar para aplicar HTTPS
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnWebPortalSSLCertPathChanged([this](const std::string &path)
+                                           {
+        m_webPortalSSLCertPath = path;
+        // Se streaming estiver ativo, reiniciar para aplicar novo certificado
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnWebPortalSSLKeyPathChanged([this](const std::string &path)
+                                          {
+        m_webPortalSSLKeyPath = path;
+        // Se streaming estiver ativo, reiniciar para aplicar nova chave
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnWebPortalTitleChanged([this](const std::string &title)
+                                     {
+        m_webPortalTitle = title;
+        // Atualizar em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalTitle(title);
+        } });
+
+    m_ui->setOnWebPortalSubtitleChanged([this](const std::string &subtitle)
+                                        {
+        m_webPortalSubtitle = subtitle;
+        // Atualizar em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalSubtitle(subtitle);
+        } });
+
+    m_ui->setOnWebPortalImagePathChanged([this](const std::string &path)
+                                         {
+        m_webPortalImagePath = path;
+        // Atualizar em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalImagePath(path);
+        } });
+
+    m_ui->setOnWebPortalBackgroundImagePathChanged([this](const std::string &path)
+                                                   {
+        m_webPortalBackgroundImagePath = path;
+        // Atualizar em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->setWebPortalBackgroundImagePath(path);
+        } });
+
+    m_ui->setOnWebPortalColorsChanged([this]()
+                                      {
+        // Atualizar cores em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager && m_ui) {
+            // Sincronizar cores da UI para Application (com verificação de segurança)
+            const float* bg = m_ui->getWebPortalColorBackground();
+            if (bg) {
+                memcpy(m_webPortalColorBackground, bg, 4 * sizeof(float));
+            }
+            const float* txt = m_ui->getWebPortalColorText();
+            if (txt) {
+                memcpy(m_webPortalColorText, txt, 4 * sizeof(float));
+            }
+            const float* prim = m_ui->getWebPortalColorPrimary();
+            if (prim) {
+                memcpy(m_webPortalColorPrimary, prim, 4 * sizeof(float));
+            }
+            const float* primLight = m_ui->getWebPortalColorPrimaryLight();
+            if (primLight) {
+                memcpy(m_webPortalColorPrimaryLight, primLight, 4 * sizeof(float));
+            }
+            const float* primDark = m_ui->getWebPortalColorPrimaryDark();
+            if (primDark) {
+                memcpy(m_webPortalColorPrimaryDark, primDark, 4 * sizeof(float));
+            }
+            const float* sec = m_ui->getWebPortalColorSecondary();
+            if (sec) {
+                memcpy(m_webPortalColorSecondary, sec, 4 * sizeof(float));
+            }
+            const float* secHighlight = m_ui->getWebPortalColorSecondaryHighlight();
+            if (secHighlight) {
+                memcpy(m_webPortalColorSecondaryHighlight, secHighlight, 4 * sizeof(float));
+            }
+            const float* ch = m_ui->getWebPortalColorCardHeader();
+            if (ch) {
+                memcpy(m_webPortalColorCardHeader, ch, 4 * sizeof(float));
+            }
+            const float* bord = m_ui->getWebPortalColorBorder();
+            if (bord) {
+                memcpy(m_webPortalColorBorder, bord, 4 * sizeof(float));
+            }
+            const float* succ = m_ui->getWebPortalColorSuccess();
+            if (succ) {
+                memcpy(m_webPortalColorSuccess, succ, 4 * sizeof(float));
+            }
+            const float* warn = m_ui->getWebPortalColorWarning();
+            if (warn) {
+                memcpy(m_webPortalColorWarning, warn, 4 * sizeof(float));
+            }
+            const float* dang = m_ui->getWebPortalColorDanger();
+            if (dang) {
+                memcpy(m_webPortalColorDanger, dang, 4 * sizeof(float));
+            }
+            const float* inf = m_ui->getWebPortalColorInfo();
+            if (inf) {
+                memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
+            }
+            
+            // Atualizar no StreamManager
+            m_streamManager->setWebPortalColors(
+                m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
+                m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+                m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+                m_webPortalColorCardHeader, m_webPortalColorBorder,
+                m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+        } });
+
+    m_ui->setOnWebPortalTextsChanged([this]()
+                                     {
+        // Atualizar textos em tempo real se streaming estiver ativo
+        if (m_streamingEnabled && m_streamManager && m_ui) {
+            // Sincronizar textos da UI para Application
+            m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
+            m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
+            m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
+            m_webPortalTextStatus = m_ui->getWebPortalTextStatus();
+            m_webPortalTextCodec = m_ui->getWebPortalTextCodec();
+            m_webPortalTextResolution = m_ui->getWebPortalTextResolution();
+            m_webPortalTextStreamUrl = m_ui->getWebPortalTextStreamUrl();
+            m_webPortalTextCopyUrl = m_ui->getWebPortalTextCopyUrl();
+            m_webPortalTextOpenNewTab = m_ui->getWebPortalTextOpenNewTab();
+            m_webPortalTextSupported = m_ui->getWebPortalTextSupported();
+            m_webPortalTextFormat = m_ui->getWebPortalTextFormat();
+            m_webPortalTextCodecInfo = m_ui->getWebPortalTextCodecInfo();
+            m_webPortalTextSupportedBrowsers = m_ui->getWebPortalTextSupportedBrowsers();
+            m_webPortalTextFormatInfo = m_ui->getWebPortalTextFormatInfo();
+            m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
+            m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
+            
+            // Atualizar no StreamManager
+            m_streamManager->setWebPortalTexts(
+                m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+                m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+                m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+                m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+                m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+                m_webPortalTextConnecting);
+        } });
+
+    // Web Portal Start/Stop callback (independent from streaming)
+    m_ui->setOnWebPortalStartStop([this](bool start)
+                                  {
+        LOG_INFO("[CALLBACK] Portal Web " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        
+        if (start) {
+            // Criar thread separada para iniciar portal
+            std::thread([this]() {
+                try {
+                    if (!initWebPortal()) {
+                        LOG_ERROR("Falha ao iniciar portal web");
+                        if (m_ui) {
+                            m_ui->setWebPortalActive(false);
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao iniciar portal web: " + std::string(e.what()));
+                    if (m_ui) {
+                        m_ui->setWebPortalActive(false);
+                    }
+                }
+            }).detach();
+        } else {
+            // Parar portal em thread separada
+            std::thread([this]() {
+                try {
+                    stopWebPortal();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exceção ao parar portal web: " + std::string(e.what()));
+                }
+                
+                // Atualizar UI após parar
+                if (m_ui) {
+                    m_ui->setWebPortalActive(false);
+                }
+            }).detach();
+        }
+        
+        LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
+
+    // Callback para mudança de tipo de fonte
+    m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
+                                 {
+        LOG_INFO("Tipo de fonte alterado via UI");
+        
+        if (sourceType == UIManager::SourceType::None)
+        {
+            LOG_INFO("Fonte None selecionada - ativando modo dummy");
+            
+            // Fechar dispositivo atual se houver
+            if (m_capture) {
+                m_capture->stopCapture();
+                m_capture->close();
+                // Ativar modo dummy
+                m_capture->enableDummyMode(true);
+                
+                // Configurar formato dummy com resolução atual
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    if (m_capture->startCapture())
+                    {
+                        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                                 std::to_string(m_capture->getHeight()));
+                        
+                        // Atualizar informações na UI
+                        if (m_ui) {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
+                        }
+                    }
+                }
+            }
+        }
+        else if (sourceType == UIManager::SourceType::V4L2)
+        {
+            LOG_INFO("Fonte V4L2 selecionada");
+            // Se já houver um dispositivo selecionado, tentar reabrir
+            if (!m_devicePath.empty() && m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->enableDummyMode(false);
+                
+                if (m_capture->open(m_devicePath))
+                {
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        m_capture->setFramerate(m_captureFps);
+                        if (m_capture->startCapture())
+                        {
+                            if (m_ui) {
+                                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                    m_captureFps, m_devicePath);
+                                m_ui->setV4L2Controls(m_capture.get());
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Se falhar ao abrir dispositivo, voltar para modo dummy
+                    LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
+                    m_capture->enableDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        if (m_capture->startCapture() && m_ui)
+                        {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr);
+                        }
+                    }
+                }
+            }
+            else if (m_capture)
+            {
+                // Se não houver dispositivo selecionado mas V4L2 foi escolhido, manter em modo dummy
+                LOG_INFO("Nenhum dispositivo V4L2 selecionado - mantendo modo dummy");
+                if (!m_capture->isOpen() || !m_capture->isDummyMode())
+                {
+                    m_capture->stopCapture();
+                    m_capture->close();
+                    m_capture->enableDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    {
+                        if (m_capture->startCapture() && m_ui)
+                        {
+                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                                m_captureFps, "None (Dummy)");
+                            m_ui->setV4L2Controls(nullptr);
+                        }
+                    }
+                }
+            }
+        } });
+
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
+        // Se devicePath estiver vazio, significa "None" - ativar modo dummy
+        if (devicePath.empty())
+        {
+            LOG_INFO("Desconectando dispositivo (None selecionado) - ativando modo dummy");
+            
+            // Fechar dispositivo atual
+            if (m_capture) {
+                m_capture->stopCapture();
+                m_capture->close();
+                // Ativar modo dummy
+                m_capture->enableDummyMode(true);
+                
+                // Configurar formato dummy com resolução atual
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                {
+                    m_capture->startCapture();
+                    LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                             std::to_string(m_capture->getHeight()));
+                }
+            }
+            
+            // Atualizar caminho do dispositivo
+            m_devicePath = "";
+            
+            // Atualizar informações na UI
+            if (m_ui) {
+                if (m_capture && m_capture->isOpen()) {
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                        m_captureFps, "None (Dummy)");
+                } else {
+                    m_ui->setCaptureInfo(0, 0, 0, "None");
+                }
+                m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando não há dispositivo
+            }
+            
+            LOG_INFO("Modo dummy ativado. Selecione um dispositivo para usar captura real.");
+            return;
+        }
+        
         LOG_INFO("Mudando dispositivo para: " + devicePath);
         
         // Salvar configurações atuais
@@ -818,10 +1536,12 @@ bool Application::initUI()
         uint32_t oldHeight = m_captureHeight;
         uint32_t oldFps = m_captureFps;
         
-        // Fechar dispositivo atual
+        // Fechar dispositivo atual (ou modo dummy)
         if (m_capture) {
             m_capture->stopCapture();
             m_capture->close();
+            // Desativar modo dummy ao tentar abrir dispositivo real
+            m_capture->enableDummyMode(false);
         }
         
         // Atualizar caminho do dispositivo
@@ -835,18 +1555,28 @@ bool Application::initUI()
                 m_capture->startCapture();
                 
                 // Atualizar informações na UI
-                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                    m_captureFps, devicePath);
-                
-                // Recarregar controles V4L2
-                m_ui->setV4L2Controls(m_capture.get());
+                if (m_ui) {
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                        m_captureFps, devicePath);
+                    
+                    // Recarregar controles V4L2
+                    m_ui->setV4L2Controls(m_capture.get());
+                }
                 
                 LOG_INFO("Dispositivo alterado com sucesso");
             } else {
                 LOG_ERROR("Falha ao configurar formato no novo dispositivo");
+                // Fechar dispositivo se falhou
+                m_capture->close();
+                if (m_ui) {
+                    m_ui->setCaptureInfo(0, 0, 0, "Error");
+                }
             }
         } else {
             LOG_ERROR("Falha ao abrir novo dispositivo: " + devicePath);
+            if (m_ui) {
+                m_ui->setCaptureInfo(0, 0, 0, "Error");
+            }
         } });
 
     // Configurar shader atual
@@ -905,7 +1635,6 @@ bool Application::initUI()
             }
         } });
 
-    LOG_INFO("UIManager inicializado");
     return true;
 }
 
@@ -942,12 +1671,22 @@ bool Application::initStreaming()
         return true; // Streaming não habilitado, não é erro
     }
 
-    LOG_INFO("Inicializando streaming...");
+    // Se o portal web estiver ativo independentemente, pará-lo antes de iniciar streaming
+    // O streaming incluirá o portal web se estiver habilitado
+    if (m_webPortalActive && m_webPortalServer)
+    {
+        LOG_INFO("Parando Portal Web independente antes de iniciar streaming...");
+        stopWebPortal();
+    }
+
+    // Log removido para reduzir ruído - streaming já loga internamente
 
     // OPÇÃO A: Não há mais thread de streaming para limpar
 
     // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
     // Isso previne problemas de double free quando há mudanças de configuração
+    // CRÍTICO: Estas operações já estão em uma thread separada, mas ainda podem bloquear
+    // Reduzir ao mínimo necessário e evitar esperas longas
     if (m_streamManager)
     {
         LOG_INFO("Limpando StreamManager existente antes de reinicializar...");
@@ -958,18 +1697,21 @@ bool Application::initStreaming()
         }
         m_streamManager->cleanup();
         m_streamManager.reset();
+        m_currentStreamer = nullptr; // Limpar referência ao streamer
 
         // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
         // e recursos foram liberados antes de criar um novo StreamManager
-        usleep(100000); // 100ms
+        // Reduzir tempo de espera ao mínimo - threads detached devem terminar rapidamente
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Reduzido para 10ms
     }
 
     m_streamManager = std::make_unique<StreamManager>();
 
     // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
     // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
-    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture ? m_capture->getWidth() : m_captureWidth);
-    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture ? m_capture->getHeight() : m_captureHeight);
+    // IMPORTANTE: Verificar se dispositivo está aberto antes de acessar getWidth/getHeight
+    uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture && m_capture->isOpen() ? m_capture->getWidth() : m_captureWidth);
+    uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture && m_capture->isOpen() ? m_capture->getHeight() : m_captureHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
     LOG_INFO("initStreaming: Using resolution " + std::to_string(streamWidth) + "x" +
@@ -1028,6 +1770,52 @@ bool Application::initStreaming()
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
     }
 
+    // Configurar parâmetros de buffer (carregados da configuração)
+    tsStreamer->setBufferConfig(
+        m_ui->getStreamingMaxVideoBufferSize(),
+        m_ui->getStreamingMaxAudioBufferSize(),
+        m_ui->getStreamingMaxBufferTimeSeconds(),
+        m_ui->getStreamingAVIOBufferSize());
+
+    // Configurar Web Portal
+    tsStreamer->enableWebPortal(m_webPortalEnabled);
+    tsStreamer->setWebPortalTitle(m_webPortalTitle);
+
+    // Configurar API Controller
+    tsStreamer->setApplicationForAPI(this);
+    tsStreamer->setUIManagerForAPI(m_ui.get());
+    tsStreamer->setWebPortalSubtitle(m_webPortalSubtitle);
+    tsStreamer->setWebPortalImagePath(m_webPortalImagePath);
+    tsStreamer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);
+    // IMPORTANTE: Passar cores apenas se arrays estiverem inicializados corretamente
+    // Os arrays são inicializados com valores padrão no construtor, então são sempre válidos
+    tsStreamer->setWebPortalColors(
+        m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
+        m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+        m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+        m_webPortalColorCardHeader, m_webPortalColorBorder,
+        m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+    // Configurar textos editáveis
+    tsStreamer->setWebPortalTexts(
+        m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+        m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+        m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+        m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+        m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+        m_webPortalTextConnecting);
+
+    // Configurar HTTPS do Web Portal
+    if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
+    {
+        // Os caminhos serão resolvidos no HTTPTSStreamer::start() que busca em vários locais
+        // Aqui apenas passamos os caminhos como configurados na UI
+        tsStreamer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
+        tsStreamer->enableHTTPS(true);
+        LOG_INFO("HTTPS habilitado na configuração. Certificados serão buscados no diretório de execução.");
+    }
+
+    // Armazenar referência ao streamer antes de movê-lo para o StreamManager
+    m_currentStreamer = tsStreamer.get();
     m_streamManager->addStreamer(std::move(tsStreamer));
     LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
 
@@ -1052,6 +1840,12 @@ bool Application::initStreaming()
         LOG_INFO("Stream disponível: " + url);
     }
 
+    // Limpar caminhos encontrados (serão atualizados quando o streaming realmente iniciar)
+    // Os caminhos são encontrados no HTTPTSStreamer::start(), mas não temos acesso direto aqui
+    // Vamos atualizar a UI periodicamente no loop principal
+    m_foundSSLCertPath.clear();
+    m_foundSSLKeyPath.clear();
+
     // Initialize audio capture if not already initialized (sempre necessário para streaming)
     if (!m_audioCapture)
     {
@@ -1059,32 +1853,114 @@ bool Application::initStreaming()
         {
             LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
         }
-        else
-        {
-            // IMPORTANTE: O formato de áudio já foi configurado antes de inicializar o streamer
-            // Se a captura foi inicializada depois, precisamos reinicializar o streaming
-            // para garantir que o sample rate correto seja usado
-            if (m_streamManager && m_audioCapture && m_audioCapture->isOpen())
-            {
-                LOG_INFO("Formato de áudio da captura: " + std::to_string(m_audioCapture->getSampleRate()) +
-                         "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
-                // Nota: O streamer já foi configurado com o formato correto antes de ser inicializado
-                // Se a captura foi inicializada depois, o formato pode estar incorreto
-                // Nesse caso, seria necessário reinicializar o streaming, mas isso é complexo
-                // Por enquanto, assumimos que a captura é inicializada antes do streaming
-            }
-        }
     }
 
-    // IMPORTANTE: A thread de streaming já foi limpa acima no início da função
-    // Esta verificação é redundante, mas mantida como segurança extra
-    // (não deveria ser necessária, mas ajuda a garantir que não há threads órfãs)
+    return true;
+}
 
-    // OPÇÃO A: Não criar thread de streaming - processamento movido para thread principal
-    // Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
-    LOG_INFO("Streaming inicializado (processamento na thread principal)");
+bool Application::initWebPortal()
+{
+    if (m_webPortalActive && m_webPortalServer)
+    {
+        LOG_INFO("Portal Web já está ativo");
+        return true;
+    }
+
+    if (!m_webPortalEnabled)
+    {
+        LOG_WARN("Portal Web está desabilitado na configuração");
+        return false;
+    }
+
+    LOG_INFO("Iniciando Portal Web independente...");
+
+    // Criar HTTPTSStreamer apenas para o portal (sem streaming)
+    m_webPortalServer = std::make_unique<HTTPTSStreamer>();
+
+    // Configurar Web Portal
+    m_webPortalServer->enableWebPortal(true);
+    m_webPortalServer->setWebPortalTitle(m_webPortalTitle);
+    m_webPortalServer->setWebPortalSubtitle(m_webPortalSubtitle);
+    m_webPortalServer->setWebPortalImagePath(m_webPortalImagePath);
+    m_webPortalServer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);
+    m_webPortalServer->setWebPortalColors(
+        m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
+        m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
+        m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
+        m_webPortalColorCardHeader, m_webPortalColorBorder,
+        m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
+    m_webPortalServer->setWebPortalTexts(
+        m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
+        m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
+        m_webPortalTextStreamUrl, m_webPortalTextCopyUrl, m_webPortalTextOpenNewTab,
+        m_webPortalTextSupported, m_webPortalTextFormat, m_webPortalTextCodecInfo,
+        m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
+        m_webPortalTextConnecting);
+
+    // Configurar API Controller
+    m_webPortalServer->setApplicationForAPI(this);
+    m_webPortalServer->setUIManagerForAPI(m_ui.get());
+
+    // Configurar HTTPS
+    if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
+    {
+        m_webPortalServer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
+        m_webPortalServer->enableHTTPS(true);
+        LOG_INFO("HTTPS habilitado para Portal Web. Certificados serão buscados no diretório de execução.");
+    }
+
+    // Inicializar com dimensões dummy (não usadas para portal sem streaming)
+    if (!m_webPortalServer->initialize(m_streamingPort, 640, 480, 30))
+    {
+        LOG_ERROR("Falha ao inicializar Portal Web");
+        m_webPortalServer.reset();
+        return false;
+    }
+
+    // Iniciar apenas o servidor HTTP (sem encoding thread)
+    if (!m_webPortalServer->startWebPortalServer())
+    {
+        LOG_ERROR("Falha ao iniciar servidor HTTP do Portal Web");
+        m_webPortalServer.reset();
+        return false;
+    }
+
+    m_webPortalActive = true;
+    LOG_INFO("Portal Web iniciado na porta " + std::to_string(m_streamingPort));
+    std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
+                            std::string("localhost:") + std::to_string(m_streamingPort);
+    LOG_INFO("Portal Web disponível: " + portalUrl);
+
+    // Atualizar UI
+    if (m_ui)
+    {
+        m_ui->setWebPortalActive(true);
+    }
 
     return true;
+}
+
+void Application::stopWebPortal()
+{
+    if (!m_webPortalActive || !m_webPortalServer)
+    {
+        return;
+    }
+
+    LOG_INFO("Parando Portal Web...");
+
+    // Parar servidor HTTP
+    m_webPortalServer->stop();
+    m_webPortalServer.reset();
+    m_webPortalActive = false;
+
+    LOG_INFO("Portal Web parado");
+
+    // Atualizar UI
+    if (m_ui)
+    {
+        m_ui->setWebPortalActive(false);
+    }
 }
 
 bool Application::initAudioCapture()
@@ -1093,8 +1969,6 @@ bool Application::initAudioCapture()
     {
         return true; // Audio não habilitado, não é erro
     }
-
-    LOG_INFO("Inicializando captura de áudio...");
 
     m_audioCapture = std::make_unique<AudioCapture>();
 
@@ -1158,11 +2032,18 @@ void Application::run()
         // mesmo quando a janela não está em foco.
 
         // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
-        // CRÍTICO: Processar TODOS os samples disponíveis em loop até esgotar
+        // Processar TODOS os samples disponíveis em loop até esgotar
         // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
-        // O áudio acumula no buffer do AudioCapture e precisa ser processado continuamente
-        if (m_audioCapture && m_audioCapture->isOpen() && m_streamManager && m_streamManager->isActive())
+        // IMPORTANTE: Processar mainloop do PulseAudio sempre que áudio estiver aberto
+        // Isso é crítico para evitar que o PulseAudio trave o áudio do sistema
+        // O mainloop precisa ser processado regularmente, mesmo sem streaming ativo
+        if (m_audioCapture && m_audioCapture->isOpen())
         {
+            // Processar mainloop do PulseAudio para evitar bloqueio do áudio do sistema
+            // Isso deve ser feito sempre, não apenas quando streaming está ativo
+            if (m_streamManager && m_streamManager->isActive())
+            {
+
             // Calcular tamanho do buffer baseado no tempo para sincronização
             uint32_t audioSampleRate = m_audioCapture->getSampleRate();
             uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
@@ -1174,12 +2055,16 @@ void Application::run()
                                               : 512;
             samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
 
-            // CRÍTICO: Processar áudio em loop até esgotar todos os samples disponíveis
+            // Processar áudio em loop até esgotar todos os samples disponíveis
             // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
-            // Processar até não haver mais samples (sem limite de iterações)
+            // IMPORTANTE: Adicionar limite de iterações para evitar loop infinito que travaria a thread principal
             std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
 
-            while (true)
+            // Limite de iterações para evitar loop infinito (processar no máximo 10 frames de áudio por ciclo)
+            const int maxIterations = 10;
+            int iteration = 0;
+
+            while (iteration < maxIterations)
             {
                 // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
                 size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
@@ -1199,6 +2084,29 @@ void Application::run()
                     // Não há mais samples disponíveis, parar
                     break;
                 }
+
+                iteration++;
+            }
+
+                // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
+                if (iteration >= maxIterations)
+                {
+                    static int logCount = 0;
+                    if (logCount < 3)
+                    {
+                        LOG_WARN("Áudio acumulado: processando em chunks para evitar bloqueio da thread principal");
+                        logCount++;
+                    }
+                }
+            }
+            else
+            {
+                // Streaming não está ativo, mas ainda precisamos processar o mainloop
+                // para evitar que o PulseAudio trave o áudio do sistema
+                // Ler e descartar samples para manter o buffer limpo
+                const size_t maxSamples = 4096; // Buffer temporário
+                std::vector<int16_t> tempBuffer(maxSamples);
+                m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
         }
 
@@ -1214,8 +2122,9 @@ void Application::run()
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
         // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
         // Isso garante que o streaming e processamento continuem funcionando
+        // IMPORTANTE: Só tentar capturar se o dispositivo estiver aberto
         bool newFrame = false;
-        if (m_capture)
+        if (m_capture && m_capture->isOpen())
         {
             // Tentar processar frame várias vezes se não temos textura válida
             // Isso é importante após reconfiguração quando a textura foi deletada
@@ -1396,31 +2305,15 @@ void Application::run()
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, renderWidth, renderHeight);
 
-            // Capturar frame para streaming (ANTES de renderizar UI)
-            // IMPORTANTE: NÃO fazer resize aqui - isso atrasa timestamps e quebra sincronia
-            // Apenas capturar do viewport e enviar - o resize será feito no encoding
             if (m_streamManager && m_streamManager->isActive())
             {
-                // Capturar exatamente do viewport onde renderizou (sem resize)
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
                 uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
-
-                // Debug: Log quando shader está ativo
-                static int shaderDebugCount = 0;
-                if (isShaderTexture && shaderDebugCount < 5)
-                {
-                    LOG_INFO("[SHADER_CAPTURE] Shader ativo: viewport=" + std::to_string(viewportWidth) +
-                             "x" + std::to_string(viewportHeight) + ", render=" +
-                             std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
-                    shaderDebugCount++;
-                }
-
                 size_t captureDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
 
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    // Calcular padding para alinhamento de 4 bytes
                     size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
                     size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
                     size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
@@ -1428,11 +2321,9 @@ void Application::run()
                     std::vector<uint8_t> frameDataWithPadding;
                     frameDataWithPadding.resize(totalSizeWithPadding);
 
-                    // Ler pixels do viewport onde renderizou (sempre RGB, sem resize)
                     glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
                                  GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
-                    // Copiar dados removendo padding e fazer flip vertical
                     std::vector<uint8_t> frameData;
                     frameData.resize(captureDataSize);
 
@@ -1445,31 +2336,69 @@ void Application::run()
                         uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
                         memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                     }
-
-                    // IMPORTANTE: Enviar TODOS os frames, incluindo frames pretos
-                    // Frames pretos são válidos e devem ser enviados ao stream
-                    // A verificação de "allZeros" foi removida pois rejeitava frames válidos
-                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                    if (m_streamManager)
+                    {
+                        m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                    }
                 }
             }
 
-            // Atualizar informações de streaming na UI
-            if (m_ui && m_streamManager && m_streamManager->isActive())
+            auto streamManager = m_streamManager.get();
+            if (m_ui && streamManager && streamManager->isActive())
             {
                 m_ui->setStreamingActive(true);
-                auto urls = m_streamManager->getStreamUrls();
+                auto urls = streamManager->getStreamUrls();
                 if (!urls.empty())
                 {
                     m_ui->setStreamUrl(urls[0]);
                 }
-                uint32_t clientCount = m_streamManager->getTotalClientCount();
+                uint32_t clientCount = streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
+
+                // Atualizar cooldown (se ativo, pode iniciar e não há cooldown)
+                m_ui->setCanStartStreaming(true);
+                m_ui->setStreamingCooldownRemainingMs(0);
+
+                // Atualizar informações do certificado SSL se HTTPS estiver ativo
+                std::string foundCert = streamManager->getFoundSSLCertificatePath();
+                std::string foundKey = streamManager->getFoundSSLKeyPath();
+
+                if (m_webPortalHTTPSEnabled && !foundCert.empty())
+                {
+                    m_foundSSLCertPath = foundCert;
+                    m_foundSSLKeyPath = foundKey;
+                    m_ui->setFoundSSLCertificatePath(foundCert);
+                    m_ui->setFoundSSLKeyPath(foundKey);
+                }
+                else
+                {
+                    // Limpar caminhos encontrados se HTTPS não estiver ativo
+                    m_foundSSLCertPath.clear();
+                    m_foundSSLKeyPath.clear();
+                    m_ui->setFoundSSLCertificatePath("");
+                    m_ui->setFoundSSLKeyPath("");
+                }
             }
             else if (m_ui)
             {
                 m_ui->setStreamingActive(false);
                 m_ui->setStreamUrl("");
                 m_ui->setStreamClientCount(0);
+
+                // Atualizar cooldown do StreamManager se disponível
+                if (streamManager)
+                {
+                    bool canStart = streamManager->canStartStreaming();
+                    int64_t cooldownMs = streamManager->getStreamingCooldownRemainingMs();
+                    m_ui->setCanStartStreaming(canStart);
+                    m_ui->setStreamingCooldownRemainingMs(cooldownMs);
+                }
+                else
+                {
+                    // Se não há StreamManager, pode iniciar
+                    m_ui->setCanStartStreaming(true);
+                    m_ui->setStreamingCooldownRemainingMs(0);
+                }
             }
 
             // Renderizar UI (após capturar a área da captura)
@@ -1500,9 +2429,6 @@ void Application::run()
 
     LOG_INFO("Loop principal encerrado");
 }
-
-// OPÇÃO A: streamingThreadFunc removida - processamento movido para thread principal
-// Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
 
 void Application::shutdown()
 {
