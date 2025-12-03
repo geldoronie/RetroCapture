@@ -969,11 +969,12 @@ bool Application::initUI()
                     m_ui->setStreamClientCount(0);
                 }
                 
-                // Se o portal web estava habilitado, reiniciar o portal independente
-                if (m_webPortalEnabled && !m_webPortalActive) {
-                    LOG_INFO("Reiniciando Portal Web independente após parar streaming...");
-                    initWebPortal();
-                }
+                // NÃO reiniciar o portal web automaticamente quando o streaming para.
+                // O portal web pode estar habilitado mas não necessariamente precisa
+                // estar rodando independentemente. Se o usuário quiser o portal ativo,
+                // ele pode iniciá-lo manualmente pela UI.
+                // A reinicialização automática causava problemas quando o portal
+                // não estava ativo antes do streaming começar.
             }).detach();
         }
         
@@ -2305,8 +2306,10 @@ void Application::run()
                         uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
                         memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                     }
-
-                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                    if (m_streamManager)
+                    {
+                        m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                    }
                 }
             }
 
@@ -2377,9 +2380,6 @@ void Application::run()
 
     LOG_INFO("Loop principal encerrado");
 }
-
-// OPÇÃO A: streamingThreadFunc removida - processamento movido para thread principal
-// Isso elimina uma thread, uma fila e uma cópia de dados, melhorando performance
 
 void Application::shutdown()
 {

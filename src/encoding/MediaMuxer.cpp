@@ -34,7 +34,7 @@ MediaMuxer::MediaMuxer()
 
 MediaMuxer::~MediaMuxer()
 {
-    cleanup();
+    // cleanup();
 }
 
 bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,

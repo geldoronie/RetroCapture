@@ -555,10 +555,10 @@ void HTTPTSStreamer::stop()
     // Aguardar um tempo para threads processarem m_stopRequest e terminarem
     // Como threads são detached, precisamos aguardar um tempo razoável
     // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
     // Limpar recursos de encoding
-    cleanupEncoding();
+    // cleanupEncoding();
 
     LOG_INFO("HTTP TS Streamer stopped");
 }
