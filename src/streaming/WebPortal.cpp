@@ -974,7 +974,18 @@ void WebPortal::replaceTextInHTML(std::string &html, const std::string &oldText,
 
 std::string WebPortal::getWebDirectory() const
 {
-    // Tentar encontrar o diretório web em várias localizações possíveis
+    // 1. Variável de ambiente RETROCAPTURE_WEB_PATH (para AppImage) - PRIORIDADE MÁXIMA
+    const char *webEnvPath = std::getenv("RETROCAPTURE_WEB_PATH");
+    if (webEnvPath)
+    {
+        std::filesystem::path envWebPath(webEnvPath);
+        if (std::filesystem::exists(envWebPath) && std::filesystem::is_directory(envWebPath))
+        {
+            return std::filesystem::absolute(envWebPath).string();
+        }
+    }
+
+    // 2. Tentar encontrar o diretório web em várias localizações possíveis
     std::vector<std::string> possiblePaths = {
         "./web",         // Diretório atual (build/bin/web)
         "../web",        // Um nível acima
