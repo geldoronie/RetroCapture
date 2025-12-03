@@ -16,9 +16,10 @@ RetroCapture was born from the desire to experience retro gaming with the authen
 
 ## ⚠️ Development Status
 
-**RetroCapture is currently in active development (v0.2.0-alpha).** 
+**RetroCapture is currently in active development (v0.3.0-alpha).**
 
 ### Shader Support
+
 While many shaders work perfectly, not all shaders function as expected. Some complex multi-pass presets may have issues, and certain shader features may not be fully implemented yet. However, a significant number of shaders are working well, including:
 
 - ✅ Most CRT shaders (CRT-Geom, CRT-Pi, CRT-Guest, etc.)
@@ -28,6 +29,7 @@ While many shaders work perfectly, not all shaders function as expected. Some co
 - ✅ Many single-pass and simple multi-pass shaders
 
 ### Streaming Status
+
 - ✅ **H.264**: Fully functional and stable
 - ✅ **H.265**: Fully functional with profile and level support
 - ⚠️ **VP8/VP9**: Functional but may appear as "Data: bin_data" in some players (implementation incomplete)
@@ -37,6 +39,7 @@ We're continuously working to improve compatibility and add support for more sha
 ## ✨ Features
 
 ### Video Capture & Processing
+
 - ✅ Real-time video capture via V4L2
 - ✅ Full support for RetroArch shaders (GLSL)
 - ✅ Multi-pass presets
@@ -46,6 +49,7 @@ We're continuously working to improve compatibility and add support for more sha
 - ✅ Real-time shader parameter editing
 
 ### Streaming (NEW in 0.2.0-alpha)
+
 - ✅ **HTTP MPEG-TS Streaming**: Stream your processed video over HTTP
 - ✅ **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9
 - ✅ **Audio Streaming**: PulseAudio integration for system audio capture
@@ -53,13 +57,27 @@ We're continuously working to improve compatibility and add support for more sha
 - ✅ **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
 - ✅ **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
 
+### Web Portal (NEW in 0.3.0-alpha)
+
+- ✅ **Remote Control Interface**: Complete web-based control panel
+- ✅ **REST API**: Full API for remote control of all features
+- ✅ **Real-time Updates**: Live status updates and bidirectional communication
+- ✅ **Progressive Web App (PWA)**: Installable on mobile and desktop
+- ✅ **HTTPS Support**: Optional SSL/TLS encryption
+- ✅ **Customizable UI**: Colors, images, and text labels
+- ✅ **Independent Operation**: Can run separately from streaming
+
 ### User Interface
+
 - ✅ Graphical interface with ImGui
 - ✅ Configuration persistence (automatic save/load)
 - ✅ Stream management UI with codec selection
 - ✅ Real-time stream status and client count
+- ✅ Web portal with remote control (NEW in 0.3.0-alpha)
+- ✅ Modular UI architecture with separate classes per tab
 
 ### Distribution
+
 - ✅ Portable AppImage distribution
 
 ## 📸 Visual Examples
@@ -70,19 +88,20 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 
 #### CRT Shader (Mattias)
 
-| Without Shader | With CRT Mattias Shader |
-|----------------|-------------------------|
+| Without Shader                                                 | With CRT Mattias Shader                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------- |
 | ![Without Shader - Mattias](docs/sonic-no-shaders-mattias.png) | ![With Shader - Mattias](docs/sonic-with-shaders-mattias.png) |
 
 #### NTSC Shader
 
-| Without Shader | With NTSC Shader |
-|---------------|------------------|
+| Without Shader                                           | With NTSC Shader                                        |
+| -------------------------------------------------------- | ------------------------------------------------------- |
 | ![Without Shader - NTSC](docs/sonic-no-shaders-ntsc.png) | ![With Shader - NTSC](docs/sonic-with-shaders-ntsc.png) |
 
 ## 📋 Requirements
 
 ### Core Dependencies
+
 - Linux (with V4L2 support)
 - OpenGL 3.3+
 - GLFW 3.x
@@ -92,6 +111,7 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 - C++17 compiler
 
 ### Streaming Dependencies (for streaming features)
+
 - **FFmpeg** (libavcodec, libavformat, libavutil, libswscale, libswresample)
   - **libx264**: For H.264 encoding
   - **libx265**: For H.265/HEVC encoding (optional)
@@ -99,6 +119,11 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
   - **libfdk-aac** or **libavcodec AAC**: For audio encoding
 - **PulseAudio**: For audio capture
 - **nlohmann/json**: For configuration persistence (automatically fetched by CMake)
+
+### Web Portal Dependencies (for web portal features)
+
+- **OpenSSL** (optional): For HTTPS support
+  - Install: `sudo pacman -S openssl` (Arch/Manjaro) or `sudo apt-get install libssl-dev` (Ubuntu/Debian)
 
 ## 🔨 Building
 
@@ -115,22 +140,25 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 ### Basic Usage
 
 ```bash
-# Basic capture
-./build/bin/retrocapture --device /dev/video0
+# Basic capture (V4L2 source)
+./build/bin/retrocapture --source v4l2 --v4l2-device /dev/video0
 
 # With shader
-./build/bin/retrocapture --preset shaders/shaders_glsl/crt/crt-guest-dr-venom.glslp
+./build/bin/retrocapture --source v4l2 --preset shaders/shaders_glsl/crt/crt-guest-dr-venom.glslp
 
 # Custom resolution and framerate
 ./build/bin/retrocapture --width 1920 --height 1080 --fps 60
 
 # Fullscreen
 ./build/bin/retrocapture --fullscreen --monitor 0
+
+# Dummy mode (no capture device)
+./build/bin/retrocapture --source none
 ```
 
 ### Streaming
 
-Streaming can be configured and started via the GUI (Stream tab) or will use default settings. Once streaming is active:
+Streaming can be configured and started via the GUI (Stream tab), web portal, or CLI. Once streaming is active:
 
 1. **Access the stream**: Open `http://localhost:8080/stream` in a media player (VLC, ffplay, mpv, etc.)
 2. **Multiple clients**: Multiple viewers can connect simultaneously
@@ -138,6 +166,7 @@ Streaming can be configured and started via the GUI (Stream tab) or will use def
 4. **Audio included**: System audio is automatically captured and streamed (via PulseAudio)
 
 **Example with ffplay**:
+
 ```bash
 # In one terminal, start RetroCapture
 ./build/bin/retrocapture --preset shaders/shaders_glsl/crt/crt-pi.glslp
@@ -147,10 +176,41 @@ ffplay http://localhost:8080/stream
 ```
 
 **Example with VLC**:
+
 ```bash
 # Open VLC → Media → Open Network Stream
 # Enter: http://localhost:8080/stream
 ```
+
+### Web Portal
+
+The web portal provides a complete remote control interface accessible from any device on your network:
+
+1. **Access the portal**: Open `http://localhost:8080` (or `https://localhost:8080` if HTTPS is enabled) in a web browser
+2. **Control everything**: Adjust shaders, resolution, FPS, image settings, streaming, and V4L2 controls remotely
+3. **Real-time updates**: All changes are applied immediately without refresh
+4. **Install as PWA**: On mobile devices, you can install the portal as a Progressive Web App for easy access
+
+**Enable web portal via CLI**:
+
+```bash
+# Enable web portal (enabled by default)
+./build/bin/retrocapture --web-portal-enable
+
+# Enable with HTTPS
+./build/bin/retrocapture --web-portal-https --web-portal-ssl-cert ssl/server.crt --web-portal-ssl-key ssl/server.key
+
+# Custom port
+./build/bin/retrocapture --web-portal-port 9000
+```
+
+**Access from mobile device**:
+
+1. Find your computer's local IP (e.g., `192.168.1.100`)
+2. Open `http://192.168.1.100:8080` on your mobile device
+3. Install as PWA (if HTTPS is enabled) for native app experience
+
+**Note**: For PWA installation on local network IPs, HTTPS is required. See `ssl/README.md` for certificate generation instructions.
 
 ### Command-Line Parameters
 
@@ -159,9 +219,9 @@ ffplay http://localhost:8080/stream
 - `--shader <path>`: Load a simple GLSL shader file (.glsl)
 - `--preset <path>`: Load a RetroArch shader preset (.glslp)
 
-#### Capture Device
+#### Source Type
 
-- `--device <path>`: Specify V4L2 device path (default: `/dev/video0`)
+- `--source <type>`: Select source type - `none` (dummy mode) or `v4l2` (default: `v4l2`)
 
 #### Capture Resolution and Framerate
 
@@ -184,26 +244,36 @@ ffplay http://localhost:8080/stream
 
 #### V4L2 Hardware Controls
 
-These parameters directly control the capture device hardware settings. Values are device-specific and may vary.
+These parameters are only applied when `--source v4l2`. They directly control the capture device hardware settings. Values are device-specific and may vary.
 
-- `--v4l2-brightness <value>`: V4L2 brightness control
-- `--v4l2-contrast <value>`: V4L2 contrast control
-- `--v4l2-saturation <value>`: V4L2 saturation control
-- `--v4l2-hue <value>`: V4L2 hue control
-- `--v4l2-gain <value>`: V4L2 gain control
-- `--v4l2-exposure <value>`: V4L2 exposure control
-- `--v4l2-sharpness <value>`: V4L2 sharpness control
-- `--v4l2-gamma <value>`: V4L2 gamma control
-- `--v4l2-whitebalance <value>`: V4L2 white balance temperature control
+- `--v4l2-device <path>`: V4L2 device path (default: `/dev/video0`)
+- `--v4l2-brightness <value>`: V4L2 brightness control (-100 to 100)
+- `--v4l2-contrast <value>`: V4L2 contrast control (-100 to 100)
+- `--v4l2-saturation <value>`: V4L2 saturation control (-100 to 100)
+- `--v4l2-hue <value>`: V4L2 hue control (-100 to 100)
+- `--v4l2-gain <value>`: V4L2 gain control (0 to 100)
+- `--v4l2-exposure <value>`: V4L2 exposure control (-13 to 1)
+- `--v4l2-sharpness <value>`: V4L2 sharpness control (0 to 6)
+- `--v4l2-gamma <value>`: V4L2 gamma control (100 to 300)
+- `--v4l2-whitebalance <value>`: V4L2 white balance temperature control (2800 to 6500)
 
-**Note**: V4L2 control ranges and availability depend on your capture device. Use the GUI to discover available controls and their ranges.
+**Note**: V4L2 control ranges and availability depend on your capture device. Use the GUI or web portal to discover available controls and their ranges.
+
+#### Web Portal Options
+
+- `--web-portal-enable`: Enable web portal (default: enabled)
+- `--web-portal-disable`: Disable web portal
+- `--web-portal-port <port>`: Web portal port (default: 8080, same as streaming)
+- `--web-portal-https`: Enable HTTPS for web portal
+- `--web-portal-ssl-cert <path>`: SSL certificate path (default: `ssl/server.crt`)
+- `--web-portal-ssl-key <path>`: SSL key path (default: `ssl/server.key`)
 
 ### Example Commands
 
 ```bash
 # Capture from /dev/video1 at 640x480, 30fps with CRT shader
 ./build/bin/retrocapture \
-  --device /dev/video1 \
+  --source v4l2 --v4l2-device /dev/video1 \
   --width 640 --height 480 --fps 30 \
   --preset shaders/shaders_glsl/crt/crt-pi.glslp
 
@@ -215,9 +285,21 @@ These parameters directly control the capture device hardware settings. Values a
 
 # Capture with custom brightness/contrast and V4L2 controls
 ./build/bin/retrocapture \
+  --source v4l2 \
   --brightness 1.2 --contrast 1.1 \
   --v4l2-brightness 60 --v4l2-contrast 40 \
   --preset shaders/shaders_glsl/crt/crt-geom.glslp
+
+# Enable streaming and web portal with HTTPS
+./build/bin/retrocapture \
+  --source v4l2 \
+  --stream-enable \
+  --web-portal-https \
+  --web-portal-ssl-cert ssl/server.crt \
+  --web-portal-ssl-key ssl/server.key
+
+# Dummy mode for testing without capture device
+./build/bin/retrocapture --source none
 ```
 
 ## 📦 Building AppImage
@@ -234,15 +316,21 @@ Press **F12** to toggle the graphical interface. The GUI provides:
 
 - **Shaders Tab**: Browse and select shaders, edit shader parameters in real-time, save modified presets
 - **Image Tab**: Adjust brightness/contrast, toggle aspect ratio, fullscreen settings, monitor selection
-- **V4L2 Tab**: Control hardware settings, change resolution/framerate, select capture device
-- **Stream Tab** (NEW): Configure streaming settings
+- **Source Tab**: Select source type (None/V4L2), control hardware settings, change resolution/framerate, select capture device
+- **Stream Tab**: Configure streaming settings
   - Enable/disable streaming
   - Select video codec (H.264, H.265, VP8, VP9)
   - Configure codec-specific options (presets, profiles, levels, speed)
   - Set stream resolution and FPS (via dropdowns)
   - Adjust video and audio bitrates
   - View stream URL and active client count
-  - Start/stop streaming
+  - Start/stop streaming with cooldown protection
+- **Web Portal Tab** (NEW in 0.3.0-alpha): Configure web portal
+  - Enable/disable web portal
+  - Configure HTTPS settings
+  - Customize portal appearance (colors, images, text)
+  - View portal URL and status
+  - Start/stop portal independently from streaming
 - **Info Tab**: View capture device information, resolution, framerate, and application details
 
 **Note**: All settings are automatically saved to `config.json` and restored on application startup.
@@ -273,6 +361,7 @@ We welcome contributions! Before contributing:
 ### Reporting Issues
 
 When reporting shader compatibility issues, please include:
+
 - Shader preset name and path
 - Error messages (if any)
 - Expected vs. actual behavior
@@ -290,9 +379,26 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Streaming**: See `src/streaming/` for streaming implementation
 - **Audio Capture**: See `src/audio/` for PulseAudio integration
 
-## 🆕 What's New in 0.2.0-alpha
+## 🆕 What's New in 0.3.0-alpha
 
 This release introduces major new features:
+
+- **Web Portal with Remote Control**: Complete web-based control interface accessible from any device
+- **REST API**: Full API for remote control of all application features
+- **Progressive Web App (PWA)**: Installable on mobile devices and desktop
+- **HTTPS/SSL Support**: Optional encryption for web portal and streaming
+- **Source Type Selection**: Choose between V4L2 capture or dummy mode
+- **Enhanced CLI**: New parameters for source selection and web portal configuration
+- **Modular UI Architecture**: Refactored UI into separate classes for better maintainability
+- **Real-time Updates**: All controls update immediately without apply/save buttons
+- **Streaming Cooldown**: Protection against rapid start/stop cycles
+- **Audio Fixes**: Fixed critical issue where audio would freeze the entire system
+
+See [CHANGELOG.md](CHANGELOG.md) for complete details.
+
+## 🆕 What's New in 0.2.0-alpha
+
+Previous release introduced:
 
 - **HTTP MPEG-TS Streaming**: Stream your processed video with audio over HTTP
 - **Multi-Codec Support**: Choose from H.264, H.265, VP8, or VP9 codecs
@@ -300,8 +406,6 @@ This release introduces major new features:
 - **Configuration Persistence**: All settings automatically saved and restored
 - **Improved UI**: New Stream tab with codec selection and streaming controls
 - **Better Performance**: Multi-threaded architecture for encoding and streaming
-
-See [CHANGELOG.md](CHANGELOG.md) for complete details.
 
 ## 🙏 Acknowledgments
 

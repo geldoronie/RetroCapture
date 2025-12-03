@@ -16,6 +16,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0-alpha] - 2025-12-03
+
+### Added
+
+- **Web Portal with Remote Control**: Complete web-based control interface
+
+  - Full REST API for remote control of all application features
+  - Real-time status updates and bidirectional communication
+  - Control capture sources, shaders, resolution, FPS, image adjustments, streaming settings, and V4L2 controls
+  - Modern, responsive UI with RetroCapture styleguide
+  - Customizable colors, images, and text labels
+  - Independent operation from streaming (can be enabled/disabled separately)
+
+- **Progressive Web App (PWA) Support**:
+
+  - Installable on mobile devices and desktop
+  - Service worker for offline functionality and caching
+  - App manifest with icons and metadata
+  - Works on local network IPs (requires HTTPS)
+
+- **HTTPS/SSL Support**:
+
+  - Optional HTTPS for web portal and streaming
+  - Self-signed certificate support for local development
+  - Configurable SSL certificate and key paths
+  - Support for Subject Alternative Names (SANs) for local network IPs
+
+- **Source Type Selection**:
+
+  - New `--source` parameter to select source type (none, v4l2)
+  - Dummy mode for testing without capture device
+  - V4L2 controls only applied when source is V4L2
+
+- **Enhanced CLI Parameters**:
+
+  - `--source <type>`: Select source type (none, v4l2)
+  - `--v4l2-device <path>`: V4L2 device path (renamed from --device for consistency)
+  - `--web-portal-enable/--web-portal-disable`: Enable/disable web portal
+  - `--web-portal-port <port>`: Web portal port
+  - `--web-portal-https`: Enable HTTPS
+  - `--web-portal-ssl-cert <path>`: SSL certificate path
+  - `--web-portal-ssl-key <path>`: SSL key path
+
+- **REST API Endpoints**:
+
+  - `GET /api/source`: Get current source configuration
+  - `POST /api/source`: Set source type and device
+  - `GET /api/shader`: Get current shader
+  - `POST /api/shader`: Set shader
+  - `GET /api/shader/list`: Get available shaders
+  - `GET /api/shader/parameters`: Get shader parameters
+  - `POST /api/shader/parameter`: Set shader parameter
+  - `GET /api/capture/resolution`: Get capture resolution
+  - `POST /api/capture/resolution`: Set capture resolution
+  - `GET /api/capture/fps`: Get capture FPS
+  - `POST /api/capture/fps`: Set capture FPS
+  - `GET /api/image`: Get image settings
+  - `POST /api/image`: Set image settings
+  - `GET /api/streaming/settings`: Get streaming settings
+  - `POST /api/streaming/settings`: Set streaming settings
+  - `POST /api/streaming/control`: Start/stop streaming
+  - `GET /api/streaming/status`: Get streaming status
+  - `GET /api/v4l2/devices`: Get available V4L2 devices
+  - `POST /api/v4l2/devices/refresh`: Refresh V4L2 device list
+  - `GET /api/v4l2/controls`: Get V4L2 controls
+  - `POST /api/v4l2/control`: Set V4L2 control value
+  - `POST /api/v4l2/device`: Set V4L2 device
+
+- **Streaming Cooldown System**:
+
+  - 10-second cooldown after stopping streaming
+  - Prevents rapid start/stop cycles that could cause issues
+  - Visual feedback in both local and web UIs
+  - API returns cooldown status and remaining time
+
+- **UI Refactoring**:
+
+  - Modular UI architecture with separate classes per window/tab
+  - `UIConfiguration`: Main configuration window
+  - `UIConfigurationSource`: Source selection and V4L2 controls
+  - `UIConfigurationImage`: Image adjustments
+  - `UIConfigurationShader`: Shader selection and parameters
+  - `UIConfigurationStreaming`: Streaming configuration
+  - `UIConfigurationWebPortal`: Web portal settings
+  - `UIInfoPanel`: Information display
+  - Better code organization and maintainability
+
+- **Real-time Updates**:
+  - All controls update in real-time without apply/save buttons
+  - Immediate feedback for all parameter changes
+  - Synchronized state between local UI and web portal
+
+### Changed
+
+- **CLI Parameter Reorganization**:
+
+  - `--device` renamed to `--v4l2-device` for consistency
+  - V4L2 parameters grouped together in help
+  - V4L2 parameters only applied when `--source v4l2`
+  - Improved parameter validation and error messages
+
+- **Web Portal Architecture**:
+
+  - Web portal can run independently of streaming
+  - Same HTTP server used for both portal and streaming
+  - Improved request routing and static file serving
+  - Better error handling and 404 responses
+
+- **Streaming Architecture**:
+
+  - Simplified resource management
+  - Better thread synchronization
+  - Improved cleanup and shutdown procedures
+
+- **Audio Processing**:
+  - Continuous PulseAudio mainloop processing even when streaming is inactive
+  - Prevents system audio freezing
+  - Multiple mainloop iterations per call for better responsiveness
+
+### Fixed
+
+- **Audio System**:
+
+  - Fixed critical issue where RetroCapture would freeze entire PC audio after extended use
+  - Audio now processes correctly even when streaming is not active
+  - Proper PulseAudio mainloop handling
+
+- **Streaming Stability**:
+
+  - Fixed heap corruption issues during streaming stop/restart
+  - Improved resource cleanup and deallocation
+  - Better error handling and recovery
+
+- **Web Portal**:
+
+  - Fixed V4L2 device list not populating correctly
+  - Fixed CSS issues with sliders and controls
+  - Fixed infinite recursion in slider controls
+  - Fixed streaming status not updating in frontend
+  - Fixed button state management during start/stop operations
+
+- **UI**:
+  - Fixed button being clickable multiple times during stop operation
+  - Fixed processing state not being properly displayed
+  - Fixed cooldown display in both local and web UIs
+
+### Removed
+
+- **Unused Code**:
+  - Removed `HTTPMJPEGStreamer` class (not being used)
+  - Removed HLS/player.js related code (file doesn't exist)
+  - Removed `setHLSParameters()` method and related variables
+  - Removed `libmicrohttpd` dependency from CMakeLists.txt
+  - Removed `--stream-quality` CLI parameter (was for MJPEG)
+  - Removed `--stream-audio-buffer-size` CLI parameter (managed automatically)
+  - Removed `setStreamingQuality()` method and `m_streamingQuality` variable
+
+### Technical Details
+
+- **New Dependencies**: OpenSSL (optional, for HTTPS support)
+- **New Files**:
+  - `src/streaming/WebPortal.h/cpp`: Web portal implementation
+  - `src/streaming/HTTPServer.h/cpp`: HTTP/HTTPS server implementation
+  - `src/streaming/APIController.h/cpp`: REST API controller
+  - `src/ui/UIConfiguration*.h/cpp`: Modular UI components
+  - `src/web/`: Web portal static files (HTML, CSS, JS)
+  - `src/web/manifest.json`: PWA manifest
+  - `src/web/service-worker.js`: Service worker for PWA
+- **Statistics**: 29 commits, significant refactoring and new features
+
+---
+
 ## [0.2.0-alpha] - 2025-11-22
 
 ### Added
