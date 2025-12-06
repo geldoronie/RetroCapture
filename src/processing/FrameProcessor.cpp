@@ -1,5 +1,5 @@
 #include "FrameProcessor.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
 #include <linux/videodev2.h>
@@ -18,7 +18,7 @@ void FrameProcessor::init(OpenGLRenderer* renderer)
     m_renderer = renderer;
 }
 
-bool FrameProcessor::processFrame(VideoCapture* capture)
+bool FrameProcessor::processFrame(IVideoCapture* capture)
 {
     if (!capture)
     {
@@ -59,7 +59,10 @@ bool FrameProcessor::processFrame(VideoCapture* capture)
     // Converter e atualizar textura
     glBindTexture(GL_TEXTURE_2D, m_texture);
 
-    if (frame.format == V4L2_PIX_FMT_YUYV)
+    // Assumir formato YUYV (0x56595559) ou qualquer formato que precise conversão
+    // A interface não expõe constantes de formato, então verificamos pelo tamanho esperado
+    // YUYV: 2 bytes por pixel
+    if (frame.size == frame.width * frame.height * 2)
     {
         // Converter YUYV para RGB
         std::vector<uint8_t> rgbBuffer(frame.width * frame.height * 3);

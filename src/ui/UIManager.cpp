@@ -3,7 +3,7 @@
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #include "../utils/V4L2DeviceScanner.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
 #define GLFW_INCLUDE_NONE
@@ -11,7 +11,9 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#endif
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -861,27 +863,27 @@ void UIManager::renderV4L2Controls()
     ImGui::Separator();
 
     // Helper function para renderizar controle com range do dispositivo ou padrão
-    auto renderControl = [this](const char *name, uint32_t cid, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
     {
         if (!m_capture)
             return;
 
-        int32_t value, min, max, step;
-        bool available = m_capture->getControl(cid, value, min, max, step);
-
-        // Se não disponível, usar valores padrão
-        if (!available)
+        int32_t value, min, max;
+        bool available = false;
+        
+        // Tentar obter valores do dispositivo usando interface genérica
+        if (m_capture->getControl(name, value) &&
+            m_capture->getControlMin(name, min) &&
+            m_capture->getControlMax(name, max))
         {
+            available = true;
+        }
+        else
+        {
+            // Se não disponível, usar valores padrão
             min = defaultMin;
             max = defaultMax;
             value = defaultValue;
-            step = 1;
-        }
-
-        // Alinhar valor com step
-        if (step > 1)
-        {
-            value = ((value - min) / step) * step + min;
         }
 
         // Clamp valor
@@ -891,11 +893,6 @@ void UIManager::renderV4L2Controls()
         std::string label = std::string(name) + "##manual";
         if (ImGui::SliderInt(label.c_str(), &value, min, max))
         {
-            // Alinhar valor com step antes de aplicar
-            if (step > 1)
-            {
-                value = ((value - min) / step) * step + min;
-            }
             value = std::max(min, std::min(max, value));
 
             if (m_onV4L2ControlChanged)
@@ -906,34 +903,34 @@ void UIManager::renderV4L2Controls()
     };
 
     // Brightness
-    renderControl("Brightness", V4L2_CID_BRIGHTNESS, -100, 100, 0);
+    renderControl("Brightness", -100, 100, 0);
 
     // Contrast
-    renderControl("Contrast", V4L2_CID_CONTRAST, -100, 100, 0);
+    renderControl("Contrast", -100, 100, 0);
 
     // Saturation
-    renderControl("Saturation", V4L2_CID_SATURATION, -100, 100, 0);
+    renderControl("Saturation", -100, 100, 0);
 
     // Hue
-    renderControl("Hue", V4L2_CID_HUE, -100, 100, 0);
+    renderControl("Hue", -100, 100, 0);
 
     // Gain
-    renderControl("Gain", V4L2_CID_GAIN, 0, 100, 0);
+    renderControl("Gain", 0, 100, 0);
 
     // Exposure
-    renderControl("Exposure", V4L2_CID_EXPOSURE_ABSOLUTE, -13, 1, 0);
+    renderControl("Exposure", -13, 1, 0);
 
     // Sharpness
-    renderControl("Sharpness", V4L2_CID_SHARPNESS, 0, 6, 0);
+    renderControl("Sharpness", 0, 6, 0);
 
     // Gamma
-    renderControl("Gamma", V4L2_CID_GAMMA, 100, 300, 100);
+    renderControl("Gamma", 100, 300, 100);
 
     // White Balance
-    renderControl("White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE, 2800, 6500, 4000);
+    renderControl("White Balance", 2800, 6500, 4000);
 }
 
-void UIManager::setV4L2Controls(VideoCapture *capture)
+void UIManager::setV4L2Controls(IVideoCapture *capture)
 {
     m_capture = capture;
     m_v4l2Controls.clear();
@@ -943,30 +940,37 @@ void UIManager::setV4L2Controls(VideoCapture *capture)
         return;
     }
 
-    // Lista de controles V4L2 comuns
-    struct ControlInfo
-    {
-        const char *name;
-        uint32_t cid;
+    // Lista de controles comuns (usando interface genérica)
+    const char *controlNames[] = {
+        "Brightness",
+        "Contrast",
+        "Saturation",
+        "Hue",
+        "Gain",
+        "Exposure",
+        "Sharpness",
+        "Gamma",
+        "White Balance",
     };
 
-    ControlInfo controls[] = {
-        {"Brightness", V4L2_CID_BRIGHTNESS},
-        {"Contrast", V4L2_CID_CONTRAST},
-        {"Saturation", V4L2_CID_SATURATION},
-        {"Hue", V4L2_CID_HUE},
-        {"Gain", V4L2_CID_GAIN},
-        {"Exposure", V4L2_CID_EXPOSURE_ABSOLUTE},
-        {"Sharpness", V4L2_CID_SHARPNESS},
-        {"Gamma", V4L2_CID_GAMMA},
-        {"White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE},
-    };
-
-    for (const auto &info : controls)
+    for (const char *name : controlNames)
     {
         V4L2Control ctrl;
-        ctrl.name = info.name;
-        ctrl.available = capture->getControl(info.cid, ctrl.value, ctrl.min, ctrl.max, ctrl.step);
+        ctrl.name = name;
+        
+        // Usar interface genérica para obter informações do controle
+        int32_t value, minVal, maxVal;
+        if (capture->getControl(name, value) &&
+            capture->getControlMin(name, minVal) &&
+            capture->getControlMax(name, maxVal))
+        {
+            ctrl.value = value;
+            ctrl.min = minVal;
+            ctrl.max = maxVal;
+            ctrl.step = 1; // Step não disponível na interface genérica
+            ctrl.available = true;
+            m_v4l2Controls.push_back(ctrl);
+        }
 
         if (ctrl.available)
         {

@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "../utils/Logger.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
+#include "../capture/VideoCaptureFactory.h"
 #include "../v4l2/V4L2ControlMapper.h"
 #include "../processing/FrameProcessor.h"
 #include "../output/WindowManager.h"
@@ -10,10 +11,13 @@
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
-#include "../audio/AudioCapture.h"
+#include "../audio/IAudioCapture.h"
+#include "../audio/AudioCaptureFactory.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#endif
 #include <vector>
 #include <algorithm>
 #include <cstring>
@@ -222,7 +226,12 @@ bool Application::initRenderer()
 
 bool Application::initCapture()
 {
-    m_capture = std::make_unique<VideoCapture>();
+    m_capture = VideoCaptureFactory::create();
+    if (!m_capture)
+    {
+        LOG_ERROR("Falha ao criar VideoCapture para esta plataforma");
+        return false;
+    }
 
     // Tentar abrir dispositivo especificado (ou padrão /dev/video0)
     // Se falhar, ativar modo dummy (gera frames pretos)
@@ -233,10 +242,11 @@ bool Application::initCapture()
         LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
 
         // Ativar modo dummy
-        m_capture->enableDummyMode(true);
+        m_capture->setDummyMode(true);
 
         // Configurar formato dummy com resolução padrão
-        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+        // Nota: V4L2_PIX_FMT_YUYV é específico do V4L2, mas a interface aceita 0 para default
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
         {
             LOG_ERROR("Falha ao configurar formato dummy");
             return false;
@@ -258,7 +268,7 @@ bool Application::initCapture()
     LOG_INFO("Configurando captura: " + std::to_string(m_captureWidth) + "x" +
              std::to_string(m_captureHeight) + " @ " + std::to_string(m_captureFps) + "fps");
 
-    if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+    if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
     {
         LOG_ERROR("Falha ao configurar formato de captura");
         LOG_WARN("Resolução solicitada pode não ser suportada pelo dispositivo");
@@ -268,9 +278,9 @@ bool Application::initCapture()
         {
             LOG_INFO("Tentando ativar modo dummy como fallback...");
             m_capture->close();
-            m_capture->enableDummyMode(true);
+            m_capture->setDummyMode(true);
 
-            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
             {
                 if (m_capture->startCapture())
                 {
@@ -298,63 +308,51 @@ bool Application::initCapture()
         }
     }
 
-    // Configurar controles V4L2 se especificados
+    // Configurar controles de hardware se especificados (usando interface genérica)
     if (m_v4l2Brightness >= 0)
     {
-        if (m_capture->setBrightness(m_v4l2Brightness))
-        {
-        }
+        m_capture->setControl("Brightness", m_v4l2Brightness);
     }
     if (m_v4l2Contrast >= 0)
     {
-        if (m_capture->setContrast(m_v4l2Contrast))
-        {
-        }
+        m_capture->setControl("Contrast", m_v4l2Contrast);
     }
     if (m_v4l2Saturation >= 0)
     {
-        if (m_capture->setSaturation(m_v4l2Saturation))
+        if (m_capture->setControl("Saturation", m_v4l2Saturation))
         {
-            LOG_INFO("Saturação V4L2 configurada: " + std::to_string(m_v4l2Saturation));
+            LOG_INFO("Saturação configurada: " + std::to_string(m_v4l2Saturation));
         }
     }
     if (m_v4l2Hue >= 0)
     {
-        if (m_capture->setHue(m_v4l2Hue))
-        {
-        }
+        m_capture->setControl("Hue", m_v4l2Hue);
     }
     if (m_v4l2Gain >= 0)
     {
-        if (m_capture->setGain(m_v4l2Gain))
-        {
-        }
+        m_capture->setControl("Gain", m_v4l2Gain);
     }
     if (m_v4l2Exposure >= 0)
     {
-        if (m_capture->setExposure(m_v4l2Exposure))
+        if (m_capture->setControl("Exposure", m_v4l2Exposure))
         {
-            LOG_INFO("Exposição V4L2 configurada: " + std::to_string(m_v4l2Exposure));
+            LOG_INFO("Exposição configurada: " + std::to_string(m_v4l2Exposure));
         }
     }
     if (m_v4l2Sharpness >= 0)
     {
-        if (m_capture->setSharpness(m_v4l2Sharpness))
+        if (m_capture->setControl("Sharpness", m_v4l2Sharpness))
         {
-            LOG_INFO("Nitidez V4L2 configurada: " + std::to_string(m_v4l2Sharpness));
+            LOG_INFO("Nitidez configurada: " + std::to_string(m_v4l2Sharpness));
         }
     }
     if (m_v4l2Gamma >= 0)
     {
-        if (m_capture->setGamma(m_v4l2Gamma))
-        {
-        }
+        m_capture->setControl("Gamma", m_v4l2Gamma);
     }
     if (m_v4l2WhiteBalance >= 0)
     {
-        if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance))
-        {
-        }
+        m_capture->setControl("White Balance", m_v4l2WhiteBalance);
     }
 
     if (!m_capture->startCapture())
@@ -366,9 +364,9 @@ bool Application::initCapture()
         {
             LOG_INFO("Tentando ativar modo dummy como fallback...");
             m_capture->close();
-            m_capture->enableDummyMode(true);
+            m_capture->setDummyMode(true);
 
-            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
             {
                 if (m_capture->startCapture())
                 {
@@ -432,7 +430,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     }
 
     // Configurar novo formato
-    if (!m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV))
+    if (!m_capture->setFormat(width, height, 0))
     {
         LOG_ERROR("Falha ao configurar novo formato de captura");
         // Tentar rollback: reabrir com formato anterior
@@ -440,7 +438,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         usleep(100000);
         if (m_capture->open(devicePath))
         {
-            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFormat(oldWidth, oldHeight, 0);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
@@ -468,7 +466,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         usleep(100000);
         if (m_capture->open(devicePath))
         {
-            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFormat(oldWidth, oldHeight, 0);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
@@ -593,27 +591,19 @@ bool Application::initUI()
             }
         } });
 
-    m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
-                                  {
+    m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value) {
         if (!m_capture) return;
         
-        // Mapear nome para control ID usando V4L2ControlMapper
-        uint32_t cid = V4L2ControlMapper::getControlId(name);
+        // Usar interface genérica para definir controle
+        int32_t minVal, maxVal;
+        if (m_capture->getControlMin(name, minVal) && 
+            m_capture->getControlMax(name, maxVal)) {
+            // Clamp ao range
+            value = std::max(minVal, std::min(maxVal, value));
+        }
         
-        if (cid != 0) {
-            // Obter range real do dispositivo para validar
-            int32_t currentValue, min, max, step;
-            if (m_capture->getControl(cid, currentValue, min, max, step)) {
-                // Alinhar valor com step
-                if (step > 1) {
-                    value = ((value - min) / step) * step + min;
-                }
-                // Clamp ao range
-                value = std::max(min, std::min(max, value));
-            }
-            
-            m_capture->setControl(cid, value);
-        } });
+        m_capture->setControl(name, value);
+    });
 
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
@@ -628,11 +618,11 @@ bool Application::initUI()
             // Se não estiver em modo dummy, tentar ativar
             if (!m_capture->isDummyMode()) {
                 LOG_INFO("Nenhum dispositivo aberto. Ativando modo dummy...");
-                m_capture->enableDummyMode(true);
+                m_capture->setDummyMode(true);
             }
             
             // Configurar formato dummy
-            if (m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+            if (m_capture->setFormat(width, height, 0)) {
                 if (m_capture->startCapture()) {
                     LOG_INFO("Resolução dummy atualizada: " + std::to_string(width) + "x" + std::to_string(height));
                     if (m_ui) {
@@ -711,8 +701,8 @@ bool Application::initUI()
             {
                 m_capture->stopCapture();
                 m_capture->close();
-                m_capture->enableDummyMode(true);
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                m_capture->setDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                 {
                     if (m_capture->startCapture())
                     {
@@ -885,11 +875,14 @@ bool Application::initUI()
     if (!loadedShader.empty() && m_shaderEngine)
     {
         // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
         std::filesystem::path shaderBasePath;
-        if (envShaderPath && std::filesystem::exists(envShaderPath)) {
+        if (envShaderPath && std::filesystem::exists(envShaderPath))
+        {
             shaderBasePath = std::filesystem::path(envShaderPath);
-        } else {
+        }
+        else
+        {
             shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
         }
         std::filesystem::path fullPath = shaderBasePath / loadedShader;
@@ -1422,10 +1415,10 @@ bool Application::initUI()
                 m_capture->stopCapture();
                 m_capture->close();
                 // Ativar modo dummy
-                m_capture->enableDummyMode(true);
+                m_capture->setDummyMode(true);
                 
                 // Configurar formato dummy com resolução atual
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                 {
                     if (m_capture->startCapture())
                     {
@@ -1450,11 +1443,11 @@ bool Application::initUI()
             {
                 m_capture->stopCapture();
                 m_capture->close();
-                m_capture->enableDummyMode(false);
+                m_capture->setDummyMode(false);
                 
                 if (m_capture->open(m_devicePath))
                 {
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                     {
                         m_capture->setFramerate(m_captureFps);
                         if (m_capture->startCapture())
@@ -1471,8 +1464,8 @@ bool Application::initUI()
                 {
                     // Se falhar ao abrir dispositivo, voltar para modo dummy
                     LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
-                    m_capture->enableDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    m_capture->setDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                     {
                         if (m_capture->startCapture() && m_ui)
                         {
@@ -1491,8 +1484,8 @@ bool Application::initUI()
                 {
                     m_capture->stopCapture();
                     m_capture->close();
-                    m_capture->enableDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                    m_capture->setDummyMode(true);
+                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                     {
                         if (m_capture->startCapture() && m_ui)
                         {
@@ -1517,10 +1510,10 @@ bool Application::initUI()
                 m_capture->stopCapture();
                 m_capture->close();
                 // Ativar modo dummy
-                m_capture->enableDummyMode(true);
+                m_capture->setDummyMode(true);
                 
                 // Configurar formato dummy com resolução atual
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                 {
                     m_capture->startCapture();
                     LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
@@ -1558,7 +1551,7 @@ bool Application::initUI()
             m_capture->stopCapture();
             m_capture->close();
             // Desativar modo dummy ao tentar abrir dispositivo real
-            m_capture->enableDummyMode(false);
+            m_capture->setDummyMode(false);
         }
         
         // Atualizar caminho do dispositivo
@@ -1567,7 +1560,7 @@ bool Application::initUI()
         // Reabrir com novo dispositivo
         if (m_capture && m_capture->open(devicePath)) {
             // Reconfigurar formato e framerate
-            if (m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV)) {
+            if (m_capture->setFormat(oldWidth, oldHeight, 0)) {
                 m_capture->setFramerate(oldFps);
                 m_capture->startCapture();
                 
@@ -1987,7 +1980,12 @@ bool Application::initAudioCapture()
         return true; // Audio não habilitado, não é erro
     }
 
-    m_audioCapture = std::make_unique<AudioCapture>();
+    m_audioCapture = AudioCaptureFactory::create();
+    if (!m_audioCapture)
+    {
+        LOG_ERROR("Falha ao criar AudioCapture para esta plataforma");
+        return false;
+    }
 
     // Open default audio device (will create virtual sink)
     if (!m_audioCapture->open())
@@ -2061,49 +2059,49 @@ void Application::run()
             if (m_streamManager && m_streamManager->isActive())
             {
 
-            // Calcular tamanho do buffer baseado no tempo para sincronização
-            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
-            uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+                // Calcular tamanho do buffer baseado no tempo para sincronização
+                uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+                uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
-            // Calcular samples correspondentes a 1 frame de vídeo
-            // Para 60 FPS e 44100Hz: 44100/60 = 735 samples por frame
-            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
-                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
-                                              : 512;
-            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+                // Calcular samples correspondentes a 1 frame de vídeo
+                // Para 60 FPS e 44100Hz: 44100/60 = 735 samples por frame
+                size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                                  ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                                  : 512;
+                samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
 
-            // Processar áudio em loop até esgotar todos os samples disponíveis
-            // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
-            // IMPORTANTE: Adicionar limite de iterações para evitar loop infinito que travaria a thread principal
-            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+                // Processar áudio em loop até esgotar todos os samples disponíveis
+                // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
+                // IMPORTANTE: Adicionar limite de iterações para evitar loop infinito que travaria a thread principal
+                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
 
-            // Limite de iterações para evitar loop infinito (processar no máximo 10 frames de áudio por ciclo)
-            const int maxIterations = 10;
-            int iteration = 0;
+                // Limite de iterações para evitar loop infinito (processar no máximo 10 frames de áudio por ciclo)
+                const int maxIterations = 10;
+                int iteration = 0;
 
-            while (iteration < maxIterations)
-            {
-                // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
-                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-
-                if (samplesRead > 0)
+                while (iteration < maxIterations)
                 {
-                    m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                    // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
+                    size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
 
-                    // Se lemos menos que o esperado, não há mais samples disponíveis
-                    if (samplesRead < samplesPerVideoFrame)
+                    if (samplesRead > 0)
                     {
-                        break; // Não há mais samples disponíveis
-                    }
-                }
-                else
-                {
-                    // Não há mais samples disponíveis, parar
-                    break;
-                }
+                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
 
-                iteration++;
-            }
+                        // Se lemos menos que o esperado, não há mais samples disponíveis
+                        if (samplesRead < samplesPerVideoFrame)
+                        {
+                            break; // Não há mais samples disponíveis
+                        }
+                    }
+                    else
+                    {
+                        // Não há mais samples disponíveis, parar
+                        break;
+                    }
+
+                    iteration++;
+                }
 
                 // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
                 if (iteration >= maxIterations)
@@ -2431,16 +2429,34 @@ void Application::run()
         }
         else
         {
-            // Se não há frame válido ainda, fazer um pequeno sleep
-            // IMPORTANTE: Captura continua mesmo sem frame válido para renderização
-            usleep(1000); // 1ms
+            // Se não há frame válido ainda, ainda precisamos renderizar a UI e atualizar a janela
+            // para que a janela seja visível mesmo sem frame de vídeo
+            
+            // Limpar framebuffer
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
+            uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
+            
+            if (currentWidth > 0 && currentHeight > 0)
+            {
+                glViewport(0, 0, currentWidth, currentHeight);
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
 
             // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
             // Isso evita o erro "Forgot to call Render() or EndFrame()"
             if (m_ui)
             {
+                m_ui->render();
                 m_ui->endFrame();
             }
+
+            // IMPORTANTE: Sempre fazer swapBuffers para que a janela seja atualizada e visível
+            m_window->swapBuffers();
+
+            // Fazer um pequeno sleep para não consumir 100% da CPU
+            usleep(1000); // 1ms
         }
     }
 

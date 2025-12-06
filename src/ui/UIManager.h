@@ -10,7 +10,7 @@
 
 struct GLFWwindow;
 
-class VideoCapture;
+class IVideoCapture;
 class ShaderEngine;
 
 // Forward declaration
@@ -98,7 +98,7 @@ public:
     void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
 
     // Controles V4L2
-    void setV4L2Controls(VideoCapture *capture);
+    void setV4L2Controls(IVideoCapture *capture);
     void setOnV4L2ControlChanged(std::function<void(const std::string &, int32_t)> callback)
     {
         m_onV4L2ControlChanged = callback;
@@ -281,7 +281,7 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
-    VideoCapture *getCapture() const { return m_capture; }
+    IVideoCapture *getCapture() const { return m_capture; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -507,7 +507,7 @@ private:
     std::function<void(int)> m_onMonitorIndexChanged;
 
     // V4L2 Controls
-    VideoCapture *m_capture = nullptr;
+    IVideoCapture *m_capture = nullptr;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 

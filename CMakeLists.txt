@@ -17,9 +17,21 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Incluir diretórios
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-# Encontrar dependências
-find_package(PkgConfig REQUIRED)
+# Detectar plataforma
+if(WIN32)
+    set(PLATFORM_WINDOWS ON)
+    message(STATUS "Plataforma: Windows")
+elseif(UNIX AND NOT APPLE)
+    set(PLATFORM_LINUX ON)
+    message(STATUS "Plataforma: Linux")
+elseif(APPLE)
+    set(PLATFORM_MACOS ON)
+    message(STATUS "Plataforma: macOS")
+else()
+    message(FATAL_ERROR "Plataforma não suportada")
+endif()
 
+# Encontrar dependências
 # OpenGL
 find_package(OpenGL REQUIRED)
 
@@ -27,28 +39,69 @@ find_package(OpenGL REQUIRED)
 find_package(glfw3 QUIET)
 
 if(NOT glfw3_FOUND)
-    pkg_check_modules(GLFW REQUIRED glfw3)
-    set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
-    set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+    if(PLATFORM_LINUX)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GLFW REQUIRED glfw3)
+        set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
+        set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+    else()
+        message(FATAL_ERROR "GLFW não encontrado. Instale glfw3.")
+    endif()
 endif()
 
-# V4L2 (via libv4l2)
-pkg_check_modules(V4L2 REQUIRED libv4l2)
-
 # PNG (via libpng)
-pkg_check_modules(PNG REQUIRED libpng)
+if(PLATFORM_LINUX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PNG REQUIRED libpng)
+else()
+    find_package(PNG REQUIRED)
+endif()
 
 # FFmpeg for streaming
-pkg_check_modules(AVCODEC REQUIRED libavcodec)
-pkg_check_modules(AVFORMAT REQUIRED libavformat)
-pkg_check_modules(AVUTIL REQUIRED libavutil)
-pkg_check_modules(SWSCALE REQUIRED libswscale)
-pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+if(PLATFORM_LINUX)
+    pkg_check_modules(AVCODEC REQUIRED libavcodec)
+    pkg_check_modules(AVFORMAT REQUIRED libavformat)
+    pkg_check_modules(AVUTIL REQUIRED libavutil)
+    pkg_check_modules(SWSCALE REQUIRED libswscale)
+    pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+else()
+    # Windows: usar find_package ou vcpkg
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        pkg_check_modules(AVCODEC REQUIRED libavcodec)
+        pkg_check_modules(AVFORMAT REQUIRED libavformat)
+        pkg_check_modules(AVUTIL REQUIRED libavutil)
+        pkg_check_modules(SWSCALE REQUIRED libswscale)
+        pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    else()
+        # Tentar encontrar via find_package (vcpkg)
+        find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample)
+        set(AVCODEC_LIBRARIES avcodec)
+        set(AVFORMAT_LIBRARIES avformat)
+        set(AVUTIL_LIBRARIES avutil)
+        set(SWSCALE_LIBRARIES swscale)
+        set(SWRESAMPLE_LIBRARIES swresample)
+        set(AVCODEC_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(AVFORMAT_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(AVUTIL_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(SWSCALE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(SWRESAMPLE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+    endif()
+endif()
 
 # HTTP server implementado internamente (HTTPServer.cpp)
 
-# PulseAudio for audio capture
-pkg_check_modules(PULSE REQUIRED libpulse)
+# V4L2 (Linux only)
+if(PLATFORM_LINUX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(V4L2 REQUIRED libv4l2)
+endif()
+
+# PulseAudio (Linux only)
+if(PLATFORM_LINUX)
+    pkg_check_modules(PULSE REQUIRED libpulse)
+endif()
 
 # OpenSSL for HTTPS support - sempre habilitado se disponível
 # Tentar encontrar OpenSSL primeiro
@@ -124,11 +177,11 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC
     glfw
     OpenGL::GL
-    X11
 )
 
-# Threading
-find_package(Threads REQUIRED)
+if(PLATFORM_LINUX)
+    target_link_libraries(imgui PUBLIC X11)
+endif()
 
 # Fontes
 file(GLOB_RECURSE SOURCES
@@ -136,43 +189,78 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
+# Excluir implementações de outras plataformas
+if(PLATFORM_LINUX)
+    # No Linux, excluir implementações Windows (quando existirem)
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureMF\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+elseif(PLATFORM_WINDOWS)
+    # No Windows, excluir implementações Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+endif()
+
 # Executável principal
 add_executable(retrocapture
     ${SOURCES}
 )
 
+# Definir macros de plataforma
+if(PLATFORM_LINUX)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_LINUX)
+elseif(PLATFORM_WINDOWS)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_WINDOWS)
+elseif(PLATFORM_MACOS)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
+endif()
+
+# Threading
+find_package(Threads REQUIRED)
+
 # Link libraries
+set(LINK_LIBS
+    OpenGL::GL
+    Threads::Threads
+    imgui
+)
+
 if(glfw3_FOUND)
-    target_link_libraries(retrocapture PRIVATE
-        OpenGL::GL
-        glfw
-        ${V4L2_LIBRARIES}
-        ${PNG_LIBRARIES}
-        ${AVCODEC_LIBRARIES}
-        ${AVFORMAT_LIBRARIES}
-        ${AVUTIL_LIBRARIES}
-        ${SWSCALE_LIBRARIES}
-        ${SWRESAMPLE_LIBRARIES}
-        ${PULSE_LIBRARIES}
-        Threads::Threads
-        imgui
-    )
+    list(APPEND LINK_LIBS glfw)
 else()
-    target_link_libraries(retrocapture PRIVATE
-        OpenGL::GL
-        ${GLFW_LIBRARIES}
-        ${V4L2_LIBRARIES}
-        ${PNG_LIBRARIES}
-        ${AVCODEC_LIBRARIES}
-        ${AVFORMAT_LIBRARIES}
-        ${AVUTIL_LIBRARIES}
-        ${SWSCALE_LIBRARIES}
-        ${SWRESAMPLE_LIBRARIES}
-        ${PULSE_LIBRARIES}
-        Threads::Threads
-        imgui
+    list(APPEND LINK_LIBS ${GLFW_LIBRARIES})
+endif()
+
+list(APPEND LINK_LIBS
+    ${PNG_LIBRARIES}
+    ${AVCODEC_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
+    ${SWSCALE_LIBRARIES}
+    ${SWRESAMPLE_LIBRARIES}
+)
+
+# Bibliotecas específicas de plataforma
+if(PLATFORM_LINUX)
+    list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
+elseif(PLATFORM_WINDOWS)
+    # Windows Media Foundation libraries
+    list(APPEND LINK_LIBS
+        mf
+        mfplat
+        mfuuid
+        strmiids
+        ole32
+        oleaut32
+    )
+    # Windows Audio Session API (WASAPI) libraries
+    list(APPEND LINK_LIBS
+        avrt
+        propsys
     )
 endif()
+
+target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
 
 # Include directories
 if(NOT glfw3_FOUND)
@@ -181,16 +269,21 @@ if(NOT glfw3_FOUND)
     )
 endif()
 
-target_include_directories(retrocapture PRIVATE
-    ${V4L2_INCLUDE_DIRS}
+set(INCLUDE_DIRS
     ${PNG_INCLUDE_DIRS}
     ${AVCODEC_INCLUDE_DIRS}
     ${AVFORMAT_INCLUDE_DIRS}
     ${AVUTIL_INCLUDE_DIRS}
     ${SWSCALE_INCLUDE_DIRS}
     ${SWRESAMPLE_INCLUDE_DIRS}
-    ${PULSE_INCLUDE_DIRS}
 )
+
+# Include directories específicos de plataforma
+if(PLATFORM_LINUX)
+    list(APPEND INCLUDE_DIRS ${V4L2_INCLUDE_DIRS} ${PULSE_INCLUDE_DIRS})
+endif()
+
+target_include_directories(retrocapture PRIVATE ${INCLUDE_DIRS})
 
 # Adicionar include do nlohmann/json (header-only, não precisa linkar)
 # O nlohmann/json é header-only, então precisamos apenas adicionar o diretório de include

@@ -1,9 +1,11 @@
 #include "UIConfigurationSource.h"
 #include "UIManager.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <algorithm>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#endif
 
 UIConfigurationSource::UIConfigurationSource(UIManager *uiManager)
     : m_uiManager(uiManager)
@@ -110,27 +112,27 @@ void UIConfigurationSource::renderV4L2Controls()
     ImGui::Separator();
 
     // Helper function para renderizar controle com range do dispositivo ou padrão
-    auto renderControl = [this](const char *name, uint32_t cid, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
     {
         if (!m_capture)
             return;
 
-        int32_t value, min, max, step;
-        bool available = m_capture->getControl(cid, value, min, max, step);
-
-        // Se não disponível, usar valores padrão
-        if (!available)
+        int32_t value, min, max;
+        bool available = false;
+        
+        // Tentar obter valores do dispositivo usando interface genérica
+        if (m_capture->getControl(name, value) &&
+            m_capture->getControlMin(name, min) &&
+            m_capture->getControlMax(name, max))
         {
+            available = true;
+        }
+        else
+        {
+            // Se não disponível, usar valores padrão
             min = defaultMin;
             max = defaultMax;
             value = defaultValue;
-            step = 1;
-        }
-
-        // Alinhar valor com step
-        if (step > 1)
-        {
-            value = ((value - min) / step) * step + min;
         }
 
         // Clamp valor
@@ -140,43 +142,37 @@ void UIConfigurationSource::renderV4L2Controls()
         std::string label = std::string(name) + "##manual";
         if (ImGui::SliderInt(label.c_str(), &value, min, max))
         {
-            // Alinhar valor com step antes de aplicar
-            if (step > 1)
-            {
-                value = ((value - min) / step) * step + min;
-            }
             value = std::max(min, std::min(max, value));
-
             m_uiManager->triggerV4L2ControlChange(name, value);
         }
     };
 
     // Brightness
-    renderControl("Brightness", V4L2_CID_BRIGHTNESS, -100, 100, 0);
+    renderControl("Brightness", -100, 100, 0);
 
     // Contrast
-    renderControl("Contrast", V4L2_CID_CONTRAST, -100, 100, 0);
+    renderControl("Contrast", -100, 100, 0);
 
     // Saturation
-    renderControl("Saturation", V4L2_CID_SATURATION, -100, 100, 0);
+    renderControl("Saturation", -100, 100, 0);
 
     // Hue
-    renderControl("Hue", V4L2_CID_HUE, -100, 100, 0);
+    renderControl("Hue", -100, 100, 0);
 
     // Gain
-    renderControl("Gain", V4L2_CID_GAIN, 0, 100, 0);
+    renderControl("Gain", 0, 100, 0);
 
     // Exposure
-    renderControl("Exposure", V4L2_CID_EXPOSURE_ABSOLUTE, -13, 1, 0);
+    renderControl("Exposure", -13, 1, 0);
 
     // Sharpness
-    renderControl("Sharpness", V4L2_CID_SHARPNESS, 0, 6, 0);
+    renderControl("Sharpness", 0, 6, 0);
 
     // Gamma
-    renderControl("Gamma", V4L2_CID_GAMMA, 100, 300, 100);
+    renderControl("Gamma", 100, 300, 100);
 
     // White Balance
-    renderControl("White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE, 2800, 6500, 4000);
+    renderControl("White Balance", 2800, 6500, 4000);
 }
 
 void UIConfigurationSource::renderV4L2DeviceSelection()
