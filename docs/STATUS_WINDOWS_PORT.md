@@ -7,22 +7,26 @@
 ### ✅ Fase 1: Preparação - **CONCLUÍDA (100%)**
 
 #### 1. Interfaces Abstratas ✅
+
 - ✅ `IVideoCapture.h` - Interface abstrata para captura de vídeo criada
 - ✅ `IAudioCapture.h` - Interface abstrata para captura de áudio criada
 - ✅ Interfaces incluem todos os métodos necessários para abstração multiplataforma
 
 #### 2. Factories ✅
+
 - ✅ `VideoCaptureFactory.h/cpp` - Factory para criar instâncias de captura de vídeo
 - ✅ `AudioCaptureFactory.h/cpp` - Factory para criar instâncias de captura de áudio
 - ✅ Factories detectam plataforma automaticamente (`__linux__` vs `_WIN32`)
 
 #### 3. Refatoração do Código Linux ✅
+
 - ✅ `VideoCaptureV4L2.h/cpp` - Implementação Linux de `IVideoCapture` usando V4L2
 - ✅ `AudioCapturePulse.h/cpp` - Implementação Linux de `IAudioCapture` usando PulseAudio
 - ✅ `Application.cpp` - Refatorado para usar `VideoCaptureFactory` e `AudioCaptureFactory`
 - ✅ Todos os componentes principais usam as interfaces abstratas
 
 #### 4. CMakeLists.txt ✅
+
 - ✅ Detecção de plataforma implementada (`PLATFORM_WINDOWS`, `PLATFORM_LINUX`, `PLATFORM_MACOS`)
 - ✅ Dependências condicionais por plataforma
 - ✅ Exclusão automática de arquivos de outras plataformas no build
@@ -31,6 +35,7 @@
 ### ✅ Fase 2: Implementação Windows - **CONCLUÍDA (100%)**
 
 #### 1. Captura de Vídeo Windows ✅
+
 - ✅ `VideoCaptureMF.h/cpp` - **IMPLEMENTADO COMPLETAMENTE**
   - Implementa `IVideoCapture` usando Media Foundation
   - Suporta enumeração de dispositivos via `MFEnumDeviceSources`
@@ -41,6 +46,7 @@
   - Factory atualizada para retornar instância no Windows
 
 #### 2. Captura de Áudio Windows ✅
+
 - ✅ `AudioCaptureWASAPI.h/cpp` - **IMPLEMENTADO COMPLETAMENTE**
   - Implementa `IAudioCapture` usando WASAPI
   - Suporta enumeração de dispositivos de áudio
@@ -49,12 +55,14 @@
   - Factory atualizada para retornar instância no Windows
 
 #### 3. Scanner de Dispositivos Windows ✅
+
 - ✅ Enumeração de dispositivos integrada em `VideoCaptureMF::listDevices()`
   - Usa Media Foundation para enumerar câmeras
   - Retorna lista com IDs e nomes amigáveis
   - Não requer classe separada
 
 #### 4. Mapeador de Controles Windows ⚠️
+
 - ⚠️ Controles de hardware **PARCIALMENTE IMPLEMENTADOS**
   - Media Foundation não expõe diretamente controles de câmera
   - Métodos `setControl()` e `getControl()` retornam false com aviso
@@ -62,6 +70,7 @@
   - **Nota:** Isso é uma limitação conhecida do Media Foundation
 
 #### 5. Networking Windows ✅
+
 - ✅ `HTTPServer.cpp` - **ATUALIZADO PARA WINDOWS**
   - Inicialização do Winsock (`WSAStartup`) no construtor
   - Limpeza do Winsock (`WSACleanup`) no destrutor
@@ -70,6 +79,7 @@
   - Inclusão correta de `winsock2.h` antes de `windows.h`
 
 #### 6. Portal Web para Windows ✅
+
 - ✅ Frontend adaptado para Windows
   - Detecção automática de plataforma via API `/api/v1/platform`
   - Interface dinâmica que mostra controles V4L2 (Linux) ou Media Foundation (Windows)
@@ -84,12 +94,14 @@
 ### ✅ Fase 3: Build e Distribuição - **EM PROGRESSO (80%)**
 
 #### 1. Build com Docker ✅
+
 - ✅ `Dockerfile.windows` - Dockerfile para build Windows
 - ✅ `docker-build-windows.sh` - Script de build automatizado
 - ✅ `docker-compose.yml` - Configuração para build Windows
 - ✅ Suporte para MinGW/MXE no ambiente Docker
 
 #### 2. Build Manual ⏳
+
 - ⏳ Documentação de build manual no Windows
 - ⏳ Instruções para uso de vcpkg
 - ⏳ Troubleshooting de problemas comuns
@@ -97,12 +109,14 @@
 ### 🔍 Verificações Realizadas
 
 #### Uso das Interfaces
+
 - ✅ `Application.cpp` usa `IVideoCapture` e `IAudioCapture` via factories
 - ✅ `UIManager.cpp` usa `IVideoCapture` (ponteiro)
 - ✅ `UIConfigurationSource.cpp` usa `IVideoCapture` (ponteiro)
 - ✅ `FrameProcessor.cpp` usa `IVideoCapture` (ponteiro)
 
 #### CMakeLists.txt
+
 - ✅ Detecta plataforma corretamente
 - ✅ Exclui arquivos Windows no build Linux
 - ✅ Exclui arquivos Linux no build Windows
@@ -112,6 +126,7 @@
 ## 📋 Checklist de Implementação Windows
 
 ### VideoCaptureMF
+
 - [x] Criar `VideoCaptureMF.h`
 - [x] Criar `VideoCaptureMF.cpp`
 - [x] Implementar `open()`
@@ -132,6 +147,7 @@
 - [x] Testar modo dummy
 
 ### AudioCaptureWASAPI
+
 - [x] Criar `AudioCaptureWASAPI.h`
 - [x] Criar `AudioCaptureWASAPI.cpp`
 - [x] Implementar `open()`
@@ -146,12 +162,14 @@
 - [x] Testar captura de áudio
 
 ### Networking Windows
+
 - [x] Inicializar Winsock no `HTTPServer`
 - [x] Limpar Winsock no destrutor
 - [x] Verificar estado antes de criar sockets
 - [x] Incluir headers na ordem correta
 
 ### Portal Web Windows
+
 - [x] Endpoint `/api/v1/platform`
 - [x] Endpoint `/api/v1/mf/devices`
 - [x] Endpoint `/api/v1/mf/devices/refresh`
@@ -164,6 +182,7 @@
 ## 🔧 Dependências Windows Necessárias
 
 ### Bibliotecas do Sistema
+
 - `mf.lib` - Media Foundation
 - `mfplat.lib` - Media Foundation Platform (carregada dinamicamente)
 - `mfuuid.lib` - Media Foundation UUIDs
@@ -172,6 +191,7 @@
 - `ws2_32.lib` - Winsock2 (para networking)
 
 ### Headers Necessários
+
 - `<mfapi.h>` - Media Foundation API
 - `<mfidl.h>` - Media Foundation Interfaces
 - `<mfreadwrite.h>` - Media Foundation Read/Write
@@ -181,6 +201,7 @@
 - `<winsock2.h>` - Winsock2 (deve ser incluído antes de `<windows.h>`)
 
 ### vcpkg Packages
+
 ```bash
 vcpkg install glfw3:x64-windows
 vcpkg install ffmpeg:x64-windows
@@ -190,12 +211,12 @@ vcpkg install libpng:x64-windows
 
 ## 📊 Estimativa de Progresso
 
-| Fase | Status | Progresso |
-|------|--------|-----------|
-| Fase 1: Preparação | ✅ Concluída | 100% |
-| Fase 2: Implementação Windows | ✅ Concluída | 100% |
-| Fase 3: Build e Distribuição | ⏳ Em Progresso | 80% |
-| Fase 4: Testes e Ajustes | ⏳ Aguardando | 0% |
+| Fase                          | Status          | Progresso |
+| ----------------------------- | --------------- | --------- |
+| Fase 1: Preparação            | ✅ Concluída    | 100%      |
+| Fase 2: Implementação Windows | ✅ Concluída    | 100%      |
+| Fase 3: Build e Distribuição  | ⏳ Em Progresso | 80%       |
+| Fase 4: Testes e Ajustes      | ⏳ Aguardando   | 0%        |
 
 **Progresso Geral: ~85%** (Fases 1 e 2 completas, Fase 3 em progresso)
 
@@ -204,12 +225,14 @@ vcpkg install libpng:x64-windows
 As **Fases 1 e 2** estão **completas**:
 
 ### ✅ Fase 1 (Preparação) - 100%
+
 - ✅ Interfaces abstratas criadas
 - ✅ Factories implementadas
 - ✅ Código Linux refatorado
 - ✅ CMakeLists.txt configurado
 
 ### ✅ Fase 2 (Implementação Windows) - 100%
+
 - ✅ `VideoCaptureMF` implementado (Media Foundation)
   - Carregamento dinâmico de funções (compatível MinGW/MXE)
   - Detecção de Wine e fallback
@@ -221,6 +244,7 @@ As **Fases 1 e 2** estão **completas**:
 - ⚠️ Controles de hardware parcialmente suportados (limitação do Media Foundation)
 
 ### ⏳ Fase 3 (Build e Distribuição) - 80%
+
 - ✅ Build com Docker configurado
 - ⏳ Documentação de build manual
 - ⏳ Instruções de instalação
@@ -237,16 +261,19 @@ O código agora deve compilar e funcionar no Windows. As implementações estão
 ## 🔧 Problemas Conhecidos e Soluções
 
 ### Media Foundation no MinGW/MXE
+
 **Problema:** `MFEnumDeviceSources` pode não estar disponível via linkagem estática.
 
 **Solução:** Implementado carregamento dinâmico de `MFEnumDeviceSources` via `GetProcAddress` em `VideoCaptureMF.cpp`.
 
 ### Winsock não inicializado
+
 **Problema:** Erro 10093 (WSANOTINITIALISED) ao criar sockets no Windows.
 
 **Solução:** Adicionada inicialização do Winsock (`WSAStartup`) no construtor de `HTTPServer` e limpeza (`WSACleanup`) no destrutor.
 
 ### Portal Web não mostra Media Foundation
+
 **Problema:** Frontend não detecta plataforma Windows e não mostra controles MF.
 
 **Solução:** Implementado endpoint `/api/v1/platform` e lógica no frontend para detectar plataforma e mostrar controles apropriados.
