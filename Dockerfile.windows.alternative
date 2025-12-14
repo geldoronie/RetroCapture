@@ -1,0 +1,41 @@
+# Alternativa: Usar imagem com MXE pré-configurado se disponível
+# Exemplo usando imagem base e instalando apenas o necessário
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MXE_TARGET=x86_64-w64-mingw32.shared
+
+# Instalar apenas dependências essenciais
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Usar MXE pré-compilado ou compilar apenas o essencial
+# Pular verificações de requirements do MXE
+WORKDIR /opt
+RUN git clone https://github.com/mxe/mxe.git && \
+    cd mxe && \
+    # Desabilitar verificação de requirements
+    sed -i 's/check-requirements:/check-requirements-dummy:/' Makefile && \
+    echo "check-requirements-dummy:" >> Makefile && \
+    # Compilar apenas compilador
+    make -j$(nproc) MXE_TARGETS=${MXE_TARGET} cc mingw-w64
+
+# Compilar dependências (sem verificação de requirements)
+WORKDIR /opt/mxe
+RUN make -j$(nproc) glfw3 openssl libpng MXE_TARGETS=${MXE_TARGET}
+
+COPY docker-build.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build.sh
+
+WORKDIR /workspace
+ENV PATH=/opt/mxe/usr/bin:$PATH
+ENV CMAKE_TOOLCHAIN_FILE=/opt/mxe/usr/${MXE_TARGET}/share/cmake/mxe-conf.cmake
+
+ENTRYPOINT ["/usr/local/bin/docker-build.sh"]
+

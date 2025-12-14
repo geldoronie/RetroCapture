@@ -2,7 +2,9 @@
 #include "UIConfiguration.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
+#ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
+#endif
 #include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
@@ -11,13 +13,13 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#ifdef __linux__
+#ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
-#endif
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <filesystem>
+#endif
+#include "../utils/FilesystemCompat.h"
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -81,9 +83,9 @@ bool UIManager::init(GLFWwindow *window)
     // Remover apenas o arquivo de configuração antigo (imgui.ini) se existir
     // O RetroCapture.ini pode ser criado normalmente
     std::string oldIniPath = "imgui.ini";
-    if (std::filesystem::exists(oldIniPath))
+    if (fs::exists(oldIniPath))
     {
-        std::filesystem::remove(oldIniPath);
+        fs::remove(oldIniPath);
         LOG_INFO("Arquivo de configuração antigo removido: " + oldIniPath);
     }
 
@@ -97,7 +99,7 @@ bool UIManager::init(GLFWwindow *window)
     // Scan for shaders
     // Verificar se há variável de ambiente para o caminho dos shaders (útil para AppImage)
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-    if (envShaderPath && std::filesystem::exists(envShaderPath))
+    if (envShaderPath && fs::exists(envShaderPath))
     {
         m_shaderBasePath = envShaderPath;
     }
@@ -126,9 +128,9 @@ void UIManager::shutdown()
     // Remover apenas o arquivo antigo (imgui.ini) se ainda existir
     // O RetroCapture.ini pode ser mantido
     std::string oldIniPath = "imgui.ini";
-    if (std::filesystem::exists(oldIniPath))
+    if (fs::exists(oldIniPath))
     {
-        std::filesystem::remove(oldIniPath);
+        fs::remove(oldIniPath);
         LOG_INFO("Arquivo de configuração antigo removido no shutdown: " + oldIniPath);
     }
 
@@ -276,8 +278,8 @@ void UIManager::renderShaderPanel()
         if (!currentPreset.empty())
         {
             // Extrair apenas o nome do arquivo
-            std::filesystem::path presetPath(currentPreset);
-            std::string fileName = presetPath.filename().string();
+            fs::path presetPath(currentPreset);
+            std::string fileName = presetPath.filename();
 
             if (ImGui::Button("Save"))
             {
@@ -318,8 +320,8 @@ void UIManager::renderShaderPanel()
                 if (m_onSavePreset && strlen(m_savePresetPath) > 0)
                 {
                     // Construir caminho completo
-                    std::filesystem::path basePath("shaders/shaders_glsl");
-                    std::filesystem::path newPath = basePath / m_savePresetPath;
+                    fs::path basePath("shaders/shaders_glsl");
+                    fs::path newPath = basePath / m_savePresetPath;
                     // Garantir extensão .glslp
                     if (newPath.extension() != ".glslp")
                     {
@@ -869,14 +871,13 @@ void UIManager::renderV4L2Controls()
             return;
 
         int32_t value, min, max;
-        bool available = false;
-        
+
         // Tentar obter valores do dispositivo usando interface genérica
         if (m_capture->getControl(name, value) &&
             m_capture->getControlMin(name, min) &&
             m_capture->getControlMax(name, max))
         {
-            available = true;
+            // Valores obtidos com sucesso
         }
         else
         {
@@ -957,7 +958,7 @@ void UIManager::setV4L2Controls(IVideoCapture *capture)
     {
         V4L2Control ctrl;
         ctrl.name = name;
-        
+
         // Usar interface genérica para obter informações do controle
         int32_t value, minVal, maxVal;
         if (capture->getControl(name, value) &&
@@ -1538,7 +1539,12 @@ void UIManager::renderStreamingPanel()
 
 void UIManager::scanV4L2Devices()
 {
+#ifdef PLATFORM_LINUX
     m_v4l2Devices = V4L2DeviceScanner::scan();
+#else
+    // Windows não usa V4L2
+    m_v4l2Devices.clear();
+#endif
 }
 
 void UIManager::refreshV4L2Devices()
@@ -1546,9 +1552,29 @@ void UIManager::refreshV4L2Devices()
     scanV4L2Devices();
 }
 
+void UIManager::refreshMFDevices()
+{
+    if (!m_capture)
+    {
+        m_mfDevices.clear();
+        return;
+    }
+
+    m_mfDevices = m_capture->listDevices();
+}
+
 void UIManager::setSourceType(SourceType sourceType)
 {
     m_sourceType = sourceType;
+
+    // Atualizar cache de dispositivos quando mudar o tipo de fonte
+#ifdef _WIN32
+    if (sourceType == SourceType::MF)
+    {
+        refreshMFDevices();
+    }
+#endif
+
     if (m_onSourceTypeChanged)
     {
         m_onSourceTypeChanged(sourceType);
@@ -1861,11 +1887,11 @@ std::string UIManager::getConfigPath() const
     const char *homeDir = std::getenv("HOME");
     if (homeDir)
     {
-        std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+        fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
         // Criar diretório se não existir
-        if (!std::filesystem::exists(configDir))
+        if (!fs::exists(configDir))
         {
-            std::filesystem::create_directories(configDir);
+            fs::create_directories(configDir);
         }
         return (configDir / "config.json").string();
     }
@@ -1877,7 +1903,7 @@ void UIManager::loadConfig()
 {
     std::string configPath = getConfigPath();
 
-    if (!std::filesystem::exists(configPath))
+    if (!fs::exists(configPath))
     {
         LOG_INFO("Arquivo de configuração não encontrado: " + configPath + " (usando padrões)");
         return;
@@ -2218,7 +2244,7 @@ void UIManager::saveConfig()
 
         // Salvar shader atual
         config["shader"] = {
-            {"current", m_currentShader.empty() ? nullptr : m_currentShader}};
+            {"current", m_currentShader.empty() ? "" : m_currentShader}};
 
         // Salvar configurações de fonte
         config["source"] = {
@@ -2226,7 +2252,7 @@ void UIManager::saveConfig()
 
         // Salvar dispositivo V4L2
         config["v4l2"] = {
-            {"device", m_currentDevice.empty() ? nullptr : m_currentDevice}};
+            {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
 
         // Escrever arquivo
         std::ofstream file(configPath);

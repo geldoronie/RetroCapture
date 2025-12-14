@@ -1,8 +1,8 @@
 #include "UIConfigurationShader.h"
 #include "UIManager.h"
 #include "../shader/ShaderEngine.h"
+#include "../utils/FilesystemCompat.h"
 #include <imgui.h>
-#include <filesystem>
 #include <cstring>
 
 UIConfigurationShader::UIConfigurationShader(UIManager *uiManager)
@@ -83,8 +83,8 @@ void UIConfigurationShader::renderSavePreset()
     if (!currentPreset.empty())
     {
         // Extrair apenas o nome do arquivo
-        std::filesystem::path presetPath(currentPreset);
-        std::string fileName = presetPath.filename().string();
+        fs::path presetPath(currentPreset);
+        std::string fileName = presetPath.filename();
 
         if (ImGui::Button("Save"))
         {
@@ -127,8 +127,8 @@ void UIConfigurationShader::renderSavePreset()
             if (onSavePreset && strlen(m_savePresetPath) > 0)
             {
                 // Construir caminho completo
-                std::filesystem::path basePath("shaders/shaders_glsl");
-                std::filesystem::path newPath = basePath / m_savePresetPath;
+                fs::path basePath("shaders/shaders_glsl");
+                fs::path newPath = basePath / m_savePresetPath;
                 // Garantir extensão .glslp
                 if (newPath.extension() != ".glslp")
                 {

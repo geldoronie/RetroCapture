@@ -127,6 +127,8 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 
 ## 🔨 Building
 
+### Linux (nativo)
+
 ```bash
 # Build
 ./build.sh
@@ -134,6 +136,37 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 # Run
 ./build/bin/retrocapture
 ```
+
+### Windows (cross-compile do Linux)
+
+**Opção 1: Docker (Recomendado) ⭐**
+
+A forma mais simples e confiável:
+
+```bash
+# Primeira vez (pode demorar 30-60 min para compilar MXE)
+docker-compose build build-windows
+docker-compose run --rm build-windows
+
+# Builds seguintes (muito mais rápido)
+docker-compose run --rm build-windows
+```
+
+O executável estará em `./build-windows/bin/retrocapture.exe`
+
+📖 Veja [docs/DOCKER_BUILD.md](docs/DOCKER_BUILD.md) para mais detalhes.
+
+**Opção 2: MXE Local**
+
+```bash
+# Configurar MXE
+./setup-mxe.sh
+
+# Compilar
+./build-windows.sh
+```
+
+📖 Veja [docs/MXE_SETUP.md](docs/MXE_SETUP.md) para mais detalhes.
 
 ## 📖 Usage
 

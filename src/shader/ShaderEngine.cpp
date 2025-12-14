@@ -1,10 +1,10 @@
 #include "ShaderEngine.h"
 #include "ShaderPreprocessor.h"
 #include "../utils/Logger.h"
+#include "../utils/FilesystemCompat.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
-#include <filesystem>
 #include <cmath>
 #include <cstring>
 #include <regex>
@@ -28,6 +28,13 @@ bool ShaderEngine::init()
     if (m_initialized)
     {
         return true;
+    }
+
+    // Carregar funções OpenGL antes de usar
+    if (!loadOpenGLFunctions())
+    {
+        LOG_ERROR("Falha ao carregar funções OpenGL no ShaderEngine");
+        return false;
     }
 
     createQuad();
@@ -81,8 +88,8 @@ bool ShaderEngine::loadShader(const std::string &shaderPath)
     disableShader();
 
     // Verificar extensão - apenas GLSL é suportado
-    std::filesystem::path shaderFilePath(shaderPath);
-    std::string extension = shaderFilePath.extension().string();
+    fs::path shaderFilePath(shaderPath);
+    std::string extension = shaderFilePath.extension();
     std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
 
     if (extension == ".slang")
@@ -161,8 +168,8 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
     cleanupPresetPasses();
 
     // Verificar extensão - apenas GLSLP é suportado
-    std::filesystem::path presetFilePath(presetPath);
-    std::string extension = presetFilePath.extension().string();
+    fs::path presetFilePath(presetPath);
+    std::string extension = presetFilePath.extension();
     std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
 
     if (extension == ".slangp")
@@ -234,8 +241,8 @@ bool ShaderEngine::loadPresetPasses()
         file.close();
 
         // Verificar extensão do shader - apenas GLSL é suportado
-        std::filesystem::path shaderPath(passInfo.shaderPath);
-        std::string shaderExtension = shaderPath.extension().string();
+        fs::path shaderPath(passInfo.shaderPath);
+        std::string shaderExtension = shaderPath.extension();
         std::transform(shaderExtension.begin(), shaderExtension.end(), shaderExtension.begin(), ::tolower);
 
         if (shaderExtension == ".slang")
@@ -1938,7 +1945,7 @@ bool ShaderEngine::loadTextureReference(const std::string &name, const std::stri
     }
 
     // Verificar se o arquivo existe
-    if (!std::filesystem::exists(path))
+    if (!fs::exists(path))
     {
         LOG_ERROR("Arquivo de textura não encontrado: " + path);
         return false;
@@ -3016,14 +3023,14 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
         else
         {
             // Caminho relativo - tentar várias localizações
-            std::filesystem::path currentPath = std::filesystem::current_path();
+            fs::path currentPath = fs::current_path();
 
             // 1. Relativo ao diretório do shader atual
             if (!basePath.empty())
             {
-                std::filesystem::path base(basePath);
-                std::filesystem::path resolved = base / includePath;
-                if (std::filesystem::exists(resolved))
+                fs::path base(basePath);
+                fs::path resolved = base / includePath;
+                if (fs::exists(resolved))
                 {
                     fullPath = resolved.string();
                 }
@@ -3032,8 +3039,8 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
             // 2. Em shaders/shaders_slang/
             if (fullPath.empty())
             {
-                std::filesystem::path slangPath = currentPath / "shaders" / "shaders_slang" / includePath;
-                if (std::filesystem::exists(slangPath))
+                fs::path slangPath = currentPath / "shaders" / "shaders_slang" / includePath;
+                if (fs::exists(slangPath))
                 {
                     fullPath = slangPath.string();
                 }
@@ -3042,8 +3049,8 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
             // 3. Relativo ao diretório atual
             if (fullPath.empty())
             {
-                std::filesystem::path relPath = currentPath / includePath;
-                if (std::filesystem::exists(relPath))
+                fs::path relPath = currentPath / includePath;
+                if (fs::exists(relPath))
                 {
                     fullPath = relPath.string();
                 }
@@ -3052,7 +3059,7 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
             // 4. Tentar com caminho relativo do shader (subindo diretórios)
             if (fullPath.empty() && !basePath.empty())
             {
-                std::filesystem::path base(basePath);
+                fs::path base(basePath);
                 // Remover "../" do início
                 std::string cleanPath = includePath;
                 while (cleanPath.find("../") == 0)
@@ -3060,15 +3067,15 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
                     cleanPath = cleanPath.substr(3);
                     base = base.parent_path();
                 }
-                std::filesystem::path resolved = base / cleanPath;
-                if (std::filesystem::exists(resolved))
+                fs::path resolved = base / cleanPath;
+                if (fs::exists(resolved))
                 {
                     fullPath = resolved.string();
                 }
             }
         }
 
-        if (!fullPath.empty() && std::filesystem::exists(fullPath))
+        if (!fullPath.empty() && fs::exists(fullPath))
         {
             // Carregar arquivo incluído
             std::ifstream includeFile(fullPath);
@@ -3080,7 +3087,7 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
                 includeFile.close();
 
                 // Processar includes recursivamente no arquivo incluído
-                std::filesystem::path includeFilePath(fullPath);
+                fs::path includeFilePath(fullPath);
                 std::string includeDir = includeFilePath.parent_path().string();
                 includeContent = ShaderPreprocessor::processIncludes(includeContent, includeDir);
 

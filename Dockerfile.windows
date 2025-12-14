@@ -1,0 +1,36 @@
+# Usar imagem especializada dockcross/windows-x64
+# Esta imagem já tem MXE configurado em /usr/src/mxe
+FROM dockcross/windows-x64:latest
+
+# A imagem dockcross já tem:
+# - MXE em /usr/src/mxe
+# - MinGW-w64 compilador
+# - CMake configurado
+
+# Compilar dependências usando o MXE que já vem no dockcross
+RUN cd /usr/src/mxe && \
+    echo "🔨 Compilando GLFW..." && \
+    make -j$(nproc) glfw3 MXE_TARGETS=x86_64-w64-mingw32.static && \
+    echo "🔨 Compilando OpenSSL..." && \
+    make -j$(nproc) openssl MXE_TARGETS=x86_64-w64-mingw32.static && \
+    echo "🔨 Compilando libpng..." && \
+    make -j$(nproc) libpng MXE_TARGETS=x86_64-w64-mingw32.static && \
+    echo "✅ Dependências compiladas"
+
+# Remover 'lame' do FFmpeg se necessário
+RUN cd /usr/src/mxe && \
+    if [ -f src/ffmpeg.mk ]; then \
+    sed -i 's/ lame / /g' src/ffmpeg.mk && \
+    sed -i '/--enable-libmp3lame/d' src/ffmpeg.mk; \
+    fi && \
+    echo "🔨 Compilando FFmpeg..." && \
+    make -j$(nproc) ffmpeg MXE_TARGETS=x86_64-w64-mingw32.static || \
+    echo "⚠️  FFmpeg opcional"
+
+# Script de build
+COPY docker-build.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build.sh
+
+WORKDIR /work
+
+ENTRYPOINT ["/usr/local/bin/docker-build.sh"]

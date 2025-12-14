@@ -44,6 +44,42 @@ if(NOT glfw3_FOUND)
         pkg_check_modules(GLFW REQUIRED glfw3)
         set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
         set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+    elseif(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
+        # Cross-compiling: primeiro tentar find_package (funciona com MXE)
+        # MXE fornece arquivos CMake config para glfw3
+        find_package(glfw3 QUIET)
+
+        if(NOT glfw3_FOUND)
+            # Fallback: tentar encontrar GLFW manualmente no sistema MinGW-w64
+            find_path(GLFW_INCLUDE_DIR GLFW/glfw3.h
+                PATHS
+                /usr/x86_64-w64-mingw32/include
+                /usr/x86_64-w64-mingw32/include/GLFW
+                ${CMAKE_FIND_ROOT_PATH}/include
+                ${CMAKE_FIND_ROOT_PATH}/include/GLFW
+            )
+            find_library(GLFW_LIBRARY
+                NAMES glfw3 glfw
+                PATHS
+                /usr/x86_64-w64-mingw32/lib
+                ${CMAKE_FIND_ROOT_PATH}/lib
+            )
+
+            if(GLFW_INCLUDE_DIR AND GLFW_LIBRARY)
+                set(glfw3_FOUND TRUE)
+                set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIR})
+                set(GLFW_LIBRARIES ${GLFW_LIBRARY})
+            endif()
+        endif()
+
+        if(NOT glfw3_FOUND)
+            message(WARNING "GLFW não encontrado para MinGW-w64.")
+            message(WARNING "Opções:")
+            message(WARNING "  1. Compilar GLFW manualmente para MinGW-w64")
+            message(WARNING "  2. Usar MXE para compilar dependências: ./setup-mxe.sh")
+            message(WARNING "  3. Usar bibliotecas pré-compiladas")
+            message(FATAL_ERROR "GLFW é necessário. Veja docs/WINDOWS_CROSS_COMPILE.md para mais informações.")
+        endif()
     else()
         message(FATAL_ERROR "GLFW não encontrado. Instale glfw3.")
     endif()
@@ -54,7 +90,14 @@ if(PLATFORM_LINUX)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PNG REQUIRED libpng)
 else()
-    find_package(PNG REQUIRED)
+    # Windows: tentar pkg-config primeiro (MXE), depois find_package
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PNG REQUIRED libpng)
+    else()
+        find_package(PNG REQUIRED)
+    endif()
 endif()
 
 # FFmpeg for streaming
@@ -65,10 +108,11 @@ if(PLATFORM_LINUX)
     pkg_check_modules(SWSCALE REQUIRED libswscale)
     pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 else()
-    # Windows: usar find_package ou vcpkg
+    # Windows: usar pkg-config (MXE) ou find_package (vcpkg)
     find_package(PkgConfig QUIET)
 
     if(PkgConfig_FOUND)
+        # MXE fornece pkg-config, então usar isso
         pkg_check_modules(AVCODEC REQUIRED libavcodec)
         pkg_check_modules(AVFORMAT REQUIRED libavformat)
         pkg_check_modules(AVUTIL REQUIRED libavutil)
@@ -76,12 +120,18 @@ else()
         pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
     else()
         # Tentar encontrar via find_package (vcpkg)
-        find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample)
-        set(AVCODEC_LIBRARIES avcodec)
-        set(AVFORMAT_LIBRARIES avformat)
-        set(AVUTIL_LIBRARIES avutil)
-        set(SWSCALE_LIBRARIES swscale)
-        set(SWRESAMPLE_LIBRARIES swresample)
+        find_package(FFmpeg QUIET COMPONENTS avcodec avformat avutil swscale swresample)
+
+        if(FFmpeg_FOUND)
+            set(AVCODEC_LIBRARIES avcodec)
+            set(AVFORMAT_LIBRARIES avformat)
+            set(AVUTIL_LIBRARIES avutil)
+            set(SWSCALE_LIBRARIES swscale)
+            set(SWRESAMPLE_LIBRARIES swresample)
+        else()
+            message(FATAL_ERROR "FFmpeg não encontrado. Use MXE (./setup-mxe.sh) ou vcpkg para instalar.")
+        endif()
+
         set(AVCODEC_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
         set(AVFORMAT_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
         set(AVUTIL_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
@@ -141,22 +191,59 @@ else()
     message(STATUS "=== HTTPS Support: DISABLED ===")
 endif()
 
-# ImGui (via FetchContent)
-include(FetchContent)
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG docking
-)
-FetchContent_MakeAvailable(imgui)
+# ImGui e nlohmann/json (usando ExternalProject para compatibilidade com CMake 3.10)
+# Verificar se FetchContent está disponível (CMake 3.11+)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
+    include(FetchContent)
+    FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG docking
+    )
+    FetchContent_MakeAvailable(imgui)
 
-# nlohmann/json (header-only JSON library)
-FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-)
-FetchContent_MakeAvailable(json)
+    FetchContent_Declare(
+        json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+    )
+    FetchContent_MakeAvailable(json)
+else()
+    # Fallback para CMake 3.10: baixar manualmente durante configure
+    set(IMGUI_DIR ${CMAKE_BINARY_DIR}/_deps/imgui-src)
+    set(JSON_DIR ${CMAKE_BINARY_DIR}/_deps/json-src)
+
+    # Baixar ImGui se não existir
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        message(STATUS "Baixando ImGui...")
+        file(MAKE_DIRECTORY ${IMGUI_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch docking https://github.com/ocornut/imgui.git ${IMGUI_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar ImGui")
+        endif()
+    endif()
+
+    # Baixar nlohmann/json se não existir
+    if(NOT EXISTS ${JSON_DIR}/include/nlohmann/json.hpp)
+        message(STATUS "Baixando nlohmann/json...")
+        file(MAKE_DIRECTORY ${JSON_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git ${JSON_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar nlohmann/json")
+        endif()
+    endif()
+
+    set(imgui_SOURCE_DIR ${IMGUI_DIR})
+    set(json_SOURCE_DIR ${JSON_DIR})
+endif()
 
 # Criar target para ImGui
 add_library(imgui STATIC
@@ -199,6 +286,17 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+
+    # Excluir arquivos Linux genéricos que não têm versão Windows
+    list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/AudioCapture\\.cpp$") # AudioCapture.cpp é Linux
+
+    # HTTPServer.cpp foi adaptado para Windows - incluir no build
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/HTTPServer\\.cpp$")      # HTTPServer.cpp agora suporta Windows
+    list(FILTER SOURCES EXCLUDE REGEX ".*/OpenGLRenderer\\.cpp$") # OpenGLRenderer.cpp usa linux/videodev2.h
+    list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp usa linux/videodev2.h
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
 endif()
 
 # Executável principal
@@ -249,18 +347,40 @@ elseif(PLATFORM_WINDOWS)
         mf
         mfplat
         mfuuid
+
+        # mfreadwrite pode não estar disponível no MXE - MFCreateSourceReaderFromMediaSource está em mfplat
         strmiids
         ole32
         oleaut32
     )
+
     # Windows Audio Session API (WASAPI) libraries
     list(APPEND LINK_LIBS
         avrt
-        propsys
+
+        # propsys não está disponível no MXE - PKEY_Device_FriendlyName está definido estaticamente no código
     )
 endif()
 
 target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
+
+# MinGW-w64 precisa linkar com stdc++fs para filesystem (GCC 8+)
+# Para GCC < 8, nossa implementação manual usa shlwapi
+if(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Verificar versão do GCC
+    execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} -dumpversion
+        OUTPUT_VARIABLE GCC_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if(GCC_VERSION VERSION_GREATER_EQUAL "8.0")
+        target_link_libraries(retrocapture PRIVATE stdc++fs)
+    else()
+        # GCC < 8: usar nossa implementação manual que precisa de shlwapi
+        target_link_libraries(retrocapture PRIVATE shlwapi)
+    endif()
+endif()
 
 # Include directories
 if(NOT glfw3_FOUND)
@@ -318,12 +438,8 @@ target_compile_options(retrocapture PRIVATE
 )
 
 # Linker flags específicas por build type
-target_link_options(retrocapture PRIVATE
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Release>:>
-    $<$<CONFIG:RelWithDebInfo>:-g>
-    $<$<CONFIG:MinSizeRel>:>
-)
+# target_link_options não disponível no CMake 3.10 (requer 3.13+)
+# As flags de linker são opcionais e não críticas para o build
 
 # Copiar pasta de shaders para o diretório de build
 # Isso garante que o binário encontre os shaders corretamente ao executar
@@ -395,6 +511,28 @@ if(HTTPS_ENABLED)
         target_link_libraries(retrocapture PRIVATE ${OPENSSL_LIBRARIES})
         target_include_directories(retrocapture PRIVATE ${OPENSSL_INCLUDE_DIRS})
         target_compile_definitions(retrocapture PRIVATE ENABLE_HTTPS)
+    endif()
+
+    # Resolver conflito de símbolos duplicados entre OpenSSL e GnuTLS (usado pelo FFmpeg)
+    # Ambos definem funções AES-NI, então precisamos permitir múltiplas definições
+    if(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
+        # Usar --allow-multiple-definition para resolver conflitos de símbolos
+        # Isso é necessário porque FFmpeg linka com GnuTLS que tem suas próprias implementações AES-NI
+        # que conflitam com as do OpenSSL
+        # CMake 3.10 não tem target_link_options, então usamos set_target_properties
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            get_target_property(CURRENT_LINK_FLAGS retrocapture LINK_FLAGS)
+
+            if(CURRENT_LINK_FLAGS)
+                set_target_properties(retrocapture PROPERTIES
+                    LINK_FLAGS "${CURRENT_LINK_FLAGS} -Wl,--allow-multiple-definition"
+                )
+            else()
+                set_target_properties(retrocapture PROPERTIES
+                    LINK_FLAGS "-Wl,--allow-multiple-definition"
+                )
+            endif()
+        endif()
     endif()
 endif()
 

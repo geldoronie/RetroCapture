@@ -3,7 +3,9 @@
 #include <string>
 #include <map>
 #include <cstddef>
+#ifdef PLATFORM_LINUX
 #include <sys/types.h>
+#endif
 
 #ifdef ENABLE_HTTPS
 struct ssl_st;

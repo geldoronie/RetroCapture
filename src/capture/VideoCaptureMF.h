@@ -89,7 +89,7 @@ private:
     bool readSample(Frame &frame);
     void generateDummyFrame(Frame &frame);
     GUID getPixelFormatGUID(uint32_t pixelFormat);
-    uint32_t getPixelFormatFromGUID(const GUID &guid);
+    uint32_t getPixelFormatFromGUID(const GUID &guid) const;
     std::string getControlNameFromMF(const std::string &controlName);
     bool setControlMF(const std::string &controlName, int32_t value);
     bool getControlMF(const std::string &controlName, int32_t &value);

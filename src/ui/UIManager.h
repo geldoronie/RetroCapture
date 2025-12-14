@@ -7,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include "../renderer/glad_loader.h"
+#include "../capture/IVideoCapture.h"
 
 struct GLFWwindow;
 
@@ -109,7 +110,8 @@ public:
     enum class SourceType
     {
         None = 0,
-        V4L2 = 1
+        V4L2 = 1,
+        MF = 2 // Media Foundation (Windows)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -293,6 +295,10 @@ public:
     // V4L2 getters
     const std::vector<std::string> &getV4L2Devices() const { return m_v4l2Devices; }
     const std::vector<V4L2Control> &getV4L2Controls() const { return m_v4l2Controls; }
+
+    // Media Foundation getters
+    const std::vector<DeviceInfo> &getMFDevices() const { return m_mfDevices; }
+    void refreshMFDevices();
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -512,10 +518,15 @@ private:
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 
     // Source selection
-    SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2
+#ifdef _WIN32
+    SourceType m_sourceType = SourceType::MF; // Padrão: Media Foundation no Windows
+#else
+    SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
+#endif
 
     // Device selection (V4L2)
     std::vector<std::string> m_v4l2Devices;
+    std::vector<DeviceInfo> m_mfDevices;
     std::string m_currentDevice;
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;

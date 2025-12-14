@@ -12,8 +12,17 @@
 
 #ifdef _WIN32
 
+// PKEY_Device_FriendlyName pode não estar definido no MinGW
+// Definir manualmente se necessário - usar definição estática para evitar problemas de linkagem
+#ifndef PKEY_Device_FriendlyName
+// DEFINE_PROPERTYKEY pode não estar disponível no MinGW, usar definição estática
+EXTERN_C const PROPERTYKEY PKEY_Device_FriendlyName = {
+    {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+    14};
+#endif
+
 // Helper to release COM objects
-template<typename T>
+template <typename T>
 void SafeRelease(T **ppT)
 {
     if (*ppT)
@@ -24,26 +33,18 @@ void SafeRelease(T **ppT)
 }
 
 // Helper macro for COM error checking
-#define CHECK_HR(hr, msg) \
-    if (FAILED(hr)) { \
-        _com_error err(hr); \
+#define CHECK_HR(hr, msg)                                        \
+    if (FAILED(hr))                                              \
+    {                                                            \
+        _com_error err(hr);                                      \
         LOG_ERROR(msg + std::string(": ") + err.ErrorMessage()); \
-        return false; \
+        return false;                                            \
     }
 
 AudioCaptureWASAPI::AudioCaptureWASAPI()
-    : m_deviceEnumerator(nullptr)
-    , m_device(nullptr)
-    , m_audioClient(nullptr)
-    , m_captureClient(nullptr)
-    , m_endpointVolume(nullptr)
-    , m_sampleRate(44100)
-    , m_channels(2)
-    , m_bytesPerSample(2) // 16-bit
-    , m_waveFormat(nullptr)
-    , m_isOpen(false)
-    , m_isCapturing(false)
-    , m_captureThreadRunning(false)
+    : m_deviceEnumerator(nullptr), m_device(nullptr), m_audioClient(nullptr), m_captureClient(nullptr), m_endpointVolume(nullptr), m_sampleRate(44100), m_channels(2), m_bytesPerSample(2) // 16-bit
+      ,
+      m_waveFormat(nullptr), m_isOpen(false), m_isCapturing(false), m_captureThreadRunning(false)
 {
     if (!initializeCOM())
     {
@@ -498,7 +499,7 @@ size_t AudioCaptureWASAPI::getSamples(int16_t *buffer, size_t maxSamples)
     {
         std::memcpy(buffer, m_audioBuffer.data(), samplesToCopy * sizeof(int16_t));
         m_audioBuffer.erase(m_audioBuffer.begin(),
-                           m_audioBuffer.begin() + samplesToCopy);
+                            m_audioBuffer.begin() + samplesToCopy);
     }
 
     return samplesToCopy;
@@ -618,4 +619,3 @@ void AudioCaptureWASAPI::convertToFloat(const int16_t *input, float *output, siz
 }
 
 #endif // _WIN32
-

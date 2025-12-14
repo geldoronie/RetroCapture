@@ -1,18 +1,20 @@
 #include "HTTPTSStreamer.h"
 #include "../utils/Logger.h"
 
+#ifdef PLATFORM_LINUX
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#endif
 #include <cstring>
 #include <cerrno>
 #include <cstdlib>
 #include <time.h>
 #include <fstream>
 #include <sstream>
-#include <filesystem>
+#include "../utils/FilesystemCompat.h"
 
 extern "C"
 {
@@ -26,10 +28,11 @@ extern "C"
 }
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
-static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
+// FFmpeg antigo espera uint8_t* (não const), mas não modifica o buffer
+static int writeCallback(void *opaque, uint8_t *buf, int buf_size)
 {
     HTTPTSStreamer *streamer = static_cast<HTTPTSStreamer *>(opaque);
-    return streamer->writeToClients(buf, buf_size);
+    return streamer->writeToClients(const_cast<const uint8_t *>(buf), buf_size);
 }
 
 HTTPTSStreamer::HTTPTSStreamer()
@@ -193,7 +196,7 @@ bool HTTPTSStreamer::start()
             const char *homeDir = std::getenv("HOME");
             if (homeDir)
             {
-                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+                fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
                 return configDir.string();
             }
             return "";
@@ -204,15 +207,15 @@ bool HTTPTSStreamer::start()
         auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
         {
             // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
-            std::filesystem::path testPath(relativePath);
-            if (testPath.is_absolute() && std::filesystem::exists(testPath))
+            fs::path testPath(relativePath);
+            if (testPath.is_absolute() && fs::exists(testPath))
             {
-                return std::filesystem::absolute(testPath).string();
+                return fs::absolute(testPath).string();
             }
 
             // Extrair apenas o nome do arquivo
-            std::filesystem::path inputPath(relativePath);
-            std::string fileName = inputPath.filename().string();
+            fs::path inputPath(relativePath);
+            std::string fileName = inputPath.filename();
 
             // Lista de locais para buscar (em ordem de prioridade)
             std::vector<std::string> possiblePaths;
@@ -221,7 +224,7 @@ bool HTTPTSStreamer::start()
             std::string userConfigDir = getUserConfigDir();
             if (!userConfigDir.empty())
             {
-                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                fs::path userSSLDir = fs::path(userConfigDir) / "ssl";
                 possiblePaths.push_back((userSSLDir / fileName).string());
             }
 
@@ -247,10 +250,10 @@ bool HTTPTSStreamer::start()
             // Tentar caminhos na ordem de prioridade
             for (const auto &path : possiblePaths)
             {
-                std::filesystem::path fsPath(path);
-                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                fs::path fsPath(path);
+                if (fs::exists(fsPath) && fs::is_regular_file(fsPath))
                 {
-                    return std::filesystem::absolute(fsPath).string();
+                    return fs::absolute(fsPath).string();
                 }
             }
 
@@ -258,10 +261,10 @@ bool HTTPTSStreamer::start()
         };
 
         // Extrair apenas o nome do arquivo do caminho fornecido
-        std::filesystem::path certInputPath(m_sslCertPath);
-        std::filesystem::path keyInputPath(m_sslKeyPath);
-        std::string certFileName = certInputPath.filename().string();
-        std::string keyFileName = keyInputPath.filename().string();
+        fs::path certInputPath(m_sslCertPath);
+        fs::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename();
+        std::string keyFileName = keyInputPath.filename();
 
         // Tentar encontrar os arquivos
         std::string foundCertPath = findSSLFile(m_sslCertPath);
@@ -394,8 +397,8 @@ bool HTTPTSStreamer::startWebPortalServer()
             const char *homeDir = std::getenv("HOME");
             if (homeDir)
             {
-                std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
-                if (std::filesystem::exists(configDir))
+                fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
+                if (fs::exists(configDir))
                 {
                     return configDir.string();
                 }
@@ -408,8 +411,8 @@ bool HTTPTSStreamer::startWebPortalServer()
             if (relativePath.empty())
                 return "";
 
-            std::filesystem::path inputPath(relativePath);
-            std::string fileName = inputPath.filename().string();
+            fs::path inputPath(relativePath);
+            std::string fileName = inputPath.filename();
 
             // Lista de locais para buscar (em ordem de prioridade)
             std::vector<std::string> possiblePaths;
@@ -418,7 +421,7 @@ bool HTTPTSStreamer::startWebPortalServer()
             std::string userConfigDir = getUserConfigDir();
             if (!userConfigDir.empty())
             {
-                std::filesystem::path userSSLDir = std::filesystem::path(userConfigDir) / "ssl";
+                fs::path userSSLDir = fs::path(userConfigDir) / "ssl";
                 possiblePaths.push_back((userSSLDir / fileName).string());
             }
 
@@ -444,10 +447,10 @@ bool HTTPTSStreamer::startWebPortalServer()
             // Tentar caminhos na ordem de prioridade
             for (const auto &path : possiblePaths)
             {
-                std::filesystem::path fsPath(path);
-                if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+                fs::path fsPath(path);
+                if (fs::exists(fsPath) && fs::is_regular_file(fsPath))
                 {
-                    return std::filesystem::absolute(fsPath).string();
+                    return fs::absolute(fsPath).string();
                 }
             }
 
@@ -455,10 +458,10 @@ bool HTTPTSStreamer::startWebPortalServer()
         };
 
         // Extrair apenas o nome do arquivo do caminho fornecido
-        std::filesystem::path certInputPath(m_sslCertPath);
-        std::filesystem::path keyInputPath(m_sslKeyPath);
-        std::string certFileName = certInputPath.filename().string();
-        std::string keyFileName = keyInputPath.filename().string();
+        fs::path certInputPath(m_sslCertPath);
+        fs::path keyInputPath(m_sslKeyPath);
+        std::string certFileName = certInputPath.filename();
+        std::string keyFileName = keyInputPath.filename();
 
         // Buscar certificados SSL
         std::string foundCertPath = findSSLFile(m_sslCertPath);
@@ -654,8 +657,14 @@ void HTTPTSStreamer::cleanup()
 void HTTPTSStreamer::handleClient(int clientFd)
 {
     // Configurar socket para baixa latência
+    #ifdef PLATFORM_LINUX
     int flag = 1;
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    #else
+    // Windows: usar BOOL
+    BOOL flag = TRUE;
+    setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag, sizeof(flag));
+    #endif
 
     // Ler requisição HTTP
     char buffer[4096];
@@ -1357,7 +1366,12 @@ bool HTTPTSStreamer::initializeAudioCodec()
     codecCtx->codec_id = codec->id;
     codecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
     codecCtx->sample_rate = m_audioSampleRate;
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     av_channel_layout_default(&codecCtx->ch_layout, m_audioChannelsCount);
+    #else
+    codecCtx->channels = m_audioChannelsCount;
+    codecCtx->channel_layout = av_get_default_channel_layout(m_audioChannelsCount);
+    #endif
     // AAC requer float planar (fltp), não s16
     codecCtx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     codecCtx->bit_rate = m_audioBitrate;
@@ -1384,6 +1398,7 @@ bool HTTPTSStreamer::initializeAudioCodec()
         return false;
     }
 
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     AVChannelLayout inChLayout, outChLayout;
     av_channel_layout_default(&inChLayout, m_audioChannelsCount);
     av_channel_layout_default(&outChLayout, m_audioChannelsCount);
@@ -1409,6 +1424,24 @@ bool HTTPTSStreamer::initializeAudioCodec()
 
     av_channel_layout_uninit(&inChLayout);
     av_channel_layout_uninit(&outChLayout);
+    #else
+    av_opt_set_int(swrCtx, "in_channel_layout", av_get_default_channel_layout(m_audioChannelsCount), 0);
+    av_opt_set_int(swrCtx, "in_sample_rate", static_cast<int>(m_audioSampleRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+
+    av_opt_set_int(swrCtx, "out_channel_layout", av_get_default_channel_layout(m_audioChannelsCount), 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", static_cast<int>(m_audioSampleRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+
+    if (swr_init(swrCtx) < 0)
+    {
+        LOG_ERROR("Failed to initialize SWR context");
+        swr_free(&swrCtx);
+        avcodec_free_context(&codecCtx);
+        m_audioCodecContext = nullptr;
+        return false;
+    }
+    #endif
     m_swrContext = swrCtx;
 
     // Alocar frame de áudio
@@ -1424,7 +1457,12 @@ bool HTTPTSStreamer::initializeAudioCodec()
     }
 
     audioFrame->format = AV_SAMPLE_FMT_FLTP;
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     av_channel_layout_default(&audioFrame->ch_layout, m_audioChannelsCount);
+    #else
+    audioFrame->channels = m_audioChannelsCount;
+    audioFrame->channel_layout = av_get_default_channel_layout(m_audioChannelsCount);
+    #endif
     audioFrame->sample_rate = m_audioSampleRate;
     audioFrame->nb_samples = codecCtx->frame_size;
     if (av_frame_get_buffer(audioFrame, 0) < 0)
@@ -1570,7 +1608,11 @@ bool HTTPTSStreamer::initializeMuxers()
                     memset(dummyFrame->data[2], 128, dummyFrame->linesize[2] * dummyFrame->height / 2);
 
                 dummyFrame->pts = 0;
+                #if LIBAVCODEC_VERSION_MAJOR >= 59
                 dummyFrame->flags |= AV_FRAME_FLAG_KEY;
+                #else
+                dummyFrame->key_frame = 1;
+                #endif
 
                 // Enviar frame dummy para gerar extradata
                 if (avcodec_send_frame(videoCtx, dummyFrame) >= 0)
@@ -1922,7 +1964,11 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     {
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
         // Usar flags do frame para garantir que o codec respeite o keyframe
+        #if LIBAVCODEC_VERSION_MAJOR >= 59
         videoFrame->flags |= AV_FRAME_FLAG_KEY;
+        #else
+        videoFrame->key_frame = 1;
+        #endif
     }
     m_videoFrameCount++;
 

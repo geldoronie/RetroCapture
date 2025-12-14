@@ -2,10 +2,50 @@
 #include "../utils/Logger.h"
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
+#ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
 #include "../processing/FrameProcessor.h"
-#include "../output/WindowManager.h"
 #include "../renderer/OpenGLRenderer.h"
+#else
+// Windows: criar stubs ou implementações alternativas
+// Nota: OpenGLRenderer e FrameProcessor são específicos do Linux (usam V4L2)
+// No Windows, o processamento de frames pode ser diferente
+class FrameProcessor
+{
+public:
+    void init(void *) {}
+    void deleteTexture() {}
+    bool hasValidFrame() const { return false; }
+    GLuint getTexture() const { return 0; }
+    uint32_t getTextureWidth() const { return 0; }
+    uint32_t getTextureHeight() const { return 0; }
+    bool processFrame(void *) { return false; }
+};
+
+class OpenGLRenderer
+{
+public:
+    bool init() { return true; }
+    void shutdown() {}
+    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight,
+                       bool shouldFlipY, bool isShaderTexture, float brightness, float contrast,
+                       bool maintainAspect, uint32_t renderWidth, uint32_t renderHeight)
+    {
+        // Stub para Windows - implementação real seria diferente
+        (void)texture;
+        (void)windowWidth;
+        (void)windowHeight;
+        (void)shouldFlipY;
+        (void)isShaderTexture;
+        (void)brightness;
+        (void)contrast;
+        (void)maintainAspect;
+        (void)renderWidth;
+        (void)renderHeight;
+    }
+};
+#endif
+#include "../output/WindowManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../renderer/glad_loader.h"
@@ -15,15 +55,17 @@
 #include "../audio/AudioCaptureFactory.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#ifdef __linux__
+#ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
 #endif
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#ifdef PLATFORM_LINUX
 #include <unistd.h>
-#include <filesystem>
+#endif
+#include "../utils/FilesystemCompat.h"
 #include <time.h>
 #include <sstream>
 #include <iomanip>
@@ -49,21 +91,29 @@ bool Application::init()
     {
         return false;
     }
+    LOG_INFO("Janela inicializada");
 
     if (!initRenderer())
     {
         return false;
     }
+    LOG_INFO("Renderer inicializado");
 
     if (!initCapture())
     {
-        return false;
+        LOG_WARN("Falha ao inicializar captura - continuando em modo dummy");
+        // Não retornar false, continuar em modo dummy
+    }
+    else
+    {
+        LOG_INFO("Captura inicializada");
     }
 
     if (!initUI())
     {
         return false;
     }
+    LOG_INFO("UI inicializada");
 
     if (!initStreaming())
     {
@@ -134,27 +184,43 @@ bool Application::initWindow()
 
 bool Application::initRenderer()
 {
+    LOG_INFO("Inicializando renderer...");
     // Garantir que o contexto OpenGL está ativo
     if (m_window)
     {
+        LOG_INFO("Fazendo contexto OpenGL atual...");
         m_window->makeCurrent();
+        LOG_INFO("Contexto OpenGL ativado");
+    }
+    else
+    {
+        LOG_ERROR("Janela não disponível para inicializar renderer");
+        return false;
     }
 
+    LOG_INFO("Criando OpenGLRenderer...");
     m_renderer = std::make_unique<OpenGLRenderer>();
+    LOG_INFO("OpenGLRenderer criado");
 
+    LOG_INFO("Inicializando OpenGLRenderer...");
     if (!m_renderer->init())
     {
         LOG_ERROR("Falha ao inicializar renderer");
         m_renderer.reset();
         return false;
     }
+    LOG_INFO("OpenGLRenderer inicializado");
 
     // Inicializar FrameProcessor
+    LOG_INFO("Criando FrameProcessor...");
     m_frameProcessor = std::make_unique<FrameProcessor>();
     m_frameProcessor->init(m_renderer.get());
+    LOG_INFO("FrameProcessor criado");
 
     // Inicializar ShaderEngine
+    LOG_INFO("Criando ShaderEngine...");
     m_shaderEngine = std::make_unique<ShaderEngine>();
+    LOG_INFO("ShaderEngine criado, inicializando...");
     if (!m_shaderEngine->init())
     {
         LOG_ERROR("Falha ao inicializar ShaderEngine");
@@ -163,6 +229,7 @@ bool Application::initRenderer()
     }
     else
     {
+        LOG_INFO("ShaderEngine inicializado");
         // IMPORTANTE: Atualizar viewport do ShaderEngine com as dimensões atuais da janela
         // Isso é especialmente importante quando a janela é criada em fullscreen
         // O callback de resize pode não ser chamado imediatamente na criação
@@ -190,8 +257,12 @@ bool Application::initRenderer()
                         std::lock_guard<std::mutex> lock(appPtr->m_resizeMutex);
                         appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                     }
-                    // Pequeno delay para garantir que o ShaderEngine terminou de recriar framebuffers
+// Pequeno delay para garantir que o ShaderEngine terminou de recriar framebuffers
+#ifdef PLATFORM_LINUX
                     usleep(10000); // 10ms
+#else
+                    Sleep(10); // 10ms
+#endif
                     appPtr->m_isResizing = false;
                 } });
         }
@@ -226,20 +297,38 @@ bool Application::initRenderer()
 
 bool Application::initCapture()
 {
+    LOG_INFO("Criando VideoCapture...");
     m_capture = VideoCaptureFactory::create();
     if (!m_capture)
     {
         LOG_ERROR("Falha ao criar VideoCapture para esta plataforma");
         return false;
     }
+    LOG_INFO("VideoCapture criado com sucesso");
 
-    // Tentar abrir dispositivo especificado (ou padrão /dev/video0)
+    // Tentar abrir dispositivo especificado
+    // No Windows, m_devicePath pode estar vazio ou ser um índice de dispositivo MF
+    // No Linux, m_devicePath é o caminho do dispositivo V4L2 (ex: /dev/video0)
     // Se falhar, ativar modo dummy (gera frames pretos)
+    if (m_devicePath.empty())
+    {
+#ifdef _WIN32
+        LOG_INFO("Nenhum dispositivo especificado - ativando modo dummy");
+#else
+        LOG_INFO("Nenhum dispositivo especificado - usando padrão /dev/video0");
+        m_devicePath = "/dev/video0";
+#endif
+    }
+
     if (!m_capture->open(m_devicePath))
     {
-        LOG_WARN("Falha ao abrir dispositivo de captura: " + m_devicePath);
+        LOG_WARN("Falha ao abrir dispositivo de captura: " + (m_devicePath.empty() ? "(nenhum)" : m_devicePath));
         LOG_INFO("Ativando modo dummy: gerando frames pretos na resolução especificada.");
+#ifdef __linux__
         LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
+#elif defined(_WIN32)
+        LOG_INFO("Selecione um dispositivo na aba Media Foundation para usar captura real.");
+#endif
 
         // Ativar modo dummy
         m_capture->setDummyMode(true);
@@ -418,8 +507,12 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     m_capture->stopCapture();
     m_capture->close();
 
-    // Pequeno delay para garantir que o dispositivo foi liberado
+// Pequeno delay para garantir que o dispositivo foi liberado
+#ifdef PLATFORM_LINUX
     usleep(100000); // 100ms
+#else
+    Sleep(100); // 100ms
+#endif
 
     // Reabrir dispositivo
     LOG_INFO("Reabrindo dispositivo...");
@@ -435,7 +528,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         LOG_ERROR("Falha ao configurar novo formato de captura");
         // Tentar rollback: reabrir com formato anterior
         m_capture->close();
-        usleep(100000);
+#ifdef PLATFORM_LINUX
+        usleep(100000); // 100ms
+#else
+        Sleep(100); // 100ms
+#endif
         if (m_capture->open(devicePath))
         {
             m_capture->setFormat(oldWidth, oldHeight, 0);
@@ -463,7 +560,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
-        usleep(100000);
+#ifdef PLATFORM_LINUX
+        usleep(100000); // 100ms
+#else
+        Sleep(100); // 100ms
+#endif
         if (m_capture->open(devicePath))
         {
             m_capture->setFormat(oldWidth, oldHeight, 0);
@@ -486,7 +587,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     for (int i = 0; i < 5; ++i)
     {
         m_capture->captureLatestFrame(dummyFrame);
+#ifdef PLATFORM_LINUX
         usleep(10000); // 10ms entre tentativas
+#else
+        Sleep(10); // 10ms entre tentativas
+#endif
     }
 
     LOG_INFO("Captura reconfigurada com sucesso: " +
@@ -538,13 +643,13 @@ bool Application::initUI()
             } else {
                 // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
                 const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-                std::filesystem::path shaderBasePath;
-                if (envShaderPath && std::filesystem::exists(envShaderPath)) {
-                    shaderBasePath = std::filesystem::path(envShaderPath);
+                fs::path shaderBasePath;
+                if (envShaderPath && fs::exists(envShaderPath)) {
+                    shaderBasePath = fs::path(envShaderPath);
                 } else {
-                    shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+                    shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
                 }
-                std::filesystem::path fullPath = shaderBasePath / shaderPath;
+                fs::path fullPath = shaderBasePath / shaderPath;
                 if (m_shaderEngine->loadPreset(fullPath.string())) {
                     LOG_INFO("Shader carregado via UI: " + shaderPath);
                 } else {
@@ -591,7 +696,8 @@ bool Application::initUI()
             }
         } });
 
-    m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value) {
+    m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
+                                  {
         if (!m_capture) return;
         
         // Usar interface genérica para definir controle
@@ -602,8 +708,7 @@ bool Application::initUI()
             value = std::max(minVal, std::min(maxVal, value));
         }
         
-        m_capture->setControl(name, value);
-    });
+        m_capture->setControl(name, value); });
 
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
@@ -876,16 +981,16 @@ bool Application::initUI()
     {
         // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
         const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        std::filesystem::path shaderBasePath;
-        if (envShaderPath && std::filesystem::exists(envShaderPath))
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
         {
-            shaderBasePath = std::filesystem::path(envShaderPath);
+            shaderBasePath = fs::path(envShaderPath);
         }
         else
         {
-            shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
         }
-        std::filesystem::path fullPath = shaderBasePath / loadedShader;
+        fs::path fullPath = shaderBasePath / loadedShader;
         if (m_shaderEngine->loadPreset(fullPath.string()))
         {
             LOG_INFO("Shader carregado da configuração: " + loadedShader);
@@ -1404,99 +1509,164 @@ bool Application::initUI()
     // Callback para mudança de tipo de fonte
     m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
                                  {
-        LOG_INFO("Tipo de fonte alterado via UI");
-        
-        if (sourceType == UIManager::SourceType::None)
-        {
-            LOG_INFO("Fonte None selecionada - ativando modo dummy");
-            
-            // Fechar dispositivo atual se houver
-            if (m_capture) {
-                m_capture->stopCapture();
-                m_capture->close();
-                // Ativar modo dummy
-                m_capture->setDummyMode(true);
-                
-                // Configurar formato dummy com resolução atual
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
-                {
-                    if (m_capture->startCapture())
-                    {
-                        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
-                                 std::to_string(m_capture->getHeight()));
-                        
-                        // Atualizar informações na UI
-                        if (m_ui) {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
-                        }
-                    }
-                }
-            }
-        }
-        else if (sourceType == UIManager::SourceType::V4L2)
-        {
-            LOG_INFO("Fonte V4L2 selecionada");
-            // Se já houver um dispositivo selecionado, tentar reabrir
-            if (!m_devicePath.empty() && m_capture)
-            {
-                m_capture->stopCapture();
-                m_capture->close();
-                m_capture->setDummyMode(false);
-                
-                if (m_capture->open(m_devicePath))
-                {
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
-                    {
-                        m_capture->setFramerate(m_captureFps);
-                        if (m_capture->startCapture())
-                        {
-                            if (m_ui) {
-                                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                    m_captureFps, m_devicePath);
-                                m_ui->setV4L2Controls(m_capture.get());
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // Se falhar ao abrir dispositivo, voltar para modo dummy
-                    LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
-                    m_capture->setDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
-                    {
-                        if (m_capture->startCapture() && m_ui)
-                        {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr);
-                        }
-                    }
-                }
-            }
-            else if (m_capture)
-            {
-                // Se não houver dispositivo selecionado mas V4L2 foi escolhido, manter em modo dummy
-                LOG_INFO("Nenhum dispositivo V4L2 selecionado - mantendo modo dummy");
-                if (!m_capture->isOpen() || !m_capture->isDummyMode())
-                {
-                    m_capture->stopCapture();
-                    m_capture->close();
-                    m_capture->setDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
-                    {
-                        if (m_capture->startCapture() && m_ui)
-                        {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr);
-                        }
-                    }
-                }
-            }
-        } });
+                                     LOG_INFO("Tipo de fonte alterado via UI");
+
+                                     if (sourceType == UIManager::SourceType::None)
+                                     {
+                                         LOG_INFO("Fonte None selecionada - ativando modo dummy");
+
+                                         // Fechar dispositivo atual se houver
+                                         if (m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             // Ativar modo dummy
+                                             m_capture->setDummyMode(true);
+
+                                             // Configurar formato dummy com resolução atual
+                                             if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                             {
+                                                 if (m_capture->startCapture())
+                                                 {
+                                                     LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                                                              std::to_string(m_capture->getHeight()));
+
+                                                     // Atualizar informações na UI
+                                                     if (m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#ifdef __linux__
+                                     if (sourceType == UIManager::SourceType::V4L2)
+                                     {
+                                         LOG_INFO("Fonte V4L2 selecionada");
+                                         // Se já houver um dispositivo selecionado, tentar reabrir
+                                         if (!m_devicePath.empty() && m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             m_capture->setDummyMode(false);
+
+                                             if (m_capture->open(m_devicePath))
+                                             {
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     m_capture->setFramerate(m_captureFps);
+                                                     if (m_capture->startCapture())
+                                                     {
+                                                         if (m_ui)
+                                                         {
+                                                             m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                                  m_captureFps, m_devicePath);
+                                                             m_ui->setV4L2Controls(m_capture.get());
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                             else
+                                             {
+                                                 // Se falhar ao abrir dispositivo, voltar para modo dummy
+                                                 LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setV4L2Controls(nullptr);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         else if (m_capture)
+                                         {
+                                             // Se não houver dispositivo selecionado mas V4L2 foi escolhido, manter em modo dummy
+                                             LOG_INFO("Nenhum dispositivo V4L2 selecionado - mantendo modo dummy");
+                                         }
+                                     }
+#endif
+#ifdef _WIN32
+                                     if (sourceType == UIManager::SourceType::MF)
+                                     {
+                                         LOG_INFO("Fonte Media Foundation selecionada");
+
+                                         // No Windows, m_devicePath pode ser vazio ou conter caminho Linux (/dev/video0)
+                                         // Limpar se for caminho Linux
+                                         std::string devicePath = m_devicePath;
+                                         if (!devicePath.empty() && devicePath.find("/dev/video") == 0)
+                                         {
+                                             LOG_INFO("Limpando caminho de dispositivo Linux: " + devicePath);
+                                             devicePath.clear();
+                                             m_devicePath.clear(); // Atualizar também o membro da classe
+                                         }
+
+                                         // Se já houver um dispositivo selecionado, tentar reabrir
+                                         if (!devicePath.empty() && m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             m_capture->setDummyMode(false);
+
+                                             if (m_capture->open(devicePath))
+                                             {
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     m_capture->setFramerate(m_captureFps);
+                                                     if (m_capture->startCapture())
+                                                     {
+                                                         if (m_ui)
+                                                         {
+                                                             m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                                  m_captureFps, devicePath);
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                             else
+                                             {
+                                                 // Se falhar ao abrir dispositivo, voltar para modo dummy
+                                                 LOG_WARN("Falha ao abrir dispositivo Media Foundation - ativando modo dummy");
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         else if (m_capture)
+                                         {
+                                             // Se não houver dispositivo selecionado mas MF foi escolhido, manter em modo dummy
+                                             LOG_INFO("Nenhum dispositivo Media Foundation selecionado - mantendo modo dummy");
+                                             if (!m_capture->isOpen() || !m_capture->isDummyMode())
+                                             {
+                                                 m_capture->stopCapture();
+                                                 m_capture->close();
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setV4L2Controls(nullptr);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#endif
+                                 });
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
@@ -1592,9 +1762,9 @@ bool Application::initUI()
     // Configurar shader atual
     if (!m_presetPath.empty())
     {
-        std::filesystem::path presetPath(m_presetPath);
-        std::filesystem::path basePath("shaders/shaders_glsl");
-        std::filesystem::path relativePath = std::filesystem::relative(presetPath, basePath);
+        fs::path presetPath(m_presetPath);
+        fs::path basePath("shaders/shaders_glsl");
+        fs::path relativePath = fs::relative(presetPath, basePath);
         if (!relativePath.empty() && relativePath != presetPath)
         {
             m_ui->setCurrentShader(relativePath.string());
@@ -1603,17 +1773,16 @@ bool Application::initUI()
         {
             m_ui->setCurrentShader(m_presetPath);
         }
-    }
 
-    // Conectar ShaderEngine à UI para parâmetros
-    if (m_shaderEngine)
-    {
-        m_ui->setShaderEngine(m_shaderEngine.get());
-    }
+        // Conectar ShaderEngine à UI para parâmetros
+        if (m_shaderEngine)
+        {
+            m_ui->setShaderEngine(m_shaderEngine.get());
+        }
 
-    // Callback para salvar preset
-    m_ui->setOnSavePreset([this](const std::string &path, bool overwrite)
-                          {
+        // Callback para salvar preset
+        m_ui->setOnSavePreset([this](const std::string &path, bool overwrite)
+                              {
         if (!m_shaderEngine || !m_shaderEngine->isShaderActive()) {
             LOG_WARN("Nenhum preset carregado para salvar");
             return;
@@ -1644,6 +1813,7 @@ bool Application::initUI()
                 LOG_ERROR("Falha ao salvar preset como: " + path);
             }
         } });
+    }
 
     return true;
 }
@@ -2153,7 +2323,11 @@ void Application::run()
                 }
                 if (attempt < maxAttempts - 1)
                 {
+#ifdef PLATFORM_LINUX
                     usleep(5000); // 5ms entre tentativas
+#else
+                    Sleep(5); // 5ms entre tentativas
+#endif
                 }
             }
         }
@@ -2431,12 +2605,12 @@ void Application::run()
         {
             // Se não há frame válido ainda, ainda precisamos renderizar a UI e atualizar a janela
             // para que a janela seja visível mesmo sem frame de vídeo
-            
+
             // Limpar framebuffer
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
             uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
-            
+
             if (currentWidth > 0 && currentHeight > 0)
             {
                 glViewport(0, 0, currentWidth, currentHeight);
@@ -2455,8 +2629,12 @@ void Application::run()
             // IMPORTANTE: Sempre fazer swapBuffers para que a janela seja atualizada e visível
             m_window->swapBuffers();
 
-            // Fazer um pequeno sleep para não consumir 100% da CPU
+// Fazer um pequeno sleep para não consumir 100% da CPU
+#ifdef PLATFORM_LINUX
             usleep(1000); // 1ms
+#else
+            Sleep(1); // 1ms
+#endif
         }
     }
 

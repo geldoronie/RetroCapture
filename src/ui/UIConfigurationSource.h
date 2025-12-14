@@ -26,6 +26,10 @@ private:
     void renderSourceTypeSelection();
     void renderV4L2Controls();
     void renderV4L2DeviceSelection();
+#ifdef _WIN32
+    void renderMFControls();
+    void renderMFDeviceSelection();
+#endif
     void renderCaptureSettings();
     void renderQuickResolutions();
     void renderQuickFPS();

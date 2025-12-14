@@ -37,6 +37,7 @@ void UIConfigurationSource::render()
 
     // Renderizar controles específicos da fonte selecionada
     UIManager::SourceType sourceType = m_uiManager->getSourceType();
+#ifdef __linux__
     if (sourceType == UIManager::SourceType::V4L2)
     {
         renderV4L2Controls();
@@ -45,6 +46,21 @@ void UIConfigurationSource::render()
     {
         ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
+#elif defined(_WIN32)
+    if (sourceType == UIManager::SourceType::MF)
+    {
+        renderMFControls();
+    }
+    else if (sourceType == UIManager::SourceType::None)
+    {
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+    }
+#else
+    if (sourceType == UIManager::SourceType::None)
+    {
+        ImGui::TextWrapped("Nenhuma fonte selecionada.");
+    }
+#endif
 }
 
 void UIConfigurationSource::renderSourceTypeSelection()
@@ -53,13 +69,38 @@ void UIConfigurationSource::renderSourceTypeSelection()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Dropdown para seleção do tipo de fonte
+// Dropdown para seleção do tipo de fonte
+#ifdef __linux__
     const char *sourceTypeNames[] = {"None", "V4L2"};
-    int currentSourceType = static_cast<int>(m_uiManager->getSourceType());
+    // Mapeamento: índice 0 = None (0), índice 1 = V4L2 (1)
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
+#elif defined(_WIN32)
+    const char *sourceTypeNames[] = {"None", "Media Foundation"};
+    // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::MF};
+#else
+    const char *sourceTypeNames[] = {"None"};
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
+#endif
 
-    if (ImGui::Combo("##sourceType", &currentSourceType, sourceTypeNames, IM_ARRAYSIZE(sourceTypeNames)))
+    // Encontrar índice atual baseado no SourceType
+    int currentIndex = 0;
+    UIManager::SourceType currentSourceType = m_uiManager->getSourceType();
+    for (int i = 0; i < IM_ARRAYSIZE(sourceTypeNames); ++i)
     {
-        m_uiManager->setSourceType(static_cast<UIManager::SourceType>(currentSourceType));
+        if (sourceTypeMap[i] == currentSourceType)
+        {
+            currentIndex = i;
+            break;
+        }
+    }
+
+    if (ImGui::Combo("##sourceType", &currentIndex, sourceTypeNames, IM_ARRAYSIZE(sourceTypeNames)))
+    {
+        if (currentIndex >= 0 && currentIndex < IM_ARRAYSIZE(sourceTypeMap))
+        {
+            m_uiManager->setSourceType(sourceTypeMap[currentIndex]);
+        }
     }
 }
 
@@ -118,14 +159,13 @@ void UIConfigurationSource::renderV4L2Controls()
             return;
 
         int32_t value, min, max;
-        bool available = false;
-        
+
         // Tentar obter valores do dispositivo usando interface genérica
         if (m_capture->getControl(name, value) &&
             m_capture->getControlMin(name, min) &&
             m_capture->getControlMax(name, max))
         {
-            available = true;
+            // Valores obtidos com sucesso
         }
         else
         {
@@ -249,6 +289,128 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
         m_uiManager->refreshV4L2Devices();
     }
 }
+
+#ifdef _WIN32
+void UIConfigurationSource::renderMFControls()
+{
+    // Sempre mostrar controles, mesmo sem dispositivo
+    // Se não houver dispositivo, mostrar mensagem informativa
+    if (!m_capture || !m_capture->isOpen())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo Media Foundation conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::Separator();
+    }
+
+    renderMFDeviceSelection();
+    ImGui::Separator();
+    renderCaptureSettings();
+}
+
+void UIConfigurationSource::renderMFDeviceSelection()
+{
+    // Device selection
+    ImGui::Text("Media Foundation Device:");
+    ImGui::Separator();
+
+    if (!m_capture)
+    {
+        ImGui::TextWrapped("VideoCapture não disponível.");
+        return;
+    }
+
+    // Usar cache de dispositivos do UIManager (similar ao V4L2)
+    const auto &devices = m_uiManager->getMFDevices();
+
+    // Se a lista estiver vazia, tentar atualizar uma vez
+    if (devices.empty())
+    {
+        static bool hasTriedRefresh = false;
+        if (!hasTriedRefresh)
+        {
+            m_uiManager->refreshMFDevices();
+            hasTriedRefresh = true;
+        }
+    }
+
+    // Usar lista atualizada
+    const auto &currentDevices = m_uiManager->getMFDevices();
+
+    if (currentDevices.empty())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo Media Foundation encontrado.");
+        ImGui::TextWrapped("Nota: Media Foundation pode não estar disponível no Wine.");
+    }
+
+    // Combo box for device selection
+    // Adicionar "None" como primeira opção
+    std::string currentDevice = m_uiManager->getCurrentDevice();
+    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
+    int selectedIndex = -1;
+
+    // Verificar se "None" está selecionado
+    if (currentDevice.empty())
+    {
+        selectedIndex = 0; // "None" é o índice 0
+    }
+    else
+    {
+        // Procurar dispositivo na lista (índice +1 porque "None" é 0)
+        for (size_t i = 0; i < currentDevices.size(); ++i)
+        {
+            if (currentDevices[i].id == currentDevice || currentDevices[i].name == currentDevice)
+            {
+                selectedIndex = static_cast<int>(i) + 1; // +1 porque "None" é 0
+                displayText = currentDevices[i].name + " (" + currentDevices[i].id + ")";
+                break;
+            }
+        }
+    }
+
+    if (ImGui::BeginCombo("##mfdevice", displayText.c_str()))
+    {
+        // Opção "None" sempre como primeira opção
+        bool isNoneSelected = currentDevice.empty();
+        if (ImGui::Selectable("None (No device)", isNoneSelected))
+        {
+            m_uiManager->triggerDeviceChange("");
+            m_uiManager->saveConfig();
+        }
+        if (isNoneSelected)
+        {
+            ImGui::SetItemDefaultFocus();
+        }
+
+        // Listar dispositivos disponíveis
+        for (size_t i = 0; i < currentDevices.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i) + 1);
+            std::string deviceLabel = currentDevices[i].name;
+            if (!currentDevices[i].id.empty() && currentDevices[i].id != currentDevices[i].name)
+            {
+                deviceLabel += " (" + currentDevices[i].id + ")";
+            }
+            if (ImGui::Selectable(deviceLabel.c_str(), isSelected))
+            {
+                // Usar o ID do dispositivo (índice numérico para MF)
+                m_uiManager->triggerDeviceChange(currentDevices[i].id);
+                m_uiManager->saveConfig();
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##mfdevices"))
+    {
+        // Recarregar lista de dispositivos
+        m_uiManager->refreshMFDevices();
+    }
+}
+#endif
 
 void UIConfigurationSource::renderCaptureSettings()
 {

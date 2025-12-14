@@ -1,6 +1,6 @@
 #include "ShaderScanner.h"
 #include "../utils/Logger.h"
-#include <filesystem>
+#include "FilesystemCompat.h"
 #include <algorithm>
 #include <cctype>
 
@@ -8,14 +8,14 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
 {
     std::vector<std::string> shaders;
 
-    std::filesystem::path path(basePath);
-    if (!std::filesystem::exists(path))
+    fs::path path(basePath);
+    if (!fs::exists(path))
     {
         // Tentar caminho relativo ao diretório de trabalho
-        path = std::filesystem::current_path() / basePath;
+        path = fs::current_path() / basePath;
     }
 
-    if (!std::filesystem::exists(path))
+    if (!fs::exists(path))
     {
         LOG_WARN("Diretório de shaders não encontrado: " + basePath);
         return shaders;
@@ -24,25 +24,28 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
     try
     {
         // Normalizar o caminho base para comparações
-        std::filesystem::path normalizedBasePath = std::filesystem::canonical(path);
+        fs::path normalizedBasePath = fs::canonical(path);
 
         // Escanear recursivamente todos os arquivos
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(path))
+        // Nota: range-based for não funciona com nossa implementação, usar loop manual
+        fs::recursive_directory_iterator it(path);
+        fs::recursive_directory_iterator end;
+        for (; it != end; ++it)
         {
-            if (entry.is_regular_file())
+            if (it.is_regular_file())
             {
-                std::string ext = entry.path().extension().string();
+                std::string ext = it.path().extension();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
                 if (ext == ".glslp")
                 {
-                    std::filesystem::path entryPath = entry.path();
+                    fs::path entryPath = it.path();
 
                     // Tentar normalizar o caminho do arquivo
-                    std::filesystem::path normalizedEntryPath;
+                    fs::path normalizedEntryPath;
                     try
                     {
-                        normalizedEntryPath = std::filesystem::canonical(entryPath);
+                        normalizedEntryPath = fs::canonical(entryPath);
                     }
                     catch (...)
                     {
@@ -51,10 +54,10 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
                     }
 
                     // Obter o diretório pai normalizado
-                    std::filesystem::path parentPath = normalizedEntryPath.parent_path();
+                    fs::path parentPath = normalizedEntryPath.parent_path();
                     try
                     {
-                        parentPath = std::filesystem::canonical(parentPath);
+                        parentPath = fs::canonical(parentPath);
                     }
                     catch (...)
                     {
@@ -67,12 +70,12 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
                     if (parentPath == normalizedBasePath)
                     {
                         // Arquivo está na raiz, usar apenas o nome do arquivo
-                        relativePath = entryPath.filename().string();
+                        relativePath = entryPath.filename();
                     }
                     else
                     {
                         // Arquivo está em subpasta, usar caminho relativo completo
-                        relativePath = std::filesystem::relative(entryPath, path).string();
+                        relativePath = fs::relative(entryPath, path).string();
                     }
 
                     shaders.push_back(relativePath);
@@ -80,7 +83,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
             }
         }
     }
-    catch (const std::filesystem::filesystem_error &e)
+    catch (const fs::filesystem_error &e)
     {
         LOG_ERROR("Erro ao escanear diretório de shaders: " + std::string(e.what()));
     }

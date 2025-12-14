@@ -178,7 +178,10 @@ void WindowManager::setFullscreen(bool fullscreen, int monitorIndex) {
         if (monitor) {
             // IMPORTANTE: Desabilitar auto-iconify para evitar que a janela minimize quando perder o foco
             // Isso permite que a aplicação permaneça em fullscreen mesmo quando o usuário interage com outras janelas
+            // Nota: glfwSetWindowAttrib requer GLFW 3.3+, se não disponível, comentar esta linha
+            #if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 3)
             glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
+            #endif
             
             const GLFWvidmode* mode = glfwGetVideoMode(monitor);
             glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
@@ -186,7 +189,9 @@ void WindowManager::setFullscreen(bool fullscreen, int monitorIndex) {
     } else {
         // Sair do fullscreen (voltar para windowed)
         // Reabilitar auto-iconify quando sair do fullscreen (comportamento padrão)
+        #if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 3)
         glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+        #endif
         
         // Usar dimensões anteriores ou padrão
         int width = m_width > 0 ? m_width : 1280;

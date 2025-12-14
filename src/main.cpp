@@ -74,8 +74,22 @@ int main(int argc, char *argv[])
 
     std::string shaderPath;
     std::string presetPath;
-    std::string sourceType = "v4l2"; // Padrão: v4l2 (mesmo padrão do UIManager)
+    // Detectar plataforma e definir sourceType padrão
+    std::string sourceType;
+#ifdef __linux__
+    sourceType = "v4l2"; // Linux usa V4L2
+#elif defined(_WIN32)
+    sourceType = "mf"; // Windows usa Media Foundation
+#else
+    sourceType = "none"; // Outras plataformas sem suporte
+#endif
+#ifdef __linux__
     std::string devicePath = "/dev/video0";
+#elif defined(_WIN32)
+    std::string devicePath = ""; // Windows: dispositivo será selecionado via Media Foundation
+#else
+    std::string devicePath = "";
+#endif
     int captureWidth = 1920;
     int captureHeight = 1080;
     int captureFps = 60;
@@ -139,7 +153,13 @@ int main(int argc, char *argv[])
             sourceType = argv[++i];
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
+#ifdef __linux__
             if (sourceType != "none" && sourceType != "v4l2")
+#elif defined(_WIN32)
+            if (sourceType != "none" && sourceType != "mf")
+#else
+            if (sourceType != "none")
+#endif
             {
                 LOG_ERROR("Tipo de fonte inválido. Use 'none' ou 'v4l2'");
                 return 1;
@@ -413,15 +433,26 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Determinar se a fonte é V4L2
+// Determinar tipo de fonte
+#ifdef __linux__
     bool isV4L2Source = (sourceType == "v4l2");
+#elif defined(_WIN32)
+    bool isMFSource = (sourceType == "mf");
+#endif
 
     LOG_INFO("Inicializando aplicação...");
     LOG_INFO("Tipo de fonte: " + sourceType);
+#ifdef __linux__
     if (isV4L2Source)
     {
         LOG_INFO("Dispositivo V4L2: " + devicePath);
     }
+#elif defined(_WIN32)
+    if (isMFSource && !devicePath.empty())
+    {
+        LOG_INFO("Dispositivo Media Foundation: " + devicePath);
+    }
+#endif
     LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
@@ -474,7 +505,8 @@ int main(int argc, char *argv[])
     app.setBrightness(brightness);
     app.setContrast(contrast);
 
-    // Configurar dispositivo e controles V4L2 apenas se a fonte for V4L2
+    // Configurar dispositivo e controles apenas se a fonte for apropriada
+#ifdef __linux__
     if (isV4L2Source)
     {
         // Configurar dispositivo V4L2
@@ -500,7 +532,9 @@ int main(int argc, char *argv[])
         if (v4l2WhiteBalance >= 0)
             app.setV4L2WhiteBalance(v4l2WhiteBalance);
     }
-    else
+#endif
+#ifdef __linux__
+    if (!isV4L2Source)
     {
         // Se não for V4L2, avisar sobre parâmetros V4L2 ignorados
         bool hasV4L2Params = (v4l2Brightness >= 0 || v4l2Contrast >= 0 || v4l2Saturation >= 0 ||
@@ -511,6 +545,7 @@ int main(int argc, char *argv[])
             LOG_WARN("Parâmetros V4L2 ou --v4l2-device especificados mas fonte não é V4L2. Parâmetros serão ignorados.");
         }
     }
+#endif
 
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
@@ -546,7 +581,14 @@ int main(int argc, char *argv[])
     }
 
     // Configurar source type após inicialização (para acessar UIManager)
-    UIManager::SourceType sourceTypeEnum = (sourceType == "v4l2") ? UIManager::SourceType::V4L2 : UIManager::SourceType::None;
+    UIManager::SourceType sourceTypeEnum = UIManager::SourceType::None;
+#ifdef __linux__
+    if (sourceType == "v4l2")
+        sourceTypeEnum = UIManager::SourceType::V4L2;
+#elif defined(_WIN32)
+    if (sourceType == "mf")
+        sourceTypeEnum = UIManager::SourceType::MF;
+#endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Tipo de fonte: " + sourceType);
 

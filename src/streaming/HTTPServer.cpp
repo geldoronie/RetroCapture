@@ -1,12 +1,49 @@
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
+#ifdef PLATFORM_LINUX
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#elif defined(_WIN32) || defined(WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+#define close closesocket
+#define SHUT_RDWR SD_BOTH
+#ifndef socklen_t
+typedef int socklen_t;
+#endif
+// Helper para obter mensagem de erro de socket no Windows
+inline std::string getSocketError()
+{
+    int error = WSAGetLastError();
+    char *msg = nullptr;
+    FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPSTR)&msg, 0, nullptr);
+    if (msg)
+    {
+        std::string result(msg);
+        LocalFree(msg);
+        // Remover newline no final
+        if (!result.empty() && result.back() == '\n')
+            result.pop_back();
+        if (!result.empty() && result.back() == '\r')
+            result.pop_back();
+        return result;
+    }
+    return "Socket error " + std::to_string(error);
+}
+#define SOCKET_ERROR_MSG() getSocketError()
+#else
+#define SOCKET_ERROR_MSG() std::string(strerror(errno))
+#endif
 #include <cstring>
 #include <cerrno>
-#include <filesystem>
+#include "../utils/FilesystemCompat.h"
 #include <sstream>
 #include <iomanip>
 #include <thread>
@@ -46,24 +83,24 @@ bool HTTPServer::setSSLCertificate(const std::string &certPath, const std::strin
     LOG_INFO("  keyPath: " + keyPath);
 
     // Verificar se os arquivos existem antes de tentar carregar
-    std::filesystem::path certFsPath(certPath);
-    std::filesystem::path keyFsPath(keyPath);
+    fs::path certFsPath(certPath);
+    fs::path keyFsPath(keyPath);
 
-    if (!std::filesystem::exists(certFsPath))
+    if (!fs::exists(certFsPath))
     {
         LOG_ERROR("Certificate file does not exist: " + certPath);
         return false;
     }
 
-    if (!std::filesystem::exists(keyFsPath))
+    if (!fs::exists(keyFsPath))
     {
         LOG_ERROR("Private key file does not exist: " + keyPath);
         return false;
     }
 
     LOG_INFO("Both certificate files exist. File sizes:");
-    LOG_INFO("  Certificate: " + std::to_string(std::filesystem::file_size(certFsPath)) + " bytes");
-    LOG_INFO("  Private Key: " + std::to_string(std::filesystem::file_size(keyFsPath)) + " bytes");
+    LOG_INFO("  Certificate: " + std::to_string(fs::file_size(certFsPath)) + " bytes");
+    LOG_INFO("  Private Key: " + std::to_string(fs::file_size(keyFsPath)) + " bytes");
 
     if (!initializeSSL())
     {
@@ -72,8 +109,8 @@ bool HTTPServer::setSSLCertificate(const std::string &certPath, const std::strin
     }
 
     // Usar caminho absoluto para garantir que o OpenSSL encontre os arquivos
-    std::string absCertPath = std::filesystem::absolute(certFsPath).string();
-    std::string absKeyPath = std::filesystem::absolute(keyFsPath).string();
+    std::string absCertPath = fs::absolute(certFsPath).string();
+    std::string absKeyPath = fs::absolute(keyFsPath).string();
 
     LOG_INFO("Loading certificate from: " + absCertPath);
     // Carregar certificado
@@ -126,16 +163,30 @@ bool HTTPServer::setSSLCertificate(const std::string &certPath, const std::strin
 bool HTTPServer::createServer(int port)
 {
     // Criar socket
+#ifdef PLATFORM_LINUX
     m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (m_serverSocket < 0)
     {
-        LOG_ERROR("Failed to create server socket: " + std::string(strerror(errno)));
+        LOG_ERROR("Failed to create server socket: " + SOCKET_ERROR_MSG());
         return false;
     }
+#else
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET)
+    {
+        LOG_ERROR("Failed to create server socket: " + SOCKET_ERROR_MSG());
+        return false;
+    }
+    m_serverSocket = (int)sock;
+#endif
 
     // Configurar opções do socket
     int opt = 1;
+#ifdef PLATFORM_LINUX
     setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#else
+    setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#endif
 
     // Configurar endereço
     struct sockaddr_in addr;
@@ -147,7 +198,7 @@ bool HTTPServer::createServer(int port)
     // Fazer bind
     if (bind(m_serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
-        LOG_ERROR("Failed to bind to port " + std::to_string(port) + ": " + std::string(strerror(errno)));
+        LOG_ERROR("Failed to bind to port " + std::to_string(port) + ": " + SOCKET_ERROR_MSG());
         close(m_serverSocket);
         m_serverSocket = -1;
         return false;
@@ -156,7 +207,7 @@ bool HTTPServer::createServer(int port)
     // Fazer listen
     if (listen(m_serverSocket, 5) < 0)
     {
-        LOG_ERROR("Failed to listen on socket: " + std::string(strerror(errno)));
+        LOG_ERROR("Failed to listen on socket: " + SOCKET_ERROR_MSG());
         close(m_serverSocket);
         m_serverSocket = -1;
         return false;
@@ -169,13 +220,26 @@ bool HTTPServer::createServer(int port)
 int HTTPServer::acceptClient()
 {
     struct sockaddr_in clientAddr;
+#ifdef PLATFORM_LINUX
     socklen_t clientLen = sizeof(clientAddr);
+#else
+    int clientLen = sizeof(clientAddr);
+#endif
 
+#ifdef PLATFORM_LINUX
     int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
     if (clientFd < 0)
     {
         return -1;
     }
+#else
+    SOCKET clientSock = accept((SOCKET)m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+    if (clientSock == INVALID_SOCKET)
+    {
+        return -1;
+    }
+    int clientFd = (int)clientSock;
+#endif
 
 #ifdef ENABLE_HTTPS
     if (m_useSSL && m_sslContext)
@@ -246,7 +310,7 @@ int HTTPServer::acceptClient()
         else if (peeked < 0)
         {
             // Erro ao fazer peek, tratar como HTTP para evitar problemas
-            LOG_WARN("Error peeking socket, treating as HTTP: " + std::string(strerror(errno)));
+            LOG_WARN("Error peeking socket, treating as HTTP: " + SOCKET_ERROR_MSG());
         }
         else
         {
@@ -347,7 +411,11 @@ ssize_t HTTPServer::sendData(int clientFd, const void *data, size_t size)
         }
     }
 #endif
+#ifdef PLATFORM_LINUX
     return send(clientFd, data, size, MSG_NOSIGNAL);
+#else
+    return send(clientFd, (const char *)data, (int)size, 0);
+#endif
 }
 
 ssize_t HTTPServer::receiveData(int clientFd, void *buffer, size_t size)
@@ -362,7 +430,11 @@ ssize_t HTTPServer::receiveData(int clientFd, void *buffer, size_t size)
         }
     }
 #endif
+#ifdef PLATFORM_LINUX
     return recv(clientFd, buffer, size, 0);
+#else
+    return recv(clientFd, (char *)buffer, (int)size, 0);
+#endif
 }
 
 void HTTPServer::closeClient(int clientFd)
@@ -446,11 +518,11 @@ bool HTTPServer::initializeSSL()
 void HTTPServer::cleanupSSL()
 {
     // Fechar todas as conexões SSL de clientes
-    for (auto &[fd, ssl] : m_sslClients)
+    for (auto it = m_sslClients.begin(); it != m_sslClients.end(); ++it)
     {
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        close(fd);
+        SSL_shutdown(it->second);
+        SSL_free(it->second);
+        close(it->first);
     }
     m_sslClients.clear();
 

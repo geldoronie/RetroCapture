@@ -113,7 +113,11 @@ private:
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
-    std::string m_devicePath = "/dev/video0";
+#ifdef _WIN32
+    std::string m_devicePath = ""; // Windows: vazio por padrão (Media Foundation usa índices)
+#else
+    std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
+#endif
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;
