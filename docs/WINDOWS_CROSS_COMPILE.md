@@ -1,5 +1,7 @@
 # Compilação Cross-Platform: Windows a partir do Linux
 
+> **Nota:** Para informações sobre o status atual da implementação Windows, consulte [STATUS_WINDOWS_PORT.md](./STATUS_WINDOWS_PORT.md).
+
 Este documento descreve as alternativas disponíveis para compilar o RetroCapture para Windows a partir de um ambiente Linux.
 
 ## 📋 Alternativas Disponíveis
@@ -234,9 +236,10 @@ echo "Executável: $BUILD_DIR/bin/retrocapture.exe"
 ## ⚠️ Limitações Conhecidas
 
 ### Media Foundation
-- MinGW-w64 pode ter limitações com Media Foundation
-- Pode ser necessário usar DirectShow como fallback
-- Testes em Windows real são essenciais
+- ✅ **Resolvido:** O RetroCapture agora usa carregamento dinâmico de funções do Media Foundation (`GetProcAddress`), tornando-o compatível com MinGW/MXE
+- ✅ `MFEnumDeviceSources` é carregado dinamicamente para evitar problemas de linkagem
+- ⚠️ Alguns controles de hardware podem não estar disponíveis (limitação do Media Foundation)
+- ⚠️ Testes em Windows real são recomendados para validação completa
 
 ### Bibliotecas Nativas do Windows
 - Algumas APIs do Windows podem não estar disponíveis
