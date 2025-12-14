@@ -105,8 +105,8 @@ private:
     bool handleGETStatus(int clientFd);
     bool handleRefreshV4L2Devices(int clientFd);
     bool handleGETPlatform(int clientFd);
-    bool handleGETMFDevices(int clientFd);
-    bool handleRefreshMFDevices(int clientFd);
+    bool handleGETDSDevices(int clientFd);
+    bool handleRefreshDSDevices(int clientFd);
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
@@ -121,7 +121,7 @@ private:
     bool handleSetStreamingControl(int clientFd, const std::string &body);
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
-    bool handleSetMFDevice(int clientFd, const std::string &body);
+    bool handleSetDSDevice(int clientFd, const std::string &body);
 
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;

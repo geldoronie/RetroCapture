@@ -29,6 +29,9 @@ void UIConfigurationSource::render()
 
     // Atualizar referência ao capture se necessário
     m_capture = m_uiManager->getCapture();
+    
+    // Não atualizar a lista aqui - será atualizada apenas quando necessário em renderDSDeviceSelection
+    // Isso evita chamar refreshDSDevices() a cada frame
 
     renderSourceTypeSelection();
     ImGui::Spacing();
@@ -47,9 +50,9 @@ void UIConfigurationSource::render()
         ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
 #elif defined(_WIN32)
-    if (sourceType == UIManager::SourceType::MF)
+    if (sourceType == UIManager::SourceType::DS)
     {
-        renderMFControls();
+        renderDSControls();
     }
     else if (sourceType == UIManager::SourceType::None)
     {
@@ -75,9 +78,9 @@ void UIConfigurationSource::renderSourceTypeSelection()
     // Mapeamento: índice 0 = None (0), índice 1 = V4L2 (1)
     UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
 #elif defined(_WIN32)
-    const char *sourceTypeNames[] = {"None", "Media Foundation"};
+    const char *sourceTypeNames[] = {"None", "DirectShow"};
     // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::MF};
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::DS};
 #else
     const char *sourceTypeNames[] = {"None"};
     UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
@@ -291,60 +294,60 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
 }
 
 #ifdef _WIN32
-void UIConfigurationSource::renderMFControls()
+void UIConfigurationSource::renderDSControls()
 {
+    // Atualizar referência ao capture ANTES de verificar
+    m_capture = m_uiManager->getCapture();
+    
     // Sempre mostrar controles, mesmo sem dispositivo
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("Nenhum dispositivo Media Foundation conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::TextWrapped("Nenhum dispositivo DirectShow conectado. Selecione um dispositivo abaixo para iniciar a captura.");
         ImGui::Separator();
     }
 
-    renderMFDeviceSelection();
+    renderDSDeviceSelection();
     ImGui::Separator();
     renderCaptureSettings();
 }
 
-void UIConfigurationSource::renderMFDeviceSelection()
+void UIConfigurationSource::renderDSDeviceSelection()
 {
     // Device selection
-    ImGui::Text("Media Foundation Device:");
+    ImGui::Text("DirectShow Device:");
     ImGui::Separator();
 
-    if (!m_capture)
-    {
-        ImGui::TextWrapped("VideoCapture não disponível.");
-        return;
-    }
+    // Obter o ponteiro do capture do UIManager (sempre atualizar)
+    m_capture = m_uiManager->getCapture();
 
     // Usar cache de dispositivos do UIManager (similar ao V4L2)
-    const auto &devices = m_uiManager->getMFDevices();
-
-    // Se a lista estiver vazia, tentar atualizar uma vez
-    if (devices.empty())
+    // Obter lista atual (cópia para evitar problemas de referência)
+    auto currentDevices = m_uiManager->getDSDevices();
+    
+    // Apenas atualizar a lista se estiver vazia E m_capture estiver disponível
+    // Isso evita chamar refreshDSDevices() a cada frame
+    if (currentDevices.empty() && m_capture)
     {
-        static bool hasTriedRefresh = false;
-        if (!hasTriedRefresh)
-        {
-            m_uiManager->refreshMFDevices();
-            hasTriedRefresh = true;
-        }
+        m_uiManager->refreshDSDevices();
+        // Obter lista novamente após atualização
+        currentDevices = m_uiManager->getDSDevices();
     }
-
-    // Usar lista atualizada
-    const auto &currentDevices = m_uiManager->getMFDevices();
-
-    if (currentDevices.empty())
-    {
-        ImGui::TextWrapped("Nenhum dispositivo Media Foundation encontrado.");
-        ImGui::TextWrapped("Nota: Media Foundation pode não estar disponível no Wine.");
-    }
+    
+    // NÃO retornar se m_capture for nullptr - ainda podemos mostrar a lista se ela já foi enumerada
+    // A lista pode ter sido populada anteriormente mesmo que m_capture não esteja disponível agora
 
     // Combo box for device selection
     // Adicionar "None" como primeira opção
     std::string currentDevice = m_uiManager->getCurrentDevice();
     std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
+    
+    // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
+    if (currentDevices.empty())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo DirectShow encontrado. Clique em Refresh para atualizar.");
+        ImGui::Spacing();
+    }
     int selectedIndex = -1;
 
     // Verificar se "None" está selecionado
@@ -366,7 +369,7 @@ void UIConfigurationSource::renderMFDeviceSelection()
         }
     }
 
-    if (ImGui::BeginCombo("##mfdevice", displayText.c_str()))
+    if (ImGui::BeginCombo("##dsdevice", displayText.c_str()))
     {
         // Opção "None" sempre como primeira opção
         bool isNoneSelected = currentDevice.empty();
@@ -404,10 +407,10 @@ void UIConfigurationSource::renderMFDeviceSelection()
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Refresh##mfdevices"))
+    if (ImGui::Button("Refresh##dsdevices"))
     {
         // Recarregar lista de dispositivos
-        m_uiManager->refreshMFDevices();
+        m_uiManager->refreshDSDevices();
     }
 }
 #endif

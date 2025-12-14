@@ -271,13 +271,13 @@ bool APIController::handleGET(int clientFd, const std::string &path)
     {
         return handleGETV4L2Controls(clientFd);
     }
-    else if (path == "/api/v1/mf/devices")
+    else if (path == "/api/v1/ds/devices")
     {
-        return handleGETMFDevices(clientFd);
+        return handleGETDSDevices(clientFd);
     }
-    else if (path == "/api/v1/mf/devices/refresh")
+    else if (path == "/api/v1/ds/devices/refresh")
     {
-        return handleRefreshMFDevices(clientFd);
+        return handleRefreshDSDevices(clientFd);
     }
     else if (path == "/api/v1/status")
     {
@@ -334,9 +334,9 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleSetV4L2Device(clientFd, body);
     }
-    else if (path == "/api/v1/mf/device")
+    else if (path == "/api/v1/ds/device")
     {
-        return handleSetMFDevice(clientFd, body);
+        return handleSetDSDevice(clientFd, body);
     }
 
     send404(clientFd);
@@ -647,7 +647,7 @@ bool APIController::handleGETPlatform(int clientFd)
     // Adicionar tipos de source disponíveis baseado na plataforma
 #ifdef _WIN32
     json << "{\"value\": 0, \"name\": \"None\"}, "
-         << "{\"value\": 2, \"name\": \"Media Foundation\"}";
+         << "{\"value\": 2, \"name\": \"DirectShow\"}";
 #else
     json << "{\"value\": 0, \"name\": \"None\"}, "
          << "{\"value\": 1, \"name\": \"V4L2\"}";
@@ -659,7 +659,7 @@ bool APIController::handleGETPlatform(int clientFd)
     return true;
 }
 
-bool APIController::handleGETMFDevices(int clientFd)
+bool APIController::handleGETDSDevices(int clientFd)
 {
     if (!m_uiManager)
     {
@@ -667,7 +667,7 @@ bool APIController::handleGETMFDevices(int clientFd)
         return true;
     }
 
-    const auto &devices = m_uiManager->getMFDevices();
+    const auto &devices = m_uiManager->getDSDevices();
     std::ostringstream json;
     json << "{\"devices\": [";
     for (size_t i = 0; i < devices.size(); ++i)
@@ -686,7 +686,7 @@ bool APIController::handleGETMFDevices(int clientFd)
     return true;
 }
 
-bool APIController::handleRefreshMFDevices(int clientFd)
+bool APIController::handleRefreshDSDevices(int clientFd)
 {
     if (!m_uiManager)
     {
@@ -694,8 +694,8 @@ bool APIController::handleRefreshMFDevices(int clientFd)
         return true;
     }
 
-    m_uiManager->refreshMFDevices();
-    return handleGETMFDevices(clientFd);
+    m_uiManager->refreshDSDevices();
+    return handleGETDSDevices(clientFd);
 }
 
 // Implementações dos handlers POST/PUT
@@ -1214,7 +1214,7 @@ bool APIController::handleSetV4L2Device(int clientFd, const std::string &body)
     }
 }
 
-bool APIController::handleSetMFDevice(int clientFd, const std::string &body)
+bool APIController::handleSetDSDevice(int clientFd, const std::string &body)
 {
     if (!m_uiManager)
     {

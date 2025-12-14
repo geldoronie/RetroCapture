@@ -940,6 +940,16 @@ void UIManager::setV4L2Controls(IVideoCapture *capture)
     {
         return;
     }
+    
+    // Se o tipo de fonte for DirectShow, atualizar lista de dispositivos
+#ifdef _WIN32
+    if (m_sourceType == SourceType::DS)
+    {
+        // Sempre atualizar lista quando m_capture é setado
+        refreshDSDevices();
+        LOG_INFO("Lista de dispositivos DirectShow atualizada após setV4L2Controls: " + std::to_string(m_dsDevices.size()) + " dispositivo(s)");
+    }
+#endif
 
     // Lista de controles comuns (usando interface genérica)
     const char *controlNames[] = {
@@ -1560,15 +1570,16 @@ void UIManager::refreshV4L2Devices()
     scanV4L2Devices();
 }
 
-void UIManager::refreshMFDevices()
+void UIManager::refreshDSDevices()
 {
     if (!m_capture)
     {
-        m_mfDevices.clear();
+        // Não limpar a lista - pode ter sido populada anteriormente
+        // Apenas não atualizar se m_capture não estiver disponível
         return;
     }
 
-    m_mfDevices = m_capture->listDevices();
+    m_dsDevices = m_capture->listDevices();
 }
 
 void UIManager::setSourceType(SourceType sourceType)
@@ -1577,9 +1588,18 @@ void UIManager::setSourceType(SourceType sourceType)
 
     // Atualizar cache de dispositivos quando mudar o tipo de fonte
 #ifdef _WIN32
-    if (sourceType == SourceType::MF)
+    if (sourceType == SourceType::DS)
     {
-        refreshMFDevices();
+        // Garantir que m_capture está disponível antes de atualizar
+        if (m_capture)
+        {
+            refreshDSDevices();
+        }
+        else
+        {
+            // Se m_capture não estiver disponível, limpar lista
+            m_dsDevices.clear();
+        }
     }
 #endif
 

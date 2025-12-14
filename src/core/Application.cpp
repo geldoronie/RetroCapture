@@ -333,7 +333,7 @@ bool Application::initCapture()
 #ifdef __linux__
         LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
 #elif defined(_WIN32)
-        LOG_INFO("Selecione um dispositivo na aba Media Foundation para usar captura real.");
+        LOG_INFO("Selecione um dispositivo na aba DirectShow para usar captura real.");
 #endif
 
         // Ativar modo dummy
@@ -738,6 +738,7 @@ bool Application::initUI()
                     LOG_INFO("Resolução dummy atualizada: " + std::to_string(width) + "x" + std::to_string(height));
                     if (m_ui) {
                         m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                        m_ui->setCurrentDevice(""); // String vazia = None
                     }
                     return;
                 }
@@ -828,13 +829,15 @@ bool Application::initUI()
     else
     {
         // Configurar controles V4L2 se houver dispositivo aberto
-        if (m_capture && m_capture->isOpen())
+        // IMPORTANTE: Sempre passar m_capture para o UIManager, mesmo se não estiver aberto,
+        // para permitir enumeração de dispositivos (especialmente para DirectShow)
+        if (m_capture)
         {
             m_ui->setV4L2Controls(m_capture.get());
         }
         else
         {
-            // Sem dispositivo, mas ainda permitir seleção
+            // Sem capture, não permitir seleção
             m_ui->setV4L2Controls(nullptr);
         }
     }
@@ -1542,6 +1545,7 @@ bool Application::initUI()
                                                      {
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice(""); // String vazia = None
                                                          m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
                                                      }
                                                  }
@@ -1599,9 +1603,9 @@ bool Application::initUI()
                                      }
 #endif
 #ifdef _WIN32
-                                     if (sourceType == UIManager::SourceType::MF)
+                                     if (sourceType == UIManager::SourceType::DS)
                                      {
-                                         LOG_INFO("Fonte Media Foundation selecionada");
+                                         LOG_INFO("Fonte DirectShow selecionada");
 
                                          // No Windows, m_devicePath pode ser vazio ou conter caminho Linux (/dev/video0)
                                          // Limpar se for caminho Linux
@@ -1611,6 +1615,13 @@ bool Application::initUI()
                                              LOG_INFO("Limpando caminho de dispositivo Linux: " + devicePath);
                                              devicePath.clear();
                                              m_devicePath.clear(); // Atualizar também o membro da classe
+                                         }
+
+                                         // Tentar obter o dispositivo atual do UIManager se m_devicePath estiver vazio
+                                         if (devicePath.empty() && m_ui)
+                                         {
+                                             devicePath = m_ui->getCurrentDevice();
+                                             LOG_INFO("Obtendo dispositivo atual do UIManager: " + devicePath);
                                          }
 
                                          // Se já houver um dispositivo selecionado, tentar reabrir
@@ -1638,7 +1649,7 @@ bool Application::initUI()
                                              else
                                              {
                                                  // Se falhar ao abrir dispositivo, voltar para modo dummy
-                                                 LOG_WARN("Falha ao abrir dispositivo Media Foundation - ativando modo dummy");
+                                                 LOG_WARN("Falha ao abrir dispositivo DirectShow - ativando modo dummy");
                                                  m_capture->setDummyMode(true);
                                                  if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                                                  {
@@ -1646,14 +1657,15 @@ bool Application::initUI()
                                                      {
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice(""); // String vazia = None
                                                      }
                                                  }
                                              }
                                          }
                                          else if (m_capture)
                                          {
-                                             // Se não houver dispositivo selecionado mas MF foi escolhido, manter em modo dummy
-                                             LOG_INFO("Nenhum dispositivo Media Foundation selecionado - mantendo modo dummy");
+                                             // Se não houver dispositivo selecionado mas DS foi escolhido, manter em modo dummy
+                                             LOG_INFO("Nenhum dispositivo DirectShow selecionado - mantendo modo dummy");
                                              if (!m_capture->isOpen() || !m_capture->isDummyMode())
                                              {
                                                  m_capture->stopCapture();
@@ -1665,6 +1677,7 @@ bool Application::initUI()
                                                      {
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice(""); // String vazia = None
                                                          m_ui->setV4L2Controls(nullptr);
                                                      }
                                                  }
@@ -1676,9 +1689,22 @@ bool Application::initUI()
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
+        // Evitar loop infinito: se já estamos processando "None", não fazer nada
+        static bool processingDeviceChange = false;
+        if (processingDeviceChange) {
+            return;
+        }
+        processingDeviceChange = true;
+        
         // Se devicePath estiver vazio, significa "None" - ativar modo dummy
         if (devicePath.empty())
         {
+            // Verificar se já estamos em modo dummy para evitar loop
+            if (m_devicePath.empty() && m_capture && m_capture->isDummyMode() && m_capture->isOpen()) {
+                processingDeviceChange = false;
+                return;
+            }
+            
             LOG_INFO("Desconectando dispositivo (None selecionado) - ativando modo dummy");
             
             // Fechar dispositivo atual
@@ -1700,18 +1726,21 @@ bool Application::initUI()
             // Atualizar caminho do dispositivo
             m_devicePath = "";
             
-            // Atualizar informações na UI
+            // Atualizar informações na UI (sem chamar setCurrentDevice para evitar loop)
             if (m_ui) {
                 if (m_capture && m_capture->isOpen()) {
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                         m_captureFps, "None (Dummy)");
+                    // Não chamar setCurrentDevice aqui para evitar loop
                 } else {
                     m_ui->setCaptureInfo(0, 0, 0, "None");
+                    // Não chamar setCurrentDevice aqui para evitar loop
                 }
                 m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando não há dispositivo
             }
             
             LOG_INFO("Modo dummy ativado. Selecione um dispositivo para usar captura real.");
+            processingDeviceChange = false;
             return;
         }
         
@@ -1755,6 +1784,7 @@ bool Application::initUI()
                 }
                 
                 LOG_INFO("Dispositivo alterado com sucesso");
+                processingDeviceChange = false;
             } else {
                 LOG_ERROR("Falha ao configurar formato no novo dispositivo");
                 // Fechar dispositivo se falhou
@@ -1762,9 +1792,11 @@ bool Application::initUI()
                 if (m_ui) {
                     m_ui->setCaptureInfo(0, 0, 0, "Error");
                 }
+                processingDeviceChange = false;
             }
         } else {
             LOG_ERROR("Falha ao abrir novo dispositivo: " + devicePath);
+            processingDeviceChange = false;
             if (m_ui) {
                 m_ui->setCaptureInfo(0, 0, 0, "Error");
             }

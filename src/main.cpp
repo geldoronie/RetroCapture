@@ -79,14 +79,14 @@ int main(int argc, char *argv[])
 #ifdef __linux__
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
-    sourceType = "mf"; // Windows usa Media Foundation
+    sourceType = "ds"; // Windows usa DirectShow
 #else
     sourceType = "none"; // Outras plataformas sem suporte
 #endif
 #ifdef __linux__
     std::string devicePath = "/dev/video0";
 #elif defined(_WIN32)
-    std::string devicePath = ""; // Windows: dispositivo será selecionado via Media Foundation
+    std::string devicePath = ""; // Windows: dispositivo será selecionado via DirectShow
 #else
     std::string devicePath = "";
 #endif
@@ -156,7 +156,7 @@ int main(int argc, char *argv[])
 #ifdef __linux__
             if (sourceType != "none" && sourceType != "v4l2")
 #elif defined(_WIN32)
-            if (sourceType != "none" && sourceType != "mf")
+            if (sourceType != "none" && sourceType != "ds")
 #else
             if (sourceType != "none")
 #endif
@@ -437,7 +437,7 @@ int main(int argc, char *argv[])
 #ifdef __linux__
     bool isV4L2Source = (sourceType == "v4l2");
 #elif defined(_WIN32)
-    bool isMFSource = (sourceType == "mf");
+    bool isDSSource = (sourceType == "ds");
 #endif
 
     LOG_INFO("Inicializando aplicação...");
@@ -448,9 +448,9 @@ int main(int argc, char *argv[])
         LOG_INFO("Dispositivo V4L2: " + devicePath);
     }
 #elif defined(_WIN32)
-    if (isMFSource && !devicePath.empty())
+    if (isDSSource && !devicePath.empty())
     {
-        LOG_INFO("Dispositivo Media Foundation: " + devicePath);
+        LOG_INFO("Dispositivo DirectShow: " + devicePath);
     }
 #endif
     LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
@@ -586,8 +586,8 @@ int main(int argc, char *argv[])
     if (sourceType == "v4l2")
         sourceTypeEnum = UIManager::SourceType::V4L2;
 #elif defined(_WIN32)
-    if (sourceType == "mf")
-        sourceTypeEnum = UIManager::SourceType::MF;
+    if (sourceType == "ds")
+        sourceTypeEnum = UIManager::SourceType::DS;
 #endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Tipo de fonte: " + sourceType);

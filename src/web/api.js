@@ -100,12 +100,12 @@ class RetroCaptureAPI {
         return await this.request('GET', '/v4l2/controls');
     }
 
-    async getMFDevices() {
-        return await this.request('GET', '/mf/devices');
+    async getDSDevices() {
+        return await this.request('GET', '/ds/devices');
     }
 
-    async refreshMFDevices() {
-        return await this.request('GET', '/mf/devices/refresh');
+    async refreshDSDevices() {
+        return await this.request('GET', '/ds/devices/refresh');
     }
 
     async getStatus() {
@@ -154,8 +154,8 @@ class RetroCaptureAPI {
         return await this.request('POST', '/v4l2/device', { device });
     }
 
-    async setMFDevice(device) {
-        return await this.request('POST', '/mf/device', { device });
+    async setDSDevice(device) {
+        return await this.request('POST', '/ds/device', { device });
     }
 
     async setStreamingControl(action) {

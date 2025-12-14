@@ -111,7 +111,7 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        MF = 2 // Media Foundation (Windows)
+        DS = 2 // DirectShow (Windows)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -296,9 +296,9 @@ public:
     const std::vector<std::string> &getV4L2Devices() const { return m_v4l2Devices; }
     const std::vector<V4L2Control> &getV4L2Controls() const { return m_v4l2Controls; }
 
-    // Media Foundation getters
-    const std::vector<DeviceInfo> &getMFDevices() const { return m_mfDevices; }
-    void refreshMFDevices();
+    // DirectShow getters
+    const std::vector<DeviceInfo> &getDSDevices() const { return m_dsDevices; }
+    void refreshDSDevices();
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -519,14 +519,14 @@ private:
 
     // Source selection
 #ifdef _WIN32
-    SourceType m_sourceType = SourceType::MF; // Padrão: Media Foundation no Windows
+    SourceType m_sourceType = SourceType::DS; // Padrão: DirectShow no Windows
 #else
     SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
 #endif
 
     // Device selection (V4L2)
     std::vector<std::string> m_v4l2Devices;
-    std::vector<DeviceInfo> m_mfDevices;
+    std::vector<DeviceInfo> m_dsDevices;
     std::string m_currentDevice;
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;

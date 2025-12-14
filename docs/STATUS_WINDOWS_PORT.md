@@ -36,13 +36,12 @@
 
 #### 1. Captura de Vídeo Windows ✅
 
-- ✅ `VideoCaptureMF.h/cpp` - **IMPLEMENTADO COMPLETAMENTE**
-  - Implementa `IVideoCapture` usando Media Foundation
-  - Suporta enumeração de dispositivos via `MFEnumDeviceSources`
-  - Carregamento dinâmico de funções do Media Foundation (compatível com MinGW/MXE)
+- ✅ `VideoCaptureDS.h/cpp` - **IMPLEMENTADO COMPLETAMENTE**
+  - Implementa `IVideoCapture` usando DirectShow
+  - Suporta enumeração de dispositivos via DirectShow COM interfaces
+  - Compatível com MinGW/MXE (não requer Media Foundation)
   - Suporta configuração de formato e framerate
-  - Suporta modo dummy (frames pretos) quando Media Foundation não está disponível
-  - Detecção de Wine e fallback para modo dummy
+  - Suporta modo dummy (frames pretos) quando DirectShow não está disponível
   - Factory atualizada para retornar instância no Windows
 
 #### 2. Captura de Áudio Windows ✅
@@ -56,18 +55,17 @@
 
 #### 3. Scanner de Dispositivos Windows ✅
 
-- ✅ Enumeração de dispositivos integrada em `VideoCaptureMF::listDevices()`
-  - Usa Media Foundation para enumerar câmeras
+- ✅ Enumeração de dispositivos integrada em `VideoCaptureDS::listDevices()`
+  - Usa DirectShow para enumerar câmeras
   - Retorna lista com IDs e nomes amigáveis
   - Não requer classe separada
 
 #### 4. Mapeador de Controles Windows ⚠️
 
 - ⚠️ Controles de hardware **PARCIALMENTE IMPLEMENTADOS**
-  - Media Foundation não expõe diretamente controles de câmera
-  - Métodos `setControl()` e `getControl()` retornam false com aviso
-  - Para suporte completo, seria necessário usar DirectShow (`IAMCameraControl`, `IAMVideoProcAmp`)
-  - **Nota:** Isso é uma limitação conhecida do Media Foundation
+  - DirectShow expõe controles via `IAMCameraControl` e `IAMVideoProcAmp`
+  - Métodos `setControl()` e `getControl()` implementados mas precisam de mapeamento completo
+  - **Nota:** Mapeamento de controles está em desenvolvimento
 
 #### 5. Networking Windows ✅
 
@@ -82,12 +80,12 @@
 
 - ✅ Frontend adaptado para Windows
   - Detecção automática de plataforma via API `/api/v1/platform`
-  - Interface dinâmica que mostra controles V4L2 (Linux) ou Media Foundation (Windows)
-  - Endpoints da API para Media Foundation:
+  - Interface dinâmica que mostra controles V4L2 (Linux) ou DirectShow (Windows)
+  - Endpoints da API para DirectShow:
     - `GET /api/v1/platform` - Retorna plataforma e tipos de source disponíveis
-    - `GET /api/v1/mf/devices` - Lista dispositivos Media Foundation
-    - `GET /api/v1/mf/devices/refresh` - Atualiza lista de dispositivos
-    - `POST /api/v1/mf/device` - Define dispositivo ativo
+    - `GET /api/v1/ds/devices` - Lista dispositivos DirectShow
+    - `GET /api/v1/ds/devices/refresh` - Atualiza lista de dispositivos
+    - `POST /api/v1/ds/device` - Define dispositivo ativo
   - Logs de diagnóstico para troubleshooting
   - Fallback inteligente baseado em user agent se API falhar
 
@@ -125,10 +123,10 @@
 
 ## 📋 Checklist de Implementação Windows
 
-### VideoCaptureMF
+### VideoCaptureDS
 
-- [x] Criar `VideoCaptureMF.h`
-- [x] Criar `VideoCaptureMF.cpp`
+- [x] Criar `VideoCaptureDS.h`
+- [x] Criar `VideoCaptureDS.cpp`
 - [x] Implementar `open()`
 - [x] Implementar `close()`
 - [x] Implementar `setFormat()`
@@ -141,7 +139,7 @@
 - [x] Implementar `setDummyMode()`
 - [x] Implementar `startCapture()`
 - [x] Implementar `stopCapture()`
-- [x] Carregamento dinâmico de `MFEnumDeviceSources`
+- [x] Enumeração de dispositivos via DirectShow
 - [x] Detecção de Wine e fallback
 - [x] Testar com webcam real
 - [x] Testar modo dummy
@@ -171,9 +169,9 @@
 ### Portal Web Windows
 
 - [x] Endpoint `/api/v1/platform`
-- [x] Endpoint `/api/v1/mf/devices`
-- [x] Endpoint `/api/v1/mf/devices/refresh`
-- [x] Endpoint `/api/v1/mf/device`
+- [x] Endpoint `/api/v1/ds/devices`
+- [x] Endpoint `/api/v1/ds/devices/refresh`
+- [x] Endpoint `/api/v1/ds/device`
 - [x] Frontend adaptado para Windows
 - [x] Detecção automática de plataforma
 - [x] Controles dinâmicos baseados em plataforma
@@ -183,18 +181,17 @@
 
 ### Bibliotecas do Sistema
 
-- `mf.lib` - Media Foundation
-- `mfplat.lib` - Media Foundation Platform (carregada dinamicamente)
-- `mfuuid.lib` - Media Foundation UUIDs
+- `strmiids.lib` - DirectShow (Streaming Media IDs)
 - `avrt.lib` - Audio Runtime (WASAPI)
-- `ole32.lib` - COM (para Media Foundation e WASAPI)
+- `ole32.lib` - COM (para DirectShow e WASAPI)
+- `oleaut32.lib` - COM Automation
 - `ws2_32.lib` - Winsock2 (para networking)
 
 ### Headers Necessários
 
-- `<mfapi.h>` - Media Foundation API
-- `<mfidl.h>` - Media Foundation Interfaces
-- `<mfreadwrite.h>` - Media Foundation Read/Write
+- `<dshow.h>` - DirectShow
+- `<strmif.h>` - Streaming Media Interfaces
+- `<qedit.h>` - Sample Grabber (ISampleGrabber)
 - `<mmdeviceapi.h>` - WASAPI Device Enumeration
 - `<audioclient.h>` - WASAPI Audio Client
 - `<endpointvolume.h>` - WASAPI Endpoint Volume
@@ -233,7 +230,7 @@ As **Fases 1 e 2** estão **completas**:
 
 ### ✅ Fase 2 (Implementação Windows) - 100%
 
-- ✅ `VideoCaptureMF` implementado (Media Foundation)
+- ✅ `VideoCaptureDS` implementado (DirectShow)
   - Carregamento dinâmico de funções (compatível MinGW/MXE)
   - Detecção de Wine e fallback
 - ✅ `AudioCaptureWASAPI` implementado (WASAPI)
@@ -241,7 +238,7 @@ As **Fases 1 e 2** estão **completas**:
 - ✅ CMakeLists.txt atualizado com bibliotecas Windows
 - ✅ Networking Windows (Winsock) implementado
 - ✅ Portal Web adaptado para Windows
-- ⚠️ Controles de hardware parcialmente suportados (limitação do Media Foundation)
+- ⚠️ Controles de hardware parcialmente suportados (mapeamento em desenvolvimento)
 
 ### ⏳ Fase 3 (Build e Distribuição) - 80%
 
@@ -260,11 +257,9 @@ O código agora deve compilar e funcionar no Windows. As implementações estão
 
 ## 🔧 Problemas Conhecidos e Soluções
 
-### Media Foundation no MinGW/MXE
+### DirectShow no MinGW/MXE
 
-**Problema:** `MFEnumDeviceSources` pode não estar disponível via linkagem estática.
-
-**Solução:** Implementado carregamento dinâmico de `MFEnumDeviceSources` via `GetProcAddress` em `VideoCaptureMF.cpp`.
+**Solução:** DirectShow funciona bem com MinGW/MXE através de COM interfaces padrão. Não requer carregamento dinâmico de funções.
 
 ### Winsock não inicializado
 
@@ -272,8 +267,8 @@ O código agora deve compilar e funcionar no Windows. As implementações estão
 
 **Solução:** Adicionada inicialização do Winsock (`WSAStartup`) no construtor de `HTTPServer` e limpeza (`WSACleanup`) no destrutor.
 
-### Portal Web não mostra Media Foundation
+### Portal Web não mostra DirectShow
 
-**Problema:** Frontend não detecta plataforma Windows e não mostra controles MF.
+**Problema:** Frontend não detecta plataforma Windows e não mostra controles DS.
 
 **Solução:** Implementado endpoint `/api/v1/platform` e lógica no frontend para detectar plataforma e mostrar controles apropriados.

@@ -216,6 +216,10 @@ else()
     # Baixar ImGui se não existir
     if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
         message(STATUS "Baixando ImGui...")
+        # Remover diretório se existir mas estiver vazio ou corrompido
+        if(EXISTS ${IMGUI_DIR})
+            file(REMOVE_RECURSE ${IMGUI_DIR})
+        endif()
         file(MAKE_DIRECTORY ${IMGUI_DIR})
         execute_process(
             COMMAND git clone --depth 1 --branch docking https://github.com/ocornut/imgui.git ${IMGUI_DIR}
@@ -230,6 +234,10 @@ else()
     # Baixar nlohmann/json se não existir
     if(NOT EXISTS ${JSON_DIR}/include/nlohmann/json.hpp)
         message(STATUS "Baixando nlohmann/json...")
+        # Remover diretório se existir mas estiver vazio ou corrompido
+        if(EXISTS ${JSON_DIR})
+            file(REMOVE_RECURSE ${JSON_DIR})
+        endif()
         file(MAKE_DIRECTORY ${JSON_DIR})
         execute_process(
             COMMAND git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git ${JSON_DIR}
@@ -279,7 +287,7 @@ file(GLOB_RECURSE SOURCES
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
     # No Linux, excluir implementações Windows (quando existirem)
-    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureMF\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
 elseif(PLATFORM_WINDOWS)
     # No Windows, excluir implementações Linux
@@ -342,16 +350,11 @@ list(APPEND LINK_LIBS
 if(PLATFORM_LINUX)
     list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
 elseif(PLATFORM_WINDOWS)
-    # Windows Media Foundation libraries
+    # Windows DirectShow libraries
     list(APPEND LINK_LIBS
-        mf
-        mfplat
-        mfuuid
-
-        # mfreadwrite pode não estar disponível no MXE - MFCreateSourceReaderFromMediaSource está em mfplat
-        strmiids
-        ole32
-        oleaut32
+        strmiids  # DirectShow (Streaming Media IDs)
+        ole32     # COM
+        oleaut32  # COM Automation
     )
 
     # Windows Audio Session API (WASAPI) libraries

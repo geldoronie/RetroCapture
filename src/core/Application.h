@@ -114,7 +114,7 @@ private:
     std::string m_shaderPath;
     std::string m_presetPath;
 #ifdef _WIN32
-    std::string m_devicePath = ""; // Windows: vazio por padrão (Media Foundation usa índices)
+    std::string m_devicePath = ""; // Windows: vazio por padrão (DirectShow usa índices)
 #else
     std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
 #endif

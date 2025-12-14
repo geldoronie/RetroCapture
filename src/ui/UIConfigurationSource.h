@@ -27,8 +27,8 @@ private:
     void renderV4L2Controls();
     void renderV4L2DeviceSelection();
 #ifdef _WIN32
-    void renderMFControls();
-    void renderMFDeviceSelection();
+    void renderDSControls();
+    void renderDSDeviceSelection();
 #endif
     void renderCaptureSettings();
     void renderQuickResolutions();

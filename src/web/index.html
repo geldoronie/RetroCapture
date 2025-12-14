@@ -239,23 +239,23 @@
                                             </div>
                                         </div>
                                         
-                                        <!-- Media Foundation Controls - Aparece apenas quando Media Foundation está selecionado (Windows) -->
-                                        <div id="mfControlsContainer" style="display: none;">
+                                        <!-- DirectShow Controls - Aparece apenas quando DirectShow está selecionado (Windows) -->
+                                        <div id="dsControlsContainer" style="display: none;">
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">Media Foundation Device</h6>
-                                                    <button class="btn btn-sm btn-secondary" onclick="refreshMFDevices()">
+                                                    <h6 class="mb-0">DirectShow Device</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshDSDevices()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                     </button>
                                                 </div>
-                                                <select class="form-select" id="mfDevice">
+                                                <select class="form-select" id="dsDevice">
                                                     <option value="">Carregando...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo Media Foundation ou "None (No device)" para desabilitar</small>
+                                                <small class="form-text text-muted mt-1">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</small>
                                             </div>
                                             
-                                            <div class="col-12" id="mfCaptureInfo" style="display: none;">
+                                            <div class="col-12" id="dsCaptureInfo" style="display: none;">
                                                 <hr>
                                                 <h6>Capture Resolution & Framerate</h6>
                                                 
@@ -263,15 +263,15 @@
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-4">
                                                         <label class="form-label">Width</label>
-                                                        <input type="number" class="form-control" id="mfCaptureWidth" min="1" max="7680">
+                                                        <input type="number" class="form-control" id="dsCaptureWidth" min="1" max="7680">
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label">Height</label>
-                                                        <input type="number" class="form-control" id="mfCaptureHeight" min="1" max="4320">
+                                                        <input type="number" class="form-control" id="dsCaptureHeight" min="1" max="4320">
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label">FPS</label>
-                                                        <input type="number" class="form-control" id="mfCaptureFPS" min="1" max="240">
+                                                        <input type="number" class="form-control" id="dsCaptureFPS" min="1" max="240">
                                                     </div>
                                                 </div>
                                                 

@@ -9,28 +9,29 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <mferror.h>
-#include <wmcodecdsp.h>
 #include <comdef.h>
+#include <dshow.h>
 
 // Forward declarations
-struct IMFMediaSource;
-struct IMFSourceReader;
-struct IMFMediaType;
-struct IMFSample;
-struct IMFMediaBuffer;
+struct IGraphBuilder;
+struct ICaptureGraphBuilder2;
+struct IBaseFilter;
+struct ISampleGrabber;
+struct IMediaControl;
+struct IMediaEventEx;
+struct IAMStreamConfig;
+struct IAMVideoProcAmp;
+struct IAMCameraControl;
 
 /**
- * @brief Media Foundation implementation of IVideoCapture for Windows
+ * @brief DirectShow implementation of IVideoCapture for Windows
+ * Uses DirectShow instead of Media Foundation for better MinGW/MXE compatibility
  */
-class VideoCaptureMF : public IVideoCapture
+class VideoCaptureDS : public IVideoCapture
 {
 public:
-    VideoCaptureMF();
-    ~VideoCaptureMF() override;
+    VideoCaptureDS();
+    ~VideoCaptureDS() override;
 
     // IVideoCapture interface
     bool open(const std::string &device) override;
@@ -55,10 +56,16 @@ public:
     uint32_t getPixelFormat() const override;
 
 private:
-    // Media Foundation objects
-    IMFMediaSource *m_mediaSource;
-    IMFSourceReader *m_sourceReader;
-    IMFMediaType *m_mediaType;
+    // DirectShow objects
+    IGraphBuilder *m_graphBuilder;
+    ICaptureGraphBuilder2 *m_captureGraphBuilder;
+    IBaseFilter *m_captureFilter;
+    ISampleGrabber *m_sampleGrabber;
+    IMediaControl *m_mediaControl;
+    IMediaEventEx *m_mediaEvent;
+    IAMStreamConfig *m_streamConfig;
+    IAMVideoProcAmp *m_videoProcAmp;
+    IAMCameraControl *m_cameraControl;
 
     // Frame buffer
     std::vector<uint8_t> m_frameBuffer;
@@ -70,7 +77,7 @@ private:
     uint32_t m_width;
     uint32_t m_height;
     uint32_t m_fps;
-    GUID m_pixelFormat; // MF video format GUID
+    uint32_t m_pixelFormat; // Pixel format code (0 = RGB24)
 
     // State
     bool m_isOpen;
@@ -82,17 +89,18 @@ private:
     std::vector<uint8_t> m_dummyFrameBuffer;
 
     // Helper methods
-    bool initializeMediaFoundation();
-    void shutdownMediaFoundation();
-    bool createMediaSource(const std::string &deviceId);
-    bool configureSourceReader();
+    bool initializeCOM();
+    void shutdownCOM();
+    bool createCaptureGraph(const std::string &deviceId);
+    bool configureCaptureFormat();
     bool readSample(Frame &frame);
     void generateDummyFrame(Frame &frame);
-    GUID getPixelFormatGUID(uint32_t pixelFormat);
-    uint32_t getPixelFormatFromGUID(const GUID &guid) const;
-    std::string getControlNameFromMF(const std::string &controlName);
-    bool setControlMF(const std::string &controlName, int32_t value);
-    bool getControlMF(const std::string &controlName, int32_t &value);
+    std::string getControlNameFromDS(const std::string &controlName);
+    bool setControlDS(const std::string &controlName, int32_t value);
+    bool getControlDS(const std::string &controlName, int32_t &value);
+    
+    // COM initialization tracking
+    bool m_comInitialized;
 };
 
 #endif // _WIN32

@@ -75,7 +75,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
 
     // Verificar formato do frame
     // YUYV: 2 bytes por pixel (formato comum V4L2)
-    // RGB24: 3 bytes por pixel (formato comum Media Foundation)
+    // RGB24: 3 bytes por pixel (formato comum DirectShow)
     bool isYUYV = false;
 #ifdef __linux__
     // No Linux, verificar se é YUYV pelo formato ou tamanho
@@ -93,7 +93,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         isYUYV = true;
     }
 #else
-    // No Windows, verificar pelo tamanho (Media Foundation geralmente usa RGB24)
+    // No Windows, verificar pelo tamanho (DirectShow geralmente usa RGB24)
     if (frame.size == frame.width * frame.height * 2)
     {
         isYUYV = true;
