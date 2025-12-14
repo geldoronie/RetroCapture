@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cctype>
 
-std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
+std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
 {
     std::vector<std::string> shaders;
 
@@ -32,6 +32,10 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
         fs::recursive_directory_iterator end;
         for (; it != end; ++it)
         {
+            // No Linux usa std::filesystem padrão (C++17), precisa desreferenciar
+            // No Windows com MinGW < 8 usa implementação customizada que tem métodos diretos
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+            // Implementação customizada do FilesystemCompat.h (Windows MinGW < 8)
             if (it.is_regular_file())
             {
                 std::string ext = it.path().extension();
@@ -40,6 +44,18 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
                 if (ext == ".glslp")
                 {
                     fs::path entryPath = it.path();
+#else
+            // std::filesystem padrão (C++17) - Linux e Windows MinGW >= 8
+            // *it retorna directory_entry, então usamos it->path() e fs::is_regular_file(*it)
+            if (fs::is_regular_file(*it))
+            {
+                std::string ext = it->path().extension();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                if (ext == ".glslp")
+                {
+                    fs::path entryPath = it->path();
+#endif
 
                     // Tentar normalizar o caminho do arquivo
                     fs::path normalizedEntryPath;
@@ -93,4 +109,3 @@ std::vector<std::string> ShaderScanner::scan(const std::string& basePath)
 
     return shaders;
 }
-

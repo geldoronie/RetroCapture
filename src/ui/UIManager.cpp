@@ -960,6 +960,14 @@ void UIManager::setV4L2Controls(IVideoCapture *capture)
         ctrl.name = name;
 
         // Usar interface genérica para obter informações do controle
+        // Verificar se o dispositivo está aberto antes de tentar obter controles
+        if (!capture->isOpen())
+        {
+            ctrl.available = false;
+            m_v4l2Controls.push_back(ctrl);
+            continue;
+        }
+
         int32_t value, minVal, maxVal;
         if (capture->getControl(name, value) &&
             capture->getControlMin(name, minVal) &&
@@ -972,10 +980,10 @@ void UIManager::setV4L2Controls(IVideoCapture *capture)
             ctrl.available = true;
             m_v4l2Controls.push_back(ctrl);
         }
-
-        if (ctrl.available)
+        else
         {
-            m_v4l2Controls.push_back(ctrl);
+            // Controle não disponível - não adicionar à lista
+            ctrl.available = false;
         }
     }
 }

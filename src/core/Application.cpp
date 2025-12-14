@@ -1727,6 +1727,11 @@ bool Application::initUI()
         // Atualizar caminho do dispositivo
         m_devicePath = devicePath;
         
+        // Limpar textura do FrameProcessor ao trocar dispositivo
+        if (m_frameProcessor) {
+            m_frameProcessor->deleteTexture();
+        }
+        
         // Reabrir com novo dispositivo
         if (m_capture && m_capture->open(devicePath)) {
             // Reconfigurar formato e framerate

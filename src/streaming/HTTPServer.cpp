@@ -5,6 +5,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <cstring>
+#include <cerrno>
+#define SOCKET_ERROR_MSG() std::string(strerror(errno))
 #elif defined(_WIN32) || defined(WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>

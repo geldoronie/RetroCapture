@@ -400,11 +400,24 @@ std::string ShaderPreset::resolvePath(const std::string &path)
                 fs::recursive_directory_iterator end;
                 for (; it != end; ++it)
                 {
+// No Linux usa std::filesystem padrão (C++17), precisa desreferenciar
+// No Windows com MinGW < 8 usa implementação customizada que tem métodos diretos
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Implementação customizada do FilesystemCompat.h (Windows MinGW < 8)
                     if (it.is_regular_file() && it.path().filename() == filePart)
                     {
                         LOG_INFO("Shader encontrado (busca recursiva): " + it.path().string());
                         return it.path().string();
                     }
+#else
+                    // std::filesystem padrão (C++17) - Linux e Windows MinGW >= 8
+                    // *it retorna directory_entry, então usamos it->path() e fs::is_regular_file(*it)
+                    if (fs::is_regular_file(*it) && it->path().filename() == filePart)
+                    {
+                        LOG_INFO("Shader encontrado (busca recursiva): " + it->path().string());
+                        return it->path().string();
+                    }
+#endif
                 }
             }
         }

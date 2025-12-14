@@ -12,6 +12,10 @@
 #include <algorithm>
 #include <filesystem>
 
+#ifndef V4L2_PIX_FMT_MJPEG
+#define V4L2_PIX_FMT_MJPEG v4l2_fourcc('M', 'J', 'P', 'G')
+#endif
+
 VideoCaptureV4L2::VideoCaptureV4L2()
 {
 }
@@ -110,10 +114,53 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
 
     if (pixelFormat == 0)
     {
-        pixelFormat = fmt.fmt.pix.pixelformat;
-        if (pixelFormat == 0)
+        // Quando formato não especificado, sempre tentar YUYV primeiro
+        // Verificar se YUYV é suportado
+        struct v4l2_fmtdesc fmtDesc = {};
+        fmtDesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        bool yuyvSupported = false;
+        bool mjpegSupported = false;
+
+        while (ioctl(m_fd, VIDIOC_ENUM_FMT, &fmtDesc) == 0)
         {
+            if (fmtDesc.pixelformat == V4L2_PIX_FMT_YUYV)
+            {
+                yuyvSupported = true;
+            }
+            if (fmtDesc.pixelformat == V4L2_PIX_FMT_MJPEG)
+            {
+                mjpegSupported = true;
+            }
+            fmtDesc.index++;
+        }
+
+        if (yuyvSupported)
+        {
+            LOG_INFO("YUYV é suportado, usando YUYV como formato padrão");
             pixelFormat = V4L2_PIX_FMT_YUYV;
+        }
+        else
+        {
+            // Se YUYV não é suportado, pegar o formato atual do dispositivo
+            pixelFormat = fmt.fmt.pix.pixelformat;
+            if (pixelFormat == 0)
+            {
+                // Se ainda não temos formato, tentar MJPG como último recurso
+                if (mjpegSupported)
+                {
+                    LOG_WARN("YUYV não suportado, usando MJPG (não totalmente suportado ainda)");
+                    pixelFormat = V4L2_PIX_FMT_MJPEG;
+                }
+                else
+                {
+                    LOG_ERROR("Nenhum formato suportado encontrado");
+                    return false;
+                }
+            }
+            else if (pixelFormat == V4L2_PIX_FMT_MJPEG)
+            {
+                LOG_WARN("Dispositivo está usando MJPG mas YUYV não está disponível. MJPG não é totalmente suportado.");
+            }
         }
     }
 
@@ -132,9 +179,41 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
     m_height = fmt.fmt.pix.height;
     m_pixelFormat = fmt.fmt.pix.pixelformat;
 
+    // Verificar se o formato foi aceito corretamente
+    if (m_pixelFormat != pixelFormat)
+    {
+        char requestedStr[5] = {0};
+        requestedStr[0] = (pixelFormat >> 0) & 0xFF;
+        requestedStr[1] = (pixelFormat >> 8) & 0xFF;
+        requestedStr[2] = (pixelFormat >> 16) & 0xFF;
+        requestedStr[3] = (pixelFormat >> 24) & 0xFF;
+
+        char actualStr[5] = {0};
+        actualStr[0] = (m_pixelFormat >> 0) & 0xFF;
+        actualStr[1] = (m_pixelFormat >> 8) & 0xFF;
+        actualStr[2] = (m_pixelFormat >> 16) & 0xFF;
+        actualStr[3] = (m_pixelFormat >> 24) & 0xFF;
+
+        LOG_WARN("Formato solicitado '" + std::string(requestedStr) +
+                 "' mas dispositivo retornou '" + std::string(actualStr) + "'");
+
+        // Se foi solicitado YUYV mas retornou MJPG, tentar forçar novamente
+        if (pixelFormat == V4L2_PIX_FMT_YUYV && m_pixelFormat == V4L2_PIX_FMT_MJPEG)
+        {
+            LOG_ERROR("Dispositivo não aceitou YUYV e retornou MJPG. YUYV pode não ser suportado.");
+            return false;
+        }
+    }
+
+    // Log do formato de forma mais legível
+    char formatStr[5] = {0};
+    formatStr[0] = (m_pixelFormat >> 0) & 0xFF;
+    formatStr[1] = (m_pixelFormat >> 8) & 0xFF;
+    formatStr[2] = (m_pixelFormat >> 16) & 0xFF;
+    formatStr[3] = (m_pixelFormat >> 24) & 0xFF;
     LOG_INFO("Formato definido: " + std::to_string(m_width) + "x" +
              std::to_string(m_height) + " (format: 0x" +
-             std::to_string(m_pixelFormat) + ")");
+             std::to_string(m_pixelFormat) + " = '" + std::string(formatStr) + "')");
 
     return true;
 }
@@ -224,11 +303,28 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
         return false;
     }
 
+    // Validar buffer antes de usar
+    if (!m_buffers[buf.index].start || m_buffers[buf.index].start == MAP_FAILED)
+    {
+        LOG_ERROR("Buffer inválido no índice " + std::to_string(buf.index));
+        // Ainda assim, tentar reenfileirar para não perder sincronização
+        ioctl(m_fd, VIDIOC_QBUF, &buf);
+        return false;
+    }
+
     frame.data = static_cast<uint8_t *>(m_buffers[buf.index].start);
     frame.size = buf.length;
     frame.width = m_width;
     frame.height = m_height;
     frame.format = m_pixelFormat;
+
+    // Validar tamanho do frame
+    size_t expectedSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+    if (buf.length < expectedSize)
+    {
+        LOG_WARN("Tamanho do buffer menor que o esperado: " + std::to_string(buf.length) +
+                 " < " + std::to_string(expectedSize));
+    }
 
     if (ioctl(m_fd, VIDIOC_QBUF, &buf) < 0)
     {
@@ -389,7 +485,8 @@ bool VideoCaptureV4L2::getControl(uint32_t controlId, int32_t &value)
 
     if (ioctl(m_fd, VIDIOC_G_CTRL, &ctrl) < 0)
     {
-        LOG_WARN("Falha ao obter controle V4L2 (ID: " + std::to_string(controlId) + ")");
+        // Não logar como WARN se o controle simplesmente não existe ou não está disponível
+        // Apenas retornar false silenciosamente
         return false;
     }
 
