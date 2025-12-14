@@ -33,6 +33,7 @@ Makefile
 Thumbs.db
 
 imgui.ini
+retrocapture_config.json
 
 AppDir/
 RetroCapture-*.AppImage
