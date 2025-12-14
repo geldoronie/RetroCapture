@@ -11,6 +11,8 @@ let appState = {
     image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
+    mf: { devices: [], currentDevice: '' }, // Media Foundation (Windows)
+    platform: { platform: 'linux', availableSourceTypes: [] },
     status: { streamingActive: false, active: false, streamUrl: '', url: '', clientCount: 0 }
 };
 
@@ -56,10 +58,79 @@ function copyStreamUrl() {
 }
 
 /**
+ * Carrega informações da plataforma
+ */
+async function loadPlatform() {
+    try {
+        console.log('Carregando informações da plataforma...');
+        const platform = await api.getPlatform();
+        console.log('Plataforma recebida:', platform);
+        appState.platform = platform;
+        
+        // Atualizar UI baseado na plataforma
+        updatePlatformUI();
+    } catch (error) {
+        console.error('Erro ao carregar informações da plataforma:', error);
+        // Usar padrão baseado na detecção do user agent se falhar
+        const isWindows = navigator.platform.toLowerCase().includes('win') || 
+                         navigator.userAgent.toLowerCase().includes('windows');
+        appState.platform = { 
+            platform: isWindows ? 'windows' : 'linux', 
+            availableSourceTypes: isWindows ? [
+                { value: 0, name: 'None' },
+                { value: 2, name: 'Media Foundation' }
+            ] : [
+                { value: 0, name: 'None' },
+                { value: 1, name: 'V4L2' }
+            ]
+        };
+        console.log('Usando fallback de plataforma:', appState.platform);
+        updatePlatformUI();
+    }
+}
+
+/**
+ * Atualiza a UI baseado na plataforma detectada
+ */
+function updatePlatformUI() {
+    const sourceTypeSelect = document.getElementById('sourceType');
+    if (!sourceTypeSelect) {
+        console.warn('sourceType select não encontrado');
+        return;
+    }
+    
+    // Limpar opções existentes
+    sourceTypeSelect.innerHTML = '';
+    
+    // Verificar se temos tipos de source disponíveis
+    if (!appState.platform.availableSourceTypes || appState.platform.availableSourceTypes.length === 0) {
+        console.warn('Nenhum tipo de source disponível na plataforma');
+        const option = document.createElement('option');
+        option.value = '0';
+        option.textContent = 'Carregando...';
+        sourceTypeSelect.appendChild(option);
+        return;
+    }
+    
+    // Adicionar opções baseadas na plataforma
+    appState.platform.availableSourceTypes.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type.value;
+        option.textContent = type.name;
+        sourceTypeSelect.appendChild(option);
+    });
+    
+    console.log('Platform UI atualizada:', appState.platform.platform, 'com', appState.platform.availableSourceTypes.length, 'tipos de source');
+}
+
+/**
  * Carrega todos os dados da aplicação
  */
 async function loadAllData() {
     try {
+        // Carregar informações da plataforma primeiro
+        await loadPlatform();
+        
         // Carregar status
         await loadStatus();
         
@@ -227,7 +298,23 @@ async function loadSource() {
         appState.v4l2.currentDevice = source.device || '';
         
         const sourceType = source.type || 0;
-        document.getElementById('sourceType').value = sourceType;
+        const sourceTypeSelect = document.getElementById('sourceType');
+        if (sourceTypeSelect) {
+            // Verificar se o valor existe nas opções antes de definir
+            let optionExists = false;
+            for (let i = 0; i < sourceTypeSelect.options.length; i++) {
+                if (parseInt(sourceTypeSelect.options[i].value) === sourceType) {
+                    optionExists = true;
+                    break;
+                }
+            }
+            if (optionExists) {
+                sourceTypeSelect.value = sourceType;
+            } else {
+                console.warn('Tipo de source', sourceType, 'não encontrado nas opções. Opções disponíveis:', 
+                    Array.from(sourceTypeSelect.options).map(opt => opt.value + '=' + opt.textContent));
+            }
+        }
         
         // Atualizar visibilidade dos controles baseado no tipo de fonte
         updateSourceUI(sourceType);
@@ -257,15 +344,22 @@ async function loadSource() {
  */
 function updateSourceUI(sourceType) {
     const v4l2Container = document.getElementById('v4l2ControlsContainer');
+    const mfContainer = document.getElementById('mfControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
-    
+
+    // Esconder todos os containers primeiro
+    if (v4l2Container) v4l2Container.style.display = 'none';
+    if (mfContainer) mfContainer.style.display = 'none';
+    if (noneMessage) noneMessage.style.display = 'none';
+
     if (sourceType === 1) {
-        // V4L2 selecionado - mostrar controles V4L2
+        // V4L2 selecionado (Linux)
         if (v4l2Container) v4l2Container.style.display = 'block';
-        if (noneMessage) noneMessage.style.display = 'none';
+    } else if (sourceType === 2) {
+        // Media Foundation selecionado (Windows)
+        if (mfContainer) mfContainer.style.display = 'block';
     } else {
-        // None selecionado - esconder controles V4L2
-        if (v4l2Container) v4l2Container.style.display = 'none';
+        // None selecionado
         if (noneMessage) noneMessage.style.display = 'block';
     }
 }
@@ -398,6 +492,102 @@ async function updateV4L2ControlSource(name, value) {
 }
 
 /**
+ * Carrega dispositivos Media Foundation para a aba Source
+ */
+async function loadMFDevicesForSource() {
+    try {
+        const response = await api.getMFDevices();
+        const devices = response.devices || [];
+        
+        const select = document.getElementById('mfDevice');
+        if (!select) return;
+        
+        select.innerHTML = '';
+        
+        // Adicionar opção "None"
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = 'None (No device)';
+        select.appendChild(noneOption);
+        
+        // Adicionar dispositivos
+        devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.id || device.name;
+            option.textContent = device.name || device.id;
+            if (!device.available) {
+                option.disabled = true;
+                option.textContent += ' (Não disponível)';
+            }
+            select.appendChild(option);
+        });
+        
+        // Marcar dispositivo atual se disponível
+        const currentDevice = appState.source.device || '';
+        appState.mf.currentDevice = currentDevice;
+        if (currentDevice) {
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === currentDevice) {
+                    select.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        // Mostrar informações de captura se dispositivo estiver selecionado
+        const captureInfo = document.getElementById('mfCaptureInfo');
+        if (captureInfo && currentDevice) {
+            captureInfo.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Erro ao carregar dispositivos Media Foundation:', error);
+        showAlert('Erro ao carregar dispositivos Media Foundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza o dispositivo Media Foundation na aba Source
+ */
+async function updateMFDeviceSource() {
+    try {
+        const select = document.getElementById('mfDevice');
+        if (!select) return;
+        
+        const device = select.value;
+        await api.setMFDevice(device);
+        appState.mf.currentDevice = device;
+        
+        // Recarregar informações de captura
+        await loadCapture();
+        
+        // Mostrar/esconder informações de captura
+        const captureInfo = document.getElementById('mfCaptureInfo');
+        if (captureInfo) {
+            captureInfo.style.display = device ? 'block' : 'none';
+        }
+        
+        showAlert('Dispositivo Media Foundation atualizado', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar dispositivo Media Foundation:', error);
+        showAlert('Erro ao atualizar dispositivo Media Foundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza a lista de dispositivos Media Foundation
+ */
+async function refreshMFDevices() {
+    try {
+        await api.refreshMFDevices();
+        await loadMFDevicesForSource();
+        showAlert('Lista de dispositivos Media Foundation atualizada', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar lista de dispositivos Media Foundation:', error);
+        showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
+    }
+}
+
+/**
  * Atualiza o dispositivo V4L2 na aba Source
  */
 async function updateV4L2DeviceSource() {
@@ -433,7 +623,14 @@ async function updateV4L2DeviceSource() {
  */
 async function setQuickFPS(fps) {
     try {
-        const fpsInput = document.getElementById('v4l2CaptureFPS');
+        // Atualizar input baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let fpsInput = null;
+        if (sourceType === 1) {
+            fpsInput = document.getElementById('v4l2CaptureFPS');
+        } else if (sourceType === 2) {
+            fpsInput = document.getElementById('mfCaptureFPS');
+        }
         if (fpsInput) {
             fpsInput.value = fps;
         }
@@ -454,8 +651,16 @@ async function setQuickFPS(fps) {
  */
 async function setQuickResolution(width, height) {
     try {
-        const widthInput = document.getElementById('v4l2CaptureWidth');
-        const heightInput = document.getElementById('v4l2CaptureHeight');
+        // Atualizar inputs baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let widthInput = null, heightInput = null;
+        if (sourceType === 1) {
+            widthInput = document.getElementById('v4l2CaptureWidth');
+            heightInput = document.getElementById('v4l2CaptureHeight');
+        } else if (sourceType === 2) {
+            widthInput = document.getElementById('mfCaptureWidth');
+            heightInput = document.getElementById('mfCaptureHeight');
+        }
         if (widthInput) widthInput.value = width;
         if (heightInput) heightInput.value = height;
         
@@ -476,23 +681,35 @@ async function setQuickResolution(width, height) {
  */
 async function updateV4L2CaptureSettings() {
     try {
-        const widthInput = document.getElementById('v4l2CaptureWidth');
-        const heightInput = document.getElementById('v4l2CaptureHeight');
-        const fpsInput = document.getElementById('v4l2CaptureFPS');
+        // Obter inputs baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let widthInput = null, heightInput = null, fpsInput = null;
         
+        if (sourceType === 1) {
+            // V4L2
+            widthInput = document.getElementById('v4l2CaptureWidth');
+            heightInput = document.getElementById('v4l2CaptureHeight');
+            fpsInput = document.getElementById('v4l2CaptureFPS');
+        } else if (sourceType === 2) {
+            // Media Foundation
+            widthInput = document.getElementById('mfCaptureWidth');
+            heightInput = document.getElementById('mfCaptureHeight');
+            fpsInput = document.getElementById('mfCaptureFPS');
+        }
+
         if (!widthInput || !heightInput || !fpsInput) {
-            showAlert('Erro: Campos de captura não encontrados', 'danger');
+            // Não mostrar erro se não houver campos (pode ser que o tipo de source não tenha esses campos)
             return;
         }
-        
+
         const width = parseInt(widthInput.value);
         const height = parseInt(heightInput.value);
         const fps = parseInt(fpsInput.value);
-        
+
         if (width && height) {
             await api.setCaptureResolution(width, height);
         }
-        
+
         if (fps) {
             await api.setCaptureFPS(fps);
         }
@@ -537,11 +754,15 @@ async function updateSource() {
         
         // Atualizar UI imediatamente
         updateSourceUI(sourceType);
-        
-        // Se for V4L2, carregar dispositivos e controles
+
+        // Carregar dispositivos e controles baseado no tipo de source
         if (sourceType === 1) {
+            // V4L2 (Linux)
             await loadV4L2DevicesForSource();
             await loadV4L2ControlsForSource();
+        } else if (sourceType === 2) {
+            // Media Foundation (Windows)
+            await loadMFDevicesForSource();
         }
         
         // Recarregar dados completos
@@ -712,14 +933,20 @@ async function loadCapture() {
             fps: fps.fps || 0
         };
         
-        // Atualizar campos na aba Source (V4L2)
+        // Atualizar campos na aba Source (V4L2 e MF)
         const v4l2Width = document.getElementById('v4l2CaptureWidth');
         const v4l2Height = document.getElementById('v4l2CaptureHeight');
         const v4l2FPS = document.getElementById('v4l2CaptureFPS');
+        const mfWidth = document.getElementById('mfCaptureWidth');
+        const mfHeight = document.getElementById('mfCaptureHeight');
+        const mfFPS = document.getElementById('mfCaptureFPS');
         
         if (v4l2Width) v4l2Width.value = appState.capture.width;
         if (v4l2Height) v4l2Height.value = appState.capture.height;
         if (v4l2FPS) v4l2FPS.value = appState.capture.fps;
+        if (mfWidth) mfWidth.value = appState.capture.width;
+        if (mfHeight) mfHeight.value = appState.capture.height;
+        if (mfFPS) mfFPS.value = appState.capture.fps;
         
         // Atualizar status bar
         const captureResolutionEl = document.getElementById('captureResolution');
@@ -1064,16 +1291,29 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // Event listener para mudança de tipo de fonte - aplica automaticamente
-    document.getElementById('sourceType').addEventListener('change', function() {
-        const sourceType = parseInt(this.value);
-        updateSource(); // Aplicar mudança automaticamente
-    });
+    const sourceTypeSelect = document.getElementById('sourceType');
+    if (sourceTypeSelect) {
+        sourceTypeSelect.addEventListener('change', function() {
+            const sourceType = parseInt(this.value);
+            updateSource(); // Aplicar mudança automaticamente
+        });
+    } else {
+        console.error('sourceType select não encontrado ao adicionar event listener');
+    }
     
     // Event listener para mudança de dispositivo V4L2 na aba Source
     const v4l2DeviceSelect = document.getElementById('v4l2Device');
     if (v4l2DeviceSelect) {
         v4l2DeviceSelect.addEventListener('change', function() {
             updateV4L2DeviceSource();
+        });
+    }
+    
+    // Event listener para mudança de dispositivo Media Foundation na aba Source
+    const mfDeviceSelect = document.getElementById('mfDevice');
+    if (mfDeviceSelect) {
+        mfDeviceSelect.addEventListener('change', function() {
+            updateMFDeviceSource();
         });
     }
     
@@ -1101,11 +1341,14 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
     
-    // Resolução/FPS de captura (V4L2) - atualização em tempo real com debounce
+    // Resolução/FPS de captura (V4L2 e MF) - atualização em tempo real com debounce
     let captureSettingsTimeout = null;
     const v4l2CaptureWidth = document.getElementById('v4l2CaptureWidth');
     const v4l2CaptureHeight = document.getElementById('v4l2CaptureHeight');
     const v4l2CaptureFPS = document.getElementById('v4l2CaptureFPS');
+    const mfCaptureWidth = document.getElementById('mfCaptureWidth');
+    const mfCaptureHeight = document.getElementById('mfCaptureHeight');
+    const mfCaptureFPS = document.getElementById('mfCaptureFPS');
     
     function updateCaptureSettingsDebounced() {
         clearTimeout(captureSettingsTimeout);
@@ -1125,6 +1368,20 @@ document.addEventListener('DOMContentLoaded', function() {
     if (v4l2CaptureFPS) {
         v4l2CaptureFPS.addEventListener('input', updateCaptureSettingsDebounced);
         v4l2CaptureFPS.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    
+    // Event listeners para controles Media Foundation (similar ao V4L2)
+    if (mfCaptureWidth) {
+        mfCaptureWidth.addEventListener('input', updateCaptureSettingsDebounced);
+        mfCaptureWidth.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (mfCaptureHeight) {
+        mfCaptureHeight.addEventListener('input', updateCaptureSettingsDebounced);
+        mfCaptureHeight.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (mfCaptureFPS) {
+        mfCaptureFPS.addEventListener('input', updateCaptureSettingsDebounced);
+        mfCaptureFPS.addEventListener('change', updateCaptureSettingsDebounced);
     }
     
     // Shader select - atualização em tempo real

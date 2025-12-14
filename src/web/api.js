@@ -100,8 +100,20 @@ class RetroCaptureAPI {
         return await this.request('GET', '/v4l2/controls');
     }
 
+    async getMFDevices() {
+        return await this.request('GET', '/mf/devices');
+    }
+
+    async refreshMFDevices() {
+        return await this.request('GET', '/mf/devices/refresh');
+    }
+
     async getStatus() {
         return await this.request('GET', '/status');
+    }
+
+    async getPlatform() {
+        return await this.request('GET', '/platform');
     }
 
     // ========== SET Methods ==========
@@ -140,6 +152,10 @@ class RetroCaptureAPI {
 
     async setV4L2Device(device) {
         return await this.request('POST', '/v4l2/device', { device });
+    }
+
+    async setMFDevice(device) {
+        return await this.request('POST', '/mf/device', { device });
     }
 
     async setStreamingControl(action) {

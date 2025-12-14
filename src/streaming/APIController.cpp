@@ -271,9 +271,21 @@ bool APIController::handleGET(int clientFd, const std::string &path)
     {
         return handleGETV4L2Controls(clientFd);
     }
+    else if (path == "/api/v1/mf/devices")
+    {
+        return handleGETMFDevices(clientFd);
+    }
+    else if (path == "/api/v1/mf/devices/refresh")
+    {
+        return handleRefreshMFDevices(clientFd);
+    }
     else if (path == "/api/v1/status")
     {
         return handleGETStatus(clientFd);
+    }
+    else if (path == "/api/v1/platform")
+    {
+        return handleGETPlatform(clientFd);
     }
 
     send404(clientFd);
@@ -321,6 +333,10 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     else if (path == "/api/v1/v4l2/device")
     {
         return handleSetV4L2Device(clientFd, body);
+    }
+    else if (path == "/api/v1/mf/device")
+    {
+        return handleSetMFDevice(clientFd, body);
     }
 
     send404(clientFd);
@@ -606,6 +622,80 @@ bool APIController::handleGETStatus(int clientFd)
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
+}
+
+bool APIController::handleGETPlatform(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    std::ostringstream json;
+    json << "{"
+         << "\"platform\": " << jsonString(
+#ifdef _WIN32
+                                    "windows"
+#else
+                                    "linux"
+#endif
+                                    )
+         << ", "
+         << "\"availableSourceTypes\": [";
+
+    // Adicionar tipos de source disponíveis baseado na plataforma
+#ifdef _WIN32
+    json << "{\"value\": 0, \"name\": \"None\"}, "
+         << "{\"value\": 2, \"name\": \"Media Foundation\"}";
+#else
+    json << "{\"value\": 0, \"name\": \"None\"}, "
+         << "{\"value\": 1, \"name\": \"V4L2\"}";
+#endif
+
+    json << "]"
+         << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleGETMFDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    const auto &devices = m_uiManager->getMFDevices();
+    std::ostringstream json;
+    json << "{\"devices\": [";
+    for (size_t i = 0; i < devices.size(); ++i)
+    {
+        if (i > 0)
+            json << ", ";
+        const auto &device = devices[i];
+        json << "{"
+             << "\"id\": " << jsonString(device.id) << ", "
+             << "\"name\": " << jsonString(device.name) << ", "
+             << "\"available\": " << jsonBool(device.available)
+             << "}";
+    }
+    json << "]}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleRefreshMFDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    m_uiManager->refreshMFDevices();
+    return handleGETMFDevices(clientFd);
 }
 
 // Implementações dos handlers POST/PUT
@@ -1089,6 +1179,42 @@ bool APIController::handleSetV4L2Control(int clientFd, const std::string &body)
 }
 
 bool APIController::handleSetV4L2Device(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (json.contains("device"))
+        {
+            std::string device = json["device"].get<std::string>();
+
+            // setCurrentDevice agora dispara o callback automaticamente
+            m_uiManager->setCurrentDevice(device);
+
+            std::ostringstream response;
+            response << "{\"success\": true, \"device\": " << jsonString(device) << "}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'device' field");
+            return true;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleSetMFDevice(int clientFd, const std::string &body)
 {
     if (!m_uiManager)
     {
