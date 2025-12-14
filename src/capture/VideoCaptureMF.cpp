@@ -39,13 +39,54 @@ DEFINE_GUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, 0xc60ac5fe, 0x252a, 0x478f, 0xa0
 // e será convertido para DEFINE_GUID por initguid.h
 // Não redefinir manualmente para evitar conflito
 
-// Declarar MFEnumDeviceSources manualmente se não estiver disponível
-#ifndef MFEnumDeviceSources
-extern "C" HRESULT WINAPI MFEnumDeviceSources(
+// Carregar MFStartup dinamicamente para evitar crashes no Wine
+typedef HRESULT(WINAPI *PFN_MFStartup)(ULONG Version);
+typedef HRESULT(WINAPI *PFN_MFShutdown)();
+
+static PFN_MFStartup g_pfnMFStartup = nullptr;
+static PFN_MFShutdown g_pfnMFShutdown = nullptr;
+static HMODULE g_hMfPlatDll = nullptr;
+
+// Carregar MFEnumDeviceSources dinamicamente (pode não estar disponível no MinGW/MXE)
+typedef HRESULT(WINAPI *PFN_MFEnumDeviceSources)(
     IMFAttributes *pAttributes,
     IMFActivate ***pppSourceActivate,
     UINT32 *pcSourceActivate);
-#endif
+
+static PFN_MFEnumDeviceSources g_pfnMFEnumDeviceSources = nullptr;
+
+static HRESULT LoadMFEnumDeviceSources()
+{
+    if (g_pfnMFEnumDeviceSources)
+        return S_OK;
+
+    if (!g_hMfPlatDll)
+    {
+        g_hMfPlatDll = LoadLibraryA("mfplat.dll");
+        if (!g_hMfPlatDll)
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    g_pfnMFEnumDeviceSources = (PFN_MFEnumDeviceSources)GetProcAddress(
+        g_hMfPlatDll, "MFEnumDeviceSources");
+
+    if (!g_pfnMFEnumDeviceSources)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    return S_OK;
+}
+
+static HRESULT MFEnumDeviceSources_Dynamic(
+    IMFAttributes *pAttributes,
+    IMFActivate ***pppSourceActivate,
+    UINT32 *pcSourceActivate)
+{
+    HRESULT hr = LoadMFEnumDeviceSources();
+    if (FAILED(hr))
+        return hr;
+
+    return g_pfnMFEnumDeviceSources(pAttributes, pppSourceActivate, pcSourceActivate);
+}
 
 // MFCreateSourceReaderFromMediaSource pode não estar disponível no MinGW/MXE
 // Carregar dinamicamente da DLL mfreadwrite.dll
@@ -56,14 +97,6 @@ typedef HRESULT(WINAPI *PFN_MFCreateSourceReaderFromMediaSource)(
 
 static PFN_MFCreateSourceReaderFromMediaSource g_pfnMFCreateSourceReaderFromMediaSource = nullptr;
 static HMODULE g_hMfReadWriteDll = nullptr;
-
-// Carregar MFStartup dinamicamente para evitar crashes no Wine
-typedef HRESULT(WINAPI *PFN_MFStartup)(ULONG Version);
-typedef HRESULT(WINAPI *PFN_MFShutdown)();
-
-static PFN_MFStartup g_pfnMFStartup = nullptr;
-static PFN_MFShutdown g_pfnMFShutdown = nullptr;
-static HMODULE g_hMfPlatDll = nullptr;
 
 static HRESULT LoadMFCreateSourceReaderFromMediaSource()
 {
@@ -310,12 +343,20 @@ bool VideoCaptureMF::createMediaSource(const std::string &deviceId)
     hr = MFCreateAttributes(&attributes, 1);
     CHECK_HR(hr, "Falha ao criar atributos");
 
-    hr = attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
-    CHECK_HR(hr, "Falha ao definir tipo de dispositivo");
+    GUID sourceTypeGuid = MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID;
+    hr = attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, sourceTypeGuid);
+    if (FAILED(hr))
+    {
+        LOG_ERROR("Falha ao definir tipo de dispositivo: " + std::to_string(hr) + " (HRESULT: 0x" +
+                  std::to_string(static_cast<unsigned int>(hr)) + ")");
+        _com_error err(hr);
+        LOG_ERROR("Descrição do erro: " + std::string(err.ErrorMessage()));
+        SafeRelease(&attributes);
+        return false;
+    }
 
-    // Enumerate video capture devices
-    // MFEnumDeviceSources já declarado no topo do arquivo se necessário
-    hr = MFEnumDeviceSources(attributes, &devices, &deviceCount);
+    // Enumerate video capture devices (usar função dinâmica)
+    hr = MFEnumDeviceSources_Dynamic(attributes, &devices, &deviceCount);
     CHECK_HR(hr, "Falha ao enumerar dispositivos");
 
     if (deviceCount == 0)
@@ -876,14 +917,31 @@ std::vector<DeviceInfo> VideoCaptureMF::listDevices()
         return devices;
     }
 
-    // Enumerate devices
-    // MFEnumDeviceSources já declarado acima se necessário
-    hr = MFEnumDeviceSources(attributes, &deviceList, &deviceCount);
+    // Enumerate devices (usar função dinâmica)
+    hr = LoadMFEnumDeviceSources();
     if (FAILED(hr))
     {
-        LOG_ERROR("Falha ao enumerar dispositivos MF: " + std::to_string(hr));
+        LOG_ERROR("Falha ao carregar MFEnumDeviceSources: " + std::to_string(hr));
         SafeRelease(&attributes);
-        CoUninitialize();
+        if (comInitializedHere)
+        {
+            CoUninitialize();
+        }
+        return devices;
+    }
+
+    hr = MFEnumDeviceSources_Dynamic(attributes, &deviceList, &deviceCount);
+    if (FAILED(hr))
+    {
+        LOG_ERROR("Falha ao enumerar dispositivos MF: " + std::to_string(hr) + " (HRESULT: 0x" +
+                  std::to_string(static_cast<unsigned int>(hr)) + ")");
+        _com_error err(hr);
+        LOG_ERROR("Descrição do erro: " + std::string(err.ErrorMessage()));
+        SafeRelease(&attributes);
+        if (comInitializedHere)
+        {
+            CoUninitialize();
+        }
         return devices;
     }
 

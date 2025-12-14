@@ -125,4 +125,8 @@ private:
     SSL_CTX *m_sslContext = nullptr;
     std::map<int, SSL *> m_sslClients; // Mapeia clientFd -> SSL*
 #endif
+
+#ifdef _WIN32
+    bool m_winsockInitialized = false; // Flag para rastrear se Winsock foi inicializado
+#endif
 };

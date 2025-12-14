@@ -9,9 +9,11 @@
 #include <cerrno>
 #define SOCKET_ERROR_MSG() std::string(strerror(errno))
 #elif defined(_WIN32) || defined(WIN32)
+// IMPORTANTE: winsock2.h deve ser incluído ANTES de windows.h para evitar conflitos
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+// MAKEWORD está definido em winsock.h (incluído por winsock2.h)
 #include <io.h>
 #define close closesocket
 #define SHUT_RDWR SD_BOTH
@@ -64,7 +66,26 @@ HTTPServer::HTTPServer()
       ,
       m_sslContext(nullptr)
 #endif
+#ifdef _WIN32
+      ,
+      m_winsockInitialized(false)
+#endif
 {
+#ifdef _WIN32
+    // Inicializar Winsock no Windows
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0)
+    {
+        LOG_ERROR("WSAStartup failed: " + std::to_string(result));
+        m_winsockInitialized = false;
+    }
+    else
+    {
+        m_winsockInitialized = true;
+        LOG_INFO("Winsock initialized successfully");
+    }
+#endif
 }
 
 HTTPServer::~HTTPServer()
@@ -72,6 +93,14 @@ HTTPServer::~HTTPServer()
     closeServer();
 #ifdef ENABLE_HTTPS
     cleanupSSL();
+#endif
+#ifdef _WIN32
+    // Limpar Winsock no Windows
+    if (m_winsockInitialized)
+    {
+        WSACleanup();
+        m_winsockInitialized = false;
+    }
 #endif
 }
 
@@ -165,6 +194,15 @@ bool HTTPServer::setSSLCertificate(const std::string &certPath, const std::strin
 
 bool HTTPServer::createServer(int port)
 {
+#ifdef _WIN32
+    // Verificar se Winsock foi inicializado
+    if (!m_winsockInitialized)
+    {
+        LOG_ERROR("Winsock not initialized. Cannot create server socket.");
+        return false;
+    }
+#endif
+
     // Criar socket
 #ifdef PLATFORM_LINUX
     m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
