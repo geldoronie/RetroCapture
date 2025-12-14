@@ -205,22 +205,133 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
         }
     }
 
+    // Carregar passes imediatamente para que os parâmetros estejam disponíveis na UI
+    // IMPORTANTE: Tentar carregar passes mesmo que falhe parcialmente, para extrair parâmetros
+    // Mesmo que a compilação falhe, os parâmetros podem ser extraídos do código fonte
+    bool passesLoaded = loadPresetPasses();
+
+    // Verificar se os parâmetros foram extraídos (mesmo se a compilação falhou)
+    size_t totalParams = 0;
+    for (const auto &passData : m_passes)
+    {
+        totalParams += passData.parameterInfo.size();
+    }
+
+    if (passesLoaded)
+    {
+        LOG_INFO("Preset carregado com " + std::to_string(m_passes.size()) + " pass(es) e " + std::to_string(totalParams) + " parâmetro(s)");
+    }
+    else
+    {
+        if (totalParams > 0)
+        {
+            LOG_WARN("Preset carregado mas compilação de shaders falhou. " + std::to_string(totalParams) + " parâmetro(s) extraído(s) mas shader não funcionará até compilação ser corrigida.");
+            // IMPORTANTE: NÃO limpar passes se temos parâmetros extraídos!
+            // Manter os passes com parameterInfo para que a UI possa mostrar os controles
+            // Apenas os recursos OpenGL (shaders, programs) não estarão disponíveis
+            LOG_INFO("Passes mantidos com parameterInfo para UI (m_passes.size() = " + std::to_string(m_passes.size()) + ")");
+        }
+        else
+        {
+            LOG_WARN("Preset carregado mas falha ao carregar passes. Passes serão carregados quando o shader for aplicado.");
+            // Limpar passes apenas se não temos parâmetros extraídos
+            cleanupPresetPasses();
+        }
+    }
+
     m_shaderActive = true;
-    LOG_INFO("Preset carregado: " + presetPath);
+    LOG_INFO("Preset carregado: " + presetPath + " (m_shaderActive = true, m_passes.size() = " + std::to_string(m_passes.size()) + ")");
     return true;
 }
 
 bool ShaderEngine::loadPresetPasses()
 {
-    cleanupPresetPasses();
+    // IMPORTANTE: Preservar parameterInfo existente ao recarregar passes
+    // Salvar parameterInfo de passes existentes antes de limpar
+    std::vector<std::map<std::string, ShaderParameterInfo>> preservedParamInfo;
+    std::vector<std::map<std::string, float>> preservedExtractedParams;
+
+    if (!m_passes.empty() && m_passes.size() == m_preset.getPasses().size())
+    {
+        // Se já temos passes com o mesmo número, preservar parameterInfo
+        for (const auto &passData : m_passes)
+        {
+            preservedParamInfo.push_back(passData.parameterInfo);
+            preservedExtractedParams.push_back(passData.extractedParameters);
+        }
+    }
+
+    // Limpar recursos OpenGL mas preservar estrutura se temos parameterInfo
+    bool hasPreservedParams = false;
+    for (size_t i = 0; i < preservedParamInfo.size(); ++i)
+    {
+        if (!preservedParamInfo[i].empty())
+        {
+            hasPreservedParams = true;
+            break;
+        }
+    }
+
+    if (!hasPreservedParams)
+    {
+        // Se não temos parâmetros preservados, limpar tudo
+        cleanupPresetPasses();
+    }
+    else
+    {
+        // Limpar apenas recursos OpenGL, preservando parameterInfo
+        for (auto &pass : m_passes)
+        {
+            if (pass.program != 0)
+            {
+                glDeleteProgram(pass.program);
+                pass.program = 0;
+            }
+            if (pass.vertexShader != 0)
+            {
+                glDeleteShader(pass.vertexShader);
+                pass.vertexShader = 0;
+            }
+            if (pass.fragmentShader != 0)
+            {
+                glDeleteShader(pass.fragmentShader);
+                pass.fragmentShader = 0;
+            }
+            cleanupFramebuffer(pass.framebuffer, pass.texture);
+        }
+    }
 
     const auto &passes = m_preset.getPasses();
-    m_passes.resize(passes.size());
+    // Redimensionar apenas se necessário
+    if (m_passes.size() != passes.size())
+    {
+        m_passes.resize(passes.size());
+    }
+
+    // Restaurar parameterInfo preservado se não foi limpo
+    if (hasPreservedParams && m_passes.size() == preservedParamInfo.size())
+    {
+        for (size_t i = 0; i < m_passes.size(); ++i)
+        {
+            if (!preservedParamInfo[i].empty())
+            {
+                m_passes[i].parameterInfo = preservedParamInfo[i];
+                m_passes[i].extractedParameters = preservedExtractedParams[i];
+            }
+        }
+    }
+
+    bool allPassesCompiled = true; // Rastrear se todos os passes compilaram com sucesso
 
     for (size_t i = 0; i < passes.size(); ++i)
     {
         const auto &passInfo = passes[i];
         auto &passData = m_passes[i];
+
+        // Preservar parameterInfo existente se já temos (backup local)
+        std::map<std::string, ShaderParameterInfo> localPreservedParamInfo = passData.parameterInfo;
+        std::map<std::string, float> localPreservedExtractedParams = passData.extractedParameters;
+
         passData.passInfo = passInfo;
 
         // DEBUG: Log das configurações do pass
@@ -231,8 +342,13 @@ bool ShaderEngine::loadPresetPasses()
         if (!file.is_open())
         {
             LOG_ERROR("Falha ao abrir shader do pass " + std::to_string(i) + ": " + passInfo.shaderPath);
-            cleanupPresetPasses();
-            return false;
+            // Se não conseguimos ler o arquivo, manter parâmetros existentes se houver
+            // Apenas marcar que este pass não compilou
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            allPassesCompiled = false;
+            continue; // Continuar para próximo pass
         }
 
         std::stringstream buffer;
@@ -249,8 +365,12 @@ bool ShaderEngine::loadPresetPasses()
         {
             LOG_ERROR("Shaders Slang (.slang) não são suportados no pass " + std::to_string(i));
             LOG_ERROR("Use shaders GLSL (.glsl) ou presets GLSLP (.glslp)");
-            cleanupPresetPasses();
-            return false;
+            // Slang não suportado, manter parâmetros existentes se houver
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            allPassesCompiled = false;
+            continue; // Continuar para próximo pass
         }
 
         // Usar ShaderPreprocessor para processar o shader
@@ -276,16 +396,43 @@ bool ShaderEngine::loadPresetPasses()
         // Armazenar resultados
         std::string vertexSource = preprocessResult.vertexSource;
         std::string fragmentSource = preprocessResult.fragmentSource;
-        passData.extractedParameters = preprocessResult.extractedParameters;
-        passData.parameterInfo = preprocessResult.parameterInfo;
+
+        // Se já temos parameterInfo preservado e o novo está vazio, manter o preservado
+        // Caso contrário, usar o novo (que pode ter mais parâmetros)
+        if (!preprocessResult.parameterInfo.empty())
+        {
+            passData.extractedParameters = preprocessResult.extractedParameters;
+            passData.parameterInfo = preprocessResult.parameterInfo;
+        }
+        else if (!localPreservedParamInfo.empty())
+        {
+            // Manter os parâmetros preservados se o novo está vazio
+            passData.parameterInfo = localPreservedParamInfo;
+            passData.extractedParameters = localPreservedExtractedParams;
+        }
+
+        // Log de debug: verificar se parâmetros foram extraídos
+        if (!passData.parameterInfo.empty())
+        {
+            LOG_INFO("Pass " + std::to_string(i) + " tem " + std::to_string(passData.parameterInfo.size()) + " parâmetro(s)");
+        }
+
+        // IMPORTANTE: Os parâmetros já foram extraídos e armazenados em passData.parameterInfo
+        // Mesmo que a compilação falhe, queremos manter os parâmetros para a UI
 
         // Compilar shaders
         // Log removido para reduzir verbosidade
         if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
         {
             LOG_ERROR("Falha ao compilar vertex shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
-            cleanupPresetPasses();
-            return false;
+            // Não limpar passes aqui - manter parameterInfo mesmo se compilação falhar
+            // Apenas marcar que este pass não está compilado
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            allPassesCompiled = false;
+            // Continuar para o próximo pass para tentar extrair parâmetros de outros passes
+            continue;
         }
         // Log removido para reduzir verbosidade
 
@@ -514,8 +661,12 @@ bool ShaderEngine::loadPresetPasses()
                         glDeleteShader(passData.vertexShader);
                         if (tempFragmentShader != 0)
                             glDeleteShader(tempFragmentShader);
-                        cleanupPresetPasses();
-                        return false;
+                        // Não limpar tudo - manter parameterInfo para a UI
+                        passData.vertexShader = 0;
+                        passData.fragmentShader = 0;
+                        passData.program = 0;
+                        allPassesCompiled = false;
+                        continue; // Continuar para próximo pass
                     }
                 }
                 else
@@ -535,30 +686,27 @@ bool ShaderEngine::loadPresetPasses()
                     glDeleteShader(passData.vertexShader);
                     if (tempFragmentShader != 0)
                         glDeleteShader(tempFragmentShader);
-                    cleanupPresetPasses();
-                    return false;
+                    // Manter parameterInfo mesmo se compilação falhar
+                    passData.vertexShader = 0;
+                    passData.fragmentShader = 0;
+                    passData.program = 0;
+                    allPassesCompiled = false;
+                    continue; // Continuar para próximo pass
                 }
             }
             else
             {
                 // Erro não relacionado a vec3 = vec4 ou padrão não encontrado
                 LOG_ERROR("Falha ao compilar fragment shader do pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
-                std::istringstream iss(fragmentSource);
-                std::string line;
-                int lineNum = 0;
-                while (std::getline(iss, line) && lineNum < 105)
-                {
-                    lineNum++;
-                    if (lineNum >= 95 && lineNum <= 105)
-                    {
-                        // Log removido para reduzir verbosidade
-                    }
-                }
+                // Manter parameterInfo mesmo se compilação falhar
                 glDeleteShader(passData.vertexShader);
                 if (tempFragmentShader != 0)
                     glDeleteShader(tempFragmentShader);
-                cleanupPresetPasses();
-                return false;
+                passData.vertexShader = 0;
+                passData.fragmentShader = 0;
+                passData.program = 0;
+                allPassesCompiled = false;
+                continue; // Continuar para próximo pass
             }
         }
         else
@@ -572,8 +720,15 @@ bool ShaderEngine::loadPresetPasses()
         if (program == 0)
         {
             LOG_ERROR("Falha ao criar shader program do pass " + std::to_string(i));
-            cleanupPresetPasses();
-            return false;
+            // Manter parameterInfo mesmo se criação do programa falhar
+            glDeleteShader(passData.vertexShader);
+            if (passData.fragmentShader != 0)
+                glDeleteShader(passData.fragmentShader);
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            allPassesCompiled = false;
+            continue; // Continuar para próximo pass
         }
 
         glAttachShader(program, passData.vertexShader);
@@ -609,8 +764,13 @@ bool ShaderEngine::loadPresetPasses()
             glDeleteProgram(program);
             glDeleteShader(passData.vertexShader);
             glDeleteShader(passData.fragmentShader);
-            cleanupPresetPasses();
-            return false;
+            glDeleteProgram(program);
+            // Manter parameterInfo mesmo se linkagem falhar
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            allPassesCompiled = false;
+            continue; // Continuar para próximo pass
         }
 
         passData.program = program;
@@ -630,7 +790,9 @@ bool ShaderEngine::loadPresetPasses()
         (void)textures;
     }
 
-    return true;
+    // Retornar true mesmo se alguns passes falharam na compilação
+    // Os parâmetros extraídos estarão disponíveis na UI
+    return allPassesCompiled;
 }
 
 GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t height)
@@ -644,11 +806,30 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
     if (!m_passes.empty() || !m_preset.getPasses().empty())
     {
         // Se passes ainda não foram carregados, carregar agora
-        if (m_passes.empty())
+        // IMPORTANTE: Verificar se temos parameterInfo antes de recarregar
+        bool hasParameterInfo = false;
+        if (!m_passes.empty())
         {
+            for (const auto &passData : m_passes)
+            {
+                if (!passData.parameterInfo.empty())
+                {
+                    hasParameterInfo = true;
+                    break;
+                }
+            }
+        }
+
+        if (m_passes.empty() || (!hasParameterInfo && m_passes[0].program == 0))
+        {
+            // Só recarregar se não temos passes ou se não temos parameterInfo e programas não compilados
             if (!loadPresetPasses())
             {
-                return inputTexture;
+                // Se loadPresetPasses falhou mas temos parameterInfo, continuar mesmo assim
+                if (!hasParameterInfo)
+                {
+                    return inputTexture;
+                }
             }
         }
 
@@ -2140,6 +2321,9 @@ void ShaderEngine::cleanupPresetPasses()
         }
         cleanupFramebuffer(pass.framebuffer, pass.texture);
     }
+    // IMPORTANTE: Limpar apenas recursos OpenGL, mas preservar parameterInfo
+    // para que os parâmetros estejam disponíveis na UI mesmo se a compilação falhar
+    // Os parameterInfo serão limpos apenas quando um novo preset for carregado
     m_passes.clear();
 
     // Limpar histórico de frames
@@ -3180,8 +3364,25 @@ std::vector<ShaderEngine::ShaderParameter> ShaderEngine::getShaderParameters() c
 {
     std::vector<ShaderParameter> params;
 
-    if (!m_shaderActive || m_passes.empty())
+    if (!m_shaderActive)
     {
+        static int logCount = 0;
+        if (++logCount % 60 == 0) // Log a cada 60 chamadas
+        {
+            LOG_WARN("getShaderParameters: shader não está ativo");
+        }
+        return params;
+    }
+
+    if (m_passes.empty())
+    {
+        static int logCount = 0;
+        if (++logCount % 60 == 0) // Log a cada 60 chamadas
+        {
+            LOG_WARN("getShaderParameters: shader ativo mas passes vazios (shader ativo: " +
+                     std::string(m_shaderActive ? "sim" : "não") + ", passes: " +
+                     std::to_string(m_passes.size()) + ", presetPath: " + m_presetPath);
+        }
         return params;
     }
 
@@ -3189,8 +3390,16 @@ std::vector<ShaderEngine::ShaderParameter> ShaderEngine::getShaderParameters() c
     // Usar um map para evitar duplicatas
     std::map<std::string, ShaderParameter> paramMap;
 
-    for (const auto &passData : m_passes)
+    size_t totalParamInfo = 0;
+    static std::string lastLoggedPresetForParams;
+    std::string currentPresetForParams = m_presetPath;
+
+    for (size_t passIdx = 0; passIdx < m_passes.size(); ++passIdx)
     {
+        const auto &passData = m_passes[passIdx];
+        size_t passParamCount = passData.parameterInfo.size();
+        totalParamInfo += passParamCount;
+
         for (const auto &paramInfo : passData.parameterInfo)
         {
             const std::string &name = paramInfo.first;
@@ -3223,6 +3432,12 @@ std::vector<ShaderEngine::ShaderParameter> ShaderEngine::getShaderParameters() c
                 paramMap[name] = param;
             }
         }
+    }
+
+    // Atualizar lastLoggedPresetForParams após processar todos os passes
+    if (currentPresetForParams != lastLoggedPresetForParams)
+    {
+        lastLoggedPresetForParams = currentPresetForParams;
     }
 
     // Converter map para vector

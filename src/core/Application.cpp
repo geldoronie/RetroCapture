@@ -115,6 +115,12 @@ bool Application::init()
     }
     LOG_INFO("UI inicializada");
 
+    // Conectar ShaderEngine à UI para parâmetros
+    if (m_ui && m_shaderEngine)
+    {
+        m_ui->setShaderEngine(m_shaderEngine.get());
+    }
+
     if (!initStreaming())
     {
         LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
@@ -1777,12 +1783,6 @@ bool Application::initUI()
         else
         {
             m_ui->setCurrentShader(m_presetPath);
-        }
-
-        // Conectar ShaderEngine à UI para parâmetros
-        if (m_shaderEngine)
-        {
-            m_ui->setShaderEngine(m_shaderEngine.get());
         }
 
         // Callback para salvar preset
