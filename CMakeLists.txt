@@ -288,6 +288,8 @@ file(GLOB_RECURSE SOURCES
 if(PLATFORM_LINUX)
     # No Linux, excluir implementações Windows (quando existirem)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
 elseif(PLATFORM_WINDOWS)
     # No Windows, excluir implementações Linux
@@ -301,8 +303,9 @@ elseif(PLATFORM_WINDOWS)
 
     # HTTPServer.cpp foi adaptado para Windows - incluir no build
     # list(FILTER SOURCES EXCLUDE REGEX ".*/HTTPServer\\.cpp$")      # HTTPServer.cpp agora suporta Windows
-    list(FILTER SOURCES EXCLUDE REGEX ".*/OpenGLRenderer\\.cpp$") # OpenGLRenderer.cpp usa linux/videodev2.h
-    list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp usa linux/videodev2.h
+    # OpenGLRenderer.cpp e FrameProcessor.cpp agora suportam Windows (usam #ifdef __linux__)
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/OpenGLRenderer\\.cpp$") # OpenGLRenderer.cpp agora suporta Windows
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp agora suporta Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
 endif()

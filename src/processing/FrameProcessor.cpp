@@ -2,6 +2,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
+#include <iostream>
 #ifdef __linux__
 #include <linux/videodev2.h>
 #ifndef V4L2_PIX_FMT_MJPEG
@@ -27,12 +28,36 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
 {
     if (!capture)
     {
+        LOG_WARN("FrameProcessor: capture é nullptr");
         return false;
     }
 
     Frame frame;
     // Usar captureLatestFrame para descartar frames antigos e pegar apenas o mais recente
-    if (!capture->captureLatestFrame(frame))
+    bool captured = capture->captureLatestFrame(frame);
+    
+    // Log de depuração para dummy mode
+    if (capture->isDummyMode())
+    {
+        static int logCount = 0;
+        if (logCount++ < 10) // Log as primeiras 10 vezes
+        {
+            LOG_INFO("FrameProcessor: captureLatestFrame retornou " + std::string(captured ? "true" : "false") + 
+                     " no dummy mode (tentativa " + std::to_string(logCount) + ")");
+            if (captured)
+            {
+                LOG_INFO("FrameProcessor: Frame recebido - data: " + std::string(frame.data ? "ok" : "null") +
+                         ", size: " + std::to_string(frame.size) +
+                         ", dim: " + std::to_string(frame.width) + "x" + std::to_string(frame.height));
+            }
+            else
+            {
+                LOG_WARN("FrameProcessor: captureLatestFrame retornou false - verificando motivo...");
+            }
+        }
+    }
+    
+    if (!captured)
     {
         return false; // Nenhum frame novo disponível
     }

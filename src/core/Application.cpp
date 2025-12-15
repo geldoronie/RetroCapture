@@ -4,47 +4,10 @@
 #include "../capture/VideoCaptureFactory.h"
 #ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
+#endif
+// FrameProcessor e OpenGLRenderer funcionam em todas as plataformas
 #include "../processing/FrameProcessor.h"
 #include "../renderer/OpenGLRenderer.h"
-#else
-// Windows: criar stubs ou implementações alternativas
-// Nota: OpenGLRenderer e FrameProcessor são específicos do Linux (usam V4L2)
-// No Windows, o processamento de frames pode ser diferente
-class FrameProcessor
-{
-public:
-    void init(void *) {}
-    void deleteTexture() {}
-    bool hasValidFrame() const { return false; }
-    GLuint getTexture() const { return 0; }
-    uint32_t getTextureWidth() const { return 0; }
-    uint32_t getTextureHeight() const { return 0; }
-    bool processFrame(void *) { return false; }
-};
-
-class OpenGLRenderer
-{
-public:
-    bool init() { return true; }
-    void shutdown() {}
-    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight,
-                       bool shouldFlipY, bool isShaderTexture, float brightness, float contrast,
-                       bool maintainAspect, uint32_t renderWidth, uint32_t renderHeight)
-    {
-        // Stub para Windows - implementação real seria diferente
-        (void)texture;
-        (void)windowWidth;
-        (void)windowHeight;
-        (void)shouldFlipY;
-        (void)isShaderTexture;
-        (void)brightness;
-        (void)contrast;
-        (void)maintainAspect;
-        (void)renderWidth;
-        (void)renderHeight;
-    }
-};
-#endif
 #include "../output/WindowManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
@@ -62,6 +25,7 @@ public:
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
 #ifdef PLATFORM_LINUX
 #include <unistd.h>
 #endif
@@ -824,7 +788,7 @@ bool Application::initUI()
                 }
             }
         }
-        m_ui->setV4L2Controls(nullptr);
+        m_ui->setCaptureControls(nullptr);
     }
     else
     {
@@ -833,12 +797,12 @@ bool Application::initUI()
         // para permitir enumeração de dispositivos (especialmente para DirectShow)
         if (m_capture)
         {
-            m_ui->setV4L2Controls(m_capture.get());
+            m_ui->setCaptureControls(m_capture.get());
         }
         else
         {
             // Sem capture, não permitir seleção
-            m_ui->setV4L2Controls(nullptr);
+            m_ui->setCaptureControls(nullptr);
         }
     }
 
@@ -1546,7 +1510,7 @@ bool Application::initUI()
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
                                                          m_ui->setCurrentDevice(""); // String vazia = None
-                                                         m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
+                                                         m_ui->setCaptureControls(nullptr); // Sem controles V4L2 quando None
                                                      }
                                                  }
                                              }
@@ -1574,7 +1538,7 @@ bool Application::initUI()
                                                          {
                                                              m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                                   m_captureFps, m_devicePath);
-                                                             m_ui->setV4L2Controls(m_capture.get());
+                                                             m_ui->setCaptureControls(m_capture.get());
                                                          }
                                                      }
                                                  }
@@ -1590,7 +1554,7 @@ bool Application::initUI()
                                                      {
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
-                                                         m_ui->setV4L2Controls(nullptr);
+                                                         m_ui->setCaptureControls(nullptr);
                                                      }
                                                  }
                                              }
@@ -1678,7 +1642,7 @@ bool Application::initUI()
                                                          m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
                                                                               m_captureFps, "None (Dummy)");
                                                          m_ui->setCurrentDevice(""); // String vazia = None
-                                                         m_ui->setV4L2Controls(nullptr);
+                                                         m_ui->setCaptureControls(nullptr);
                                                      }
                                                  }
                                              }
@@ -1736,7 +1700,7 @@ bool Application::initUI()
                     m_ui->setCaptureInfo(0, 0, 0, "None");
                     // Não chamar setCurrentDevice aqui para evitar loop
                 }
-                m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando não há dispositivo
+                m_ui->setCaptureControls(nullptr); // Sem controles V4L2 quando não há dispositivo
             }
             
             LOG_INFO("Modo dummy ativado. Selecione um dispositivo para usar captura real.");
@@ -1744,7 +1708,9 @@ bool Application::initUI()
             return;
         }
         
+        LOG_INFO("=== CALLBACK setOnDeviceChanged CHAMADO ===");
         LOG_INFO("Mudando dispositivo para: " + devicePath);
+        std::cout << "[FORCE] setOnDeviceChanged chamado com devicePath: " << devicePath << std::endl;
         
         // Salvar configurações atuais
         uint32_t oldWidth = m_captureWidth;
@@ -1769,10 +1735,17 @@ bool Application::initUI()
         
         // Reabrir com novo dispositivo
         if (m_capture && m_capture->open(devicePath)) {
+            LOG_INFO("Dispositivo aberto com sucesso, configurando formato...");
             // Reconfigurar formato e framerate
             if (m_capture->setFormat(oldWidth, oldHeight, 0)) {
+                LOG_INFO("Formato configurado, configurando framerate...");
                 m_capture->setFramerate(oldFps);
-                m_capture->startCapture();
+                LOG_INFO("Framerate configurado, iniciando captura (startCapture)...");
+                if (m_capture->startCapture()) {
+                    LOG_INFO("startCapture() retornou true - dispositivo deve estar ativo (luz ligada)");
+                } else {
+                    LOG_ERROR("startCapture() retornou false - dispositivo NÃO foi ativado!");
+                }
                 
                 // Atualizar informações na UI
                 if (m_ui) {
@@ -1780,7 +1753,7 @@ bool Application::initUI()
                                         m_captureFps, devicePath);
                     
                     // Recarregar controles V4L2
-                    m_ui->setV4L2Controls(m_capture.get());
+                    m_ui->setCaptureControls(m_capture.get());
                 }
                 
                 LOG_INFO("Dispositivo alterado com sucesso");
@@ -2344,16 +2317,34 @@ void Application::run()
         // Tentar capturar e processar o frame mais recente (descartando frames antigos)
         // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
         // Isso garante que o streaming e processamento continuem funcionando
-        // IMPORTANTE: Só tentar capturar se o dispositivo estiver aberto
+        // IMPORTANTE: Tentar capturar se o dispositivo estiver aberto OU em modo dummy
         bool newFrame = false;
-        if (m_capture && m_capture->isOpen())
+        // Processar frames se o dispositivo estiver aberto OU em modo dummy
+        bool shouldProcess = m_capture && (m_capture->isOpen() || m_capture->isDummyMode());
+        
+        // Log de depuração para dummy mode
+        static bool dummyLogShown = false;
+        if (m_capture && m_capture->isDummyMode() && !dummyLogShown)
+        {
+            LOG_INFO("Application: Processando dummy mode (isOpen: " + std::string(m_capture->isOpen() ? "true" : "false") + 
+                     ", isDummyMode: " + std::string(m_capture->isDummyMode() ? "true" : "false") + ")");
+            dummyLogShown = true;
+        }
+        
+        if (shouldProcess)
         {
             // Tentar processar frame várias vezes se não temos textura válida
             // Isso é importante após reconfiguração quando a textura foi deletada
+            // No dummy mode, sempre tentar processar para garantir que o frame verde apareça
             int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
+            if (m_capture->isDummyMode())
+            {
+                maxAttempts = 5; // Sempre tentar várias vezes no dummy mode
+            }
             for (int attempt = 0; attempt < maxAttempts; ++attempt)
             {
                 newFrame = m_frameProcessor->processFrame(m_capture.get());
+                
                 if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
                 {
                     break; // Frame processado com sucesso

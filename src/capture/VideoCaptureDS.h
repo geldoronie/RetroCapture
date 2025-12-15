@@ -22,6 +22,11 @@ struct IMediaEventEx;
 struct IAMStreamConfig;
 struct IAMVideoProcAmp;
 struct IAMCameraControl;
+struct IPin;
+struct IEnumPins;
+
+// Forward declaration for custom filter
+class DSFrameGrabber;
 
 /**
  * @brief DirectShow implementation of IVideoCapture for Windows
@@ -54,6 +59,9 @@ public:
     uint32_t getWidth() const override { return m_width; }
     uint32_t getHeight() const override { return m_height; }
     uint32_t getPixelFormat() const override;
+    
+    // Obter resoluções disponíveis do dispositivo (sem precisar abrir completamente)
+    std::vector<std::pair<uint32_t, uint32_t>> getSupportedResolutions(const std::string &deviceId);
 
 private:
     // DirectShow objects
@@ -72,6 +80,11 @@ private:
     std::mutex m_bufferMutex;
     Frame m_latestFrame;
     bool m_hasFrame;
+    
+    // Alternative capture without Sample Grabber
+    IPin *m_capturePin; // Pin de captura para obter samples diretamente
+    bool m_useAlternativeCapture; // Flag para usar captura alternativa
+    IBaseFilter *m_customGrabberFilter; // Filtro customizado para capturar frames
 
     // Format information
     uint32_t m_width;

@@ -931,7 +931,7 @@ void UIManager::renderV4L2Controls()
     renderControl("White Balance", 2800, 6500, 4000);
 }
 
-void UIManager::setV4L2Controls(IVideoCapture *capture)
+void UIManager::setCaptureControls(IVideoCapture *capture)
 {
     m_capture = capture;
     m_v4l2Controls.clear();
@@ -947,7 +947,7 @@ void UIManager::setV4L2Controls(IVideoCapture *capture)
     {
         // Sempre atualizar lista quando m_capture é setado
         refreshDSDevices();
-        LOG_INFO("Lista de dispositivos DirectShow atualizada após setV4L2Controls: " + std::to_string(m_dsDevices.size()) + " dispositivo(s)");
+        LOG_INFO("Lista de dispositivos DirectShow atualizada após setCaptureControls: " + std::to_string(m_dsDevices.size()) + " dispositivo(s)");
     }
 #endif
 
@@ -1728,6 +1728,21 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
         m_onStreamingH265LevelChanged(level);
     }
     saveConfig();
+}
+
+void UIManager::triggerDeviceChange(const std::string &device)
+{
+    LOG_INFO("[FORCE-UI] triggerDeviceChange chamado com device: " + device);
+    m_currentDevice = device;
+    if (m_onDeviceChanged)
+    {
+        LOG_INFO("[FORCE-UI] Callback m_onDeviceChanged existe, chamando...");
+        m_onDeviceChanged(device);
+    }
+    else
+    {
+        LOG_ERROR("[FORCE-UI] ERRO: Callback m_onDeviceChanged é NULL!");
+    }
 }
 
 void UIManager::triggerStreamingVP8SpeedChange(int speed)

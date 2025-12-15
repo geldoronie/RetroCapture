@@ -99,7 +99,9 @@ public:
     void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
 
     // Controles V4L2
-    void setV4L2Controls(IVideoCapture *capture);
+    void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
+    // Deprecated: use setCaptureControls instead
+    void setV4L2Controls(IVideoCapture *capture) { setCaptureControls(capture); }
     void setOnV4L2ControlChanged(std::function<void(const std::string &, int32_t)> callback)
     {
         m_onV4L2ControlChanged = callback;
@@ -166,14 +168,7 @@ public:
         }
     }
 
-    void triggerDeviceChange(const std::string &device)
-    {
-        m_currentDevice = device;
-        if (m_onDeviceChanged)
-        {
-            m_onDeviceChanged(device);
-        }
-    }
+    void triggerDeviceChange(const std::string &device);
 
     // V4L2Control struct - public for API access
     struct V4L2Control
