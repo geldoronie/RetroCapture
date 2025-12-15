@@ -216,10 +216,12 @@ else()
     # Baixar ImGui se não existir
     if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
         message(STATUS "Baixando ImGui...")
+
         # Remover diretório se existir mas estiver vazio ou corrompido
         if(EXISTS ${IMGUI_DIR})
             file(REMOVE_RECURSE ${IMGUI_DIR})
         endif()
+
         file(MAKE_DIRECTORY ${IMGUI_DIR})
         execute_process(
             COMMAND git clone --depth 1 --branch docking https://github.com/ocornut/imgui.git ${IMGUI_DIR}
@@ -234,10 +236,12 @@ else()
     # Baixar nlohmann/json se não existir
     if(NOT EXISTS ${JSON_DIR}/include/nlohmann/json.hpp)
         message(STATUS "Baixando nlohmann/json...")
+
         # Remover diretório se existir mas estiver vazio ou corrompido
         if(EXISTS ${JSON_DIR})
             file(REMOVE_RECURSE ${JSON_DIR})
         endif()
+
         file(MAKE_DIRECTORY ${JSON_DIR})
         execute_process(
             COMMAND git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git ${JSON_DIR}
@@ -355,9 +359,9 @@ if(PLATFORM_LINUX)
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
     list(APPEND LINK_LIBS
-        strmiids  # DirectShow (Streaming Media IDs)
-        ole32     # COM
-        oleaut32  # COM Automation
+        strmiids # DirectShow (Streaming Media IDs)
+        ole32 # COM
+        oleaut32 # COM Automation
     )
 
     # Windows Audio Session API (WASAPI) libraries
@@ -542,5 +546,161 @@ if(HTTPS_ENABLED)
     endif()
 endif()
 
-# Instalação
-install(TARGETS retrocapture DESTINATION bin)
+# Instalação e CPack configuration
+if(PLATFORM_WINDOWS)
+    # CPack configuration for Windows installer
+    # IMPORTANTE: Todas as variáveis CPACK_* devem ser definidas ANTES do include(CPack)
+
+    # Basic package information
+    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_PACKAGE_NAME "RetroCapture")
+    set(CPACK_PACKAGE_VENDOR "RetroCapture")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Video capture with RetroArch shader support")
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+
+    # Pasta de instalação: apenas "RetroCapture" sem versão
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "RetroCapture")
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "RetroCapture")
+
+    # NSIS: garantir que não adicione versão ao diretório de instalação
+    set(CPACK_NSIS_INSTALL_DIRECTORY "$PROGRAMFILES\\RetroCapture")
+
+    # Definir nome do arquivo do instalador explicitamente
+    # Formato: RetroCapture-{VERSION}-Windows-Setup.exe
+    # IMPORTANTE: Deve ser definido ANTES do include(CPack)
+    # Usar PROJECT_VERSION diretamente para garantir que está usando a versão correta
+    set(CPACK_PACKAGE_FILE_NAME "RetroCapture-${PROJECT_VERSION}-Windows-Setup")
+    message(STATUS "CPack package file name: ${CPACK_PACKAGE_FILE_NAME}")
+
+    # License file - incluir texto do LICENSE na etapa de licença do instalador
+    if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
+        set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+        message(STATUS "License file configurado: ${CPACK_RESOURCE_FILE_LICENSE}")
+    else()
+        message(WARNING "Arquivo LICENSE não encontrado em ${CMAKE_SOURCE_DIR}/LICENSE")
+    endif()
+
+    # Garantir que a página de licença seja exibida (não ignorar)
+    set(CPACK_NSIS_IGNORE_LICENSE_PAGE OFF)
+
+    # Icon/logo for installer
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.png")
+        # NSIS pode usar .ico, mas podemos converter ou usar PNG
+        # Por enquanto, vamos usar o logo.png se disponível
+        set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/logo.png")
+    endif()
+
+    # NSIS specific settings
+    set(CPACK_NSIS_PACKAGE_NAME "RetroCapture")
+    set(CPACK_NSIS_DISPLAY_NAME "RetroCapture ${PROJECT_VERSION}")
+    set(CPACK_NSIS_HELP_LINK "https://github.com/yourusername/retrocapture")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/yourusername/retrocapture")
+    set(CPACK_NSIS_CONTACT "your-email@example.com")
+    set(CPACK_NSIS_MODIFY_PATH ON) # Adicionar ao PATH
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON) # Desinstalar versão anterior se existir
+
+    # Configurar caminho do NSIS (CPack precisa encontrar makensis)
+    # Tentar encontrar makensis no sistema
+    find_program(NSIS_MAKENSIS makensis PATHS /usr/bin /usr/local/bin)
+
+    if(NSIS_MAKENSIS)
+        set(CPACK_NSIS_EXECUTABLE "${NSIS_MAKENSIS}")
+        message(STATUS "NSIS encontrado: ${NSIS_MAKENSIS}")
+    else()
+        message(WARNING "NSIS makensis não encontrado. CPack pode falhar ao gerar instalador.")
+    endif()
+
+    # Component descriptions (devem estar antes do include(CPack))
+    set(CPACK_COMPONENT_APPLICATION_DISPLAY_NAME "RetroCapture Application")
+    set(CPACK_COMPONENT_APPLICATION_DESCRIPTION "Main RetroCapture executable and required DLLs")
+    set(CPACK_COMPONENT_APPLICATION_REQUIRED ON)
+
+    set(CPACK_COMPONENT_SHADERS_DISPLAY_NAME "Shader Presets")
+    set(CPACK_COMPONENT_SHADERS_DESCRIPTION "RetroArch-compatible shader presets")
+    set(CPACK_COMPONENT_SHADERS_REQUIRED ON)
+
+    set(CPACK_COMPONENT_ASSETS_DISPLAY_NAME "Assets")
+    set(CPACK_COMPONENT_ASSETS_DESCRIPTION "Application assets (icons, logos, etc.)")
+    set(CPACK_COMPONENT_ASSETS_REQUIRED ON)
+
+    set(CPACK_COMPONENT_WEB_DISPLAY_NAME "Web Portal")
+    set(CPACK_COMPONENT_WEB_DESCRIPTION "Web-based control interface")
+    set(CPACK_COMPONENT_WEB_REQUIRED ON)
+
+    set(CPACK_COMPONENT_SSL_DISPLAY_NAME "SSL Certificates")
+    set(CPACK_COMPONENT_SSL_DESCRIPTION "SSL certificates for HTTPS support")
+    set(CPACK_COMPONENT_SSL_REQUIRED ON)
+
+    # Create Start Menu shortcuts (devem estar antes do include(CPack))
+    set(CPACK_NSIS_CREATE_ICONS_EXTRA
+        "CreateShortCut '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+    )
+    set(CPACK_NSIS_DELETE_ICONS_EXTRA
+        "Delete '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk'"
+    )
+
+    # Create Desktop shortcut (optional)
+    # set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+    # "CreateShortCut '$DESKTOP\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+    # )
+    # set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
+    # )
+
+    # Incluir CPack APÓS todas as configurações CPACK_*
+    include(CPack)
+
+    # Install components
+    # Executável e DLLs
+    install(TARGETS retrocapture
+        RUNTIME DESTINATION bin
+        COMPONENT application
+    )
+
+    # Shaders
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl"
+        DESTINATION share/retrocapture/shaders
+        COMPONENT shaders
+        FILES_MATCHING PATTERN "*"
+    )
+
+    # Assets (logo, etc.)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets"
+            DESTINATION share/retrocapture
+            COMPONENT assets
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # Web portal
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/web")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/web"
+            DESTINATION share/retrocapture
+            COMPONENT web
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # SSL certificates
+    if(EXISTS "${CMAKE_SOURCE_DIR}/ssl")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/ssl"
+            DESTINATION share/retrocapture
+            COMPONENT ssl
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # Mensagens de status (após include(CPack) e install)
+    message(STATUS "CPack configured for Windows installer (NSIS)")
+    message(STATUS "  Package name: ${CPACK_PACKAGE_NAME}")
+    message(STATUS "  Version: ${CPACK_PACKAGE_VERSION}")
+    message(STATUS "  Generator: ${CPACK_GENERATOR}")
+
+    if(DEFINED CPACK_PACKAGE_FILE_NAME)
+        message(STATUS "  Output file: ${CPACK_PACKAGE_FILE_NAME}.exe")
+    endif()
+else()
+    # Instalação padrão para outras plataformas
+    install(TARGETS retrocapture DESTINATION bin)
+endif()

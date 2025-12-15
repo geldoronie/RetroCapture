@@ -78,7 +78,8 @@ We're continuously working to improve compatibility and add support for more sha
 
 ### Distribution
 
-- ✅ Portable AppImage distribution
+- ✅ Portable AppImage distribution (Linux)
+- ✅ Windows Installer (NSIS) - NEW in 0.3.0
 
 ## 📸 Visual Examples
 
@@ -102,6 +103,8 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 
 ### Core Dependencies
 
+**Linux:**
+
 - Linux (with V4L2 support)
 - OpenGL 3.3+
 - GLFW 3.x
@@ -109,6 +112,14 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 - libpng
 - CMake 3.10+
 - C++17 compiler
+
+**Windows:**
+
+- Windows 7+ (tested on Windows 10/11 and Wine)
+- DirectShow-compatible capture devices
+- OpenGL 3.3+ support
+- CMake 3.10+ (for building)
+- MinGW-w64 or MSVC (for building)
 
 ### Streaming Dependencies (for streaming features)
 
@@ -139,9 +150,24 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 
 ### Windows (cross-compile do Linux)
 
-**Opção 1: Docker (Recomendado) ⭐**
+**Opção 1: Gerar Instalador Windows (Recomendado) ⭐**
 
-A forma mais simples e confiável:
+A forma mais simples para distribuir:
+
+```bash
+# Gerar instalador Windows completo
+./build-windows-installer.sh
+```
+
+Isso irá:
+
+1. Compilar a aplicação via Docker
+2. Gerar instalador NSIS (`RetroCapture-{VERSION}-Windows-Setup.exe`)
+3. Incluir todos os componentes (executável, DLLs, shaders, assets, web portal, SSL)
+
+O instalador estará no diretório raiz do projeto.
+
+**Opção 2: Build Manual (apenas executável)**
 
 ```bash
 # Primeira vez (pode demorar 30-60 min para compilar MXE)
@@ -153,6 +179,11 @@ docker-compose run --rm build-windows
 ```
 
 O executável estará em `./build-windows/bin/retrocapture.exe`
+
+**Documentação Completa:**
+
+- 📖 [Guia de Uso do Instalador](docs/WINDOWS_INSTALLER_USAGE.md)
+- 📖 [Análise de Alternativas](docs/WINDOWS_INSTALLER.md)
 
 📖 Veja [docs/DOCKER_BUILD.md](docs/DOCKER_BUILD.md) para mais detalhes.
 
