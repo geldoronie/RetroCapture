@@ -14,8 +14,9 @@ struct GLFWwindow;
 class IVideoCapture;
 class ShaderEngine;
 
-// Forward declaration
+// Forward declarations
 class UIConfiguration;
+class UICredits;
 
 class UIManager
 {
@@ -482,6 +483,7 @@ private:
 
     // UI Configuration window (refatorado)
     std::unique_ptr<class UIConfiguration> m_configWindow;
+    std::unique_ptr<class UICredits> m_creditsWindow;
     GLFWwindow *m_window = nullptr;
 
     // Shader selection

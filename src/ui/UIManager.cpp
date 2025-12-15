@@ -1,5 +1,6 @@
 #include "UIManager.h"
 #include "UIConfiguration.h"
+#include "UICredits.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
@@ -26,14 +27,15 @@
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
-    : m_configWindow(nullptr)
+    : m_configWindow(nullptr), m_creditsWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
-    // Destruir janela de configuração antes de shutdown
+    // Destruir janelas antes de shutdown
     m_configWindow.reset();
+    m_creditsWindow.reset();
     shutdown();
 }
 
@@ -110,6 +112,7 @@ bool UIManager::init(GLFWwindow *window)
 
     // Criar janela de configuração
     m_configWindow = std::make_unique<UIConfiguration>(this);
+    m_creditsWindow = std::make_unique<UICredits>(this);
     m_configWindow->setVisible(true);    // Visível por padrão
     m_configWindow->setJustOpened(true); // Marcar como recém-aberta
 
@@ -218,6 +221,18 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Help"))
+        {
+            if (m_creditsWindow)
+            {
+                bool visible = m_creditsWindow->isVisible();
+                if (ImGui::MenuItem("Credits", nullptr, visible))
+                {
+                    m_creditsWindow->setVisible(!visible);
+                }
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
     }
 
@@ -225,6 +240,12 @@ void UIManager::render()
     if (m_configWindow)
     {
         m_configWindow->render();
+    }
+
+    // Renderizar janela de créditos
+    if (m_creditsWindow)
+    {
+        m_creditsWindow->render();
     }
 }
 
@@ -940,7 +961,7 @@ void UIManager::setCaptureControls(IVideoCapture *capture)
     {
         return;
     }
-    
+
     // Se o tipo de fonte for DirectShow, atualizar lista de dispositivos
 #ifdef _WIN32
     if (m_sourceType == SourceType::DS)
