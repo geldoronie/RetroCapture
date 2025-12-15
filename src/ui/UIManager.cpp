@@ -1926,7 +1926,25 @@ void UIManager::scanShaders(const std::string &basePath)
 
 std::string UIManager::getConfigPath() const
 {
-    // Usar diretório home do usuário para salvar configurações
+#ifdef _WIN32
+    // Windows: usar APPDATA (ou LOCALAPPDATA como fallback)
+    const char *appDataDir = std::getenv("APPDATA");
+    if (!appDataDir)
+    {
+        appDataDir = std::getenv("LOCALAPPDATA");
+    }
+    if (appDataDir)
+    {
+        fs::path configDir = fs::path(appDataDir) / "RetroCapture";
+        // Criar diretório se não existir
+        if (!fs::exists(configDir))
+        {
+            fs::create_directories(configDir);
+        }
+        return (configDir / "config.json").string();
+    }
+#else
+    // Linux/Unix: usar diretório home do usuário
     const char *homeDir = std::getenv("HOME");
     if (homeDir)
     {
@@ -1938,6 +1956,7 @@ std::string UIManager::getConfigPath() const
         }
         return (configDir / "config.json").string();
     }
+#endif
     // Fallback: salvar no diretório atual
     return "retrocapture_config.json";
 }
@@ -2230,6 +2249,16 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar dispositivo DirectShow
+        if (config.contains("directshow"))
+        {
+            auto &ds = config["directshow"];
+            if (ds.contains("device") && !ds["device"].is_null())
+            {
+                m_currentDevice = ds["device"].get<std::string>();
+            }
+        }
+
         LOG_INFO("Configurações carregadas de: " + configPath);
     }
     catch (const std::exception &e)
@@ -2295,6 +2324,10 @@ void UIManager::saveConfig()
 
         // Salvar dispositivo V4L2
         config["v4l2"] = {
+            {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // Salvar dispositivo DirectShow
+        config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
 
         // Escrever arquivo
