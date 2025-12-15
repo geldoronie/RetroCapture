@@ -2,7 +2,7 @@
 
 ## Overview
 
-RetroCapture is a real-time video capture application for Linux that applies RetroArch shaders (GLSL) to video feeds from V4L2 capture cards and streams the processed output over HTTP. The architecture was designed to be modular, efficient, and low-latency, with support for multiple video codecs (H.264, H.265, VP8, VP9) and real-time audio/video synchronization.
+RetroCapture is a real-time video capture application for Linux and Windows that applies RetroArch shaders (GLSL) to video feeds from capture cards and streams the processed output over HTTP. The architecture was designed to be modular, efficient, and low-latency, with support for multiple video codecs (H.264, H.265, VP8, VP9) and real-time audio/video synchronization. The application uses a cross-platform architecture with platform-specific implementations for video and audio capture.
 
 ## Architecture Diagram
 
@@ -18,7 +18,7 @@ RetroCapture is a real-time video capture application for Linux that applies Ret
         ▼                     ▼                     ▼
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │ VideoCapture │    │ WindowManager│    │ ShaderEngine │
-│   (V4L2)     │    │   (GLFW)     │    │  (OpenGL)    │
+│ (V4L2/DS)    │    │   (GLFW)     │    │  (OpenGL)    │
 └──────────────┘    └──────────────┘    └──────────────┘
         │                     │                       │
         │                     ▼                       │
@@ -42,7 +42,7 @@ RetroCapture is a real-time video capture application for Linux that applies Ret
         ▼                     ▼                     ▼
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │ AudioCapture │    │StreamManager │    │  UIManager   │
-│ (PulseAudio) │    │  (Orchestr.) │    │   (ImGui)    │
+│(Pulse/WASAPI)│    │  (Orchestr.) │    │   (ImGui)    │
 └──────────────┘    └──────────────┘    └──────────────┘
         │                     │
         │                     ▼
@@ -96,23 +96,31 @@ Utility Classes:
 **Data Flow**:
 
 ```
-VideoCapture → FrameProcessor (YUYV→RGB, Texture) → ShaderEngine → OpenGLRenderer → Window
-                                                                    ↓
-                                                          StreamManager → HTTPTSStreamer → HTTP Stream
-AudioCapture → StreamManager → HTTPTSStreamer → HTTP Stream
+VideoCapture (V4L2/DS) → FrameProcessor (YUYV→RGB, Texture) → ShaderEngine → OpenGLRenderer → Window
+                                                                              ↓
+                                                                    StreamManager → HTTPTSStreamer → HTTP Stream
+AudioCapture (Pulse/WASAPI) → StreamManager → HTTPTSStreamer → HTTP Stream
 ```
 
-### 2. VideoCapture (`src/capture/VideoCapture.h/cpp`)
+### 2. VideoCapture (`src/capture/IVideoCapture.h` and implementations)
 
-**Responsibility**: Video capture via V4L2 (Video4Linux2).
+**Responsibility**: Cross-platform video capture abstraction.
+
+**Architecture**:
+
+- **Interface**: `IVideoCapture` provides abstract interface for video capture
+- **Linux Implementation**: `VideoCaptureV4L2` uses V4L2 (Video4Linux2)
+- **Windows Implementation**: `VideoCaptureDS` uses DirectShow
+- **Factory Pattern**: `VideoCaptureFactory` creates platform-specific instances
 
 **Main Features**:
 
-- Opening/closing V4L2 devices
+- Opening/closing capture devices
 - Format configuration (resolution, pixel format, framerate)
-- V4L2 controls (brightness, contrast, saturation, etc.)
-- Frame capture using memory mapping (mmap)
-- Circular buffer for low latency
+- Hardware controls (brightness, contrast, saturation, etc.)
+- Frame capture
+- Device enumeration
+- Dummy mode for testing without capture device
 
 **Main API**:
 
@@ -121,7 +129,9 @@ bool open(const std::string& device);
 bool setFormat(uint32_t width, uint32_t height, uint32_t pixelFormat);
 bool setFramerate(uint32_t fps);
 bool captureFrame(Frame& frame);
-bool setControl(uint32_t controlId, int32_t value);
+bool setControl(const std::string& controlName, int32_t value);
+std::vector<DeviceInfo> listDevices();
+void setDummyMode(bool enabled);
 ```
 
 **Frame Format**:
@@ -132,9 +142,14 @@ struct Frame {
     size_t size;        // Size in bytes
     uint32_t width;     // Width
     uint32_t height;    // Height
-    uint32_t format;    // V4L2 format (e.g., V4L2_PIX_FMT_YUYV)
+    uint32_t format;    // Platform-specific format (V4L2_PIX_FMT_YUYV on Linux)
 };
 ```
+
+**Platform-Specific Details**:
+
+- **Linux (V4L2)**: Uses memory mapping (mmap) for efficient frame capture, supports V4L2 controls
+- **Windows (DirectShow)**: Uses DirectShow COM interfaces, supports DirectShow camera controls
 
 ### 3. WindowManager (`src/output/WindowManager.h/cpp`)
 
@@ -147,6 +162,7 @@ struct Frame {
 - Fullscreen and multi-monitor support
 - Event callbacks (resize, etc.)
 - VSync
+- **Linux**: WM_CLASS setting for proper window manager identification
 
 **Main API**:
 
@@ -157,6 +173,11 @@ void setResizeCallback(std::function<void(int, int)> callback);
 void swapBuffers();
 void pollEvents();
 ```
+
+**Platform-Specific Features**:
+
+- **Linux**: Sets WM_CLASS property using X11 to ensure proper application identification in taskbar/launcher
+- **Windows**: Uses native window properties for proper taskbar integration
 
 ### 4. OpenGLRenderer (`src/renderer/OpenGLRenderer.h/cpp`)
 
@@ -346,14 +367,21 @@ static std::string processIncludes(const std::string& source, const std::string&
 - Settings are loaded on application startup
 - Includes streaming configuration, shader parameters, and UI preferences
 
-### 10. AudioCapture (`src/audio/AudioCapture.h/cpp`)
+### 10. AudioCapture (`src/audio/IAudioCapture.h` and implementations)
 
-**Responsibility**: Audio capture from PulseAudio.
+**Responsibility**: Cross-platform audio capture abstraction.
+
+**Architecture**:
+
+- **Interface**: `IAudioCapture` provides abstract interface for audio capture
+- **Linux Implementation**: `AudioCapturePulse` uses PulseAudio
+- **Windows Implementation**: `AudioCaptureWASAPI` uses WASAPI (Windows Audio Session API)
+- **Factory Pattern**: `AudioCaptureFactory` creates platform-specific instances
 
 **Main Features**:
 
-- PulseAudio integration for system audio capture
-- Virtual sink creation for routing audio
+- System audio capture
+- Device enumeration
 - 16-bit PCM audio capture
 - Configurable sample rate and channel count
 - Thread-safe audio buffer management
@@ -367,21 +395,20 @@ void close();
 bool startCapture();
 void stopCapture();
 size_t getSamples(int16_t* buffer, size_t maxSamples);
-void setAudioCallback(std::function<void(const int16_t*, size_t)> callback);
+std::vector<AudioDeviceInfo> listDevices();
 ```
 
 **Audio Format**:
 
-- **Sample Format**: 16-bit signed little-endian PCM (`PA_SAMPLE_S16LE`)
+- **Sample Format**: 16-bit signed little-endian PCM
 - **Default Sample Rate**: 44100 Hz
 - **Default Channels**: 2 (stereo)
-- **Buffer Size**: 100ms fragments
+- **Buffer Size**: Platform-specific (100ms fragments on Linux)
 
-**Virtual Sink**:
+**Platform-Specific Details**:
 
-- Creates a virtual PulseAudio sink named "RetroCapture" when no device is specified
-- Allows routing system audio to the capture stream
-- Visible in PulseAudio tools (e.g., `qpwgraph`)
+- **Linux (PulseAudio)**: Creates virtual sink named "RetroCapture" for routing system audio, visible in PulseAudio tools (e.g., `qpwgraph`)
+- **Windows (WASAPI)**: Uses WASAPI loopback capture for system audio, supports device enumeration via MMDevice API
 
 ### 11. StreamManager (`src/streaming/StreamManager.h/cpp`)
 
@@ -555,7 +582,7 @@ virtual uint32_t getClientCount() const = 0;
 
 ```
 1. VideoCapture::captureLatestFrame()
-   └─▶ Frame (YUYV) from V4L2 device
+   └─▶ Frame (YUYV) from capture device (V4L2 on Linux, DirectShow on Windows)
 
 2. FrameProcessor::processFrame()
    └─▶ YUYV → RGB conversion
@@ -632,7 +659,7 @@ while (!window->shouldClose()) {
 
 ```
 1. Main Thread (Application::run())
-   ├─▶ Capture video frame (VideoCapture)
+   ├─▶ Capture video frame (VideoCapture - V4L2/DS)
    ├─▶ Process frame (FrameProcessor: YUYV→RGB)
    ├─▶ Apply shader (ShaderEngine)
    ├─▶ Render to screen (OpenGLRenderer)
@@ -640,8 +667,8 @@ while (!window->shouldClose()) {
        └─▶ StreamManager::pushFrame() → HTTPTSStreamer::pushFrame()
            └─▶ Add to m_timestampedVideoBuffer with timestamp
 
-2. Audio Thread (PulseAudio callback)
-   └─▶ AudioCapture::streamReadCallback()
+2. Audio Thread (PulseAudio callback on Linux, WASAPI thread on Windows)
+   └─▶ AudioCapture callback/thread
        └─▶ StreamManager::pushAudio() → HTTPTSStreamer::pushAudio()
            └─▶ Add to m_timestampedAudioBuffer with timestamp
 
@@ -682,9 +709,16 @@ src/
 ├── core/
 │   ├── Application.h/cpp    # Main orchestrator
 ├── capture/
-│   ├── VideoCapture.h/cpp   # V4L2 capture
+│   ├── IVideoCapture.h      # Video capture interface
+│   ├── VideoCaptureFactory.h/cpp # Factory for platform-specific implementations
+│   ├── VideoCaptureV4L2.h/cpp   # Linux V4L2 implementation
+│   ├── VideoCaptureDS.h/cpp     # Windows DirectShow implementation
+│   └── [DS helper classes]      # DirectShow helper classes
 ├── audio/
-│   ├── AudioCapture.h/cpp   # PulseAudio capture
+│   ├── IAudioCapture.h     # Audio capture interface
+│   ├── AudioCaptureFactory.h/cpp # Factory for platform-specific implementations
+│   ├── AudioCapturePulse.h/cpp  # Linux PulseAudio implementation
+│   └── AudioCaptureWASAPI.h/cpp # Windows WASAPI implementation
 ├── output/
 │   ├── WindowManager.h/cpp  # Window management (GLFW)
 ├── processing/
@@ -700,24 +734,35 @@ src/
 │   ├── IStreamer.h          # Streaming interface
 │   ├── StreamManager.h/cpp  # Stream orchestrator
 │   ├── HTTPTSStreamer.h/cpp # HTTP MPEG-TS streamer (FFmpeg)
-│   └── HTTPMJPEGStreamer.h/cpp # HTTP MJPEG streamer
+│   ├── HTTPServer.h/cpp     # HTTP/HTTPS server implementation
+│   ├── WebPortal.h/cpp      # Web portal implementation
+│   └── APIController.h/cpp  # REST API controller
 ├── ui/
 │   ├── UIManager.h/cpp     # Graphical interface (ImGui)
+│   └── UIConfiguration*.h/cpp # Modular UI components
 ├── utils/
 │   ├── Logger.h/cpp        # Logging system
 │   ├── ShaderScanner.h/cpp # Shader discovery
-│   └── V4L2DeviceScanner.h/cpp # V4L2 device discovery
-└── v4l2/
-    └── V4L2ControlMapper.h/cpp # V4L2 control name→ID mapping
+│   ├── V4L2DeviceScanner.h/cpp # V4L2 device discovery (Linux only)
+│   └── FilesystemCompat.h  # Cross-platform filesystem utilities
+├── v4l2/
+│   └── V4L2ControlMapper.h/cpp # V4L2 control name→ID mapping (Linux only)
+└── web/
+    ├── index.html          # Web portal HTML
+    ├── style.css           # Web portal styles
+    ├── control.js          # Web portal JavaScript
+    ├── api.js              # API client library
+    ├── manifest.json       # PWA manifest
+    └── service-worker.js   # Service worker for PWA
 ```
 
 ## Dependencies
 
 ### Main Libraries
 
+**Cross-Platform:**
 - **GLFW**: Window and OpenGL context management
 - **OpenGL 3.3+**: Rendering and shaders
-- **libv4l2**: V4L2 API for video capture
 - **libpng**: Reference texture loading (LUTs)
 - **ImGui**: Graphical interface
 - **GLAD**: Dynamic OpenGL function loading
@@ -726,13 +771,24 @@ src/
   - **libx265**: H.265/HEVC video encoding
   - **libvpx**: VP8/VP9 video encoding
   - **libfdk-aac** or **libavcodec AAC**: Audio encoding
-- **PulseAudio**: Audio capture from system
 - **nlohmann/json**: Configuration persistence
+- **OpenSSL** (optional): HTTPS support
+
+**Linux-Specific:**
+- **libv4l2**: V4L2 API for video capture
+- **PulseAudio**: Audio capture from system
+- **X11**: Window manager integration (WM_CLASS)
+
+**Windows-Specific:**
+- **DirectShow**: Video capture (via COM interfaces)
+- **WASAPI**: Audio capture (Windows Audio Session API)
+- **Winsock2**: Network socket support
 
 ### Build System
 
 - **CMake 3.10+**: Build system
-- **pkg-config**: Dependency detection
+- **pkg-config**: Dependency detection (Linux)
+- **vcpkg** or **MXE**: Dependency management for Windows cross-compilation
 
 ## Threading
 
@@ -740,7 +796,7 @@ The application uses a **hybrid threading model**:
 
 ### Main Thread
 
-- Video capture (V4L2)
+- Video capture (V4L2 on Linux, DirectShow on Windows)
 - Frame processing (YUYV→RGB conversion)
 - Shader application
 - OpenGL rendering
@@ -759,9 +815,10 @@ The application uses a **hybrid threading model**:
   - Forwards stream packets to individual clients
   - Automatically cleaned up when client disconnects
 
-### Audio Thread (PulseAudio)
+### Audio Thread
 
-- **Callback Thread**: PulseAudio callback thread for audio data
+- **Linux (PulseAudio)**: PulseAudio callback thread for audio data
+- **Windows (WASAPI)**: WASAPI capture thread for audio data
 - Delivers audio samples to `AudioCapture` buffer
 - Thread-safe buffer management with mutexes
 
@@ -780,7 +837,8 @@ The application uses a **hybrid threading model**:
   - Exception-safe memory management
   - Clear ownership semantics
 - **OpenGL Resources**: Manually managed with `glDelete*` on shutdown
-- **V4L2 Buffers**: Use memory mapping (mmap) for efficiency
+- **V4L2 Buffers** (Linux): Use memory mapping (mmap) for efficiency
+- **DirectShow Buffers** (Windows): Use DirectShow sample grabber for frame capture
 
 ## Utility Classes
 
@@ -789,20 +847,22 @@ The application uses a **hybrid threading model**:
 - Handles all shader source preprocessing
 - Extracted from `ShaderEngine` to improve separation of concerns
 
-### V4L2ControlMapper (`src/v4l2/V4L2ControlMapper.h/cpp`)
+### V4L2ControlMapper (`src/v4l2/V4L2ControlMapper.h/cpp`) - Linux only
 
 - Maps V4L2 control names to control IDs
 - Extracted from `Application` to improve modularity
+- Note: Windows uses DirectShow control interfaces (`IAMCameraControl`, `IAMVideoProcAmp`)
 
 ### ShaderScanner (`src/utils/ShaderScanner.h/cpp`)
 
 - Scans directories for shader preset files (`.glslp`)
 - Extracted from `UIManager` to improve separation of concerns
 
-### V4L2DeviceScanner (`src/utils/V4L2DeviceScanner.h/cpp`)
+### V4L2DeviceScanner (`src/utils/V4L2DeviceScanner.h/cpp`) - Linux only
 
 - Scans for available V4L2 video capture devices
 - Extracted from `UIManager` to improve separation of concerns
+- Note: Windows uses DirectShow device enumeration integrated into `VideoCaptureDS`
 
 ### FrameProcessor (`src/processing/FrameProcessor.h/cpp`)
 
@@ -813,8 +873,12 @@ The application uses a **hybrid threading model**:
 
 The architecture was designed to be extensible:
 
-1. **New capture formats**: Implement interface similar to `VideoCapture`
+1. **New capture formats**: Implement `IVideoCapture` interface
+   - Current implementations: V4L2 (Linux), DirectShow (Windows)
+   - Future: macOS AVFoundation, etc.
 2. **New shader types**: Extend `ShaderEngine` to support other formats
+   - Current: RetroArch GLSL shaders
+   - Future: Slang shaders, custom formats
 3. **New streaming protocols**: Implement `IStreamer` interface
    - Examples: WebRTC, RTSP, UDP streaming
    - `StreamManager` automatically distributes frames to all streamers
@@ -824,7 +888,9 @@ The architecture was designed to be extensible:
 5. **New outputs**: Add output classes (recording, file output, etc.)
 6. **Plugins**: Structure allows adding processing plugins
 7. **New processors**: Add processing classes similar to `FrameProcessor`
-8. **New audio sources**: Extend `AudioCapture` or create new audio capture implementations
+8. **New audio sources**: Implement `IAudioCapture` interface
+   - Current implementations: PulseAudio (Linux), WASAPI (Windows)
+   - Future: ALSA (Linux), Core Audio (macOS), etc.
 
 ## Performance Considerations
 
@@ -852,3 +918,5 @@ The architecture was designed to be extensible:
 7. **HTTP Streaming**: No authentication or access control (stream is publicly accessible)
 8. **Single Stream**: Only one active streamer type at a time (though architecture supports multiple)
 9. **Configuration**: Some codec-specific settings are not yet exposed in UI (e.g., VP8/VP9 advanced options)
+10. **Windows DirectShow Controls**: Hardware control mapping is partially implemented
+11. **Cross-Platform Testing**: Some features may behave differently across platforms

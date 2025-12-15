@@ -1,6 +1,6 @@
 # RetroCapture
 
-RetroCapture is a real-time video capture application for Linux that allows you to apply RetroArch shaders (GLSL) to live video feeds from capture cards, providing authentic retro visual effects and advanced image processing.
+RetroCapture is a real-time video capture application for Linux and Windows that allows you to apply RetroArch shaders (GLSL) to live video feeds from capture cards, providing authentic retro visual effects and advanced image processing.
 
 ## 🎯 Motivation
 
@@ -40,19 +40,20 @@ We're continuously working to improve compatibility and add support for more sha
 
 ### Video Capture & Processing
 
-- ✅ Real-time video capture via V4L2
+- ✅ Real-time video capture via V4L2 (Linux) or DirectShow (Windows)
 - ✅ Full support for RetroArch shaders (GLSL)
 - ✅ Multi-pass presets
-- ✅ V4L2 controls (brightness, contrast, saturation, etc.)
+- ✅ Hardware controls (V4L2 on Linux, DirectShow on Windows)
 - ✅ Fullscreen and multi-monitor support
 - ✅ Aspect ratio maintenance
 - ✅ Real-time shader parameter editing
+- ✅ Cross-platform architecture with platform-specific implementations
 
 ### Streaming (NEW in 0.2.0-alpha)
 
 - ✅ **HTTP MPEG-TS Streaming**: Stream your processed video over HTTP
 - ✅ **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9
-- ✅ **Audio Streaming**: PulseAudio integration for system audio capture
+- ✅ **Audio Streaming**: PulseAudio (Linux) or WASAPI (Windows) integration for system audio capture
 - ✅ **Real-time A/V Synchronization**: Timestamp-based synchronization system
 - ✅ **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
 - ✅ **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
@@ -110,6 +111,7 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 - GLFW 3.x
 - libv4l2
 - libpng
+- X11 (for window manager integration)
 - CMake 3.10+
 - C++17 compiler
 
@@ -128,7 +130,7 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
   - **libx265**: For H.265/HEVC encoding (optional)
   - **libvpx**: For VP8/VP9 encoding (optional)
   - **libfdk-aac** or **libavcodec AAC**: For audio encoding
-- **PulseAudio**: For audio capture
+- **PulseAudio** (Linux) or **WASAPI** (Windows): For audio capture
 - **nlohmann/json**: For configuration persistence (automatically fetched by CMake)
 
 ### Web Portal Dependencies (for web portal features)
@@ -179,25 +181,6 @@ docker-compose run --rm build-windows
 ```
 
 O executável estará em `./build-windows/bin/retrocapture.exe`
-
-**Documentação Completa:**
-
-- 📖 [Guia de Uso do Instalador](docs/WINDOWS_INSTALLER_USAGE.md)
-- 📖 [Análise de Alternativas](docs/WINDOWS_INSTALLER.md)
-
-📖 Veja [docs/DOCKER_BUILD.md](docs/DOCKER_BUILD.md) para mais detalhes.
-
-**Opção 2: MXE Local**
-
-```bash
-# Configurar MXE
-./setup-mxe.sh
-
-# Compilar
-./build-windows.sh
-```
-
-📖 Veja [docs/MXE_SETUP.md](docs/MXE_SETUP.md) para mais detalhes.
 
 ## 📖 Usage
 
@@ -285,7 +268,9 @@ The web portal provides a complete remote control interface accessible from any 
 
 #### Source Type
 
-- `--source <type>`: Select source type - `none` (dummy mode) or `v4l2` (default: `v4l2`)
+- `--source <type>`: Select source type
+  - Linux: `none` (dummy mode) or `v4l2` (default: `v4l2`)
+  - Windows: `none` (dummy mode) or `ds` (DirectShow, default: `ds`)
 
 #### Capture Resolution and Framerate
 
@@ -306,9 +291,9 @@ The web portal provides a complete remote control interface accessible from any 
 - `--brightness <value>`: Overall image brightness (0.0 to 2.0, default: 1.0)
 - `--contrast <value>`: Overall image contrast (0.0 to 2.0, default: 1.0)
 
-#### V4L2 Hardware Controls
+#### Hardware Controls
 
-These parameters are only applied when `--source v4l2`. They directly control the capture device hardware settings. Values are device-specific and may vary.
+**Linux (V4L2):** These parameters are only applied when `--source v4l2`. They directly control the capture device hardware settings. Values are device-specific and may vary.
 
 - `--v4l2-device <path>`: V4L2 device path (default: `/dev/video0`)
 - `--v4l2-brightness <value>`: V4L2 brightness control (-100 to 100)
@@ -321,7 +306,20 @@ These parameters are only applied when `--source v4l2`. They directly control th
 - `--v4l2-gamma <value>`: V4L2 gamma control (100 to 300)
 - `--v4l2-whitebalance <value>`: V4L2 white balance temperature control (2800 to 6500)
 
-**Note**: V4L2 control ranges and availability depend on your capture device. Use the GUI or web portal to discover available controls and their ranges.
+**Windows (DirectShow):** These parameters are only applied when `--source ds`.
+
+- `--ds-device <index>`: DirectShow device index (default: first available)
+- `--ds-brightness <value>`: DirectShow brightness control (-100 to 100)
+- `--ds-contrast <value>`: DirectShow contrast control (-100 to 100)
+- `--ds-saturation <value>`: DirectShow saturation control (-100 to 100)
+- `--ds-hue <value>`: DirectShow hue control (-100 to 100)
+- `--ds-gain <value>`: DirectShow gain control (0 to 100)
+- `--ds-exposure <value>`: DirectShow exposure control (-13 to 1)
+- `--ds-sharpness <value>`: DirectShow sharpness control (0 to 6)
+- `--ds-gamma <value>`: DirectShow gamma control (100 to 300)
+- `--ds-whitebalance <value>`: DirectShow white balance temperature control (2800 to 6500)
+
+**Note**: Control ranges and availability depend on your capture device. Use the GUI or web portal to discover available controls and their ranges.
 
 #### Web Portal Options
 
@@ -380,7 +378,7 @@ Press **F12** to toggle the graphical interface. The GUI provides:
 
 - **Shaders Tab**: Browse and select shaders, edit shader parameters in real-time, save modified presets
 - **Image Tab**: Adjust brightness/contrast, toggle aspect ratio, fullscreen settings, monitor selection
-- **Source Tab**: Select source type (None/V4L2), control hardware settings, change resolution/framerate, select capture device
+- **Source Tab**: Select source type (None/V4L2 on Linux, None/DirectShow on Windows), control hardware settings, change resolution/framerate, select capture device
 - **Stream Tab**: Configure streaming settings
   - Enable/disable streaming
   - Select video codec (H.264, H.265, VP8, VP9)
@@ -441,35 +439,58 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Shader Examples**: See `shaders/` for shader examples
 - **Build System**: See `build.sh` and `CMakeLists.txt` for build information
 - **Streaming**: See `src/streaming/` for streaming implementation
-- **Audio Capture**: See `src/audio/` for PulseAudio integration
+- **Audio Capture**: See `src/audio/` for PulseAudio (Linux) and WASAPI (Windows) integration
+- **Video Capture**: See `src/capture/` for V4L2 (Linux) and DirectShow (Windows) implementations
 
-## 🆕 What's New in 0.3.0-alpha
+## 🎯 Key Features
 
-This release introduces major new features:
+RetroCapture provides a comprehensive set of features for real-time video capture and processing:
 
-- **Web Portal with Remote Control**: Complete web-based control interface accessible from any device
+### Core Features
+
+- **Cross-Platform Support**: Native support for Linux and Windows
+- **Real-Time Video Capture**: Capture from V4L2 devices (Linux) or DirectShow devices (Windows)
+- **RetroArch Shader Support**: Full compatibility with RetroArch GLSL shaders and presets
+- **Multi-Pass Shaders**: Support for complex multi-pass shader presets
+- **Real-Time Processing**: Apply shaders and effects in real-time with minimal latency
+- **Hardware Controls**: Direct control of capture device settings (brightness, contrast, saturation, etc.)
+
+### Streaming & Distribution
+
+- **HTTP MPEG-TS Streaming**: Stream processed video with audio over HTTP
+- **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9 codecs
+- **Audio Streaming**: System audio capture and streaming (PulseAudio on Linux, WASAPI on Windows)
+- **Real-Time A/V Synchronization**: Timestamp-based synchronization system
+- **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
+- **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
+
+### Web Portal & Remote Control
+
+- **Web-Based Control Interface**: Complete remote control panel accessible from any device
 - **REST API**: Full API for remote control of all application features
 - **Progressive Web App (PWA)**: Installable on mobile devices and desktop
 - **HTTPS/SSL Support**: Optional encryption for web portal and streaming
-- **Source Type Selection**: Choose between V4L2 capture or dummy mode
-- **Enhanced CLI**: New parameters for source selection and web portal configuration
-- **Modular UI Architecture**: Refactored UI into separate classes for better maintainability
-- **Real-time Updates**: All controls update immediately without apply/save buttons
-- **Streaming Cooldown**: Protection against rapid start/stop cycles
-- **Audio Fixes**: Fixed critical issue where audio would freeze the entire system
+- **Real-Time Updates**: Live status updates and bidirectional communication
+- **Customizable UI**: Customize colors, images, and text labels
 
-See [CHANGELOG.md](CHANGELOG.md) for complete details.
+### User Interface
 
-## 🆕 What's New in 0.2.0-alpha
+- **Graphical Interface**: Modern ImGui-based interface with tabbed layout
+- **Configuration Persistence**: Automatic save/load of all settings
+- **Real-Time Parameter Editing**: Edit shader parameters and see changes instantly
+- **Shader Management**: Browse, select, and save shader presets
+- **Stream Management**: Configure and monitor streaming from the UI
+- **Device Selection**: Easy selection and configuration of capture devices
 
-Previous release introduced:
+### Advanced Features
 
-- **HTTP MPEG-TS Streaming**: Stream your processed video with audio over HTTP
-- **Multi-Codec Support**: Choose from H.264, H.265, VP8, or VP9 codecs
-- **Audio Capture**: System audio capture via PulseAudio with virtual sink support
-- **Configuration Persistence**: All settings automatically saved and restored
-- **Improved UI**: New Stream tab with codec selection and streaming controls
-- **Better Performance**: Multi-threaded architecture for encoding and streaming
+- **Fullscreen & Multi-Monitor**: Fullscreen support with multi-monitor selection
+- **Aspect Ratio Maintenance**: Automatic aspect ratio preservation
+- **Dummy Mode**: Test without capture devices
+- **Modular Architecture**: Clean, extensible codebase following SOLID principles
+- **Cross-Platform Build**: Docker-based cross-compilation for Windows from Linux
+
+For detailed version history and changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ## 🙏 Acknowledgments
 
