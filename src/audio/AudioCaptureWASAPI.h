@@ -71,6 +71,7 @@ private:
     bool m_isOpen;
     bool m_isCapturing;
     std::string m_deviceId;
+    bool m_useLoopback; // Flag para usar loopback (áudio do sistema) em vez de captura (microfone)
 
     // Audio buffer (thread-safe)
     std::vector<int16_t> m_audioBuffer;
@@ -98,4 +99,3 @@ private:
 };
 
 #endif // _WIN32
-

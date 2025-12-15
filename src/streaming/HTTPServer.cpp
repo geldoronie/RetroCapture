@@ -455,7 +455,23 @@ ssize_t HTTPServer::sendData(int clientFd, const void *data, size_t size)
 #ifdef PLATFORM_LINUX
     return send(clientFd, data, size, MSG_NOSIGNAL);
 #else
-    return send(clientFd, (const char *)data, (int)size, 0);
+    // Windows: send retorna SOCKET_ERROR (-1) em caso de erro
+    // SOCKET_ERROR é definido como -1 em winsock2.h
+    int result = send(clientFd, (const char *)data, (int)size, 0);
+    if (result == SOCKET_ERROR)
+    {
+        int error = WSAGetLastError();
+        // WSAEWOULDBLOCK significa que o socket está temporariamente bloqueado (não-bloqueante)
+        // Não é um erro fatal, retornar 0 para indicar que nada foi enviado (mas não é erro)
+        if (error == WSAEWOULDBLOCK)
+        {
+            return 0; // Retornar 0 em vez de -1 para não ser tratado como erro fatal
+        }
+        // WSAECONNRESET ou WSAENOTSOCK indicam conexão fechada ou socket inválido - erro fatal
+        // Outros erros também são tratados como fatais
+        return -1;
+    }
+    return result;
 #endif
 }
 

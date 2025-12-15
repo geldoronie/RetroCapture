@@ -44,7 +44,7 @@ void SafeRelease(T **ppT)
 AudioCaptureWASAPI::AudioCaptureWASAPI()
     : m_deviceEnumerator(nullptr), m_device(nullptr), m_audioClient(nullptr), m_captureClient(nullptr), m_endpointVolume(nullptr), m_sampleRate(44100), m_channels(2), m_bytesPerSample(2) // 16-bit
       ,
-      m_waveFormat(nullptr), m_isOpen(false), m_isCapturing(false), m_captureThreadRunning(false)
+      m_waveFormat(nullptr), m_isOpen(false), m_isCapturing(false), m_captureThreadRunning(false), m_useLoopback(false) // Por padrão, capturar do microfone (não loopback)
 {
     if (!initializeCOM())
     {
@@ -99,15 +99,41 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
 
     HRESULT hr = S_OK;
 
-    // If deviceName is empty or "default", use default capture device
-    if (deviceName.empty() || deviceName == "default")
+    // Se usar loopback, obter dispositivo de renderização (output)
+    // Caso contrário, obter dispositivo de captura (input/microfone)
+    if (m_useLoopback)
     {
-        hr = m_deviceEnumerator->GetDefaultAudioEndpoint(
-            eCapture,
-            eConsole,
-            &m_device);
-        CHECK_HR(hr, "Falha ao obter dispositivo padrão");
+        // Loopback: capturar áudio do sistema (o que está sendo reproduzido)
+        // Requer dispositivo de renderização (eRender)
+        if (deviceName.empty() || deviceName == "default")
+        {
+            hr = m_deviceEnumerator->GetDefaultAudioEndpoint(
+                eRender, // Renderização (output) para loopback
+                eConsole,
+                &m_device);
+            CHECK_HR(hr, "Falha ao obter dispositivo de renderização padrão para loopback");
+            return true;
+        }
+        // TODO: Implementar seleção de dispositivo de renderização específico para loopback
+        // Por enquanto, apenas dispositivo padrão
+        LOG_WARN("Seleção de dispositivo específico para loopback não implementada, usando padrão");
+        hr = m_deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &m_device);
+        CHECK_HR(hr, "Falha ao obter dispositivo de renderização padrão");
         return true;
+    }
+    else
+    {
+        // Captura normal: capturar do microfone
+        // Requer dispositivo de captura (eCapture)
+        if (deviceName.empty() || deviceName == "default")
+        {
+            hr = m_deviceEnumerator->GetDefaultAudioEndpoint(
+                eCapture, // Captura (input/microfone)
+                eConsole,
+                &m_device);
+            CHECK_HR(hr, "Falha ao obter dispositivo padrão");
+            return true;
+        }
     }
 
     // Enumerate devices and find matching one
@@ -214,12 +240,18 @@ bool AudioCaptureWASAPI::initializeAudioClient()
     m_channels = m_waveFormat->nChannels;
     m_bytesPerSample = m_waveFormat->wBitsPerSample / 8;
 
+    // IMPORTANTE: AUDCLNT_STREAMFLAGS_LOOPBACK só funciona com dispositivos de RENDERIZAÇÃO (eRender)
+    // Não funciona com dispositivos de CAPTURA (eCapture)
+    // Se m_useLoopback é true, o dispositivo deve ser de renderização (eRender) e podemos usar LOOPBACK
+    // Se m_useLoopback é false, o dispositivo é de captura (eCapture) e NÃO podemos usar LOOPBACK
+    DWORD streamFlags = m_useLoopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0;
+
     // Initialize audio client
     hr = m_audioClient->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK,
-        0, // Buffer duration (0 = default)
-        0, // Period (0 = default)
+        streamFlags, // 0 = captura normal (sem loopback)
+        0,           // Buffer duration (0 = default)
+        0,           // Period (0 = default)
         m_waveFormat,
         nullptr);
     CHECK_HR(hr, "Falha ao inicializar Audio Client");
