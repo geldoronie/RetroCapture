@@ -18,7 +18,7 @@ fi
 
 # Versão da aplicação (obtida do CMakeLists.txt)
 # Suporta versões com sufixos como -alpha, -beta, etc.
-VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.3.0-alpha")
+VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.4.0-alpha")
 APP_NAME="RetroCapture"
 APP_ID="com.retrocapture.app"
 APP_DIR="AppDir"

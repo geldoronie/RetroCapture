@@ -10,8 +10,8 @@ IDI_ICON1 ICON DISCARDABLE "logo.ico"
 
 // Version information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     0,3,0,0
-PRODUCTVERSION  0,3,0,0
+FILEVERSION     0,4,0,0
+PRODUCTVERSION  0,4,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0x0L
 FILEOS           VOS__WINDOWS32
@@ -24,12 +24,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "RetroCapture"
             VALUE "FileDescription",  "Video capture with RetroArch shader support"
-            VALUE "FileVersion",      "0.3.0"
+            VALUE "FileVersion",      "0.4.0"
             VALUE "InternalName",    "retrocapture"
-            VALUE "LegalCopyright",   "Copyright (C) 2024"
+            VALUE "LegalCopyright",   "Copyright (C) 2025"
             VALUE "OriginalFilename", "retrocapture.exe"
             VALUE "ProductName",     "RetroCapture"
-            VALUE "ProductVersion",   "0.3.0"
+            VALUE "ProductVersion",   "0.4.0"
         END
     END
     BLOCK "VarFileInfo"

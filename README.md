@@ -16,7 +16,7 @@ RetroCapture was born from the desire to experience retro gaming with the authen
 
 ## ⚠️ Development Status
 
-**RetroCapture is currently in active development (v0.3.0-alpha).**
+**RetroCapture is currently in active development (v0.4.0-alpha).**
 
 ### Shader Support
 
@@ -58,7 +58,7 @@ We're continuously working to improve compatibility and add support for more sha
 - ✅ **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
 - ✅ **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
 
-### Web Portal (NEW in 0.3.0-alpha)
+### Web Portal
 
 - ✅ **Remote Control Interface**: Complete web-based control panel
 - ✅ **REST API**: Full API for remote control of all features
@@ -74,13 +74,13 @@ We're continuously working to improve compatibility and add support for more sha
 - ✅ Configuration persistence (automatic save/load)
 - ✅ Stream management UI with codec selection
 - ✅ Real-time stream status and client count
-- ✅ Web portal with remote control (NEW in 0.3.0-alpha)
+- ✅ Web portal with remote control
 - ✅ Modular UI architecture with separate classes per tab
 
 ### Distribution
 
 - ✅ Portable AppImage distribution (Linux)
-- ✅ Windows Installer (NSIS) - NEW in 0.3.0
+- ✅ Windows Installer (NSIS)
 
 ## 📸 Visual Examples
 
@@ -387,7 +387,7 @@ Press **F12** to toggle the graphical interface. The GUI provides:
   - Adjust video and audio bitrates
   - View stream URL and active client count
   - Start/stop streaming with cooldown protection
-- **Web Portal Tab** (NEW in 0.3.0-alpha): Configure web portal
+- **Web Portal Tab**: Configure web portal
   - Enable/disable web portal
   - Configure HTTPS settings
   - Customize portal appearance (colors, images, text)

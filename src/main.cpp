@@ -90,7 +90,7 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
-    LOG_INFO("RetroCapture v0.3.0");
+    LOG_INFO("RetroCapture v0.4.0");
 
     std::string shaderPath;
     std::string presetPath;

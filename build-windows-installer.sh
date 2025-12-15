@@ -18,7 +18,7 @@ fi
 # Versão da aplicação (obtida do CMakeLists.txt)
 # O CPack vai gerar o nome automaticamente baseado em CPACK_PACKAGE_FILE_NAME
 # Formato esperado: RetroCapture-{VERSION}-Windows-Setup.exe
-VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.3.0")
+VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.4.0")
 INSTALLER_NAME="RetroCapture-${VERSION}-Windows-Setup.exe"
 
 # Verificar se Docker está disponível
