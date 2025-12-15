@@ -11,6 +11,8 @@ let appState = {
     image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
+    ds: { devices: [], currentDevice: '' }, // DirectShow (Windows)
+    platform: { platform: 'linux', availableSourceTypes: [] },
     status: { streamingActive: false, active: false, streamUrl: '', url: '', clientCount: 0 }
 };
 
@@ -56,10 +58,79 @@ function copyStreamUrl() {
 }
 
 /**
+ * Carrega informações da plataforma
+ */
+async function loadPlatform() {
+    try {
+        console.log('Carregando informações da plataforma...');
+        const platform = await api.getPlatform();
+        console.log('Plataforma recebida:', platform);
+        appState.platform = platform;
+        
+        // Atualizar UI baseado na plataforma
+        updatePlatformUI();
+    } catch (error) {
+        console.error('Erro ao carregar informações da plataforma:', error);
+        // Usar padrão baseado na detecção do user agent se falhar
+        const isWindows = navigator.platform.toLowerCase().includes('win') || 
+                         navigator.userAgent.toLowerCase().includes('windows');
+        appState.platform = { 
+            platform: isWindows ? 'windows' : 'linux', 
+            availableSourceTypes: isWindows ? [
+                { value: 0, name: 'None' },
+                { value: 2, name: 'DirectShow' }
+            ] : [
+                { value: 0, name: 'None' },
+                { value: 1, name: 'V4L2' }
+            ]
+        };
+        console.log('Usando fallback de plataforma:', appState.platform);
+        updatePlatformUI();
+    }
+}
+
+/**
+ * Atualiza a UI baseado na plataforma detectada
+ */
+function updatePlatformUI() {
+    const sourceTypeSelect = document.getElementById('sourceType');
+    if (!sourceTypeSelect) {
+        console.warn('sourceType select não encontrado');
+        return;
+    }
+    
+    // Limpar opções existentes
+    sourceTypeSelect.innerHTML = '';
+    
+    // Verificar se temos tipos de source disponíveis
+    if (!appState.platform.availableSourceTypes || appState.platform.availableSourceTypes.length === 0) {
+        console.warn('Nenhum tipo de source disponível na plataforma');
+        const option = document.createElement('option');
+        option.value = '0';
+        option.textContent = 'Carregando...';
+        sourceTypeSelect.appendChild(option);
+        return;
+    }
+    
+    // Adicionar opções baseadas na plataforma
+    appState.platform.availableSourceTypes.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type.value;
+        option.textContent = type.name;
+        sourceTypeSelect.appendChild(option);
+    });
+    
+    console.log('Platform UI atualizada:', appState.platform.platform, 'com', appState.platform.availableSourceTypes.length, 'tipos de source');
+}
+
+/**
  * Carrega todos os dados da aplicação
  */
 async function loadAllData() {
     try {
+        // Carregar informações da plataforma primeiro
+        await loadPlatform();
+        
         // Carregar status
         await loadStatus();
         
@@ -225,21 +296,52 @@ async function loadSource() {
         const source = await api.getSource();
         appState.source = source;
         appState.v4l2.currentDevice = source.device || '';
+        appState.ds.currentDevice = source.device || '';
         
         const sourceType = source.type || 0;
-        document.getElementById('sourceType').value = sourceType;
+        const sourceTypeSelect = document.getElementById('sourceType');
+        if (sourceTypeSelect) {
+            // Verificar se o valor existe nas opções antes de definir
+            let optionExists = false;
+            for (let i = 0; i < sourceTypeSelect.options.length; i++) {
+                if (parseInt(sourceTypeSelect.options[i].value) === sourceType) {
+                    optionExists = true;
+                    break;
+                }
+            }
+            if (optionExists) {
+                sourceTypeSelect.value = sourceType;
+            } else {
+                console.warn('Tipo de source', sourceType, 'não encontrado nas opções. Opções disponíveis:', 
+                    Array.from(sourceTypeSelect.options).map(opt => opt.value + '=' + opt.textContent));
+            }
+        }
         
         // Atualizar visibilidade dos controles baseado no tipo de fonte
         updateSourceUI(sourceType);
         
-        // Se for V4L2, carregar dispositivos e controles
+        // Carregar dispositivos e controles baseado no tipo de source
         if (sourceType === 1) {
+            // V4L2 (Linux)
             await loadV4L2DevicesForSource();
             await loadV4L2ControlsForSource();
             
             // Se houver dispositivo, carregar informações de captura
             if (source.device) {
                 const captureInfo = document.getElementById('v4l2CaptureInfo');
+                if (captureInfo) {
+                    captureInfo.style.display = 'block';
+                }
+                // Carregar valores de captura
+                await loadCapture();
+            }
+        } else if (sourceType === 2) {
+            // DirectShow (Windows)
+            await loadDSDevicesForSource();
+            
+            // Se houver dispositivo, carregar informações de captura
+            if (source.device) {
+                const captureInfo = document.getElementById('dsCaptureInfo');
                 if (captureInfo) {
                     captureInfo.style.display = 'block';
                 }
@@ -257,15 +359,24 @@ async function loadSource() {
  */
 function updateSourceUI(sourceType) {
     const v4l2Container = document.getElementById('v4l2ControlsContainer');
+    const dsContainer = document.getElementById('dsControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
-    
+
+    // Esconder todos os containers primeiro
+    if (v4l2Container) v4l2Container.style.display = 'none';
+    if (dsContainer) dsContainer.style.display = 'none';
+    if (noneMessage) noneMessage.style.display = 'none';
+
     if (sourceType === 1) {
-        // V4L2 selecionado - mostrar controles V4L2
+        // V4L2 selecionado (Linux)
         if (v4l2Container) v4l2Container.style.display = 'block';
-        if (noneMessage) noneMessage.style.display = 'none';
+    } else if (sourceType === 2) {
+        // DirectShow selecionado (Windows)
+        if (dsContainer) dsContainer.style.display = 'block';
+        // Carregar dispositivos DirectShow
+        loadDSDevicesForSource();
     } else {
-        // None selecionado - esconder controles V4L2
-        if (v4l2Container) v4l2Container.style.display = 'none';
+        // None selecionado
         if (noneMessage) noneMessage.style.display = 'block';
     }
 }
@@ -398,6 +509,102 @@ async function updateV4L2ControlSource(name, value) {
 }
 
 /**
+ * Carrega dispositivos DirectShow para a aba Source
+ */
+async function loadDSDevicesForSource() {
+    try {
+        const response = await api.getDSDevices();
+        const devices = response.devices || [];
+        
+        const select = document.getElementById('dsDevice');
+        if (!select) return;
+        
+        select.innerHTML = '';
+        
+        // Adicionar opção "None"
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = 'None (No device)';
+        select.appendChild(noneOption);
+        
+        // Adicionar dispositivos
+        devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.id || device.name;
+            option.textContent = device.name || device.id;
+            if (!device.available) {
+                option.disabled = true;
+                option.textContent += ' (Não disponível)';
+            }
+            select.appendChild(option);
+        });
+        
+        // Marcar dispositivo atual se disponível
+        const currentDevice = appState.source.device || '';
+        appState.ds.currentDevice = currentDevice;
+        if (currentDevice) {
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === currentDevice) {
+                    select.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        // Mostrar informações de captura se dispositivo estiver selecionado
+        const captureInfo = document.getElementById('dsCaptureInfo');
+        if (captureInfo && currentDevice) {
+            captureInfo.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Erro ao carregar dispositivos DirectShow:', error);
+        showAlert('Erro ao carregar dispositivos DirectShow: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza o dispositivo DirectShow na aba Source
+ */
+async function updateDSDeviceSource() {
+    try {
+        const select = document.getElementById('dsDevice');
+        if (!select) return;
+        
+        const device = select.value;
+        await api.setDSDevice(device);
+        appState.ds.currentDevice = device;
+        
+        // Recarregar informações de captura
+        await loadCapture();
+        
+        // Mostrar/esconder informações de captura
+        const captureInfo = document.getElementById('mfCaptureInfo');
+        if (captureInfo) {
+            captureInfo.style.display = device ? 'block' : 'none';
+        }
+        
+        showAlert('Dispositivo DirectShow atualizado', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar dispositivo DirectShow:', error);
+        showAlert('Erro ao atualizar dispositivo DirectShow: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza a lista de dispositivos DirectShow
+ */
+async function refreshDSDevices() {
+    try {
+        await api.refreshDSDevices();
+        await loadDSDevicesForSource();
+        showAlert('Lista de dispositivos DirectShow atualizada', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar lista de dispositivos DirectShow:', error);
+        showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
+    }
+}
+
+/**
  * Atualiza o dispositivo V4L2 na aba Source
  */
 async function updateV4L2DeviceSource() {
@@ -433,7 +640,14 @@ async function updateV4L2DeviceSource() {
  */
 async function setQuickFPS(fps) {
     try {
-        const fpsInput = document.getElementById('v4l2CaptureFPS');
+        // Atualizar input baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let fpsInput = null;
+        if (sourceType === 1) {
+            fpsInput = document.getElementById('v4l2CaptureFPS');
+        } else if (sourceType === 2) {
+            fpsInput = document.getElementById('dsCaptureFPS');
+        }
         if (fpsInput) {
             fpsInput.value = fps;
         }
@@ -454,8 +668,16 @@ async function setQuickFPS(fps) {
  */
 async function setQuickResolution(width, height) {
     try {
-        const widthInput = document.getElementById('v4l2CaptureWidth');
-        const heightInput = document.getElementById('v4l2CaptureHeight');
+        // Atualizar inputs baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let widthInput = null, heightInput = null;
+        if (sourceType === 1) {
+            widthInput = document.getElementById('v4l2CaptureWidth');
+            heightInput = document.getElementById('v4l2CaptureHeight');
+        } else if (sourceType === 2) {
+            widthInput = document.getElementById('dsCaptureWidth');
+            heightInput = document.getElementById('dsCaptureHeight');
+        }
         if (widthInput) widthInput.value = width;
         if (heightInput) heightInput.value = height;
         
@@ -476,23 +698,35 @@ async function setQuickResolution(width, height) {
  */
 async function updateV4L2CaptureSettings() {
     try {
-        const widthInput = document.getElementById('v4l2CaptureWidth');
-        const heightInput = document.getElementById('v4l2CaptureHeight');
-        const fpsInput = document.getElementById('v4l2CaptureFPS');
+        // Obter inputs baseado no tipo de source
+        const sourceType = appState.source.type || 0;
+        let widthInput = null, heightInput = null, fpsInput = null;
         
+        if (sourceType === 1) {
+            // V4L2
+            widthInput = document.getElementById('v4l2CaptureWidth');
+            heightInput = document.getElementById('v4l2CaptureHeight');
+            fpsInput = document.getElementById('v4l2CaptureFPS');
+        } else if (sourceType === 2) {
+            // DirectShow
+            widthInput = document.getElementById('dsCaptureWidth');
+            heightInput = document.getElementById('dsCaptureHeight');
+            fpsInput = document.getElementById('dsCaptureFPS');
+        }
+
         if (!widthInput || !heightInput || !fpsInput) {
-            showAlert('Erro: Campos de captura não encontrados', 'danger');
+            // Não mostrar erro se não houver campos (pode ser que o tipo de source não tenha esses campos)
             return;
         }
-        
+
         const width = parseInt(widthInput.value);
         const height = parseInt(heightInput.value);
         const fps = parseInt(fpsInput.value);
-        
+
         if (width && height) {
             await api.setCaptureResolution(width, height);
         }
-        
+
         if (fps) {
             await api.setCaptureFPS(fps);
         }
@@ -537,11 +771,15 @@ async function updateSource() {
         
         // Atualizar UI imediatamente
         updateSourceUI(sourceType);
-        
-        // Se for V4L2, carregar dispositivos e controles
+
+        // Carregar dispositivos e controles baseado no tipo de source
         if (sourceType === 1) {
+            // V4L2 (Linux)
             await loadV4L2DevicesForSource();
             await loadV4L2ControlsForSource();
+        } else if (sourceType === 2) {
+            // DirectShow (Windows)
+            await loadDSDevicesForSource();
         }
         
         // Recarregar dados completos
@@ -712,14 +950,20 @@ async function loadCapture() {
             fps: fps.fps || 0
         };
         
-        // Atualizar campos na aba Source (V4L2)
+        // Atualizar campos na aba Source (V4L2 e MF)
         const v4l2Width = document.getElementById('v4l2CaptureWidth');
         const v4l2Height = document.getElementById('v4l2CaptureHeight');
         const v4l2FPS = document.getElementById('v4l2CaptureFPS');
+        const dsWidth = document.getElementById('dsCaptureWidth');
+        const dsHeight = document.getElementById('dsCaptureHeight');
+        const dsFPS = document.getElementById('dsCaptureFPS');
         
         if (v4l2Width) v4l2Width.value = appState.capture.width;
         if (v4l2Height) v4l2Height.value = appState.capture.height;
         if (v4l2FPS) v4l2FPS.value = appState.capture.fps;
+        if (dsWidth) dsWidth.value = appState.capture.width;
+        if (dsHeight) dsHeight.value = appState.capture.height;
+        if (dsFPS) dsFPS.value = appState.capture.fps;
         
         // Atualizar status bar
         const captureResolutionEl = document.getElementById('captureResolution');
@@ -1064,16 +1308,29 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // Event listener para mudança de tipo de fonte - aplica automaticamente
-    document.getElementById('sourceType').addEventListener('change', function() {
-        const sourceType = parseInt(this.value);
-        updateSource(); // Aplicar mudança automaticamente
-    });
+    const sourceTypeSelect = document.getElementById('sourceType');
+    if (sourceTypeSelect) {
+        sourceTypeSelect.addEventListener('change', function() {
+            const sourceType = parseInt(this.value);
+            updateSource(); // Aplicar mudança automaticamente
+        });
+    } else {
+        console.error('sourceType select não encontrado ao adicionar event listener');
+    }
     
     // Event listener para mudança de dispositivo V4L2 na aba Source
     const v4l2DeviceSelect = document.getElementById('v4l2Device');
     if (v4l2DeviceSelect) {
         v4l2DeviceSelect.addEventListener('change', function() {
             updateV4L2DeviceSource();
+        });
+    }
+    
+    // Event listener para mudança de dispositivo DirectShow na aba Source
+    const dsDeviceSelect = document.getElementById('dsDevice');
+    if (dsDeviceSelect) {
+        dsDeviceSelect.addEventListener('change', function() {
+            updateDSDeviceSource();
         });
     }
     
@@ -1101,11 +1358,14 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
     
-    // Resolução/FPS de captura (V4L2) - atualização em tempo real com debounce
+    // Resolução/FPS de captura (V4L2 e MF) - atualização em tempo real com debounce
     let captureSettingsTimeout = null;
     const v4l2CaptureWidth = document.getElementById('v4l2CaptureWidth');
     const v4l2CaptureHeight = document.getElementById('v4l2CaptureHeight');
     const v4l2CaptureFPS = document.getElementById('v4l2CaptureFPS');
+    const dsCaptureWidth = document.getElementById('dsCaptureWidth');
+    const dsCaptureHeight = document.getElementById('dsCaptureHeight');
+    const dsCaptureFPS = document.getElementById('dsCaptureFPS');
     
     function updateCaptureSettingsDebounced() {
         clearTimeout(captureSettingsTimeout);
@@ -1125,6 +1385,20 @@ document.addEventListener('DOMContentLoaded', function() {
     if (v4l2CaptureFPS) {
         v4l2CaptureFPS.addEventListener('input', updateCaptureSettingsDebounced);
         v4l2CaptureFPS.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    
+    // Event listeners para controles DirectShow (similar ao V4L2)
+    if (dsCaptureWidth) {
+        dsCaptureWidth.addEventListener('input', updateCaptureSettingsDebounced);
+        dsCaptureWidth.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (dsCaptureHeight) {
+        dsCaptureHeight.addEventListener('input', updateCaptureSettingsDebounced);
+        dsCaptureHeight.addEventListener('change', updateCaptureSettingsDebounced);
+    }
+    if (dsCaptureFPS) {
+        dsCaptureFPS.addEventListener('input', updateCaptureSettingsDebounced);
+        dsCaptureFPS.addEventListener('change', updateCaptureSettingsDebounced);
     }
     
     // Shader select - atualização em tempo real

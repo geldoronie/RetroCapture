@@ -7,35 +7,55 @@
 
 void printUsage(const char *programName)
 {
-    std::cout << "Uso: " << programName << " [opções]\n";
-    std::cout << "\nOpções de Shader:\n";
-    std::cout << "  --shader <caminho>     Carregar shader GLSL simples (.glsl)\n";
-    std::cout << "  --preset <caminho>     Carregar preset com múltiplos passes (.glslp)\n";
-    std::cout << "\nOpções de Captura:\n";
-    std::cout << "  --source <tipo>        Tipo de fonte: none, v4l2 (padrão: v4l2)\n";
-    std::cout << "  --width <valor>        Largura da captura (padrão: 1920)\n";
-    std::cout << "  --height <valor>       Altura da captura (padrão: 1080)\n";
-    std::cout << "  --fps <valor>          Framerate da captura (padrão: 60)\n";
-    std::cout << "\nOpções de Janela:\n";
-    std::cout << "  --window-width <valor>  Largura da janela (padrão: 1920)\n";
-    std::cout << "  --window-height <valor> Altura da janela (padrão: 1080)\n";
-    std::cout << "  --maintain-aspect       Manter proporção da captura (evita deformação)\n";
-    std::cout << "  --fullscreen            Iniciar em modo tela cheia\n";
-    std::cout << "  --monitor <número>      Monitor a usar (0=primário, 1=segundo, etc., padrão: primário)\n";
-    std::cout << "\nOpções de Ajuste:\n";
-    std::cout << "  --brightness <valor>   Brilho geral (0.0-5.0, padrão: 1.0)\n";
-    std::cout << "  --contrast <valor>     Contraste geral (0.0-5.0, padrão: 1.0)\n";
-    std::cout << "\nControles V4L2 (hardware) - apenas quando --source v4l2:\n";
-    std::cout << "  --v4l2-device <caminho>     Dispositivo de captura V4L2 (padrão: /dev/video0)\n";
-    std::cout << "  --v4l2-brightness <valor>    Brilho V4L2 (-100 a 100, padrão: não configurar)\n";
-    std::cout << "  --v4l2-contrast <valor>      Contraste V4L2 (-100 a 100, padrão: não configurar)\n";
-    std::cout << "  --v4l2-saturation <valor>    Saturação V4L2 (-100 a 100, padrão: não configurar)\n";
-    std::cout << "  --v4l2-hue <valor>           Matiz V4L2 (-100 a 100, padrão: não configurar)\n";
-    std::cout << "  --v4l2-gain <valor>          Ganho V4L2 (0 a 100, padrão: não configurar)\n";
-    std::cout << "  --v4l2-exposure <valor>      Exposição V4L2 (-13 a 1, padrão: não configurar)\n";
-    std::cout << "  --v4l2-sharpness <valor>     Nitidez V4L2 (0 a 6, padrão: não configurar)\n";
-    std::cout << "  --v4l2-gamma <valor>         Gama V4L2 (100 a 300, padrão: não configurar)\n";
-    std::cout << "  --v4l2-whitebalance <valor>  Balanço de branco V4L2 (2800 a 6500, padrão: não configurar)\n";
+    std::cout << "Usage: " << programName << " [options]\n";
+    std::cout << "\nShader Options:\n";
+    std::cout << "  --shader <path>        Load simple GLSL shader (.glsl)\n";
+    std::cout << "  --preset <path>        Load preset with multiple passes (.glslp)\n";
+    std::cout << "\nCapture Options:\n";
+#ifdef __linux__
+    std::cout << "  --source <type>        Source type: none, v4l2 (default: v4l2)\n";
+#elif defined(_WIN32)
+    std::cout << "  --source <type>        Source type: none, ds (default: ds)\n";
+#else
+    std::cout << "  --source <type>        Source type: none (default: none)\n";
+#endif
+    std::cout << "  --width <value>        Capture width (default: 1920)\n";
+    std::cout << "  --height <value>       Capture height (default: 1080)\n";
+    std::cout << "  --fps <value>          Capture framerate (default: 60)\n";
+    std::cout << "\nWindow Options:\n";
+    std::cout << "  --window-width <value>  Window width (default: 1920)\n";
+    std::cout << "  --window-height <value> Window height (default: 1080)\n";
+    std::cout << "  --maintain-aspect       Maintain capture aspect ratio (prevents distortion)\n";
+    std::cout << "  --fullscreen            Start in fullscreen mode\n";
+    std::cout << "  --monitor <number>      Monitor to use (0=primary, 1=secondary, etc., default: primary)\n";
+    std::cout << "\nAdjustment Options:\n";
+    std::cout << "  --brightness <value>   Overall brightness (0.0-5.0, default: 1.0)\n";
+    std::cout << "  --contrast <value>     Overall contrast (0.0-5.0, default: 1.0)\n";
+#ifdef __linux__
+    std::cout << "\nV4L2 Hardware Controls (only when --source v4l2):\n";
+    std::cout << "  --v4l2-device <path>        V4L2 capture device (default: /dev/video0)\n";
+    std::cout << "  --v4l2-brightness <value>   V4L2 brightness (-100 to 100, default: don't set)\n";
+    std::cout << "  --v4l2-contrast <value>     V4L2 contrast (-100 to 100, default: don't set)\n";
+    std::cout << "  --v4l2-saturation <value>   V4L2 saturation (-100 to 100, default: don't set)\n";
+    std::cout << "  --v4l2-hue <value>          V4L2 hue (-100 to 100, default: don't set)\n";
+    std::cout << "  --v4l2-gain <value>         V4L2 gain (0 to 100, default: don't set)\n";
+    std::cout << "  --v4l2-exposure <value>     V4L2 exposure (-13 to 1, default: don't set)\n";
+    std::cout << "  --v4l2-sharpness <value>    V4L2 sharpness (0 to 6, default: don't set)\n";
+    std::cout << "  --v4l2-gamma <value>        V4L2 gamma (100 to 300, default: don't set)\n";
+    std::cout << "  --v4l2-whitebalance <value> V4L2 white balance (2800 to 6500, default: don't set)\n";
+#elif defined(_WIN32)
+    std::cout << "\nDirectShow Hardware Controls (only when --source ds):\n";
+    std::cout << "  --ds-device <index>         DirectShow device index (default: first available)\n";
+    std::cout << "  --ds-brightness <value>    DirectShow brightness (-100 to 100, default: don't set)\n";
+    std::cout << "  --ds-contrast <value>       DirectShow contrast (-100 to 100, default: don't set)\n";
+    std::cout << "  --ds-saturation <value>     DirectShow saturation (-100 to 100, default: don't set)\n";
+    std::cout << "  --ds-hue <value>            DirectShow hue (-100 to 100, default: don't set)\n";
+    std::cout << "  --ds-gain <value>           DirectShow gain (0 to 100, default: don't set)\n";
+    std::cout << "  --ds-exposure <value>       DirectShow exposure (-13 to 1, default: don't set)\n";
+    std::cout << "  --ds-sharpness <value>      DirectShow sharpness (0 to 6, default: don't set)\n";
+    std::cout << "  --ds-gamma <value>         DirectShow gamma (100 to 300, default: don't set)\n";
+    std::cout << "  --ds-whitebalance <value>   DirectShow white balance (2800 to 6500, default: don't set)\n";
+#endif
     std::cout << "\nOpções de Streaming:\n";
     std::cout << "  --stream-enable              Habilitar streaming HTTP MPEG-TS (áudio + vídeo)\n";
     std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
@@ -74,8 +94,22 @@ int main(int argc, char *argv[])
 
     std::string shaderPath;
     std::string presetPath;
-    std::string sourceType = "v4l2"; // Padrão: v4l2 (mesmo padrão do UIManager)
+    // Detectar plataforma e definir sourceType padrão
+    std::string sourceType;
+#ifdef __linux__
+    sourceType = "v4l2"; // Linux usa V4L2
+#elif defined(_WIN32)
+    sourceType = "ds"; // Windows usa DirectShow
+#else
+    sourceType = "none"; // Outras plataformas sem suporte
+#endif
+#ifdef __linux__
     std::string devicePath = "/dev/video0";
+#elif defined(_WIN32)
+    std::string devicePath = ""; // Windows: dispositivo será selecionado via DirectShow
+#else
+    std::string devicePath = "";
+#endif
     int captureWidth = 1920;
     int captureHeight = 1080;
     int captureFps = 60;
@@ -97,6 +131,17 @@ int main(int argc, char *argv[])
     int v4l2Sharpness = -1;
     int v4l2Gamma = -1;
     int v4l2WhiteBalance = -1;
+
+    // Controles DirectShow (-1 significa não configurar)
+    int dsBrightness = -1;
+    int dsContrast = -1;
+    int dsSaturation = -1;
+    int dsHue = -1;
+    int dsGain = -1;
+    int dsExposure = -1;
+    int dsSharpness = -1;
+    int dsGamma = -1;
+    int dsWhiteBalance = -1;
 
     // Streaming options
     bool streamingEnabled = false;
@@ -139,22 +184,45 @@ int main(int argc, char *argv[])
             sourceType = argv[++i];
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
+#ifdef __linux__
             if (sourceType != "none" && sourceType != "v4l2")
+#elif defined(_WIN32)
+            if (sourceType != "none" && sourceType != "ds")
+#else
+            if (sourceType != "none")
+#endif
             {
-                LOG_ERROR("Tipo de fonte inválido. Use 'none' ou 'v4l2'");
+#ifdef __linux__
+                LOG_ERROR("Invalid source type. Use 'none' or 'v4l2'");
+#elif defined(_WIN32)
+                LOG_ERROR("Invalid source type. Use 'none' or 'ds'");
+#else
+                LOG_ERROR("Invalid source type. Use 'none'");
+#endif
                 return 1;
             }
         }
         else if (arg == "--v4l2-device" && i + 1 < argc)
         {
+#ifdef __linux__
+            devicePath = argv[++i];
+#else
+            LOG_WARN("--v4l2-device is only available on Linux");
+            ++i; // Skip argument
+#endif
+        }
+#ifdef _WIN32
+        else if (arg == "--ds-device" && i + 1 < argc)
+        {
             devicePath = argv[++i];
         }
+#endif
         else if (arg == "--width" && i + 1 < argc)
         {
             captureWidth = std::stoi(argv[++i]);
             if (captureWidth <= 0 || captureWidth > 7680)
             {
-                LOG_ERROR("Largura inválida. Use um valor entre 1 e 7680");
+                LOG_ERROR("Invalid width. Use a value between 1 and 7680");
                 return 1;
             }
         }
@@ -163,7 +231,7 @@ int main(int argc, char *argv[])
             captureHeight = std::stoi(argv[++i]);
             if (captureHeight <= 0 || captureHeight > 4320)
             {
-                LOG_ERROR("Altura inválida. Use um valor entre 1 e 4320");
+                LOG_ERROR("Invalid height. Use a value between 1 and 4320");
                 return 1;
             }
         }
@@ -172,7 +240,7 @@ int main(int argc, char *argv[])
             captureFps = std::stoi(argv[++i]);
             if (captureFps <= 0 || captureFps > 240)
             {
-                LOG_ERROR("FPS inválido. Use um valor entre 1 e 240");
+                LOG_ERROR("Invalid FPS. Use a value between 1 and 240");
                 return 1;
             }
         }
@@ -181,7 +249,7 @@ int main(int argc, char *argv[])
             windowWidth = std::stoi(argv[++i]);
             if (windowWidth <= 0 || windowWidth > 7680)
             {
-                LOG_ERROR("Largura da janela inválida. Use um valor entre 1 e 7680");
+                LOG_ERROR("Invalid window width. Use a value between 1 and 7680");
                 return 1;
             }
         }
@@ -190,7 +258,7 @@ int main(int argc, char *argv[])
             windowHeight = std::stoi(argv[++i]);
             if (windowHeight <= 0 || windowHeight > 4320)
             {
-                LOG_ERROR("Altura da janela inválida. Use um valor entre 1 e 4320");
+                LOG_ERROR("Invalid window height. Use a value between 1 and 4320");
                 return 1;
             }
         }
@@ -207,7 +275,7 @@ int main(int argc, char *argv[])
             monitorIndex = std::stoi(argv[++i]);
             if (monitorIndex < 0)
             {
-                LOG_ERROR("Índice do monitor deve ser >= 0");
+                LOG_ERROR("Monitor index must be >= 0");
                 return 1;
             }
         }
@@ -216,7 +284,7 @@ int main(int argc, char *argv[])
             brightness = std::stof(argv[++i]);
             if (brightness < 0.0f || brightness > 5.0f)
             {
-                LOG_ERROR("Brilho inválido. Use um valor entre 0.0 e 5.0");
+                LOG_ERROR("Invalid brightness. Use a value between 0.0 and 5.0");
                 return 1;
             }
         }
@@ -225,91 +293,219 @@ int main(int argc, char *argv[])
             contrast = std::stof(argv[++i]);
             if (contrast < 0.0f || contrast > 5.0f)
             {
-                LOG_ERROR("Contraste inválido. Use um valor entre 0.0 e 5.0");
+                LOG_ERROR("Invalid contrast. Use a value between 0.0 and 5.0");
                 return 1;
             }
         }
         else if (arg == "--v4l2-brightness" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Brightness = std::stoi(argv[++i]);
             if (v4l2Brightness < -100 || v4l2Brightness > 100)
             {
-                LOG_ERROR("Brilho V4L2 inválido. Use um valor entre -100 e 100");
+                LOG_ERROR("V4L2 brightness invalid. Use a value between -100 and 100");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-brightness is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-contrast" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Contrast = std::stoi(argv[++i]);
             if (v4l2Contrast < -100 || v4l2Contrast > 100)
             {
-                LOG_ERROR("Contraste V4L2 inválido. Use um valor entre -100 e 100");
+                LOG_ERROR("V4L2 contrast invalid. Use a value between -100 and 100");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-contrast is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-saturation" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Saturation = std::stoi(argv[++i]);
             if (v4l2Saturation < -100 || v4l2Saturation > 100)
             {
-                LOG_ERROR("Saturação V4L2 inválida. Use um valor entre -100 e 100");
+                LOG_ERROR("V4L2 saturation invalid. Use a value between -100 and 100");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-saturation is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-hue" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Hue = std::stoi(argv[++i]);
             if (v4l2Hue < -100 || v4l2Hue > 100)
             {
-                LOG_ERROR("Matiz V4L2 inválido. Use um valor entre -100 e 100");
+                LOG_ERROR("V4L2 hue invalid. Use a value between -100 and 100");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-hue is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-gain" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Gain = std::stoi(argv[++i]);
             if (v4l2Gain < 0 || v4l2Gain > 100)
             {
-                LOG_ERROR("Ganho V4L2 inválido. Use um valor entre 0 e 100");
+                LOG_ERROR("V4L2 gain invalid. Use a value between 0 and 100");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-gain is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-exposure" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Exposure = std::stoi(argv[++i]);
             if (v4l2Exposure < -13 || v4l2Exposure > 1)
             {
-                LOG_ERROR("Exposição V4L2 inválida. Use um valor entre -13 e 1");
+                LOG_ERROR("V4L2 exposure invalid. Use a value between -13 and 1");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-exposure is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-sharpness" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Sharpness = std::stoi(argv[++i]);
             if (v4l2Sharpness < 0 || v4l2Sharpness > 6)
             {
-                LOG_ERROR("Nitidez V4L2 inválida. Use um valor entre 0 e 6");
+                LOG_ERROR("V4L2 sharpness invalid. Use a value between 0 and 6");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-sharpness is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-gamma" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2Gamma = std::stoi(argv[++i]);
             if (v4l2Gamma < 100 || v4l2Gamma > 300)
             {
-                LOG_ERROR("Gama V4L2 inválido. Use um valor entre 100 e 300");
+                LOG_ERROR("V4L2 gamma invalid. Use a value between 100 and 300");
                 return 1;
             }
+#else
+            LOG_WARN("--v4l2-gamma is only available on Linux");
+            ++i; // Skip argument
+#endif
         }
         else if (arg == "--v4l2-whitebalance" && i + 1 < argc)
         {
+#ifdef __linux__
             v4l2WhiteBalance = std::stoi(argv[++i]);
             if (v4l2WhiteBalance < 2800 || v4l2WhiteBalance > 6500)
             {
-                LOG_ERROR("Balanço de branco V4L2 inválido. Use um valor entre 2800 e 6500");
+                LOG_ERROR("V4L2 white balance invalid. Use a value between 2800 and 6500");
+                return 1;
+            }
+#else
+            LOG_WARN("--v4l2-whitebalance is only available on Linux");
+            ++i; // Skip argument
+#endif
+        }
+#ifdef _WIN32
+        else if (arg == "--ds-brightness" && i + 1 < argc)
+        {
+            dsBrightness = std::stoi(argv[++i]);
+            if (dsBrightness < -100 || dsBrightness > 100)
+            {
+                LOG_ERROR("DirectShow brightness invalid. Use a value between -100 and 100");
                 return 1;
             }
         }
+        else if (arg == "--ds-contrast" && i + 1 < argc)
+        {
+            dsContrast = std::stoi(argv[++i]);
+            if (dsContrast < -100 || dsContrast > 100)
+            {
+                LOG_ERROR("DirectShow contrast invalid. Use a value between -100 and 100");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-saturation" && i + 1 < argc)
+        {
+            dsSaturation = std::stoi(argv[++i]);
+            if (dsSaturation < -100 || dsSaturation > 100)
+            {
+                LOG_ERROR("DirectShow saturation invalid. Use a value between -100 and 100");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-hue" && i + 1 < argc)
+        {
+            dsHue = std::stoi(argv[++i]);
+            if (dsHue < -100 || dsHue > 100)
+            {
+                LOG_ERROR("DirectShow hue invalid. Use a value between -100 and 100");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-gain" && i + 1 < argc)
+        {
+            dsGain = std::stoi(argv[++i]);
+            if (dsGain < 0 || dsGain > 100)
+            {
+                LOG_ERROR("DirectShow gain invalid. Use a value between 0 and 100");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-exposure" && i + 1 < argc)
+        {
+            dsExposure = std::stoi(argv[++i]);
+            if (dsExposure < -13 || dsExposure > 1)
+            {
+                LOG_ERROR("DirectShow exposure invalid. Use a value between -13 and 1");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-sharpness" && i + 1 < argc)
+        {
+            dsSharpness = std::stoi(argv[++i]);
+            if (dsSharpness < 0 || dsSharpness > 6)
+            {
+                LOG_ERROR("DirectShow sharpness invalid. Use a value between 0 and 6");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-gamma" && i + 1 < argc)
+        {
+            dsGamma = std::stoi(argv[++i]);
+            if (dsGamma < 100 || dsGamma > 300)
+            {
+                LOG_ERROR("DirectShow gamma invalid. Use a value between 100 and 300");
+                return 1;
+            }
+        }
+        else if (arg == "--ds-whitebalance" && i + 1 < argc)
+        {
+            dsWhiteBalance = std::stoi(argv[++i]);
+            if (dsWhiteBalance < 2800 || dsWhiteBalance > 6500)
+            {
+                LOG_ERROR("DirectShow white balance invalid. Use a value between 2800 and 6500");
+                return 1;
+            }
+        }
+#endif
         else if (arg == "--stream-enable")
         {
             streamingEnabled = true;
@@ -389,7 +585,7 @@ int main(int argc, char *argv[])
             webPortalPort = std::stoi(argv[++i]);
             if (webPortalPort < 1024 || webPortalPort > 65535)
             {
-                LOG_ERROR("Porta do web portal inválida. Use um valor entre 1024 e 65535");
+                LOG_ERROR("Invalid web portal port. Use a value between 1024 and 65535");
                 return 1;
             }
         }
@@ -413,52 +609,63 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Determinar se a fonte é V4L2
+// Determinar tipo de fonte
+#ifdef __linux__
     bool isV4L2Source = (sourceType == "v4l2");
+#elif defined(_WIN32)
+    bool isDSSource = (sourceType == "ds");
+#endif
 
-    LOG_INFO("Inicializando aplicação...");
-    LOG_INFO("Tipo de fonte: " + sourceType);
+    LOG_INFO("Initializing application...");
+    LOG_INFO("Source type: " + sourceType);
+#ifdef __linux__
     if (isV4L2Source)
     {
-        LOG_INFO("Dispositivo V4L2: " + devicePath);
+        LOG_INFO("V4L2 device: " + devicePath);
     }
-    LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
+#elif defined(_WIN32)
+    if (isDSSource && !devicePath.empty())
+    {
+        LOG_INFO("DirectShow device: " + devicePath);
+    }
+#endif
+    LOG_INFO("Capture resolution: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
-    LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
-    LOG_INFO("Modo tela cheia: " + std::string(fullscreen ? "sim" : "não"));
+    LOG_INFO("Window size: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
+    LOG_INFO("Fullscreen mode: " + std::string(fullscreen ? "yes" : "no"));
     if (monitorIndex >= 0)
     {
         LOG_INFO("Monitor: " + std::to_string(monitorIndex));
     }
     else
     {
-        LOG_INFO("Monitor: primário (padrão)");
+        LOG_INFO("Monitor: primary (default)");
     }
-    LOG_INFO("Manter proporção: " + std::string(maintainAspect ? "sim" : "não"));
-    LOG_INFO("Brilho: " + std::to_string(brightness));
-    LOG_INFO("Contraste: " + std::to_string(contrast));
+    LOG_INFO("Maintain aspect ratio: " + std::string(maintainAspect ? "yes" : "no"));
+    LOG_INFO("Brightness: " + std::to_string(brightness));
+    LOG_INFO("Contrast: " + std::to_string(contrast));
     if (streamingEnabled)
     {
-        LOG_INFO("Streaming: habilitado na porta " + std::to_string(streamingPort));
+        LOG_INFO("Streaming: enabled on port " + std::to_string(streamingPort));
     }
-    LOG_INFO("Web Portal: " + std::string(webPortalEnabled ? "habilitado" : "desabilitado"));
+    LOG_INFO("Web Portal: " + std::string(webPortalEnabled ? "enabled" : "disabled"));
     if (webPortalHTTPSEnabled)
     {
-        LOG_INFO("HTTPS: habilitado (cert: " + webPortalSSLCertPath + ", key: " + webPortalSSLKeyPath + ")");
+        LOG_INFO("HTTPS: enabled (cert: " + webPortalSSLCertPath + ", key: " + webPortalSSLKeyPath + ")");
     }
 
     Application app;
 
-    // Configurar shader/preset se especificado
+    // Configure shader/preset if specified
     if (!presetPath.empty())
     {
         app.setPresetPath(presetPath);
-        LOG_INFO("Preset especificado: " + presetPath);
+        LOG_INFO("Preset specified: " + presetPath);
     }
     else if (!shaderPath.empty())
     {
         app.setShaderPath(shaderPath);
-        LOG_INFO("Shader especificado: " + shaderPath);
+        LOG_INFO("Shader specified: " + shaderPath);
     }
 
     // Configurar parâmetros de captura
@@ -474,7 +681,8 @@ int main(int argc, char *argv[])
     app.setBrightness(brightness);
     app.setContrast(contrast);
 
-    // Configurar dispositivo e controles V4L2 apenas se a fonte for V4L2
+    // Configurar dispositivo e controles apenas se a fonte for apropriada
+#ifdef __linux__
     if (isV4L2Source)
     {
         // Configurar dispositivo V4L2
@@ -508,19 +716,61 @@ int main(int argc, char *argv[])
                               v4l2Sharpness >= 0 || v4l2Gamma >= 0 || v4l2WhiteBalance >= 0);
         if (hasV4L2Params || devicePath != "/dev/video0")
         {
-            LOG_WARN("Parâmetros V4L2 ou --v4l2-device especificados mas fonte não é V4L2. Parâmetros serão ignorados.");
+            LOG_WARN("V4L2 parameters or --v4l2-device specified but source is not V4L2. Parameters will be ignored.");
         }
     }
+#elif defined(_WIN32)
+    if (isDSSource)
+    {
+        // Configurar dispositivo DirectShow (índice ou string vazia)
+        if (!devicePath.empty())
+        {
+            app.setDevicePath(devicePath);
+        }
+
+        // Configurar controles DirectShow se especificados (usando interface genérica)
+        // Os controles DirectShow usam os mesmos nomes que V4L2, então podemos usar setV4L2* que internamente usa setControl()
+        if (dsBrightness >= 0)
+            app.setV4L2Brightness(dsBrightness);
+        if (dsContrast >= 0)
+            app.setV4L2Contrast(dsContrast);
+        if (dsSaturation >= 0)
+            app.setV4L2Saturation(dsSaturation);
+        if (dsHue >= 0)
+            app.setV4L2Hue(dsHue);
+        if (dsGain >= 0)
+            app.setV4L2Gain(dsGain);
+        if (dsExposure >= 0)
+            app.setV4L2Exposure(dsExposure);
+        if (dsSharpness >= 0)
+            app.setV4L2Sharpness(dsSharpness);
+        if (dsGamma >= 0)
+            app.setV4L2Gamma(dsGamma);
+        if (dsWhiteBalance >= 0)
+            app.setV4L2WhiteBalance(dsWhiteBalance);
+    }
+    else
+    {
+        // Se não for DirectShow, avisar sobre parâmetros DirectShow ignorados
+        bool hasDSParams = (dsBrightness >= 0 || dsContrast >= 0 || dsSaturation >= 0 ||
+                            dsHue >= 0 || dsGain >= 0 || dsExposure >= 0 ||
+                            dsSharpness >= 0 || dsGamma >= 0 || dsWhiteBalance >= 0);
+        if (hasDSParams || !devicePath.empty())
+        {
+            LOG_WARN("DirectShow parameters or --ds-device specified but source is not DirectShow. Parameters will be ignored.");
+        }
+    }
+#endif
 
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
-    // Sempre definir width/height (0 significa usar resolução de captura)
+    // Always set width/height (0 means use capture resolution)
     app.setStreamingWidth(streamWidth);
     app.setStreamingHeight(streamHeight);
-    // Sempre definir fps (0 significa usar FPS da captura)
+    // Always set fps (0 means use capture FPS)
     app.setStreamingFps(streamFps);
-    // Sempre definir bitrate (0 significa calcular automaticamente)
+    // Always set bitrate (0 means calculate automatically)
     app.setStreamingBitrate(streamBitrate);
     app.setStreamingAudioBitrate(streamAudioBitrate);
     app.setStreamingVideoCodec(streamVideoCodec);
@@ -528,12 +778,12 @@ int main(int argc, char *argv[])
 
     // Configure Web Portal
     app.setWebPortalEnabled(webPortalEnabled);
-    // A porta do web portal é a mesma do streaming (ambos usam o mesmo servidor HTTP)
-    // Se especificada uma porta diferente para o portal, usar essa porta para o servidor
+    // Web portal port is the same as streaming (both use the same HTTP server)
+    // If a different port is specified for the portal, use that port for the server
     if (webPortalPort != streamingPort)
     {
         app.setStreamingPort(webPortalPort);
-        LOG_INFO("Porta do web portal: " + std::to_string(webPortalPort));
+        LOG_INFO("Web portal port: " + std::to_string(webPortalPort));
     }
     app.setWebPortalHTTPSEnabled(webPortalHTTPSEnabled);
     app.setWebPortalSSLCertPath(webPortalSSLCertPath);
@@ -541,14 +791,21 @@ int main(int argc, char *argv[])
 
     if (!app.init())
     {
-        LOG_ERROR("Falha ao inicializar aplicação");
+        LOG_ERROR("Failed to initialize application");
         return 1;
     }
 
-    // Configurar source type após inicialização (para acessar UIManager)
-    UIManager::SourceType sourceTypeEnum = (sourceType == "v4l2") ? UIManager::SourceType::V4L2 : UIManager::SourceType::None;
+    // Configure source type after initialization (to access UIManager)
+    UIManager::SourceType sourceTypeEnum = UIManager::SourceType::None;
+#ifdef __linux__
+    if (sourceType == "v4l2")
+        sourceTypeEnum = UIManager::SourceType::V4L2;
+#elif defined(_WIN32)
+    if (sourceType == "ds")
+        sourceTypeEnum = UIManager::SourceType::DS;
+#endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
-    LOG_INFO("Tipo de fonte: " + sourceType);
+    LOG_INFO("Source type: " + sourceType);
 
     app.run();
     app.shutdown();

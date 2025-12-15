@@ -1,9 +1,9 @@
 #include "ShaderPreprocessor.h"
 #include "../utils/Logger.h"
 #include "ShaderEngine.h"  // For ShaderParameterInfo
+#include "../utils/FilesystemCompat.h"
 #include <fstream>
 #include <sstream>
-#include <filesystem>
 #include <regex>
 #include <algorithm>
 
@@ -20,7 +20,7 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     PreprocessResult result;
 
     // Extrair diretório base do shader para resolver includes
-    std::filesystem::path shaderPathObj(shaderPath);
+    fs::path shaderPathObj(shaderPath);
     std::string shaderDir = shaderPathObj.parent_path().string();
 
     // Processar includes primeiro
@@ -160,14 +160,14 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
         else
         {
             // Caminho relativo - tentar várias localizações
-            std::filesystem::path currentPath = std::filesystem::current_path();
+            fs::path currentPath = fs::current_path();
 
             // 1. Relativo ao diretório do shader atual
             if (!basePath.empty())
             {
-                std::filesystem::path base(basePath);
-                std::filesystem::path resolved = base / includePath;
-                if (std::filesystem::exists(resolved))
+                fs::path base(basePath);
+                fs::path resolved = base / includePath;
+                if (fs::exists(resolved))
                 {
                     fullPath = resolved.string();
                 }
@@ -176,8 +176,8 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
             // 2. Em shaders/shaders_slang/
             if (fullPath.empty())
             {
-                std::filesystem::path slangPath = currentPath / "shaders" / "shaders_slang" / includePath;
-                if (std::filesystem::exists(slangPath))
+                fs::path slangPath = currentPath / "shaders" / "shaders_slang" / includePath;
+                if (fs::exists(slangPath))
                 {
                     fullPath = slangPath.string();
                 }
@@ -186,8 +186,8 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
             // 3. Relativo ao diretório atual
             if (fullPath.empty())
             {
-                std::filesystem::path relPath = currentPath / includePath;
-                if (std::filesystem::exists(relPath))
+                fs::path relPath = currentPath / includePath;
+                if (fs::exists(relPath))
                 {
                     fullPath = relPath.string();
                 }
@@ -196,7 +196,7 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
             // 4. Tentar com caminho relativo do shader (subindo diretórios)
             if (fullPath.empty() && !basePath.empty())
             {
-                std::filesystem::path base(basePath);
+                fs::path base(basePath);
                 // Remover "../" do início
                 std::string cleanPath = includePath;
                 while (cleanPath.find("../") == 0)
@@ -204,15 +204,15 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
                     cleanPath = cleanPath.substr(3);
                     base = base.parent_path();
                 }
-                std::filesystem::path resolved = base / cleanPath;
-                if (std::filesystem::exists(resolved))
+                fs::path resolved = base / cleanPath;
+                if (fs::exists(resolved))
                 {
                     fullPath = resolved.string();
                 }
             }
         }
 
-        if (!fullPath.empty() && std::filesystem::exists(fullPath))
+        if (!fullPath.empty() && fs::exists(fullPath))
         {
             // Carregar arquivo incluído
             std::ifstream includeFile(fullPath);
@@ -224,7 +224,7 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
                 includeFile.close();
 
                 // Processar includes recursivamente no arquivo incluído
-                std::filesystem::path includeFilePath(fullPath);
+                fs::path includeFilePath(fullPath);
                 std::string includeDir = includeFilePath.parent_path().string();
                 includeContent = processIncludes(includeContent, includeDir);
 

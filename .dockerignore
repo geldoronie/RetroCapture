@@ -1,0 +1,45 @@
+# Build directories
+build/
+build-windows/
+AppDir/
+
+# MXE (será compilado dentro do container)
+mxe/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Documentation (não necessário para build)
+docs/
+
+# Assets (será copiado se necessário)
+# assets/
+
+# Scripts de build locais (não necessários no container)
+build.sh
+build-windows.sh
+setup-mxe.sh
+
+# AppImage tools
+*.AppImage
+appimagetool-*
+linuxdeploy-*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+

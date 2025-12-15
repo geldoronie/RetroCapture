@@ -6,7 +6,7 @@
 
 // Forward declarations
 class UIManager;
-class VideoCapture;
+class IVideoCapture;
 
 /**
  * Aba Source da janela de configuração
@@ -21,11 +21,15 @@ public:
 
 private:
     UIManager *m_uiManager = nullptr;
-    VideoCapture *m_capture = nullptr;
+    IVideoCapture *m_capture = nullptr;
 
     void renderSourceTypeSelection();
     void renderV4L2Controls();
     void renderV4L2DeviceSelection();
+#ifdef _WIN32
+    void renderDSControls();
+    void renderDSDeviceSelection();
+#endif
     void renderCaptureSettings();
     void renderQuickResolutions();
     void renderQuickFPS();

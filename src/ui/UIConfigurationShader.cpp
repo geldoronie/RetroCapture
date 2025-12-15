@@ -1,8 +1,8 @@
 #include "UIConfigurationShader.h"
 #include "UIManager.h"
 #include "../shader/ShaderEngine.h"
+#include "../utils/FilesystemCompat.h"
 #include <imgui.h>
-#include <filesystem>
 #include <cstring>
 
 UIConfigurationShader::UIConfigurationShader(UIManager *uiManager)
@@ -83,8 +83,8 @@ void UIConfigurationShader::renderSavePreset()
     if (!currentPreset.empty())
     {
         // Extrair apenas o nome do arquivo
-        std::filesystem::path presetPath(currentPreset);
-        std::string fileName = presetPath.filename().string();
+        fs::path presetPath(currentPreset);
+        std::string fileName = presetPath.filename();
 
         if (ImGui::Button("Save"))
         {
@@ -127,8 +127,8 @@ void UIConfigurationShader::renderSavePreset()
             if (onSavePreset && strlen(m_savePresetPath) > 0)
             {
                 // Construir caminho completo
-                std::filesystem::path basePath("shaders/shaders_glsl");
-                std::filesystem::path newPath = basePath / m_savePresetPath;
+                fs::path basePath("shaders/shaders_glsl");
+                fs::path newPath = basePath / m_savePresetPath;
                 // Garantir extensão .glslp
                 if (newPath.extension() != ".glslp")
                 {
@@ -149,20 +149,48 @@ void UIConfigurationShader::renderSavePreset()
 
 void UIConfigurationShader::renderShaderParameters()
 {
-    if (!m_shaderEngine || !m_shaderEngine->isShaderActive())
+    // Sempre atualizar referência ao shader engine antes de usar
+    if (m_uiManager)
     {
+        m_shaderEngine = m_uiManager->getShaderEngine();
+    }
+
+    if (!m_shaderEngine)
+    {
+        ImGui::TextDisabled("Shader engine não disponível");
+        return;
+    }
+
+    if (!m_shaderEngine->isShaderActive())
+    {
+        ImGui::TextDisabled("Nenhum shader ativo");
         return;
     }
 
     ImGui::Text("Shader Parameters:");
 
     auto params = m_shaderEngine->getShaderParameters();
+
     if (params.empty())
     {
         ImGui::TextDisabled("No parameters available");
+        if (m_shaderEngine->isShaderActive())
+        {
+            ImGui::TextDisabled("(Shader ativo mas sem parâmetros)");
+        }
     }
     else
     {
+        // Log quando encontramos parâmetros (apenas uma vez)
+        static std::string lastShaderPath;
+        std::string currentShaderPath = m_shaderEngine->getPresetPath();
+        if (currentShaderPath != lastShaderPath)
+        {
+            lastShaderPath = currentShaderPath;
+            // Não temos acesso direto ao Logger aqui, mas podemos mostrar na UI
+            ImGui::Text("Encontrados %zu parâmetro(s)", params.size());
+        }
+
         for (auto &param : params)
         {
             ImGui::PushID(param.name.c_str());

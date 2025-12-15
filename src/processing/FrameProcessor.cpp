@@ -1,8 +1,14 @@
 #include "FrameProcessor.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
+#include <iostream>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#ifndef V4L2_PIX_FMT_MJPEG
+#define V4L2_PIX_FMT_MJPEG v4l2_fourcc('M', 'J', 'P', 'G')
+#endif
+#endif
 
 FrameProcessor::FrameProcessor()
 {
@@ -13,23 +19,56 @@ FrameProcessor::~FrameProcessor()
     deleteTexture();
 }
 
-void FrameProcessor::init(OpenGLRenderer* renderer)
+void FrameProcessor::init(OpenGLRenderer *renderer)
 {
     m_renderer = renderer;
 }
 
-bool FrameProcessor::processFrame(VideoCapture* capture)
+bool FrameProcessor::processFrame(IVideoCapture *capture)
 {
     if (!capture)
     {
+        LOG_WARN("FrameProcessor: capture é nullptr");
         return false;
     }
 
     Frame frame;
     // Usar captureLatestFrame para descartar frames antigos e pegar apenas o mais recente
-    if (!capture->captureLatestFrame(frame))
+    bool captured = capture->captureLatestFrame(frame);
+    
+    // Log de depuração para dummy mode
+    if (capture->isDummyMode())
+    {
+        static int logCount = 0;
+        if (logCount++ < 10) // Log as primeiras 10 vezes
+        {
+            LOG_INFO("FrameProcessor: captureLatestFrame retornou " + std::string(captured ? "true" : "false") + 
+                     " no dummy mode (tentativa " + std::to_string(logCount) + ")");
+            if (captured)
+            {
+                LOG_INFO("FrameProcessor: Frame recebido - data: " + std::string(frame.data ? "ok" : "null") +
+                         ", size: " + std::to_string(frame.size) +
+                         ", dim: " + std::to_string(frame.width) + "x" + std::to_string(frame.height));
+            }
+            else
+            {
+                LOG_WARN("FrameProcessor: captureLatestFrame retornou false - verificando motivo...");
+            }
+        }
+    }
+    
+    if (!captured)
     {
         return false; // Nenhum frame novo disponível
+    }
+
+    // Validar dados do frame
+    if (!frame.data || frame.size == 0 || frame.width == 0 || frame.height == 0)
+    {
+        LOG_WARN("Frame inválido recebido (data: " + std::string(frame.data ? "ok" : "null") +
+                 ", size: " + std::to_string(frame.size) +
+                 ", dim: " + std::to_string(frame.width) + "x" + std::to_string(frame.height) + ")");
+        return false;
     }
 
     // Se a textura ainda não foi criada ou o tamanho mudou
@@ -59,8 +98,44 @@ bool FrameProcessor::processFrame(VideoCapture* capture)
     // Converter e atualizar textura
     glBindTexture(GL_TEXTURE_2D, m_texture);
 
-    if (frame.format == V4L2_PIX_FMT_YUYV)
+    // Verificar formato do frame
+    // YUYV: 2 bytes por pixel (formato comum V4L2)
+    // RGB24: 3 bytes por pixel (formato comum DirectShow)
+    bool isYUYV = false;
+#ifdef __linux__
+    // No Linux, verificar se é YUYV pelo formato ou tamanho
+    // V4L2_PIX_FMT_YUYV e V4L2_PIX_FMT_MJPEG já estão definidos em <linux/videodev2.h>
+
+    // Verificar se é MJPG (não suportado ainda)
+    if (frame.format == V4L2_PIX_FMT_MJPEG)
     {
+        LOG_ERROR("Formato MJPG detectado mas não suportado. O dispositivo deve ser configurado para YUYV.");
+        return false;
+    }
+
+    if (frame.format == V4L2_PIX_FMT_YUYV || frame.size == frame.width * frame.height * 2)
+    {
+        isYUYV = true;
+    }
+#else
+    // No Windows, verificar pelo tamanho (DirectShow geralmente usa RGB24)
+    if (frame.size == frame.width * frame.height * 2)
+    {
+        isYUYV = true;
+    }
+#endif
+
+    if (isYUYV)
+    {
+        // Validar tamanho do buffer YUYV
+        size_t expectedSize = frame.width * frame.height * 2;
+        if (frame.size < expectedSize)
+        {
+            LOG_ERROR("Tamanho do frame YUYV incorreto: esperado " + std::to_string(expectedSize) +
+                      ", recebido " + std::to_string(frame.size));
+            return false;
+        }
+
         // Converter YUYV para RGB
         std::vector<uint8_t> rgbBuffer(frame.width * frame.height * 3);
         convertYUYVtoRGB(frame.data, rgbBuffer.data(), frame.width, frame.height);
@@ -76,16 +151,27 @@ bool FrameProcessor::processFrame(VideoCapture* capture)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, rgbBuffer.data());
         }
     }
+    else if (frame.size == frame.width * frame.height * 3)
+    {
+        // RGB24: usar diretamente
+        if (textureCreated)
+        {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0, GL_RGB, GL_UNSIGNED_BYTE, frame.data);
+        }
+        else
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, frame.data);
+        }
+    }
     else
     {
-        // Usar formato diretamente (se suportado)
+        // Outros formatos: usar renderer (pode ter conversão específica)
         if (textureCreated)
         {
             m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
         }
         else
         {
-            // Para outros formatos, ainda precisamos atualizar via renderer
             m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
         }
     }
@@ -108,13 +194,31 @@ void FrameProcessor::deleteTexture()
 
 void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
 {
+    // Validar ponteiros
+    if (!yuyv || !rgb)
+    {
+        LOG_ERROR("Ponteiros inválidos na conversão YUYV para RGB");
+        return;
+    }
+
     // Conversão YUYV para RGB
     // YUYV: Y0 U0 Y1 V0 Y2 U1 Y3 V1 ...
+    // Layout: para cada par de pixels, temos Y0 U Y1 V
     for (uint32_t y = 0; y < height; ++y)
     {
         for (uint32_t x = 0; x < width; x += 2)
         {
-            uint32_t idx = y * width * 2 + x * 2;
+            // Índice no buffer YUYV (2 bytes por pixel, mas U e V são compartilhados)
+            // YUYV layout: Y0 U Y1 V Y2 U Y3 V ...
+            // Para cada par de pixels (x, x+1), temos 4 bytes: Y0 U Y1 V
+            uint32_t idx = (y * width + x) * 2;
+
+            // Verificar limites do buffer - garantir que temos pelo menos 4 bytes
+            if (x + 1 >= width || idx + 3 >= width * height * 2)
+            {
+                // Se não temos um par completo de pixels, pular este
+                continue;
+            }
 
             int y0 = yuyv[idx];
             int u = yuyv[idx + 1];
@@ -130,9 +234,12 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
             int g0 = (298 * c - 100 * d - 208 * e + 128) >> 8;
             int b0 = (298 * c + 516 * d + 128) >> 8;
 
-            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255 : r0;
-            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255 : g0;
-            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255 : b0;
+            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255
+                                           : r0;
+            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255
+                                           : g0;
+            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255
+                                           : b0;
 
             // Converter segundo pixel
             c = y1 - 16;
@@ -140,9 +247,12 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
             int g1 = (298 * c - 100 * d - 208 * e + 128) >> 8;
             int b1 = (298 * c + 516 * d + 128) >> 8;
 
-            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255 : r1;
-            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255 : g1;
-            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255 : b1;
+            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255
+                                           : r1;
+            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255
+                                           : g1;
+            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255
+                                           : b1;
 
             // Escrever pixels RGB
             uint32_t rgbIdx0 = (y * width + x) * 3;
@@ -157,4 +267,3 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
         }
     }
 }
-

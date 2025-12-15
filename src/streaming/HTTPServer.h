@@ -3,7 +3,9 @@
 #include <string>
 #include <map>
 #include <cstddef>
+#ifdef PLATFORM_LINUX
 #include <sys/types.h>
+#endif
 
 #ifdef ENABLE_HTTPS
 struct ssl_st;
@@ -122,5 +124,9 @@ private:
 #ifdef ENABLE_HTTPS
     SSL_CTX *m_sslContext = nullptr;
     std::map<int, SSL *> m_sslClients; // Mapeia clientFd -> SSL*
+#endif
+
+#ifdef _WIN32
+    bool m_winsockInitialized = false; // Flag para rastrear se Winsock foi inicializado
 #endif
 };

@@ -1,0 +1,20 @@
+services:
+  build-windows:
+    build:
+      context: .
+      dockerfile: Dockerfile.windows
+    image: retrocapture-windows-builder:latest
+    volumes:
+      - .:/work:ro
+      - ./build-windows:/work/build-windows
+    working_dir: /work
+
+  build-linux:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux
+    image: retrocapture-linux-builder:latest
+    volumes:
+      - .:/work:ro
+      - ./build-linux:/work/build-linux:rw
+    working_dir: /work

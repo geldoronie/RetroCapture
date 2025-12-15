@@ -1,7 +1,17 @@
 #include "OpenGLRenderer.h"
 #include "glad_loader.h"
 #include "../utils/Logger.h"
+#ifdef __linux__
 #include <linux/videodev2.h>
+#else
+// Definir constantes V4L2 para Windows (valores padrão)
+#define V4L2_PIX_FMT_RGB24  0x52474232  // 'RGB2'
+#define V4L2_PIX_FMT_RGB32  0x52474234  // 'RGB4'
+#define V4L2_PIX_FMT_BGR32  0x42475232  // 'BGR2'
+#define V4L2_PIX_FMT_YUYV   0x56595559  // 'YUYV'
+#define V4L2_PIX_FMT_MJPEG  0x47504A4D  // 'MJPG'
+#define V4L2_PIX_FMT_JPEG   0x4745504A  // 'JPEG'
+#endif
 #include <cstring>
 
 // Shader vertex simples

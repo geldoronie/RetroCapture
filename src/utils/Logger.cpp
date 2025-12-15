@@ -6,34 +6,41 @@
 
 bool Logger::s_initialized = false;
 
-void Logger::init() {
-    if (s_initialized) {
+void Logger::init()
+{
+    if (s_initialized)
+    {
         return;
     }
     s_initialized = true;
-    info("Logger inicializado");
+    info("Logger initialized");
 }
 
-void Logger::shutdown() {
-    if (!s_initialized) {
+void Logger::shutdown()
+{
+    if (!s_initialized)
+    {
         return;
     }
     s_initialized = false;
 }
 
-void Logger::info(const std::string& message) {
+void Logger::info(const std::string &message)
+{
     std::cout << "[INFO] " << message << std::endl;
 }
 
-void Logger::error(const std::string& message) {
+void Logger::error(const std::string &message)
+{
     std::cerr << "[ERROR] " << message << std::endl;
 }
 
-void Logger::warn(const std::string& message) {
+void Logger::warn(const std::string &message)
+{
     std::cout << "[WARN] " << message << std::endl;
 }
 
-void Logger::debug(const std::string& message) {
+void Logger::debug(const std::string &message)
+{
     std::cout << "[DEBUG] " << message << std::endl;
 }
-

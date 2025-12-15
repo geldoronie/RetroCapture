@@ -1,0 +1,38 @@
+# Dockerfile para build do RetroCapture no Linux
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar dependências do sistema e ferramentas de build
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar dependências do RetroCapture
+RUN apt-get update && apt-get install -y \
+    libglfw3-dev \
+    libssl-dev \
+    libpng-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
+    libavdevice-dev \
+    libv4l-dev \
+    libpulse-dev \
+    libx11-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Script de build
+COPY docker-build-linux.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build-linux.sh
+
+WORKDIR /work
+
+ENTRYPOINT ["/usr/local/bin/docker-build-linux.sh"]

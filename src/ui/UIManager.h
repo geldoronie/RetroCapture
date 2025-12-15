@@ -7,14 +7,16 @@
 #include <cstring>
 #include <memory>
 #include "../renderer/glad_loader.h"
+#include "../capture/IVideoCapture.h"
 
 struct GLFWwindow;
 
-class VideoCapture;
+class IVideoCapture;
 class ShaderEngine;
 
-// Forward declaration
+// Forward declarations
 class UIConfiguration;
+class UICredits;
 
 class UIManager
 {
@@ -98,7 +100,9 @@ public:
     void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
 
     // Controles V4L2
-    void setV4L2Controls(VideoCapture *capture);
+    void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
+    // Deprecated: use setCaptureControls instead
+    void setV4L2Controls(IVideoCapture *capture) { setCaptureControls(capture); }
     void setOnV4L2ControlChanged(std::function<void(const std::string &, int32_t)> callback)
     {
         m_onV4L2ControlChanged = callback;
@@ -109,7 +113,8 @@ public:
     enum class SourceType
     {
         None = 0,
-        V4L2 = 1
+        V4L2 = 1,
+        DS = 2 // DirectShow (Windows)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -164,14 +169,7 @@ public:
         }
     }
 
-    void triggerDeviceChange(const std::string &device)
-    {
-        m_currentDevice = device;
-        if (m_onDeviceChanged)
-        {
-            m_onDeviceChanged(device);
-        }
-    }
+    void triggerDeviceChange(const std::string &device);
 
     // V4L2Control struct - public for API access
     struct V4L2Control
@@ -281,7 +279,7 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
-    VideoCapture *getCapture() const { return m_capture; }
+    IVideoCapture *getCapture() const { return m_capture; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -293,6 +291,10 @@ public:
     // V4L2 getters
     const std::vector<std::string> &getV4L2Devices() const { return m_v4l2Devices; }
     const std::vector<V4L2Control> &getV4L2Controls() const { return m_v4l2Controls; }
+
+    // DirectShow getters
+    const std::vector<DeviceInfo> &getDSDevices() const { return m_dsDevices; }
+    void refreshDSDevices();
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -481,6 +483,7 @@ private:
 
     // UI Configuration window (refatorado)
     std::unique_ptr<class UIConfiguration> m_configWindow;
+    std::unique_ptr<class UICredits> m_creditsWindow;
     GLFWwindow *m_window = nullptr;
 
     // Shader selection
@@ -507,15 +510,20 @@ private:
     std::function<void(int)> m_onMonitorIndexChanged;
 
     // V4L2 Controls
-    VideoCapture *m_capture = nullptr;
+    IVideoCapture *m_capture = nullptr;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 
     // Source selection
-    SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2
+#ifdef _WIN32
+    SourceType m_sourceType = SourceType::DS; // Padrão: DirectShow no Windows
+#else
+    SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
+#endif
 
     // Device selection (V4L2)
     std::vector<std::string> m_v4l2Devices;
+    std::vector<DeviceInfo> m_dsDevices;
     std::string m_currentDevice;
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;

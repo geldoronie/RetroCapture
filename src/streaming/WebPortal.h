@@ -3,8 +3,8 @@
 #include <string>
 #include <fstream>
 #include <sstream>
-#include <filesystem>
 #include <vector>
+#include "../utils/FilesystemCompat.h"
 
 /**
  * WebPortal - Responsável por servir o portal web do RetroCapture
