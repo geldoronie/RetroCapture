@@ -222,6 +222,7 @@ if [ -n "$INSTALLER_FOUND" ]; then
     echo "=== Instalador gerado com sucesso! ==="
     echo "Arquivo: ${INSTALLER_BASENAME}"
     echo "Tamanho: $(du -h "${INSTALLER_BASENAME}" | cut -f1)"
+    rm -f build-installer-temp.sh
     exit 0
 else
     echo ""
