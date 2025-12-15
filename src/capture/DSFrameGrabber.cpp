@@ -350,14 +350,6 @@ void DSFrameGrabber::ProcessSample(IMediaSample *pSample)
         }
     }
     
-    if (processCount <= 10 || processCount % 100 == 0)
-    {
-        LOG_INFO("[DSFrameGrabber] ProcessSample (call #" + std::to_string(processCount) + 
-                 ", dataLength: " + std::to_string(dataLength) + 
-                 ", dim: " + std::to_string(width) + "x" + std::to_string(height) +
-                 ", subtype: " + std::to_string(subtype.Data1) + ")");
-    }
-    
     // Copiar dados para buffer e converter se necessário
     {
         std::lock_guard<std::mutex> lock(m_bufferMutex);

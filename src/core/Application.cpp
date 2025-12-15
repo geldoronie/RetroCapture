@@ -283,7 +283,22 @@ bool Application::initCapture()
     if (m_devicePath.empty())
     {
 #ifdef _WIN32
-        LOG_INFO("Nenhum dispositivo especificado - ativando modo dummy");
+        LOG_INFO("Nenhum dispositivo especificado - ativando modo dummy diretamente");
+        // Ir direto para dummy mode sem tentar abrir dispositivo
+        m_capture->setDummyMode(true);
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+        {
+            LOG_ERROR("Falha ao configurar formato dummy");
+            return false;
+        }
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Falha ao iniciar captura dummy");
+            return false;
+        }
+        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
 #else
         LOG_INFO("Nenhum dispositivo especificado - usando padrão /dev/video0");
         m_devicePath = "/dev/video0";

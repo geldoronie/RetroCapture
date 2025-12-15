@@ -668,56 +668,40 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                     hr = m_customGrabberFilter->FindPin(L"In", &pGrabberInputPin);
                     if (SUCCEEDED(hr) && pGrabberInputPin)
                     {
-                        LOG_INFO("Pin de entrada do filtro customizado encontrado");
                         
                         // Obter o tipo de mídia do pin de captura
                         IEnumMediaTypes *pEnumMediaTypes = nullptr;
                         hr = pCapturePin->EnumMediaTypes(&pEnumMediaTypes);
                         if (SUCCEEDED(hr) && pEnumMediaTypes)
                         {
-                            LOG_INFO("EnumMediaTypes obtido do pin de captura");
                             AM_MEDIA_TYPE *pmt = nullptr;
                             ULONG fetched = 0;
                             
                             // Tentar o primeiro tipo de mídia disponível
                             if (pEnumMediaTypes->Next(1, &pmt, &fetched) == S_OK && fetched > 0)
                             {
-                                LOG_INFO("Tipo de mídia obtido do pin de captura - major: " + 
-                                         std::to_string(pmt->majortype.Data1) + 
-                                         ", subtype: " + std::to_string(pmt->subtype.Data1));
-                                
                                 // Verificar se o pin aceita este tipo de mídia
                                 HRESULT acceptHr = pGrabberInputPin->QueryAccept(pmt);
-                                LOG_INFO("QueryAccept retornou: " + std::to_string(acceptHr));
                                 
                                 if (SUCCEEDED(acceptHr) && acceptHr == S_OK)
                                 {
-                                    LOG_INFO("Pin aceita tipo de mídia - tentando conectar...");
-                                    
                                     // Tentar ConnectDirect primeiro (mais direto)
-                                    LOG_INFO("Tentando ConnectDirect...");
                                     hr = m_graphBuilder->ConnectDirect(pCapturePin, pGrabberInputPin, pmt);
-                                    LOG_INFO("ConnectDirect retornou: " + std::to_string(hr));
                                     
                                     if (FAILED(hr))
                                     {
                                         // Se ConnectDirect falhar, tentar Connect (que negocia formato automaticamente)
-                                        LOG_INFO("ConnectDirect falhou - tentando Connect...");
                                         hr = m_graphBuilder->Connect(pCapturePin, pGrabberInputPin);
-                                        LOG_INFO("IGraphBuilder::Connect() retornou: " + std::to_string(hr));
                                         
                                         if (FAILED(hr))
                                         {
                                             // Última tentativa: chamar Connect diretamente no pin de saída
-                                            LOG_INFO("IGraphBuilder::Connect falhou - tentando Connect no pin de saída...");
                                             hr = pCapturePin->Connect(pGrabberInputPin, pmt);
-                                            LOG_INFO("pCapturePin->Connect() retornou: " + std::to_string(hr));
                                         }
                                     }
                                     
                                     if (SUCCEEDED(hr))
                                     {
-                                        LOG_INFO("Filtro customizado conectado - captura de frames habilitada");
                                         m_useAlternativeCapture = true;
                                     }
                                     else
@@ -744,7 +728,6 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                             hr = m_graphBuilder->Connect(pCapturePin, pGrabberInputPin);
                             if (SUCCEEDED(hr))
                             {
-                                LOG_INFO("Filtro customizado conectado (sem negociação de tipo) - captura de frames habilitada");
                                 m_useAlternativeCapture = true;
                             }
                             else
@@ -1369,15 +1352,177 @@ bool VideoCaptureDS::getControl(const std::string &controlName, int32_t &value)
 
 bool VideoCaptureDS::getControlMin(const std::string &controlName, int32_t &minValue)
 {
-    // DirectShow interfaces podem expor min/max (TODO: implementar)
-    // This would require IAMCameraControl or IAMVideoProcAmp from DirectShow
-    // For now, return false
+    if (!m_videoProcAmp && !m_cameraControl)
+    {
+        return false;
+    }
+    
+    HRESULT hr = E_FAIL;
+    long min = 0, max = 0, step = 0, defaultValue = 0, flags = 0;
+    
+    // Mapear nome do controle para propriedade DirectShow
+    if (controlName == "Brightness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Brightness, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Contrast")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Contrast, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Saturation")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Saturation, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Hue")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Hue, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Sharpness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Sharpness, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Gamma")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Gamma, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Gain")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(static_cast<CameraControlProperty>(1), &min, &max, &step, &defaultValue, &flags); // CameraControl_Gain = 1
+        }
+    }
+    else if (controlName == "Exposure")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(CameraControl_Exposure, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "White Balance")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(static_cast<CameraControlProperty>(4), &min, &max, &step, &defaultValue, &flags); // CameraControl_WhiteBalance = 4
+        }
+    }
+    else
+    {
+        return false;
+    }
+    
+    if (SUCCEEDED(hr))
+    {
+        minValue = static_cast<int32_t>(min);
+        return true;
+    }
+    
     return false;
 }
 
 bool VideoCaptureDS::getControlMax(const std::string &controlName, int32_t &maxValue)
 {
-    // DirectShow interfaces podem expor min/max (TODO: implementar)
+    if (!m_videoProcAmp && !m_cameraControl)
+    {
+        return false;
+    }
+    
+    HRESULT hr = E_FAIL;
+    long min = 0, max = 0, step = 0, defaultValue = 0, flags = 0;
+    
+    // Mapear nome do controle para propriedade DirectShow
+    if (controlName == "Brightness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Brightness, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Contrast")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Contrast, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Saturation")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Saturation, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Hue")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Hue, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Sharpness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Sharpness, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Gamma")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->GetRange(VideoProcAmp_Gamma, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "Gain")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(static_cast<CameraControlProperty>(1), &min, &max, &step, &defaultValue, &flags); // CameraControl_Gain = 1
+        }
+    }
+    else if (controlName == "Exposure")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(CameraControl_Exposure, &min, &max, &step, &defaultValue, &flags);
+        }
+    }
+    else if (controlName == "White Balance")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->GetRange(static_cast<CameraControlProperty>(4), &min, &max, &step, &defaultValue, &flags); // CameraControl_WhiteBalance = 4
+        }
+    }
+    else
+    {
+        return false;
+    }
+    
+    if (SUCCEEDED(hr))
+    {
+        maxValue = static_cast<int32_t>(max);
+        return true;
+    }
+    
     return false;
 }
 
@@ -1409,32 +1554,181 @@ std::string VideoCaptureDS::getControlNameFromDS(const std::string &controlName)
 
 bool VideoCaptureDS::setControlDS(const std::string &controlName, int32_t value)
 {
-    // Usar DirectShow interfaces para controles de hardware
     if (!m_videoProcAmp && !m_cameraControl)
     {
-        LOG_WARN("Interfaces de controle não disponíveis: " + controlName);
         return false;
     }
     
+    HRESULT hr = E_FAIL;
+    long propertyValue = value;
+    
     // Mapear nome do controle para propriedade DirectShow
-    // Por enquanto, implementação básica
-    LOG_INFO("Definindo controle DirectShow: " + controlName + " = " + std::to_string(value));
-    // TODO: Implementar mapeamento completo de controles
+    // IAMVideoProcAmp properties
+    if (controlName == "Brightness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Brightness, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    else if (controlName == "Contrast")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Contrast, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    else if (controlName == "Saturation")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Saturation, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    else if (controlName == "Hue")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Hue, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    else if (controlName == "Sharpness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Sharpness, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    else if (controlName == "Gamma")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Set(VideoProcAmp_Gamma, propertyValue, VideoProcAmp_Flags_Manual);
+        }
+    }
+    // IAMCameraControl properties
+    else if (controlName == "Gain")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Set(static_cast<CameraControlProperty>(1), propertyValue, CameraControl_Flags_Manual); // CameraControl_Gain = 1
+        }
+    }
+    else if (controlName == "Exposure")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Set(CameraControl_Exposure, propertyValue, CameraControl_Flags_Manual);
+        }
+    }
+    else if (controlName == "White Balance")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Set(static_cast<CameraControlProperty>(4), propertyValue, CameraControl_Flags_Manual); // CameraControl_WhiteBalance = 4
+        }
+    }
+    else
+    {
+        return false;
+    }
+    
+    if (SUCCEEDED(hr))
+    {
+        return true;
+    }
+    
     return false;
 }
 
 bool VideoCaptureDS::getControlDS(const std::string &controlName, int32_t &value)
 {
-    // Usar DirectShow interfaces para controles de hardware
     if (!m_videoProcAmp && !m_cameraControl)
     {
-        LOG_WARN("Interfaces de controle não disponíveis: " + controlName);
         return false;
     }
     
+    HRESULT hr = E_FAIL;
+    long propertyValue = 0;
+    long flags = 0;
+    
     // Mapear nome do controle para propriedade DirectShow
-    LOG_INFO("Obtendo controle DirectShow: " + controlName);
-    // TODO: Implementar mapeamento completo de controles
+    // IAMVideoProcAmp properties
+    if (controlName == "Brightness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Brightness, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "Contrast")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Contrast, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "Saturation")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Saturation, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "Hue")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Hue, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "Sharpness")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Sharpness, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "Gamma")
+    {
+        if (m_videoProcAmp)
+        {
+            hr = m_videoProcAmp->Get(VideoProcAmp_Gamma, &propertyValue, &flags);
+        }
+    }
+    // IAMCameraControl properties
+    else if (controlName == "Gain")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Get(static_cast<CameraControlProperty>(1), &propertyValue, &flags); // CameraControl_Gain = 1
+        }
+    }
+    else if (controlName == "Exposure")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Get(CameraControl_Exposure, &propertyValue, &flags);
+        }
+    }
+    else if (controlName == "White Balance")
+    {
+        if (m_cameraControl)
+        {
+            hr = m_cameraControl->Get(static_cast<CameraControlProperty>(4), &propertyValue, &flags); // CameraControl_WhiteBalance = 4
+        }
+    }
+    else
+    {
+        return false;
+    }
+    
+    if (SUCCEEDED(hr))
+    {
+        value = static_cast<int32_t>(propertyValue);
+        return true;
+    }
+    
     return false;
 }
 

@@ -98,7 +98,6 @@ STDMETHODIMP DSPin::Connect(IPin *pReceivePin, const AM_MEDIA_TYPE *pmt)
     // Para um pin de entrada, Connect não deve ser chamado diretamente
     // O DirectShow deve chamar ReceiveConnection no pin de entrada
     // Mas alguns graph builders podem chamar Connect primeiro
-    LOG_INFO("[DSPin] Connect chamado (pin de entrada) - redirecionando para ReceiveConnection");
     
     if (!pReceivePin)
         return E_POINTER;
@@ -139,8 +138,6 @@ STDMETHODIMP DSPin::Connect(IPin *pReceivePin, const AM_MEDIA_TYPE *pmt)
 
 STDMETHODIMP DSPin::ReceiveConnection(IPin *pConnector, const AM_MEDIA_TYPE *pmt)
 {
-    LOG_INFO("[DSPin] ReceiveConnection chamado");
-    
     if (!pConnector || !pmt)
         return E_POINTER;
     
@@ -267,24 +264,17 @@ STDMETHODIMP DSPin::QueryAccept(const AM_MEDIA_TYPE *pmt)
     if (!pmt)
         return E_POINTER;
     
-    LOG_INFO("[DSPin] QueryAccept chamado - major: " + std::to_string(pmt->majortype.Data1) + 
-             ", subtype: " + std::to_string(pmt->subtype.Data1));
-    
     // Aceitar apenas vídeo (qualquer subtipo)
     if (pmt->majortype != MEDIATYPE_Video)
     {
-        LOG_WARN("[DSPin] QueryAccept: tipo de mídia não é vídeo");
         return S_FALSE;
     }
     
-    LOG_INFO("[DSPin] QueryAccept: aceitando tipo de vídeo");
     return S_OK;
 }
 
 STDMETHODIMP DSPin::EnumMediaTypes(IEnumMediaTypes **ppEnum)
 {
-    LOG_INFO("[DSPin] EnumMediaTypes chamado - retornando tipos de mídia aceitos");
-    
     if (!ppEnum)
         return E_POINTER;
     
@@ -410,7 +400,6 @@ STDMETHODIMP DSPin::EnumMediaTypes(IEnumMediaTypes **ppEnum)
         return E_OUTOFMEMORY;
     
     *ppEnum = pEnum;
-    LOG_INFO("[DSPin] EnumMediaTypes: enumerador criado");
     return S_OK;
 }
 
@@ -442,8 +431,6 @@ STDMETHODIMP DSPin::NewSegment(REFERENCE_TIME tStart, REFERENCE_TIME tStop, doub
 // IMemInputPin
 STDMETHODIMP DSPin::GetAllocator(IMemAllocator **ppAllocator)
 {
-    LOG_INFO("[DSPin] GetAllocator chamado - m_pAllocator: " + std::string(m_pAllocator ? "não-null" : "null"));
-    
     if (!ppAllocator)
         return E_POINTER;
     
@@ -451,20 +438,15 @@ STDMETHODIMP DSPin::GetAllocator(IMemAllocator **ppAllocator)
     {
         *ppAllocator = m_pAllocator;
         m_pAllocator->AddRef();
-        LOG_INFO("[DSPin] GetAllocator: retornando allocator existente");
         return S_OK;
     }
     
     *ppAllocator = nullptr;
-    LOG_INFO("[DSPin] GetAllocator: retornando VFW_E_NO_ALLOCATOR (sem allocator)");
     return VFW_E_NO_ALLOCATOR;
 }
 
 STDMETHODIMP DSPin::NotifyAllocator(IMemAllocator *pAllocator, BOOL bReadOnly)
 {
-    LOG_INFO("[DSPin] NotifyAllocator chamado - allocator: " + std::string(pAllocator ? "não-null" : "null") + 
-             ", readOnly: " + std::string(bReadOnly ? "true" : "false"));
-    
     if (m_pAllocator)
     {
         m_pAllocator->Release();
@@ -476,7 +458,6 @@ STDMETHODIMP DSPin::NotifyAllocator(IMemAllocator *pAllocator, BOOL bReadOnly)
         m_pAllocator = pAllocator;
         m_pAllocator->AddRef();
         m_bReadOnly = bReadOnly;
-        LOG_INFO("[DSPin] NotifyAllocator: allocator configurado");
     }
     
     return S_OK;
@@ -489,18 +470,8 @@ STDMETHODIMP DSPin::GetAllocatorRequirements(ALLOCATOR_PROPERTIES *pProps)
 
 STDMETHODIMP DSPin::Receive(IMediaSample *pSample)
 {
-    static int receiveCount = 0;
-    receiveCount++;
-    
     if (!pSample)
         return E_POINTER;
-    
-    long dataLength = pSample->GetActualDataLength();
-    if (receiveCount <= 10 || receiveCount % 100 == 0)
-    {
-        LOG_INFO("[DSPin] Receive chamado (call #" + std::to_string(receiveCount) + 
-                 ", dataLength: " + std::to_string(dataLength) + ")");
-    }
     
     if (m_pFilter)
     {

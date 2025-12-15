@@ -310,6 +310,77 @@ void UIConfigurationSource::renderDSControls()
     renderDSDeviceSelection();
     ImGui::Separator();
     renderCaptureSettings();
+    ImGui::Separator();
+    renderQuickResolutions();
+    ImGui::Separator();
+    renderQuickFPS();
+    ImGui::Separator();
+
+    // DirectShow Hardware Controls
+    ImGui::Text("DirectShow Hardware Controls");
+    ImGui::Separator();
+
+    // Helper function para renderizar controle com range do dispositivo ou padrão
+    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    {
+        if (!m_capture)
+            return;
+
+        int32_t value, min, max;
+
+        // Tentar obter valores do dispositivo usando interface genérica
+        if (m_capture->getControl(name, value) &&
+            m_capture->getControlMin(name, min) &&
+            m_capture->getControlMax(name, max))
+        {
+            // Valores obtidos com sucesso
+        }
+        else
+        {
+            // Se não disponível, usar valores padrão
+            min = defaultMin;
+            max = defaultMax;
+            value = defaultValue;
+        }
+
+        // Clamp valor
+        value = std::max(min, std::min(max, value));
+
+        // Use unique ID with suffix to avoid conflicts with dynamic controls
+        std::string label = std::string(name) + "##dsmanual";
+        if (ImGui::SliderInt(label.c_str(), &value, min, max))
+        {
+            value = std::max(min, std::min(max, value));
+            m_uiManager->triggerV4L2ControlChange(name, value);
+        }
+    };
+
+    // Brightness
+    renderControl("Brightness", -100, 100, 0);
+
+    // Contrast
+    renderControl("Contrast", -100, 100, 0);
+
+    // Saturation
+    renderControl("Saturation", -100, 100, 0);
+
+    // Hue
+    renderControl("Hue", -100, 100, 0);
+
+    // Gain
+    renderControl("Gain", 0, 100, 0);
+
+    // Exposure
+    renderControl("Exposure", -13, 1, 0);
+
+    // Sharpness
+    renderControl("Sharpness", 0, 6, 0);
+
+    // Gamma
+    renderControl("Gamma", 100, 300, 100);
+
+    // White Balance
+    renderControl("White Balance", 2800, 6500, 4000);
 }
 
 void UIConfigurationSource::renderDSDeviceSelection()
