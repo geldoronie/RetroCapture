@@ -883,7 +883,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
         else
         {
-            // Log removido para reduzir poluição
         }
     }
 
@@ -892,7 +891,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
         std::lock_guard<std::mutex> lock(m_outputMutex);
         m_clientSockets.push_back(clientFd);
         m_clientCount = m_clientSockets.size();
-        // Log removido para reduzir poluição
     }
 
     // Manter conexão aberta - dados serão enviados via writeToClients
@@ -917,7 +915,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
         {
             m_clientSockets.erase(it);
             m_clientCount = m_clientSockets.size();
-            // Log removido para reduzir poluição
         }
     }
 }
@@ -1944,8 +1941,6 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
         return false;
     }
 
-    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
-
     // Converter RGB para YUV
     if (!convertRGBToYUV(rgbData, width, height, videoFrame))
     {
@@ -2284,7 +2279,6 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
             av_write_frame(formatCtx, nullptr); // Flush explícito
         }
     }
-    // Log removido para reduzir poluição - usar [SYNC_DEBUG] logs para depuração
 
     return true;
 }

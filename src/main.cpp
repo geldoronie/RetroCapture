@@ -616,42 +616,42 @@ int main(int argc, char *argv[])
     bool isDSSource = (sourceType == "ds");
 #endif
 
-    LOG_INFO("Inicializando aplicação...");
-    LOG_INFO("Tipo de fonte: " + sourceType);
+    LOG_INFO("Initializing application...");
+    LOG_INFO("Source type: " + sourceType);
 #ifdef __linux__
     if (isV4L2Source)
     {
-        LOG_INFO("Dispositivo V4L2: " + devicePath);
+        LOG_INFO("V4L2 device: " + devicePath);
     }
 #elif defined(_WIN32)
     if (isDSSource && !devicePath.empty())
     {
-        LOG_INFO("Dispositivo DirectShow: " + devicePath);
+        LOG_INFO("DirectShow device: " + devicePath);
     }
 #endif
-    LOG_INFO("Resolução de captura: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
+    LOG_INFO("Capture resolution: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
-    LOG_INFO("Tamanho da janela: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
-    LOG_INFO("Modo tela cheia: " + std::string(fullscreen ? "sim" : "não"));
+    LOG_INFO("Window size: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
+    LOG_INFO("Fullscreen mode: " + std::string(fullscreen ? "yes" : "no"));
     if (monitorIndex >= 0)
     {
         LOG_INFO("Monitor: " + std::to_string(monitorIndex));
     }
     else
     {
-        LOG_INFO("Monitor: primário (padrão)");
+        LOG_INFO("Monitor: primary (default)");
     }
-    LOG_INFO("Manter proporção: " + std::string(maintainAspect ? "sim" : "não"));
-    LOG_INFO("Brilho: " + std::to_string(brightness));
-    LOG_INFO("Contraste: " + std::to_string(contrast));
+    LOG_INFO("Maintain aspect ratio: " + std::string(maintainAspect ? "yes" : "no"));
+    LOG_INFO("Brightness: " + std::to_string(brightness));
+    LOG_INFO("Contrast: " + std::to_string(contrast));
     if (streamingEnabled)
     {
-        LOG_INFO("Streaming: habilitado na porta " + std::to_string(streamingPort));
+        LOG_INFO("Streaming: enabled on port " + std::to_string(streamingPort));
     }
-    LOG_INFO("Web Portal: " + std::string(webPortalEnabled ? "habilitado" : "desabilitado"));
+    LOG_INFO("Web Portal: " + std::string(webPortalEnabled ? "enabled" : "disabled"));
     if (webPortalHTTPSEnabled)
     {
-        LOG_INFO("HTTPS: habilitado (cert: " + webPortalSSLCertPath + ", key: " + webPortalSSLKeyPath + ")");
+        LOG_INFO("HTTPS: enabled (cert: " + webPortalSSLCertPath + ", key: " + webPortalSSLKeyPath + ")");
     }
 
     Application app;

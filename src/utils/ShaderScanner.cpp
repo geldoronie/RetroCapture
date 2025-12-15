@@ -11,7 +11,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
     fs::path path(basePath);
     if (!fs::exists(path))
     {
-        // Tentar caminho relativo ao diretório de trabalho
+        // Try relative path to working directory
         path = fs::current_path() / basePath;
     }
 
@@ -23,11 +23,11 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
 
     try
     {
-        // Normalizar o caminho base para comparações
+        // Normalize base path for comparisons
         fs::path normalizedBasePath = fs::canonical(path);
 
-        // Escanear recursivamente todos os arquivos
-        // Nota: range-based for não funciona com nossa implementação, usar loop manual
+        // Recursively scan all files
+        // Note: range-based for doesn't work with our implementation, use manual loop
         fs::recursive_directory_iterator it(path);
         fs::recursive_directory_iterator end;
         for (; it != end; ++it)
@@ -35,7 +35,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
             // No Linux usa std::filesystem padrão (C++17), precisa desreferenciar
             // No Windows com MinGW < 8 usa implementação customizada que tem métodos diretos
 #if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
-            // Implementação customizada do FilesystemCompat.h (Windows MinGW < 8)
+            // Custom implementation from FilesystemCompat.h (Windows MinGW < 8)
             if (it.is_regular_file())
             {
                 std::string ext = it.path().extension();
@@ -57,7 +57,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
                     fs::path entryPath = it->path();
 #endif
 
-                    // Tentar normalizar o caminho do arquivo
+                    // Try to normalize file path
                     fs::path normalizedEntryPath;
                     try
                     {
@@ -69,7 +69,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
                         normalizedEntryPath = entryPath;
                     }
 
-                    // Obter o diretório pai normalizado
+                    // Get normalized parent directory
                     fs::path parentPath = normalizedEntryPath.parent_path();
                     try
                     {
@@ -85,7 +85,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
                     std::string relativePath;
                     if (parentPath == normalizedBasePath)
                     {
-                        // Arquivo está na raiz, usar apenas o nome do arquivo
+                        // File is in root, use only filename
                         relativePath = entryPath.filename();
                     }
                     else
@@ -101,7 +101,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
     }
     catch (const fs::filesystem_error &e)
     {
-        LOG_ERROR("Erro ao escanear diretório de shaders: " + std::string(e.what()));
+        LOG_ERROR("Error scanning shader directory: " + std::string(e.what()));
     }
 
     // Sort the shader list alphabetically

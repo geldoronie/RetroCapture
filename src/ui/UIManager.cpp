@@ -48,27 +48,24 @@ bool UIManager::init(GLFWwindow *window)
 
     m_window = window;
 
-    // IMPORTANTE: Garantir que o contexto OpenGL está ativo antes de inicializar ImGui
-    // O ImGui precisa de um contexto OpenGL válido e ativo para inicializar corretamente
+    // Ensure OpenGL context is active before initializing ImGui
     if (window)
     {
         glfwMakeContextCurrent(window);
     }
     else
     {
-        LOG_ERROR("Janela GLFW inválida para inicializar ImGui");
+        LOG_ERROR("Invalid GLFW window for ImGui initialization");
         return false;
     }
 
-    // IMPORTANTE: Verificar se as funções OpenGL foram carregadas antes de inicializar ImGui
-    // O ImGui precisa de glGenVertexArrays que é carregado via loadOpenGLFunctions()
-    // Se não estiver carregado, o ImGui falhará ao tentar criar VAOs
+    // Verify OpenGL functions are loaded before initializing ImGui
     if (!glGenVertexArrays)
     {
-        LOG_ERROR("Funções OpenGL não foram carregadas. Carregando agora...");
+        LOG_ERROR("OpenGL functions not loaded. Loading now...");
         if (!loadOpenGLFunctions())
         {
-            LOG_ERROR("Falha ao carregar funções OpenGL para ImGui");
+            LOG_ERROR("Failed to load OpenGL functions for ImGui");
             return false;
         }
     }
@@ -79,16 +76,12 @@ bool UIManager::init(GLFWwindow *window)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Configurar nome do arquivo de configuração para usar o nome da aplicação
     io.IniFilename = "RetroCapture.ini";
-
-    // Remover apenas o arquivo de configuração antigo (imgui.ini) se existir
-    // O RetroCapture.ini pode ser criado normalmente
     std::string oldIniPath = "imgui.ini";
     if (fs::exists(oldIniPath))
     {
         fs::remove(oldIniPath);
-        LOG_INFO("Arquivo de configuração antigo removido: " + oldIniPath);
+        LOG_INFO("Old configuration file removed: " + oldIniPath);
     }
 
     // Setup Dear ImGui style
@@ -98,8 +91,7 @@ bool UIManager::init(GLFWwindow *window)
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    // Scan for shaders
-    // Verificar se há variável de ambiente para o caminho dos shaders (útil para AppImage)
+    // Scan for shaders (check environment variable for AppImage support)
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     if (envShaderPath && fs::exists(envShaderPath))
     {
@@ -107,17 +99,15 @@ bool UIManager::init(GLFWwindow *window)
     }
     scanShaders(m_shaderBasePath);
 
-    // Carregar configurações salvas
     loadConfig();
 
-    // Criar janela de configuração
     m_configWindow = std::make_unique<UIConfiguration>(this);
     m_creditsWindow = std::make_unique<UICredits>(this);
-    m_configWindow->setVisible(true);    // Visível por padrão
-    m_configWindow->setJustOpened(true); // Marcar como recém-aberta
+    m_configWindow->setVisible(true);
+    m_configWindow->setJustOpened(true);
 
     m_initialized = true;
-    LOG_INFO("UIManager inicializado");
+    LOG_INFO("UIManager initialized");
     return true;
 }
 
@@ -128,13 +118,11 @@ void UIManager::shutdown()
         return;
     }
 
-    // Remover apenas o arquivo antigo (imgui.ini) se ainda existir
-    // O RetroCapture.ini pode ser mantido
     std::string oldIniPath = "imgui.ini";
     if (fs::exists(oldIniPath))
     {
         fs::remove(oldIniPath);
-        LOG_INFO("Arquivo de configuração antigo removido no shutdown: " + oldIniPath);
+        LOG_INFO("Old configuration file removed during shutdown: " + oldIniPath);
     }
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -151,8 +139,7 @@ void UIManager::beginFrame()
         return;
     }
 
-    // IMPORTANTE: Sempre chamar NewFrame, mesmo quando UI está oculta
-    // Isso mantém o estado do ImGui correto e permite toggle funcionar
+    // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -165,7 +152,6 @@ void UIManager::endFrame()
         return;
     }
 
-    // Renderizar apenas se a UI estiver visível
     if (m_uiVisible)
     {
         ImGui::Render();
@@ -185,7 +171,6 @@ void UIManager::render()
         return;
     }
 
-    // Main menu bar fixo no topo
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
@@ -263,7 +248,7 @@ void UIManager::renderShaderPanel()
             {
                 m_onShaderChanged("");
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
 
         for (size_t i = 0; i < m_scannedShaders.size(); ++i)
@@ -276,7 +261,7 @@ void UIManager::renderShaderPanel()
                 {
                     m_onShaderChanged(m_scannedShaders[i]);
                 }
-                saveConfig(); // Salvar configuração quando mudar
+                saveConfig();
             }
             if (isSelected)
             {
@@ -304,7 +289,6 @@ void UIManager::renderShaderPanel()
 
             if (ImGui::Button("Save"))
             {
-                // Salvar por cima do arquivo atual
                 if (m_onSavePreset)
                 {
                     m_onSavePreset(currentPreset, true);
@@ -313,7 +297,6 @@ void UIManager::renderShaderPanel()
             ImGui::SameLine();
             if (ImGui::Button("Save As..."))
             {
-                // Abrir dialog para salvar como novo arquivo
                 strncpy(m_savePresetPath, fileName.c_str(), sizeof(m_savePresetPath) - 1);
                 m_savePresetPath[sizeof(m_savePresetPath) - 1] = '\0';
                 m_showSaveDialog = true;
@@ -343,7 +326,6 @@ void UIManager::renderShaderPanel()
                     // Construir caminho completo
                     fs::path basePath("shaders/shaders_glsl");
                     fs::path newPath = basePath / m_savePresetPath;
-                    // Garantir extensão .glslp
                     if (newPath.extension() != ".glslp")
                     {
                         newPath.replace_extension(".glslp");
@@ -361,7 +343,6 @@ void UIManager::renderShaderPanel()
         }
     }
 
-    // Parâmetros do shader
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
     {
         ImGui::Separator();
@@ -378,7 +359,6 @@ void UIManager::renderShaderPanel()
             {
                 ImGui::PushID(param.name.c_str());
 
-                // Mostrar nome e descrição
                 if (!param.description.empty())
                 {
                     ImGui::Text("%s", param.description.c_str());
@@ -395,7 +375,6 @@ void UIManager::renderShaderPanel()
                     m_shaderEngine->setShaderParameter(param.name, value);
                 }
 
-                // Botão para resetar ao valor padrão
                 ImGui::SameLine();
                 if (ImGui::Button("Reset##param"))
                 {
@@ -623,7 +602,7 @@ void UIManager::renderV4L2Controls()
                 {
                     m_onDeviceChanged(m_v4l2Devices[i]);
                 }
-                saveConfig(); // Salvar configuração quando mudar
+                saveConfig();
             }
             if (isSelected)
             {
@@ -968,7 +947,7 @@ void UIManager::setCaptureControls(IVideoCapture *capture)
     {
         // Sempre atualizar lista quando m_capture é setado
         refreshDSDevices();
-        LOG_INFO("Lista de dispositivos DirectShow atualizada após setCaptureControls: " + std::to_string(m_dsDevices.size()) + " dispositivo(s)");
+        LOG_INFO("DirectShow device list updated after setCaptureControls: " + std::to_string(m_dsDevices.size()) + " device(s)");
     }
 #endif
 
@@ -1085,7 +1064,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingPortChanged(m_streamingPort);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
     }
 
@@ -1231,7 +1210,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH264PresetChanged(m_streamingH264Preset);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1272,7 +1251,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265PresetChanged(m_streamingH265Preset);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1301,7 +1280,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265ProfileChanged(m_streamingH265Profile);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1331,7 +1310,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265LevelChanged(m_streamingH265Level);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1353,7 +1332,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1375,7 +1354,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1988,7 +1967,7 @@ void UIManager::loadConfig()
 
     if (!fs::exists(configPath))
     {
-        LOG_INFO("Arquivo de configuração não encontrado: " + configPath + " (usando padrões)");
+        LOG_INFO("Configuration file not found: " + configPath + " (using defaults)");
         return;
     }
 
@@ -2280,11 +2259,11 @@ void UIManager::loadConfig()
             }
         }
 
-        LOG_INFO("Configurações carregadas de: " + configPath);
+        LOG_INFO("Configuration loaded from: " + configPath);
     }
     catch (const std::exception &e)
     {
-        LOG_ERROR("Erro ao carregar configurações: " + std::string(e.what()));
+        LOG_ERROR("Error loading configuration: " + std::string(e.what()));
     }
 }
 
@@ -2355,18 +2334,18 @@ void UIManager::saveConfig()
         std::ofstream file(configPath);
         if (!file.is_open())
         {
-            LOG_WARN("Não foi possível criar arquivo de configuração: " + configPath);
+            LOG_WARN("Could not create configuration file: " + configPath);
             return;
         }
 
         file << config.dump(4); // Indentação de 4 espaços para legibilidade
         file.close();
 
-        LOG_INFO("Configurações salvas em: " + configPath);
+        LOG_INFO("Configuration saved to: " + configPath);
     }
     catch (const std::exception &e)
     {
-        LOG_ERROR("Erro ao salvar configurações: " + std::string(e.what()));
+        LOG_ERROR("Error saving configuration: " + std::string(e.what()));
     }
 }
 
