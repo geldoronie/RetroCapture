@@ -1,32 +1,42 @@
 #include "Application.h"
 #include "../utils/Logger.h"
-#include "../capture/VideoCapture.h"
+#include "../capture/IVideoCapture.h"
+#include "../capture/VideoCaptureFactory.h"
+#ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
+#endif
+// FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
-#include "../output/WindowManager.h"
 #include "../renderer/OpenGLRenderer.h"
+#include "../output/WindowManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
-#include "../audio/AudioCapture.h"
+#include "../audio/IAudioCapture.h"
+#include "../audio/AudioCaptureFactory.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
+#endif
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
+#ifdef PLATFORM_LINUX
 #include <unistd.h>
-#include <filesystem>
+#endif
+#include "../utils/FilesystemCompat.h"
 #include <time.h>
 #include <sstream>
 #include <iomanip>
 #include <thread>
 #include <chrono>
 
-// swscale removido - resize agora é feito no encoding (HTTPTSStreamer)
+// swscale removed - resize is now done in encoding (HTTPTSStreamer)
 
 Application::Application()
 {
@@ -39,46 +49,59 @@ Application::~Application()
 
 bool Application::init()
 {
-    LOG_INFO("Inicializando Application...");
+    LOG_INFO("Initializing Application...");
 
     if (!initWindow())
     {
         return false;
     }
+    LOG_INFO("Window initialized");
 
     if (!initRenderer())
     {
         return false;
     }
+    LOG_INFO("Renderer initialized");
 
     if (!initCapture())
     {
-        return false;
+        LOG_WARN("Failed to initialize capture - continuing in dummy mode");
+        // Don't return false, continue in dummy mode
+    }
+    else
+    {
+        LOG_INFO("Capture initialized");
     }
 
     if (!initUI())
     {
         return false;
     }
+    LOG_INFO("UI initialized");
+
+    // Connect ShaderEngine to UI for parameters
+    if (m_ui && m_shaderEngine)
+    {
+        m_ui->setShaderEngine(m_shaderEngine.get());
+    }
 
     if (!initStreaming())
     {
-        LOG_WARN("Falha ao inicializar streaming - continuando sem streaming");
+        LOG_WARN("Failed to initialize streaming - continuing without streaming");
     }
 
-    // Initialize audio capture (sempre necessário para streaming)
+    // Initialize audio capture (always required for streaming)
     if (m_streamingEnabled)
     {
         if (!initAudioCapture())
         {
-            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+            LOG_WARN("Failed to initialize audio capture - continuing without audio");
         }
     }
 
     m_initialized = true;
 
-    // IMPORTANTE: Após inicialização completa, garantir que o viewport está atualizado
-    // Isso é especialmente importante quando a janela é criada em fullscreen
+    // Ensure viewport is updated after complete initialization (important for fullscreen)
     if (m_window && m_shaderEngine)
     {
         uint32_t currentWidth = m_window->getWidth();
@@ -86,7 +109,7 @@ bool Application::init()
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
 
-    LOG_INFO("Application inicializada com sucesso");
+    LOG_INFO("Application initialized successfully");
     return true;
 }
 
@@ -100,68 +123,85 @@ bool Application::initWindow()
     config.title = "RetroCapture";
     config.fullscreen = m_fullscreen;
     config.monitorIndex = m_monitorIndex;
-    // IMPORTANTE: Desabilitar VSync para evitar bloqueio quando janela não está focada
-    // VSync pode causar pausa na aplicação quando a janela está em segundo plano
-    // Isso garante que captura e streaming continuem funcionando mesmo quando não focada
+    // IMPORTANT: Disable VSync to avoid blocking when window is not focused
+    // VSync can cause application pause when window is in background
+    // This ensures capture and streaming continue working even when not focused
     config.vsync = false;
 
     if (!m_window->init(config))
     {
-        LOG_ERROR("Falha ao inicializar janela");
+        LOG_ERROR("Failed to initialize window");
         m_window.reset();
         return false;
     }
 
     m_window->makeCurrent();
 
-    // Armazenar ponteiro da Application no WindowManager para uso em callbacks
+    // Store Application pointer in WindowManager for use in callbacks
     m_window->setUserData(this);
 
-    // Configurar callback de resize para atualizar viewport quando a janela for redimensionada
-    // ou entrar em fullscreen
-    // IMPORTANTE: Este callback é chamado pelo GLFW quando a janela muda de tamanho,
-    // incluindo quando entra em fullscreen
-    // IMPORTANTE: O ShaderEngine ainda não foi inicializado aqui, então vamos atualizar
-    // o callback depois que o ShaderEngine for criado
-    // Por enquanto, vamos apenas armazenar o ponteiro
+    // Configure resize callback to update viewport when window is resized
+    // or enters fullscreen
+    // IMPORTANT: This callback is called by GLFW when window changes size,
+    // including when entering fullscreen
+    // IMPORTANT: ShaderEngine is not yet initialized here, so we'll update
+    // the callback after ShaderEngine is created
+    // For now, we'll just store the pointer
 
     return true;
 }
 
 bool Application::initRenderer()
 {
-    // Garantir que o contexto OpenGL está ativo
+    LOG_INFO("Initializing renderer...");
+    // Ensure OpenGL context is active
     if (m_window)
     {
+        LOG_INFO("Making OpenGL context current...");
         m_window->makeCurrent();
-    }
-
-    m_renderer = std::make_unique<OpenGLRenderer>();
-
-    if (!m_renderer->init())
-    {
-        LOG_ERROR("Falha ao inicializar renderer");
-        m_renderer.reset();
-        return false;
-    }
-
-    // Inicializar FrameProcessor
-    m_frameProcessor = std::make_unique<FrameProcessor>();
-    m_frameProcessor->init(m_renderer.get());
-
-    // Inicializar ShaderEngine
-    m_shaderEngine = std::make_unique<ShaderEngine>();
-    if (!m_shaderEngine->init())
-    {
-        LOG_ERROR("Falha ao inicializar ShaderEngine");
-        m_shaderEngine.reset();
-        // Não é crítico, podemos continuar sem shaders
+        LOG_INFO("OpenGL context activated");
     }
     else
     {
-        // IMPORTANTE: Atualizar viewport do ShaderEngine com as dimensões atuais da janela
-        // Isso é especialmente importante quando a janela é criada em fullscreen
-        // O callback de resize pode não ser chamado imediatamente na criação
+        LOG_ERROR("Window not available to initialize renderer");
+        return false;
+    }
+
+    LOG_INFO("Creating OpenGLRenderer...");
+    m_renderer = std::make_unique<OpenGLRenderer>();
+    LOG_INFO("OpenGLRenderer created");
+
+    LOG_INFO("Initializing OpenGLRenderer...");
+    if (!m_renderer->init())
+    {
+        LOG_ERROR("Failed to initialize renderer");
+        m_renderer.reset();
+        return false;
+    }
+    LOG_INFO("OpenGLRenderer initialized");
+
+    // Initialize FrameProcessor
+    LOG_INFO("Creating FrameProcessor...");
+    m_frameProcessor = std::make_unique<FrameProcessor>();
+    m_frameProcessor->init(m_renderer.get());
+    LOG_INFO("FrameProcessor created");
+
+    // Initialize ShaderEngine
+    LOG_INFO("Creating ShaderEngine...");
+    m_shaderEngine = std::make_unique<ShaderEngine>();
+    LOG_INFO("ShaderEngine created, initializing...");
+    if (!m_shaderEngine->init())
+    {
+        LOG_ERROR("Failed to initialize ShaderEngine");
+        m_shaderEngine.reset();
+        // Not critical, we can continue without shaders
+    }
+    else
+    {
+        LOG_INFO("ShaderEngine initialized");
+        // IMPORTANT: Update ShaderEngine viewport with current window dimensions
+        // This is especially important when window is created in fullscreen
+        // The resize callback may not be called immediately on creation
         if (m_window)
         {
             uint32_t currentWidth = m_window->getWidth();
@@ -169,16 +209,16 @@ bool Application::initRenderer()
             m_shaderEngine->setViewport(currentWidth, currentHeight);
         }
 
-        // IMPORTANTE: Agora que o ShaderEngine está inicializado, configurar o callback de resize
-        // para atualizar o viewport quando a janela for redimensionada ou entrar em fullscreen
+        // IMPORTANT: Now that ShaderEngine is initialized, configure resize callback
+        // to update viewport when window is resized or enters fullscreen
         if (m_window)
         {
             Application *appPtr = this;
             m_window->setResizeCallback([appPtr](int width, int height)
                                         {
-                // IMPORTANTE: Atualizar viewport do ShaderEngine imediatamente quando resize acontece
-                // Isso é especialmente crítico quando entra em fullscreen
-                // IMPORTANTE: Validar dimensões antes de atualizar para evitar problemas
+                // IMPORTANT: Update ShaderEngine viewport immediately when resize happens
+                // This is especially critical when entering fullscreen
+                // IMPORTANT: Validate dimensions before updating to avoid issues
                 if (appPtr && appPtr->m_shaderEngine && width > 0 && height > 0 && 
                     width <= 7680 && height <= 4320) {
                     appPtr->m_isResizing = true;
@@ -186,33 +226,37 @@ bool Application::initRenderer()
                         std::lock_guard<std::mutex> lock(appPtr->m_resizeMutex);
                         appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                     }
-                    // Pequeno delay para garantir que o ShaderEngine terminou de recriar framebuffers
+// Small delay to ensure ShaderEngine finished recreating framebuffers
+#ifdef PLATFORM_LINUX
                     usleep(10000); // 10ms
+#else
+                    Sleep(10); // 10ms
+#endif
                     appPtr->m_isResizing = false;
                 } });
         }
 
-        // Carregar shader ou preset se especificado
+        // Load shader or preset if specified
         if (!m_presetPath.empty())
         {
             if (m_shaderEngine->loadPreset(m_presetPath))
             {
-                LOG_INFO("Preset carregado: " + m_presetPath);
+                LOG_INFO("Preset loaded: " + m_presetPath);
             }
             else
             {
-                LOG_ERROR("Falha ao carregar preset: " + m_presetPath);
+                LOG_ERROR("Failed to load preset: " + m_presetPath);
             }
         }
         else if (!m_shaderPath.empty())
         {
             if (m_shaderEngine->loadShader(m_shaderPath))
             {
-                LOG_INFO("Shader carregado: " + m_shaderPath);
+                LOG_INFO("Shader loaded: " + m_shaderPath);
             }
             else
             {
-                LOG_ERROR("Falha ao carregar shader: " + m_shaderPath);
+                LOG_ERROR("Failed to load shader: " + m_shaderPath);
             }
         }
     }
@@ -222,59 +266,98 @@ bool Application::initRenderer()
 
 bool Application::initCapture()
 {
-    m_capture = std::make_unique<VideoCapture>();
-
-    // Tentar abrir dispositivo especificado (ou padrão /dev/video0)
-    // Se falhar, ativar modo dummy (gera frames pretos)
-    if (!m_capture->open(m_devicePath))
+    LOG_INFO("Creating VideoCapture...");
+    m_capture = VideoCaptureFactory::create();
+    if (!m_capture)
     {
-        LOG_WARN("Falha ao abrir dispositivo de captura: " + m_devicePath);
-        LOG_INFO("Ativando modo dummy: gerando frames pretos na resolução especificada.");
-        LOG_INFO("Selecione um dispositivo na aba V4L2 para usar captura real.");
+        LOG_ERROR("Failed to create VideoCapture for this platform");
+        return false;
+    }
+    LOG_INFO("VideoCapture created successfully");
 
-        // Ativar modo dummy
-        m_capture->enableDummyMode(true);
-
-        // Configurar formato dummy com resolução padrão
-        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+    // Try to open specified device
+    // On Windows, m_devicePath can be empty or be a MF device index
+    // On Linux, m_devicePath is the V4L2 device path (e.g., /dev/video0)
+    // If it fails, activate dummy mode (generates black frames)
+    if (m_devicePath.empty())
+    {
+#ifdef _WIN32
+        LOG_INFO("No device specified - activating dummy mode directly");
+        // Go directly to dummy mode without trying to open device
+        m_capture->setDummyMode(true);
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
         {
-            LOG_ERROR("Falha ao configurar formato dummy");
+            LOG_ERROR("Failed to configure dummy format");
             return false;
         }
-
-        // Iniciar captura dummy
         if (!m_capture->startCapture())
         {
-            LOG_ERROR("Falha ao iniciar captura dummy");
+            LOG_ERROR("Failed to start dummy capture");
+            return false;
+        }
+        LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
+#else
+        LOG_INFO("No device specified - using default /dev/video0");
+        m_devicePath = "/dev/video0";
+#endif
+    }
+
+    if (!m_capture->open(m_devicePath))
+    {
+        LOG_WARN("Failed to open capture device: " + (m_devicePath.empty() ? "(none)" : m_devicePath));
+        LOG_INFO("Activating dummy mode: generating black frames at specified resolution.");
+#ifdef __linux__
+        LOG_INFO("Select a device in the V4L2 tab to use real capture.");
+#elif defined(_WIN32)
+        LOG_INFO("Select a device in the DirectShow tab to use real capture.");
+#endif
+
+        // Activate dummy mode
+        m_capture->setDummyMode(true);
+
+        // Configure dummy format with default resolution
+        // Note: V4L2_PIX_FMT_YUYV is V4L2-specific, but interface accepts 0 for default
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+        {
+            LOG_ERROR("Failed to configure dummy format");
             return false;
         }
 
-        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+        // Start dummy capture
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Failed to start dummy capture");
+            return false;
+        }
+
+        LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
         return true;
     }
 
-    // Configurar formato com parâmetros configuráveis
-    LOG_INFO("Configurando captura: " + std::to_string(m_captureWidth) + "x" +
+    // Configure format with configurable parameters
+    LOG_INFO("Configuring capture: " + std::to_string(m_captureWidth) + "x" +
              std::to_string(m_captureHeight) + " @ " + std::to_string(m_captureFps) + "fps");
 
-    if (!m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+    if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
     {
-        LOG_ERROR("Falha ao configurar formato de captura");
-        LOG_WARN("Resolução solicitada pode não ser suportada pelo dispositivo");
+        LOG_ERROR("Failed to configure capture format");
+        LOG_WARN("Requested resolution may not be supported by device");
 
-        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        // If not in dummy mode, try to activate dummy mode as fallback
         if (!m_capture->isDummyMode())
         {
-            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            LOG_INFO("Attempting to activate dummy mode as fallback...");
             m_capture->close();
-            m_capture->enableDummyMode(true);
+            m_capture->setDummyMode(true);
 
-            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
             {
                 if (m_capture->startCapture())
                 {
-                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                    LOG_INFO("Dummy mode activated as fallback: " + std::to_string(m_capture->getWidth()) + "x" +
                              std::to_string(m_capture->getHeight()));
                     return true;
                 }
@@ -282,97 +365,85 @@ bool Application::initCapture()
         }
 
         m_capture->close();
-        // Não resetar m_capture - permitir tentar novamente depois
-        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
-        return true; // Continuar sem dispositivo
+        // Don't reset m_capture - allow trying again later
+        LOG_INFO("Device closed. Select another device in the V4L2 tab.");
+        return true; // Continue without device
     }
 
-    // Tentar configurar framerate (não é crítico se falhar)
-    // Em modo dummy, isso apenas loga mas não configura dispositivo real
+    // Try to configure framerate (not critical if it fails)
+    // In dummy mode, this only logs but doesn't configure real device
     if (!m_capture->setFramerate(m_captureFps))
     {
         if (!m_capture->isDummyMode())
         {
-            LOG_WARN("Não foi possível configurar framerate para " + std::to_string(m_captureFps) + "fps");
-            LOG_INFO("Usando framerate padrão do dispositivo");
+            LOG_WARN("Could not configure framerate to " + std::to_string(m_captureFps) + "fps");
+            LOG_INFO("Using device default framerate");
         }
     }
 
-    // Configurar controles V4L2 se especificados
+    // Configure hardware controls if specified (using generic interface)
     if (m_v4l2Brightness >= 0)
     {
-        if (m_capture->setBrightness(m_v4l2Brightness))
-        {
-        }
+        m_capture->setControl("Brightness", m_v4l2Brightness);
     }
     if (m_v4l2Contrast >= 0)
     {
-        if (m_capture->setContrast(m_v4l2Contrast))
-        {
-        }
+        m_capture->setControl("Contrast", m_v4l2Contrast);
     }
     if (m_v4l2Saturation >= 0)
     {
-        if (m_capture->setSaturation(m_v4l2Saturation))
+        if (m_capture->setControl("Saturation", m_v4l2Saturation))
         {
-            LOG_INFO("Saturação V4L2 configurada: " + std::to_string(m_v4l2Saturation));
+            LOG_INFO("Saturation configured: " + std::to_string(m_v4l2Saturation));
         }
     }
     if (m_v4l2Hue >= 0)
     {
-        if (m_capture->setHue(m_v4l2Hue))
-        {
-        }
+        m_capture->setControl("Hue", m_v4l2Hue);
     }
     if (m_v4l2Gain >= 0)
     {
-        if (m_capture->setGain(m_v4l2Gain))
-        {
-        }
+        m_capture->setControl("Gain", m_v4l2Gain);
     }
     if (m_v4l2Exposure >= 0)
     {
-        if (m_capture->setExposure(m_v4l2Exposure))
+        if (m_capture->setControl("Exposure", m_v4l2Exposure))
         {
-            LOG_INFO("Exposição V4L2 configurada: " + std::to_string(m_v4l2Exposure));
+            LOG_INFO("Exposure configured: " + std::to_string(m_v4l2Exposure));
         }
     }
     if (m_v4l2Sharpness >= 0)
     {
-        if (m_capture->setSharpness(m_v4l2Sharpness))
+        if (m_capture->setControl("Sharpness", m_v4l2Sharpness))
         {
-            LOG_INFO("Nitidez V4L2 configurada: " + std::to_string(m_v4l2Sharpness));
+            LOG_INFO("Sharpness configured: " + std::to_string(m_v4l2Sharpness));
         }
     }
     if (m_v4l2Gamma >= 0)
     {
-        if (m_capture->setGamma(m_v4l2Gamma))
-        {
-        }
+        m_capture->setControl("Gamma", m_v4l2Gamma);
     }
     if (m_v4l2WhiteBalance >= 0)
     {
-        if (m_capture->setWhiteBalanceTemperature(m_v4l2WhiteBalance))
-        {
-        }
+        m_capture->setControl("White Balance", m_v4l2WhiteBalance);
     }
 
     if (!m_capture->startCapture())
     {
-        LOG_ERROR("Falha ao iniciar captura");
+        LOG_ERROR("Failed to start capture");
 
-        // Se não estiver em modo dummy, tentar ativar modo dummy como fallback
+        // If not in dummy mode, try to activate dummy mode as fallback
         if (!m_capture->isDummyMode())
         {
-            LOG_INFO("Tentando ativar modo dummy como fallback...");
+            LOG_INFO("Attempting to activate dummy mode as fallback...");
             m_capture->close();
-            m_capture->enableDummyMode(true);
+            m_capture->setDummyMode(true);
 
-            if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
             {
                 if (m_capture->startCapture())
                 {
-                    LOG_INFO("Modo dummy ativado como fallback: " + std::to_string(m_capture->getWidth()) + "x" +
+                    LOG_INFO("Dummy mode activated as fallback: " + std::to_string(m_capture->getWidth()) + "x" +
                              std::to_string(m_capture->getHeight()));
                     return true;
                 }
@@ -380,15 +451,15 @@ bool Application::initCapture()
         }
 
         m_capture->close();
-        // Não resetar m_capture - permitir tentar novamente depois
-        LOG_INFO("Dispositivo fechado. Selecione outro dispositivo na aba V4L2.");
-        return true; // Continuar sem dispositivo
+        // Don't reset m_capture - allow trying again later
+        LOG_INFO("Device closed. Select another device in the V4L2 tab.");
+        return true; // Continue without device
     }
 
-    // Só logar dimensões se o dispositivo estiver aberto
+    // Only log dimensions if device is open
     if (m_capture->isOpen())
     {
-        LOG_INFO("Captura inicializada: " +
+        LOG_INFO("Capture initialized: " +
                  std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
     }
@@ -400,98 +471,114 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 {
     if (!m_capture || !m_capture->isOpen())
     {
-        LOG_ERROR("Captura não está aberta, não é possível reconfigurar");
+        LOG_ERROR("Capture is not open, cannot reconfigure");
         return false;
     }
 
-    LOG_INFO("Reconfigurando captura: " + std::to_string(width) + "x" +
+    LOG_INFO("Reconfiguring capture: " + std::to_string(width) + "x" +
              std::to_string(height) + " @ " + std::to_string(fps) + "fps");
 
-    // Salvar valores atuais para rollback se necessário
+    // Save current values for rollback if needed
     uint32_t oldWidth = m_captureWidth;
     uint32_t oldHeight = m_captureHeight;
     uint32_t oldFps = m_captureFps;
     std::string devicePath = m_devicePath;
 
-    // IMPORTANTE: Fechar e reabrir o dispositivo completamente
-    // Isso é necessário porque alguns drivers V4L2 não permitem mudar
-    // a resolução sem fechar o dispositivo
-    LOG_INFO("Fechando dispositivo para reconfiguração...");
+    // IMPORTANT: Close and reopen device completely
+    // This is necessary because some V4L2 drivers don't allow changing
+    // resolution without closing the device
+    LOG_INFO("Closing device for reconfiguration...");
     m_capture->stopCapture();
     m_capture->close();
 
-    // Pequeno delay para garantir que o dispositivo foi liberado
+// Small delay to ensure device was released
+#ifdef PLATFORM_LINUX
     usleep(100000); // 100ms
+#else
+    Sleep(100); // 100ms
+#endif
 
-    // Reabrir dispositivo
-    LOG_INFO("Reabrindo dispositivo...");
+    // Reopen device
+    LOG_INFO("Reopening device...");
     if (!m_capture->open(devicePath))
     {
-        LOG_ERROR("Falha ao reabrir dispositivo após reconfiguração");
+        LOG_ERROR("Failed to reopen device after reconfiguration");
         return false;
     }
 
-    // Configurar novo formato
-    if (!m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV))
+    // Configure new format
+    if (!m_capture->setFormat(width, height, 0))
     {
-        LOG_ERROR("Falha ao configurar novo formato de captura");
-        // Tentar rollback: reabrir com formato anterior
+        LOG_ERROR("Failed to configure new capture format");
+        // Try rollback: reopen with previous format
         m_capture->close();
-        usleep(100000);
+#ifdef PLATFORM_LINUX
+        usleep(100000); // 100ms
+#else
+        Sleep(100); // 100ms
+#endif
         if (m_capture->open(devicePath))
         {
-            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFormat(oldWidth, oldHeight, 0);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
         return false;
     }
 
-    // Obter dimensões reais (o driver pode ter ajustado)
+    // Get actual dimensions (driver may have adjusted)
     uint32_t actualWidth = m_capture->getWidth();
     uint32_t actualHeight = m_capture->getHeight();
 
-    // Configurar framerate
+    // Configure framerate
     if (!m_capture->setFramerate(fps))
     {
-        LOG_WARN("Não foi possível configurar framerate para " + std::to_string(fps) + "fps");
-        LOG_INFO("Usando framerate padrão do dispositivo");
+        LOG_WARN("Could not configure framerate to " + std::to_string(fps) + "fps");
+        LOG_INFO("Using device default framerate");
     }
 
-    // Reiniciar captura (isso cria os buffers com o novo formato)
+    // Restart capture (this creates buffers with new format)
     if (!m_capture->startCapture())
     {
-        LOG_ERROR("Falha ao reiniciar captura após reconfiguração");
+        LOG_ERROR("Failed to restart capture after reconfiguration");
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
-        usleep(100000);
+#ifdef PLATFORM_LINUX
+        usleep(100000); // 100ms
+#else
+        Sleep(100); // 100ms
+#endif
         if (m_capture->open(devicePath))
         {
-            m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV);
+            m_capture->setFormat(oldWidth, oldHeight, 0);
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
         return false;
     }
 
-    // Atualizar dimensões internas com valores reais
+    // Update internal dimensions with actual values
     m_captureWidth = actualWidth;
     m_captureHeight = actualHeight;
     m_captureFps = fps;
 
-    // IMPORTANTE: Descarta alguns frames iniciais após reconfiguração
-    // Os primeiros frames podem estar com dados antigos ou inválidos
-    // Isso garante que quando o loop principal tentar processar, já teremos frames válidos
-    LOG_INFO("Descartando frames iniciais após reconfiguração...");
+    // IMPORTANT: Discard some initial frames after reconfiguration
+    // First frames may have old or invalid data
+    // This ensures that when main loop tries to process, we already have valid frames
+    LOG_INFO("Discarding initial frames after reconfiguration...");
     Frame dummyFrame;
     for (int i = 0; i < 5; ++i)
     {
         m_capture->captureLatestFrame(dummyFrame);
+#ifdef PLATFORM_LINUX
         usleep(10000); // 10ms entre tentativas
+#else
+        Sleep(10); // 10ms entre tentativas
+#endif
     }
 
-    LOG_INFO("Captura reconfigurada com sucesso: " +
+    LOG_INFO("Capture reconfigured successfully: " +
              std::to_string(actualWidth) + "x" +
              std::to_string(actualHeight) + " @ " + std::to_string(fps) + "fps");
 
@@ -500,57 +587,57 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
 bool Application::initUI()
 {
-    // IMPORTANTE: Garantir que o contexto OpenGL está ativo antes de inicializar ImGui
-    // O ImGui precisa de um contexto OpenGL válido para inicializar corretamente
+    // IMPORTANT: Ensure OpenGL context is active before initializing ImGui
+    // ImGui needs a valid OpenGL context to initialize correctly
     if (m_window)
     {
         m_window->makeCurrent();
     }
     else
     {
-        LOG_ERROR("Janela não disponível para inicializar UI");
+        LOG_ERROR("Window not available to initialize UI");
         return false;
     }
 
     m_ui = std::make_unique<UIManager>();
 
-    // Obter GLFWwindow* do WindowManager
+    // Get GLFWwindow* from WindowManager
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
     if (!window)
     {
-        LOG_ERROR("Falha ao obter janela GLFW para ImGui");
+        LOG_ERROR("Failed to get GLFW window for ImGui");
         m_ui.reset();
         return false;
     }
 
     if (!m_ui->init(window))
     {
-        LOG_ERROR("Falha ao inicializar UIManager");
+        LOG_ERROR("Failed to initialize UIManager");
         m_ui.reset();
         return false;
     }
 
-    // Configurar callbacks
+    // Configure callbacks
     m_ui->setOnShaderChanged([this](const std::string &shaderPath)
                              {
         if (m_shaderEngine) {
             if (shaderPath.empty()) {
                 m_shaderEngine->disableShader();
-                LOG_INFO("Shader desabilitado");
+                LOG_INFO("Shader disabled");
             } else {
-                // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
+                // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
                 const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-                std::filesystem::path shaderBasePath;
-                if (envShaderPath && std::filesystem::exists(envShaderPath)) {
-                    shaderBasePath = std::filesystem::path(envShaderPath);
+                fs::path shaderBasePath;
+                if (envShaderPath && fs::exists(envShaderPath)) {
+                    shaderBasePath = fs::path(envShaderPath);
                 } else {
-                    shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+                    shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
                 }
-                std::filesystem::path fullPath = shaderBasePath / shaderPath;
+                fs::path fullPath = shaderBasePath / shaderPath;
                 if (m_shaderEngine->loadPreset(fullPath.string())) {
-                    LOG_INFO("Shader carregado via UI: " + shaderPath);
+                    LOG_INFO("Shader loaded via UI: " + shaderPath);
                 } else {
-                    LOG_ERROR("Falha ao carregar shader via UI: " + shaderPath);
+                    LOG_ERROR("Failed to load shader via UI: " + shaderPath);
                 }
             }
         } });
@@ -566,26 +653,26 @@ bool Application::initUI()
 
     m_ui->setOnFullscreenChanged([this](bool fullscreen)
                                  {
-        LOG_INFO("Fullscreen toggle solicitado: " + std::string(fullscreen ? "ON" : "OFF"));
-        // IMPORTANTE: Fazer mudança de fullscreen de forma assíncrona para evitar travamento
-        // O callback de resize será chamado automaticamente pelo GLFW quando a janela mudar
-        // Não fazer operações bloqueantes aqui
+        LOG_INFO("Fullscreen toggle requested: " + std::string(fullscreen ? "ON" : "OFF"));
+        // IMPORTANT: Make fullscreen change asynchronously to avoid freezing
+        // The resize callback will be called automatically by GLFW when window changes
+        // Don't do blocking operations here
         if (m_window) {
             m_fullscreen = fullscreen;
-            // A mudança de fullscreen será feita no próximo frame do loop principal
-            // para evitar deadlocks e travamentos
+            // The fullscreen change will be done in the next frame of main loop
+            // to avoid deadlocks and freezing
             m_pendingFullscreenChange = true;
         } });
 
     m_ui->setOnMonitorIndexChanged([this](int monitorIndex)
                                    {
-        LOG_INFO("Monitor index alterado: " + std::to_string(monitorIndex));
+        LOG_INFO("Monitor index changed: " + std::to_string(monitorIndex));
         m_monitorIndex = monitorIndex;
-        // Se estiver em fullscreen, atualizar para usar o novo monitor
+        // If in fullscreen, update to use new monitor
         if (m_fullscreen && m_window) {
             m_window->setFullscreen(true, monitorIndex);
             
-            // Atualizar viewport do shader engine após mudança de monitor
+            // Update shader engine viewport after monitor change
             if (m_shaderEngine) {
                 uint32_t currentWidth = m_window->getWidth();
                 uint32_t currentHeight = m_window->getHeight();
@@ -597,73 +684,66 @@ bool Application::initUI()
                                   {
         if (!m_capture) return;
         
-        // Mapear nome para control ID usando V4L2ControlMapper
-        uint32_t cid = V4L2ControlMapper::getControlId(name);
+        // Use generic interface to set control
+        int32_t minVal, maxVal;
+        if (m_capture->getControlMin(name, minVal) && 
+            m_capture->getControlMax(name, maxVal)) {
+            // Clamp ao range
+            value = std::max(minVal, std::min(maxVal, value));
+        }
         
-        if (cid != 0) {
-            // Obter range real do dispositivo para validar
-            int32_t currentValue, min, max, step;
-            if (m_capture->getControl(cid, currentValue, min, max, step)) {
-                // Alinhar valor com step
-                if (step > 1) {
-                    value = ((value - min) / step) * step + min;
-                }
-                // Clamp ao range
-                value = std::max(min, std::min(max, value));
-            }
-            
-            m_capture->setControl(cid, value);
-        } });
+        m_capture->setControl(name, value); });
 
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
-        LOG_INFO("Resolução alterada via UI: " + std::to_string(width) + "x" + std::to_string(height));
-        // Se não houver dispositivo aberto, ativar modo dummy
+        LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
+        // If no device is open, activate dummy mode
         if (!m_capture || !m_capture->isOpen()) {
             if (!m_capture) {
-                LOG_WARN("VideoCapture não inicializado. Selecione um dispositivo primeiro.");
+                LOG_WARN("VideoCapture not initialized. Select a device first.");
                 return;
             }
             
-            // Se não estiver em modo dummy, tentar ativar
+            // If not in dummy mode, try to activate
             if (!m_capture->isDummyMode()) {
-                LOG_INFO("Nenhum dispositivo aberto. Ativando modo dummy...");
-                m_capture->enableDummyMode(true);
+                LOG_INFO("No device open. Activating dummy mode...");
+                m_capture->setDummyMode(true);
             }
             
-            // Configurar formato dummy
-            if (m_capture->setFormat(width, height, V4L2_PIX_FMT_YUYV)) {
+            // Configure dummy format
+            if (m_capture->setFormat(width, height, 0)) {
                 if (m_capture->startCapture()) {
-                    LOG_INFO("Resolução dummy atualizada: " + std::to_string(width) + "x" + std::to_string(height));
+                    LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
                     if (m_ui) {
                         m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                        m_ui->setCurrentDevice(""); // Empty string = None
                     }
                     return;
                 }
             }
-            LOG_WARN("Falha ao configurar resolução dummy. Selecione um dispositivo primeiro.");
+            LOG_WARN("Failed to configure dummy resolution. Select a device first.");
             return;
         }
         if (reconfigureCapture(width, height, m_captureFps)) {
-            // Atualizar textura se necessário (usar valores reais do dispositivo)
+            // Update texture if needed (use actual device values)
             uint32_t actualWidth = m_capture->getWidth();
             uint32_t actualHeight = m_capture->getHeight();
             
-            // Sempre deletar e recriar a textura após reconfiguração
+            // Always delete and recreate texture after reconfiguration
             if (m_frameProcessor) {
                 m_frameProcessor->deleteTexture();
             }
             
-            // Atualizar informações na UI com valores reais
+            // Update UI information with actual values
             if (m_ui && m_capture) {
                 m_ui->setCaptureInfo(actualWidth, actualHeight, 
                                     m_captureFps, m_devicePath);
             }
             
-            LOG_INFO("Textura será recriada no próximo frame: " + 
+            LOG_INFO("Texture will be recreated on next frame: " + 
                      std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
         } else {
-            // Se falhou, atualizar UI com valores atuais
+            // If failed, update UI with current values
             if (m_ui && m_capture) {
                 m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                     m_captureFps, m_devicePath);
@@ -672,47 +752,47 @@ bool Application::initUI()
 
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
-        LOG_INFO("Framerate alterado via UI: " + std::to_string(fps) + "fps");
-        // Atualizar FPS na configuração
+        LOG_INFO("Framerate changed via UI: " + std::to_string(fps) + "fps");
+        // Update FPS in configuration
         m_captureFps = fps;
         
-        // Se não houver dispositivo aberto, apenas atualizar configuração (modo dummy não precisa reconfigurar)
+        // If no device is open, just update configuration (dummy mode doesn't need reconfiguration)
         if (!m_capture || !m_capture->isOpen()) {
             if (m_capture && m_capture->isDummyMode()) {
-                LOG_INFO("Framerate atualizado para modo dummy: " + std::to_string(fps) + "fps");
+                LOG_INFO("Framerate updated for dummy mode: " + std::to_string(fps) + "fps");
             } else {
-                LOG_WARN("Nenhum dispositivo aberto. FPS será aplicado quando um dispositivo for selecionado.");
+                LOG_WARN("No device open. FPS will be applied when a device is selected.");
             }
             return;
         }
         if (reconfigureCapture(m_captureWidth, m_captureHeight, fps)) {
             m_captureFps = fps;
-            // Atualizar informações na UI
+            // Update UI information
             if (m_ui && m_capture) {
                 m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                     m_captureFps, m_devicePath);
             }
         } });
 
-    // Configurar valores iniciais
+    // Configure initial values
     m_ui->setBrightness(m_brightness);
     m_ui->setContrast(m_contrast);
     m_ui->setMaintainAspect(m_maintainAspect);
     m_ui->setFullscreen(m_fullscreen);
     m_ui->setMonitorIndex(m_monitorIndex);
 
-    // Verificar tipo de fonte inicial e configurar adequadamente
+    // Check initial source type and configure appropriately
     if (m_ui->getSourceType() == UIManager::SourceType::None)
     {
-        // Se None estiver selecionado, garantir que modo dummy está ativo
+        // If None is selected, ensure dummy mode is active
         if (m_capture)
         {
             if (!m_capture->isDummyMode() || !m_capture->isOpen())
             {
                 m_capture->stopCapture();
                 m_capture->close();
-                m_capture->enableDummyMode(true);
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                m_capture->setDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                 {
                     if (m_capture->startCapture())
                     {
@@ -722,23 +802,25 @@ bool Application::initUI()
                 }
             }
         }
-        m_ui->setV4L2Controls(nullptr);
+        m_ui->setCaptureControls(nullptr);
     }
     else
     {
-        // Configurar controles V4L2 se houver dispositivo aberto
-        if (m_capture && m_capture->isOpen())
+        // Configure V4L2 controls if device is open
+        // IMPORTANT: Always pass m_capture to UIManager, even if not open,
+        // to allow device enumeration (especially for DirectShow)
+        if (m_capture)
         {
-            m_ui->setV4L2Controls(m_capture.get());
+            m_ui->setCaptureControls(m_capture.get());
         }
         else
         {
-            // Sem dispositivo, mas ainda permitir seleção
-            m_ui->setV4L2Controls(nullptr);
+            // Without capture, don't allow selection
+            m_ui->setCaptureControls(nullptr);
         }
     }
 
-    // Configurar informações da captura
+    // Configure capture information
     if (m_capture && m_capture->isOpen())
     {
         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
@@ -747,14 +829,14 @@ bool Application::initUI()
     }
     else
     {
-        // Sem dispositivo - mostrar "None"
+        // No device - show "None"
         m_ui->setCaptureInfo(0, 0, 0, "None");
-        m_ui->setCurrentDevice(""); // String vazia = None
+        m_ui->setCurrentDevice(""); // Empty string = None
     }
 
-    // IMPORTANTE: Após init(), o UIManager já carregou as configurações salvas
-    // Sincronizar valores do Application com os valores carregados da UI
-    // Isso garante que as configurações salvas sejam aplicadas
+    // IMPORTANT: After init(), UIManager has already loaded saved configurations
+    // Synchronize Application values with values loaded from UI
+    // This ensures saved configurations are applied
     m_streamingPort = m_ui->getStreamingPort();
     m_streamingWidth = m_ui->getStreamingWidth();
     m_streamingHeight = m_ui->getStreamingHeight();
@@ -770,15 +852,15 @@ bool Application::initUI()
     m_streamingVP8Speed = m_ui->getStreamingVP8Speed();
     m_streamingVP9Speed = m_ui->getStreamingVP9Speed();
 
-    // Carregar parâmetros de buffer de streaming
+    // Load streaming buffer parameters
     m_streamingMaxVideoBufferSize = m_ui->getStreamingMaxVideoBufferSize();
     m_streamingMaxAudioBufferSize = m_ui->getStreamingMaxAudioBufferSize();
     m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();
     m_streamingAVIOBufferSize = m_ui->getStreamingAVIOBufferSize();
 
-    // Carregar configurações de buffer (já carregadas pelo UIManager do arquivo de config)
+    // Load buffer settings (already loaded by UIManager from config file)
 
-    // Carregar configurações do Web Portal
+    // Load Web Portal settings
     m_webPortalEnabled = m_ui->getWebPortalEnabled();
     m_webPortalHTTPSEnabled = m_ui->getWebPortalHTTPSEnabled();
     m_webPortalSSLCertPath = m_ui->getWebPortalSSLCertPath();
@@ -788,7 +870,7 @@ bool Application::initUI()
     m_webPortalImagePath = m_ui->getWebPortalImagePath();
     m_webPortalBackgroundImagePath = m_ui->getWebPortalBackgroundImagePath();
 
-    // Carregar textos editáveis
+    // Load editable texts
     m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
     m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
     m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
@@ -806,7 +888,7 @@ bool Application::initUI()
     m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
     m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
 
-    // Carregar cores (com verificação de segurança)
+    // Load colors (with safety check)
     const float *bg = m_ui->getWebPortalColorBackground();
     if (bg)
     {
@@ -873,36 +955,39 @@ bool Application::initUI()
         memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
     }
 
-    // Também sincronizar configurações de imagem
+    // Also synchronize image settings
     m_brightness = m_ui->getBrightness();
     m_contrast = m_ui->getContrast();
     m_maintainAspect = m_ui->getMaintainAspect();
     m_fullscreen = m_ui->getFullscreen();
     m_monitorIndex = m_ui->getMonitorIndex();
 
-    // Aplicar shader carregado se houver
+    // Apply loaded shader if available
     std::string loadedShader = m_ui->getCurrentShader();
     if (!loadedShader.empty() && m_shaderEngine)
     {
-        // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        std::filesystem::path shaderBasePath;
-        if (envShaderPath && std::filesystem::exists(envShaderPath)) {
-            shaderBasePath = std::filesystem::path(envShaderPath);
-        } else {
-            shaderBasePath = std::filesystem::current_path() / "shaders" / "shaders_glsl";
+        // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
+        const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
+        {
+            shaderBasePath = fs::path(envShaderPath);
         }
-        std::filesystem::path fullPath = shaderBasePath / loadedShader;
+        else
+        {
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
+        }
+        fs::path fullPath = shaderBasePath / loadedShader;
         if (m_shaderEngine->loadPreset(fullPath.string()))
         {
-            LOG_INFO("Shader carregado da configuração: " + loadedShader);
+            LOG_INFO("Shader loaded from configuration: " + loadedShader);
         }
     }
 
-    // Aplicar configurações de imagem
-    // FrameProcessor aplica brightness/contrast durante o processamento, não precisa setar aqui
+    // Apply image settings
+    // FrameProcessor applies brightness/contrast during processing, no need to set here
 
-    // Aplicar fullscreen se necessário
+    // Apply fullscreen if needed
     if (m_fullscreen && m_window)
     {
         m_window->setFullscreen(m_fullscreen, m_monitorIndex);
@@ -910,75 +995,75 @@ bool Application::initUI()
 
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
-        // CRÍTICO: Este callback é executado na thread principal (ImGui render thread)
-        // NÃO fazer NENHUMA operação bloqueante aqui - apenas marcar flag e criar thread
-        // NÃO acessar m_streamManager ou outros recursos compartilhados aqui
+        // CRITICAL: This callback runs in main thread (ImGui render thread)
+        // DO NOT do ANY blocking operations here - just set flag and create thread
+        // DO NOT access m_streamManager or other shared resources here
         
-        LOG_INFO("[CALLBACK] Streaming " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        LOG_INFO("[CALLBACK] Streaming " + std::string(start ? "START" : "STOP") + " - creating thread...");
         
         if (start) {
-            // Verificar se pode iniciar (não está em cooldown)
+            // Check if can start (not in cooldown)
             if (m_ui && !m_ui->canStartStreaming()) {
                 int64_t cooldownMs = m_ui->getStreamingCooldownRemainingMs();
                 int cooldownSeconds = static_cast<int>(cooldownMs / 1000);
-                LOG_WARN("Tentativa de iniciar streaming bloqueada - ainda em cooldown. Aguarde " + 
-                         std::to_string(cooldownSeconds) + " segundos");
+                LOG_WARN("Streaming start attempt blocked - still in cooldown. Wait " + 
+                         std::to_string(cooldownSeconds) + " seconds");
                 if (m_ui) {
                     m_ui->setStreamingProcessing(false); // Resetar flag se bloqueado
                 }
-                return; // Não iniciar se estiver em cooldown
+                return; // Don't start if in cooldown
             }
             
-            // Apenas marcar flag - thread separada fará todo o trabalho
+            // Just set flag - separate thread will do all the work
             m_streamingEnabled = true;
             
-            // Atualizar status imediatamente para "iniciando" (será atualizado novamente quando realmente iniciar)
+            // Update status immediately to "starting" (will be updated again when actually starting)
             if (m_ui) {
-                m_ui->setStreamingActive(false); // Ainda não está ativo, mas está iniciando
+                m_ui->setStreamingActive(false); // Not active yet, but starting
             }
             
-            // Criar thread separada imediatamente - não esperar nada
+            // Create separate thread immediately - don't wait
             std::thread([this]() {
-                // Todas as operações bloqueantes devem estar aqui, na thread separada
+                // All blocking operations should be here, in the separate thread
                 bool success = false;
                 try {
                     if (initStreaming()) {
-                        // Initialize audio capture (sempre necessário para streaming)
+                        // Initialize audio capture (always required for streaming)
                         if (!m_audioCapture) {
                             if (!initAudioCapture()) {
-                                LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+                                LOG_WARN("Failed to initialize audio capture - continuing without audio");
                             }
                         }
                         success = true;
                     } else {
-                        LOG_ERROR("Falha ao iniciar streaming");
+                        LOG_ERROR("Failed to start streaming");
                         m_streamingEnabled = false;
                     }
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Exceção ao iniciar streaming: " + std::string(e.what()));
+                    LOG_ERROR("Exception starting streaming: " + std::string(e.what()));
                     m_streamingEnabled = false;
                 }
                 
-                // Atualizar UI após inicialização (pode ser chamado de qualquer thread)
-                // IMPORTANTE: Verificar se m_streamManager existe antes de chamar isActive()
+                // Update UI after initialization (can be called from any thread)
+                // IMPORTANT: Check if m_streamManager exists before calling isActive()
                 if (m_ui) {
                     bool active = success && m_streamManager && m_streamManager->isActive();
                     m_ui->setStreamingActive(active);
-                    m_ui->setStreamingProcessing(false); // Processamento concluído
+                    m_ui->setStreamingProcessing(false); // Processing completed
                 }
             }).detach();
         } else {
-            // Parar streaming também em thread separada para não bloquear a UI
+            // Stop streaming also in separate thread to not block UI
             m_streamingEnabled = false;
             
-            // Atualizar status imediatamente quando parar
+            // Update status immediately when stopping
             if (m_ui) {
                 m_ui->setStreamingActive(false);
                 m_ui->setStreamUrl("");
                 m_ui->setStreamClientCount(0);
             }
             
-            // Criar thread separada imediatamente - não esperar nada
+            // Create separate thread immediately - don't wait
             std::thread([this]() {
                 try {
                     if (m_streamManager) {
@@ -986,26 +1071,26 @@ bool Application::initUI()
                         m_streamManager->stop();
                         m_streamManager->cleanup();
                         m_streamManager.reset();
-                        m_currentStreamer = nullptr; // Limpar referência ao streamer
+                        m_currentStreamer = nullptr; // Clear streamer reference
                     }
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Exceção ao parar streaming: " + std::string(e.what()));
+                    LOG_ERROR("Exception stopping streaming: " + std::string(e.what()));
                 }
                 
-                // Garantir que o status está atualizado após parar
+                // Ensure status is updated after stopping
                 if (m_ui) {
                     m_ui->setStreamingActive(false);
                     m_ui->setStreamUrl("");
                     m_ui->setStreamClientCount(0);
-                    m_ui->setStreamingProcessing(false); // Processamento concluído
+                    m_ui->setStreamingProcessing(false); // Processing completed
                 }
                 
-                // NÃO reiniciar o portal web automaticamente quando o streaming para.
-                // O portal web pode estar habilitado mas não necessariamente precisa
-                // estar rodando independentemente. Se o usuário quiser o portal ativo,
-                // ele pode iniciá-lo manualmente pela UI.
-                // A reinicialização automática causava problemas quando o portal
-                // não estava ativo antes do streaming começar.
+                // DO NOT restart web portal automatically when streaming stops.
+                // Web portal can be enabled but doesn't necessarily need
+                // to be running independently. If user wants portal active,
+                // they can start it manually via UI.
+                // Automatic restart caused problems when portal
+                // was not active before streaming started.
             }).detach();
         }
         
@@ -1014,7 +1099,7 @@ bool Application::initUI()
     m_ui->setOnStreamingPortChanged([this](uint16_t port)
                                     {
         m_streamingPort = port;
-        // Se streaming estiver ativo, reiniciar
+        // If streaming is active, restart
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1034,9 +1119,9 @@ bool Application::initUI()
     m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate)
                                        {
         m_streamingBitrate = bitrate;
-        // Atualizar bitrate do streamer se estiver ativo
+        // Update streamer bitrate if active
         if (m_streamManager && m_streamManager->isActive()) {
-            // Reiniciar streaming com novo bitrate
+            // Restart streaming with new bitrate
             m_streamManager->stop();
             m_streamManager->cleanup();
             m_streamManager.reset();
@@ -1046,7 +1131,7 @@ bool Application::initUI()
     m_ui->setOnStreamingAudioBitrateChanged([this](uint32_t bitrate)
                                             {
         m_streamingAudioBitrate = bitrate;
-        // Se streaming estiver ativo, reiniciar
+        // If streaming is active, restart
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1057,7 +1142,7 @@ bool Application::initUI()
     m_ui->setOnStreamingVideoCodecChanged([this](const std::string &codec)
                                           {
         m_streamingVideoCodec = codec;
-        // Se streaming estiver ativo, reiniciar
+        // If streaming is active, restart
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1068,7 +1153,7 @@ bool Application::initUI()
     m_ui->setOnStreamingAudioCodecChanged([this](const std::string &codec)
                                           {
         m_streamingAudioCodec = codec;
-        // Se streaming estiver ativo, reiniciar
+        // If streaming is active, restart
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1079,7 +1164,7 @@ bool Application::initUI()
     m_ui->setOnStreamingH264PresetChanged([this](const std::string &preset)
                                           {
         m_streamingH264Preset = preset;
-        // Se streaming estiver ativo, reiniciar para aplicar novo preset
+        // If streaming is active, restart to apply new preset
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1090,7 +1175,7 @@ bool Application::initUI()
     m_ui->setOnStreamingH265PresetChanged([this](const std::string &preset)
                                           {
         m_streamingH265Preset = preset;
-        // Se streaming estiver ativo, reiniciar para aplicar novo preset
+        // If streaming is active, restart to apply new preset
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1101,7 +1186,7 @@ bool Application::initUI()
     m_ui->setOnStreamingH265ProfileChanged([this](const std::string &profile)
                                            {
         m_streamingH265Profile = profile;
-        // Se streaming estiver ativo, reiniciar para aplicar novo profile
+        // If streaming is active, restart to apply new profile
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1112,7 +1197,7 @@ bool Application::initUI()
     m_ui->setOnStreamingH265LevelChanged([this](const std::string &level)
                                          {
         m_streamingH265Level = level;
-        // Se streaming estiver ativo, reiniciar para aplicar novo level
+        // If streaming is active, restart to apply new level
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1123,7 +1208,7 @@ bool Application::initUI()
     m_ui->setOnStreamingVP8SpeedChanged([this](int speed)
                                         {
         m_streamingVP8Speed = speed;
-        // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        // If streaming is active, restart to apply new speed
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1134,7 +1219,7 @@ bool Application::initUI()
     m_ui->setOnStreamingVP9SpeedChanged([this](int speed)
                                         {
         m_streamingVP9Speed = speed;
-        // Se streaming estiver ativo, reiniciar para aplicar novo speed
+        // If streaming is active, restart to apply new speed
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1142,7 +1227,7 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    // Callbacks para configurações de buffer
+    // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
                                                   {
         m_streamingMaxVideoBufferSize = size;
@@ -1191,15 +1276,15 @@ bool Application::initUI()
     m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
                                        {
         m_webPortalEnabled = enabled;
-        // Se Web Portal for desabilitado, também desabilitar HTTPS
+        // If Web Portal is disabled, also disable HTTPS
         if (!enabled && m_webPortalHTTPSEnabled) {
             m_webPortalHTTPSEnabled = false;
-            // Atualizar UI para refletir a mudança
+            // Update UI to reflect the change
             if (m_ui) {
                 m_ui->setWebPortalHTTPSEnabled(false);
             }
         }
-        // Atualizar em tempo real se streaming estiver ativo (sem reiniciar)
+        // Update in real-time if streaming is active (without restarting)
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->setWebPortalEnabled(enabled);
         } });
@@ -1207,7 +1292,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalHTTPSChanged([this](bool enabled)
                                      {
         m_webPortalHTTPSEnabled = enabled;
-        // Se streaming estiver ativo, reiniciar para aplicar HTTPS
+        // If streaming is active, restart to apply HTTPS
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1218,7 +1303,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalSSLCertPathChanged([this](const std::string &path)
                                            {
         m_webPortalSSLCertPath = path;
-        // Se streaming estiver ativo, reiniciar para aplicar novo certificado
+        // If streaming is active, restart to apply new certificate
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1229,7 +1314,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalSSLKeyPathChanged([this](const std::string &path)
                                           {
         m_webPortalSSLKeyPath = path;
-        // Se streaming estiver ativo, reiniciar para aplicar nova chave
+        // If streaming is active, restart to apply new key
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -1240,7 +1325,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalTitleChanged([this](const std::string &title)
                                      {
         m_webPortalTitle = title;
-        // Atualizar em tempo real se streaming estiver ativo
+        // Update in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->setWebPortalTitle(title);
         } });
@@ -1248,7 +1333,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalSubtitleChanged([this](const std::string &subtitle)
                                         {
         m_webPortalSubtitle = subtitle;
-        // Atualizar em tempo real se streaming estiver ativo
+        // Update in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->setWebPortalSubtitle(subtitle);
         } });
@@ -1256,7 +1341,7 @@ bool Application::initUI()
     m_ui->setOnWebPortalImagePathChanged([this](const std::string &path)
                                          {
         m_webPortalImagePath = path;
-        // Atualizar em tempo real se streaming estiver ativo
+        // Update in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->setWebPortalImagePath(path);
         } });
@@ -1264,16 +1349,16 @@ bool Application::initUI()
     m_ui->setOnWebPortalBackgroundImagePathChanged([this](const std::string &path)
                                                    {
         m_webPortalBackgroundImagePath = path;
-        // Atualizar em tempo real se streaming estiver ativo
+        // Update in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->setWebPortalBackgroundImagePath(path);
         } });
 
     m_ui->setOnWebPortalColorsChanged([this]()
                                       {
-        // Atualizar cores em tempo real se streaming estiver ativo
+        // Update colors in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager && m_ui) {
-            // Sincronizar cores da UI para Application (com verificação de segurança)
+            // Synchronize colors from UI to Application (with safety check)
             const float* bg = m_ui->getWebPortalColorBackground();
             if (bg) {
                 memcpy(m_webPortalColorBackground, bg, 4 * sizeof(float));
@@ -1327,7 +1412,7 @@ bool Application::initUI()
                 memcpy(m_webPortalColorInfo, inf, 4 * sizeof(float));
             }
             
-            // Atualizar no StreamManager
+            // Update in StreamManager
             m_streamManager->setWebPortalColors(
                 m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
                 m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
@@ -1338,9 +1423,9 @@ bool Application::initUI()
 
     m_ui->setOnWebPortalTextsChanged([this]()
                                      {
-        // Atualizar textos em tempo real se streaming estiver ativo
+        // Update texts in real-time if streaming is active
         if (m_streamingEnabled && m_streamManager && m_ui) {
-            // Sincronizar textos da UI para Application
+            // Synchronize texts from UI to Application
             m_webPortalTextStreamInfo = m_ui->getWebPortalTextStreamInfo();
             m_webPortalTextQuickActions = m_ui->getWebPortalTextQuickActions();
             m_webPortalTextCompatibility = m_ui->getWebPortalTextCompatibility();
@@ -1358,7 +1443,7 @@ bool Application::initUI()
             m_webPortalTextCodecInfoValue = m_ui->getWebPortalTextCodecInfoValue();
             m_webPortalTextConnecting = m_ui->getWebPortalTextConnecting();
             
-            // Atualizar no StreamManager
+            // Update in StreamManager
             m_streamManager->setWebPortalTexts(
                 m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
                 m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
@@ -1371,35 +1456,35 @@ bool Application::initUI()
     // Web Portal Start/Stop callback (independent from streaming)
     m_ui->setOnWebPortalStartStop([this](bool start)
                                   {
-        LOG_INFO("[CALLBACK] Portal Web " + std::string(start ? "START" : "STOP") + " - criando thread...");
+        LOG_INFO("[CALLBACK] Web Portal " + std::string(start ? "START" : "STOP") + " - creating thread...");
         
         if (start) {
-            // Criar thread separada para iniciar portal
+            // Create separate thread to start portal
             std::thread([this]() {
                 try {
                     if (!initWebPortal()) {
-                        LOG_ERROR("Falha ao iniciar portal web");
+                        LOG_ERROR("Failed to start web portal");
                         if (m_ui) {
                             m_ui->setWebPortalActive(false);
                         }
                     }
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Exceção ao iniciar portal web: " + std::string(e.what()));
+                    LOG_ERROR("Exception starting web portal: " + std::string(e.what()));
                     if (m_ui) {
                         m_ui->setWebPortalActive(false);
                     }
                 }
             }).detach();
         } else {
-            // Parar portal em thread separada
+            // Stop portal in separate thread
             std::thread([this]() {
                 try {
                     stopWebPortal();
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Exceção ao parar portal web: " + std::string(e.what()));
+                    LOG_ERROR("Exception stopping web portal: " + std::string(e.what()));
                 }
                 
-                // Atualizar UI após parar
+                // Update UI after stopping
                 if (m_ui) {
                     m_ui->setWebPortalActive(false);
                 }
@@ -1408,200 +1493,308 @@ bool Application::initUI()
         
         LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
 
-    // Callback para mudança de tipo de fonte
+    // Callback for source type change
     m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
                                  {
-        LOG_INFO("Tipo de fonte alterado via UI");
-        
-        if (sourceType == UIManager::SourceType::None)
-        {
-            LOG_INFO("Fonte None selecionada - ativando modo dummy");
-            
-            // Fechar dispositivo atual se houver
-            if (m_capture) {
-                m_capture->stopCapture();
-                m_capture->close();
-                // Ativar modo dummy
-                m_capture->enableDummyMode(true);
-                
-                // Configurar formato dummy com resolução atual
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
-                {
-                    if (m_capture->startCapture())
-                    {
-                        LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
-                                 std::to_string(m_capture->getHeight()));
-                        
-                        // Atualizar informações na UI
-                        if (m_ui) {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando None
-                        }
-                    }
-                }
-            }
-        }
-        else if (sourceType == UIManager::SourceType::V4L2)
-        {
-            LOG_INFO("Fonte V4L2 selecionada");
-            // Se já houver um dispositivo selecionado, tentar reabrir
-            if (!m_devicePath.empty() && m_capture)
-            {
-                m_capture->stopCapture();
-                m_capture->close();
-                m_capture->enableDummyMode(false);
-                
-                if (m_capture->open(m_devicePath))
-                {
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
-                    {
-                        m_capture->setFramerate(m_captureFps);
-                        if (m_capture->startCapture())
-                        {
-                            if (m_ui) {
-                                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                    m_captureFps, m_devicePath);
-                                m_ui->setV4L2Controls(m_capture.get());
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // Se falhar ao abrir dispositivo, voltar para modo dummy
-                    LOG_WARN("Falha ao abrir dispositivo V4L2 - ativando modo dummy");
-                    m_capture->enableDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
-                    {
-                        if (m_capture->startCapture() && m_ui)
-                        {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr);
-                        }
-                    }
-                }
-            }
-            else if (m_capture)
-            {
-                // Se não houver dispositivo selecionado mas V4L2 foi escolhido, manter em modo dummy
-                LOG_INFO("Nenhum dispositivo V4L2 selecionado - mantendo modo dummy");
-                if (!m_capture->isOpen() || !m_capture->isDummyMode())
-                {
-                    m_capture->stopCapture();
-                    m_capture->close();
-                    m_capture->enableDummyMode(true);
-                    if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
-                    {
-                        if (m_capture->startCapture() && m_ui)
-                        {
-                            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                                m_captureFps, "None (Dummy)");
-                            m_ui->setV4L2Controls(nullptr);
-                        }
-                    }
-                }
-            }
-        } });
+                                     LOG_INFO("Source type changed via UI");
+
+                                     if (sourceType == UIManager::SourceType::None)
+                                     {
+                                         LOG_INFO("None source selected - activating dummy mode");
+
+                                         // Close current device if any
+                                         if (m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             // Activate dummy mode
+                                             m_capture->setDummyMode(true);
+
+                                             // Configure dummy format with current resolution
+                                             if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                             {
+                                                 if (m_capture->startCapture())
+                                                 {
+                                                     LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
+                                                              std::to_string(m_capture->getHeight()));
+
+                                                     // Update UI information
+                                                     if (m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice("");        // String vazia = None
+                                                         m_ui->setCaptureControls(nullptr); // No V4L2 controls when None
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#ifdef __linux__
+                                     if (sourceType == UIManager::SourceType::V4L2)
+                                     {
+                                         LOG_INFO("V4L2 source selected");
+                                         // If device is already selected, try to reopen
+                                         if (!m_devicePath.empty() && m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             m_capture->setDummyMode(false);
+
+                                             if (m_capture->open(m_devicePath))
+                                             {
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     m_capture->setFramerate(m_captureFps);
+                                                     if (m_capture->startCapture())
+                                                     {
+                                                         if (m_ui)
+                                                         {
+                                                             m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                                  m_captureFps, m_devicePath);
+                                                             m_ui->setCaptureControls(m_capture.get());
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                             else
+                                             {
+                                                 // If failed to open device, return to dummy mode
+                                                 LOG_WARN("Failed to open V4L2 device - activating dummy mode");
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setCaptureControls(nullptr);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         else if (m_capture)
+                                         {
+                                             // If no device selected but V4L2 was chosen, keep in dummy mode
+                                             LOG_INFO("No V4L2 device selected - keeping dummy mode");
+                                         }
+                                     }
+#endif
+#ifdef _WIN32
+                                     if (sourceType == UIManager::SourceType::DS)
+                                     {
+                                         LOG_INFO("DirectShow source selected");
+
+                                         // On Windows, m_devicePath can be empty or contain Linux path (/dev/video0)
+                                         // Clear if it's a Linux path
+                                         std::string devicePath = m_devicePath;
+                                         if (!devicePath.empty() && devicePath.find("/dev/video") == 0)
+                                         {
+                                             LOG_INFO("Clearing Linux device path: " + devicePath);
+                                             devicePath.clear();
+                                             m_devicePath.clear(); // Also update class member
+                                         }
+
+                                         // Try to get current device from UIManager if m_devicePath is empty
+                                         if (devicePath.empty() && m_ui)
+                                         {
+                                             devicePath = m_ui->getCurrentDevice();
+                                             LOG_INFO("Getting current device from UIManager: " + devicePath);
+                                         }
+
+                                         // If device is already selected, try to reopen
+                                         if (!devicePath.empty() && m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             m_capture->setDummyMode(false);
+
+                                             if (m_capture->open(devicePath))
+                                             {
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     m_capture->setFramerate(m_captureFps);
+                                                     if (m_capture->startCapture())
+                                                     {
+                                                         if (m_ui)
+                                                         {
+                                                             m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                                  m_captureFps, devicePath);
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                             else
+                                             {
+                                                 // If failed to open device, return to dummy mode
+                                                 LOG_WARN("Failed to open DirectShow device - activating dummy mode");
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice(""); // Empty string = None
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         else if (m_capture)
+                                         {
+                                             // If no device selected but DS was chosen, keep in dummy mode
+                                             LOG_INFO("No DirectShow device selected - keeping dummy mode");
+                                             if (!m_capture->isOpen() || !m_capture->isDummyMode())
+                                             {
+                                                 m_capture->stopCapture();
+                                                 m_capture->close();
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setCurrentDevice(""); // Empty string = None
+                                                         m_ui->setCaptureControls(nullptr);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#endif
+                                 });
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
-        // Se devicePath estiver vazio, significa "None" - ativar modo dummy
+        // Avoid infinite loop: if already processing "None", do nothing
+        static bool processingDeviceChange = false;
+        if (processingDeviceChange) {
+            return;
+        }
+        processingDeviceChange = true;
+        
+        // If devicePath is empty, it means "None" - activate dummy mode
         if (devicePath.empty())
         {
-            LOG_INFO("Desconectando dispositivo (None selecionado) - ativando modo dummy");
+            // Check if already in dummy mode to avoid loop
+            if (m_devicePath.empty() && m_capture && m_capture->isDummyMode() && m_capture->isOpen()) {
+                processingDeviceChange = false;
+                return;
+            }
             
-            // Fechar dispositivo atual
+            LOG_INFO("Disconnecting device (None selected) - activating dummy mode");
+            
+            // Close current device
             if (m_capture) {
                 m_capture->stopCapture();
                 m_capture->close();
                 // Ativar modo dummy
-                m_capture->enableDummyMode(true);
+                m_capture->setDummyMode(true);
                 
-                // Configurar formato dummy com resolução atual
-                if (m_capture->setFormat(m_captureWidth, m_captureHeight, V4L2_PIX_FMT_YUYV))
+                // Configure dummy format with current resolution
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
                 {
                     m_capture->startCapture();
-                    LOG_INFO("Modo dummy ativado: " + std::to_string(m_capture->getWidth()) + "x" +
+                    LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
                              std::to_string(m_capture->getHeight()));
                 }
             }
             
-            // Atualizar caminho do dispositivo
+            // Update device path
             m_devicePath = "";
             
-            // Atualizar informações na UI
+            // Update UI information (without calling setCurrentDevice to avoid loop)
             if (m_ui) {
                 if (m_capture && m_capture->isOpen()) {
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                         m_captureFps, "None (Dummy)");
+                    // Don't call setCurrentDevice here to avoid loop
                 } else {
                     m_ui->setCaptureInfo(0, 0, 0, "None");
+                    // Don't call setCurrentDevice here to avoid loop
                 }
-                m_ui->setV4L2Controls(nullptr); // Sem controles V4L2 quando não há dispositivo
+                m_ui->setCaptureControls(nullptr); // No V4L2 controls when no device
             }
             
-            LOG_INFO("Modo dummy ativado. Selecione um dispositivo para usar captura real.");
+            LOG_INFO("Dummy mode activated. Select a device to use real capture.");
+            processingDeviceChange = false;
             return;
         }
         
-        LOG_INFO("Mudando dispositivo para: " + devicePath);
+        LOG_INFO("=== CALLBACK setOnDeviceChanged CALLED ===");
+        LOG_INFO("Changing device to: " + devicePath);
+        std::cout << "[FORCE] setOnDeviceChanged called with devicePath: " << devicePath << std::endl;
         
-        // Salvar configurações atuais
+        // Save current settings
         uint32_t oldWidth = m_captureWidth;
         uint32_t oldHeight = m_captureHeight;
         uint32_t oldFps = m_captureFps;
         
-        // Fechar dispositivo atual (ou modo dummy)
+        // Close current device (or dummy mode)
         if (m_capture) {
             m_capture->stopCapture();
             m_capture->close();
-            // Desativar modo dummy ao tentar abrir dispositivo real
-            m_capture->enableDummyMode(false);
+            // Disable dummy mode when trying to open real device
+            m_capture->setDummyMode(false);
         }
         
-        // Atualizar caminho do dispositivo
+        // Update device path
         m_devicePath = devicePath;
         
-        // Reabrir com novo dispositivo
+        // Clear FrameProcessor texture when changing device
+        if (m_frameProcessor) {
+            m_frameProcessor->deleteTexture();
+        }
+        
+        // Reopen with new device
         if (m_capture && m_capture->open(devicePath)) {
-            // Reconfigurar formato e framerate
-            if (m_capture->setFormat(oldWidth, oldHeight, V4L2_PIX_FMT_YUYV)) {
+            LOG_INFO("Device opened successfully, configuring format...");
+            // Reconfigure format and framerate
+            if (m_capture->setFormat(oldWidth, oldHeight, 0)) {
+                LOG_INFO("Format configured, configuring framerate...");
                 m_capture->setFramerate(oldFps);
-                m_capture->startCapture();
+                LOG_INFO("Framerate configured, starting capture (startCapture)...");
+                if (m_capture->startCapture()) {
+                    LOG_INFO("startCapture() returned true - device should be active (light on)");
+                } else {
+                    LOG_ERROR("startCapture() returned false - device was NOT activated!");
+                }
                 
-                // Atualizar informações na UI
+                // Update UI information
                 if (m_ui) {
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                         m_captureFps, devicePath);
                     
-                    // Recarregar controles V4L2
-                    m_ui->setV4L2Controls(m_capture.get());
+                    // Reload V4L2 controls
+                    m_ui->setCaptureControls(m_capture.get());
                 }
                 
-                LOG_INFO("Dispositivo alterado com sucesso");
+                LOG_INFO("Device changed successfully");
+                processingDeviceChange = false;
             } else {
-                LOG_ERROR("Falha ao configurar formato no novo dispositivo");
-                // Fechar dispositivo se falhou
+                LOG_ERROR("Failed to configure format on new device");
+                // Close device if failed
                 m_capture->close();
                 if (m_ui) {
                     m_ui->setCaptureInfo(0, 0, 0, "Error");
                 }
+                processingDeviceChange = false;
             }
         } else {
-            LOG_ERROR("Falha ao abrir novo dispositivo: " + devicePath);
+            LOG_ERROR("Failed to open new device: " + devicePath);
+            processingDeviceChange = false;
             if (m_ui) {
                 m_ui->setCaptureInfo(0, 0, 0, "Error");
             }
         } });
 
-    // Configurar shader atual
+    // Configure current shader
     if (!m_presetPath.empty())
     {
-        std::filesystem::path presetPath(m_presetPath);
-        std::filesystem::path basePath("shaders/shaders_glsl");
-        std::filesystem::path relativePath = std::filesystem::relative(presetPath, basePath);
+        fs::path presetPath(m_presetPath);
+        fs::path basePath("shaders/shaders_glsl");
+        fs::path relativePath = fs::relative(presetPath, basePath);
         if (!relativePath.empty() && relativePath != presetPath)
         {
             m_ui->setCurrentShader(relativePath.string());
@@ -1610,47 +1803,41 @@ bool Application::initUI()
         {
             m_ui->setCurrentShader(m_presetPath);
         }
-    }
 
-    // Conectar ShaderEngine à UI para parâmetros
-    if (m_shaderEngine)
-    {
-        m_ui->setShaderEngine(m_shaderEngine.get());
-    }
-
-    // Callback para salvar preset
-    m_ui->setOnSavePreset([this](const std::string &path, bool overwrite)
-                          {
+        // Callback to save preset
+        m_ui->setOnSavePreset([this](const std::string &path, bool overwrite)
+                              {
         if (!m_shaderEngine || !m_shaderEngine->isShaderActive()) {
             LOG_WARN("Nenhum preset carregado para salvar");
             return;
         }
         
-        // Obter parâmetros customizados do ShaderEngine
+        // Get custom parameters from ShaderEngine
         auto params = m_shaderEngine->getShaderParameters();
         std::unordered_map<std::string, float> customParams;
         for (const auto& param : params) {
-            // Salvar todos os valores (mesmo se iguais ao padrão, para preservar configuração)
+            // Save all values (even if equal to default, to preserve configuration)
             customParams[param.name] = param.value;
         }
         
-        // Salvar preset
+        // Save preset
         const ShaderPreset& preset = m_shaderEngine->getPreset();
         if (overwrite) {
-            // Salvar por cima
+            // Save overwriting
             if (preset.save(path, customParams)) {
-                LOG_INFO("Preset salvo: " + path);
+                LOG_INFO("Preset saved: " + path);
             } else {
-                LOG_ERROR("Falha ao salvar preset: " + path);
+                LOG_ERROR("Failed to save preset: " + path);
             }
         } else {
-            // Salvar como novo arquivo
+            // Save as new file
             if (preset.saveAs(path, customParams)) {
-                LOG_INFO("Preset salvo como: " + path);
+                LOG_INFO("Preset saved as: " + path);
             } else {
                 LOG_ERROR("Falha ao salvar preset como: " + path);
             }
         } });
+    }
 
     return true;
 }
@@ -1664,7 +1851,7 @@ void Application::handleKeyInput()
     if (!window)
         return;
 
-    // F12 para toggle UI
+    // F12 to toggle UI
     static bool f12Pressed = false;
     if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS)
     {
@@ -1685,48 +1872,46 @@ bool Application::initStreaming()
 {
     if (!m_streamingEnabled)
     {
-        return true; // Streaming não habilitado, não é erro
+        return true; // Streaming not enabled, not an error
     }
 
-    // Se o portal web estiver ativo independentemente, pará-lo antes de iniciar streaming
-    // O streaming incluirá o portal web se estiver habilitado
+    // If web portal is active independently, stop it before starting streaming
+    // Streaming will include web portal if enabled
     if (m_webPortalActive && m_webPortalServer)
     {
-        LOG_INFO("Parando Portal Web independente antes de iniciar streaming...");
+        LOG_INFO("Stopping independent Web Portal before starting streaming...");
         stopWebPortal();
     }
 
-    // Log removido para reduzir ruído - streaming já loga internamente
+    // OPTION A: No more streaming thread to clean up
 
-    // OPÇÃO A: Não há mais thread de streaming para limpar
-
-    // IMPORTANTE: Limpar streamManager existente ANTES de criar um novo
-    // Isso previne problemas de double free quando há mudanças de configuração
-    // CRÍTICO: Estas operações já estão em uma thread separada, mas ainda podem bloquear
-    // Reduzir ao mínimo necessário e evitar esperas longas
+    // IMPORTANT: Clear existing streamManager BEFORE creating a new one
+    // This prevents double free problems when there are configuration changes
+    // CRITICAL: These operations are already in a separate thread, but can still block
+    // Reduce to minimum necessary and avoid long waits
     if (m_streamManager)
     {
-        LOG_INFO("Limpando StreamManager existente antes de reinicializar...");
-        // Parar e limpar de forma segura
+        LOG_INFO("Clearing existing StreamManager before reinitializing...");
+        // Stop and clean up safely
         if (m_streamManager->isActive())
         {
             m_streamManager->stop();
         }
         m_streamManager->cleanup();
         m_streamManager.reset();
-        m_currentStreamer = nullptr; // Limpar referência ao streamer
+        m_currentStreamer = nullptr; // Clear streamer reference
 
-        // IMPORTANTE: Aguardar um pouco para garantir que todas as threads terminaram
-        // e recursos foram liberados antes de criar um novo StreamManager
-        // Reduzir tempo de espera ao mínimo - threads detached devem terminar rapidamente
-        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Reduzido para 10ms
+        // IMPORTANT: Wait a bit to ensure all threads finished
+        // and resources were released before creating a new StreamManager
+        // Reduce wait time to minimum - detached threads should finish quickly
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Reduced to 10ms
     }
 
     m_streamManager = std::make_unique<StreamManager>();
 
-    // IMPORTANTE: Resolução de streaming deve ser fixa, baseada nas configurações da aba de streaming
-    // Se não configurada, usar resolução de captura (NUNCA usar resolução da janela que pode mudar)
-    // IMPORTANTE: Verificar se dispositivo está aberto antes de acessar getWidth/getHeight
+    // IMPORTANT: Streaming resolution must be fixed, based on streaming tab settings
+    // If not configured, use capture resolution (NEVER use window resolution which can change)
+    // IMPORTANT: Check if device is open before accessing getWidth/getHeight
     uint32_t streamWidth = m_streamingWidth > 0 ? m_streamingWidth : (m_capture && m_capture->isOpen() ? m_capture->getWidth() : m_captureWidth);
     uint32_t streamHeight = m_streamingHeight > 0 ? m_streamingHeight : (m_capture && m_capture->isOpen() ? m_capture->getHeight() : m_captureHeight);
     uint32_t streamFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
@@ -1736,83 +1921,83 @@ bool Application::initStreaming()
     LOG_INFO("initStreaming: m_streamingWidth=" + std::to_string(m_streamingWidth) +
              ", m_streamingHeight=" + std::to_string(m_streamingHeight));
 
-    // Sempre usar MPEG-TS streamer (áudio + vídeo obrigatório)
+    // Always use MPEG-TS streamer (audio + video required)
     auto tsStreamer = std::make_unique<HTTPTSStreamer>();
 
-    // Configurar bitrate de vídeo
+    // Configure video bitrate
     if (m_streamingBitrate > 0)
     {
-        tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Converter kbps para bps
+        tsStreamer->setVideoBitrate(m_streamingBitrate * 1000); // Convert kbps to bps
     }
 
-    // Configurar bitrate de áudio
+    // Configure audio bitrate
     if (m_streamingAudioBitrate > 0)
     {
-        tsStreamer->setAudioBitrate(m_streamingAudioBitrate * 1000); // Converter kbps para bps
+        tsStreamer->setAudioBitrate(m_streamingAudioBitrate * 1000); // Convert kbps to bps
     }
 
-    // Configurar codecs
+    // Configure codecs
     tsStreamer->setVideoCodec(m_streamingVideoCodec);
     tsStreamer->setAudioCodec(m_streamingAudioCodec);
 
-    // Configurar preset H.264 (se aplicável)
+    // Configure H.264 preset (if applicable)
     if (m_streamingVideoCodec == "h264")
     {
         tsStreamer->setH264Preset(m_streamingH264Preset);
     }
-    // Configurar preset, profile e level H.265 (se aplicável)
+    // Configure H.265 preset, profile and level (if applicable)
     else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
     {
         tsStreamer->setH265Preset(m_streamingH265Preset);
         tsStreamer->setH265Profile(m_streamingH265Profile);
         tsStreamer->setH265Level(m_streamingH265Level);
     }
-    // Configurar speed VP8 (se aplicável)
+    // Configure VP8 speed (if applicable)
     else if (m_streamingVideoCodec == "vp8")
     {
         tsStreamer->setVP8Speed(m_streamingVP8Speed);
     }
-    // Configurar speed VP9 (se aplicável)
+    // Configure VP9 speed (if applicable)
     else if (m_streamingVideoCodec == "vp9")
     {
         tsStreamer->setVP9Speed(m_streamingVP9Speed);
     }
 
-    // Configurar tamanho do buffer de áudio
-    // setAudioBufferSize removido - buffer é gerenciado automaticamente (OBS style)
+    // Configure audio buffer size
+    // setAudioBufferSize removed - buffer is managed automatically (OBS style)
 
-    // Configurar formato de áudio para corresponder ao AudioCapture
+    // Configure audio format to match AudioCapture
     if (m_audioCapture && m_audioCapture->isOpen())
     {
         tsStreamer->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
     }
 
-    // Configurar parâmetros de buffer (carregados da configuração)
+    // Configure buffer parameters (loaded from configuration)
     tsStreamer->setBufferConfig(
         m_ui->getStreamingMaxVideoBufferSize(),
         m_ui->getStreamingMaxAudioBufferSize(),
         m_ui->getStreamingMaxBufferTimeSeconds(),
         m_ui->getStreamingAVIOBufferSize());
 
-    // Configurar Web Portal
+    // Configure Web Portal
     tsStreamer->enableWebPortal(m_webPortalEnabled);
     tsStreamer->setWebPortalTitle(m_webPortalTitle);
 
-    // Configurar API Controller
+    // Configure API Controller
     tsStreamer->setApplicationForAPI(this);
     tsStreamer->setUIManagerForAPI(m_ui.get());
     tsStreamer->setWebPortalSubtitle(m_webPortalSubtitle);
     tsStreamer->setWebPortalImagePath(m_webPortalImagePath);
     tsStreamer->setWebPortalBackgroundImagePath(m_webPortalBackgroundImagePath);
-    // IMPORTANTE: Passar cores apenas se arrays estiverem inicializados corretamente
-    // Os arrays são inicializados com valores padrão no construtor, então são sempre válidos
+    // IMPORTANT: Pass colors only if arrays are correctly initialized
+    // Arrays are initialized with default values in constructor, so they are always valid
     tsStreamer->setWebPortalColors(
         m_webPortalColorBackground, m_webPortalColorText, m_webPortalColorPrimary,
         m_webPortalColorPrimaryLight, m_webPortalColorPrimaryDark,
         m_webPortalColorSecondary, m_webPortalColorSecondaryHighlight,
         m_webPortalColorCardHeader, m_webPortalColorBorder,
         m_webPortalColorSuccess, m_webPortalColorWarning, m_webPortalColorDanger, m_webPortalColorInfo);
-    // Configurar textos editáveis
+    // Configure editable texts
     tsStreamer->setWebPortalTexts(
         m_webPortalTextStreamInfo, m_webPortalTextQuickActions, m_webPortalTextCompatibility,
         m_webPortalTextStatus, m_webPortalTextCodec, m_webPortalTextResolution,
@@ -1821,54 +2006,54 @@ bool Application::initStreaming()
         m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
         m_webPortalTextConnecting);
 
-    // Configurar HTTPS do Web Portal
+    // Configure Web Portal HTTPS
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
     {
-        // Os caminhos serão resolvidos no HTTPTSStreamer::start() que busca em vários locais
-        // Aqui apenas passamos os caminhos como configurados na UI
+        // Paths will be resolved in HTTPTSStreamer::start() which searches in multiple locations
+        // Here we just pass paths as configured in UI
         tsStreamer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
         tsStreamer->enableHTTPS(true);
-        LOG_INFO("HTTPS habilitado na configuração. Certificados serão buscados no diretório de execução.");
+        LOG_INFO("HTTPS enabled in configuration. Certificates will be searched in execution directory.");
     }
 
-    // Armazenar referência ao streamer antes de movê-lo para o StreamManager
+    // Store streamer reference before moving it to StreamManager
     m_currentStreamer = tsStreamer.get();
     m_streamManager->addStreamer(std::move(tsStreamer));
-    LOG_INFO("Usando HTTP MPEG-TS streamer (áudio + vídeo)");
+    LOG_INFO("Using HTTP MPEG-TS streamer (audio + video)");
 
     if (!m_streamManager->initialize(m_streamingPort, streamWidth, streamHeight, streamFps))
     {
-        LOG_ERROR("Falha ao inicializar StreamManager");
+        LOG_ERROR("Failed to initialize StreamManager");
         m_streamManager.reset();
         return false;
     }
 
     if (!m_streamManager->start())
     {
-        LOG_ERROR("Falha ao iniciar streaming");
+        LOG_ERROR("Failed to start streaming");
         m_streamManager.reset();
         return false;
     }
 
-    LOG_INFO("Streaming iniciado na porta " + std::to_string(m_streamingPort));
+    LOG_INFO("Streaming started on port " + std::to_string(m_streamingPort));
     auto urls = m_streamManager->getStreamUrls();
     for (const auto &url : urls)
     {
-        LOG_INFO("Stream disponível: " + url);
+        LOG_INFO("Stream available: " + url);
     }
 
-    // Limpar caminhos encontrados (serão atualizados quando o streaming realmente iniciar)
-    // Os caminhos são encontrados no HTTPTSStreamer::start(), mas não temos acesso direto aqui
-    // Vamos atualizar a UI periodicamente no loop principal
+    // Clear found paths (will be updated when streaming actually starts)
+    // Paths are found in HTTPTSStreamer::start(), but we don't have direct access here
+    // We'll update UI periodically in main loop
     m_foundSSLCertPath.clear();
     m_foundSSLKeyPath.clear();
 
-    // Initialize audio capture if not already initialized (sempre necessário para streaming)
+    // Initialize audio capture if not already initialized (always required for streaming)
     if (!m_audioCapture)
     {
         if (!initAudioCapture())
         {
-            LOG_WARN("Falha ao inicializar captura de áudio - continuando sem áudio");
+            LOG_WARN("Failed to initialize audio capture - continuing without audio");
         }
     }
 
@@ -1879,22 +2064,22 @@ bool Application::initWebPortal()
 {
     if (m_webPortalActive && m_webPortalServer)
     {
-        LOG_INFO("Portal Web já está ativo");
+        LOG_INFO("Web Portal is already active");
         return true;
     }
 
     if (!m_webPortalEnabled)
     {
-        LOG_WARN("Portal Web está desabilitado na configuração");
+        LOG_WARN("Web Portal is disabled in configuration");
         return false;
     }
 
-    LOG_INFO("Iniciando Portal Web independente...");
+    LOG_INFO("Starting independent Web Portal...");
 
-    // Criar HTTPTSStreamer apenas para o portal (sem streaming)
+    // Create HTTPTSStreamer only for portal (without streaming)
     m_webPortalServer = std::make_unique<HTTPTSStreamer>();
 
-    // Configurar Web Portal
+    // Configure Web Portal
     m_webPortalServer->enableWebPortal(true);
     m_webPortalServer->setWebPortalTitle(m_webPortalTitle);
     m_webPortalServer->setWebPortalSubtitle(m_webPortalSubtitle);
@@ -1914,22 +2099,22 @@ bool Application::initWebPortal()
         m_webPortalTextSupportedBrowsers, m_webPortalTextFormatInfo, m_webPortalTextCodecInfoValue,
         m_webPortalTextConnecting);
 
-    // Configurar API Controller
+    // Configure API Controller
     m_webPortalServer->setApplicationForAPI(this);
     m_webPortalServer->setUIManagerForAPI(m_ui.get());
 
-    // Configurar HTTPS
+    // Configure HTTPS
     if (m_webPortalHTTPSEnabled && !m_webPortalSSLCertPath.empty() && !m_webPortalSSLKeyPath.empty())
     {
         m_webPortalServer->setSSLCertificatePath(m_webPortalSSLCertPath, m_webPortalSSLKeyPath);
         m_webPortalServer->enableHTTPS(true);
-        LOG_INFO("HTTPS habilitado para Portal Web. Certificados serão buscados no diretório de execução.");
+        LOG_INFO("HTTPS enabled for Web Portal. Certificates will be searched in execution directory.");
     }
 
-    // Inicializar com dimensões dummy (não usadas para portal sem streaming)
+    // Initialize with dummy dimensions (not used for portal without streaming)
     if (!m_webPortalServer->initialize(m_streamingPort, 640, 480, 30))
     {
-        LOG_ERROR("Falha ao inicializar Portal Web");
+        LOG_ERROR("Failed to initialize Web Portal");
         m_webPortalServer.reset();
         return false;
     }
@@ -1937,18 +2122,18 @@ bool Application::initWebPortal()
     // Iniciar apenas o servidor HTTP (sem encoding thread)
     if (!m_webPortalServer->startWebPortalServer())
     {
-        LOG_ERROR("Falha ao iniciar servidor HTTP do Portal Web");
+        LOG_ERROR("Failed to start Web Portal HTTP server");
         m_webPortalServer.reset();
         return false;
     }
 
     m_webPortalActive = true;
-    LOG_INFO("Portal Web iniciado na porta " + std::to_string(m_streamingPort));
+    LOG_INFO("Web Portal started on port " + std::to_string(m_streamingPort));
     std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
                             std::string("localhost:") + std::to_string(m_streamingPort);
-    LOG_INFO("Portal Web disponível: " + portalUrl);
+    LOG_INFO("Web Portal available: " + portalUrl);
 
-    // Atualizar UI
+    // Update UI
     if (m_ui)
     {
         m_ui->setWebPortalActive(true);
@@ -1966,14 +2151,14 @@ void Application::stopWebPortal()
 
     LOG_INFO("Parando Portal Web...");
 
-    // Parar servidor HTTP
+    // Stop HTTP server
     m_webPortalServer->stop();
     m_webPortalServer.reset();
     m_webPortalActive = false;
 
-    LOG_INFO("Portal Web parado");
+    LOG_INFO("Web Portal stopped");
 
-    // Atualizar UI
+    // Update UI
     if (m_ui)
     {
         m_ui->setWebPortalActive(false);
@@ -1984,15 +2169,20 @@ bool Application::initAudioCapture()
 {
     if (!m_streamingEnabled)
     {
-        return true; // Audio não habilitado, não é erro
+        return true; // Audio not enabled, not an error
     }
 
-    m_audioCapture = std::make_unique<AudioCapture>();
+    m_audioCapture = AudioCaptureFactory::create();
+    if (!m_audioCapture)
+    {
+        LOG_ERROR("Failed to create AudioCapture for this platform");
+        return false;
+    }
 
     // Open default audio device (will create virtual sink)
     if (!m_audioCapture->open())
     {
-        LOG_ERROR("Falha ao abrir dispositivo de áudio");
+        LOG_ERROR("Failed to open audio device");
         m_audioCapture.reset();
         return false;
     }
@@ -2000,14 +2190,14 @@ bool Application::initAudioCapture()
     // Start capturing
     if (!m_audioCapture->startCapture())
     {
-        LOG_ERROR("Falha ao iniciar captura de áudio");
+        LOG_ERROR("Failed to start audio capture");
         m_audioCapture->close();
         m_audioCapture.reset();
         return false;
     }
 
-    LOG_INFO("Captura de áudio iniciada: " + std::to_string(m_audioCapture->getSampleRate()) +
-             "Hz, " + std::to_string(m_audioCapture->getChannels()) + " canais");
+    LOG_INFO("Audio capture started: " + std::to_string(m_audioCapture->getSampleRate()) +
+             "Hz, " + std::to_string(m_audioCapture->getChannels()) + " channels");
 
     return true;
 }
@@ -2016,14 +2206,14 @@ void Application::run()
 {
     if (!m_initialized)
     {
-        LOG_ERROR("Application não inicializada");
+        LOG_ERROR("Application not initialized");
         return;
     }
 
-    LOG_INFO("Iniciando loop principal...");
+    LOG_INFO("Starting main loop...");
 
-    // IMPORTANTE: Garantir que o viewport está atualizado antes do primeiro frame
-    // Isso é especialmente importante quando a janela é criada em fullscreen
+    // IMPORTANT: Ensure viewport is updated before first frame
+    // This is especially important when window is created in fullscreen
     if (m_shaderEngine)
     {
         uint32_t currentWidth = m_window->getWidth();
@@ -2035,149 +2225,171 @@ void Application::run()
     {
         m_window->pollEvents();
 
-        // Processar mudança de fullscreen pendente (fora do callback para evitar deadlock)
+        // Process pending fullscreen change (outside callback to avoid deadlock)
         if (m_pendingFullscreenChange && m_window)
         {
             m_pendingFullscreenChange = false;
             m_window->setFullscreen(m_fullscreen, m_monitorIndex);
-            // O callback de resize será chamado automaticamente pelo GLFW
-            // Não fazer setViewport aqui para evitar bloqueios
+            // The resize callback will be called automatically by GLFW
+            // Don't do setViewport here to avoid blocking
         }
 
-        // IMPORTANTE: Captura, processamento e streaming sempre continuam,
-        // independente do foco da janela. Isso garante que o streaming funcione
-        // mesmo quando a janela não está em foco.
+        // IMPORTANT: Capture, processing and streaming always continue,
+        // regardless of window focus. This ensures streaming works
+        // even when window is not focused.
 
-        // OPÇÃO A: Processar áudio continuamente na thread principal (independente de frames de vídeo)
-        // Processar TODOS os samples disponíveis em loop até esgotar
-        // Isso garante que o áudio seja processado continuamente mesmo se o loop principal não rodar a 60 FPS
-        // IMPORTANTE: Processar mainloop do PulseAudio sempre que áudio estiver aberto
-        // Isso é crítico para evitar que o PulseAudio trave o áudio do sistema
-        // O mainloop precisa ser processado regularmente, mesmo sem streaming ativo
+        // OPTION A: Process audio continuously in main thread (independent of video frames)
+        // Process ALL available samples in loop until exhausted
+        // This ensures audio is processed continuously even if main loop doesn't run at 60 FPS
+        // IMPORTANT: Process PulseAudio mainloop whenever audio is open
+        // This is critical to prevent PulseAudio from freezing system audio
+        // The mainloop needs to be processed regularly, even without active streaming
         if (m_audioCapture && m_audioCapture->isOpen())
         {
-            // Processar mainloop do PulseAudio para evitar bloqueio do áudio do sistema
-            // Isso deve ser feito sempre, não apenas quando streaming está ativo
+            // Process PulseAudio mainloop to avoid blocking system audio
+            // This should be done always, not only when streaming is active
             if (m_streamManager && m_streamManager->isActive())
             {
 
-            // Calcular tamanho do buffer baseado no tempo para sincronização
-            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
-            uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
+                // Calculate buffer size based on time for synchronization
+                uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+                uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
 
-            // Calcular samples correspondentes a 1 frame de vídeo
-            // Para 60 FPS e 44100Hz: 44100/60 = 735 samples por frame
-            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
-                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
-                                              : 512;
-            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+                // Calculate samples corresponding to 1 video frame
+                // For 60 FPS and 44100Hz: 44100/60 = 735 samples per frame
+                size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                                  ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                                  : 512;
+                samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
 
-            // Processar áudio em loop até esgotar todos os samples disponíveis
-            // OTIMIZAÇÃO: Reutilizar buffer para evitar alocações desnecessárias
-            // IMPORTANTE: Adicionar limite de iterações para evitar loop infinito que travaria a thread principal
-            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+                // Process audio in loop until all available samples are exhausted
+                // OPTIMIZATION: Reuse buffer to avoid unnecessary allocations
+                // IMPORTANT: Add iteration limit to avoid infinite loop that would freeze main thread
+                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
 
-            // Limite de iterações para evitar loop infinito (processar no máximo 10 frames de áudio por ciclo)
-            const int maxIterations = 10;
-            int iteration = 0;
+                // Iteration limit to avoid infinite loop (process at most 10 audio frames per cycle)
+                const int maxIterations = 10;
+                int iteration = 0;
 
-            while (iteration < maxIterations)
-            {
-                // Ler áudio em chunks correspondentes ao tempo de 1 frame de vídeo
-                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-
-                if (samplesRead > 0)
+                while (iteration < maxIterations)
                 {
-                    m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                    // Read audio in chunks corresponding to 1 video frame time
+                    size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
 
-                    // Se lemos menos que o esperado, não há mais samples disponíveis
-                    if (samplesRead < samplesPerVideoFrame)
+                    if (samplesRead > 0)
                     {
-                        break; // Não há mais samples disponíveis
+                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+
+                        // If we read less than expected, no more samples available
+                        if (samplesRead < samplesPerVideoFrame)
+                        {
+                            break; // No more samples available
+                        }
                     }
-                }
-                else
-                {
-                    // Não há mais samples disponíveis, parar
-                    break;
+                    else
+                    {
+                        // No more samples available, stop
+                        break;
+                    }
+
+                    iteration++;
                 }
 
-                iteration++;
-            }
-
-                // Se atingimos o limite, há muito áudio acumulado - logar apenas ocasionalmente
+                // If we reached the limit, too much audio accumulated - log only occasionally
                 if (iteration >= maxIterations)
                 {
                     static int logCount = 0;
                     if (logCount < 3)
                     {
-                        LOG_WARN("Áudio acumulado: processando em chunks para evitar bloqueio da thread principal");
+                        LOG_WARN("Audio accumulated: processing in chunks to avoid blocking main thread");
                         logCount++;
                     }
                 }
             }
             else
             {
-                // Streaming não está ativo, mas ainda precisamos processar o mainloop
-                // para evitar que o PulseAudio trave o áudio do sistema
-                // Ler e descartar samples para manter o buffer limpo
-                const size_t maxSamples = 4096; // Buffer temporário
+                // Streaming is not active, but we still need to process mainloop
+                // to prevent PulseAudio from freezing system audio
+                // Read and discard samples to keep buffer clean
+                const size_t maxSamples = 4096; // Temporary buffer
                 std::vector<int16_t> tempBuffer(maxSamples);
                 m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
         }
 
-        // Processar entrada de teclado (F12 para toggle UI)
+        // Process keyboard input (F12 to toggle UI)
         handleKeyInput();
 
-        // Iniciar frame do ImGui
+        // Start ImGui frame
         if (m_ui)
         {
             m_ui->beginFrame();
         }
 
-        // Tentar capturar e processar o frame mais recente (descartando frames antigos)
-        // IMPORTANTE: A captura sempre continua, mesmo quando a janela não está focada
-        // Isso garante que o streaming e processamento continuem funcionando
-        // IMPORTANTE: Só tentar capturar se o dispositivo estiver aberto
+        // Try to capture and process the latest frame (discarding old frames)
+        // IMPORTANT: Capture always continues, even when window is not focused
+        // This ensures streaming and processing continue working
+        // IMPORTANT: Try to capture if device is open OR in dummy mode
         bool newFrame = false;
-        if (m_capture && m_capture->isOpen())
+        // Process frames if device is open OR in dummy mode
+        bool shouldProcess = m_capture && (m_capture->isOpen() || m_capture->isDummyMode());
+
+        // Debug log for dummy mode
+        static bool dummyLogShown = false;
+        if (m_capture && m_capture->isDummyMode() && !dummyLogShown)
         {
-            // Tentar processar frame várias vezes se não temos textura válida
-            // Isso é importante após reconfiguração quando a textura foi deletada
+            LOG_INFO("Application: Processing dummy mode (isOpen: " + std::string(m_capture->isOpen() ? "true" : "false") +
+                     ", isDummyMode: " + std::string(m_capture->isDummyMode() ? "true" : "false") + ")");
+            dummyLogShown = true;
+        }
+
+        if (shouldProcess)
+        {
+            // Try to process frame multiple times if we don't have valid texture
+            // This is important after reconfiguration when texture was deleted
+            // In dummy mode, always try to process to ensure green frame appears
             int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
+            if (m_capture->isDummyMode())
+            {
+                maxAttempts = 5; // Always try multiple times in dummy mode
+            }
             for (int attempt = 0; attempt < maxAttempts; ++attempt)
             {
                 newFrame = m_frameProcessor->processFrame(m_capture.get());
+
                 if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
                 {
-                    break; // Frame processado com sucesso
+                    break; // Frame processed successfully
                 }
                 if (attempt < maxAttempts - 1)
                 {
-                    usleep(5000); // 5ms entre tentativas
+#ifdef PLATFORM_LINUX
+                    usleep(5000); // 5ms between attempts
+#else
+                    Sleep(5); // 5ms between attempts
+#endif
                 }
             }
         }
 
-        // Sempre renderizar se temos um frame válido
-        // Isso garante que estamos sempre mostrando o frame mais recente
+        // Always render if we have a valid frame
+        // This ensures we're always showing the latest frame
         if (m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
-            // Aplicar shader se estiver ativo
+            // Apply shader if active
             GLuint textureToRender = m_frameProcessor->getTexture();
             bool isShaderTexture = false;
 
             if (m_shaderEngine && m_shaderEngine->isShaderActive())
             {
-                // IMPORTANTE: Atualizar viewport com as dimensões da janela antes de aplicar o shader
-                // Isso garante que o último pass renderize para o tamanho correto da janela
-                // IMPORTANTE: Sempre usar dimensões atuais, especialmente quando entra em fullscreen
-                // IMPORTANTE: Validar dimensões antes de atualizar viewport para evitar problemas durante resize
+                // IMPORTANT: Update viewport with window dimensions before applying shader
+                // This ensures the last pass renders to the correct window size
+                // IMPORTANT: Always use current dimensions, especially when entering fullscreen
+                // IMPORTANT: Validate dimensions before updating viewport to avoid issues during resize
                 uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
                 uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
 
-                // Validar dimensões antes de atualizar viewport
+                // Validate dimensions before updating viewport
                 if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320)
                 {
                     m_shaderEngine->setViewport(currentWidth, currentHeight);
@@ -2188,37 +2400,36 @@ void Application::run()
                                                               m_frameProcessor->getTextureHeight());
                 isShaderTexture = true;
 
-                // DEBUG: Verificar textura retornada
+                // DEBUG: Check returned texture
                 if (textureToRender == 0)
                 {
-                    LOG_WARN("Shader retornou textura inválida (0), usando textura original");
+                    LOG_WARN("Shader returned invalid texture (0), using original texture");
                     textureToRender = m_frameProcessor->getTexture();
                     isShaderTexture = false;
                 }
                 else
                 {
-                    // Log removido para reduzir verbosidade
                 }
             }
 
-            // Limpar o framebuffer da janela antes de renderizar
-            // IMPORTANTE: O framebuffer 0 é a janela (default framebuffer)
-            // IMPORTANTE: Lock mutex para proteger durante resize
+            // Clear window framebuffer before rendering
+            // IMPORTANT: Framebuffer 0 is the window (default framebuffer)
+            // IMPORTANT: Lock mutex to protect during resize
             std::lock_guard<std::mutex> resizeLock(m_resizeMutex);
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-            // IMPORTANTE: Resetar viewport para o tamanho completo da janela
-            // Isso garante que a textura seja renderizada em toda a janela
-            // IMPORTANTE: Sempre atualizar viewport com as dimensões atuais da janela
-            // Isso é especialmente importante quando entra em fullscreen
+            // IMPORTANT: Reset viewport to full window size
+            // This ensures texture is rendered to entire window
+            // IMPORTANT: Always update viewport with current window dimensions
+            // This is especially important when entering fullscreen
             uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
             uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
 
-            // Validar dimensões antes de continuar
+            // Validate dimensions before continuing
             if (currentWidth == 0 || currentHeight == 0 || currentWidth > 7680 || currentHeight > 4320)
             {
-                // Dimensões inválidas, pular este frame
+                // Invalid dimensions, skip this frame
                 if (m_ui)
                 {
                     m_ui->endFrame();
@@ -2227,70 +2438,68 @@ void Application::run()
                 continue;
             }
 
-            // DEBUG: Log para verificar se as dimensões mudaram
+            // DEBUG: Log to check if dimensions changed
             static uint32_t lastViewportWidth = 0, lastViewportHeight = 0;
             if (currentWidth != lastViewportWidth || currentHeight != lastViewportHeight)
             {
-                // Log removido para reduzir verbosidade
                 lastViewportWidth = currentWidth;
                 lastViewportHeight = currentHeight;
             }
 
             glViewport(0, 0, currentWidth, currentHeight);
 
-            // IMPORTANTE: Para shaders com alpha (como Game Boy), não limpar com preto opaco
-            // Limpar com preto transparente para que o blending funcione corretamente
+            // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
+            // Clear with transparent black so blending works correctly
             if (isShaderTexture)
             {
-                glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparente para shaders com alpha
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparent for shaders with alpha
             }
             else
             {
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaco para captura normal
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
             }
             glClear(GL_COLOR_BUFFER_BIT);
 
-            // Para texturas do shader (framebuffer), inverter Y (shader renderiza invertido)
-            // Para textura original (câmera), não inverter Y (já está correta)
-            // IMPORTANTE: Se for textura do shader, pode precisar de blending para alpha
-            // Obter dimensões da textura para calcular aspect ratio
-            // IMPORTANTE: Para maintainAspect, sempre usar as dimensões da CAPTURA ORIGINAL
-            // porque o shader processa a imagem mas mantém a mesma proporção
-            // A textura de saída do shader pode ter dimensões da janela (viewport), não da imagem
+            // For shader textures (framebuffer), invert Y (shader renders inverted)
+            // For original texture (camera), don't invert Y (already correct)
+            // IMPORTANT: If shader texture, may need blending for alpha
+            // Get texture dimensions to calculate aspect ratio
+            // IMPORTANT: For maintainAspect, always use ORIGINAL CAPTURE dimensions
+            // because shader processes image but maintains same aspect ratio
+            // Shader output texture may have window (viewport) dimensions, not image dimensions
             uint32_t renderWidth, renderHeight;
             if (isShaderTexture && m_maintainAspect)
             {
-                // Para maintainAspect com shader, usar dimensões da captura original
-                // O shader processa mas mantém a proporção da imagem original
+                // For maintainAspect with shader, use original capture dimensions
+                // Shader processes but maintains original image aspect ratio
                 renderWidth = m_frameProcessor->getTextureWidth();
                 renderHeight = m_frameProcessor->getTextureHeight();
-                // Log removido para reduzir verbosidade
             }
             else if (isShaderTexture)
             {
-                // Sem maintainAspect, usar dimensões de saída do shader
+                // Without maintainAspect, use shader output dimensions
                 renderWidth = m_shaderEngine->getOutputWidth();
                 renderHeight = m_shaderEngine->getOutputHeight();
                 if (renderWidth == 0 || renderHeight == 0)
                 {
-                    LOG_WARN("Dimensões de saída do shader inválidas (0x0), usando dimensões da captura");
+                    LOG_WARN("Shader output dimensions invalid (0x0), using capture dimensions");
                     renderWidth = m_frameProcessor->getTextureWidth();
                     renderHeight = m_frameProcessor->getTextureHeight();
                 }
             }
             else
             {
-                // Sem shader, usar dimensões da captura
+                // Without shader, use capture dimensions
                 renderWidth = m_frameProcessor->getTextureWidth();
                 renderHeight = m_frameProcessor->getTextureHeight();
             }
 
-            // IMPORTANTE: A imagem da câmera vem invertida (Y invertido)
-            // Shaders também renderizam invertido, então ambos precisam de inversão Y
-            // flipY: true para ambos (câmera e shader precisam inverter)
+            // IMPORTANT: Camera image comes inverted (Y inverted)
+            // Shaders also render inverted, so both need Y inversion
+            // flipY: true for both (camera and shader need to invert)
             bool shouldFlipY = true;
 
-            // Calcular viewport onde a captura será renderizada (pode ser menor que a janela se maintainAspect estiver ativo)
+            // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
             uint32_t windowWidth = m_window->getWidth();
             uint32_t windowHeight = m_window->getHeight();
             GLint viewportX = 0;
@@ -2300,19 +2509,19 @@ void Application::run()
 
             if (m_maintainAspect && renderWidth > 0 && renderHeight > 0)
             {
-                // Calcular aspect ratio da textura e da janela (igual ao renderTexture)
+                // Calculate texture and window aspect ratio (same as renderTexture)
                 float textureAspect = static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
                 float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
 
                 if (textureAspect > windowAspect)
                 {
-                    // Textura é mais larga: ajustar altura (letterboxing)
+                    // Texture is wider: adjust height (letterboxing)
                     viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
                     viewportY = (windowHeight - viewportHeight) / 2;
                 }
                 else
                 {
-                    // Textura é mais alta: ajustar largura (pillarboxing)
+                    // Texture is taller: adjust width (pillarboxing)
                     viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
                     viewportX = (windowWidth - viewportWidth) / 2;
                 }
@@ -2346,7 +2555,7 @@ void Application::run()
 
                     for (uint32_t row = 0; row < captureHeight; row++)
                     {
-                        uint32_t srcRow = captureHeight - 1 - row; // Flip vertical
+                        uint32_t srcRow = captureHeight - 1 - row; // Vertical flip
                         uint32_t dstRow = row;
 
                         const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
@@ -2372,11 +2581,11 @@ void Application::run()
                 uint32_t clientCount = streamManager->getTotalClientCount();
                 m_ui->setStreamClientCount(clientCount);
 
-                // Atualizar cooldown (se ativo, pode iniciar e não há cooldown)
+                // Update cooldown (if active, can start and there's no cooldown)
                 m_ui->setCanStartStreaming(true);
                 m_ui->setStreamingCooldownRemainingMs(0);
 
-                // Atualizar informações do certificado SSL se HTTPS estiver ativo
+                // Update SSL certificate information if HTTPS is active
                 std::string foundCert = streamManager->getFoundSSLCertificatePath();
                 std::string foundKey = streamManager->getFoundSSLKeyPath();
 
@@ -2389,7 +2598,7 @@ void Application::run()
                 }
                 else
                 {
-                    // Limpar caminhos encontrados se HTTPS não estiver ativo
+                    // Clear found paths if HTTPS is not active
                     m_foundSSLCertPath.clear();
                     m_foundSSLKeyPath.clear();
                     m_ui->setFoundSSLCertificatePath("");
@@ -2402,7 +2611,7 @@ void Application::run()
                 m_ui->setStreamUrl("");
                 m_ui->setStreamClientCount(0);
 
-                // Atualizar cooldown do StreamManager se disponível
+                // Update StreamManager cooldown if available
                 if (streamManager)
                 {
                     bool canStart = streamManager->canStartStreaming();
@@ -2412,18 +2621,18 @@ void Application::run()
                 }
                 else
                 {
-                    // Se não há StreamManager, pode iniciar
+                    // If no StreamManager, can start
                     m_ui->setCanStartStreaming(true);
                     m_ui->setStreamingCooldownRemainingMs(0);
                 }
             }
 
-            // Renderizar UI (após capturar a área da captura)
+            // Render UI (after capturing capture area)
             if (m_ui)
             {
                 m_ui->render();
-                // IMPORTANTE: endFrame() deve ser chamado ANTES do swapBuffers()
-                // para que a UI seja renderizada no buffer correto
+                // IMPORTANT: endFrame() must be called BEFORE swapBuffers()
+                // so UI is rendered to correct buffer
                 m_ui->endFrame();
             }
 
@@ -2431,16 +2640,38 @@ void Application::run()
         }
         else
         {
-            // Se não há frame válido ainda, fazer um pequeno sleep
-            // IMPORTANTE: Captura continua mesmo sem frame válido para renderização
-            usleep(1000); // 1ms
+            // If no valid frame yet, we still need to render UI and update window
+            // so window is visible even without video frame
 
-            // IMPORTANTE: Sempre finalizar o frame do ImGui, mesmo se não renderizarmos nada
-            // Isso evita o erro "Forgot to call Render() or EndFrame()"
+            // Clear framebuffer
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            uint32_t currentWidth = m_window ? m_window->getWidth() : m_windowWidth;
+            uint32_t currentHeight = m_window ? m_window->getHeight() : m_windowHeight;
+
+            if (currentWidth > 0 && currentHeight > 0)
+            {
+                glViewport(0, 0, currentWidth, currentHeight);
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+
+            // IMPORTANT: Always finalize ImGui frame, even if we don't render anything
+            // This avoids the error "Forgot to call Render() or EndFrame()"
             if (m_ui)
             {
+                m_ui->render();
                 m_ui->endFrame();
             }
+
+            // IMPORTANT: Always do swapBuffers so window is updated and visible
+            m_window->swapBuffers();
+
+// Do a small sleep to not consume 100% CPU
+#ifdef PLATFORM_LINUX
+            usleep(1000); // 1ms
+#else
+            Sleep(1); // 1ms sleep
+#endif
         }
     }
 
@@ -2454,7 +2685,7 @@ void Application::shutdown()
         return;
     }
 
-    LOG_INFO("Encerrando Application...");
+    LOG_INFO("Shutting down Application...");
 
     if (m_frameProcessor)
     {
@@ -2497,9 +2728,9 @@ void Application::shutdown()
         m_window.reset();
     }
 
-    // SwsContext de resize foi removido - agora é feito no encoding
+    // SwsContext for resize was removed - now done in encoding
 
-    // OPÇÃO A: Não há mais thread de streaming para limpar
+    // OPTION A: No more streaming thread to clean up
 
     if (m_streamManager)
     {

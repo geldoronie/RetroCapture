@@ -4,10 +4,24 @@
 
 set -e
 
+# Build type: Release (default) or Debug
+BUILD_TYPE="${1:-Release}"
+
+# Validar build type
+if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
+    echo "❌ Build type inválido: $BUILD_TYPE"
+    echo ""
+    echo "Uso: $0 [Release|Debug]"
+    echo "  Release - Build otimizado para produção (padrão)"
+    echo "  Debug   - Build com símbolos de debug"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== RetroCapture AppImage Builder ==="
+echo "📦 Build type: $BUILD_TYPE"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -18,7 +32,7 @@ fi
 
 # Versão da aplicação (obtida do CMakeLists.txt)
 # Suporta versões com sufixos como -alpha, -beta, etc.
-VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.3.0-alpha")
+VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.4.0-alpha")
 APP_NAME="RetroCapture"
 APP_ID="com.retrocapture.app"
 APP_DIR="AppDir"
@@ -46,10 +60,31 @@ if [ -d "linuxdeploy-plugins" ]; then
     rm -rf linuxdeploy-plugins
 fi
 
-# Compilar a aplicação
+# Compilar a aplicação usando Docker
 echo ""
-echo "=== Compilando aplicação ==="
-./build.sh
+echo "=== Compilando aplicação usando Docker ==="
+if ! command -v docker &> /dev/null; then
+    echo "Erro: Docker não está instalado. É necessário para compilar a aplicação."
+    exit 1
+fi
+
+DOCKER_COMPOSE="docker-compose"
+if ! command -v docker-compose &> /dev/null && docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+fi
+
+echo "Construindo imagem Docker (se necessário)..."
+$DOCKER_COMPOSE build build-linux > /dev/null 2>&1 || $DOCKER_COMPOSE build build-linux
+
+echo "Compilando RetroCapture no container Docker..."
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux > build-linux.log 2>&1
+
+if [ $? -ne 0 ]; then
+    echo "Erro: Falha na compilação. Verifique build-linux.log para mais detalhes."
+    exit 1
+fi
+
+echo "Compilação concluída!"
 
 # Criar estrutura AppDir
 echo ""
@@ -65,12 +100,12 @@ mkdir -p "$APP_DIR/usr/share/retrocapture/ssl"
 
 # Copiar executável
 echo "Copiando executável..."
-if [ ! -f "build/bin/retrocapture" ]; then
-    echo "Erro: Executável não encontrado em build/bin/retrocapture"
-    echo "Execute ./build.sh primeiro para compilar a aplicação"
+if [ ! -f "build-linux/bin/retrocapture" ]; then
+    echo "Erro: Executável não encontrado em build-linux/bin/retrocapture"
+    echo "A compilação via Docker pode ter falhado. Verifique build-linux.log"
     exit 1
 fi
-cp build/bin/retrocapture "$APP_DIR/usr/bin/"
+cp build-linux/bin/retrocapture "$APP_DIR/usr/bin/"
 chmod +x "$APP_DIR/usr/bin/retrocapture"
 echo "Executável copiado: $(ls -lh "$APP_DIR/usr/bin/retrocapture" | awk '{print $5}')"
 
@@ -365,7 +400,12 @@ if [ -n "$APPIMAGETOOL" ]; then
         done
     }
     
-    copy_deps "$APP_DIR/usr/bin/retrocapture"
+    # Usar o executável do build-linux para copiar dependências
+    if [ -f "build-linux/bin/retrocapture" ]; then
+        copy_deps "build-linux/bin/retrocapture"
+    else
+        copy_deps "$APP_DIR/usr/bin/retrocapture"
+    fi
     
     # Gerar AppImage
     $APPIMAGETOOL "$APP_DIR" "$APPIMAGE_NAME"
@@ -394,5 +434,5 @@ echo "  chmod +x appimagetool-x86_64.AppImage"
 echo "  ./appimagetool $APP_DIR $APPIMAGE_NAME"
 echo ""
 echo "Estrutura criada. Copie manualmente as bibliotecas necessárias para $APP_DIR/usr/lib/"
-echo "Use 'ldd build/bin/retrocapture' para ver as dependências."
+echo "Use 'ldd build-linux/bin/retrocapture' para ver as dependências."
 

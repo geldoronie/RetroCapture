@@ -16,6 +16,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0-alpha] - 2025-12-15
+
+### Added
+
+- **Cross-Platform Support**: Native Windows support alongside existing Linux support
+
+  - **Windows Video Capture**: DirectShow implementation (`VideoCaptureDS`)
+    - Enumeration of DirectShow capture devices
+    - Hardware controls (brightness, contrast, saturation, etc.)
+    - Dummy mode for testing without capture device
+    - Compatible with MinGW/MXE and works in Wine
+  
+  - **Windows Audio Capture**: WASAPI implementation (`AudioCaptureWASAPI`)
+    - System audio capture via Windows Audio Session API
+    - Device enumeration via MMDevice API
+    - Thread-based capture for better performance
+  
+  - **Cross-Platform Architecture**:
+    - Abstract interfaces: `IVideoCapture` and `IAudioCapture`
+    - Factory pattern for platform-specific implementations
+    - Automatic platform detection in build system
+    - Shared code between platforms where possible
+
+- **Windows Distribution**:
+  - **Windows Installer (NSIS)**: Complete installer with all components
+    - Executable with embedded icon
+    - All required DLLs
+    - Shaders, assets, web portal, and SSL certificates
+    - Start Menu shortcuts with proper icons
+  - **Application Icon**: Embedded icon in Windows executable
+    - Icon appears in taskbar, file explorer, and shortcuts
+    - Icon configured in installer and application shortcuts
+
+- **Linux Improvements**:
+  - **WM_CLASS Configuration**: Proper application identification in window managers
+    - Application appears correctly in taskbar/launcher
+    - Proper window manager integration using X11
+    - Fixed "Unknown" application name issue
+
+- **Web Portal Enhancements**:
+  - **Platform Detection**: Automatic platform detection in web interface
+  - **Windows API Endpoints**: DirectShow-specific API endpoints
+    - `GET /api/v1/platform`: Platform and source type information
+    - `GET /api/v1/ds/devices`: DirectShow device enumeration
+    - `POST /api/v1/ds/device`: DirectShow device selection
+  - **Adaptive UI**: Interface adapts based on detected platform
+
+- **Build System**:
+  - Cross-compilation support for Windows from Linux
+  - Docker-based build system for Windows
+  - MXE/MinGW-w64 support
+  - Automatic platform-specific file exclusion
+
+### Changed
+
+- **Architecture Refactoring**:
+  - Migrated to abstract interfaces for video and audio capture
+  - Factory pattern for platform-specific implementations
+  - Improved code organization and separation of concerns
+  - Better cross-platform compatibility
+
+- **Documentation**:
+  - Updated README.md with cross-platform information
+  - Updated ARCHITECTURE.md with multiplatform architecture details
+  - Replaced version-specific "What's New" sections with general "Key Features"
+  - Removed temporary planning documents
+
+- **Code Standardization**:
+  - Standardized code formatting (braces on new lines, spacing)
+  - Translated log messages and comments from Portuguese to English
+  - Consistent code style across all files
+
+### Fixed
+
+- **Linux Window Manager**:
+  - Fixed application appearing as "Unknown" in taskbar/launcher
+  - Proper WM_CLASS configuration using X11
+
+- **Windows Networking**:
+  - Fixed Winsock initialization for Windows networking
+  - Proper cleanup of Winsock resources
+
+### Technical Details
+
+- **New Dependencies**: 
+  - Windows: DirectShow (COM), WASAPI, Winsock2
+  - Linux: X11 (for window manager integration)
+- **New Files**:
+  - `src/capture/IVideoCapture.h`: Video capture interface
+  - `src/capture/VideoCaptureFactory.h/cpp`: Video capture factory
+  - `src/capture/VideoCaptureDS.h/cpp`: Windows DirectShow implementation
+  - `src/audio/IAudioCapture.h`: Audio capture interface
+  - `src/audio/AudioCaptureFactory.h/cpp`: Audio capture factory
+  - `src/audio/AudioCaptureWASAPI.h/cpp`: Windows WASAPI implementation
+  - `src/retrocapture.rc`: Windows resource file for icon
+  - `assets/logo.ico`: Application icon
+- **Modified Files**:
+  - `CMakeLists.txt`: Cross-platform build configuration
+  - `src/core/Application.cpp`: Factory usage
+  - `src/output/WindowManager.cpp`: WM_CLASS configuration (Linux)
+  - `src/streaming/HTTPServer.cpp`: Winsock support (Windows)
+  - `src/streaming/APIController.cpp`: Windows API endpoints
+  - `src/web/control.js`: Platform detection
+  - `README.md`: Cross-platform documentation
+  - `docs/ARCHITECTURE.md`: Multiplatform architecture
+
+---
+
 ## [0.3.0-alpha] - 2025-12-03
 
 ### Added

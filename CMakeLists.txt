@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(RetroCapture VERSION 0.3.0 LANGUAGES CXX)
+project(RetroCapture VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,9 +17,21 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Incluir diretórios
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-# Encontrar dependências
-find_package(PkgConfig REQUIRED)
+# Detectar plataforma
+if(WIN32)
+    set(PLATFORM_WINDOWS ON)
+    message(STATUS "Plataforma: Windows")
+elseif(UNIX AND NOT APPLE)
+    set(PLATFORM_LINUX ON)
+    message(STATUS "Plataforma: Linux")
+elseif(APPLE)
+    set(PLATFORM_MACOS ON)
+    message(STATUS "Plataforma: macOS")
+else()
+    message(FATAL_ERROR "Plataforma não suportada")
+endif()
 
+# Encontrar dependências
 # OpenGL
 find_package(OpenGL REQUIRED)
 
@@ -27,28 +39,119 @@ find_package(OpenGL REQUIRED)
 find_package(glfw3 QUIET)
 
 if(NOT glfw3_FOUND)
-    pkg_check_modules(GLFW REQUIRED glfw3)
-    set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
-    set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+    if(PLATFORM_LINUX)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GLFW REQUIRED glfw3)
+        set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
+        set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+    elseif(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
+        # Cross-compiling: primeiro tentar find_package (funciona com MXE)
+        # MXE fornece arquivos CMake config para glfw3
+        find_package(glfw3 QUIET)
+
+        if(NOT glfw3_FOUND)
+            # Fallback: tentar encontrar GLFW manualmente no sistema MinGW-w64
+            find_path(GLFW_INCLUDE_DIR GLFW/glfw3.h
+                PATHS
+                /usr/x86_64-w64-mingw32/include
+                /usr/x86_64-w64-mingw32/include/GLFW
+                ${CMAKE_FIND_ROOT_PATH}/include
+                ${CMAKE_FIND_ROOT_PATH}/include/GLFW
+            )
+            find_library(GLFW_LIBRARY
+                NAMES glfw3 glfw
+                PATHS
+                /usr/x86_64-w64-mingw32/lib
+                ${CMAKE_FIND_ROOT_PATH}/lib
+            )
+
+            if(GLFW_INCLUDE_DIR AND GLFW_LIBRARY)
+                set(glfw3_FOUND TRUE)
+                set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIR})
+                set(GLFW_LIBRARIES ${GLFW_LIBRARY})
+            endif()
+        endif()
+
+        if(NOT glfw3_FOUND)
+            message(WARNING "GLFW não encontrado para MinGW-w64.")
+            message(WARNING "Opções:")
+            message(WARNING "  1. Compilar GLFW manualmente para MinGW-w64")
+            message(WARNING "  2. Usar MXE para compilar dependências: ./setup-mxe.sh")
+            message(WARNING "  3. Usar bibliotecas pré-compiladas")
+            message(FATAL_ERROR "GLFW é necessário. Veja docs/STATUS_WINDOWS_PORT.md e docs/WINDOWS_CROSS_COMPILE.md para mais informações.")
+        endif()
+    else()
+        message(FATAL_ERROR "GLFW não encontrado. Instale glfw3.")
+    endif()
 endif()
 
-# V4L2 (via libv4l2)
-pkg_check_modules(V4L2 REQUIRED libv4l2)
-
 # PNG (via libpng)
-pkg_check_modules(PNG REQUIRED libpng)
+if(PLATFORM_LINUX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PNG REQUIRED libpng)
+else()
+    # Windows: tentar pkg-config primeiro (MXE), depois find_package
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PNG REQUIRED libpng)
+    else()
+        find_package(PNG REQUIRED)
+    endif()
+endif()
 
 # FFmpeg for streaming
-pkg_check_modules(AVCODEC REQUIRED libavcodec)
-pkg_check_modules(AVFORMAT REQUIRED libavformat)
-pkg_check_modules(AVUTIL REQUIRED libavutil)
-pkg_check_modules(SWSCALE REQUIRED libswscale)
-pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+if(PLATFORM_LINUX)
+    pkg_check_modules(AVCODEC REQUIRED libavcodec)
+    pkg_check_modules(AVFORMAT REQUIRED libavformat)
+    pkg_check_modules(AVUTIL REQUIRED libavutil)
+    pkg_check_modules(SWSCALE REQUIRED libswscale)
+    pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+else()
+    # Windows: usar pkg-config (MXE) ou find_package (vcpkg)
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        # MXE fornece pkg-config, então usar isso
+        pkg_check_modules(AVCODEC REQUIRED libavcodec)
+        pkg_check_modules(AVFORMAT REQUIRED libavformat)
+        pkg_check_modules(AVUTIL REQUIRED libavutil)
+        pkg_check_modules(SWSCALE REQUIRED libswscale)
+        pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    else()
+        # Tentar encontrar via find_package (vcpkg)
+        find_package(FFmpeg QUIET COMPONENTS avcodec avformat avutil swscale swresample)
+
+        if(FFmpeg_FOUND)
+            set(AVCODEC_LIBRARIES avcodec)
+            set(AVFORMAT_LIBRARIES avformat)
+            set(AVUTIL_LIBRARIES avutil)
+            set(SWSCALE_LIBRARIES swscale)
+            set(SWRESAMPLE_LIBRARIES swresample)
+        else()
+            message(FATAL_ERROR "FFmpeg não encontrado. Use MXE (./setup-mxe.sh) ou vcpkg para instalar.")
+        endif()
+
+        set(AVCODEC_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(AVFORMAT_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(AVUTIL_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(SWSCALE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        set(SWRESAMPLE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+    endif()
+endif()
 
 # HTTP server implementado internamente (HTTPServer.cpp)
 
-# PulseAudio for audio capture
-pkg_check_modules(PULSE REQUIRED libpulse)
+# V4L2 (Linux only)
+if(PLATFORM_LINUX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(V4L2 REQUIRED libv4l2)
+endif()
+
+# PulseAudio (Linux only)
+if(PLATFORM_LINUX)
+    pkg_check_modules(PULSE REQUIRED libpulse)
+endif()
 
 # OpenSSL for HTTPS support - sempre habilitado se disponível
 # Tentar encontrar OpenSSL primeiro
@@ -88,22 +191,71 @@ else()
     message(STATUS "=== HTTPS Support: DISABLED ===")
 endif()
 
-# ImGui (via FetchContent)
-include(FetchContent)
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG docking
-)
-FetchContent_MakeAvailable(imgui)
+# ImGui e nlohmann/json (usando ExternalProject para compatibilidade com CMake 3.10)
+# Verificar se FetchContent está disponível (CMake 3.11+)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
+    include(FetchContent)
+    FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG docking
+    )
+    FetchContent_MakeAvailable(imgui)
 
-# nlohmann/json (header-only JSON library)
-FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-)
-FetchContent_MakeAvailable(json)
+    FetchContent_Declare(
+        json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+    )
+    FetchContent_MakeAvailable(json)
+else()
+    # Fallback para CMake 3.10: baixar manualmente durante configure
+    set(IMGUI_DIR ${CMAKE_BINARY_DIR}/_deps/imgui-src)
+    set(JSON_DIR ${CMAKE_BINARY_DIR}/_deps/json-src)
+
+    # Baixar ImGui se não existir
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        message(STATUS "Baixando ImGui...")
+
+        # Remover diretório se existir mas estiver vazio ou corrompido
+        if(EXISTS ${IMGUI_DIR})
+            file(REMOVE_RECURSE ${IMGUI_DIR})
+        endif()
+
+        file(MAKE_DIRECTORY ${IMGUI_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch docking https://github.com/ocornut/imgui.git ${IMGUI_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar ImGui")
+        endif()
+    endif()
+
+    # Baixar nlohmann/json se não existir
+    if(NOT EXISTS ${JSON_DIR}/include/nlohmann/json.hpp)
+        message(STATUS "Baixando nlohmann/json...")
+
+        # Remover diretório se existir mas estiver vazio ou corrompido
+        if(EXISTS ${JSON_DIR})
+            file(REMOVE_RECURSE ${JSON_DIR})
+        endif()
+
+        file(MAKE_DIRECTORY ${JSON_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git ${JSON_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar nlohmann/json")
+        endif()
+    endif()
+
+    set(imgui_SOURCE_DIR ${IMGUI_DIR})
+    set(json_SOURCE_DIR ${JSON_DIR})
+endif()
 
 # Criar target para ImGui
 add_library(imgui STATIC
@@ -124,11 +276,11 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC
     glfw
     OpenGL::GL
-    X11
 )
 
-# Threading
-find_package(Threads REQUIRED)
+if(PLATFORM_LINUX)
+    target_link_libraries(imgui PUBLIC X11)
+endif()
 
 # Fontes
 file(GLOB_RECURSE SOURCES
@@ -136,42 +288,158 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
+# Excluir implementações de outras plataformas
+if(PLATFORM_LINUX)
+    # No Linux, excluir implementações Windows (quando existirem)
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+elseif(PLATFORM_WINDOWS)
+    # No Windows, excluir implementações Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+
+    # Excluir arquivos Linux genéricos que não têm versão Windows
+    list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/AudioCapture\\.cpp$") # AudioCapture.cpp é Linux
+
+    # HTTPServer.cpp foi adaptado para Windows - incluir no build
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/HTTPServer\\.cpp$")      # HTTPServer.cpp agora suporta Windows
+    # OpenGLRenderer.cpp e FrameProcessor.cpp agora suportam Windows (usam #ifdef __linux__)
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/OpenGLRenderer\\.cpp$") # OpenGLRenderer.cpp agora suporta Windows
+    # list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp agora suporta Windows
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
+endif()
+
 # Executável principal
-add_executable(retrocapture
-    ${SOURCES}
-)
+if(PLATFORM_WINDOWS)
+    # Adicionar arquivo de recursos (.rc) para ícone do executável
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/retrocapture.rc" AND EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        # Copiar logo.ico para o diretório de build antes de compilar
+        # Usar add_custom_command para garantir que seja copiado durante o build
+        add_custom_command(
+            OUTPUT "${CMAKE_BINARY_DIR}/logo.ico"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/logo.ico"
+                "${CMAKE_BINARY_DIR}/logo.ico"
+            DEPENDS "${CMAKE_SOURCE_DIR}/assets/logo.ico"
+            COMMENT "Copying logo.ico for resource compilation"
+        )
+        
+        add_executable(retrocapture
+            ${SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/retrocapture.rc
+            "${CMAKE_BINARY_DIR}/logo.ico"
+        )
+        message(STATUS "Windows resource file (.rc) added for executable icon")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/src/retrocapture.rc")
+        add_executable(retrocapture
+            ${SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/retrocapture.rc
+        )
+        message(WARNING "logo.ico not found, executable icon may not work correctly")
+    else()
+        add_executable(retrocapture
+            ${SOURCES}
+        )
+        message(WARNING "retrocapture.rc not found, executable will not have custom icon")
+    endif()
+else()
+    add_executable(retrocapture
+        ${SOURCES}
+    )
+endif()
+
+# Definir macros de plataforma
+if(PLATFORM_LINUX)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_LINUX)
+elseif(PLATFORM_WINDOWS)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_WINDOWS)
+elseif(PLATFORM_MACOS)
+    target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
+endif()
+
+# Threading
+find_package(Threads REQUIRED)
 
 # Link libraries
+set(LINK_LIBS
+    OpenGL::GL
+    Threads::Threads
+    imgui
+)
+
 if(glfw3_FOUND)
-    target_link_libraries(retrocapture PRIVATE
-        OpenGL::GL
-        glfw
-        ${V4L2_LIBRARIES}
-        ${PNG_LIBRARIES}
-        ${AVCODEC_LIBRARIES}
-        ${AVFORMAT_LIBRARIES}
-        ${AVUTIL_LIBRARIES}
-        ${SWSCALE_LIBRARIES}
-        ${SWRESAMPLE_LIBRARIES}
-        ${PULSE_LIBRARIES}
-        Threads::Threads
-        imgui
-    )
+    list(APPEND LINK_LIBS glfw)
 else()
-    target_link_libraries(retrocapture PRIVATE
-        OpenGL::GL
-        ${GLFW_LIBRARIES}
-        ${V4L2_LIBRARIES}
-        ${PNG_LIBRARIES}
-        ${AVCODEC_LIBRARIES}
-        ${AVFORMAT_LIBRARIES}
-        ${AVUTIL_LIBRARIES}
-        ${SWSCALE_LIBRARIES}
-        ${SWRESAMPLE_LIBRARIES}
-        ${PULSE_LIBRARIES}
-        Threads::Threads
-        imgui
+    list(APPEND LINK_LIBS ${GLFW_LIBRARIES})
+endif()
+
+list(APPEND LINK_LIBS
+    ${PNG_LIBRARIES}
+    ${AVCODEC_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
+    ${SWSCALE_LIBRARIES}
+    ${SWRESAMPLE_LIBRARIES}
+)
+
+# Bibliotecas específicas de plataforma
+if(PLATFORM_LINUX)
+    # X11 is needed for WM_CLASS setting in WindowManager
+    find_package(X11 QUIET)
+    if(X11_FOUND)
+        list(APPEND LINK_LIBS ${X11_LIBRARIES})
+        list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIR})
+    else()
+        # Fallback: try to find X11 via pkg-config
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(X11 QUIET x11)
+            if(X11_FOUND)
+                list(APPEND LINK_LIBS ${X11_LIBRARIES})
+                list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIRS})
+            endif()
+        endif()
+    endif()
+    list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
+elseif(PLATFORM_WINDOWS)
+    # Windows DirectShow libraries
+    list(APPEND LINK_LIBS
+        strmiids # DirectShow (Streaming Media IDs)
+        ole32 # COM
+        oleaut32 # COM Automation
     )
+
+    # Windows Audio Session API (WASAPI) libraries
+    list(APPEND LINK_LIBS
+        avrt
+
+        # propsys não está disponível no MXE - PKEY_Device_FriendlyName está definido estaticamente no código
+    )
+endif()
+
+target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
+
+# MinGW-w64 precisa linkar com stdc++fs para filesystem (GCC 8+)
+# Para GCC < 8, nossa implementação manual usa shlwapi
+if(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Verificar versão do GCC
+    execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} -dumpversion
+        OUTPUT_VARIABLE GCC_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if(GCC_VERSION VERSION_GREATER_EQUAL "8.0")
+        target_link_libraries(retrocapture PRIVATE stdc++fs)
+    else()
+        # GCC < 8: usar nossa implementação manual que precisa de shlwapi
+        target_link_libraries(retrocapture PRIVATE shlwapi)
+    endif()
 endif()
 
 # Include directories
@@ -181,16 +449,21 @@ if(NOT glfw3_FOUND)
     )
 endif()
 
-target_include_directories(retrocapture PRIVATE
-    ${V4L2_INCLUDE_DIRS}
+set(INCLUDE_DIRS
     ${PNG_INCLUDE_DIRS}
     ${AVCODEC_INCLUDE_DIRS}
     ${AVFORMAT_INCLUDE_DIRS}
     ${AVUTIL_INCLUDE_DIRS}
     ${SWSCALE_INCLUDE_DIRS}
     ${SWRESAMPLE_INCLUDE_DIRS}
-    ${PULSE_INCLUDE_DIRS}
 )
+
+# Include directories específicos de plataforma
+if(PLATFORM_LINUX)
+    list(APPEND INCLUDE_DIRS ${V4L2_INCLUDE_DIRS} ${PULSE_INCLUDE_DIRS})
+endif()
+
+target_include_directories(retrocapture PRIVATE ${INCLUDE_DIRS})
 
 # Adicionar include do nlohmann/json (header-only, não precisa linkar)
 # O nlohmann/json é header-only, então precisamos apenas adicionar o diretório de include
@@ -225,12 +498,8 @@ target_compile_options(retrocapture PRIVATE
 )
 
 # Linker flags específicas por build type
-target_link_options(retrocapture PRIVATE
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Release>:>
-    $<$<CONFIG:RelWithDebInfo>:-g>
-    $<$<CONFIG:MinSizeRel>:>
-)
+# target_link_options não disponível no CMake 3.10 (requer 3.13+)
+# As flags de linker são opcionais e não críticas para o build
 
 # Copiar pasta de shaders para o diretório de build
 # Isso garante que o binário encontre os shaders corretamente ao executar
@@ -303,7 +572,191 @@ if(HTTPS_ENABLED)
         target_include_directories(retrocapture PRIVATE ${OPENSSL_INCLUDE_DIRS})
         target_compile_definitions(retrocapture PRIVATE ENABLE_HTTPS)
     endif()
+
+    # Resolver conflito de símbolos duplicados entre OpenSSL e GnuTLS (usado pelo FFmpeg)
+    # Ambos definem funções AES-NI, então precisamos permitir múltiplas definições
+    if(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
+        # Usar --allow-multiple-definition para resolver conflitos de símbolos
+        # Isso é necessário porque FFmpeg linka com GnuTLS que tem suas próprias implementações AES-NI
+        # que conflitam com as do OpenSSL
+        # CMake 3.10 não tem target_link_options, então usamos set_target_properties
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            get_target_property(CURRENT_LINK_FLAGS retrocapture LINK_FLAGS)
+
+            if(CURRENT_LINK_FLAGS)
+                set_target_properties(retrocapture PROPERTIES
+                    LINK_FLAGS "${CURRENT_LINK_FLAGS} -Wl,--allow-multiple-definition"
+                )
+            else()
+                set_target_properties(retrocapture PROPERTIES
+                    LINK_FLAGS "-Wl,--allow-multiple-definition"
+                )
+            endif()
+        endif()
+    endif()
 endif()
 
-# Instalação
-install(TARGETS retrocapture DESTINATION bin)
+# Instalação e CPack configuration
+if(PLATFORM_WINDOWS)
+    # CPack configuration for Windows installer
+    # IMPORTANTE: Todas as variáveis CPACK_* devem ser definidas ANTES do include(CPack)
+
+    # Basic package information
+    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_PACKAGE_NAME "RetroCapture")
+    set(CPACK_PACKAGE_VENDOR "RetroCapture")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Video capture with RetroArch shader support")
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+
+    # Pasta de instalação: apenas "RetroCapture" sem versão
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "RetroCapture")
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "RetroCapture")
+
+    # NSIS: garantir que não adicione versão ao diretório de instalação
+    set(CPACK_NSIS_INSTALL_DIRECTORY "$PROGRAMFILES\\RetroCapture")
+
+    # Definir nome do arquivo do instalador explicitamente
+    # Formato: RetroCapture-{VERSION}-Windows-Setup.exe
+    # IMPORTANTE: Deve ser definido ANTES do include(CPack)
+    # Usar PROJECT_VERSION diretamente para garantir que está usando a versão correta
+    set(CPACK_PACKAGE_FILE_NAME "RetroCapture-${PROJECT_VERSION}-Windows-Setup")
+    message(STATUS "CPack package file name: ${CPACK_PACKAGE_FILE_NAME}")
+
+    # License file - incluir texto do LICENSE na etapa de licença do instalador
+    if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
+        set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+        message(STATUS "License file configurado: ${CPACK_RESOURCE_FILE_LICENSE}")
+    else()
+        message(WARNING "Arquivo LICENSE não encontrado em ${CMAKE_SOURCE_DIR}/LICENSE")
+    endif()
+
+    # Garantir que a página de licença seja exibida (não ignorar)
+    set(CPACK_NSIS_IGNORE_LICENSE_PAGE OFF)
+
+    # Icon/logo for installer
+    # NSIS prefers .ico files for installer icon
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        message(STATUS "Using logo.ico for NSIS installer icon")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.png")
+        # Fallback to PNG if .ico is not available
+        set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/logo.png")
+        message(STATUS "Using logo.png for NSIS installer icon (fallback)")
+    endif()
+
+    # NSIS specific settings
+    set(CPACK_NSIS_PACKAGE_NAME "RetroCapture")
+    set(CPACK_NSIS_DISPLAY_NAME "RetroCapture ${PROJECT_VERSION}")
+    set(CPACK_NSIS_HELP_LINK "https://github.com/yourusername/retrocapture")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/yourusername/retrocapture")
+    set(CPACK_NSIS_CONTACT "your-email@example.com")
+    set(CPACK_NSIS_MODIFY_PATH ON) # Adicionar ao PATH
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON) # Desinstalar versão anterior se existir
+
+    # Configurar caminho do NSIS (CPack precisa encontrar makensis)
+    # Tentar encontrar makensis no sistema
+    find_program(NSIS_MAKENSIS makensis PATHS /usr/bin /usr/local/bin)
+
+    if(NSIS_MAKENSIS)
+        set(CPACK_NSIS_EXECUTABLE "${NSIS_MAKENSIS}")
+        message(STATUS "NSIS encontrado: ${NSIS_MAKENSIS}")
+    else()
+        message(WARNING "NSIS makensis não encontrado. CPack pode falhar ao gerar instalador.")
+    endif()
+
+    # Component descriptions (devem estar antes do include(CPack))
+    set(CPACK_COMPONENT_APPLICATION_DISPLAY_NAME "RetroCapture Application")
+    set(CPACK_COMPONENT_APPLICATION_DESCRIPTION "Main RetroCapture executable and required DLLs")
+    set(CPACK_COMPONENT_APPLICATION_REQUIRED ON)
+
+    set(CPACK_COMPONENT_SHADERS_DISPLAY_NAME "Shader Presets")
+    set(CPACK_COMPONENT_SHADERS_DESCRIPTION "RetroArch-compatible shader presets")
+    set(CPACK_COMPONENT_SHADERS_REQUIRED ON)
+
+    set(CPACK_COMPONENT_ASSETS_DISPLAY_NAME "Assets")
+    set(CPACK_COMPONENT_ASSETS_DESCRIPTION "Application assets (icons, logos, etc.)")
+    set(CPACK_COMPONENT_ASSETS_REQUIRED ON)
+
+    set(CPACK_COMPONENT_WEB_DISPLAY_NAME "Web Portal")
+    set(CPACK_COMPONENT_WEB_DESCRIPTION "Web-based control interface")
+    set(CPACK_COMPONENT_WEB_REQUIRED ON)
+
+    set(CPACK_COMPONENT_SSL_DISPLAY_NAME "SSL Certificates")
+    set(CPACK_COMPONENT_SSL_DESCRIPTION "SSL certificates for HTTPS support")
+    set(CPACK_COMPONENT_SSL_REQUIRED ON)
+
+    # Create Start Menu shortcuts (devem estar antes do include(CPack))
+    # The shortcut will automatically use the icon embedded in retrocapture.exe
+    # Windows extracts the icon from the executable automatically
+    set(CPACK_NSIS_CREATE_ICONS_EXTRA
+        "CreateShortCut '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+    )
+    set(CPACK_NSIS_DELETE_ICONS_EXTRA
+        "Delete '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk'"
+    )
+
+    # Create Desktop shortcut (optional)
+    # set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+    # "CreateShortCut '$DESKTOP\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+    # )
+    # set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
+    # )
+
+    # Incluir CPack APÓS todas as configurações CPACK_*
+    include(CPack)
+
+    # Install components
+    # Executável e DLLs
+    install(TARGETS retrocapture
+        RUNTIME DESTINATION bin
+        COMPONENT application
+    )
+
+    # Shaders
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl"
+        DESTINATION share/retrocapture/shaders
+        COMPONENT shaders
+        FILES_MATCHING PATTERN "*"
+    )
+
+    # Assets (logo, etc.)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets"
+            DESTINATION share/retrocapture
+            COMPONENT assets
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # Web portal
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/web")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/web"
+            DESTINATION share/retrocapture
+            COMPONENT web
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # SSL certificates
+    if(EXISTS "${CMAKE_SOURCE_DIR}/ssl")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/ssl"
+            DESTINATION share/retrocapture
+            COMPONENT ssl
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # Mensagens de status (após include(CPack) e install)
+    message(STATUS "CPack configured for Windows installer (NSIS)")
+    message(STATUS "  Package name: ${CPACK_PACKAGE_NAME}")
+    message(STATUS "  Version: ${CPACK_PACKAGE_VERSION}")
+    message(STATUS "  Generator: ${CPACK_GENERATOR}")
+
+    if(DEFINED CPACK_PACKAGE_FILE_NAME)
+        message(STATUS "  Output file: ${CPACK_PACKAGE_FILE_NAME}.exe")
+    endif()
+else()
+    # Instalação padrão para outras plataformas
+    install(TARGETS retrocapture DESTINATION bin)
+endif()

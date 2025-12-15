@@ -1,9 +1,12 @@
 #include "UIManager.h"
 #include "UIConfiguration.h"
+#include "UICredits.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
+#ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
-#include "../capture/VideoCapture.h"
+#endif
+#include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
 #define GLFW_INCLUDE_NONE
@@ -11,25 +14,28 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <filesystem>
+#endif
+#include "../utils/FilesystemCompat.h"
 #include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
-    : m_configWindow(nullptr)
+    : m_configWindow(nullptr), m_creditsWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
-    // Destruir janela de configuração antes de shutdown
+    // Destruir janelas antes de shutdown
     m_configWindow.reset();
+    m_creditsWindow.reset();
     shutdown();
 }
 
@@ -42,27 +48,24 @@ bool UIManager::init(GLFWwindow *window)
 
     m_window = window;
 
-    // IMPORTANTE: Garantir que o contexto OpenGL está ativo antes de inicializar ImGui
-    // O ImGui precisa de um contexto OpenGL válido e ativo para inicializar corretamente
+    // Ensure OpenGL context is active before initializing ImGui
     if (window)
     {
         glfwMakeContextCurrent(window);
     }
     else
     {
-        LOG_ERROR("Janela GLFW inválida para inicializar ImGui");
+        LOG_ERROR("Invalid GLFW window for ImGui initialization");
         return false;
     }
 
-    // IMPORTANTE: Verificar se as funções OpenGL foram carregadas antes de inicializar ImGui
-    // O ImGui precisa de glGenVertexArrays que é carregado via loadOpenGLFunctions()
-    // Se não estiver carregado, o ImGui falhará ao tentar criar VAOs
+    // Verify OpenGL functions are loaded before initializing ImGui
     if (!glGenVertexArrays)
     {
-        LOG_ERROR("Funções OpenGL não foram carregadas. Carregando agora...");
+        LOG_ERROR("OpenGL functions not loaded. Loading now...");
         if (!loadOpenGLFunctions())
         {
-            LOG_ERROR("Falha ao carregar funções OpenGL para ImGui");
+            LOG_ERROR("Failed to load OpenGL functions for ImGui");
             return false;
         }
     }
@@ -73,16 +76,12 @@ bool UIManager::init(GLFWwindow *window)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Configurar nome do arquivo de configuração para usar o nome da aplicação
     io.IniFilename = "RetroCapture.ini";
-
-    // Remover apenas o arquivo de configuração antigo (imgui.ini) se existir
-    // O RetroCapture.ini pode ser criado normalmente
     std::string oldIniPath = "imgui.ini";
-    if (std::filesystem::exists(oldIniPath))
+    if (fs::exists(oldIniPath))
     {
-        std::filesystem::remove(oldIniPath);
-        LOG_INFO("Arquivo de configuração antigo removido: " + oldIniPath);
+        fs::remove(oldIniPath);
+        LOG_INFO("Old configuration file removed: " + oldIniPath);
     }
 
     // Setup Dear ImGui style
@@ -92,25 +91,23 @@ bool UIManager::init(GLFWwindow *window)
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    // Scan for shaders
-    // Verificar se há variável de ambiente para o caminho dos shaders (útil para AppImage)
+    // Scan for shaders (check environment variable for AppImage support)
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-    if (envShaderPath && std::filesystem::exists(envShaderPath))
+    if (envShaderPath && fs::exists(envShaderPath))
     {
         m_shaderBasePath = envShaderPath;
     }
     scanShaders(m_shaderBasePath);
 
-    // Carregar configurações salvas
     loadConfig();
 
-    // Criar janela de configuração
     m_configWindow = std::make_unique<UIConfiguration>(this);
-    m_configWindow->setVisible(true);    // Visível por padrão
-    m_configWindow->setJustOpened(true); // Marcar como recém-aberta
+    m_creditsWindow = std::make_unique<UICredits>(this);
+    m_configWindow->setVisible(true);
+    m_configWindow->setJustOpened(true);
 
     m_initialized = true;
-    LOG_INFO("UIManager inicializado");
+    LOG_INFO("UIManager initialized");
     return true;
 }
 
@@ -121,13 +118,11 @@ void UIManager::shutdown()
         return;
     }
 
-    // Remover apenas o arquivo antigo (imgui.ini) se ainda existir
-    // O RetroCapture.ini pode ser mantido
     std::string oldIniPath = "imgui.ini";
-    if (std::filesystem::exists(oldIniPath))
+    if (fs::exists(oldIniPath))
     {
-        std::filesystem::remove(oldIniPath);
-        LOG_INFO("Arquivo de configuração antigo removido no shutdown: " + oldIniPath);
+        fs::remove(oldIniPath);
+        LOG_INFO("Old configuration file removed during shutdown: " + oldIniPath);
     }
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -144,8 +139,7 @@ void UIManager::beginFrame()
         return;
     }
 
-    // IMPORTANTE: Sempre chamar NewFrame, mesmo quando UI está oculta
-    // Isso mantém o estado do ImGui correto e permite toggle funcionar
+    // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -158,7 +152,6 @@ void UIManager::endFrame()
         return;
     }
 
-    // Renderizar apenas se a UI estiver visível
     if (m_uiVisible)
     {
         ImGui::Render();
@@ -178,7 +171,6 @@ void UIManager::render()
         return;
     }
 
-    // Main menu bar fixo no topo
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
@@ -214,6 +206,18 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Help"))
+        {
+            if (m_creditsWindow)
+            {
+                bool visible = m_creditsWindow->isVisible();
+                if (ImGui::MenuItem("Credits", nullptr, visible))
+                {
+                    m_creditsWindow->setVisible(!visible);
+                }
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
     }
 
@@ -221,6 +225,12 @@ void UIManager::render()
     if (m_configWindow)
     {
         m_configWindow->render();
+    }
+
+    // Renderizar janela de créditos
+    if (m_creditsWindow)
+    {
+        m_creditsWindow->render();
     }
 }
 
@@ -238,7 +248,7 @@ void UIManager::renderShaderPanel()
             {
                 m_onShaderChanged("");
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
 
         for (size_t i = 0; i < m_scannedShaders.size(); ++i)
@@ -251,7 +261,7 @@ void UIManager::renderShaderPanel()
                 {
                     m_onShaderChanged(m_scannedShaders[i]);
                 }
-                saveConfig(); // Salvar configuração quando mudar
+                saveConfig();
             }
             if (isSelected)
             {
@@ -274,12 +284,11 @@ void UIManager::renderShaderPanel()
         if (!currentPreset.empty())
         {
             // Extrair apenas o nome do arquivo
-            std::filesystem::path presetPath(currentPreset);
-            std::string fileName = presetPath.filename().string();
+            fs::path presetPath(currentPreset);
+            std::string fileName = presetPath.filename();
 
             if (ImGui::Button("Save"))
             {
-                // Salvar por cima do arquivo atual
                 if (m_onSavePreset)
                 {
                     m_onSavePreset(currentPreset, true);
@@ -288,7 +297,6 @@ void UIManager::renderShaderPanel()
             ImGui::SameLine();
             if (ImGui::Button("Save As..."))
             {
-                // Abrir dialog para salvar como novo arquivo
                 strncpy(m_savePresetPath, fileName.c_str(), sizeof(m_savePresetPath) - 1);
                 m_savePresetPath[sizeof(m_savePresetPath) - 1] = '\0';
                 m_showSaveDialog = true;
@@ -316,9 +324,8 @@ void UIManager::renderShaderPanel()
                 if (m_onSavePreset && strlen(m_savePresetPath) > 0)
                 {
                     // Construir caminho completo
-                    std::filesystem::path basePath("shaders/shaders_glsl");
-                    std::filesystem::path newPath = basePath / m_savePresetPath;
-                    // Garantir extensão .glslp
+                    fs::path basePath("shaders/shaders_glsl");
+                    fs::path newPath = basePath / m_savePresetPath;
                     if (newPath.extension() != ".glslp")
                     {
                         newPath.replace_extension(".glslp");
@@ -336,7 +343,6 @@ void UIManager::renderShaderPanel()
         }
     }
 
-    // Parâmetros do shader
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
     {
         ImGui::Separator();
@@ -353,7 +359,6 @@ void UIManager::renderShaderPanel()
             {
                 ImGui::PushID(param.name.c_str());
 
-                // Mostrar nome e descrição
                 if (!param.description.empty())
                 {
                     ImGui::Text("%s", param.description.c_str());
@@ -370,7 +375,6 @@ void UIManager::renderShaderPanel()
                     m_shaderEngine->setShaderParameter(param.name, value);
                 }
 
-                // Botão para resetar ao valor padrão
                 ImGui::SameLine();
                 if (ImGui::Button("Reset##param"))
                 {
@@ -598,7 +602,7 @@ void UIManager::renderV4L2Controls()
                 {
                     m_onDeviceChanged(m_v4l2Devices[i]);
                 }
-                saveConfig(); // Salvar configuração quando mudar
+                saveConfig();
             }
             if (isSelected)
             {
@@ -861,27 +865,26 @@ void UIManager::renderV4L2Controls()
     ImGui::Separator();
 
     // Helper function para renderizar controle com range do dispositivo ou padrão
-    auto renderControl = [this](const char *name, uint32_t cid, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
     {
         if (!m_capture)
             return;
 
-        int32_t value, min, max, step;
-        bool available = m_capture->getControl(cid, value, min, max, step);
+        int32_t value, min, max;
 
-        // Se não disponível, usar valores padrão
-        if (!available)
+        // Tentar obter valores do dispositivo usando interface genérica
+        if (m_capture->getControl(name, value) &&
+            m_capture->getControlMin(name, min) &&
+            m_capture->getControlMax(name, max))
         {
+            // Valores obtidos com sucesso
+        }
+        else
+        {
+            // Se não disponível, usar valores padrão
             min = defaultMin;
             max = defaultMax;
             value = defaultValue;
-            step = 1;
-        }
-
-        // Alinhar valor com step
-        if (step > 1)
-        {
-            value = ((value - min) / step) * step + min;
         }
 
         // Clamp valor
@@ -891,11 +894,6 @@ void UIManager::renderV4L2Controls()
         std::string label = std::string(name) + "##manual";
         if (ImGui::SliderInt(label.c_str(), &value, min, max))
         {
-            // Alinhar valor com step antes de aplicar
-            if (step > 1)
-            {
-                value = ((value - min) / step) * step + min;
-            }
             value = std::max(min, std::min(max, value));
 
             if (m_onV4L2ControlChanged)
@@ -906,34 +904,34 @@ void UIManager::renderV4L2Controls()
     };
 
     // Brightness
-    renderControl("Brightness", V4L2_CID_BRIGHTNESS, -100, 100, 0);
+    renderControl("Brightness", -100, 100, 0);
 
     // Contrast
-    renderControl("Contrast", V4L2_CID_CONTRAST, -100, 100, 0);
+    renderControl("Contrast", -100, 100, 0);
 
     // Saturation
-    renderControl("Saturation", V4L2_CID_SATURATION, -100, 100, 0);
+    renderControl("Saturation", -100, 100, 0);
 
     // Hue
-    renderControl("Hue", V4L2_CID_HUE, -100, 100, 0);
+    renderControl("Hue", -100, 100, 0);
 
     // Gain
-    renderControl("Gain", V4L2_CID_GAIN, 0, 100, 0);
+    renderControl("Gain", 0, 100, 0);
 
     // Exposure
-    renderControl("Exposure", V4L2_CID_EXPOSURE_ABSOLUTE, -13, 1, 0);
+    renderControl("Exposure", -13, 1, 0);
 
     // Sharpness
-    renderControl("Sharpness", V4L2_CID_SHARPNESS, 0, 6, 0);
+    renderControl("Sharpness", 0, 6, 0);
 
     // Gamma
-    renderControl("Gamma", V4L2_CID_GAMMA, 100, 300, 100);
+    renderControl("Gamma", 100, 300, 100);
 
     // White Balance
-    renderControl("White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE, 2800, 6500, 4000);
+    renderControl("White Balance", 2800, 6500, 4000);
 }
 
-void UIManager::setV4L2Controls(VideoCapture *capture)
+void UIManager::setCaptureControls(IVideoCapture *capture)
 {
     m_capture = capture;
     m_v4l2Controls.clear();
@@ -943,34 +941,59 @@ void UIManager::setV4L2Controls(VideoCapture *capture)
         return;
     }
 
-    // Lista de controles V4L2 comuns
-    struct ControlInfo
+    // Se o tipo de fonte for DirectShow, atualizar lista de dispositivos
+#ifdef _WIN32
+    if (m_sourceType == SourceType::DS)
     {
-        const char *name;
-        uint32_t cid;
+        // Sempre atualizar lista quando m_capture é setado
+        refreshDSDevices();
+        LOG_INFO("DirectShow device list updated after setCaptureControls: " + std::to_string(m_dsDevices.size()) + " device(s)");
+    }
+#endif
+
+    // Lista de controles comuns (usando interface genérica)
+    const char *controlNames[] = {
+        "Brightness",
+        "Contrast",
+        "Saturation",
+        "Hue",
+        "Gain",
+        "Exposure",
+        "Sharpness",
+        "Gamma",
+        "White Balance",
     };
 
-    ControlInfo controls[] = {
-        {"Brightness", V4L2_CID_BRIGHTNESS},
-        {"Contrast", V4L2_CID_CONTRAST},
-        {"Saturation", V4L2_CID_SATURATION},
-        {"Hue", V4L2_CID_HUE},
-        {"Gain", V4L2_CID_GAIN},
-        {"Exposure", V4L2_CID_EXPOSURE_ABSOLUTE},
-        {"Sharpness", V4L2_CID_SHARPNESS},
-        {"Gamma", V4L2_CID_GAMMA},
-        {"White Balance", V4L2_CID_WHITE_BALANCE_TEMPERATURE},
-    };
-
-    for (const auto &info : controls)
+    for (const char *name : controlNames)
     {
         V4L2Control ctrl;
-        ctrl.name = info.name;
-        ctrl.available = capture->getControl(info.cid, ctrl.value, ctrl.min, ctrl.max, ctrl.step);
+        ctrl.name = name;
 
-        if (ctrl.available)
+        // Usar interface genérica para obter informações do controle
+        // Verificar se o dispositivo está aberto antes de tentar obter controles
+        if (!capture->isOpen())
         {
+            ctrl.available = false;
             m_v4l2Controls.push_back(ctrl);
+            continue;
+        }
+
+        int32_t value, minVal, maxVal;
+        if (capture->getControl(name, value) &&
+            capture->getControlMin(name, minVal) &&
+            capture->getControlMax(name, maxVal))
+        {
+            ctrl.value = value;
+            ctrl.min = minVal;
+            ctrl.max = maxVal;
+            ctrl.step = 1; // Step não disponível na interface genérica
+            ctrl.available = true;
+            m_v4l2Controls.push_back(ctrl);
+        }
+        else
+        {
+            // Controle não disponível - não adicionar à lista
+            ctrl.available = false;
         }
     }
 }
@@ -1041,7 +1064,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingPortChanged(m_streamingPort);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
     }
 
@@ -1187,7 +1210,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH264PresetChanged(m_streamingH264Preset);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1228,7 +1251,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265PresetChanged(m_streamingH265Preset);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1257,7 +1280,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265ProfileChanged(m_streamingH265Profile);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1287,7 +1310,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingH265LevelChanged(m_streamingH265Level);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1309,7 +1332,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1331,7 +1354,7 @@ void UIManager::renderStreamingPanel()
             {
                 m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
             }
-            saveConfig(); // Salvar configuração quando mudar
+            saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
@@ -1534,7 +1557,12 @@ void UIManager::renderStreamingPanel()
 
 void UIManager::scanV4L2Devices()
 {
+#ifdef PLATFORM_LINUX
     m_v4l2Devices = V4L2DeviceScanner::scan();
+#else
+    // Windows não usa V4L2
+    m_v4l2Devices.clear();
+#endif
 }
 
 void UIManager::refreshV4L2Devices()
@@ -1542,9 +1570,39 @@ void UIManager::refreshV4L2Devices()
     scanV4L2Devices();
 }
 
+void UIManager::refreshDSDevices()
+{
+    if (!m_capture)
+    {
+        // Não limpar a lista - pode ter sido populada anteriormente
+        // Apenas não atualizar se m_capture não estiver disponível
+        return;
+    }
+
+    m_dsDevices = m_capture->listDevices();
+}
+
 void UIManager::setSourceType(SourceType sourceType)
 {
     m_sourceType = sourceType;
+
+    // Atualizar cache de dispositivos quando mudar o tipo de fonte
+#ifdef _WIN32
+    if (sourceType == SourceType::DS)
+    {
+        // Garantir que m_capture está disponível antes de atualizar
+        if (m_capture)
+        {
+            refreshDSDevices();
+        }
+        else
+        {
+            // Se m_capture não estiver disponível, limpar lista
+            m_dsDevices.clear();
+        }
+    }
+#endif
+
     if (m_onSourceTypeChanged)
     {
         m_onSourceTypeChanged(sourceType);
@@ -1670,6 +1728,21 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
         m_onStreamingH265LevelChanged(level);
     }
     saveConfig();
+}
+
+void UIManager::triggerDeviceChange(const std::string &device)
+{
+    LOG_INFO("[FORCE-UI] triggerDeviceChange chamado com device: " + device);
+    m_currentDevice = device;
+    if (m_onDeviceChanged)
+    {
+        LOG_INFO("[FORCE-UI] Callback m_onDeviceChanged existe, chamando...");
+        m_onDeviceChanged(device);
+    }
+    else
+    {
+        LOG_ERROR("[FORCE-UI] ERRO: Callback m_onDeviceChanged é NULL!");
+    }
 }
 
 void UIManager::triggerStreamingVP8SpeedChange(int speed)
@@ -1853,18 +1926,37 @@ void UIManager::scanShaders(const std::string &basePath)
 
 std::string UIManager::getConfigPath() const
 {
-    // Usar diretório home do usuário para salvar configurações
-    const char *homeDir = std::getenv("HOME");
-    if (homeDir)
+#ifdef _WIN32
+    // Windows: usar APPDATA (ou LOCALAPPDATA como fallback)
+    const char *appDataDir = std::getenv("APPDATA");
+    if (!appDataDir)
     {
-        std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+        appDataDir = std::getenv("LOCALAPPDATA");
+    }
+    if (appDataDir)
+    {
+        fs::path configDir = fs::path(appDataDir) / "RetroCapture";
         // Criar diretório se não existir
-        if (!std::filesystem::exists(configDir))
+        if (!fs::exists(configDir))
         {
-            std::filesystem::create_directories(configDir);
+            fs::create_directories(configDir);
         }
         return (configDir / "config.json").string();
     }
+#else
+    // Linux/Unix: usar diretório home do usuário
+    const char *homeDir = std::getenv("HOME");
+    if (homeDir)
+    {
+        fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
+        // Criar diretório se não existir
+        if (!fs::exists(configDir))
+        {
+            fs::create_directories(configDir);
+        }
+        return (configDir / "config.json").string();
+    }
+#endif
     // Fallback: salvar no diretório atual
     return "retrocapture_config.json";
 }
@@ -1873,9 +1965,9 @@ void UIManager::loadConfig()
 {
     std::string configPath = getConfigPath();
 
-    if (!std::filesystem::exists(configPath))
+    if (!fs::exists(configPath))
     {
-        LOG_INFO("Arquivo de configuração não encontrado: " + configPath + " (usando padrões)");
+        LOG_INFO("Configuration file not found: " + configPath + " (using defaults)");
         return;
     }
 
@@ -2157,11 +2249,21 @@ void UIManager::loadConfig()
             }
         }
 
-        LOG_INFO("Configurações carregadas de: " + configPath);
+        // Carregar dispositivo DirectShow
+        if (config.contains("directshow"))
+        {
+            auto &ds = config["directshow"];
+            if (ds.contains("device") && !ds["device"].is_null())
+            {
+                m_currentDevice = ds["device"].get<std::string>();
+            }
+        }
+
+        LOG_INFO("Configuration loaded from: " + configPath);
     }
     catch (const std::exception &e)
     {
-        LOG_ERROR("Erro ao carregar configurações: " + std::string(e.what()));
+        LOG_ERROR("Error loading configuration: " + std::string(e.what()));
     }
 }
 
@@ -2214,7 +2316,7 @@ void UIManager::saveConfig()
 
         // Salvar shader atual
         config["shader"] = {
-            {"current", m_currentShader.empty() ? nullptr : m_currentShader}};
+            {"current", m_currentShader.empty() ? "" : m_currentShader}};
 
         // Salvar configurações de fonte
         config["source"] = {
@@ -2222,24 +2324,28 @@ void UIManager::saveConfig()
 
         // Salvar dispositivo V4L2
         config["v4l2"] = {
-            {"device", m_currentDevice.empty() ? nullptr : m_currentDevice}};
+            {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // Salvar dispositivo DirectShow
+        config["directshow"] = {
+            {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
         if (!file.is_open())
         {
-            LOG_WARN("Não foi possível criar arquivo de configuração: " + configPath);
+            LOG_WARN("Could not create configuration file: " + configPath);
             return;
         }
 
         file << config.dump(4); // Indentação de 4 espaços para legibilidade
         file.close();
 
-        LOG_INFO("Configurações salvas em: " + configPath);
+        LOG_INFO("Configuration saved to: " + configPath);
     }
     catch (const std::exception &e)
     {
-        LOG_ERROR("Erro ao salvar configurações: " + std::string(e.what()));
+        LOG_ERROR("Error saving configuration: " + std::string(e.what()));
     }
 }
 

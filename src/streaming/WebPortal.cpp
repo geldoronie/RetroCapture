@@ -1,8 +1,10 @@
 #include "WebPortal.h"
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
+#ifdef PLATFORM_LINUX
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
@@ -12,7 +14,7 @@ WebPortal::WebPortal()
 {
     // Verificar se o diretório web existe
     std::string webDir = getWebDirectory();
-    if (webDir.empty() || !std::filesystem::exists(webDir))
+    if (webDir.empty() || !fs::exists(webDir))
     {
         LOG_ERROR("Web directory not found. Web portal may not work correctly.");
     }
@@ -100,7 +102,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
             // Buscar imagem nos locais padrão (assets/)
             std::string foundImagePath = findAssetFile(m_imagePath);
 
-            if (!foundImagePath.empty() && std::filesystem::exists(foundImagePath))
+            if (!foundImagePath.empty() && fs::exists(foundImagePath))
             {
                 // Servir a imagem do portal
                 std::string content = readFileContent(foundImagePath);
@@ -160,7 +162,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
             // Buscar imagem nos locais padrão (assets/)
             std::string foundBgPath = findAssetFile(m_backgroundImagePath);
 
-            if (!foundBgPath.empty() && std::filesystem::exists(foundBgPath))
+            if (!foundBgPath.empty() && fs::exists(foundBgPath))
             {
                 // Servir a imagem de fundo do portal
                 std::string content = readFileContent(foundBgPath);
@@ -217,7 +219,8 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         return serveWebPage(clientFd, basePrefix);
     }
 
-    LOG_WARN("No file path extracted from request: " + request.substr(0, std::min(100UL, request.length())));
+    size_t maxLen = request.length() < 100 ? request.length() : 100;
+    LOG_WARN("No file path extracted from request: " + request.substr(0, maxLen));
 
     // Requisição não reconhecida
     return false;
@@ -321,7 +324,7 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
             // Buscar imagem nos locais padrão (assets/)
             std::string foundImagePath = findAssetFile(m_imagePath);
 
-            if (!foundImagePath.empty() && std::filesystem::exists(foundImagePath))
+            if (!foundImagePath.empty() && fs::exists(foundImagePath))
             {
                 // Procurar pelo logo-container no novo layout
                 std::string logoContainerStart = "<div class=\"logo-container me-3\" id=\"logoContainer\">";
@@ -512,7 +515,12 @@ ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
         return m_httpServer->sendData(clientFd, data, size);
     }
     // Fallback para send() direto se HTTPServer não estiver configurado
+    #ifdef PLATFORM_LINUX
     return send(clientFd, data, size, MSG_NOSIGNAL);
+    #else
+    // Windows não tem MSG_NOSIGNAL, usar send() normal
+    return send(clientFd, (const char*)data, size, 0);
+    #endif
 }
 
 std::string WebPortal::findAssetFile(const std::string &relativePath) const
@@ -523,22 +531,22 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
         const char *homeDir = std::getenv("HOME");
         if (homeDir)
         {
-            std::filesystem::path configDir = std::filesystem::path(homeDir) / ".config" / "retrocapture";
+            fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
             return configDir.string();
         }
         return "";
     };
 
     // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
-    std::filesystem::path testPath(relativePath);
-    if (testPath.is_absolute() && std::filesystem::exists(testPath))
+    fs::path testPath(relativePath);
+    if (testPath.is_absolute() && fs::exists(testPath))
     {
-        return std::filesystem::absolute(testPath).string();
+        return fs::absolute(testPath).string();
     }
 
     // Extrair apenas o nome do arquivo
-    std::filesystem::path inputPath(relativePath);
-    std::string fileName = inputPath.filename().string();
+    fs::path inputPath(relativePath);
+    std::string fileName = inputPath.filename();
 
     // Lista de locais para buscar (em ordem de prioridade)
     std::vector<std::string> possiblePaths;
@@ -547,7 +555,7 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     const char *assetsEnvPath = std::getenv("RETROCAPTURE_ASSETS_PATH");
     if (assetsEnvPath)
     {
-        std::filesystem::path envAssetsDir(assetsEnvPath);
+        fs::path envAssetsDir(assetsEnvPath);
         possiblePaths.push_back((envAssetsDir / fileName).string());
         possiblePaths.push_back((envAssetsDir / relativePath).string());
     }
@@ -556,19 +564,25 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     std::string userConfigDir = getUserConfigDir();
     if (!userConfigDir.empty())
     {
-        std::filesystem::path userAssetsDir = std::filesystem::path(userConfigDir) / "assets";
+        fs::path userAssetsDir = fs::path(userConfigDir) / "assets";
         possiblePaths.push_back((userAssetsDir / fileName).string());
     }
 
     // 3. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
     // No Linux, podemos usar readlink em /proc/self/exe para obter o caminho do executável
     char exePath[1024];
+    #ifdef PLATFORM_LINUX
     ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
     if (len != -1)
+    #else
+    // Windows: usar GetModuleFileName
+    DWORD len = GetModuleFileNameA(NULL, exePath, sizeof(exePath) - 1);
+    if (len != 0)
+    #endif
     {
         exePath[len] = '\0';
-        std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
-        std::filesystem::path assetsDir = exeDir / "assets";
+        fs::path exeDir = fs::path(exePath).parent_path();
+        fs::path assetsDir = exeDir / "assets";
         possiblePaths.push_back((assetsDir / fileName).string());
     }
 
@@ -586,10 +600,10 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     // Tentar caminhos na ordem de prioridade
     for (const auto &path : possiblePaths)
     {
-        std::filesystem::path fsPath(path);
-        if (std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath))
+        fs::path fsPath(path);
+        if (fs::exists(fsPath) && fs::is_regular_file(fsPath))
         {
-            return std::filesystem::absolute(fsPath).string();
+            return fs::absolute(fsPath).string();
         }
     }
 
@@ -718,7 +732,7 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
     {
         // Buscar imagem de fundo nos locais padrão
         std::string foundBgPath = findAssetFile(m_backgroundImagePath);
-        if (!foundBgPath.empty() && std::filesystem::exists(foundBgPath))
+        if (!foundBgPath.empty() && fs::exists(foundBgPath))
         {
             // Usar rota /portal-background para servir a imagem
             // Sempre usar path absoluto começando com /
@@ -978,10 +992,10 @@ std::string WebPortal::getWebDirectory() const
     const char *webEnvPath = std::getenv("RETROCAPTURE_WEB_PATH");
     if (webEnvPath)
     {
-        std::filesystem::path envWebPath(webEnvPath);
-        if (std::filesystem::exists(envWebPath) && std::filesystem::is_directory(envWebPath))
+        fs::path envWebPath(webEnvPath);
+        if (fs::exists(envWebPath) && fs::is_directory(envWebPath))
         {
-            return std::filesystem::absolute(envWebPath).string();
+            return fs::absolute(envWebPath).string();
         }
     }
 
@@ -997,10 +1011,10 @@ std::string WebPortal::getWebDirectory() const
 
     for (const auto &path : possiblePaths)
     {
-        std::filesystem::path webPath(path);
-        if (std::filesystem::exists(webPath) && std::filesystem::is_directory(webPath))
+        fs::path webPath(path);
+        if (fs::exists(webPath) && fs::is_directory(webPath))
         {
-            return std::filesystem::absolute(webPath).string();
+            return fs::absolute(webPath).string();
         }
     }
 
@@ -1265,8 +1279,10 @@ std::string WebPortal::injectBasePrefix(const std::string &html, const std::stri
         {"href='/stream'", "href='" + basePrefix + "/stream'"},
     };
 
-    for (const auto &[oldStr, newStr] : replacements)
+    for (const auto &repl : replacements)
     {
+        const std::string& oldStr = repl.first;
+        const std::string& newStr = repl.second;
         size_t pos = 0;
         while ((pos = result.find(oldStr, pos)) != std::string::npos)
         {

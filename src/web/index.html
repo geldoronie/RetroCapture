@@ -152,8 +152,7 @@
                                         <div class="col-12">
                                             <h6>Source Type</h6>
                                             <select class="form-select" id="sourceType">
-                                                <option value="0">None</option>
-                                                <option value="1">V4L2</option>
+                                                <option value="0">Carregando...</option>
                                             </select>
                                             <small class="form-text text-muted mt-1">A mudança é aplicada automaticamente ao selecionar</small>
                                         </div>
@@ -236,6 +235,80 @@
                                                 <h6>V4L2 Controls</h6>
                                                 <div id="v4l2ControlsInSource" class="row g-3">
                                                     <div class="col-12 text-muted">Nenhum dispositivo conectado. Selecione um dispositivo acima para ver os controles.</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- DirectShow Controls - Aparece apenas quando DirectShow está selecionado (Windows) -->
+                                        <div id="dsControlsContainer" style="display: none;">
+                                            <div class="col-12">
+                                                <hr>
+                                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                                    <h6 class="mb-0">DirectShow Device</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshDSDevices()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="dsDevice">
+                                                    <option value="">Carregando...</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</small>
+                                            </div>
+                                            
+                                            <div class="col-12" id="dsCaptureInfo" style="display: none;">
+                                                <hr>
+                                                <h6>Capture Resolution & Framerate</h6>
+                                                
+                                                <!-- Resolução Manual -->
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">Width</label>
+                                                        <input type="number" class="form-control" id="dsCaptureWidth" min="1" max="7680">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">Height</label>
+                                                        <input type="number" class="form-control" id="dsCaptureHeight" min="1" max="4320">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label">FPS</label>
+                                                        <input type="number" class="form-control" id="dsCaptureFPS" min="1" max="240">
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Quick FPS -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">Quick FPS:</label>
+                                                    <div class="btn-group" role="group">
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(120)">120</button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Resoluções 4:3 -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">4:3 Resolutions:</label>
+                                                    <div class="d-flex flex-wrap gap-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(320, 240)">320x240</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1024, 768)">1024x768</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 960)">1280x960</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1600, 1200)">1600x1200</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2048, 1536)">2048x1536</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1920)">2560x1920</button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Resoluções 16:9 -->
+                                                <div class="mb-3">
+                                                    <label class="form-label">16:9 Resolutions:</label>
+                                                    <div class="d-flex flex-wrap gap-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1440)">2560x1440</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(3840, 2160)">3840x2160</button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>

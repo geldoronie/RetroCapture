@@ -7,7 +7,7 @@
 
 // Forward declarations
 class UIManager;
-class VideoCapture;
+class IVideoCapture;
 class ShaderEngine;
 
 /**

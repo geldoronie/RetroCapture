@@ -6,7 +6,7 @@
 
 // Forward declarations
 struct Frame;
-class VideoCapture;
+class IVideoCapture;
 class OpenGLRenderer;
 
 /**
@@ -33,7 +33,7 @@ public:
      * @param capture Video capture device
      * @return true if a new frame was processed, false otherwise
      */
-    bool processFrame(VideoCapture* capture);
+    bool processFrame(IVideoCapture* capture);
 
     /**
      * Get the current texture ID.

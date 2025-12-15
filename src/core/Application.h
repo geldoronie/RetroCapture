@@ -11,14 +11,14 @@
 #include <vector>
 #include "../renderer/glad_loader.h"
 
-class VideoCapture;
+class IVideoCapture;
+class IAudioCapture;
 class WindowManager;
 class OpenGLRenderer;
 class ShaderEngine;
 class UIManager;
 class FrameProcessor;
 class StreamManager;
-class AudioCapture;
 class HTTPTSStreamer;
 
 // Forward declaration for API
@@ -96,14 +96,14 @@ public:
 private:
     bool m_initialized = false;
 
-    std::unique_ptr<VideoCapture> m_capture;
+    std::unique_ptr<IVideoCapture> m_capture;
     std::unique_ptr<WindowManager> m_window;
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
-    std::unique_ptr<AudioCapture> m_audioCapture;
+    std::unique_ptr<IAudioCapture> m_audioCapture;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 
@@ -113,7 +113,11 @@ private:
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
-    std::string m_devicePath = "/dev/video0";
+#ifdef _WIN32
+    std::string m_devicePath = ""; // Windows: vazio por padrão (DirectShow usa índices)
+#else
+    std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
+#endif
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;

@@ -275,7 +275,12 @@ bool MediaEncoder::initializeAudioCodec()
     codecCtx->codec_id = codec->id;
     codecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
     codecCtx->sample_rate = m_audioConfig.sampleRate;
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     av_channel_layout_default(&codecCtx->ch_layout, m_audioConfig.channels);
+    #else
+    codecCtx->channels = m_audioConfig.channels;
+    codecCtx->channel_layout = av_get_default_channel_layout(m_audioConfig.channels);
+    #endif
     codecCtx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     codecCtx->bit_rate = m_audioConfig.bitrate;
     codecCtx->thread_count = 4;
@@ -299,6 +304,7 @@ bool MediaEncoder::initializeAudioCodec()
         return false;
     }
 
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     AVChannelLayout inChLayout, outChLayout;
     av_channel_layout_default(&inChLayout, m_audioConfig.channels);
     av_channel_layout_default(&outChLayout, m_audioConfig.channels);
@@ -324,6 +330,24 @@ bool MediaEncoder::initializeAudioCodec()
 
     av_channel_layout_uninit(&inChLayout);
     av_channel_layout_uninit(&outChLayout);
+    #else
+    av_opt_set_int(swrCtx, "in_channel_layout", av_get_default_channel_layout(m_audioConfig.channels), 0);
+    av_opt_set_int(swrCtx, "in_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+
+    av_opt_set_int(swrCtx, "out_channel_layout", av_get_default_channel_layout(m_audioConfig.channels), 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+
+    if (swr_init(swrCtx) < 0)
+    {
+        LOG_ERROR("Failed to initialize SWR context");
+        swr_free(&swrCtx);
+        avcodec_free_context(&codecCtx);
+        m_audioCodecContext = nullptr;
+        return false;
+    }
+    #endif
     m_swrContext = swrCtx;
 
     AVFrame *audioFrame = av_frame_alloc();
@@ -338,7 +362,12 @@ bool MediaEncoder::initializeAudioCodec()
     }
 
     audioFrame->format = AV_SAMPLE_FMT_FLTP;
+    #if LIBAVCODEC_VERSION_MAJOR >= 59
     av_channel_layout_default(&audioFrame->ch_layout, m_audioConfig.channels);
+    #else
+    audioFrame->channels = m_audioConfig.channels;
+    audioFrame->channel_layout = av_get_default_channel_layout(m_audioConfig.channels);
+    #endif
     audioFrame->sample_rate = m_audioConfig.sampleRate;
     audioFrame->nb_samples = codecCtx->frame_size;
     if (av_frame_get_buffer(audioFrame, 0) < 0)
@@ -740,7 +769,11 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     if (forceKeyframe)
     {
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
+        #if LIBAVCODEC_VERSION_MAJOR >= 59
         videoFrame->flags |= AV_FRAME_FLAG_KEY;
+        #else
+        videoFrame->key_frame = 1;
+        #endif
     }
     m_videoFrameCount++;
 

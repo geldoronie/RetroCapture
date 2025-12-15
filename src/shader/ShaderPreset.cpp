@@ -3,7 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
-#include <filesystem>
+#include "../utils/FilesystemCompat.h"
 #include <cstdlib>
 
 ShaderPreset::ShaderPreset()
@@ -21,16 +21,16 @@ bool ShaderPreset::load(const std::string &presetPath)
     m_parameters.clear();
 
     // Extrair diretório base do preset (como caminho absoluto)
-    std::filesystem::path path(presetPath);
+    fs::path path(presetPath);
     if (path.is_relative())
     {
         // Se o caminho é relativo, converter para absoluto
-        path = std::filesystem::absolute(path);
+        path = fs::absolute(path);
     }
     m_basePath = path.parent_path().string();
     if (m_basePath.empty())
     {
-        m_basePath = std::filesystem::current_path().string();
+        m_basePath = fs::current_path().string();
     }
     m_presetPath = path.string(); // Armazenar caminho completo do preset
 
@@ -301,28 +301,28 @@ std::string ShaderPreset::resolvePath(const std::string &path)
         return path;
     }
 
-    std::filesystem::path currentPath = std::filesystem::current_path();
+    fs::path currentPath = fs::current_path();
 
     // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-    std::filesystem::path shaderBasePath;
-    if (envShaderPath && std::filesystem::exists(envShaderPath))
+    fs::path shaderBasePath;
+    if (envShaderPath && fs::exists(envShaderPath))
     {
-        shaderBasePath = std::filesystem::path(envShaderPath);
+        shaderBasePath = fs::path(envShaderPath);
     }
     else
     {
         shaderBasePath = currentPath / "shaders" / "shaders_glsl";
     }
 
-    std::filesystem::path relPath(path);
+    fs::path relPath(path);
 
     // Primeiro, tentar resolver a partir do basePath (diretório do preset)
-    std::filesystem::path basePath(m_basePath);
-    std::filesystem::path resolved = (basePath / relPath).lexically_normal();
+    fs::path basePath(m_basePath);
+    fs::path resolved = (basePath / relPath).lexically_normal();
 
     // Verificar se o arquivo existe
-    if (std::filesystem::exists(resolved))
+    if (fs::exists(resolved))
     {
         return resolved.string();
     }
@@ -335,16 +335,16 @@ std::string ShaderPreset::resolvePath(const std::string &path)
         std::string subPath = path.substr(8); // Remove "shaders/"
 
         // Primeiro, tentar a partir do diretório do preset (pode haver subdiretórios como denoisers/shaders/)
-        std::filesystem::path presetGlslPath = basePath / subPath;
-        if (std::filesystem::exists(presetGlslPath))
+        fs::path presetGlslPath = basePath / subPath;
+        if (fs::exists(presetGlslPath))
         {
             LOG_INFO("Shader encontrado (shaders/ relativo ao preset): " + presetGlslPath.string());
             return presetGlslPath.string();
         }
 
         // Se não encontrou, tentar a partir da raiz shaders/shaders_glsl/
-        std::filesystem::path glslPath = shaderBasePath / subPath;
-        if (std::filesystem::exists(glslPath))
+        fs::path glslPath = shaderBasePath / subPath;
+        if (fs::exists(glslPath))
         {
             LOG_INFO("Shader encontrado (shaders/): " + glslPath.string());
             return glslPath.string();
@@ -369,11 +369,11 @@ std::string ShaderPreset::resolvePath(const std::string &path)
         // Exemplo: "../crt/shaders/..." a partir de shaders/shaders_glsl/denoisers/
         // deve ir para shaders/shaders_glsl/crt/shaders/...
         // Então sempre tentar primeiro a partir de shaders/shaders_glsl/
-        std::filesystem::path glslBase = shaderBasePath;
+        fs::path glslBase = shaderBasePath;
 
         // Tentar o caminho exato primeiro
         resolved = (glslBase / cleanPath).lexically_normal();
-        if (std::filesystem::exists(resolved))
+        if (fs::exists(resolved))
         {
             LOG_INFO("Shader encontrado (../ em shaders_glsl): " + resolved.string());
             return resolved.string();
@@ -382,7 +382,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
         // Se não encontrou, tentar buscar recursivamente em subdiretórios
         // Exemplo: "crt/shaders/crt-hyllian.glsl" pode estar em "crt/shaders/hyllian/crt-hyllian.glsl"
         std::string cleanPathStr = cleanPath;
-        std::filesystem::path searchBase = glslBase;
+        fs::path searchBase = glslBase;
 
         // Extrair o nome do arquivo
         size_t lastSlash = cleanPathStr.find_last_of('/');
@@ -392,23 +392,39 @@ std::string ShaderPreset::resolvePath(const std::string &path)
             std::string filePart = cleanPathStr.substr(lastSlash + 1);
 
             // Tentar buscar o arquivo recursivamente no diretório
-            std::filesystem::path dirPath = searchBase / dirPart;
-            if (std::filesystem::exists(dirPath) && std::filesystem::is_directory(dirPath))
+            fs::path dirPath = searchBase / dirPart;
+            if (fs::exists(dirPath) && fs::is_directory(dirPath))
             {
-                for (const auto &entry : std::filesystem::recursive_directory_iterator(dirPath))
+                // Nota: range-based for não funciona com nossa implementação, usar loop manual
+                fs::recursive_directory_iterator it(dirPath);
+                fs::recursive_directory_iterator end;
+                for (; it != end; ++it)
                 {
-                    if (entry.is_regular_file() && entry.path().filename().string() == filePart)
+// No Linux usa std::filesystem padrão (C++17), precisa desreferenciar
+// No Windows com MinGW < 8 usa implementação customizada que tem métodos diretos
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Implementação customizada do FilesystemCompat.h (Windows MinGW < 8)
+                    if (it.is_regular_file() && it.path().filename() == filePart)
                     {
-                        LOG_INFO("Shader encontrado (busca recursiva): " + entry.path().string());
-                        return entry.path().string();
+                        LOG_INFO("Shader encontrado (busca recursiva): " + it.path().string());
+                        return it.path().string();
                     }
+#else
+                    // std::filesystem padrão (C++17) - Linux e Windows MinGW >= 8
+                    // *it retorna directory_entry, então usamos it->path() e fs::is_regular_file(*it)
+                    if (fs::is_regular_file(*it) && it->path().filename() == filePart)
+                    {
+                        LOG_INFO("Shader encontrado (busca recursiva): " + it->path().string());
+                        return it->path().string();
+                    }
+#endif
                 }
             }
         }
 
         // Se não encontrou, tentar a partir do diretório do preset (caso seja estrutura diferente)
-        std::filesystem::path base = basePath;
-        if (std::filesystem::path(basePath).is_relative())
+        fs::path base = basePath;
+        if (fs::path(basePath).is_relative())
         {
             base = currentPath / basePath;
         }
@@ -419,9 +435,9 @@ std::string ShaderPreset::resolvePath(const std::string &path)
         {
             // Encontrar a posição de "shaders_glsl" e usar como base
             size_t pos = baseStr.find("shaders_glsl");
-            std::filesystem::path glslBaseFromPath = std::filesystem::path(baseStr.substr(0, pos + 11));
+            fs::path glslBaseFromPath = fs::path(baseStr.substr(0, pos + 11));
             resolved = (glslBaseFromPath / cleanPath).lexically_normal();
-            if (std::filesystem::exists(resolved))
+            if (fs::exists(resolved))
             {
                 LOG_INFO("Shader encontrado (../ relativo a shaders_glsl no path): " + resolved.string());
                 return resolved.string();
@@ -436,7 +452,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
 
         // Tentar resolver a partir do caminho calculado (relativo ao preset)
         resolved = (base / cleanPath).lexically_normal();
-        if (std::filesystem::exists(resolved))
+        if (fs::exists(resolved))
         {
             LOG_INFO("Shader encontrado (../ relativo ao preset): " + resolved.string());
             return resolved.string();
@@ -445,7 +461,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
 
     // Tentar resolver a partir do diretório de trabalho atual
     resolved = (currentPath / relPath).lexically_normal();
-    if (std::filesystem::exists(resolved))
+    if (fs::exists(resolved))
     {
         return resolved.string();
     }
@@ -454,8 +470,8 @@ std::string ShaderPreset::resolvePath(const std::string &path)
     if (cleanPath.find("crt/") == 0 || cleanPath.find("xbr/") == 0 ||
         cleanPath.find("denoisers/") == 0 || cleanPath.find("guest/") == 0)
     {
-        std::filesystem::path glslPath = shaderBasePath / cleanPath;
-        if (std::filesystem::exists(glslPath))
+        fs::path glslPath = shaderBasePath / cleanPath;
+        if (fs::exists(glslPath))
         {
             LOG_INFO("Shader encontrado (crt/xbr/etc): " + glslPath.string());
             return glslPath.string();
@@ -463,8 +479,8 @@ std::string ShaderPreset::resolvePath(const std::string &path)
     }
 
     // Tentar em shaders/shaders_glsl/ diretamente
-    std::filesystem::path glslPath = shaderBasePath / cleanPath;
-    if (std::filesystem::exists(glslPath))
+    fs::path glslPath = shaderBasePath / cleanPath;
+    if (fs::exists(glslPath))
     {
         LOG_INFO("Shader encontrado (shaders_glsl): " + glslPath.string());
         return glslPath.string();
