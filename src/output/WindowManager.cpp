@@ -2,6 +2,12 @@
 #include "../utils/Logger.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef PLATFORM_LINUX
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#endif
 
 WindowManager::WindowManager()
 {
@@ -77,6 +83,27 @@ bool WindowManager::init(const WindowConfig &config)
     }
 
     glfwMakeContextCurrent(window);
+
+#ifdef PLATFORM_LINUX
+    // Set WM_CLASS for proper application identification in Linux window managers
+    // This ensures the application appears correctly in the taskbar/launcher
+    Display *display = glfwGetX11Display();
+    Window x11Window = glfwGetX11Window(window);
+    if (display && x11Window)
+    {
+        XClassHint *classHint = XAllocClassHint();
+        if (classHint)
+        {
+            // WM_CLASS consists of two strings: res_name (instance) and res_class (class)
+            // res_name is typically the executable name, res_class is the application name
+            classHint->res_name = const_cast<char *>("retrocapture");
+            classHint->res_class = const_cast<char *>("RetroCapture");
+            XSetClassHint(display, x11Window, classHint);
+            XFree(classHint);
+            LOG_INFO("WM_CLASS set to RetroCapture for proper window manager identification");
+        }
+    }
+#endif
 
     // Load OpenGL functions (GLAD would be ideal, but for now we'll use directly)
     // On Linux systems with Mesa, it usually works without GLAD

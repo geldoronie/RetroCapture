@@ -389,6 +389,22 @@ list(APPEND LINK_LIBS
 
 # Bibliotecas específicas de plataforma
 if(PLATFORM_LINUX)
+    # X11 is needed for WM_CLASS setting in WindowManager
+    find_package(X11 QUIET)
+    if(X11_FOUND)
+        list(APPEND LINK_LIBS ${X11_LIBRARIES})
+        list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIR})
+    else()
+        # Fallback: try to find X11 via pkg-config
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(X11 QUIET x11)
+            if(X11_FOUND)
+                list(APPEND LINK_LIBS ${X11_LIBRARIES})
+                list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIRS})
+            endif()
+        endif()
+    endif()
     list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
