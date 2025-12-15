@@ -315,9 +315,43 @@ elseif(PLATFORM_WINDOWS)
 endif()
 
 # Executável principal
-add_executable(retrocapture
-    ${SOURCES}
-)
+if(PLATFORM_WINDOWS)
+    # Adicionar arquivo de recursos (.rc) para ícone do executável
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/retrocapture.rc" AND EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        # Copiar logo.ico para o diretório de build antes de compilar
+        # Usar add_custom_command para garantir que seja copiado durante o build
+        add_custom_command(
+            OUTPUT "${CMAKE_BINARY_DIR}/logo.ico"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/logo.ico"
+                "${CMAKE_BINARY_DIR}/logo.ico"
+            DEPENDS "${CMAKE_SOURCE_DIR}/assets/logo.ico"
+            COMMENT "Copying logo.ico for resource compilation"
+        )
+        
+        add_executable(retrocapture
+            ${SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/retrocapture.rc
+            "${CMAKE_BINARY_DIR}/logo.ico"
+        )
+        message(STATUS "Windows resource file (.rc) added for executable icon")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/src/retrocapture.rc")
+        add_executable(retrocapture
+            ${SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/retrocapture.rc
+        )
+        message(WARNING "logo.ico not found, executable icon may not work correctly")
+    else()
+        add_executable(retrocapture
+            ${SOURCES}
+        )
+        message(WARNING "retrocapture.rc not found, executable will not have custom icon")
+    endif()
+else()
+    add_executable(retrocapture
+        ${SOURCES}
+    )
+endif()
 
 # Definir macros de plataforma
 if(PLATFORM_LINUX)
@@ -584,10 +618,14 @@ if(PLATFORM_WINDOWS)
     set(CPACK_NSIS_IGNORE_LICENSE_PAGE OFF)
 
     # Icon/logo for installer
-    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.png")
-        # NSIS pode usar .ico, mas podemos converter ou usar PNG
-        # Por enquanto, vamos usar o logo.png se disponível
+    # NSIS prefers .ico files for installer icon
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/logo.ico")
+        message(STATUS "Using logo.ico for NSIS installer icon")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/assets/logo.png")
+        # Fallback to PNG if .ico is not available
         set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/logo.png")
+        message(STATUS "Using logo.png for NSIS installer icon (fallback)")
     endif()
 
     # NSIS specific settings
@@ -632,6 +670,8 @@ if(PLATFORM_WINDOWS)
     set(CPACK_COMPONENT_SSL_REQUIRED ON)
 
     # Create Start Menu shortcuts (devem estar antes do include(CPack))
+    # The shortcut will automatically use the icon embedded in retrocapture.exe
+    # Windows extracts the icon from the executable automatically
     set(CPACK_NSIS_CREATE_ICONS_EXTRA
         "CreateShortCut '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
     )

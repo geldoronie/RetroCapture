@@ -1,0 +1,40 @@
+// Windows resource file for RetroCapture
+// This file defines the application icon and version information
+
+#include <windows.h>
+
+// Application icon
+// CMake copies logo.ico to ${CMAKE_BINARY_DIR}/logo.ico
+// windres is executed from the build directory, so we use a relative path
+IDI_ICON1 ICON DISCARDABLE "logo.ico"
+
+// Version information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     0,3,0,0
+PRODUCTVERSION  0,3,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0x0L
+FILEOS           VOS__WINDOWS32
+FILETYPE         VFT_APP
+FILESUBTYPE      VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "RetroCapture"
+            VALUE "FileDescription",  "Video capture with RetroArch shader support"
+            VALUE "FileVersion",      "0.3.0"
+            VALUE "InternalName",    "retrocapture"
+            VALUE "LegalCopyright",   "Copyright (C) 2024"
+            VALUE "OriginalFilename", "retrocapture.exe"
+            VALUE "ProductName",     "RetroCapture"
+            VALUE "ProductVersion",   "0.3.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
