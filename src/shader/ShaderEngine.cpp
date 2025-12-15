@@ -205,6 +205,13 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
         }
     }
 
+    // IMPORTANTE: Resetar estado do OpenGL antes de carregar novo preset
+    // Isso garante que se o preset anterior falhou, o estado não fique corrompido
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+
     // Carregar passes imediatamente para que os parâmetros estejam disponíveis na UI
     // IMPORTANTE: Tentar carregar passes mesmo que falhe parcialmente, para extrair parâmetros
     // Mesmo que a compilação falhe, os parâmetros podem ser extraídos do código fonte
@@ -806,32 +813,93 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
     if (!m_passes.empty() || !m_preset.getPasses().empty())
     {
         // Se passes ainda não foram carregados, carregar agora
-        // IMPORTANTE: Verificar se temos parameterInfo antes de recarregar
+        // IMPORTANTE: Verificar se temos passes válidos (program != 0), não apenas parameterInfo
+        // Isso garante que se um shader falhou na compilação, tentamos recarregar
+        bool hasValidPass = false;
         bool hasParameterInfo = false;
+
         if (!m_passes.empty())
         {
-            for (const auto &passData : m_passes)
+            for (const auto &pass : m_passes)
             {
-                if (!passData.parameterInfo.empty())
+                if (pass.program != 0)
+                {
+                    hasValidPass = true;
+                }
+                if (!pass.parameterInfo.empty())
                 {
                     hasParameterInfo = true;
-                    break;
                 }
             }
         }
 
-        if (m_passes.empty() || (!hasParameterInfo && m_passes[0].program == 0))
+        // IMPORTANTE: Recarregar passes se:
+        // 1. Não temos passes, OU
+        // 2. Não temos passes válidos (mesmo que tenhamos parameterInfo)
+        // Isso garante que se um shader falhou na compilação, tentamos recarregar
+        if (m_passes.empty() || !hasValidPass)
         {
-            // Só recarregar se não temos passes ou se não temos parameterInfo e programas não compilados
+            // Tentar recarregar passes
             if (!loadPresetPasses())
             {
-                // Se loadPresetPasses falhou mas temos parameterInfo, continuar mesmo assim
-                if (!hasParameterInfo)
+                // Se loadPresetPasses falhou, verificar novamente se temos passes válidos
+                hasValidPass = false;
+                if (!m_passes.empty())
                 {
+                    for (const auto &pass : m_passes)
+                    {
+                        if (pass.program != 0)
+                        {
+                            hasValidPass = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Se ainda não temos passes válidos, retornar textura original
+                if (!hasValidPass)
+                {
+                    // IMPORTANTE: Resetar estado do OpenGL antes de retornar
+                    glUseProgram(0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
                     return inputTexture;
                 }
             }
+            else
+            {
+                // Se recarregou com sucesso, verificar novamente se temos passes válidos
+                hasValidPass = false;
+                for (const auto &pass : m_passes)
+                {
+                    if (pass.program != 0)
+                    {
+                        hasValidPass = true;
+                        break;
+                    }
+                }
+            }
         }
+
+        // IMPORTANTE: Verificar novamente se temos pelo menos um pass válido antes de tentar renderizar
+        if (!hasValidPass)
+        {
+            // Log apenas ocasionalmente para evitar spam (a cada 60 frames = ~1 segundo a 60fps)
+            static int errorLogCounter = 0;
+            if (errorLogCounter++ % 60 == 0)
+            {
+                LOG_ERROR("Nenhum pass válido encontrado no preset. Retornando textura original. (log a cada 60 frames)");
+            }
+            // IMPORTANTE: Resetar estado do OpenGL antes de retornar
+            glUseProgram(0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return inputTexture;
+        }
+
+        // Resetar contador de erro se temos passes válidos
+        static int errorLogCounter = 0;
+        errorLogCounter = 0;
 
         m_sourceWidth = width;
         m_sourceHeight = height;
@@ -952,20 +1020,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // O blending é necessário apenas na renderização final na janela, não durante a renderização para o framebuffer
             // Durante a renderização para o framebuffer, queremos que o shader escreva diretamente o alpha que ele calcula
             // O blending será aplicado depois quando renderizarmos a textura do framebuffer na janela
+            // IMPORTANTE: Verificar se o programa é válido ANTES de usar
+            if (pass.program == 0)
+            {
+                LOG_ERROR("Programa de shader inválido no pass " + std::to_string(i));
+                // IMPORTANTE: Resetar estado do OpenGL antes de continuar
+                glUseProgram(0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                continue; // Pular este pass se o programa é inválido
+            }
+
             // IMPORTANTE: Desabilitar blending, culling e depth test (como RetroArch faz)
             glDisable(GL_BLEND);
             glDisable(GL_CULL_FACE);
             glDisable(GL_DEPTH_TEST);
 
-            // Usar shader program
+            // Usar shader program (agora sabemos que é válido)
             glUseProgram(pass.program);
-
-            // Verificar se o programa é válido
-            if (pass.program == 0)
-            {
-                LOG_ERROR("Programa de shader inválido no pass " + std::to_string(i));
-                continue; // Pular este pass se o programa é inválido
-            }
 
             // Log removido para reduzir verbosidade
 
@@ -982,6 +1053,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             if (currentTexture == 0)
             {
                 LOG_ERROR("Textura de entrada inválida no pass " + std::to_string(i));
+                // IMPORTANTE: Resetar estado do OpenGL antes de continuar
+                glUseProgram(0);
+                glBindTexture(GL_TEXTURE_2D, 0);
                 continue; // Pular este pass se não há textura válida
             }
 

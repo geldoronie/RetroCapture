@@ -140,8 +140,8 @@
 - [x] Implementar `startCapture()`
 - [x] Implementar `stopCapture()`
 - [x] Enumeração de dispositivos via DirectShow
-- [x] Detecção de Wine e fallback
 - [x] Testar com webcam real
+- [x] Testar no Wine (funciona perfeitamente)
 - [x] Testar modo dummy
 
 ### AudioCaptureWASAPI
@@ -231,8 +231,8 @@ As **Fases 1 e 2** estão **completas**:
 ### ✅ Fase 2 (Implementação Windows) - 100%
 
 - ✅ `VideoCaptureDS` implementado (DirectShow)
-  - Carregamento dinâmico de funções (compatível MinGW/MXE)
-  - Detecção de Wine e fallback
+  - Compatível com MinGW/MXE (não requer carregamento dinâmico)
+  - **Funciona no Wine** - permite desenvolvimento e testes no Linux sem máquina Windows
 - ✅ `AudioCaptureWASAPI` implementado (WASAPI)
 - ✅ Enumeração de dispositivos implementada
 - ✅ CMakeLists.txt atualizado com bibliotecas Windows
@@ -255,11 +255,15 @@ As **Fases 1 e 2** estão **completas**:
 
 O código agora deve compilar e funcionar no Windows. As implementações estão prontas e as factories retornam instâncias corretas para cada plataforma. O portal web detecta automaticamente a plataforma e mostra os controles apropriados.
 
+**Bônus:** A implementação DirectShow também funciona no Wine, permitindo testar e desenvolver a versão Windows diretamente no Linux sem necessidade de uma máquina Windows real. Isso facilita significativamente o desenvolvimento e testes.
+
 ## 🔧 Problemas Conhecidos e Soluções
 
-### DirectShow no MinGW/MXE
+### DirectShow no MinGW/MXE e Wine
 
 **Solução:** DirectShow funciona bem com MinGW/MXE através de COM interfaces padrão. Não requer carregamento dinâmico de funções.
+
+**Bônus:** A implementação também funciona no Wine, permitindo testar e desenvolver a versão Windows diretamente no Linux sem necessidade de uma máquina Windows real. Isso facilita significativamente o desenvolvimento e testes.
 
 ### Winsock não inicializado
 
