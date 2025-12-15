@@ -3,10 +3,24 @@
 
 set -e
 
+# Build type: Release (default) or Debug
+BUILD_TYPE="${1:-Release}"
+
+# Validar build type
+if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
+    echo "❌ Build type inválido: $BUILD_TYPE"
+    echo ""
+    echo "Uso: $0 [Release|Debug]"
+    echo "  Release - Build otimizado para produção (padrão)"
+    echo "  Debug   - Build com símbolos de debug"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== RetroCapture Windows Installer Builder ==="
+echo "📦 Build type: $BUILD_TYPE"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -45,7 +59,7 @@ echo "Construindo imagem Docker (se necessário)..."
 $DOCKER_COMPOSE build build-windows > /dev/null 2>&1 || $DOCKER_COMPOSE build build-windows
 
 echo "Compilando RetroCapture no container Docker..."
-$DOCKER_COMPOSE run --rm build-windows > build-windows.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows > build-windows.log 2>&1
 
 if [ $? -ne 0 ]; then
     echo "Erro: Falha na compilação. Verifique build-windows.log para mais detalhes."
@@ -97,7 +111,8 @@ echo "NSIS não encontrado localmente. Gerando instalador dentro do container Do
 
 # Criar script temporário para gerar instalador no container
 # O script precisa estar no diretório do projeto para ter acesso ao build-windows
-cat > build-installer-temp.sh << 'EOF'
+# Usar heredoc com substituição apenas da variável BUILD_TYPE
+cat > build-installer-temp.sh << 'SCRIPT_EOF'
 #!/bin/bash
 set -e
 
@@ -137,9 +152,11 @@ echo "Limpando cache do CPack para garantir versão correta..."
 rm -f CPackConfig.cmake CPackSourceConfig.cmake
 # Remover variáveis CPACK do cache do CMake
 sed -i '/^CPACK_PACKAGE_FILE_NAME:/d' CMakeCache.txt 2>/dev/null || true
+# Obter BUILD_TYPE da variável de ambiente (passada pelo script principal)
+BUILD_TYPE="${BUILD_TYPE:-Release}"
 cmake .. \
     -DCMAKE_TOOLCHAIN_FILE=/usr/src/mxe/usr/x86_64-w64-mingw32.static/share/cmake/mxe-conf.cmake \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
     -DCPACK_NSIS_EXECUTABLE="${MAKENSIS_PATH}"
 
 # Verificar se o executável existe
@@ -186,15 +203,16 @@ else
     echo "Erro ao gerar instalador (código: $?)"
     exit 1
 fi
-EOF
+SCRIPT_EOF
 
 chmod +x build-installer-temp.sh
 
 # Executar script no container
 # Usar --entrypoint para sobrescrever o ENTRYPOINT e executar apenas nosso script
 # O docker-compose.yml já monta o diretório atual em /work
+# Passar BUILD_TYPE como variável de ambiente
 echo "Executando geração de instalador no container..."
-$DOCKER_COMPOSE run --rm --entrypoint bash build-windows /work/build-installer-temp.sh
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" --entrypoint bash build-windows /work/build-installer-temp.sh
 
 # Procurar pelo instalador com o nome esperado primeiro
 INSTALLER_FOUND=""

@@ -1,7 +1,18 @@
 #!/bin/bash
 set -e
 
+# Build type: Release (default) or Debug
+BUILD_TYPE="${BUILD_TYPE:-Release}"
+
+# Validar build type
+if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
+    echo "❌ Build type inválido: $BUILD_TYPE"
+    echo "   Use: Release ou Debug"
+    exit 1
+fi
+
 echo "🚀 Compilando RetroCapture para Linux..."
+echo "📦 Build type: $BUILD_TYPE"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -24,7 +35,7 @@ fi
 
 echo "⚙️  Configurando CMake..."
 cmake .. \
--DCMAKE_BUILD_TYPE=Release
+-DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
 echo ""
 echo "🔨 Compilando..."

@@ -1,7 +1,18 @@
 #!/bin/bash
 set -e
 
+# Build type: Release (default) or Debug
+BUILD_TYPE="${BUILD_TYPE:-Release}"
+
+# Validar build type
+if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
+    echo "❌ Build type inválido: $BUILD_TYPE"
+    echo "   Use: Release ou Debug"
+    exit 1
+fi
+
 echo "🚀 Compilando RetroCapture para Windows..."
+echo "📦 Build type: $BUILD_TYPE"
 echo ""
 
 # dockcross monta o código em /work
@@ -20,7 +31,7 @@ echo "⚙️  Configurando CMake..."
 export PKG_CONFIG_PATH=/usr/src/mxe/usr/x86_64-w64-mingw32.static/lib/pkgconfig
 cmake .. \
 -DCMAKE_TOOLCHAIN_FILE=/usr/src/mxe/usr/x86_64-w64-mingw32.static/share/cmake/mxe-conf.cmake \
--DCMAKE_BUILD_TYPE=Release
+-DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
 echo ""
 echo "🔨 Compilando..."

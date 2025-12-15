@@ -4,10 +4,24 @@
 
 set -e
 
+# Build type: Release (default) or Debug
+BUILD_TYPE="${1:-Release}"
+
+# Validar build type
+if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
+    echo "❌ Build type inválido: $BUILD_TYPE"
+    echo ""
+    echo "Uso: $0 [Release|Debug]"
+    echo "  Release - Build otimizado para produção (padrão)"
+    echo "  Debug   - Build com símbolos de debug"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== RetroCapture AppImage Builder ==="
+echo "📦 Build type: $BUILD_TYPE"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -63,7 +77,7 @@ echo "Construindo imagem Docker (se necessário)..."
 $DOCKER_COMPOSE build build-linux > /dev/null 2>&1 || $DOCKER_COMPOSE build build-linux
 
 echo "Compilando RetroCapture no container Docker..."
-$DOCKER_COMPOSE run --rm build-linux > build-linux.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux > build-linux.log 2>&1
 
 if [ $? -ne 0 ]; then
     echo "Erro: Falha na compilação. Verifique build-linux.log para mais detalhes."
