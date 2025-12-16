@@ -195,6 +195,11 @@ endif()
 # Verificar se FetchContent está disponível (CMake 3.11+)
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
     include(FetchContent)
+    
+    # Configurar FetchContent para não tentar fazer update (evita erro de "dubious ownership")
+    # Se o diretório já existe, usamos ele; caso contrário, baixamos do zero
+    set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+    
     FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -279,7 +284,7 @@ target_link_libraries(imgui PUBLIC
 )
 
 if(PLATFORM_LINUX)
-    target_link_libraries(imgui PUBLIC X11)
+    target_link_libraries(imgui PUBLIC X11 dl)
 endif()
 
 # Fontes

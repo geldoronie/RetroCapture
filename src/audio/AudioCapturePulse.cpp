@@ -7,6 +7,7 @@
 #include <cstring>
 #include <algorithm>
 #include <atomic>
+#include <unistd.h>
 
 AudioCapturePulse::AudioCapturePulse()
     : m_mainloop(nullptr)
