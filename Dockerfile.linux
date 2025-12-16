@@ -1,5 +1,5 @@
 # Dockerfile para build do RetroCapture no Linux
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Configurar Git para evitar erro de "dubious ownership" no Docker
+# Isso permite que o Git trabalhe com repositórios clonados pelo FetchContent
+RUN git config --global --add safe.directory '*'
 
 # Instalar dependências do RetroCapture
 RUN apt-get update && apt-get install -y \

@@ -21,6 +21,11 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Configurar Git ANTES de qualquer operação (resolve "dubious ownership" no Docker)
+# Isso deve ser feito antes de entrar no diretório de build
+echo "⚙️  Configurando Git..."
+git config --global --add safe.directory '*' || true
+
 # Criar diretório de build (limpar cache CMake se existir)
 BUILD_DIR="build-linux"
 mkdir -p "$BUILD_DIR"
@@ -31,6 +36,13 @@ if [ -f "CMakeCache.txt" ]; then
     echo "🧹 Limpando cache do CMake..."
     rm -f CMakeCache.txt
     rm -rf CMakeFiles
+fi
+
+# Limpar diretório _deps se existir (pode ter sido criado com permissões incorretas)
+# Isso garante que o FetchContent baixe tudo do zero com as permissões corretas
+if [ -d "_deps" ]; then
+    echo "🧹 Limpando dependências anteriores..."
+    rm -rf _deps
 fi
 
 echo "⚙️  Configurando CMake..."
