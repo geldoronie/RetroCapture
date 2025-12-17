@@ -4,10 +4,12 @@
 #include "../shader/ShaderEngine.h"
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
+#include "../utils/PresetManager.h"
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 // Simple JSON helper functions
 namespace
@@ -117,13 +119,27 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
             return handlePUT(clientFd, path, body);
         }
     }
+    else if (method == "DELETE")
+    {
+        // Handle DELETE requests (e.g., /api/v1/presets/{name})
+        if (path.find("/api/v1/presets/") == 0)
+        {
+            std::string presetName = path.substr(16); // Length of "/api/v1/presets/"
+            if (!presetName.empty())
+            {
+                return handleDeletePreset(clientFd, presetName);
+            }
+        }
+        send404(clientFd);
+        return true;
+    }
     else if (method == "OPTIONS")
     {
         // CORS preflight
         std::ostringstream response;
         response << "HTTP/1.1 200 OK\r\n";
         response << "Access-Control-Allow-Origin: *\r\n";
-        response << "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n";
+        response << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n";
         response << "Access-Control-Allow-Headers: Content-Type\r\n";
         response << "Content-Length: 0\r\n";
         response << "Connection: close\r\n";
@@ -287,6 +303,19 @@ bool APIController::handleGET(int clientFd, const std::string &path)
     {
         return handleGETPlatform(clientFd);
     }
+    else if (path == "/api/v1/presets")
+    {
+        return handleGETPresets(clientFd);
+    }
+    else if (path.find("/api/v1/presets/") == 0)
+    {
+        // Extract preset name from path: /api/v1/presets/{name}
+        std::string presetName = path.substr(16); // Length of "/api/v1/presets/"
+        if (!presetName.empty())
+        {
+            return handleGETPreset(clientFd, presetName);
+        }
+    }
 
     send404(clientFd);
     return true;
@@ -337,6 +366,27 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     else if (path == "/api/v1/ds/device")
     {
         return handleSetDSDevice(clientFd, body);
+    }
+    else if (path == "/api/v1/presets")
+    {
+        return handleCreatePreset(clientFd, body);
+    }
+    else if (path.find("/api/v1/presets/") == 0 && path.find("/apply") != std::string::npos)
+    {
+        // Extract preset name from path: /api/v1/presets/{name}/apply
+        std::string fullPath = path;
+        size_t applyPos = fullPath.find("/apply");
+        std::string presetName = fullPath.substr(16, applyPos - 16); // Length of "/api/v1/presets/"
+        if (!presetName.empty())
+        {
+            // Create JSON body with preset name if body is empty
+            std::string requestBody = body;
+            if (requestBody.empty())
+            {
+                requestBody = "{\"name\": \"" + presetName + "\"}";
+            }
+            return handleApplyPreset(clientFd, requestBody);
+        }
     }
 
     send404(clientFd);
@@ -1246,6 +1296,236 @@ bool APIController::handleSetDSDevice(int clientFd, const std::string &body)
     catch (const std::exception &e)
     {
         sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+// Preset handlers
+bool APIController::handleGETPresets(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        PresetManager presetManager;
+        std::vector<std::string> presetNames = presetManager.listPresets();
+        
+        std::ostringstream response;
+        response << "{\"presets\": [";
+        
+        bool first = true;
+        for (const auto& name : presetNames)
+        {
+            if (!first)
+                response << ",";
+            first = false;
+            
+            PresetManager::PresetData data;
+            if (presetManager.loadPreset(name, data))
+            {
+                response << "{";
+                response << "\"name\": " << jsonString(name) << ",";
+                response << "\"displayName\": " << jsonString(data.name.empty() ? name : data.name) << ",";
+                response << "\"description\": " << jsonString(data.description) << ",";
+                response << "\"created\": " << jsonString(data.created) << ",";
+                response << "\"thumbnail\": " << jsonString(data.thumbnailPath);
+                response << "}";
+            }
+            else
+            {
+                // Fallback if preset can't be loaded
+                response << "{";
+                response << "\"name\": " << jsonString(name) << ",";
+                response << "\"displayName\": " << jsonString(name) << ",";
+                response << "\"description\": \"\",";
+                response << "\"created\": \"\",";
+                response << "\"thumbnail\": \"\"";
+                response << "}";
+            }
+        }
+        
+        response << "]}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error listing presets: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETPreset(int clientFd, const std::string& presetName)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        PresetManager presetManager;
+        PresetManager::PresetData data;
+        
+        if (!presetManager.loadPreset(presetName, data))
+        {
+            sendErrorResponse(clientFd, 404, "Preset not found: " + presetName);
+            return true;
+        }
+        
+        std::ostringstream response;
+        response << "{";
+        response << "\"name\": " << jsonString(presetName) << ",";
+        response << "\"displayName\": " << jsonString(data.name.empty() ? presetName : data.name) << ",";
+        response << "\"description\": " << jsonString(data.description) << ",";
+        response << "\"created\": " << jsonString(data.created) << ",";
+        response << "\"thumbnail\": " << jsonString(data.thumbnailPath) << ",";
+        response << "\"shader\": {";
+        response << "\"path\": " << jsonString(data.shaderPath) << ",";
+        response << "\"parameters\": {";
+        bool firstParam = true;
+        for (const auto& [key, value] : data.shaderParameters)
+        {
+            if (!firstParam)
+                response << ",";
+            firstParam = false;
+            response << jsonString(key) << ": " << jsonNumber(value);
+        }
+        response << "}},";
+        response << "\"capture\": {";
+        response << "\"width\": " << data.captureWidth << ",";
+        response << "\"height\": " << data.captureHeight << ",";
+        response << "\"fps\": " << data.captureFps << ",";
+        response << "\"sourceType\": " << data.sourceType;
+        response << "},";
+        response << "\"image\": {";
+        response << "\"brightness\": " << jsonNumber(data.imageBrightness) << ",";
+        response << "\"contrast\": " << jsonNumber(data.imageContrast) << ",";
+        response << "\"maintainAspect\": " << jsonBool(data.maintainAspect);
+        response << "}";
+        response << "}";
+        
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error loading preset: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleCreatePreset(int clientFd, const std::string& body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        
+        if (!json.contains("name") || json["name"].empty())
+        {
+            sendErrorResponse(clientFd, 400, "Missing or empty 'name' field");
+            return true;
+        }
+        
+        std::string name = json["name"].get<std::string>();
+        std::string description = json.contains("description") ? json["description"].get<std::string>() : "";
+        
+        // Create preset from current state
+        m_application->createPresetFromCurrentState(name, description);
+        
+        std::ostringstream response;
+        response << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+        sendJSONResponse(clientFd, 201, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleApplyPreset(int clientFd, const std::string& body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        // Extract preset name from body
+        nlohmann::json json;
+        std::string presetName;
+        
+        if (!body.empty())
+        {
+            json = nlohmann::json::parse(body);
+            if (json.contains("name"))
+            {
+                presetName = json["name"].get<std::string>();
+            }
+        }
+        
+        if (presetName.empty())
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'name' field");
+            return true;
+        }
+        
+        // Schedule preset application for main thread (thread-safe)
+        m_application->schedulePresetApplication(presetName);
+        
+        std::ostringstream response;
+        response << "{\"success\": true, \"name\": " << jsonString(presetName) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleDeletePreset(int clientFd, const std::string& presetName)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        PresetManager presetManager;
+        
+        if (!presetManager.deletePreset(presetName))
+        {
+            sendErrorResponse(clientFd, 404, "Preset not found: " + presetName);
+            return true;
+        }
+        
+        std::ostringstream response;
+        response << "{\"success\": true, \"name\": " << jsonString(presetName) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error deleting preset: " + std::string(e.what()));
         return true;
     }
 }

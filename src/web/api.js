@@ -116,6 +116,14 @@ class RetroCaptureAPI {
         return await this.request('GET', '/platform');
     }
 
+    async getPresets() {
+        return await this.request('GET', '/presets');
+    }
+
+    async getPreset(name) {
+        return await this.request('GET', `/presets/${encodeURIComponent(name)}`);
+    }
+
     // ========== SET Methods ==========
 
     async setSource(sourceType) {
@@ -161,6 +169,18 @@ class RetroCaptureAPI {
     async setStreamingControl(action) {
         // action deve ser 'start' ou 'stop'
         return await this.request('POST', '/streaming/control', { action });
+    }
+
+    async createPreset(name, description) {
+        return await this.request('POST', '/presets', { name, description });
+    }
+
+    async applyPreset(name) {
+        return await this.request('POST', `/presets/${encodeURIComponent(name)}/apply`, { name });
+    }
+
+    async deletePreset(name) {
+        return await this.request('DELETE', `/presets/${encodeURIComponent(name)}`);
     }
 }
 

@@ -9,6 +9,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <queue>
 #include "../renderer/glad_loader.h"
 
 class IVideoCapture;
@@ -95,6 +96,7 @@ public:
 
     // Preset management
     void applyPreset(const std::string& presetName);
+    void schedulePresetApplication(const std::string& presetName); // Thread-safe: schedules for main thread
     void createPresetFromCurrentState(const std::string& name, const std::string& description);
 
 private:
@@ -236,6 +238,10 @@ private:
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
     std::atomic<bool> m_isResizing{false};
+    
+    // Thread-safe queue for preset application from API threads
+    std::mutex m_presetQueueMutex;
+    std::queue<std::string> m_pendingPresets;
 
     // Fila de frames para streaming thread (captura de vídeo)
     // OPÇÃO A: Fila removida - frames processados diretamente na thread principal

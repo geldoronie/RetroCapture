@@ -57,7 +57,7 @@ bool ThumbnailGenerator::captureAndSaveThumbnail(
     // Read pixels from framebuffer (only the cropped region)
     std::vector<uint8_t> frameData(cropWidth * cropHeight * 3);
     
-    // glReadPixels reads from bottom-left, so we need to flip vertically
+    // glReadPixels reads from bottom-left, so we need to adjust Y coordinate
     // Read with padding to handle alignment
     size_t readRowSizeUnpadded = static_cast<size_t>(cropWidth) * 3;
     size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
@@ -65,19 +65,22 @@ bool ThumbnailGenerator::captureAndSaveThumbnail(
     
     std::vector<uint8_t> frameDataWithPadding(totalSizeWithPadding);
     
-    // Read from the cropped region (note: glReadPixels Y coordinate is from bottom)
-    // We need to adjust Y to account for bottom-left origin
-    uint32_t readY = viewportY + (viewportHeight - cropHeight - cropY);
+    // Read from the cropped region
+    // glReadPixels Y coordinate is from bottom-left of viewport
+    // cropY is from top of viewport, so we need to convert to bottom-left coordinate
+    // The bottom of the crop region is at: viewportY + (viewportHeight - cropY - cropHeight)
+    uint32_t readY = viewportY + (viewportHeight - cropY - cropHeight);
     
     glReadPixels(static_cast<GLint>(viewportX + cropX), static_cast<GLint>(readY),
                  static_cast<GLsizei>(cropWidth), static_cast<GLsizei>(cropHeight),
                  GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
-    // Remove padding and flip vertically
+    // Remove padding and flip vertically (glReadPixels returns bottom-to-top, we need top-to-bottom)
     for (uint32_t row = 0; row < cropHeight; row++)
     {
-        uint32_t srcRow = cropHeight - 1 - row; // Vertical flip
-        uint32_t dstRow = row;
+        // glReadPixels returns rows from bottom to top, so we need to reverse
+        uint32_t srcRow = cropHeight - 1 - row; // Read from bottom row first
+        uint32_t dstRow = row; // Write to top row first
 
         const uint8_t* srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
         uint8_t* dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);

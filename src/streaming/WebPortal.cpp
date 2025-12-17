@@ -196,6 +196,69 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         return true;
     }
 
+    // Verificar se é requisição para assets (thumbnails, etc.)
+    if (request.find("GET /assets/") != std::string::npos)
+    {
+        // Extrair caminho do asset (ex: "/assets/thumbnails/image.png")
+        size_t assetsPos = request.find("/assets/");
+        size_t startPos = assetsPos + 8; // Após "/assets/"
+        size_t endPos = request.find(" ", startPos);
+        if (endPos == std::string::npos)
+        {
+            endPos = request.find(" HTTP/", startPos);
+            if (endPos == std::string::npos)
+            {
+                endPos = request.find("\r\n", startPos);
+            }
+        }
+        
+        if (endPos != std::string::npos)
+        {
+            std::string assetPath = request.substr(startPos, endPos - startPos);
+            
+            // Remover query string se existir
+            size_t queryPos = assetPath.find('?');
+            if (queryPos != std::string::npos)
+            {
+                assetPath = assetPath.substr(0, queryPos);
+            }
+            
+            // Buscar arquivo nos diretórios de assets
+            std::string foundAssetPath = findAssetFile(assetPath);
+            
+            if (!foundAssetPath.empty() && fs::exists(foundAssetPath))
+            {
+                std::string content = readFileContent(foundAssetPath);
+                if (!content.empty())
+                {
+                    std::string contentType = getContentType(foundAssetPath);
+                    std::ostringstream response;
+                    response << "HTTP/1.1 200 OK\r\n";
+                    response << "Content-Type: " << contentType << "\r\n";
+                    response << "Content-Length: " << content.length() << "\r\n";
+                    response << "Cache-Control: public, max-age=3600\r\n";
+                    response << "Connection: close\r\n";
+                    response << "\r\n";
+                    response << content;
+                    
+                    std::string responseStr = response.str();
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
+                    if (sent >= 0)
+                    {
+                        LOG_INFO("Asset served successfully: " + foundAssetPath);
+                        return true;
+                    }
+                }
+            }
+            else
+            {
+                LOG_WARN("Asset not found: " + assetPath);
+            }
+        }
+        send404(clientFd);
+        return true;
+    }
+
     // PRIMEIRO: Verificar se é arquivo estático (antes de verificar página principal)
     // Isso é importante porque arquivos estáticos têm prioridade
     std::string filePath = extractFilePath(request);
@@ -565,6 +628,7 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     if (!userConfigDir.empty())
     {
         fs::path userAssetsDir = fs::path(userConfigDir) / "assets";
+        possiblePaths.push_back((userAssetsDir / relativePath).string());
         possiblePaths.push_back((userAssetsDir / fileName).string());
     }
 
@@ -583,6 +647,7 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
         exePath[len] = '\0';
         fs::path exeDir = fs::path(exePath).parent_path();
         fs::path assetsDir = exeDir / "assets";
+        possiblePaths.push_back((assetsDir / relativePath).string());
         possiblePaths.push_back((assetsDir / fileName).string());
     }
 

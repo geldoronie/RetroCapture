@@ -142,6 +142,11 @@
                                         <i class="bi bi-broadcast me-2"></i>Streaming
                                     </button>
                                 </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="presets-tab" data-bs-toggle="tab" data-bs-target="#presets" type="button" role="tab">
+                                        <i class="bi bi-bookmark me-2"></i>Presets
+                                    </button>
+                                </li>
                             </ul>
                         </div>
                         <div class="card-body">
@@ -438,6 +443,64 @@
                                             <button type="button" class="btn btn-primary btn-lg w-100" id="streamingStartStopBtn" onclick="toggleStreaming()">
                                                 <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i>Iniciar Streaming</span>
                                             </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Presets Tab -->
+                                <div class="tab-pane fade" id="presets" role="tabpanel">
+                                    <div class="row g-3">
+                                        <div class="col-12">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <h6 class="mb-0">Capture Presets</h6>
+                                                <div>
+                                                    <button class="btn btn-sm btn-secondary me-2" onclick="refreshPresets()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                    <button class="btn btn-sm btn-primary" onclick="showCreatePresetDialog()">
+                                                        <i class="bi bi-plus-circle me-1"></i>Create Preset
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Presets Grid -->
+                                        <div class="col-12">
+                                            <div id="presetsGrid" class="row g-3">
+                                                <div class="col-12 text-muted">Carregando presets...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Create Preset Modal -->
+                                    <div class="modal fade" id="createPresetModal" tabindex="-1" aria-hidden="true">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title">Create New Preset</h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Preset Name</label>
+                                                        <input type="text" class="form-control" id="newPresetName" placeholder="Enter preset name">
+                                                    </div>
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Description (optional)</label>
+                                                        <textarea class="form-control" id="newPresetDescription" rows="3" placeholder="Enter description"></textarea>
+                                                    </div>
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox" id="captureThumbnail" checked>
+                                                        <label class="form-check-label" for="captureThumbnail">
+                                                            Capture thumbnail from current viewport
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    <button type="button" class="btn btn-primary" onclick="createPreset()">Create</button>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

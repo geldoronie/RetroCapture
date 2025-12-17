@@ -187,22 +187,24 @@ void UICapturePresets::renderPresetCard(const std::string& presetName, int index
         float targetAspect = THUMBNAIL_WIDTH / THUMBNAIL_HEIGHT;
         
         // Calculate UV coordinates for centered crop
+        // Note: ImGui uses top-left (0,0) to bottom-right (1,1) coordinate system
+        // Since we're saving thumbnails correctly (not inverted), we need to flip UVs vertically
         ImVec2 uv0, uv1;
         if (thumbnailAspect > targetAspect)
         {
             // Thumbnail is wider - crop horizontally (left/right)
             float cropWidth = thumbHeight * targetAspect;
             float cropOffset = (thumbWidth - cropWidth) / 2.0f;
-            uv0 = ImVec2(cropOffset / thumbWidth, 1.0f); // Bottom-left
-            uv1 = ImVec2(1.0f - (cropOffset / thumbWidth), 0.0f); // Top-right
+            uv0 = ImVec2(cropOffset / thumbWidth, 0.0f); // Top-left (flipped)
+            uv1 = ImVec2(1.0f - (cropOffset / thumbWidth), 1.0f); // Bottom-right (flipped)
         }
         else
         {
             // Thumbnail is taller - crop vertically (top/bottom)
             float cropHeight = thumbWidth / targetAspect;
             float cropOffset = (thumbHeight - cropHeight) / 2.0f;
-            uv0 = ImVec2(0.0f, 1.0f - (cropOffset / thumbHeight)); // Bottom-left
-            uv1 = ImVec2(1.0f, cropOffset / thumbHeight); // Top-right
+            uv0 = ImVec2(0.0f, cropOffset / thumbHeight); // Top-left (flipped)
+            uv1 = ImVec2(1.0f, 1.0f - (cropOffset / thumbHeight)); // Bottom-right (flipped)
         }
         
         ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(thumbnailTexture)),

@@ -2234,6 +2234,18 @@ void Application::run()
     {
         m_window->pollEvents();
 
+        // Process pending preset applications (from API threads)
+        {
+            std::lock_guard<std::mutex> lock(m_presetQueueMutex);
+            while (!m_pendingPresets.empty())
+            {
+                std::string presetName = m_pendingPresets.front();
+                m_pendingPresets.pop();
+                // Apply preset in main thread (safe to access OpenGL, capture, UI)
+                applyPreset(presetName);
+            }
+        }
+
         // Process pending fullscreen change (outside callback to avoid deadlock)
         if (m_pendingFullscreenChange && m_window)
         {
@@ -2757,6 +2769,14 @@ void Application::shutdown()
     m_initialized = false;
 }
 
+void Application::schedulePresetApplication(const std::string& presetName)
+{
+    // Thread-safe: add to queue for processing in main thread
+    std::lock_guard<std::mutex> lock(m_presetQueueMutex);
+    m_pendingPresets.push(presetName);
+    LOG_INFO("Preset application scheduled: " + presetName);
+}
+
 void Application::applyPreset(const std::string& presetName)
 {
     if (!m_initialized)
@@ -2814,11 +2834,26 @@ void Application::applyPreset(const std::string& presetName)
             {
                 m_shaderEngine->setShaderParameter(name, value);
             }
+            
+            // Update UI with shader path (use the relative path from preset)
+            // This is important because setCurrentShader triggers a callback that
+            // will try to reload the shader, so we need to pass the correct relative path
+            if (m_ui)
+            {
+                // Use the relative path from the preset data (not the absolute path)
+                // The callback expects a path relative to shaders/shaders_glsl
+                m_ui->setCurrentShader(data.shaderPath);
+            }
         }
         else
         {
             LOG_ERROR("Failed to load shader for preset: " + shaderPath);
         }
+    }
+    else if (m_ui && data.shaderPath.empty())
+    {
+        // No shader in preset - clear shader in UI
+        m_ui->setCurrentShader("");
     }
 
     // 2. Apply source type if changed
@@ -2950,13 +2985,23 @@ void Application::applyPreset(const std::string& presetName)
         }
     }
 
-    // 6. Update UI
+    // 6. Update UI with all applied values
     if (m_ui)
     {
+        // Update capture info (resolution and FPS)
+        if (data.captureWidth > 0 && data.captureHeight > 0)
+        {
+            std::string currentDevice = m_capture && m_capture->isOpen() ? m_devicePath : "";
+            m_ui->setCaptureInfo(data.captureWidth, data.captureHeight, data.captureFps, currentDevice);
+        }
+        
+        // Update image settings
         m_ui->setBrightness(m_brightness);
         m_ui->setContrast(m_contrast);
         m_ui->setMaintainAspect(m_maintainAspect);
         // fullscreen and monitorIndex are NOT updated - they vary per user/system
+        
+        // Save all configuration changes
         m_ui->saveConfig();
     }
 
