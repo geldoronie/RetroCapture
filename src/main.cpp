@@ -74,6 +74,7 @@ void printUsage(const char *programName)
     std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
     std::cout << "  --web-portal-ssl-key <caminho>    Caminho da chave SSL (padrão: ssl/server.key)\n";
     std::cout << "\nOutras:\n";
+    std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
@@ -160,6 +161,9 @@ int main(int argc, char *argv[])
     bool webPortalHTTPSEnabled = false;
     std::string webPortalSSLCertPath = "ssl/server.crt";
     std::string webPortalSSLKeyPath = "ssl/server.key";
+    
+    // UI visibility
+    bool hideUI = false; // Hide ImGui UI on startup
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -601,6 +605,10 @@ int main(int argc, char *argv[])
         {
             webPortalSSLKeyPath = argv[++i];
         }
+        else if (arg == "--hide-ui")
+        {
+            hideUI = true;
+        }
         else
         {
             LOG_WARN("Argumento desconhecido: " + arg);
@@ -806,6 +814,13 @@ int main(int argc, char *argv[])
 #endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
+    
+    // Hide UI if requested (same as pressing F12)
+    if (hideUI && app.getUIManager())
+    {
+        app.getUIManager()->setVisible(false);
+        LOG_INFO("UI hidden on startup (press F12 to toggle)");
+    }
 
     app.run();
     app.shutdown();
