@@ -93,6 +93,10 @@ public:
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
     UIManager *getUIManager() { return m_ui.get(); }
 
+    // Preset management
+    void applyPreset(const std::string& presetName);
+    void createPresetFromCurrentState(const std::string& name, const std::string& description);
+
 private:
     bool m_initialized = false;
 

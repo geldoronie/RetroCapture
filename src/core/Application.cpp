@@ -11,11 +11,14 @@
 #include "../output/WindowManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
+#include "../ui/UICapturePresets.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../utils/PresetManager.h"
+#include "../utils/ThumbnailGenerator.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #ifdef PLATFORM_LINUX
@@ -832,6 +835,12 @@ bool Application::initUI()
         // No device - show "None"
         m_ui->setCaptureInfo(0, 0, 0, "None");
         m_ui->setCurrentDevice(""); // Empty string = None
+    }
+
+    // Connect Application to UICapturePresets
+    if (m_ui->getCapturePresetsWindow())
+    {
+        m_ui->getCapturePresetsWindow()->setApplication(this);
     }
 
     // IMPORTANT: After init(), UIManager has already loaded saved configurations
@@ -2746,4 +2755,380 @@ void Application::shutdown()
     }
 
     m_initialized = false;
+}
+
+void Application::applyPreset(const std::string& presetName)
+{
+    if (!m_initialized)
+    {
+        LOG_ERROR("Cannot apply preset: Application not initialized");
+        return;
+    }
+
+    PresetManager presetManager;
+    PresetManager::PresetData data;
+    if (!presetManager.loadPreset(presetName, data))
+    {
+        LOG_ERROR("Failed to load preset: " + presetName);
+        return;
+    }
+
+    LOG_INFO("Applying preset: " + presetName);
+
+    // 1. Apply shader
+    if (!data.shaderPath.empty() && m_shaderEngine)
+    {
+        // Resolve relative shader path to absolute
+        std::string shaderPath = data.shaderPath;
+        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
+        {
+            shaderBasePath = fs::path(envShaderPath);
+        }
+        else
+        {
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
+        }
+        
+        // If path is relative, make it absolute
+        fs::path shaderPathObj(shaderPath);
+        if (shaderPathObj.is_relative())
+        {
+            fs::path absolutePath = shaderBasePath / shaderPathObj;
+            if (fs::exists(absolutePath))
+            {
+                shaderPath = absolutePath.string();
+            }
+            else
+            {
+                // Try as-is (might already be absolute or in different location)
+                shaderPath = data.shaderPath;
+            }
+        }
+        
+        if (m_shaderEngine->loadPreset(shaderPath))
+        {
+            // Apply shader parameters
+            for (const auto& [name, value] : data.shaderParameters)
+            {
+                m_shaderEngine->setShaderParameter(name, value);
+            }
+        }
+        else
+        {
+            LOG_ERROR("Failed to load shader for preset: " + shaderPath);
+        }
+    }
+
+    // 2. Apply source type if changed
+    if (m_ui && data.sourceType >= 0)
+    {
+        UIManager::SourceType sourceType = static_cast<UIManager::SourceType>(data.sourceType);
+        if (m_ui->getSourceType() != sourceType)
+        {
+            m_ui->triggerSourceTypeChange(sourceType);
+        }
+    }
+
+    // 3. Reconfigure capture
+    // Note: devicePath is NOT used - it varies between systems
+    if (data.captureWidth > 0 && data.captureHeight > 0 && m_capture)
+    {
+        // devicePath is NOT used - varies between systems
+        
+        // Check if we need to reconfigure
+        bool needsReconfig = false;
+        if (m_capture->isOpen())
+        {
+            // Check if resolution or FPS changed
+            if (m_captureWidth != data.captureWidth || 
+                m_captureHeight != data.captureHeight || 
+                m_captureFps != data.captureFps)
+            {
+                needsReconfig = true;
+            }
+        }
+        else if (data.sourceType != 0) // Not None - need to open device
+        {
+            needsReconfig = true;
+        }
+        
+        if (needsReconfig)
+        {
+            if (m_capture->isOpen())
+            {
+                // Use reconfigureCapture which properly closes and reopens the device
+                if (reconfigureCapture(data.captureWidth, data.captureHeight, data.captureFps))
+                {
+                    m_captureWidth = data.captureWidth;
+                    m_captureHeight = data.captureHeight;
+                    m_captureFps = data.captureFps;
+                    
+                    // Delete and recreate texture with new dimensions
+                    if (m_frameProcessor)
+                    {
+                        m_frameProcessor->deleteTexture();
+                    }
+                }
+                else
+                {
+                    LOG_ERROR("Failed to reconfigure capture for preset");
+                }
+            }
+            else if (data.sourceType != 0) // V4L2 or DirectShow - open device
+            {
+                // Open device if not already open
+                if (m_capture->open(m_devicePath))
+                {
+                    if (m_capture->setFormat(data.captureWidth, data.captureHeight, 0))
+                    {
+                        m_capture->setFramerate(data.captureFps);
+                        m_capture->startCapture();
+                        m_captureWidth = data.captureWidth;
+                        m_captureHeight = data.captureHeight;
+                        m_captureFps = data.captureFps;
+                        
+                        // Delete and recreate texture with new dimensions
+                        if (m_frameProcessor)
+                        {
+                            m_frameProcessor->deleteTexture();
+                        }
+                    }
+                    else
+                    {
+                        LOG_ERROR("Failed to set format for preset");
+                        m_capture->close();
+                    }
+                }
+                else
+                {
+                    LOG_ERROR("Failed to open device for preset: " + m_devicePath);
+                }
+            }
+        }
+        else if (data.sourceType == 0) // None - use dummy mode
+        {
+            // Activate dummy mode if source type is None
+            if (!m_capture->isDummyMode())
+            {
+                m_capture->setDummyMode(true);
+            }
+            if (m_capture->setFormat(data.captureWidth, data.captureHeight, 0))
+            {
+                if (!m_capture->isOpen() || !m_capture->startCapture())
+                {
+                    m_capture->startCapture();
+                }
+                m_captureWidth = data.captureWidth;
+                m_captureHeight = data.captureHeight;
+                m_captureFps = data.captureFps;
+            }
+        }
+        
+        // Update internal state to match preset (even if reconfig had issues)
+        // This keeps UI in sync with what the preset expects
+        m_captureWidth = data.captureWidth;
+        m_captureHeight = data.captureHeight;
+        m_captureFps = data.captureFps;
+    }
+
+    // 4. Apply image settings
+    // Note: fullscreen and monitorIndex are NOT applied - they vary per user/system
+    m_brightness = data.imageBrightness;
+    m_contrast = data.imageContrast;
+    m_maintainAspect = data.maintainAspect;
+    // fullscreen is NOT applied - varies per user preference
+    // monitorIndex is NOT applied - varies per system
+
+    // 5. Apply V4L2 controls
+    if (m_capture && !data.v4l2Controls.empty())
+    {
+        for (const auto& [name, value] : data.v4l2Controls)
+        {
+            m_capture->setControl(name, value);
+        }
+    }
+
+    // 6. Update UI
+    if (m_ui)
+    {
+        m_ui->setBrightness(m_brightness);
+        m_ui->setContrast(m_contrast);
+        m_ui->setMaintainAspect(m_maintainAspect);
+        // fullscreen and monitorIndex are NOT updated - they vary per user/system
+        m_ui->saveConfig();
+    }
+
+    LOG_INFO("Preset applied successfully: " + presetName);
+}
+
+void Application::createPresetFromCurrentState(const std::string& name, const std::string& description)
+{
+    if (!m_initialized)
+    {
+        LOG_ERROR("Cannot create preset: Application not initialized");
+        return;
+    }
+
+    PresetManager presetManager;
+    PresetManager::PresetData data;
+    data.name = name;
+    data.description = description;
+
+    // Collect shader information
+    if (m_shaderEngine && m_shaderEngine->isShaderActive())
+    {
+        std::string shaderPath = m_shaderEngine->getPresetPath();
+        
+        // Convert shader path to relative path (relative to shaders/shaders_glsl)
+        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
+        {
+            shaderBasePath = fs::path(envShaderPath);
+        }
+        else
+        {
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
+        }
+        
+        // Make path relative to shader base
+        fs::path shaderPathObj(shaderPath);
+        if (shaderPathObj.is_absolute())
+        {
+            try
+            {
+                fs::path relativePath = fs::relative(shaderPathObj, shaderBasePath);
+                if (!relativePath.empty() && relativePath.string() != ".")
+                {
+                    data.shaderPath = relativePath.string();
+                }
+                else
+                {
+                    // If relative fails, try to extract path after "shaders_glsl"
+                    std::string shaderPathStr = shaderPath;
+                    size_t pos = shaderPathStr.find("shaders_glsl");
+                    if (pos != std::string::npos)
+                    {
+                        data.shaderPath = shaderPathStr.substr(pos + 12); // +12 for "shaders_glsl"
+                        // Remove leading slash if present
+                        if (!data.shaderPath.empty() && data.shaderPath[0] == '/')
+                        {
+                            data.shaderPath = data.shaderPath.substr(1);
+                        }
+                    }
+                    else
+                    {
+                        data.shaderPath = shaderPath; // Fallback to original
+                    }
+                }
+            }
+            catch (...)
+            {
+                // If relative conversion fails, try to extract path after "shaders_glsl"
+                std::string shaderPathStr = shaderPath;
+                size_t pos = shaderPathStr.find("shaders_glsl");
+                if (pos != std::string::npos)
+                {
+                    data.shaderPath = shaderPathStr.substr(pos + 12);
+                    if (!data.shaderPath.empty() && data.shaderPath[0] == '/')
+                    {
+                        data.shaderPath = data.shaderPath.substr(1);
+                    }
+                }
+                else
+                {
+                    data.shaderPath = shaderPath; // Fallback to original
+                }
+            }
+        }
+        else
+        {
+            data.shaderPath = shaderPath; // Already relative
+        }
+        
+        // Get shader parameters
+        auto params = m_shaderEngine->getShaderParameters();
+        for (const auto& param : params)
+        {
+            data.shaderParameters[param.name] = param.value;
+        }
+    }
+
+    // Collect capture configuration
+    if (m_ui)
+    {
+        // Get source type from UI
+        UIManager::SourceType sourceType = m_ui->getSourceType();
+        data.sourceType = static_cast<int>(sourceType);
+    }
+    
+    // Note: devicePath is NOT saved - it can vary between systems
+    if (m_capture && m_capture->isOpen())
+    {
+        data.captureWidth = m_capture->getWidth();
+        data.captureHeight = m_capture->getHeight();
+        data.captureFps = m_captureFps;
+        // devicePath is NOT saved - varies between systems
+    }
+    else if (m_capture && m_capture->isDummyMode())
+    {
+        // Even in dummy mode, save the configuration
+        data.captureWidth = m_captureWidth;
+        data.captureHeight = m_captureHeight;
+        data.captureFps = m_captureFps;
+        // devicePath is NOT saved - varies between systems
+    }
+
+    // Collect image settings
+    // Note: fullscreen and monitorIndex are NOT saved - they can vary
+    data.imageBrightness = m_brightness;
+    data.imageContrast = m_contrast;
+    data.maintainAspect = m_maintainAspect;
+    // fullscreen is NOT saved - varies per user preference
+    // monitorIndex is NOT saved - varies per system
+
+    // Collect streaming settings (if active)
+    if (m_streamManager && m_streamManager->isActive())
+    {
+        data.streamingWidth = m_streamingWidth;
+        data.streamingHeight = m_streamingHeight;
+        data.streamingFps = m_streamingFps;
+        data.streamingBitrate = m_streamingBitrate;
+        data.streamingAudioBitrate = m_streamingAudioBitrate;
+        data.streamingVideoCodec = m_streamingVideoCodec;
+        data.streamingAudioCodec = m_streamingAudioCodec;
+        data.streamingH264Preset = m_streamingH264Preset;
+        data.streamingH265Preset = m_streamingH265Preset;
+        data.streamingH265Profile = m_streamingH265Profile;
+        data.streamingH265Level = m_streamingH265Level;
+        data.streamingVP8Speed = m_streamingVP8Speed;
+        data.streamingVP9Speed = m_streamingVP9Speed;
+    }
+
+    // Collect V4L2 controls (if applicable)
+    if (m_capture && m_capture->isOpen())
+    {
+        // Get common V4L2 controls
+        std::vector<std::string> controlNames = {"Brightness", "Contrast", "Saturation", "Hue"};
+        for (const auto& controlName : controlNames)
+        {
+            int32_t value = 0;
+            if (m_capture->getControl(controlName, value))
+            {
+                data.v4l2Controls[controlName] = value;
+            }
+        }
+    }
+
+    // Save preset
+    if (presetManager.savePreset(name, data))
+    {
+        LOG_INFO("Preset created from current state: " + name);
+    }
+    else
+    {
+        LOG_ERROR("Failed to create preset: " + name);
+    }
 }

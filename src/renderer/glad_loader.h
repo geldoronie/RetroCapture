@@ -95,6 +95,9 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 }
 #endif
 
+// glGetIntegerv - pode precisar ser carregado dinamicamente em alguns contextos
+extern void (*glGetIntegerv)(GLenum pname, GLint* params);
+
 // Constantes OpenGL
 #define GL_VERTEX_SHADER 0x8B31
 #define GL_FRAGMENT_SHADER 0x8B30
@@ -148,6 +151,8 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 #define GL_FLOAT_VEC4 0x8B52
 #define GL_TRUE 1
 #define GL_FALSE 0
+#define GL_VIEWPORT 0x0BA2
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
 
 bool loadOpenGLFunctions();
 
