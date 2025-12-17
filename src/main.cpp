@@ -69,6 +69,7 @@ void printUsage(const char *programName)
     std::cout << "\nOpções de Web Portal:\n";
     std::cout << "  --web-portal-enable              Habilitar web portal (padrão: habilitado)\n";
     std::cout << "  --web-portal-disable             Desabilitar web portal\n";
+    std::cout << "  --web-portal-start               Iniciar web portal automaticamente na inicialização\n";
     std::cout << "  --web-portal-port <porta>       Porta do web portal (padrão: 8080, mesma do streaming)\n";
     std::cout << "  --web-portal-https               Habilitar HTTPS no web portal\n";
     std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
@@ -157,6 +158,7 @@ int main(int argc, char *argv[])
 
     // Web Portal options
     bool webPortalEnabled = true; // Habilitado por padrão
+    bool webPortalStart = false;   // Iniciar web portal automaticamente
     int webPortalPort = 8080;     // Porta do web portal (mesma do streaming por padrão)
     bool webPortalHTTPSEnabled = false;
     std::string webPortalSSLCertPath = "ssl/server.crt";
@@ -584,6 +586,11 @@ int main(int argc, char *argv[])
         {
             webPortalEnabled = false;
         }
+        else if (arg == "--web-portal-start")
+        {
+            webPortalEnabled = true; // Garante que está habilitado
+            webPortalStart = true;    // Marca para iniciar automaticamente
+        }
         else if (arg == "--web-portal-port" && i + 1 < argc)
         {
             webPortalPort = std::stoi(argv[++i]);
@@ -820,6 +827,13 @@ int main(int argc, char *argv[])
     {
         app.getUIManager()->setVisible(false);
         LOG_INFO("UI hidden on startup (press F12 to toggle)");
+    }
+    
+    // Start web portal automatically if requested
+    if (webPortalStart && app.getUIManager())
+    {
+        app.getUIManager()->triggerWebPortalStartStop(true);
+        LOG_INFO("Web portal started automatically");
     }
 
     app.run();
