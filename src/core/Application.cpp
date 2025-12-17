@@ -481,6 +481,22 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     LOG_INFO("Reconfiguring capture: " + std::to_string(width) + "x" +
              std::to_string(height) + " @ " + std::to_string(fps) + "fps");
 
+    // Set reconfiguration flag to prevent frame processing
+    m_isReconfiguring = true;
+    
+    // Small delay to ensure any ongoing frame processing completes
+    // This prevents race conditions where processFrame is accessing the device
+#ifdef PLATFORM_LINUX
+    usleep(50000); // 50ms to let current frame processing finish
+#else
+    Sleep(50); // 50ms to let current frame processing finish
+#endif
+    
+    // Delete texture BEFORE closing device to avoid accessing invalid resources
+    if (m_frameProcessor) {
+        m_frameProcessor->deleteTexture();
+    }
+
     // Save current values for rollback if needed
     uint32_t oldWidth = m_captureWidth;
     uint32_t oldHeight = m_captureHeight;
@@ -506,6 +522,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     if (!m_capture->open(devicePath))
     {
         LOG_ERROR("Failed to reopen device after reconfiguration");
+        m_isReconfiguring = false; // Reset flag on failure
         return false;
     }
 
@@ -526,6 +543,8 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
+        // Reset reconfiguration flag on failure
+        m_isReconfiguring = false;
         return false;
     }
 
@@ -558,6 +577,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
+        m_isReconfiguring = false; // Reset flag on failure
         return false;
     }
 
@@ -585,6 +605,9 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
              std::to_string(actualWidth) + "x" +
              std::to_string(actualHeight) + " @ " + std::to_string(fps) + "fps");
 
+    // Reset reconfiguration flag
+    m_isReconfiguring = false;
+    
     return true;
 }
 
@@ -699,59 +722,10 @@ bool Application::initUI()
 
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
-        LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
-        // If no device is open, activate dummy mode
-        if (!m_capture || !m_capture->isOpen()) {
-            if (!m_capture) {
-                LOG_WARN("VideoCapture not initialized. Select a device first.");
-                return;
-            }
-            
-            // If not in dummy mode, try to activate
-            if (!m_capture->isDummyMode()) {
-                LOG_INFO("No device open. Activating dummy mode...");
-                m_capture->setDummyMode(true);
-            }
-            
-            // Configure dummy format
-            if (m_capture->setFormat(width, height, 0)) {
-                if (m_capture->startCapture()) {
-                    LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
-                    if (m_ui) {
-                        m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
-                        m_ui->setCurrentDevice(""); // Empty string = None
-                    }
-                    return;
-                }
-            }
-            LOG_WARN("Failed to configure dummy resolution. Select a device first.");
-            return;
-        }
-        if (reconfigureCapture(width, height, m_captureFps)) {
-            // Update texture if needed (use actual device values)
-            uint32_t actualWidth = m_capture->getWidth();
-            uint32_t actualHeight = m_capture->getHeight();
-            
-            // Always delete and recreate texture after reconfiguration
-            if (m_frameProcessor) {
-                m_frameProcessor->deleteTexture();
-            }
-            
-            // Update UI information with actual values
-            if (m_ui && m_capture) {
-                m_ui->setCaptureInfo(actualWidth, actualHeight, 
-                                    m_captureFps, m_devicePath);
-            }
-            
-            LOG_INFO("Texture will be recreated on next frame: " + 
-                     std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
-        } else {
-            // If failed, update UI with current values
-            if (m_ui && m_capture) {
-                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                    m_captureFps, m_devicePath);
-            }
-        } });
+        // Schedule resolution change for main thread (thread-safe)
+        // This is necessary because the callback may be called from API threads
+        scheduleResolutionChange(width, height);
+    });
 
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
@@ -2246,6 +2220,18 @@ void Application::run()
             }
         }
 
+        // Process pending resolution changes (from API threads)
+        {
+            std::lock_guard<std::mutex> lock(m_resolutionQueueMutex);
+            while (!m_pendingResolutionChanges.empty())
+            {
+                ResolutionChange change = m_pendingResolutionChanges.front();
+                m_pendingResolutionChanges.pop();
+                // Apply resolution change in main thread (safe to access OpenGL, capture, UI)
+                applyResolutionChange(change.width, change.height);
+            }
+        }
+
         // Process pending fullscreen change (outside callback to avoid deadlock)
         if (m_pendingFullscreenChange && m_window)
         {
@@ -2364,38 +2350,54 @@ void Application::run()
             dummyLogShown = true;
         }
 
-        if (shouldProcess)
+        if (shouldProcess && !m_isReconfiguring)
         {
-            // Try to process frame multiple times if we don't have valid texture
-            // This is important after reconfiguration when texture was deleted
-            // In dummy mode, always try to process to ensure green frame appears
-            int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
-            if (m_capture->isDummyMode())
+            // Double-check that capture is still open and not being reconfigured
+            // This prevents race conditions where reconfiguration starts between checks
+            if (!m_capture->isOpen() && !m_capture->isDummyMode())
             {
-                maxAttempts = 5; // Always try multiple times in dummy mode
+                // Device was closed, skip processing
+                shouldProcess = false;
             }
-            for (int attempt = 0; attempt < maxAttempts; ++attempt)
+            else
             {
-                newFrame = m_frameProcessor->processFrame(m_capture.get());
-
-                if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+                // Try to process frame multiple times if we don't have valid texture
+                // This is important after reconfiguration when texture was deleted
+                // In dummy mode, always try to process to ensure green frame appears
+                int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
+                if (m_capture->isDummyMode())
                 {
-                    break; // Frame processed successfully
+                    maxAttempts = 5; // Always try multiple times in dummy mode
                 }
-                if (attempt < maxAttempts - 1)
+                for (int attempt = 0; attempt < maxAttempts; ++attempt)
                 {
+                    // Check again before each attempt to avoid processing during reconfiguration
+                    if (m_isReconfiguring || (!m_capture->isOpen() && !m_capture->isDummyMode()))
+                    {
+                        break; // Stop processing if reconfiguration started
+                    }
+                    newFrame = m_frameProcessor->processFrame(m_capture.get());
+
+                    if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+                    {
+                        break; // Frame processed successfully
+                    }
+                    if (attempt < maxAttempts - 1)
+                    {
 #ifdef PLATFORM_LINUX
-                    usleep(5000); // 5ms between attempts
+                        usleep(5000); // 5ms between attempts
 #else
-                    Sleep(5); // 5ms between attempts
+                        Sleep(5); // 5ms between attempts
 #endif
+                    }
                 }
             }
         }
 
         // Always render if we have a valid frame
         // This ensures we're always showing the latest frame
-        if (m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+        // Skip rendering during reconfiguration to avoid accessing deleted textures
+        if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
             // Apply shader if active
             GLuint textureToRender = m_frameProcessor->getTexture();
@@ -2775,6 +2777,72 @@ void Application::schedulePresetApplication(const std::string& presetName)
     std::lock_guard<std::mutex> lock(m_presetQueueMutex);
     m_pendingPresets.push(presetName);
     LOG_INFO("Preset application scheduled: " + presetName);
+}
+
+void Application::scheduleResolutionChange(uint32_t width, uint32_t height)
+{
+    // Thread-safe: add to queue for processing in main thread
+    std::lock_guard<std::mutex> lock(m_resolutionQueueMutex);
+    ResolutionChange change;
+    change.width = width;
+    change.height = height;
+    m_pendingResolutionChanges.push(change);
+    LOG_INFO("Resolution change scheduled: " + std::to_string(width) + "x" + std::to_string(height));
+}
+
+void Application::applyResolutionChange(uint32_t width, uint32_t height)
+{
+    LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
+    // If no device is open, activate dummy mode
+    if (!m_capture || !m_capture->isOpen()) {
+        if (!m_capture) {
+            LOG_WARN("VideoCapture not initialized. Select a device first.");
+            return;
+        }
+        
+        // If not in dummy mode, try to activate
+        if (!m_capture->isDummyMode()) {
+            LOG_INFO("No device open. Activating dummy mode...");
+            m_capture->setDummyMode(true);
+        }
+        
+        // Configure dummy format
+        if (m_capture->setFormat(width, height, 0)) {
+            if (m_capture->startCapture()) {
+                LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
+                if (m_ui) {
+                    m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                    m_ui->setCurrentDevice(""); // Empty string = None
+                }
+                return;
+            }
+        }
+        LOG_WARN("Failed to configure dummy resolution. Select a device first.");
+        return;
+    }
+    if (reconfigureCapture(width, height, m_captureFps)) {
+        // Update texture if needed (use actual device values)
+        uint32_t actualWidth = m_capture->getWidth();
+        uint32_t actualHeight = m_capture->getHeight();
+        
+        // Texture was already deleted in reconfigureCapture before closing device
+        // It will be recreated automatically on next frame processing
+        
+        // Update UI information with actual values
+        if (m_ui && m_capture) {
+            m_ui->setCaptureInfo(actualWidth, actualHeight, 
+                                m_captureFps, m_devicePath);
+        }
+        
+        LOG_INFO("Texture will be recreated on next frame: " + 
+                 std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
+    } else {
+        // If failed, update UI with current values
+        if (m_ui && m_capture) {
+            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                m_captureFps, m_devicePath);
+        }
+    }
 }
 
 void Application::applyPreset(const std::string& presetName)

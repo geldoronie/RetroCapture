@@ -98,6 +98,10 @@ public:
     void applyPreset(const std::string& presetName);
     void schedulePresetApplication(const std::string& presetName); // Thread-safe: schedules for main thread
     void createPresetFromCurrentState(const std::string& name, const std::string& description);
+    
+    // Thread-safe resolution change scheduling
+    void scheduleResolutionChange(uint32_t width, uint32_t height); // Thread-safe: schedules for main thread
+    void applyResolutionChange(uint32_t width, uint32_t height); // Apply resolution change (called from main thread)
 
 private:
     bool m_initialized = false;
@@ -238,10 +242,19 @@ private:
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
     std::atomic<bool> m_isResizing{false};
+    std::atomic<bool> m_isReconfiguring{false}; // Flag to prevent frame processing during reconfiguration
     
     // Thread-safe queue for preset application from API threads
     std::mutex m_presetQueueMutex;
     std::queue<std::string> m_pendingPresets;
+    
+    // Thread-safe queue for resolution changes from API threads
+    struct ResolutionChange {
+        uint32_t width;
+        uint32_t height;
+    };
+    std::mutex m_resolutionQueueMutex;
+    std::queue<ResolutionChange> m_pendingResolutionChanges;
 
     // Fila de frames para streaming thread (captura de vídeo)
     // OPÇÃO A: Fila removida - frames processados diretamente na thread principal
