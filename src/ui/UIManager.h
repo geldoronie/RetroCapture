@@ -17,6 +17,7 @@ class ShaderEngine;
 // Forward declarations
 class UIConfiguration;
 class UICredits;
+class UICapturePresets;
 
 class UIManager
 {
@@ -47,6 +48,9 @@ public:
     // Parâmetros de shader
     void setShaderEngine(ShaderEngine *engine) { m_shaderEngine = engine; }
     ShaderEngine *getShaderEngine() const { return m_shaderEngine; }
+    
+    // Get preset window for Application connection
+    UICapturePresets* getCapturePresetsWindow() { return m_capturePresetsWindow.get(); }
     void setOnSavePreset(std::function<void(const std::string &, bool)> callback) { m_onSavePreset = callback; }
     const std::function<void(const std::string &, bool)> &getOnSavePreset() const { return m_onSavePreset; }
     const std::vector<std::string> &getScannedShaders() const { return m_scannedShaders; }
@@ -484,6 +488,7 @@ private:
     // UI Configuration window (refatorado)
     std::unique_ptr<class UIConfiguration> m_configWindow;
     std::unique_ptr<class UICredits> m_creditsWindow;
+    std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     GLFWwindow *m_window = nullptr;
 
     // Shader selection

@@ -11,11 +11,14 @@
 #include "../output/WindowManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
+#include "../ui/UICapturePresets.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../utils/PresetManager.h"
+#include "../utils/ThumbnailGenerator.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #ifdef PLATFORM_LINUX
@@ -478,6 +481,22 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     LOG_INFO("Reconfiguring capture: " + std::to_string(width) + "x" +
              std::to_string(height) + " @ " + std::to_string(fps) + "fps");
 
+    // Set reconfiguration flag to prevent frame processing
+    m_isReconfiguring = true;
+    
+    // Small delay to ensure any ongoing frame processing completes
+    // This prevents race conditions where processFrame is accessing the device
+#ifdef PLATFORM_LINUX
+    usleep(50000); // 50ms to let current frame processing finish
+#else
+    Sleep(50); // 50ms to let current frame processing finish
+#endif
+    
+    // Delete texture BEFORE closing device to avoid accessing invalid resources
+    if (m_frameProcessor) {
+        m_frameProcessor->deleteTexture();
+    }
+
     // Save current values for rollback if needed
     uint32_t oldWidth = m_captureWidth;
     uint32_t oldHeight = m_captureHeight;
@@ -503,6 +522,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     if (!m_capture->open(devicePath))
     {
         LOG_ERROR("Failed to reopen device after reconfiguration");
+        m_isReconfiguring = false; // Reset flag on failure
         return false;
     }
 
@@ -523,6 +543,8 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
+        // Reset reconfiguration flag on failure
+        m_isReconfiguring = false;
         return false;
     }
 
@@ -555,6 +577,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
             m_capture->setFramerate(oldFps);
             m_capture->startCapture();
         }
+        m_isReconfiguring = false; // Reset flag on failure
         return false;
     }
 
@@ -582,6 +605,9 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
              std::to_string(actualWidth) + "x" +
              std::to_string(actualHeight) + " @ " + std::to_string(fps) + "fps");
 
+    // Reset reconfiguration flag
+    m_isReconfiguring = false;
+    
     return true;
 }
 
@@ -696,59 +722,10 @@ bool Application::initUI()
 
     m_ui->setOnResolutionChanged([this](uint32_t width, uint32_t height)
                                  {
-        LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
-        // If no device is open, activate dummy mode
-        if (!m_capture || !m_capture->isOpen()) {
-            if (!m_capture) {
-                LOG_WARN("VideoCapture not initialized. Select a device first.");
-                return;
-            }
-            
-            // If not in dummy mode, try to activate
-            if (!m_capture->isDummyMode()) {
-                LOG_INFO("No device open. Activating dummy mode...");
-                m_capture->setDummyMode(true);
-            }
-            
-            // Configure dummy format
-            if (m_capture->setFormat(width, height, 0)) {
-                if (m_capture->startCapture()) {
-                    LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
-                    if (m_ui) {
-                        m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
-                        m_ui->setCurrentDevice(""); // Empty string = None
-                    }
-                    return;
-                }
-            }
-            LOG_WARN("Failed to configure dummy resolution. Select a device first.");
-            return;
-        }
-        if (reconfigureCapture(width, height, m_captureFps)) {
-            // Update texture if needed (use actual device values)
-            uint32_t actualWidth = m_capture->getWidth();
-            uint32_t actualHeight = m_capture->getHeight();
-            
-            // Always delete and recreate texture after reconfiguration
-            if (m_frameProcessor) {
-                m_frameProcessor->deleteTexture();
-            }
-            
-            // Update UI information with actual values
-            if (m_ui && m_capture) {
-                m_ui->setCaptureInfo(actualWidth, actualHeight, 
-                                    m_captureFps, m_devicePath);
-            }
-            
-            LOG_INFO("Texture will be recreated on next frame: " + 
-                     std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
-        } else {
-            // If failed, update UI with current values
-            if (m_ui && m_capture) {
-                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                    m_captureFps, m_devicePath);
-            }
-        } });
+        // Schedule resolution change for main thread (thread-safe)
+        // This is necessary because the callback may be called from API threads
+        scheduleResolutionChange(width, height);
+    });
 
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
@@ -832,6 +809,12 @@ bool Application::initUI()
         // No device - show "None"
         m_ui->setCaptureInfo(0, 0, 0, "None");
         m_ui->setCurrentDevice(""); // Empty string = None
+    }
+
+    // Connect Application to UICapturePresets
+    if (m_ui->getCapturePresetsWindow())
+    {
+        m_ui->getCapturePresetsWindow()->setApplication(this);
     }
 
     // IMPORTANT: After init(), UIManager has already loaded saved configurations
@@ -2225,6 +2208,30 @@ void Application::run()
     {
         m_window->pollEvents();
 
+        // Process pending preset applications (from API threads)
+        {
+            std::lock_guard<std::mutex> lock(m_presetQueueMutex);
+            while (!m_pendingPresets.empty())
+            {
+                std::string presetName = m_pendingPresets.front();
+                m_pendingPresets.pop();
+                // Apply preset in main thread (safe to access OpenGL, capture, UI)
+                applyPreset(presetName);
+            }
+        }
+
+        // Process pending resolution changes (from API threads)
+        {
+            std::lock_guard<std::mutex> lock(m_resolutionQueueMutex);
+            while (!m_pendingResolutionChanges.empty())
+            {
+                ResolutionChange change = m_pendingResolutionChanges.front();
+                m_pendingResolutionChanges.pop();
+                // Apply resolution change in main thread (safe to access OpenGL, capture, UI)
+                applyResolutionChange(change.width, change.height);
+            }
+        }
+
         // Process pending fullscreen change (outside callback to avoid deadlock)
         if (m_pendingFullscreenChange && m_window)
         {
@@ -2343,38 +2350,54 @@ void Application::run()
             dummyLogShown = true;
         }
 
-        if (shouldProcess)
+        if (shouldProcess && !m_isReconfiguring)
         {
-            // Try to process frame multiple times if we don't have valid texture
-            // This is important after reconfiguration when texture was deleted
-            // In dummy mode, always try to process to ensure green frame appears
-            int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
-            if (m_capture->isDummyMode())
+            // Double-check that capture is still open and not being reconfigured
+            // This prevents race conditions where reconfiguration starts between checks
+            if (!m_capture->isOpen() && !m_capture->isDummyMode())
             {
-                maxAttempts = 5; // Always try multiple times in dummy mode
+                // Device was closed, skip processing
+                shouldProcess = false;
             }
-            for (int attempt = 0; attempt < maxAttempts; ++attempt)
+            else
             {
-                newFrame = m_frameProcessor->processFrame(m_capture.get());
-
-                if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+                // Try to process frame multiple times if we don't have valid texture
+                // This is important after reconfiguration when texture was deleted
+                // In dummy mode, always try to process to ensure green frame appears
+                int maxAttempts = (m_frameProcessor->getTexture() == 0 && !m_frameProcessor->hasValidFrame()) ? 5 : 1;
+                if (m_capture->isDummyMode())
                 {
-                    break; // Frame processed successfully
+                    maxAttempts = 5; // Always try multiple times in dummy mode
                 }
-                if (attempt < maxAttempts - 1)
+                for (int attempt = 0; attempt < maxAttempts; ++attempt)
                 {
+                    // Check again before each attempt to avoid processing during reconfiguration
+                    if (m_isReconfiguring || (!m_capture->isOpen() && !m_capture->isDummyMode()))
+                    {
+                        break; // Stop processing if reconfiguration started
+                    }
+                    newFrame = m_frameProcessor->processFrame(m_capture.get());
+
+                    if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+                    {
+                        break; // Frame processed successfully
+                    }
+                    if (attempt < maxAttempts - 1)
+                    {
 #ifdef PLATFORM_LINUX
-                    usleep(5000); // 5ms between attempts
+                        usleep(5000); // 5ms between attempts
 #else
-                    Sleep(5); // 5ms between attempts
+                        Sleep(5); // 5ms between attempts
 #endif
+                    }
                 }
             }
         }
 
         // Always render if we have a valid frame
         // This ensures we're always showing the latest frame
-        if (m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+        // Skip rendering during reconfiguration to avoid accessing deleted textures
+        if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
             // Apply shader if active
             GLuint textureToRender = m_frameProcessor->getTexture();
@@ -2746,4 +2769,479 @@ void Application::shutdown()
     }
 
     m_initialized = false;
+}
+
+void Application::schedulePresetApplication(const std::string& presetName)
+{
+    // Thread-safe: add to queue for processing in main thread
+    std::lock_guard<std::mutex> lock(m_presetQueueMutex);
+    m_pendingPresets.push(presetName);
+    LOG_INFO("Preset application scheduled: " + presetName);
+}
+
+void Application::scheduleResolutionChange(uint32_t width, uint32_t height)
+{
+    // Thread-safe: add to queue for processing in main thread
+    std::lock_guard<std::mutex> lock(m_resolutionQueueMutex);
+    ResolutionChange change;
+    change.width = width;
+    change.height = height;
+    m_pendingResolutionChanges.push(change);
+    LOG_INFO("Resolution change scheduled: " + std::to_string(width) + "x" + std::to_string(height));
+}
+
+void Application::applyResolutionChange(uint32_t width, uint32_t height)
+{
+    LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
+    // If no device is open, activate dummy mode
+    if (!m_capture || !m_capture->isOpen()) {
+        if (!m_capture) {
+            LOG_WARN("VideoCapture not initialized. Select a device first.");
+            return;
+        }
+        
+        // If not in dummy mode, try to activate
+        if (!m_capture->isDummyMode()) {
+            LOG_INFO("No device open. Activating dummy mode...");
+            m_capture->setDummyMode(true);
+        }
+        
+        // Configure dummy format
+        if (m_capture->setFormat(width, height, 0)) {
+            if (m_capture->startCapture()) {
+                LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
+                if (m_ui) {
+                    m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
+                    m_ui->setCurrentDevice(""); // Empty string = None
+                }
+                return;
+            }
+        }
+        LOG_WARN("Failed to configure dummy resolution. Select a device first.");
+        return;
+    }
+    if (reconfigureCapture(width, height, m_captureFps)) {
+        // Update texture if needed (use actual device values)
+        uint32_t actualWidth = m_capture->getWidth();
+        uint32_t actualHeight = m_capture->getHeight();
+        
+        // Texture was already deleted in reconfigureCapture before closing device
+        // It will be recreated automatically on next frame processing
+        
+        // Update UI information with actual values
+        if (m_ui && m_capture) {
+            m_ui->setCaptureInfo(actualWidth, actualHeight, 
+                                m_captureFps, m_devicePath);
+        }
+        
+        LOG_INFO("Texture will be recreated on next frame: " + 
+                 std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
+    } else {
+        // If failed, update UI with current values
+        if (m_ui && m_capture) {
+            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                m_captureFps, m_devicePath);
+        }
+    }
+}
+
+void Application::applyPreset(const std::string& presetName)
+{
+    if (!m_initialized)
+    {
+        LOG_ERROR("Cannot apply preset: Application not initialized");
+        return;
+    }
+
+    PresetManager presetManager;
+    PresetManager::PresetData data;
+    if (!presetManager.loadPreset(presetName, data))
+    {
+        LOG_ERROR("Failed to load preset: " + presetName);
+        return;
+    }
+
+    LOG_INFO("Applying preset: " + presetName);
+
+    // 1. Apply shader
+    if (!data.shaderPath.empty() && m_shaderEngine)
+    {
+        // Resolve relative shader path to absolute
+        std::string shaderPath = data.shaderPath;
+        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
+        {
+            shaderBasePath = fs::path(envShaderPath);
+        }
+        else
+        {
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
+        }
+        
+        // If path is relative, make it absolute
+        fs::path shaderPathObj(shaderPath);
+        if (shaderPathObj.is_relative())
+        {
+            fs::path absolutePath = shaderBasePath / shaderPathObj;
+            if (fs::exists(absolutePath))
+            {
+                shaderPath = absolutePath.string();
+            }
+            else
+            {
+                // Try as-is (might already be absolute or in different location)
+                shaderPath = data.shaderPath;
+            }
+        }
+        
+        if (m_shaderEngine->loadPreset(shaderPath))
+        {
+            // Apply shader parameters
+            for (const auto& [name, value] : data.shaderParameters)
+            {
+                m_shaderEngine->setShaderParameter(name, value);
+            }
+            
+            // Update UI with shader path (use the relative path from preset)
+            // This is important because setCurrentShader triggers a callback that
+            // will try to reload the shader, so we need to pass the correct relative path
+            if (m_ui)
+            {
+                // Use the relative path from the preset data (not the absolute path)
+                // The callback expects a path relative to shaders/shaders_glsl
+                m_ui->setCurrentShader(data.shaderPath);
+            }
+        }
+        else
+        {
+            LOG_ERROR("Failed to load shader for preset: " + shaderPath);
+        }
+    }
+    else if (m_ui && data.shaderPath.empty())
+    {
+        // No shader in preset - clear shader in UI
+        m_ui->setCurrentShader("");
+    }
+
+    // 2. Apply source type if changed
+    if (m_ui && data.sourceType >= 0)
+    {
+        UIManager::SourceType sourceType = static_cast<UIManager::SourceType>(data.sourceType);
+        if (m_ui->getSourceType() != sourceType)
+        {
+            m_ui->triggerSourceTypeChange(sourceType);
+        }
+    }
+
+    // 3. Reconfigure capture
+    // Note: devicePath is NOT used - it varies between systems
+    if (data.captureWidth > 0 && data.captureHeight > 0 && m_capture)
+    {
+        // devicePath is NOT used - varies between systems
+        
+        // Check if we need to reconfigure
+        bool needsReconfig = false;
+        if (m_capture->isOpen())
+        {
+            // Check if resolution or FPS changed
+            if (m_captureWidth != data.captureWidth || 
+                m_captureHeight != data.captureHeight || 
+                m_captureFps != data.captureFps)
+            {
+                needsReconfig = true;
+            }
+        }
+        else if (data.sourceType != 0) // Not None - need to open device
+        {
+            needsReconfig = true;
+        }
+        
+        if (needsReconfig)
+        {
+            if (m_capture->isOpen())
+            {
+                // Use reconfigureCapture which properly closes and reopens the device
+                if (reconfigureCapture(data.captureWidth, data.captureHeight, data.captureFps))
+                {
+                    m_captureWidth = data.captureWidth;
+                    m_captureHeight = data.captureHeight;
+                    m_captureFps = data.captureFps;
+                    
+                    // Delete and recreate texture with new dimensions
+                    if (m_frameProcessor)
+                    {
+                        m_frameProcessor->deleteTexture();
+                    }
+                }
+                else
+                {
+                    LOG_ERROR("Failed to reconfigure capture for preset");
+                }
+            }
+            else if (data.sourceType != 0) // V4L2 or DirectShow - open device
+            {
+                // Open device if not already open
+                if (m_capture->open(m_devicePath))
+                {
+                    if (m_capture->setFormat(data.captureWidth, data.captureHeight, 0))
+                    {
+                        m_capture->setFramerate(data.captureFps);
+                        m_capture->startCapture();
+                        m_captureWidth = data.captureWidth;
+                        m_captureHeight = data.captureHeight;
+                        m_captureFps = data.captureFps;
+                        
+                        // Delete and recreate texture with new dimensions
+                        if (m_frameProcessor)
+                        {
+                            m_frameProcessor->deleteTexture();
+                        }
+                    }
+                    else
+                    {
+                        LOG_ERROR("Failed to set format for preset");
+                        m_capture->close();
+                    }
+                }
+                else
+                {
+                    LOG_ERROR("Failed to open device for preset: " + m_devicePath);
+                }
+            }
+        }
+        else if (data.sourceType == 0) // None - use dummy mode
+        {
+            // Activate dummy mode if source type is None
+            if (!m_capture->isDummyMode())
+            {
+                m_capture->setDummyMode(true);
+            }
+            if (m_capture->setFormat(data.captureWidth, data.captureHeight, 0))
+            {
+                if (!m_capture->isOpen() || !m_capture->startCapture())
+                {
+                    m_capture->startCapture();
+                }
+                m_captureWidth = data.captureWidth;
+                m_captureHeight = data.captureHeight;
+                m_captureFps = data.captureFps;
+            }
+        }
+        
+        // Update internal state to match preset (even if reconfig had issues)
+        // This keeps UI in sync with what the preset expects
+        m_captureWidth = data.captureWidth;
+        m_captureHeight = data.captureHeight;
+        m_captureFps = data.captureFps;
+    }
+
+    // 4. Apply image settings
+    // Note: fullscreen and monitorIndex are NOT applied - they vary per user/system
+    m_brightness = data.imageBrightness;
+    m_contrast = data.imageContrast;
+    m_maintainAspect = data.maintainAspect;
+    // fullscreen is NOT applied - varies per user preference
+    // monitorIndex is NOT applied - varies per system
+
+    // 5. Apply V4L2 controls
+    if (m_capture && !data.v4l2Controls.empty())
+    {
+        for (const auto& [name, value] : data.v4l2Controls)
+        {
+            m_capture->setControl(name, value);
+        }
+    }
+
+    // 6. Update UI with all applied values
+    if (m_ui)
+    {
+        // Update capture info (resolution and FPS)
+        if (data.captureWidth > 0 && data.captureHeight > 0)
+        {
+            std::string currentDevice = m_capture && m_capture->isOpen() ? m_devicePath : "";
+            m_ui->setCaptureInfo(data.captureWidth, data.captureHeight, data.captureFps, currentDevice);
+        }
+        
+        // Update image settings
+        m_ui->setBrightness(m_brightness);
+        m_ui->setContrast(m_contrast);
+        m_ui->setMaintainAspect(m_maintainAspect);
+        // fullscreen and monitorIndex are NOT updated - they vary per user/system
+        
+        // Save all configuration changes
+        m_ui->saveConfig();
+    }
+
+    LOG_INFO("Preset applied successfully: " + presetName);
+}
+
+void Application::createPresetFromCurrentState(const std::string& name, const std::string& description)
+{
+    if (!m_initialized)
+    {
+        LOG_ERROR("Cannot create preset: Application not initialized");
+        return;
+    }
+
+    PresetManager presetManager;
+    PresetManager::PresetData data;
+    data.name = name;
+    data.description = description;
+
+    // Collect shader information
+    if (m_shaderEngine && m_shaderEngine->isShaderActive())
+    {
+        std::string shaderPath = m_shaderEngine->getPresetPath();
+        
+        // Convert shader path to relative path (relative to shaders/shaders_glsl)
+        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+        fs::path shaderBasePath;
+        if (envShaderPath && fs::exists(envShaderPath))
+        {
+            shaderBasePath = fs::path(envShaderPath);
+        }
+        else
+        {
+            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
+        }
+        
+        // Make path relative to shader base
+        fs::path shaderPathObj(shaderPath);
+        if (shaderPathObj.is_absolute())
+        {
+            try
+            {
+                fs::path relativePath = fs::relative(shaderPathObj, shaderBasePath);
+                if (!relativePath.empty() && relativePath.string() != ".")
+                {
+                    data.shaderPath = relativePath.string();
+                }
+                else
+                {
+                    // If relative fails, try to extract path after "shaders_glsl"
+                    std::string shaderPathStr = shaderPath;
+                    size_t pos = shaderPathStr.find("shaders_glsl");
+                    if (pos != std::string::npos)
+                    {
+                        data.shaderPath = shaderPathStr.substr(pos + 12); // +12 for "shaders_glsl"
+                        // Remove leading slash if present
+                        if (!data.shaderPath.empty() && data.shaderPath[0] == '/')
+                        {
+                            data.shaderPath = data.shaderPath.substr(1);
+                        }
+                    }
+                    else
+                    {
+                        data.shaderPath = shaderPath; // Fallback to original
+                    }
+                }
+            }
+            catch (...)
+            {
+                // If relative conversion fails, try to extract path after "shaders_glsl"
+                std::string shaderPathStr = shaderPath;
+                size_t pos = shaderPathStr.find("shaders_glsl");
+                if (pos != std::string::npos)
+                {
+                    data.shaderPath = shaderPathStr.substr(pos + 12);
+                    if (!data.shaderPath.empty() && data.shaderPath[0] == '/')
+                    {
+                        data.shaderPath = data.shaderPath.substr(1);
+                    }
+                }
+                else
+                {
+                    data.shaderPath = shaderPath; // Fallback to original
+                }
+            }
+        }
+        else
+        {
+            data.shaderPath = shaderPath; // Already relative
+        }
+        
+        // Get shader parameters
+        auto params = m_shaderEngine->getShaderParameters();
+        for (const auto& param : params)
+        {
+            data.shaderParameters[param.name] = param.value;
+        }
+    }
+
+    // Collect capture configuration
+    if (m_ui)
+    {
+        // Get source type from UI
+        UIManager::SourceType sourceType = m_ui->getSourceType();
+        data.sourceType = static_cast<int>(sourceType);
+    }
+    
+    // Note: devicePath is NOT saved - it can vary between systems
+    if (m_capture && m_capture->isOpen())
+    {
+        data.captureWidth = m_capture->getWidth();
+        data.captureHeight = m_capture->getHeight();
+        data.captureFps = m_captureFps;
+        // devicePath is NOT saved - varies between systems
+    }
+    else if (m_capture && m_capture->isDummyMode())
+    {
+        // Even in dummy mode, save the configuration
+        data.captureWidth = m_captureWidth;
+        data.captureHeight = m_captureHeight;
+        data.captureFps = m_captureFps;
+        // devicePath is NOT saved - varies between systems
+    }
+
+    // Collect image settings
+    // Note: fullscreen and monitorIndex are NOT saved - they can vary
+    data.imageBrightness = m_brightness;
+    data.imageContrast = m_contrast;
+    data.maintainAspect = m_maintainAspect;
+    // fullscreen is NOT saved - varies per user preference
+    // monitorIndex is NOT saved - varies per system
+
+    // Collect streaming settings (if active)
+    if (m_streamManager && m_streamManager->isActive())
+    {
+        data.streamingWidth = m_streamingWidth;
+        data.streamingHeight = m_streamingHeight;
+        data.streamingFps = m_streamingFps;
+        data.streamingBitrate = m_streamingBitrate;
+        data.streamingAudioBitrate = m_streamingAudioBitrate;
+        data.streamingVideoCodec = m_streamingVideoCodec;
+        data.streamingAudioCodec = m_streamingAudioCodec;
+        data.streamingH264Preset = m_streamingH264Preset;
+        data.streamingH265Preset = m_streamingH265Preset;
+        data.streamingH265Profile = m_streamingH265Profile;
+        data.streamingH265Level = m_streamingH265Level;
+        data.streamingVP8Speed = m_streamingVP8Speed;
+        data.streamingVP9Speed = m_streamingVP9Speed;
+    }
+
+    // Collect V4L2 controls (if applicable)
+    if (m_capture && m_capture->isOpen())
+    {
+        // Get common V4L2 controls
+        std::vector<std::string> controlNames = {"Brightness", "Contrast", "Saturation", "Hue"};
+        for (const auto& controlName : controlNames)
+        {
+            int32_t value = 0;
+            if (m_capture->getControl(controlName, value))
+            {
+                data.v4l2Controls[controlName] = value;
+            }
+        }
+    }
+
+    // Save preset
+    if (presetManager.savePreset(name, data))
+    {
+        LOG_INFO("Preset created from current state: " + name);
+    }
+    else
+    {
+        LOG_ERROR("Failed to create preset: " + name);
+    }
 }

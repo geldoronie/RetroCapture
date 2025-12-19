@@ -32,6 +32,13 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         return false;
     }
 
+    // IMPORTANT: Check if device is open before attempting to capture
+    // This prevents segmentation faults during reconfiguration
+    if (!capture->isOpen() && !capture->isDummyMode())
+    {
+        return false; // Device is closed, cannot process frames
+    }
+
     Frame frame;
     // Usar captureLatestFrame para descartar frames antigos e pegar apenas o mais recente
     bool captured = capture->captureLatestFrame(frame);

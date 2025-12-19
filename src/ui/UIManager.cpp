@@ -1,6 +1,7 @@
 #include "UIManager.h"
 #include "UIConfiguration.h"
 #include "UICredits.h"
+#include "UICapturePresets.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
@@ -36,6 +37,7 @@ UIManager::~UIManager()
     // Destruir janelas antes de shutdown
     m_configWindow.reset();
     m_creditsWindow.reset();
+    m_capturePresetsWindow.reset();
     shutdown();
 }
 
@@ -103,6 +105,7 @@ bool UIManager::init(GLFWwindow *window)
 
     m_configWindow = std::make_unique<UIConfiguration>(this);
     m_creditsWindow = std::make_unique<UICredits>(this);
+    m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -204,6 +207,14 @@ void UIManager::render()
                     m_configWindow->setVisible(!visible);
                 }
             }
+            if (m_capturePresetsWindow)
+            {
+                bool visible = m_capturePresetsWindow->isVisible();
+                if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                {
+                    m_capturePresetsWindow->setVisible(!visible);
+                }
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help"))
@@ -231,6 +242,12 @@ void UIManager::render()
     if (m_creditsWindow)
     {
         m_creditsWindow->render();
+    }
+
+    // Renderizar janela de presets
+    if (m_capturePresetsWindow)
+    {
+        m_capturePresetsWindow->render();
     }
 }
 

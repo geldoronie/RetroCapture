@@ -1523,4 +1523,187 @@ document.addEventListener('DOMContentLoaded', function() {
         vp9Speed.addEventListener('change', updateStreamingSettingsDebounced);
     }
     
+    // Load presets when presets tab is shown
+    const presetsTab = document.getElementById('presets-tab');
+    if (presetsTab) {
+        presetsTab.addEventListener('shown.bs.tab', function() {
+            loadPresets();
+        });
+    }
+    
 });
+
+// ========== Preset Functions ==========
+
+/**
+ * Load and display all presets
+ */
+async function loadPresets() {
+    const grid = document.getElementById('presetsGrid');
+    if (!grid) return;
+    
+    try {
+        grid.innerHTML = '<div class="col-12 text-muted">Carregando presets...</div>';
+        const response = await api.getPresets();
+        
+        if (!response.presets || response.presets.length === 0) {
+            grid.innerHTML = '<div class="col-12 text-muted">Nenhum preset encontrado. Crie um novo preset usando o botão "Create Preset".</div>';
+            return;
+        }
+        
+        grid.innerHTML = '';
+        response.presets.forEach(preset => {
+            const presetCard = createPresetCard(preset);
+            grid.appendChild(presetCard);
+        });
+    } catch (error) {
+        console.error('Erro ao carregar presets:', error);
+        grid.innerHTML = `<div class="col-12 text-danger">Erro ao carregar presets: ${error.message}</div>`;
+    }
+}
+
+/**
+ * Create a preset card element
+ */
+function createPresetCard(preset) {
+    const col = document.createElement('div');
+    col.className = 'col-md-4 col-lg-3';
+    
+    const card = document.createElement('div');
+    card.className = 'card preset-card';
+    card.style.cursor = 'pointer';
+    card.onclick = function(e) {
+        // Don't apply if clicking on buttons
+        if (e.target.closest('button')) {
+            return;
+        }
+        applyPreset(preset.name);
+    };
+    
+    // Extract just the filename from thumbnail path
+    let thumbnailFilename = '';
+    if (preset.thumbnail) {
+        // If thumbnail path contains directory separators, extract just the filename
+        const parts = preset.thumbnail.split(/[/\\]/);
+        thumbnailFilename = parts[parts.length - 1];
+    }
+    
+    // Thumbnail - square aspect ratio
+    let thumbnailHtml = '<div class="card-img-top preset-thumbnail bg-dark d-flex align-items-center justify-content-center"><i class="bi bi-image text-muted fs-1"></i></div>';
+    if (thumbnailFilename) {
+        // Thumbnail path is relative, need to construct full URL
+        const thumbnailUrl = `/assets/thumbnails/${thumbnailFilename}`;
+        thumbnailHtml = `<img src="${thumbnailUrl}" class="card-img-top preset-thumbnail" style="object-fit: cover;" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'card-img-top preset-thumbnail bg-dark d-flex align-items-center justify-content-center\\'><i class=\\'bi bi-image text-muted fs-1\\'></i></div>'">`;
+    }
+    
+    card.innerHTML = `
+        ${thumbnailHtml}
+        <div class="card-body">
+            <h6 class="card-title">${escapeHtml(preset.displayName || preset.name)}</h6>
+            ${preset.description ? `<p class="card-text text-muted small">${escapeHtml(preset.description)}</p>` : ''}
+        </div>
+        <div class="card-footer bg-transparent">
+            <div class="btn-group w-100" role="group">
+                <button type="button" class="btn btn-sm btn-primary" onclick="event.stopPropagation(); applyPreset('${escapeHtml(preset.name)}')">
+                    <i class="bi bi-play-circle me-1"></i>Apply
+                </button>
+                <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deletePreset('${escapeHtml(preset.name)}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    
+    col.appendChild(card);
+    return col;
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Refresh presets list
+ */
+async function refreshPresets() {
+    await loadPresets();
+    showAlert('Presets atualizados', 'success');
+}
+
+/**
+ * Show create preset dialog
+ */
+function showCreatePresetDialog() {
+    const modal = new bootstrap.Modal(document.getElementById('createPresetModal'));
+    document.getElementById('newPresetName').value = '';
+    document.getElementById('newPresetDescription').value = '';
+    document.getElementById('captureThumbnail').checked = true;
+    modal.show();
+}
+
+/**
+ * Create a new preset from current state
+ */
+async function createPreset() {
+    const name = document.getElementById('newPresetName').value.trim();
+    if (!name) {
+        showAlert('Por favor, insira um nome para o preset', 'warning');
+        return;
+    }
+    
+    const description = document.getElementById('newPresetDescription').value.trim();
+    const captureThumbnail = document.getElementById('captureThumbnail').checked;
+    
+    try {
+        // Note: thumbnail capture is handled server-side, so we just pass the flag
+        await api.createPreset(name, description);
+        
+        const modal = bootstrap.Modal.getInstance(document.getElementById('createPresetModal'));
+        modal.hide();
+        
+        showAlert(`Preset "${name}" criado com sucesso!`, 'success');
+        await loadPresets();
+    } catch (error) {
+        console.error('Erro ao criar preset:', error);
+        showAlert(`Erro ao criar preset: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Apply a preset
+ */
+async function applyPreset(presetName) {
+    try {
+        await api.applyPreset(presetName);
+        showAlert(`Preset "${presetName}" aplicado com sucesso!`, 'success');
+        
+        // Reload all data to reflect changes
+        await loadAllData();
+    } catch (error) {
+        console.error('Erro ao aplicar preset:', error);
+        showAlert(`Erro ao aplicar preset: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Delete a preset
+ */
+async function deletePreset(presetName) {
+    if (!confirm(`Tem certeza que deseja deletar o preset "${presetName}"?`)) {
+        return;
+    }
+    
+    try {
+        await api.deletePreset(presetName);
+        showAlert(`Preset "${presetName}" deletado com sucesso!`, 'success');
+        await loadPresets();
+    } catch (error) {
+        console.error('Erro ao deletar preset:', error);
+        showAlert(`Erro ao deletar preset: ${error.message}`, 'danger');
+    }
+}

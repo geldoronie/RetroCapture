@@ -50,6 +50,7 @@ void (*glUniform2f)(GLint, GLfloat, GLfloat) = nullptr;
 void (*glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat *) = nullptr;
+void (*glGetIntegerv)(GLenum, GLint*) = nullptr;
 
 // Funções básicas (glViewport, glClearColor, glClear, glDrawElements) são do OpenGL 1.x/2.x
 // e estão linkadas estaticamente via OpenGL::GL - não precisam ser declaradas aqui
@@ -125,6 +126,9 @@ bool loadOpenGLFunctions()
     LOAD_FUNC(glUniform3f)
     LOAD_FUNC(glUniform4f)
     LOAD_FUNC(glUniformMatrix4fv)
+    
+    // glGetIntegerv - carregar dinamicamente para garantir compatibilidade
+    LOAD_FUNC(glGetIntegerv)
 
     // glEnable, glDisable, glBlendFunc são funções do OpenGL 1.x/2.x
     // e estão disponíveis estaticamente - não precisam ser carregadas dinamicamente

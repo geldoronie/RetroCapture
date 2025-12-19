@@ -107,6 +107,8 @@ private:
     bool handleGETPlatform(int clientFd);
     bool handleGETDSDevices(int clientFd);
     bool handleRefreshDSDevices(int clientFd);
+    bool handleGETPresets(int clientFd);
+    bool handleGETPreset(int clientFd, const std::string& presetName);
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
@@ -122,6 +124,9 @@ private:
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
     bool handleSetDSDevice(int clientFd, const std::string &body);
+    bool handleCreatePreset(int clientFd, const std::string &body);
+    bool handleApplyPreset(int clientFd, const std::string &body);
+    bool handleDeletePreset(int clientFd, const std::string &presetName);
 
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
