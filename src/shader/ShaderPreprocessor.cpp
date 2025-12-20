@@ -122,20 +122,51 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     // RetroArch adiciona: "#define VERTEX\n#define PARAMETER_UNIFORM\n" para vertex
     // e "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" para fragment
     // IMPORTANTE: RetroArch também adiciona defines para compatibilidade
+    
+    // Verificar se estamos usando OpenGL ES
+    bool isES = isOpenGLES();
+    
     // Adicionar extensão para inicialização estilo C (GL_ARB_shading_language_420pack)
     // Isso permite inicialização de arrays e estruturas estilo C
-    std::string extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
+    // IMPORTANTE: Esta extensão NÃO é suportada em OpenGL ES, então só adicionar em Desktop
+    std::string extensionLine = "";
+    if (!isES) {
+        extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
+    }
+    
+    // Remover extensões não suportadas do código fonte se for OpenGL ES
+    std::string processedCodeAfterVersion = codeAfterVersion;
+    if (isES) {
+        // Remover todas as extensões GL_ARB_shading_language_420pack do código fonte
+        std::regex extensionRegex(R"(#extension\s+GL_ARB_shading_language_420pack\s*:?\s*\w*\s*\n?)");
+        processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, extensionRegex, "");
+        
+        // Remover outras extensões problemáticas comuns em ES
+        std::regex arbExtensionRegex(R"(#extension\s+GL_ARB_[^\n]*\n?)");
+        processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, arbExtensionRegex, "");
+    }
 
-    std::string vertexCode = codeAfterVersion;
-    std::string fragmentCode = codeAfterVersion;
+    std::string vertexCode = processedCodeAfterVersion;
+    std::string fragmentCode = processedCodeAfterVersion;
 
     // Injetar código de compatibilidade se necessário
     injectCompatibilityCode(vertexCode, fragmentCode, shaderPath, passIndex,
                           outputWidth, outputHeight, inputWidth, inputHeight, presetPasses);
 
+    // Adicionar precisão para OpenGL ES (deve vir logo após #version)
+    // NOTA: GL_ES é definido automaticamente pelo driver OpenGL ES, não precisamos defini-lo manualmente
+    std::string precisionLine = "";
+    if (isES) {
+        // Em OpenGL ES, precisamos especificar precisão para todos os tipos de ponto flutuante
+        // Isso deve vir logo após #version, antes de qualquer código
+        // GL_ES já está definido automaticamente pelo driver, então os shaders podem usar #ifdef GL_ES
+        precisionLine = "precision mediump float;\nprecision mediump int;\n";
+    }
+    
     // Construir fontes finais com defines
-    result.vertexSource = versionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
-    result.fragmentSource = versionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
+    // Ordem: version + precision (se ES) + extension (se Desktop) + defines + código
+    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
+    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
 
     return result;
 }
