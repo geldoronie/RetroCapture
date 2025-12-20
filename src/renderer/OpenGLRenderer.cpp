@@ -14,49 +14,166 @@
 #endif
 #include <cstring>
 
-// Shader vertex simples
-const char* vertexShaderSource = R"(
-#version 330 core
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec2 aTexCoord;
-
-out vec2 TexCoord;
-
-void main() {
-    gl_Position = vec4(aPos, 0.0, 1.0);
-    TexCoord = aTexCoord;
+// Shaders serão gerados dinamicamente baseados na versão OpenGL
+// Funções helper para gerar shaders compatíveis
+std::string generateVertexShader()
+{
+    std::string version = getGLSLVersionString();
+    bool isES = isOpenGLES();
+    int major = getOpenGLMajorVersion();
+    
+    // Limpar a string de versão: remover espaços extras e newlines
+    // A string deve ser exatamente "#version XXX" sem espaços extras
+    while (!version.empty() && (version.back() == '\n' || version.back() == '\r' || version.back() == ' ')) {
+        version.pop_back();
+    }
+    while (!version.empty() && (version.front() == ' ' || version.front() == '\n' || version.front() == '\r')) {
+        version.erase(0, 1);
+    }
+    
+    // Verificar se é OpenGL ES - nunca usar "core" em ES
+    if (isES && major >= 3) {
+        // OpenGL ES 3.0+ - usar in/out (sem "core")
+        return version + "\n" +
+               "in vec2 aPos;\n"
+               "in vec2 aTexCoord;\n"
+               "\n"
+               "out vec2 TexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+               "    TexCoord = aTexCoord;\n"
+               "}\n";
+    } else if (isES) {
+        // OpenGL ES 2.0 - usar attribute/varying
+        return version + "\n" +
+               "precision mediump float;\n"
+               "attribute vec2 aPos;\n"
+               "attribute vec2 aTexCoord;\n"
+               "\n"
+               "varying vec2 TexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+               "    TexCoord = aTexCoord;\n"
+               "}\n";
+    } else if (major >= 3) {
+        // OpenGL 3.0+ Desktop - usar layout location com "core"
+        return version + " core\n"
+               "layout (location = 0) in vec2 aPos;\n"
+               "layout (location = 1) in vec2 aTexCoord;\n"
+               "\n"
+               "out vec2 TexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+               "    TexCoord = aTexCoord;\n"
+               "}\n";
+    } else {
+        // OpenGL 2.1 Desktop - usar attribute/varying, sem "core"
+        return version + "\n" +
+               "attribute vec2 aPos;\n"
+               "attribute vec2 aTexCoord;\n"
+               "\n"
+               "varying vec2 TexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+               "    TexCoord = aTexCoord;\n"
+               "}\n";
+    }
 }
-)";
 
-// Shader fragment simples
-const char* fragmentShaderSource = R"(
-#version 330 core
-in vec2 TexCoord;
-out vec4 FragColor;
-
-uniform sampler2D ourTexture;
-uniform int flipY;
-uniform float brightness;
-uniform float contrast;
-
-void main() {
-    // Inverter coordenada Y apenas se flipY estiver ativo
-    vec2 coord = (flipY == 1) ? vec2(TexCoord.x, 1.0 - TexCoord.y) : TexCoord;
-    vec4 texColor = texture(ourTexture, coord);
+std::string generateFragmentShader()
+{
+    std::string version = getGLSLVersionString();
+    bool isES = isOpenGLES();
+    int major = getOpenGLMajorVersion();
     
-    // Aplicar brilho multiplicando RGB pelo fator de brilho
-    vec3 color = texColor.rgb * brightness;
+    // Limpar a string de versão: remover espaços extras e newlines
+    while (!version.empty() && (version.back() == '\n' || version.back() == '\r' || version.back() == ' ')) {
+        version.pop_back();
+    }
+    while (!version.empty() && (version.front() == ' ' || version.front() == '\n' || version.front() == '\r')) {
+        version.erase(0, 1);
+    }
     
-    // Aplicar contraste: (color - 0.5) * contrast + 0.5
-    // contrast = 1.0: sem alteração
-    // contrast > 1.0: aumenta contraste
-    // contrast < 1.0: diminui contraste
-    color = (color - 0.5) * contrast + 0.5;
-    
-    // Preservar alpha para shaders que usam transparência
-    FragColor = vec4(color, texColor.a);
+    // Verificar se é OpenGL ES - nunca usar "core" em ES
+    if (isES && major >= 3) {
+        // OpenGL ES 3.0+ - usar in/out (sem "core")
+        return version + "\n" +
+               "precision mediump float;\n"
+               "in vec2 TexCoord;\n"
+               "\n"
+               "out vec4 FragColor;\n"
+               "\n"
+               "uniform sampler2D ourTexture;\n"
+               "uniform int flipY;\n"
+               "uniform float brightness;\n"
+               "uniform float contrast;\n"
+               "\n"
+               "void main() {\n"
+               "    vec2 coord = TexCoord;\n"
+               "    if (flipY == 1) coord.y = 1.0 - coord.y;\n"
+               "    vec4 color = texture(ourTexture, coord);\n"
+               "    color.rgb = (color.rgb - 0.5) * contrast + 0.5 + brightness - 1.0;\n"
+               "    FragColor = color;\n"
+               "}\n";
+    } else if (isES) {
+        // OpenGL ES 2.0 - usar varying e gl_FragColor
+        return version + "\n" +
+               "precision mediump float;\n"
+               "varying vec2 TexCoord;\n"
+               "\n"
+               "uniform sampler2D ourTexture;\n"
+               "uniform int flipY;\n"
+               "uniform float brightness;\n"
+               "uniform float contrast;\n"
+               "\n"
+               "void main() {\n"
+               "    vec2 coord = TexCoord;\n"
+               "    if (flipY == 1) coord.y = 1.0 - coord.y;\n"
+               "    vec4 color = texture2D(ourTexture, coord);\n"
+               "    color.rgb = (color.rgb - 0.5) * contrast + 0.5 + brightness - 1.0;\n"
+               "    gl_FragColor = color;\n"
+               "}\n";
+    } else if (major >= 3) {
+        // OpenGL 3.0+ Desktop - usar in/out com "core"
+        return version + " core\n" +
+               "in vec2 TexCoord;\n"
+               "out vec4 FragColor;\n"
+               "\n"
+               "uniform sampler2D ourTexture;\n"
+               "uniform int flipY;\n"
+               "uniform float brightness;\n"
+               "uniform float contrast;\n"
+               "\n"
+               "void main() {\n"
+               "    vec2 coord = (flipY == 1) ? vec2(TexCoord.x, 1.0 - TexCoord.y) : TexCoord;\n"
+               "    vec4 texColor = texture(ourTexture, coord);\n"
+               "    vec3 color = texColor.rgb * brightness;\n"
+               "    color = (color - 0.5) * contrast + 0.5;\n"
+               "    FragColor = vec4(color, texColor.a);\n"
+               "}\n";
+    } else {
+        // OpenGL 2.1 Desktop - não usar "core" profile
+        return version + "\n" +
+               "varying vec2 TexCoord;\n"
+               "\n"
+               "uniform sampler2D ourTexture;\n"
+               "uniform int flipY;\n"
+               "uniform float brightness;\n"
+               "uniform float contrast;\n"
+               "\n"
+               "void main() {\n"
+               "    vec2 coord = (flipY == 1) ? vec2(TexCoord.x, 1.0 - TexCoord.y) : TexCoord;\n"
+               "    vec4 texColor = texture2D(ourTexture, coord);\n"
+               "    vec3 color = texColor.rgb * brightness;\n"
+               "    color = (color - 0.5) * contrast + 0.5;\n"
+               "    gl_FragColor = vec4(color, texColor.a);\n"
+               "}\n";
+    }
 }
-)";
 
 OpenGLRenderer::OpenGLRenderer() {
 }
@@ -98,9 +215,23 @@ void OpenGLRenderer::shutdown() {
 }
 
 bool OpenGLRenderer::createShaderProgram() {
+    // Gerar shaders dinamicamente baseados na versão OpenGL
+    std::string vertexSource = generateVertexShader();
+    std::string fragmentSource = generateFragmentShader();
+    
+    // Debug: logar primeira linha do shader para diagnóstico
+    size_t firstNewline = vertexSource.find('\n');
+    std::string firstLine = firstNewline != std::string::npos 
+        ? vertexSource.substr(0, firstNewline) 
+        : vertexSource;
+    LOG_INFO("Vertex shader first line: " + firstLine);
+    
+    const char* vertexSourceCStr = vertexSource.c_str();
+    const char* fragmentSourceCStr = fragmentSource.c_str();
+    
     // Compilar vertex shader
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
+    glShaderSource(vertexShader, 1, &vertexSourceCStr, nullptr);
     glCompileShader(vertexShader);
     
     GLint success;
@@ -115,7 +246,7 @@ bool OpenGLRenderer::createShaderProgram() {
     
     // Compilar fragment shader
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
+    glShaderSource(fragmentShader, 1, &fragmentSourceCStr, nullptr);
     glCompileShader(fragmentShader);
     
     glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);

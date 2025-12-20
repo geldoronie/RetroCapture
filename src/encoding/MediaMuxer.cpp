@@ -11,8 +11,8 @@ extern "C"
 }
 
 // Callback wrapper para FFmpeg (precisa ser estático)
-// FFmpeg antigo espera uint8_t* (não const), mas não modifica o buffer
-static int writeCallback(void *opaque, uint8_t *buf, int buf_size)
+// FFmpeg 6.1+ requer const uint8_t* na assinatura
+static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
     MediaMuxer *muxer = static_cast<MediaMuxer *>(opaque);
     if (!muxer)
@@ -21,12 +21,12 @@ static int writeCallback(void *opaque, uint8_t *buf, int buf_size)
     }
 
     // Capturar header do formato (primeiros 64KB)
-    muxer->captureFormatHeader(const_cast<const uint8_t *>(buf), buf_size);
+    muxer->captureFormatHeader(buf, buf_size);
 
     // Chamar callback customizado
     // Acessar m_writeCallback através de método público ou friend
     // Por enquanto, vamos usar um método público para acessar o callback
-    return muxer->callWriteCallback(const_cast<const uint8_t *>(buf), buf_size);
+    return muxer->callWriteCallback(buf, buf_size);
 }
 
 MediaMuxer::MediaMuxer()

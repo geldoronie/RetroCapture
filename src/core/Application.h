@@ -15,6 +15,9 @@
 class IVideoCapture;
 class IAudioCapture;
 class WindowManager;
+#ifdef USE_SDL2
+class WindowManagerSDL;
+#endif
 class OpenGLRenderer;
 class ShaderEngine;
 class UIManager;
@@ -107,7 +110,11 @@ private:
     bool m_initialized = false;
 
     std::unique_ptr<IVideoCapture> m_capture;
+#ifdef USE_SDL2
+    std::unique_ptr<WindowManagerSDL> m_window;
+#else
     std::unique_ptr<WindowManager> m_window;
+#endif
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;

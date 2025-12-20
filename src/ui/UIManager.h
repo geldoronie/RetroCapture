@@ -10,6 +10,9 @@
 #include "../capture/IVideoCapture.h"
 
 struct GLFWwindow;
+#ifdef USE_SDL2
+struct SDL_Window;
+#endif
 
 class IVideoCapture;
 class ShaderEngine;
@@ -25,7 +28,7 @@ public:
     UIManager();
     ~UIManager();
 
-    bool init(GLFWwindow *window);
+    bool init(void *window); // Accepts GLFWwindow* or SDL_Window*
     void shutdown();
 
     void beginFrame();
@@ -489,7 +492,7 @@ private:
     std::unique_ptr<class UIConfiguration> m_configWindow;
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
-    GLFWwindow *m_window = nullptr;
+    void *m_window = nullptr; // GLFWwindow* or SDL_Window*
 
     // Shader selection
     std::vector<std::string> m_shaderList;

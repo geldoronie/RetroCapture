@@ -11,8 +11,9 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     exit 1
 fi
 
-echo "🚀 Compilando RetroCapture para Windows..."
+echo "🚀 Compilando RetroCapture para Windows x86_64..."
 echo "📦 Build type: $BUILD_TYPE"
+echo "🏗️  Arquitetura: x86_64 (amd64)"
 echo ""
 
 # dockcross monta o código em /work

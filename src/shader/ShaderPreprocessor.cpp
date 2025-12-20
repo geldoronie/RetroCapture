@@ -2,6 +2,7 @@
 #include "../utils/Logger.h"
 #include "ShaderEngine.h"  // For ShaderParameterInfo
 #include "../utils/FilesystemCompat.h"
+#include "../renderer/glad_loader.h"
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -113,8 +114,8 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     }
     else
     {
-        // Adicionar #version 330 se não existir
-        versionLine = "#version 330\n";
+        // Adicionar versão GLSL dinâmica baseada na versão OpenGL disponível
+        versionLine = getGLSLVersionString() + "\n";
     }
 
     // Construir shaders: version + extension + define + código completo

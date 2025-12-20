@@ -17,6 +17,7 @@ fi
 echo "🐳 RetroCapture - Build para Windows usando Docker"
 echo "==================================================="
 echo "📦 Build type: $BUILD_TYPE"
+echo "🏗️  Arquitetura: x86_64 (amd64)"
 echo ""
 
 if ! command -v docker &> /dev/null; then
@@ -33,13 +34,13 @@ echo "📦 Construindo imagem Docker..."
 echo "   Isso pode demorar 30-60 minutos na primeira vez..."
 echo ""
 
-$DOCKER_COMPOSE build build-windows
+$DOCKER_COMPOSE build build-windows-x86_64
 
 echo ""
 echo "🔨 Compilando RetroCapture..."
 echo ""
 
-$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows > build-windows.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows-x86_64 > build-windows-x86_64.log 2>&1
 
 echo ""
 echo "✅ Concluído!"

@@ -8,7 +8,11 @@
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
 #include "../renderer/OpenGLRenderer.h"
+#ifdef USE_SDL2
+#include "../output/WindowManagerSDL.h"
+#else
 #include "../output/WindowManager.h"
+#endif
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../ui/UICapturePresets.h"
@@ -19,8 +23,13 @@
 #include "../audio/AudioCaptureFactory.h"
 #include "../utils/PresetManager.h"
 #include "../utils/ThumbnailGenerator.h"
+#ifdef USE_SDL2
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_keyboard.h>
+#else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#endif
 #ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
 #endif
@@ -118,7 +127,11 @@ bool Application::init()
 
 bool Application::initWindow()
 {
+#ifdef USE_SDL2
+    m_window = std::make_unique<WindowManagerSDL>();
+#else
     m_window = std::make_unique<WindowManager>();
+#endif
 
     WindowConfig config;
     config.width = m_windowWidth;
@@ -627,11 +640,11 @@ bool Application::initUI()
 
     m_ui = std::make_unique<UIManager>();
 
-    // Get GLFWwindow* from WindowManager
-    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
+    // Get window pointer from WindowManager (GLFW or SDL2)
+    void *window = m_window->getWindow();
     if (!window)
     {
-        LOG_ERROR("Failed to get GLFW window for ImGui");
+        LOG_ERROR("Failed to get window pointer for ImGui");
         m_ui.reset();
         return false;
     }
@@ -1830,6 +1843,27 @@ void Application::handleKeyInput()
     if (!m_ui || !m_window)
         return;
 
+#ifdef USE_SDL2
+    // SDL2: Check F12 key via WindowManagerSDL
+    WindowManagerSDL *sdlWindow = static_cast<WindowManagerSDL *>(m_window.get());
+    if (sdlWindow)
+    {
+        static bool f12Pressed = false;
+        // SDLK_F12 está definido em SDL_keyboard.h (já incluído)
+        bool f12CurrentlyPressed = sdlWindow->isKeyPressed(SDLK_F12);
+        
+        if (f12CurrentlyPressed && !f12Pressed)
+        {
+            m_ui->toggle();
+            LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
+            f12Pressed = true;
+        }
+        else if (!f12CurrentlyPressed)
+        {
+            f12Pressed = false;
+        }
+    }
+#else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
     if (!window)
         return;
@@ -1849,6 +1883,7 @@ void Application::handleKeyInput()
     {
         f12Pressed = false;
     }
+#endif // USE_SDL2
 }
 
 bool Application::initStreaming()

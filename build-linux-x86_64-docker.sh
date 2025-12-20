@@ -19,6 +19,7 @@ fi
 echo "🐳 RetroCapture - Build para Linux usando Docker"
 echo "================================================="
 echo "📦 Build type: $BUILD_TYPE"
+echo "🏗️  Arquitetura: x86_64 (amd64)"
 echo "🔧 Base: Ubuntu 24.04 LTS (Noble Numbat) - FFmpeg 6.x (versão 60)"
 echo "✅ Compatível com: Elementary OS 8.1 (Circe), Ubuntu 24.04+, etc."
 echo ""
@@ -65,16 +66,16 @@ echo "   (Usando Ubuntu 24.04 LTS - mesma base do Elementary OS 8.1)"
 echo ""
 
 if [ "$FORCE_REBUILD" = "--rebuild" ]; then
-    $DOCKER_COMPOSE_CMD build $BUILD_FLAGS build-linux
+    $DOCKER_COMPOSE_CMD build $BUILD_FLAGS build-linux-x86_64
 else
-    $DOCKER_COMPOSE_CMD build build-linux
+    $DOCKER_COMPOSE_CMD build build-linux-x86_64
 fi
 
 echo ""
 echo "🔨 Compilando RetroCapture..."
 echo ""
 
-$DOCKER_COMPOSE_CMD run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux > build-linux.log 2>&1
+$DOCKER_COMPOSE_CMD run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux-x86_64 > build-linux-x86_64.log 2>&1
 
 echo ""
 echo "✅ Concluído!"

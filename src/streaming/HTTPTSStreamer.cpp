@@ -28,11 +28,11 @@ extern "C"
 }
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
-// FFmpeg antigo espera uint8_t* (não const), mas não modifica o buffer
-static int writeCallback(void *opaque, uint8_t *buf, int buf_size)
+// FFmpeg 6.1+ requer const uint8_t* na assinatura
+static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
     HTTPTSStreamer *streamer = static_cast<HTTPTSStreamer *>(opaque);
-    return streamer->writeToClients(const_cast<const uint8_t *>(buf), buf_size);
+    return streamer->writeToClients(buf, buf_size);
 }
 
 HTTPTSStreamer::HTTPTSStreamer()

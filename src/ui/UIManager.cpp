@@ -10,11 +10,19 @@
 #include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #include "../renderer/glad_loader.h"
+#include <string>
+#ifdef USE_SDL2
+#include <SDL2/SDL.h>
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_opengl3.h>
+#else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#endif
 #ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
@@ -41,25 +49,39 @@ UIManager::~UIManager()
     shutdown();
 }
 
-bool UIManager::init(GLFWwindow *window)
+bool UIManager::init(void *window)
 {
     if (m_initialized)
     {
         return true;
     }
 
+    if (!window)
+    {
+        LOG_ERROR("Invalid window pointer for ImGui initialization");
+        return false;
+    }
+
     m_window = window;
 
-    // Ensure OpenGL context is active before initializing ImGui
-    if (window)
+#ifdef USE_SDL2
+    // SDL2: window is already current context
+    SDL_Window *sdlWindow = static_cast<SDL_Window *>(window);
+    if (!sdlWindow)
     {
-        glfwMakeContextCurrent(window);
+        LOG_ERROR("Invalid SDL2 window for ImGui initialization");
+        return false;
     }
-    else
+#else
+    // GLFW: ensure context is active
+    GLFWwindow *glfwWindow = static_cast<GLFWwindow *>(window);
+    if (!glfwWindow)
     {
         LOG_ERROR("Invalid GLFW window for ImGui initialization");
         return false;
     }
+    glfwMakeContextCurrent(glfwWindow);
+#endif
 
     // Verify OpenGL functions are loaded before initializing ImGui
     if (!glGenVertexArrays)
@@ -90,8 +112,15 @@ bool UIManager::init(GLFWwindow *window)
     ImGui::StyleColorsDark();
 
     // Setup Platform/Renderer backends
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
+    // Usar versão GLSL dinâmica baseada na versão OpenGL disponível
+    std::string glslVersion = getGLSLVersionString();
+#ifdef USE_SDL2
+    ImGui_ImplSDL2_InitForOpenGL(static_cast<SDL_Window *>(window), nullptr);
+    ImGui_ImplOpenGL3_Init(glslVersion.c_str());
+#else
+    ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow *>(window), true);
+    ImGui_ImplOpenGL3_Init(glslVersion.c_str());
+#endif
 
     // Scan for shaders (check environment variable for AppImage support)
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
@@ -129,7 +158,11 @@ void UIManager::shutdown()
     }
 
     ImGui_ImplOpenGL3_Shutdown();
+#ifdef USE_SDL2
+    ImGui_ImplSDL2_Shutdown();
+#else
     ImGui_ImplGlfw_Shutdown();
+#endif
     ImGui::DestroyContext();
 
     m_initialized = false;
@@ -144,7 +177,11 @@ void UIManager::beginFrame()
 
     // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
+#ifdef USE_SDL2
+    ImGui_ImplSDL2_NewFrame();
+#else
     ImGui_ImplGlfw_NewFrame();
+#endif
     ImGui::NewFrame();
 }
 
@@ -187,7 +224,12 @@ void UIManager::render()
             {
                 if (m_window)
                 {
-                    glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+#ifdef USE_SDL2
+                    // SDL2: Window close is handled via SDL_QUIT event in pollEvents
+                    // Can't directly close window from here, but can set flag
+#else
+                    glfwSetWindowShouldClose(static_cast<GLFWwindow *>(m_window), GLFW_TRUE);
+#endif
                 }
             }
             ImGui::EndMenu();

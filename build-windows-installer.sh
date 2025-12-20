@@ -56,10 +56,10 @@ rm -f RetroCapture-*-win64.exe  # Remover formato antigo também
 echo ""
 echo "=== Compilando aplicação usando Docker ==="
 echo "Construindo imagem Docker (se necessário)..."
-$DOCKER_COMPOSE build build-windows > /dev/null 2>&1 || $DOCKER_COMPOSE build build-windows
+$DOCKER_COMPOSE build build-windows-x86_64 > /dev/null 2>&1 || $DOCKER_COMPOSE build build-windows-x86_64
 
 echo "Compilando RetroCapture no container Docker..."
-$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows > build-windows.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows-x86_64 > build-windows.log 2>&1
 
 if [ $? -ne 0 ]; then
     echo "Erro: Falha na compilação. Verifique build-windows.log para mais detalhes."
@@ -212,7 +212,7 @@ chmod +x build-installer-temp.sh
 # O docker-compose.yml já monta o diretório atual em /work
 # Passar BUILD_TYPE como variável de ambiente
 echo "Executando geração de instalador no container..."
-$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" --entrypoint bash build-windows /work/build-installer-temp.sh
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" --entrypoint bash build-windows-x86_64 /work/build-installer-temp.sh
 
 # Procurar pelo instalador com o nome esperado primeiro
 INSTALLER_FOUND=""
@@ -255,7 +255,7 @@ else
     echo "  3. Erro durante a geração do instalador (verifique logs acima)"
     echo ""
     echo "Para resolver:"
-    echo "  1. Reconstrua a imagem Docker: docker-compose build build-windows"
+    echo "  1. Reconstrua a imagem Docker: docker-compose build build-windows-x86_64"
     echo "  2. Verifique se CPack está ativo: grep CPack build-windows/CMakeCache.txt"
     echo "  3. Tente gerar manualmente: cd build-windows && cpack -G NSIS -V"
     # Limpar script temporário

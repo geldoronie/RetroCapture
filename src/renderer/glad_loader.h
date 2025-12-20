@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 
 // Header simples para carregar funções OpenGL via GLFW
 // GLFW pode carregar as funções OpenGL diretamente
@@ -153,8 +154,29 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_FALSE 0
 #define GL_VIEWPORT 0x0BA2
 #define GL_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_VERSION 0x1F02
+#define GL_SHADING_LANGUAGE_VERSION 0x8B8C
+#define GL_MAJOR_VERSION 0x821B
+
+// Funções básicas do OpenGL que podem estar disponíveis estaticamente
+// glGetString está disponível desde OpenGL 1.0, então pode ser linkado estaticamente
+#ifdef __cplusplus
+extern "C" {
+#endif
+const GLubyte* glGetString(GLenum name);
+#ifdef __cplusplus
+}
+#endif
 
 bool loadOpenGLFunctions();
+
+// Funções para detectar versão OpenGL e GLSL
+// Retorna a versão GLSL apropriada baseada na versão OpenGL disponível
+std::string getGLSLVersionString();
+// Retorna true se OpenGL ES está sendo usado
+bool isOpenGLES();
+// Retorna a versão major do OpenGL (3, 2, etc.)
+int getOpenGLMajorVersion();
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,7 @@
-# Dockerfile para build do RetroCapture no Linux
-FROM ubuntu:24.04
+# Dockerfile para build do RetroCapture no Linux ARM64 (Raspberry Pi 4/5, etc.)
+# Usa arm64v8/debian:trixie para compatibilidade com FFmpeg 6.1 (Debian Trixie)
+# Isso garante que o binário compilado seja compatível com sistemas Debian Trixie ARM64
+FROM arm64v8/debian:trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -17,10 +19,13 @@ RUN apt-get update && apt-get install -y \
 RUN git config --global --add safe.directory '*'
 
 # Instalar dependências do RetroCapture
-# Incluir SDL2 para suporte a DirectFB/framebuffer (opcional)
+# Debian Trixie tem FFmpeg 6.1 (libavcodec61, libavformat61, etc.)
+# Incluir SDL2 e DirectFB para suporte a DirectFB/framebuffer em sistemas embarcados ARM
 RUN apt-get update && apt-get install -y \
     libglfw3-dev \
     libsdl2-dev \
+    libdirectfb-dev \
+    directfb \
     libssl-dev \
     libpng-dev \
     libavcodec-dev \
@@ -36,9 +41,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Script de build
-COPY docker-build-linux-x86_64.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-build-linux-x86_64.sh
+COPY docker-build-linux-arm64.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build-linux-arm64.sh
 
 WORKDIR /work
 
-ENTRYPOINT ["/usr/local/bin/docker-build-linux-x86_64.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-build-linux-arm64.sh"]

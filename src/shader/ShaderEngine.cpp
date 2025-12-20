@@ -2,6 +2,7 @@
 #include "ShaderPreprocessor.h"
 #include "../utils/Logger.h"
 #include "../utils/FilesystemCompat.h"
+#include "../renderer/glad_loader.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -62,19 +63,62 @@ void ShaderEngine::shutdown()
 std::string ShaderEngine::generateDefaultVertexShader()
 {
     // Vertex shader compatível com RetroArch
-    // Não usar layout(location = X) pois foi removido na conversão
-    // Usar vec4 Position para compatibilidade com RetroArch (que usa vec4)
-    return R"(#version 330 core
-in vec4 Position;
-in vec2 TexCoord;
-
-out vec2 vTexCoord;
-
-void main() {
-    gl_Position = Position;
-    vTexCoord = TexCoord;
-}
-)";
+    // Usar versão GLSL dinâmica baseada na versão OpenGL disponível
+    std::string version = getGLSLVersionString();
+    bool isES = isOpenGLES();
+    int major = getOpenGLMajorVersion();
+    
+    // Verificar se é OpenGL ES - nunca usar "core" em ES
+    if (isES && major >= 3) {
+        // OpenGL ES 3.0+ - usar in/out (sem "core")
+        return version + "\n" +
+               "in vec4 Position;\n"
+               "in vec2 TexCoord;\n"
+               "\n"
+               "out vec2 vTexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = Position;\n"
+               "    vTexCoord = TexCoord;\n"
+               "}\n";
+    } else if (isES) {
+        // OpenGL ES 2.0 - usar attribute/varying
+        return version + "\n" +
+               "precision mediump float;\n"
+               "attribute vec4 Position;\n"
+               "attribute vec2 TexCoord;\n"
+               "\n"
+               "varying vec2 vTexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = Position;\n"
+               "    vTexCoord = TexCoord;\n"
+               "}\n";
+    } else if (major >= 3) {
+        // OpenGL 3.0+ Desktop - usar in/out com "core"
+        return version + " core\n"
+               "in vec4 Position;\n"
+               "in vec2 TexCoord;\n"
+               "\n"
+               "out vec2 vTexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = Position;\n"
+               "    vTexCoord = TexCoord;\n"
+               "}\n";
+    } else {
+        // OpenGL 2.1 Desktop - usar attribute/varying, sem "core"
+        return version + "\n" +
+               "attribute vec4 Position;\n"
+               "attribute vec2 TexCoord;\n"
+               "\n"
+               "varying vec2 vTexCoord;\n"
+               "\n"
+               "void main() {\n"
+               "    gl_Position = Position;\n"
+               "    vTexCoord = TexCoord;\n"
+               "}\n";
+    }
 }
 
 bool ShaderEngine::loadShader(const std::string &shaderPath)
