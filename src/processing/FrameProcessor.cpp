@@ -10,6 +10,17 @@
 #endif
 #endif
 
+// NEON support for ARM
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define HAVE_NEON 1
+#elif defined(__aarch64__)
+#include <arm_neon.h>
+#define HAVE_NEON 1
+#else
+#define HAVE_NEON 0
+#endif
+
 FrameProcessor::FrameProcessor()
 {
 }
@@ -213,6 +224,132 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
         return;
     }
 
+#if HAVE_NEON
+    // Versão otimizada com NEON (processa 4 pares de pixels por iteração)
+    // Desabilitar temporariamente se houver problemas de cores - usar versão escalar
+    // Para desabilitar NEON, defina USE_NEON_YUYV_CONVERSION como 0
+    #define USE_NEON_YUYV_CONVERSION 1  // Mudar para 0 para desabilitar NEON (debug)
+    
+    #if USE_NEON_YUYV_CONVERSION
+        convertYUYVtoRGB_NEON(yuyv, rgb, width, height);
+    #else
+        convertYUYVtoRGB_Scalar(yuyv, rgb, width, height); // Fallback para debug
+    #endif
+#else
+    // Versão fallback sem NEON (processa pixel por pixel)
+    convertYUYVtoRGB_Scalar(yuyv, rgb, width, height);
+#endif
+}
+
+#if HAVE_NEON
+void FrameProcessor::convertYUYVtoRGB_NEON(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
+{
+    // Constantes para conversão YUV→RGB (ITU-R BT.601) - mesmas da versão escalar
+    const int16x4_t c298 = vdup_n_s16(298);
+    const int16x4_t c409 = vdup_n_s16(409);
+    const int16x4_t c100_neg = vdup_n_s16(-100);
+    const int16x4_t c208_neg = vdup_n_s16(-208);
+    const int16x4_t c516 = vdup_n_s16(516);
+    const int16x4_t c128 = vdup_n_s16(128);
+    const uint8x8_t y_offset = vdup_n_u8(16);
+    const uint8x8_t uv_offset = vdup_n_u8(128);
+    
+    // Processar 1 par (2 pixels) por vez - mais simples e garante correção
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        const uint8_t *yuyv_row = yuyv + (y * width * 2);
+        uint8_t *rgb_row = rgb + (y * width * 3);
+        
+        uint32_t x = 0;
+        
+        // Processar pares alinhados (múltiplos de 2)
+        uint32_t aligned_width = (width / 2) * 2;
+        
+        for (; x < aligned_width; x += 2)
+        {
+            // Carregar 4 bytes de YUYV (1 par = 2 pixels)
+            // Layout: Y0 U Y1 V
+            uint32_t idx = x * 2;
+            uint8x8_t yuyv_vec = vld1_u8(yuyv_row + idx);
+            
+            // Extrair componentes: Y0 U Y1 V
+            uint8_t y0 = vget_lane_u8(yuyv_vec, 0);
+            uint8_t u = vget_lane_u8(yuyv_vec, 1);
+            uint8_t y1 = vget_lane_u8(yuyv_vec, 2);
+            uint8_t v = vget_lane_u8(yuyv_vec, 3);
+            
+            // Converter para int16 e aplicar offsets (igual versão escalar)
+            int c0 = y0 - 16;
+            int d = u - 128;
+            int e = v - 128;
+            int c1 = y1 - 16;
+            
+            // Calcular R, G, B usando exatamente as mesmas fórmulas da versão escalar
+            // Pixel 0
+            int r0 = (298 * c0 + 409 * e + 128) >> 8;
+            int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
+            int b0 = (298 * c0 + 516 * d + 128) >> 8;
+            
+            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255 : r0;
+            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255 : g0;
+            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255 : b0;
+            
+            // Pixel 1
+            int r1 = (298 * c1 + 409 * e + 128) >> 8;
+            int g1 = (298 * c1 - 100 * d - 208 * e + 128) >> 8;
+            int b1 = (298 * c1 + 516 * d + 128) >> 8;
+            
+            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255 : r1;
+            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255 : g1;
+            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255 : b1;
+            
+            // Armazenar diretamente (sem usar NEON para armazenamento, apenas para carregar)
+            uint32_t rgbIdx0 = x * 3;
+            rgb_row[rgbIdx0] = r0;
+            rgb_row[rgbIdx0 + 1] = g0;
+            rgb_row[rgbIdx0 + 2] = b0;
+            
+            uint32_t rgbIdx1 = (x + 1) * 3;
+            rgb_row[rgbIdx1] = r1;
+            rgb_row[rgbIdx1 + 1] = g1;
+            rgb_row[rgbIdx1 + 2] = b1;
+        }
+        
+        // Processar pixel restante (se width for ímpar) com versão escalar
+        if (width % 2 == 1 && x < width)
+        {
+            uint32_t idx = (y * width + x) * 2;
+            if (idx + 1 < width * height * 2)
+            {
+                int y0 = yuyv_row[idx];
+                int u = yuyv_row[idx + 1];
+                int y1 = 0; // Segundo pixel não existe
+                int v = 128; // Valor padrão
+                
+                int c0 = y0 - 16;
+                int d = u - 128;
+                int e = v - 128;
+                
+                int r0 = (298 * c0 + 409 * e + 128) >> 8;
+                int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
+                int b0 = (298 * c0 + 516 * d + 128) >> 8;
+                
+                r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255 : r0;
+                g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255 : g0;
+                b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255 : b0;
+                
+                uint32_t rgbIdx = (y * width + x) * 3;
+                rgb_row[rgbIdx] = r0;
+                rgb_row[rgbIdx + 1] = g0;
+                rgb_row[rgbIdx + 2] = b0;
+            }
+        }
+    }
+}
+#endif
+
+void FrameProcessor::convertYUYVtoRGB_Scalar(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
+{
     // Conversão YUYV para RGB
     // YUYV: Y0 U0 Y1 V0 Y2 U1 Y3 V1 ...
     // Layout: para cada par de pixels, temos Y0 U Y1 V

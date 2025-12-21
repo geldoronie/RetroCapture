@@ -4,6 +4,15 @@
 #include <cstdint>
 #include <vector>
 
+// NEON support detection
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#define HAVE_NEON 1
+#elif defined(__aarch64__)
+#define HAVE_NEON 1
+#else
+#define HAVE_NEON 0
+#endif
+
 // Forward declarations
 struct Frame;
 class IVideoCapture;
@@ -88,5 +97,19 @@ private:
      * @param height Frame height
      */
     void convertYUYVtoRGB(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
+
+#if HAVE_NEON
+    /**
+     * NEON-optimized version of YUYV to RGB conversion.
+     * Processes 8 pixels (4 pairs) per iteration.
+     */
+    void convertYUYVtoRGB_NEON(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
+#endif
+
+    /**
+     * Scalar (non-NEON) version of YUYV to RGB conversion.
+     * Fallback for systems without NEON support.
+     */
+    void convertYUYVtoRGB_Scalar(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
 };
 

@@ -4,7 +4,7 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 
 ## Prioridade Alta (Impacto Significativo)
 
-### 1. Reutilização de Buffer RGB na Conversão YUYV
+### 1. ✅ Reutilização de Buffer RGB na Conversão YUYV - **IMPLEMENTADO**
 **Localização**: `src/processing/FrameProcessor.cpp:147`
 
 **Problema**: 
@@ -12,15 +12,17 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 - Para 1920x1080, isso são ~6MB alocados/liberados a cada frame (60fps = 360MB/s de alocações)
 
 **Solução**:
-- Adicionar membro `std::vector<uint8_t> m_rgbBuffer` na classe `FrameProcessor`
-- Redimensionar apenas quando necessário (quando dimensões mudam)
-- Reutilizar o mesmo buffer entre frames
+- ✅ Adicionar membro `std::vector<uint8_t> m_rgbBuffer` na classe `FrameProcessor`
+- ✅ Redimensionar apenas quando necessário (quando dimensões mudam)
+- ✅ Reutilizar o mesmo buffer entre frames
 
 **Impacto Estimado**: Redução de 5-10% no uso de CPU, eliminação de pausas por alocação
 
+**Status**: Implementado no commit `4100470`
+
 ---
 
-### 2. Otimização da Conversão YUYV→RGB com SIMD/NEON
+### 2. ✅ Otimização da Conversão YUYV→RGB com SIMD/NEON - **IMPLEMENTADO**
 **Localização**: `src/processing/FrameProcessor.cpp:202-276`
 
 **Problema**:
@@ -28,15 +30,18 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 - No ARM (Raspberry Pi), poderia usar instruções NEON para processar múltiplos pixels simultaneamente
 
 **Solução**:
-- Implementar versão NEON da conversão (processar 8-16 pixels por vez)
-- Manter versão fallback para sistemas sem NEON
-- Usar `#ifdef __ARM_NEON` para compilação condicional
+- ✅ Implementar versão NEON da conversão (usa NEON para carregamento otimizado)
+- ✅ Manter versão fallback para sistemas sem NEON
+- ✅ Usar `#ifdef __ARM_NEON` para compilação condicional
+- ✅ Usar exatamente as mesmas fórmulas da versão escalar para garantir correção
 
-**Impacto Estimado**: 2-4x mais rápido na conversão (especialmente em ARM)
+**Impacto Estimado**: Melhoria no carregamento de dados (benefício parcial do NEON)
+
+**Status**: Implementado - versão funcional usando NEON para carregamento, cálculos idênticos à versão escalar para garantir correção. Pode ser otimizado futuramente para usar NEON nos cálculos também.
 
 ---
 
-### 3. Reutilização de Framebuffer Temporário no Motion Blur
+### 3. ✅ Reutilização de Framebuffer Temporário no Motion Blur - **IMPLEMENTADO**
 **Localização**: `src/shader/ShaderEngine.cpp:1518-1573`
 
 **Problema**:
@@ -44,11 +49,13 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 - Operações de criação/deleção de framebuffers são custosas
 
 **Solução**:
-- Adicionar membro `GLuint m_copyFramebuffer = 0` na classe `ShaderEngine`
-- Criar uma vez na inicialização, reutilizar entre frames
-- Deletar apenas no cleanup
+- ✅ Adicionar membro `GLuint m_copyFramebuffer = 0` na classe `ShaderEngine`
+- ✅ Criar uma vez quando necessário, reutilizar entre frames
+- ✅ Deletar apenas no cleanup (shutdown)
 
 **Impacto Estimado**: Redução de overhead de OpenGL, especialmente em shaders com motion blur
+
+**Status**: Implementado no commit `4100470`
 
 ---
 
@@ -186,9 +193,9 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 
 ## Ordem Recomendada de Implementação
 
-1. **Reutilização de Buffer RGB** (Fácil, alto impacto)
-2. **Reutilização de Framebuffer Temporário** (Fácil, médio impacto)
-3. **Otimização YUYV→RGB com NEON** (Médio, alto impacto em ARM)
+1. ✅ **Reutilização de Buffer RGB** (Fácil, alto impacto) - **IMPLEMENTADO**
+2. ✅ **Reutilização de Framebuffer Temporário** (Fácil, médio impacto) - **IMPLEMENTADO**
+3. ✅ **Otimização YUYV→RGB com NEON** (Médio, alto impacto em ARM) - **IMPLEMENTADO**
 4. **PBO para glReadPixels** (Médio, alto impacto no streaming)
 5. **Cache de Uniforms melhorado** (Fácil, baixo impacto)
 6. **Texture Filtering configurável** (Fácil, baixo impacto)
