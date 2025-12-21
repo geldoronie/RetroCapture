@@ -142,6 +142,7 @@ private:
     bool compileShader(const std::string& source, GLenum type, GLuint& shader);
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader);
     GLint getUniformLocation(GLuint program, const std::string& name);
+    void preCacheCommonUniforms(GLuint program); // Pré-cachear uniforms comuns após linkagem
     void createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint& fb, GLuint& tex, bool srgbBuffer = false);
     void cleanupFramebuffer(GLuint& fb, GLuint& tex);
     void createQuad();

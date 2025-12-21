@@ -200,6 +200,8 @@ bool Application::initRenderer()
     LOG_INFO("Creating FrameProcessor...");
     m_frameProcessor = std::make_unique<FrameProcessor>();
     m_frameProcessor->init(m_renderer.get());
+    // Aplicar configuração de texture filtering
+    m_frameProcessor->setTextureFilterLinear(m_textureFilterLinear);
     LOG_INFO("FrameProcessor created");
 
     // Initialize ShaderEngine

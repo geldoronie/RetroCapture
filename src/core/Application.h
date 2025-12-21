@@ -58,6 +58,8 @@ public:
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
+    void setTextureFilterLinear(bool linear) { m_textureFilterLinear = linear; }
+    bool getTextureFilterLinear() const { return m_textureFilterLinear; }
     
     // Configurar resolução de saída (0 = automático, usar resolução do source)
     void setOutputResolution(uint32_t width, uint32_t height)
@@ -166,6 +168,10 @@ private:
     bool m_maintainAspect = false;
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
+    
+    // Texture filtering configurável (true = GL_LINEAR, false = GL_NEAREST)
+    // GL_NEAREST é mais rápido e adequado para imagens pixel-perfect (retro)
+    bool m_textureFilterLinear = false; // Padrão: GL_NEAREST para melhor performance
 
     // Controles V4L2 (-1 significa não configurar)
     int32_t m_v4l2Brightness = -1;

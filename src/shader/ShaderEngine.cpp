@@ -826,6 +826,9 @@ bool ShaderEngine::loadPresetPasses()
 
         passData.program = program;
         passData.floatFramebuffer = passInfo.floatFramebuffer;
+        
+        // Pré-cachear uniforms comuns para este pass após linkagem bem-sucedida
+        preCacheCommonUniforms(program);
     }
 
     // Verificar se há texturas de referência
@@ -2527,6 +2530,9 @@ bool ShaderEngine::linkProgram(GLuint vertexShader, GLuint fragmentShader)
         return false;
     }
 
+    // Pré-cachear uniforms comuns após linkagem bem-sucedida
+    preCacheCommonUniforms(m_shaderProgram);
+
     return true;
 }
 
@@ -2567,6 +2573,24 @@ GLint ShaderEngine::getUniformLocation(GLuint program, const std::string &name)
         m_uniformLocations[key] = location;
     }
     return location;
+}
+
+void ShaderEngine::preCacheCommonUniforms(GLuint program)
+{
+    // Lista de uniforms comuns usados frequentemente
+    // Pré-cachear após linkagem para evitar chamadas glGetUniformLocation repetidas
+    const std::vector<std::string> commonUniforms = {
+        "Texture", "Source", "InputTexture", "OrigTexture",
+        "SourceSize", "InputSize", "OutputSize", "OriginalSize",
+        "IN.texture_size", "IN.video_size", "IN.output_size",
+        "IN.frame_count", "FRAMEINDEX", "TIME",
+        "brightness", "contrast", "flipY"
+    };
+    
+    for (const auto& uniformName : commonUniforms)
+    {
+        getUniformLocation(program, uniformName);
+    }
 }
 
 void ShaderEngine::createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint &fb, GLuint &tex, bool srgbBuffer)

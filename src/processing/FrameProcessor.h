@@ -76,6 +76,13 @@ public:
      * Delete the current texture (call when reconfiguring).
      */
     void deleteTexture();
+    
+    /**
+     * Set texture filtering mode.
+     * 
+     * @param linear true for GL_LINEAR, false for GL_NEAREST
+     */
+    void setTextureFilterLinear(bool linear);
 
 private:
     OpenGLRenderer* m_renderer = nullptr;
@@ -87,6 +94,9 @@ private:
     // Buffer RGB reutilizável para conversão YUYV→RGB
     // Redimensionado apenas quando necessário (quando dimensões mudam)
     std::vector<uint8_t> m_rgbBuffer;
+    
+    // Texture filtering configurável
+    bool m_textureFilterLinear = false; // Padrão: GL_NEAREST (mais rápido)
 
     /**
      * Convert YUYV format to RGB.

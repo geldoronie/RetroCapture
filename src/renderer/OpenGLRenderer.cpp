@@ -1,4 +1,5 @@
 #include "OpenGLRenderer.h"
+#include "OpenGLStateTracker.h"
 #include "glad_loader.h"
 #include "../utils/Logger.h"
 #ifdef __linux__
@@ -197,6 +198,12 @@ bool OpenGLRenderer::init() {
         return false;
     }
     
+    // NOTA: State tracker desabilitado temporariamente
+    // O ShaderEngine e outros componentes também fazem binds de texturas,
+    // então o state tracker pode causar problemas ao impedir binds necessários
+    // TODO: Implementar state tracking mais robusto que sincronize com outros componentes
+    // m_stateTracker = std::make_unique<OpenGLStateTracker>();
+    
     createQuad();
     
     m_initialized = true;
@@ -344,6 +351,7 @@ void OpenGLRenderer::cleanup() {
 GLuint OpenGLRenderer::createTextureFromFrame(const uint8_t* data, uint32_t width, uint32_t height, uint32_t format) {
     GLuint texture;
     glGenTextures(1, &texture);
+    // NOTA: State tracker desabilitado temporariamente
     glBindTexture(GL_TEXTURE_2D, texture);
     
     // Configurações de textura
@@ -358,6 +366,7 @@ GLuint OpenGLRenderer::createTextureFromFrame(const uint8_t* data, uint32_t widt
 }
 
 void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t width, uint32_t height, uint32_t format) {
+    // NOTA: State tracker desabilitado temporariamente
     glBindTexture(GL_TEXTURE_2D, texture);
     
     GLenum glFormat = getGLFormat(format);
@@ -401,6 +410,9 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
     glBindVertexArray(m_VAO);
     
     // Bind da textura na unidade 0
+    // NOTA: State tracker desabilitado temporariamente - pode causar problemas quando
+    // outros componentes (ShaderEngine) alteram o estado OpenGL
+    // TODO: Implementar state tracking mais robusto que sincronize com outros componentes
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     

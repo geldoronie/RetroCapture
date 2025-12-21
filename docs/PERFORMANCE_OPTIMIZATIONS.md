@@ -197,9 +197,22 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 2. ✅ **Reutilização de Framebuffer Temporário** (Fácil, médio impacto) - **IMPLEMENTADO**
 3. ✅ **Otimização YUYV→RGB com NEON** (Médio, alto impacto em ARM) - **IMPLEMENTADO**
 4. **PBO para glReadPixels** (Médio, alto impacto no streaming)
-5. **Cache de Uniforms melhorado** (Fácil, baixo impacto)
-6. **Texture Filtering configurável** (Fácil, baixo impacto)
-7. **State tracking OpenGL** (Médio, baixo impacto)
+5. **Cache de Uniforms melhorado** ✅ (Fácil, baixo impacto) - **IMPLEMENTADO**
+   - Função `preCacheCommonUniforms()` adicionada para pré-cachear uniforms comuns após linkagem
+   - Chamada automaticamente após compilação bem-sucedida de shaders (modo simples e preset)
+   - Reduz chamadas `glGetUniformLocation` repetidas para uniforms frequentes
+
+6. **Texture Filtering configurável** ✅ (Fácil, baixo impacto) - **IMPLEMENTADO**
+   - Adicionado `m_textureFilterLinear` em `Application` (padrão: false = GL_NEAREST)
+   - Método `setTextureFilterLinear()` em `FrameProcessor` para configurar filtering
+   - GL_NEAREST por padrão (mais rápido para pixel-perfect, adequado para retro)
+   - GL_LINEAR disponível quando necessário (melhor qualidade para imagens suaves)
+
+7. **State tracking OpenGL** ✅ (Médio, baixo impacto) - **IMPLEMENTADO**
+   - Classe `OpenGLStateTracker` criada para rastrear estados OpenGL
+   - Evita chamadas `glBindTexture` e `glActiveTexture` desnecessárias
+   - Integrado em `OpenGLRenderer` para otimizar bind de texturas
+   - Suporta até 32 unidades de textura (GL_TEXTURE0 a GL_TEXTURE31)
 8. **Threading** (Difícil, alto impacto mas complexo)
 
 ---

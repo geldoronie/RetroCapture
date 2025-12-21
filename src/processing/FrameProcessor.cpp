@@ -106,8 +106,10 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         glBindTexture(GL_TEXTURE_2D, m_texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Texture filtering configurável (padrão: GL_NEAREST para melhor performance)
+        GLenum filter = m_textureFilterLinear ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
 
         textureCreated = true;
         LOG_INFO("Textura criada: " + std::to_string(m_textureWidth) + "x" + std::to_string(m_textureHeight));
@@ -212,6 +214,19 @@ void FrameProcessor::deleteTexture()
         m_textureWidth = 0;
         m_textureHeight = 0;
         m_hasValidFrame = false;
+    }
+}
+
+void FrameProcessor::setTextureFilterLinear(bool linear)
+{
+    m_textureFilterLinear = linear;
+    // Atualizar textura existente se houver
+    if (m_texture != 0)
+    {
+        glBindTexture(GL_TEXTURE_2D, m_texture);
+        GLenum filter = linear ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
     }
 }
 
