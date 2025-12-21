@@ -73,6 +73,13 @@ void ShaderEngine::shutdown()
     cleanupPresetPasses();
     cleanupTextureReferences();
     cleanupQuad();
+    
+    // Limpar framebuffer temporário reutilizável
+    if (m_copyFramebuffer != 0)
+    {
+        glDeleteFramebuffers(1, &m_copyFramebuffer);
+        m_copyFramebuffer = 0;
+    }
 
     m_initialized = false;
     LOG_INFO("ShaderEngine shutdown");
@@ -1515,10 +1522,14 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // vinculado à textura do histórico usando o VAO e shader program existente
             if (sourceFramebuffer != 0 && historyTexture != 0)
             {
-                // Criar framebuffer temporário para a textura do histórico
-                GLuint copyFramebuffer = 0;
-                glGenFramebuffers(1, &copyFramebuffer);
-                glBindFramebuffer(GL_FRAMEBUFFER, copyFramebuffer);
+                // Criar framebuffer temporário reutilizável se ainda não existe
+                if (m_copyFramebuffer == 0)
+                {
+                    glGenFramebuffers(1, &m_copyFramebuffer);
+                }
+                
+                // Reutilizar framebuffer existente
+                glBindFramebuffer(GL_FRAMEBUFFER, m_copyFramebuffer);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, historyTexture, 0);
 
                 // Verificar se o framebuffer está completo
@@ -1570,7 +1581,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 }
 
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                glDeleteFramebuffers(1, &copyFramebuffer);
+                // Não deletar o framebuffer - reutilizar no próximo frame
             }
 
             // IMPORTANTE: Por enquanto, vamos apenas armazenar a referência da textura

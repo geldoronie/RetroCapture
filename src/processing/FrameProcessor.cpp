@@ -144,18 +144,23 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         }
 
         // Converter YUYV para RGB
-        std::vector<uint8_t> rgbBuffer(frame.width * frame.height * 3);
-        convertYUYVtoRGB(frame.data, rgbBuffer.data(), frame.width, frame.height);
+        // Reutilizar buffer existente, redimensionar apenas se necessário
+        size_t requiredSize = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height) * 3;
+        if (m_rgbBuffer.size() < requiredSize)
+        {
+            m_rgbBuffer.resize(requiredSize);
+        }
+        convertYUYVtoRGB(frame.data, m_rgbBuffer.data(), frame.width, frame.height);
 
         if (textureCreated)
         {
             // Primeira vez: usar glTexImage2D
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0, GL_RGB, GL_UNSIGNED_BYTE, rgbBuffer.data());
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0, GL_RGB, GL_UNSIGNED_BYTE, m_rgbBuffer.data());
         }
         else
         {
             // Atualização: usar glTexSubImage2D (mais rápido, não realoca)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, rgbBuffer.data());
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, m_rgbBuffer.data());
         }
     }
     else if (frame.size == frame.width * frame.height * 3)

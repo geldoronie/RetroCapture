@@ -135,6 +135,10 @@ private:
     std::vector<uint32_t> m_frameHistoryHeights;
     static constexpr size_t MAX_FRAME_HISTORY = 7;
     
+    // Framebuffer temporário reutilizável para copiar frames ao histórico
+    // Criado uma vez e reutilizado entre frames (evita criar/deletar a cada frame)
+    GLuint m_copyFramebuffer = 0;
+    
     bool compileShader(const std::string& source, GLenum type, GLuint& shader);
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader);
     GLint getUniformLocation(GLuint program, const std::string& name);

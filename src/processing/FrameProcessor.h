@@ -74,6 +74,10 @@ private:
     uint32_t m_textureWidth = 0;
     uint32_t m_textureHeight = 0;
     bool m_hasValidFrame = false;
+    
+    // Buffer RGB reutilizável para conversão YUYV→RGB
+    // Redimensionado apenas quando necessário (quando dimensões mudam)
+    std::vector<uint8_t> m_rgbBuffer;
 
     /**
      * Convert YUYV format to RGB.
