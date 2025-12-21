@@ -534,7 +534,9 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
-         << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex())
+         << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
+         << "\"outputWidth\": " << jsonNumber(m_uiManager->getOutputWidth()) << ", "
+         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -990,6 +992,14 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         {
             int monitorIndex = json["monitorIndex"].get<int>();
             m_uiManager->setMonitorIndex(monitorIndex);
+            updated = true;
+        }
+
+        if (json.contains("outputWidth") && json.contains("outputHeight"))
+        {
+            uint32_t outputWidth = json["outputWidth"].get<uint32_t>();
+            uint32_t outputHeight = json["outputHeight"].get<uint32_t>();
+            m_uiManager->setOutputResolution(outputWidth, outputHeight);
             updated = true;
         }
 

@@ -62,6 +62,11 @@ public:
     uint32_t getOutputWidth() const { return m_outputWidth; }
     uint32_t getOutputHeight() const { return m_outputHeight; }
     
+    // Configuração de performance para ARM
+    void setMaxShaderResolution(uint32_t maxWidth, uint32_t maxHeight);
+    uint32_t getMaxShaderWidth() const { return m_maxShaderWidth; }
+    uint32_t getMaxShaderHeight() const { return m_maxShaderHeight; }
+    
     // Uniforms do RetroArch
     void setUniform(const std::string& name, float value);
     void setUniform(const std::string& name, float x, float y);
@@ -106,6 +111,10 @@ private:
     uint32_t m_sourceHeight = 0;
     uint32_t m_viewportWidth = 0;
     uint32_t m_viewportHeight = 0;
+    
+    // Limites de resolução para otimização de performance (especialmente ARM)
+    uint32_t m_maxShaderWidth = 0;  // 0 = sem limite
+    uint32_t m_maxShaderHeight = 0; // 0 = sem limite
     
     // VAO para renderização
     GLuint m_VAO = 0;

@@ -385,6 +385,32 @@
                                                 <label class="form-check-label" for="fullscreen">Tela Cheia</label>
                                             </div>
                                         </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6>Resolução de Saída</h6>
+                                            <p class="text-muted small">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">
+                                                Largura
+                                                <span id="outputWidthValue" class="badge bg-primary ms-2">0</span>
+                                            </label>
+                                            <input type="number" class="form-control" id="outputWidth" min="0" max="7680" step="32" value="0">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">
+                                                Altura
+                                                <span id="outputHeightValue" class="badge bg-primary ms-2">0</span>
+                                            </label>
+                                            <input type="number" class="form-control" id="outputHeight" min="0" max="4320" step="32" value="0">
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="btn-group" role="group">
+                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1280, 720)">1280x720</button>
+                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1920, 1080)">1920x1080</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setOutputResolution(0, 0)">Automático</button>
+                                            </div>
+                                        </div>
                                         <div class="col-md-6">
                                             <label class="form-label">Índice do Monitor</label>
                                             <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">

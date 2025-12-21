@@ -58,6 +58,15 @@ public:
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
+    
+    // Configurar resolução de saída (0 = automático, usar resolução do source)
+    void setOutputResolution(uint32_t width, uint32_t height)
+    {
+        m_outputWidth = width;
+        m_outputHeight = height;
+    }
+    uint32_t getOutputWidth() const { return m_outputWidth; }
+    uint32_t getOutputHeight() const { return m_outputHeight; }
 
     // Controles V4L2 (valores opcionais, -1 significa não configurar)
     void setV4L2Brightness(int32_t value) { m_v4l2Brightness = value; }
@@ -140,6 +149,17 @@ private:
     uint32_t m_captureFps = 60;
     uint32_t m_windowWidth = 1920;
     uint32_t m_windowHeight = 1080;
+    
+    // Resolução máxima de processamento (configurável pelo usuário)
+    // 0 = sem limite (usar resolução original)
+    uint32_t m_maxProcessingWidth = 0;
+    uint32_t m_maxProcessingHeight = 0;
+    
+    // Resolução de saída configurável (aplicada após shader, antes de esticar para janela)
+    // 0 = usar resolução do source (captura/shader output) - modo automático
+    uint32_t m_outputWidth = 0;   // 0 = automático (usar source)
+    uint32_t m_outputHeight = 0;  // 0 = automático (usar source)
+    
     bool m_fullscreen = false;
     bool m_pendingFullscreenChange = false; // Flag para mudança de fullscreen pendente
     int m_monitorIndex = -1;                // -1 = usar monitor primário

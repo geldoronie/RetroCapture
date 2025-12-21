@@ -167,11 +167,15 @@ bool WindowManagerSDL::init(const WindowConfig &config)
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     }
     
+    // Usar resolução configurada pelo usuário (sem limitações hardcoded)
+    uint32_t actualWidth = config.width;
+    uint32_t actualHeight = config.height;
+    
     // Flags da janela
     Uint32 windowFlags = SDL_WINDOW_OPENGL;
     if (config.fullscreen)
     {
-        windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP; // Resolução nativa da tela
     }
 
     // Criar janela
@@ -179,8 +183,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
         config.title.c_str(),
         SDL_WINDOWPOS_UNDEFINED,
         SDL_WINDOWPOS_UNDEFINED,
-        static_cast<int>(config.width),
-        static_cast<int>(config.height),
+        static_cast<int>(actualWidth),
+        static_cast<int>(actualHeight),
         windowFlags);
 
     if (!m_window)
@@ -213,8 +217,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                 config.title.c_str(),
                 SDL_WINDOWPOS_UNDEFINED,
                 SDL_WINDOWPOS_UNDEFINED,
-                static_cast<int>(config.width),
-                static_cast<int>(config.height),
+                static_cast<int>(actualWidth),
+                static_cast<int>(actualHeight),
                 windowFlags);
             
             if (!m_window) {
@@ -239,8 +243,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                     config.title.c_str(),
                     SDL_WINDOWPOS_UNDEFINED,
                     SDL_WINDOWPOS_UNDEFINED,
-                    static_cast<int>(config.width),
-                    static_cast<int>(config.height),
+                    static_cast<int>(actualWidth),
+                    static_cast<int>(actualHeight),
                     windowFlags);
                 
                 if (!m_window) {
@@ -269,8 +273,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                 config.title.c_str(),
                 SDL_WINDOWPOS_UNDEFINED,
                 SDL_WINDOWPOS_UNDEFINED,
-                static_cast<int>(config.width),
-                static_cast<int>(config.height),
+                static_cast<int>(actualWidth),
+                static_cast<int>(actualHeight),
                 windowFlags);
             
             if (!m_window) {
@@ -295,8 +299,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                     config.title.c_str(),
                     SDL_WINDOWPOS_UNDEFINED,
                     SDL_WINDOWPOS_UNDEFINED,
-                    static_cast<int>(config.width),
-                    static_cast<int>(config.height),
+                    static_cast<int>(actualWidth),
+                    static_cast<int>(actualHeight),
                     windowFlags);
                 
                 if (!m_window) {
@@ -341,8 +345,17 @@ bool WindowManagerSDL::init(const WindowConfig &config)
     // Obter dimensões reais da janela
     int w, h;
     SDL_GL_GetDrawableSize(m_window, &w, &h);
-    m_width = static_cast<uint32_t>(w > 0 ? w : config.width);
-    m_height = static_cast<uint32_t>(h > 0 ? h : config.height);
+    
+    // Detectar qual driver está sendo usado para logging
+    const char* current_driver = SDL_GetHint(SDL_HINT_VIDEODRIVER);
+    std::string driver_name = current_driver ? current_driver : "unknown";
+    
+    LOG_INFO("SDL2: Resolução da janela: " + 
+             std::to_string(w) + "x" + std::to_string(h) + 
+             " (driver: " + driver_name + ")");
+    
+    m_width = static_cast<uint32_t>(w > 0 ? w : actualWidth);
+    m_height = static_cast<uint32_t>(h > 0 ? h : actualHeight);
 
     m_initialized = true;
     m_shouldClose = false;

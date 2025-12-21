@@ -38,10 +38,28 @@ bool ShaderEngine::init()
         return false;
     }
 
+    // Limites de resolução de shader são configuráveis pelo usuário via setMaxShaderResolution()
+    // Não há valores padrão hardcoded - o usuário define conforme necessário
+
     createQuad();
     m_initialized = true;
     LOG_INFO("ShaderEngine initialized");
     return true;
+}
+
+void ShaderEngine::setMaxShaderResolution(uint32_t maxWidth, uint32_t maxHeight)
+{
+    m_maxShaderWidth = maxWidth;
+    m_maxShaderHeight = maxHeight;
+    if (maxWidth > 0 && maxHeight > 0)
+    {
+        LOG_INFO("Limite de resolução de shader configurado: " + 
+                 std::to_string(maxWidth) + "x" + std::to_string(maxHeight));
+    }
+    else
+    {
+        LOG_INFO("Limite de resolução de shader desabilitado");
+    }
 }
 
 void ShaderEngine::shutdown()
@@ -915,16 +933,54 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         static int errorLogCounter = 0;
         errorLogCounter = 0;
 
-        m_sourceWidth = width;
-        m_sourceHeight = height;
+        // OTIMIZAÇÃO: Limitar resolução de processamento para ARM
+        // Reduzir resolução de processamento para melhorar performance drasticamente
+        uint32_t processingWidth = width;
+        uint32_t processingHeight = height;
+        
+        if (m_maxShaderWidth > 0 && m_maxShaderHeight > 0)
+        {
+            // Se a resolução excede os limites, fazer downscale mantendo aspect ratio
+            if (width > m_maxShaderWidth || height > m_maxShaderHeight)
+            {
+                float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+                
+                if (width > m_maxShaderWidth)
+                {
+                    processingWidth = m_maxShaderWidth;
+                    processingHeight = static_cast<uint32_t>(std::round(m_maxShaderWidth / aspectRatio));
+                }
+                
+                if (processingHeight > m_maxShaderHeight)
+                {
+                    processingHeight = m_maxShaderHeight;
+                    processingWidth = static_cast<uint32_t>(std::round(m_maxShaderHeight * aspectRatio));
+                }
+                
+                // Garantir que seja múltiplo de 2 (melhor para texturas)
+                processingWidth = (processingWidth / 2) * 2;
+                processingHeight = (processingHeight / 2) * 2;
+                
+                static int logCounter = 0;
+                if (logCounter++ % 300 == 0) // Log a cada 5 segundos (300 frames a 60fps)
+                {
+                    LOG_INFO("Processando shader em " + 
+                             std::to_string(processingWidth) + "x" + std::to_string(processingHeight) + 
+                             " (original: " + std::to_string(width) + "x" + std::to_string(height) + ")");
+                }
+            }
+        }
+        
+        m_sourceWidth = processingWidth;
+        m_sourceHeight = processingHeight;
         // IMPORTANTE: viewportWidth e viewportHeight devem ser as dimensões da janela,
         // não as dimensões da entrada. Eles devem ser atualizados via setViewport()
         // antes de chamar applyShader(). Se não foram atualizados, usar as dimensões da entrada como fallback.
         // Mas é melhor sempre atualizar via setViewport() antes de aplicar o shader.
 
         GLuint currentTexture = inputTexture;
-        uint32_t currentWidth = width;
-        uint32_t currentHeight = height;
+        uint32_t currentWidth = processingWidth;
+        uint32_t currentHeight = processingHeight;
 
         // IMPORTANTE: Guardar a textura original para passes que precisam dela (como hq2x)
         // Alguns shaders (como hqx-pass2) precisam tanto da saída do pass anterior quanto da entrada original
@@ -992,6 +1048,22 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                                                   m_viewportWidth, absX);
             uint32_t outputHeight = calculateScale(currentHeight, scaleTypeY, scaleY,
                                                    m_viewportHeight, absY);
+            
+            // Aplicar limite de resolução apenas se configurado pelo usuário
+            if (m_maxShaderWidth > 0 && outputWidth > m_maxShaderWidth)
+            {
+                float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
+                outputWidth = m_maxShaderWidth;
+                outputHeight = static_cast<uint32_t>(std::round(m_maxShaderWidth / aspectRatio));
+                outputHeight = (outputHeight / 2) * 2; // Múltiplo de 2
+            }
+            if (m_maxShaderHeight > 0 && outputHeight > m_maxShaderHeight)
+            {
+                float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
+                outputHeight = m_maxShaderHeight;
+                outputWidth = static_cast<uint32_t>(std::round(m_maxShaderHeight * aspectRatio));
+                outputWidth = (outputWidth / 2) * 2; // Múltiplo de 2
+            }
 
             // DEBUG: Log das dimensões calculadas
             if (i == 0 || i == m_passes.size() - 1)
@@ -1385,9 +1457,8 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
         // IMPORTANTE: Resetar viewport para um tamanho grande após os passes
         // Isso garante que a renderização final use o viewport correto
-        // O viewport será configurado novamente em Application::run() antes de renderizar
-        // Mas é bom garantir que não fique com um viewport pequeno
-        // Usar um tamanho grande padrão (1920x1080) para garantir que não fique pequeno
+        // O viewport será configurado corretamente em Application::run() antes de renderizar
+        // Usar dimensões padrão razoáveis como fallback (será sobrescrito)
         glViewport(0, 0, 1920, 1080);
 
         // IMPORTANTE: Atualizar histórico de frames para motion blur
@@ -3353,8 +3424,56 @@ std::string ShaderEngine::processIncludes(const std::string &source, const std::
 
 void ShaderEngine::setViewport(uint32_t width, uint32_t height)
 {
-    m_viewportWidth = width;
-    m_viewportHeight = height;
+    // Aplicar limite de resolução apenas se configurado pelo usuário
+    if (m_maxShaderWidth > 0 && m_maxShaderHeight > 0)
+    {
+        // Se o viewport excede os limites configurados, fazer downscale mantendo aspect ratio
+        if (width > m_maxShaderWidth || height > m_maxShaderHeight)
+        {
+            float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+            uint32_t limitedWidth = width;
+            uint32_t limitedHeight = height;
+            
+            if (width > m_maxShaderWidth)
+            {
+                limitedWidth = m_maxShaderWidth;
+                limitedHeight = static_cast<uint32_t>(std::round(m_maxShaderWidth / aspectRatio));
+            }
+            
+            if (limitedHeight > m_maxShaderHeight)
+            {
+                limitedHeight = m_maxShaderHeight;
+                limitedWidth = static_cast<uint32_t>(std::round(m_maxShaderHeight * aspectRatio));
+            }
+            
+            // Garantir múltiplo de 2
+            limitedWidth = (limitedWidth / 2) * 2;
+            limitedHeight = (limitedHeight / 2) * 2;
+            
+            m_viewportWidth = limitedWidth;
+            m_viewportHeight = limitedHeight;
+            
+            static int logCounter = 0;
+            if (logCounter++ % 300 == 0) // Log a cada 5 segundos
+            {
+                LOG_INFO("Viewport limitado para " + 
+                         std::to_string(limitedWidth) + "x" + std::to_string(limitedHeight) + 
+                         " (original: " + std::to_string(width) + "x" + std::to_string(height) + 
+                         ", limite configurado: " + std::to_string(m_maxShaderWidth) + "x" + std::to_string(m_maxShaderHeight) + ")");
+            }
+        }
+        else
+        {
+            m_viewportWidth = width;
+            m_viewportHeight = height;
+        }
+    }
+    else
+    {
+        // Sem limite configurado - usar resolução original
+        m_viewportWidth = width;
+        m_viewportHeight = height;
+    }
 }
 
 GLenum ShaderEngine::wrapModeToGLEnum(const std::string &wrapMode)

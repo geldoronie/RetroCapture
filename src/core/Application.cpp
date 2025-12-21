@@ -719,6 +719,14 @@ bool Application::initUI()
             }
         } });
 
+    m_ui->setOnOutputResolutionChanged([this](uint32_t width, uint32_t height)
+                                      {
+        LOG_INFO("Output resolution changed: " + std::to_string(width) + "x" + std::to_string(height) + 
+                 (width == 0 && height == 0 ? " (automatic)" : ""));
+        m_outputWidth = width;
+        m_outputHeight = height;
+    });
+
     m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
                                   {
         if (!m_capture) return;
@@ -2504,6 +2512,8 @@ void Application::run()
                 lastViewportHeight = currentHeight;
             }
 
+            // Usar resolução da janela (sem limitações hardcoded)
+            // O usuário pode controlar a resolução de saída via setOutputResolution()
             glViewport(0, 0, currentWidth, currentHeight);
 
             // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
@@ -2552,6 +2562,94 @@ void Application::run()
                 renderHeight = m_frameProcessor->getTextureHeight();
             }
 
+            // NOVO: Aplicar resolução de saída configurável (se definida)
+            // Isso permite que o usuário controle a resolução final antes de esticar para a janela
+            // 0 = automático (usar resolução do source)
+            GLuint finalTexture = textureToRender;
+            uint32_t finalRenderWidth = renderWidth;
+            uint32_t finalRenderHeight = renderHeight;
+            
+            if (m_outputWidth > 0 && m_outputHeight > 0)
+            {
+                // Resolução de saída configurada - fazer downscale/upscale da textura
+                // Criar framebuffer temporário para redimensionar
+                static GLuint outputFramebuffer = 0;
+                static GLuint outputTexture = 0;
+                static uint32_t lastOutputWidth = 0;
+                static uint32_t lastOutputHeight = 0;
+                
+                // Recriar framebuffer se necessário
+                if (outputFramebuffer == 0 || outputTexture == 0 || 
+                    lastOutputWidth != m_outputWidth || lastOutputHeight != m_outputHeight)
+                {
+                    // Limpar recursos antigos
+                    if (outputFramebuffer != 0)
+                    {
+                        glDeleteFramebuffers(1, &outputFramebuffer);
+                        outputFramebuffer = 0;
+                    }
+                    if (outputTexture != 0)
+                    {
+                        glDeleteTextures(1, &outputTexture);
+                        outputTexture = 0;
+                    }
+                    
+                    // Criar nova textura
+                    glGenTextures(1, &outputTexture);
+                    glBindTexture(GL_TEXTURE_2D, outputTexture);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_outputWidth, m_outputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    
+                    // Criar framebuffer
+                    glGenFramebuffers(1, &outputFramebuffer);
+                    glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
+                    
+                    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                    {
+                        LOG_ERROR("Failed to create output resolution framebuffer");
+                        glDeleteFramebuffers(1, &outputFramebuffer);
+                        glDeleteTextures(1, &outputTexture);
+                        outputFramebuffer = 0;
+                        outputTexture = 0;
+                    }
+                    else
+                    {
+                        lastOutputWidth = m_outputWidth;
+                        lastOutputHeight = m_outputHeight;
+                        LOG_INFO("Output resolution framebuffer created: " + 
+                                 std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                    }
+                    
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                }
+                
+                // Renderizar textura original para o framebuffer de saída (redimensionando)
+                if (outputFramebuffer != 0 && outputTexture != 0)
+                {
+                    glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
+                    glViewport(0, 0, m_outputWidth, m_outputHeight);
+                    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                    glClear(GL_COLOR_BUFFER_BIT);
+                    
+                    // Renderizar textura original redimensionada
+                    m_renderer->renderTexture(textureToRender, m_outputWidth, m_outputHeight,
+                                              false, isShaderTexture, 1.0f, 1.0f,
+                                              false, renderWidth, renderHeight);
+                    
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    
+                    // Usar textura redimensionada
+                    finalTexture = outputTexture;
+                    finalRenderWidth = m_outputWidth;
+                    finalRenderHeight = m_outputHeight;
+                }
+            }
+
             // IMPORTANT: Camera image comes inverted (Y inverted)
             // Shaders also render inverted, so both need Y inversion
             // flipY: true for both (camera and shader need to invert)
@@ -2565,10 +2663,10 @@ void Application::run()
             GLsizei viewportWidth = windowWidth;
             GLsizei viewportHeight = windowHeight;
 
-            if (m_maintainAspect && renderWidth > 0 && renderHeight > 0)
+            if (m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
             {
                 // Calculate texture and window aspect ratio (same as renderTexture)
-                float textureAspect = static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
+                float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
                 float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
 
                 if (textureAspect > windowAspect)
@@ -2585,9 +2683,10 @@ void Application::run()
                 }
             }
 
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
+            // Renderizar textura final na janela (sempre preenche a janela completamente)
+            m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
-                                      m_maintainAspect, renderWidth, renderHeight);
+                                      m_maintainAspect, finalRenderWidth, finalRenderHeight);
 
             if (m_streamManager && m_streamManager->isActive())
             {

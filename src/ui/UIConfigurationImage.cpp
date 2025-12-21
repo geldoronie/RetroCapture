@@ -23,6 +23,8 @@ void UIConfigurationImage::render()
 
     renderBrightnessContrast();
     ImGui::Separator();
+    renderOutputResolution();
+    ImGui::Separator();
     renderAspectRatio();
     renderFullscreen();
     ImGui::Separator();
@@ -74,6 +76,65 @@ void UIConfigurationImage::renderFullscreen()
     if (ImGui::Checkbox("Fullscreen", &fullscreen))
     {
         m_uiManager->setFullscreen(fullscreen);
+        m_uiManager->saveConfig();
+    }
+}
+
+void UIConfigurationImage::renderOutputResolution()
+{
+    ImGui::Text("Output Resolution");
+    ImGui::TextDisabled("(Applied after shader, before stretching to window)");
+    ImGui::TextDisabled("(0 = automatic, use source resolution)");
+    
+    int outputWidth = static_cast<int>(m_uiManager->getOutputWidth());
+    int outputHeight = static_cast<int>(m_uiManager->getOutputHeight());
+    
+    ImGui::PushItemWidth(120);
+    bool changed = false;
+    
+    if (ImGui::InputInt("Width##output", &outputWidth, 32, 256))
+    {
+        outputWidth = std::max(0, outputWidth);
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::InputInt("Height##output", &outputHeight, 32, 256))
+    {
+        outputHeight = std::max(0, outputHeight);
+        changed = true;
+    }
+    ImGui::PopItemWidth();
+    
+    if (changed)
+    {
+        m_uiManager->setOutputResolution(static_cast<uint32_t>(outputWidth), static_cast<uint32_t>(outputHeight));
+        m_uiManager->saveConfig();
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##output"))
+    {
+        m_uiManager->setOutputResolution(0, 0);
+        m_uiManager->saveConfig();
+    }
+    
+    // Botões rápidos para resoluções comuns
+    ImGui::Text("Quick Presets:");
+    if (ImGui::Button("1280x720##output"))
+    {
+        m_uiManager->setOutputResolution(1280, 720);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("1920x1080##output"))
+    {
+        m_uiManager->setOutputResolution(1920, 1080);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Auto##output"))
+    {
+        m_uiManager->setOutputResolution(0, 0);
         m_uiManager->saveConfig();
     }
 }
