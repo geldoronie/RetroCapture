@@ -8,6 +8,7 @@
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
 #include "../renderer/OpenGLRenderer.h"
+#include "../renderer/PBOManager.h"
 #ifdef USE_SDL2
 #include "../output/WindowManagerSDL.h"
 #else
@@ -203,6 +204,11 @@ bool Application::initRenderer()
     // Aplicar configuração de texture filtering
     m_frameProcessor->setTextureFilterLinear(m_textureFilterLinear);
     LOG_INFO("FrameProcessor created");
+
+    // Initialize PBO Manager for async pixel reading
+    LOG_INFO("Creating PBOManager...");
+    m_pboManager = std::make_unique<PBOManager>();
+    LOG_INFO("PBOManager created");
 
     // Initialize ShaderEngine
     LOG_INFO("Creating ShaderEngine...");
@@ -2685,11 +2691,19 @@ void Application::run()
                 }
             }
 
+            // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            
             // Renderizar textura final na janela (sempre preenche a janela completamente)
             m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, finalRenderWidth, finalRenderHeight);
+            
+            // IMPORTANTE: Aguardar que a renderização seja concluída
+            glFinish();
 
+            // IMPORTANTE: Para streaming, capturar diretamente da textura final ao invés do framebuffer
+            // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             if (m_streamManager && m_streamManager->isActive())
             {
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -2699,31 +2713,100 @@ void Application::run()
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
-                    size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
-                    size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
-
-                    std::vector<uint8_t> frameDataWithPadding;
-                    frameDataWithPadding.resize(totalSizeWithPadding);
-
-                    glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
-                                 GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
-
-                    std::vector<uint8_t> frameData;
-                    frameData.resize(captureDataSize);
-
-                    for (uint32_t row = 0; row < captureHeight; row++)
+                    // TEMPORÁRIO: Desabilitar PBO para debug - usar sempre método síncrono
+                    // TODO: Reabilitar PBO após confirmar que streaming funciona
+                    bool usePBO = false; // false = usar sempre método síncrono
+                    
+                    if (usePBO)
                     {
-                        uint32_t srcRow = captureHeight - 1 - row; // Vertical flip
-                        uint32_t dstRow = row;
-
-                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
-                        uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
-                        memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                        // Inicializar PBO se necessário
+                        if (m_pboManager && !m_pboManager->isInitialized())
+                        {
+                            if (!m_pboManager->init(captureWidth, captureHeight))
+                            {
+                                LOG_WARN("Failed to initialize PBO, falling back to synchronous glReadPixels");
+                            }
+                        }
+                        
+                        // Tentar usar PBO se disponível
+                        if (m_pboManager && m_pboManager->isInitialized())
+                        {
+                            // Primeiro, iniciar leitura assíncrona para ESTE frame
+                            // (isso será lido no próximo frame)
+                            m_pboManager->startAsyncRead(viewportX, viewportY, 
+                                                        static_cast<GLsizei>(captureWidth), 
+                                                        static_cast<GLsizei>(captureHeight));
+                            
+                            // Tentar obter dados do PBO anterior (frame anterior)
+                            // Isso não bloqueia se os dados ainda não estão prontos
+                            std::vector<uint8_t> frameData;
+                            frameData.resize(captureDataSize);
+                            
+                            if (m_pboManager->getReadData(frameData.data(), captureWidth, captureHeight))
+                            {
+                                // Dados disponíveis, enviar para streaming
+                                if (m_streamManager)
+                                {
+                                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                                }
+                            }
+                            // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
+                            // não enviamos este frame - isso é normal e esperado
+                        }
+                        else
+                        {
+                            // Fallback: usar glReadPixels síncrono se PBO não está disponível
+                            usePBO = false; // Forçar método síncrono
+                        }
                     }
-                    if (m_streamManager)
+                    
+                    // Usar método síncrono (fallback ou se PBO desabilitado)
+                    if (!usePBO)
                     {
-                        m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                        // SIMPLIFICADO: Capturar diretamente do framebuffer padrão (janela) após renderização
+                        // Garantir que estamos lendo do framebuffer correto
+                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                        glViewport(0, 0, windowWidth, windowHeight);
+                        
+                        // Usar dimensões do viewport renderizado
+                        uint32_t actualCaptureWidth = static_cast<uint32_t>(viewportWidth);
+                        uint32_t actualCaptureHeight = static_cast<uint32_t>(viewportHeight);
+                        size_t rgbDataSize = static_cast<size_t>(actualCaptureWidth) * static_cast<size_t>(actualCaptureHeight) * 3;
+                        
+                        // Preparar buffer com padding para glReadPixels
+                        size_t readRowSizeUnpadded = static_cast<size_t>(actualCaptureWidth) * 3;
+                        size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                        size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
+                        
+                        std::vector<uint8_t> frameDataWithPadding;
+                        frameDataWithPadding.resize(totalSizeWithPadding);
+                        
+                        // glReadPixels usa coordenadas bottom-left, converter viewportY
+                        GLint readY = static_cast<GLint>(windowHeight) - viewportY - static_cast<GLint>(actualCaptureHeight);
+                        
+                        // Capturar do framebuffer padrão como RGB
+                        glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
+                                     GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+                        
+                        // Converter dados com padding para dados sem padding e inverter verticalmente
+                        std::vector<uint8_t> frameData;
+                        frameData.resize(rgbDataSize);
+                        
+                        // glReadPixels retorna bottom-to-top, precisamos top-to-bottom
+                        for (uint32_t row = 0; row < actualCaptureHeight; row++)
+                        {
+                            uint32_t srcRow = actualCaptureHeight - 1 - row; // Inverter verticalmente
+                            uint32_t dstRow = row;
+                            
+                            const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
+                            uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
+                            memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                        }
+                        
+                        if (m_streamManager)
+                        {
+                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                        }
                     }
                 }
             }

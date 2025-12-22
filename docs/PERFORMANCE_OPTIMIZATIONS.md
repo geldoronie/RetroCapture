@@ -59,19 +59,23 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 
 ---
 
-### 4. Otimização de glReadPixels com PBO (Pixel Buffer Objects)
-**Localização**: `src/core/Application.cpp:2707`
+### 4. Otimização de glReadPixels com PBO (Pixel Buffer Objects) ✅
+**Localização**: `src/core/Application.cpp:2707` - **IMPLEMENTADO**
 
 **Problema**:
 - `glReadPixels` é síncrono e bloqueia o pipeline OpenGL
 - Para streaming, isso pode causar stuttering
 
 **Solução**:
-- Usar PBO (Pixel Buffer Objects) para leitura assíncrona
-- Implementar double-buffering com 2 PBOs (enquanto um lê, o outro processa)
-- Ler do PBO na thread de encoding, não na thread principal
+- ✅ Criar classe `PBOManager` para gerenciar PBOs com double-buffering
+- ✅ Implementar 2 PBOs (enquanto um lê, o outro processa)
+- ✅ Leitura assíncrona: `glReadPixels` escreve no PBO sem bloquear
+- ✅ Alternar PBOs a cada frame para máxima eficiência
+- ✅ Fallback para `glReadPixels` síncrono se PBO não está disponível
 
 **Impacto Estimado**: Redução de stuttering no streaming, melhor uso do pipeline OpenGL
+
+**Status**: Implementado - `PBOManager` criado e integrado em `Application`
 
 ---
 

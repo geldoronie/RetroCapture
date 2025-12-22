@@ -259,17 +259,8 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
 #if HAVE_NEON
 void FrameProcessor::convertYUYVtoRGB_NEON(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
 {
-    // Constantes para conversão YUV→RGB (ITU-R BT.601) - mesmas da versão escalar
-    const int16x4_t c298 = vdup_n_s16(298);
-    const int16x4_t c409 = vdup_n_s16(409);
-    const int16x4_t c100_neg = vdup_n_s16(-100);
-    const int16x4_t c208_neg = vdup_n_s16(-208);
-    const int16x4_t c516 = vdup_n_s16(516);
-    const int16x4_t c128 = vdup_n_s16(128);
-    const uint8x8_t y_offset = vdup_n_u8(16);
-    const uint8x8_t uv_offset = vdup_n_u8(128);
-    
     // Processar 1 par (2 pixels) por vez - mais simples e garante correção
+    // Usar valores escalares diretamente (mesma lógica da versão escalar)
     for (uint32_t y = 0; y < height; ++y)
     {
         const uint8_t *yuyv_row = yuyv + (y * width * 2);
@@ -338,7 +329,7 @@ void FrameProcessor::convertYUYVtoRGB_NEON(const uint8_t *yuyv, uint8_t *rgb, ui
             {
                 int y0 = yuyv_row[idx];
                 int u = yuyv_row[idx + 1];
-                int y1 = 0; // Segundo pixel não existe
+                // Segundo pixel não existe neste caso (última coluna ímpar)
                 int v = 128; // Valor padrão
                 
                 int c0 = y0 - 16;

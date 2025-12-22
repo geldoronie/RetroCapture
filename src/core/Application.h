@@ -24,6 +24,7 @@ class UIManager;
 class FrameProcessor;
 class StreamManager;
 class HTTPTSStreamer;
+class PBOManager;
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -132,6 +133,7 @@ private:
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<IAudioCapture> m_audioCapture;
+    std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 

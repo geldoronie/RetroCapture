@@ -52,6 +52,8 @@ extern void (*glGenBuffers)(GLsizei n, GLuint* buffers);
 extern void (*glDeleteBuffers)(GLsizei n, const GLuint* buffers);
 extern void (*glBindBuffer)(GLenum target, GLuint buffer);
 extern void (*glBufferData)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+extern void* (*glMapBuffer)(GLenum target, GLenum access);
+extern GLboolean (*glUnmapBuffer)(GLenum target);
 extern void (*glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*glEnableVertexAttribArray)(GLuint index);
 extern void (*glGenTextures)(GLsizei n, GLuint* textures);
@@ -92,6 +94,8 @@ void glDisable(GLenum cap);
 void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+void glFinish(void);
+void glFlush(void);
 #ifdef __cplusplus
 }
 #endif
@@ -145,6 +149,11 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_NEAREST_MIPMAP_NEAREST 0x2700
 #define GL_SRGB8_ALPHA8 0x8C43
 #define GL_CULL_FACE 0x0B44
+
+// PBO (Pixel Buffer Object) constants
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_STREAM_READ 0x88E1
+#define GL_READ_ONLY 0x88B8
 #define GL_DEPTH_TEST 0x0B71
 #define GL_ACTIVE_UNIFORMS 0x8B86
 #define GL_FLOAT_VEC2 0x8B50

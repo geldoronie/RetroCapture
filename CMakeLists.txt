@@ -578,7 +578,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
@@ -611,9 +611,10 @@ elseif(ARCH_ARM32)
     )
 elseif(ARCH_ARM64)
     # ARM64 (aarch64): usar flags específicas para ARM64
+    # Reduzir otimização de -O3 para -O2 para evitar segmentation fault do GCC
     target_compile_options(retrocapture PRIVATE
         $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
-        $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+        $<$<CONFIG:Release>:-O2 -DNDEBUG -march=native>
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
         $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
     )

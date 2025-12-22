@@ -34,6 +34,8 @@ void (*glGenBuffers)(GLsizei, GLuint *) = nullptr;
 void (*glDeleteBuffers)(GLsizei, const GLuint *) = nullptr;
 void (*glBindBuffer)(GLenum, GLuint) = nullptr;
 void (*glBufferData)(GLenum, GLsizeiptr, const void *, GLenum) = nullptr;
+void* (*glMapBuffer)(GLenum, GLenum) = nullptr;
+GLboolean (*glUnmapBuffer)(GLenum) = nullptr;
 void (*glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void *) = nullptr;
 void (*glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*glGenTextures)(GLsizei, GLuint *) = nullptr;
@@ -123,6 +125,8 @@ bool loadOpenGLFunctions()
     LOAD_FUNC(glDeleteBuffers)
     LOAD_FUNC(glBindBuffer)
     LOAD_FUNC(glBufferData)
+    LOAD_FUNC(glMapBuffer)
+    LOAD_FUNC(glUnmapBuffer)
     LOAD_FUNC(glVertexAttribPointer)
     LOAD_FUNC(glEnableVertexAttribArray)
 
