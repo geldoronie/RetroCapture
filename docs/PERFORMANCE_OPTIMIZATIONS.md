@@ -129,25 +129,6 @@ Este documento lista oportunidades de otimização identificadas no código, al�
 
 ---
 
-### 8. Threading: Processamento Paralelo de Frames
-**Localização**: `src/core/Application.cpp` (loop principal)
-
-**Problema**:
-- Captura, conversão YUYV→RGB, e upload de textura acontecem sequencialmente na thread principal
-- Enquanto processa um frame, não captura o próximo
-
-**Solução**:
-- Implementar double/triple buffering de frames
-- Thread de captura: apenas captura frames e coloca em fila
-- Thread de processamento: converte YUYV→RGB e faz upload de textura
-- Thread principal: apenas renderiza textura já pronta
-
-**Impacto Estimado**: Redução de latência, melhor uso de múltiplos cores (especialmente em ARM multi-core)
-
-**Complexidade**: Alta - requer sincronização cuidadosa
-
----
-
 ## Prioridade Baixa (Impacto Pequeno ou Específico)
 
 ### 9. VSync e Frame Pacing
@@ -217,7 +198,6 @@ Este documento lista oportunidades de otimização identificadas no código, al�
    - Evita chamadas `glBindTexture` e `glActiveTexture` desnecessárias
    - Integrado em `OpenGLRenderer` para otimizar bind de texturas
    - Suporta até 32 unidades de textura (GL_TEXTURE0 a GL_TEXTURE31)
-8. **Threading** (Difícil, alto impacto mas complexo)
 
 ---
 

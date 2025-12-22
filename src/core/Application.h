@@ -137,9 +137,6 @@ private:
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 
-    // Streaming thread
-    // OPÇÃO A: Thread de streaming removida - processamento movido para thread principal
-
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
@@ -290,9 +287,6 @@ private:
     };
     std::mutex m_resolutionQueueMutex;
     std::queue<ResolutionChange> m_pendingResolutionChanges;
-
-    // Fila de frames para streaming thread (captura de vídeo)
-    // OPÇÃO A: Fila removida - frames processados diretamente na thread principal
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);

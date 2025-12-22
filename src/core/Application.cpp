@@ -1917,8 +1917,6 @@ bool Application::initStreaming()
         stopWebPortal();
     }
 
-    // OPTION A: No more streaming thread to clean up
-
     // IMPORTANT: Clear existing streamManager BEFORE creating a new one
     // This prevents double free problems when there are configuration changes
     // CRITICAL: These operations are already in a separate thread, but can still block
@@ -2971,8 +2969,6 @@ void Application::shutdown()
     }
 
     // SwsContext for resize was removed - now done in encoding
-
-    // OPTION A: No more streaming thread to clean up
 
     if (m_streamManager)
     {
