@@ -24,8 +24,8 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
-mkdir -p build-windows
-cd build-windows
+mkdir -p build-windows-x86_64
+cd build-windows-x86_64
 
 echo "⚙️  Configurando CMake..."
 # dockcross usa MXE em /usr/src/mxe com target static

@@ -59,24 +59,24 @@ echo "Construindo imagem Docker (se necessário)..."
 $DOCKER_COMPOSE build build-windows-x86_64 > /dev/null 2>&1 || $DOCKER_COMPOSE build build-windows-x86_64
 
 echo "Compilando RetroCapture no container Docker..."
-$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows-x86_64 > build-windows.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows-x86_64 > build-windows-x86_64.log 2>&1
 
 if [ $? -ne 0 ]; then
-    echo "Erro: Falha na compilação. Verifique build-windows.log para mais detalhes."
+    echo "Erro: Falha na compilação. Verifique build-windows-x86_64.log para mais detalhes."
     exit 1
 fi
 
 echo "Compilação concluída!"
 
 # Verificar se o build foi bem-sucedido
-if [ ! -d "build-windows" ]; then
-    echo "Erro: Diretório build-windows não encontrado"
+if [ ! -d "build-windows-x86_64" ]; then
+    echo "Erro: Diretório build-windows-x86_64 não encontrado"
     exit 1
 fi
 
-if [ ! -f "build-windows/bin/retrocapture.exe" ]; then
-    echo "Erro: Executável não encontrado em build-windows/bin/retrocapture.exe"
-    echo "A compilação via Docker pode ter falhado. Verifique build-windows.log"
+if [ ! -f "build-windows-x86_64/bin/retrocapture.exe" ]; then
+    echo "Erro: Executável não encontrado em build-windows-x86_64/bin/retrocapture.exe"
+    echo "A compilação via Docker pode ter falhado. Verifique build-windows-x86_64.log"
     exit 1
 fi
 
@@ -87,21 +87,21 @@ echo "=== Gerando instalador Windows ==="
 
 if command -v makensis &> /dev/null; then
     echo "NSIS encontrado no sistema, gerando instalador localmente..."
-    cd build-windows
+    cd build-windows-x86_64
     cpack -G NSIS
     cd ..
     
     # Verificar se o instalador foi gerado
-    if [ -f "build-windows/${INSTALLER_NAME}" ]; then
+    if [ -f "build-windows-x86_64/${INSTALLER_NAME}" ]; then
         # Mover para o diretório raiz
-        mv "build-windows/${INSTALLER_NAME}" .
+        mv "build-windows-x86_64/${INSTALLER_NAME}" .
         echo ""
         echo "=== Instalador gerado com sucesso! ==="
         echo "Arquivo: ${INSTALLER_NAME}"
         echo "Tamanho: $(du -h "${INSTALLER_NAME}" | cut -f1)"
         exit 0
     else
-        echo "Aviso: Instalador não encontrado em build-windows/${INSTALLER_NAME}"
+        echo "Aviso: Instalador não encontrado em build-windows-x86_64/${INSTALLER_NAME}"
         echo "Tentando gerar dentro do container Docker..."
     fi
 fi
@@ -118,18 +118,18 @@ set -e
 
 cd /work
 
-# Verificar se build-windows existe
-if [ ! -d "build-windows" ]; then
-    echo "Erro: Diretório build-windows não encontrado em /work"
+# Verificar se build-windows-x86_64 existe
+if [ ! -d "build-windows-x86_64" ]; then
+    echo "Erro: Diretório build-windows-x86_64 não encontrado em /work"
     exit 1
 fi
 
-cd build-windows
+cd build-windows-x86_64
 
 # Verificar se NSIS está disponível no container
 if ! command -v makensis &> /dev/null; then
     echo "Erro: NSIS não está disponível no container Docker"
-    echo "É necessário instalar NSIS no Dockerfile.windows"
+    echo "É necessário instalar NSIS no Dockerfile.windows-x86_64"
     exit 1
 fi
 
@@ -217,13 +217,13 @@ $DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" --entrypoint bash build-win
 # Procurar pelo instalador com o nome esperado primeiro
 INSTALLER_FOUND=""
 # Priorizar o nome esperado: RetroCapture-{VERSION}-Windows-Setup.exe
-if [ -f "build-windows/${INSTALLER_NAME}" ]; then
-    INSTALLER_FOUND="build-windows/${INSTALLER_NAME}"
+if [ -f "build-windows-x86_64/${INSTALLER_NAME}" ]; then
+    INSTALLER_FOUND="build-windows-x86_64/${INSTALLER_NAME}"
     echo "Instalador encontrado com nome esperado: ${INSTALLER_NAME}"
 else
     # Se não encontrar, procurar por qualquer instalador (exceto o executável e formato antigo)
     # Ordenar por data de modificação (mais recente primeiro) e ignorar formato antigo
-    for installer in $(ls -t build-windows/RetroCapture-*-Windows-Setup.exe build-windows/RetroCapture-*.exe 2>/dev/null | grep -v "win64.exe" | grep -v "retrocapture.exe"); do
+    for installer in $(ls -t build-windows-x86_64/RetroCapture-*-Windows-Setup.exe build-windows-x86_64/RetroCapture-*.exe 2>/dev/null | grep -v "win64.exe" | grep -v "retrocapture.exe"); do
         if [ -f "$installer" ] && [[ "$installer" == *"Windows-Setup.exe" ]] || [[ "$installer" == *"-Setup.exe" ]]; then
             INSTALLER_FOUND="$installer"
             echo "Instalador encontrado: $(basename "$installer")"
@@ -246,8 +246,8 @@ else
     echo ""
     echo "=== Aviso: Instalador não foi gerado ==="
     echo ""
-    echo "Verificando build-windows/..."
-    ls -la build-windows/*.exe 2>/dev/null || echo "Nenhum .exe encontrado em build-windows/"
+    echo "Verificando build-windows-x86_64/..."
+    ls -la build-windows-x86_64/*.exe 2>/dev/null || echo "Nenhum .exe encontrado em build-windows-x86_64/"
     echo ""
     echo "Possíveis causas:"
     echo "  1. NSIS não está instalado no container Docker (rebuild necessário)"
@@ -256,8 +256,8 @@ else
     echo ""
     echo "Para resolver:"
     echo "  1. Reconstrua a imagem Docker: docker-compose build build-windows-x86_64"
-    echo "  2. Verifique se CPack está ativo: grep CPack build-windows/CMakeCache.txt"
-    echo "  3. Tente gerar manualmente: cd build-windows && cpack -G NSIS -V"
+    echo "  2. Verifique se CPack está ativo: grep CPack build-windows-x86_64/CMakeCache.txt"
+    echo "  3. Tente gerar manualmente: cd build-windows-x86_64 && cpack -G NSIS -V"
     # Limpar script temporário
     rm -f build-installer-temp.sh
     exit 1

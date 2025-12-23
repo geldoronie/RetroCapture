@@ -44,4 +44,4 @@ $DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-windows-x86_64 > buil
 
 echo ""
 echo "✅ Concluído!"
-echo "📁 Executável: ./build-windows/bin/retrocapture.exe"
+echo "📁 Executável: ./build-windows-x86_64/bin/retrocapture.exe"

@@ -2,21 +2,21 @@ services:
   build-windows-x86_64:
     build:
       context: .
-      dockerfile: Dockerfile.windows
+      dockerfile: Dockerfile.windows-x86_64
     image: retrocapture-windows-x86_64-builder:latest
     volumes:
       - .:/work:ro
-      - ./build-windows:/work/build-windows
+      - ./build-windows-x86_64:/work/build-windows-x86_64
     working_dir: /work
 
   build-linux-x86_64:
     build:
       context: .
-      dockerfile: Dockerfile.linux
+      dockerfile: Dockerfile.linux-x86_64
     image: retrocapture-linux-x86_64-builder:latest
     volumes:
       - .:/work:ro
-      - ./build-linux:/work/build-linux:rw
+      - ./build-linux-x86_64:/work/build-linux-x86_64:rw
     working_dir: /work
 
   build-linux-armv7:

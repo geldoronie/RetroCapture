@@ -28,7 +28,7 @@ echo "⚙️  Configurando Git..."
 git config --global --add safe.directory '*' || true
 
 # Criar diretório de build (limpar cache CMake se existir)
-BUILD_DIR="build-linux"
+BUILD_DIR="build-linux-x86_64"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 

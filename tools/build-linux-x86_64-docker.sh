@@ -79,4 +79,4 @@ $DOCKER_COMPOSE_CMD run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux-x86_64 > bu
 
 echo ""
 echo "✅ Concluído!"
-echo "📁 Executável: ./build-linux/bin/retrocapture"
+echo "📁 Executável: ./build-linux-x86_64/bin/retrocapture"

@@ -45,11 +45,11 @@ linuxdeploy-plugins/
 build-linux-armv7/
 build-linux-arm64/
 
-# Linux
-build-linux/
+# Linux x86_64
+build-linux-x86_64/
 
-# Windows
-build-windows/
+# Windows x86_64
+build-windows-x86_64/
 *.exe
 *.dll
 *.lib

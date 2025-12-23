@@ -91,12 +91,12 @@ Gera instalador Windows completo (NSIS) com todos os componentes.
 ./tools/build-windows-installer.sh
 ```
 
-#### `build-appimage.sh`
+#### `build-linux-appimage-x86_64.sh`
 
 Gera AppImage para Linux x86_64.
 
 ```bash
-./tools/build-appimage.sh
+./tools/build-linux-appimage-x86_64.sh
 ```
 
 ## 🔧 Scripts de Instalação e Utilitários
@@ -121,9 +121,42 @@ Verifica suporte a DirectFB no SDL2 instalado.
 
 Sincroniza código fonte para Raspberry Pi (utilitário de desenvolvimento).
 
+**Primeira configuração:**
+
 ```bash
-./tools/sync-source-raspiberry.sh
+# Configurar parâmetros interativamente
+./tools/sync-source-raspiberry.sh --config
 ```
+
+**Uso:**
+
+```bash
+# Sincronização única
+./tools/sync-source-raspiberry.sh --once
+
+# Sincronização contínua (monitora mudanças)
+./tools/sync-source-raspiberry.sh
+
+# Com parâmetros específicos
+./tools/sync-source-raspiberry.sh --ip 192.168.1.100 --user pi --dest /home/pi/Projects/RetroCapture
+```
+
+**Parâmetros:**
+
+- `--ip IP`: IP ou hostname do servidor remoto
+- `--user USER`: Usuário SSH
+- `--port PORT`: Porta SSH (padrão: 22)
+- `--source DIR`: Diretório fonte local (padrão: diretório atual)
+- `--dest DIR`: Diretório destino remoto
+- `--once`: Sincronização única (sem monitoramento)
+- `--config`: Configurar parâmetros interativamente
+- `--help`: Mostrar ajuda
+
+**Autenticação SSH:**
+O script configura automaticamente autenticação por chave SSH para evitar solicitar senha toda vez. Na primeira execução, ele oferece gerar e copiar a chave SSH automaticamente.
+
+**Arquivo de configuração:**
+`~/.retrocapture-sync-config` (criado automaticamente)
 
 ## 🐳 Scripts Docker (Internos)
 

@@ -74,13 +74,13 @@ if ! command -v docker-compose &> /dev/null && docker compose version &> /dev/nu
 fi
 
 echo "Construindo imagem Docker (se necessário)..."
-$DOCKER_COMPOSE build build-linux > /dev/null 2>&1 || $DOCKER_COMPOSE build build-linux
+$DOCKER_COMPOSE build build-linux-x86_64 > /dev/null 2>&1 || $DOCKER_COMPOSE build build-linux-x86_64
 
 echo "Compilando RetroCapture no container Docker..."
-$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux > build-linux.log 2>&1
+$DOCKER_COMPOSE run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux-x86_64 > build-linux-x86_64.log 2>&1
 
 if [ $? -ne 0 ]; then
-    echo "Erro: Falha na compilação. Verifique build-linux.log para mais detalhes."
+    echo "Erro: Falha na compilação. Verifique build-linux-x86_64.log para mais detalhes."
     exit 1
 fi
 
@@ -100,12 +100,12 @@ mkdir -p "$APP_DIR/usr/share/retrocapture/ssl"
 
 # Copiar executável
 echo "Copiando executável..."
-if [ ! -f "build-linux/bin/retrocapture" ]; then
-    echo "Erro: Executável não encontrado em build-linux/bin/retrocapture"
-    echo "A compilação via Docker pode ter falhado. Verifique build-linux.log"
+if [ ! -f "build-linux-x86_64/bin/retrocapture" ]; then
+    echo "Erro: Executável não encontrado em build-linux-x86_64/bin/retrocapture"
+    echo "A compilação via Docker pode ter falhado. Verifique build-linux-x86_64.log"
     exit 1
 fi
-cp build-linux/bin/retrocapture "$APP_DIR/usr/bin/"
+cp build-linux-x86_64/bin/retrocapture "$APP_DIR/usr/bin/"
 chmod +x "$APP_DIR/usr/bin/retrocapture"
 echo "Executável copiado: $(ls -lh "$APP_DIR/usr/bin/retrocapture" | awk '{print $5}')"
 
@@ -400,9 +400,9 @@ if [ -n "$APPIMAGETOOL" ]; then
         done
     }
     
-    # Usar o executável do build-linux para copiar dependências
-    if [ -f "build-linux/bin/retrocapture" ]; then
-        copy_deps "build-linux/bin/retrocapture"
+    # Usar o executável do build-linux-x86_64 para copiar dependências
+    if [ -f "build-linux-x86_64/bin/retrocapture" ]; then
+        copy_deps "build-linux-x86_64/bin/retrocapture"
     else
         copy_deps "$APP_DIR/usr/bin/retrocapture"
     fi
@@ -434,5 +434,5 @@ echo "  chmod +x appimagetool-x86_64.AppImage"
 echo "  ./appimagetool $APP_DIR $APPIMAGE_NAME"
 echo ""
 echo "Estrutura criada. Copie manualmente as bibliotecas necessárias para $APP_DIR/usr/lib/"
-echo "Use 'ldd build-linux/bin/retrocapture' para ver as dependências."
+echo "Use 'ldd build-linux-x86_64/bin/retrocapture' para ver as dependências."
 
