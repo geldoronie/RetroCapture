@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && (apt-get install -y libdirectfb-dev directfb || true) && rm -rf /var/lib/apt/lists/*
 
 # Script de build
-COPY docker-build-linux-arm64.sh /usr/local/bin/
+COPY tools/docker-build-linux-arm64.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-build-linux-arm64.sh
 
 WORKDIR /work

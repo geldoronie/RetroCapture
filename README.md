@@ -158,7 +158,7 @@ A forma mais simples para distribuir:
 
 ```bash
 # Gerar instalador Windows completo
-./build-windows-installer.sh
+./tools/build-windows-installer.sh
 ```
 
 Isso irá:
@@ -367,7 +367,7 @@ The web portal provides a complete remote control interface accessible from any 
 ## 📦 Building AppImage
 
 ```bash
-./build-appimage.sh
+./tools/build-appimage.sh
 ```
 
 This will generate a `RetroCapture-<version>-x86_64.AppImage` file that can be run on any compatible Linux distribution without installation.
