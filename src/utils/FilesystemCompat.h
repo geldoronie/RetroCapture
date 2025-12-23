@@ -306,6 +306,11 @@ namespace fs
             // Destrutor limpa automaticamente os DirectoryState
         }
 
+        bool operator==(const recursive_directory_iterator &other) const
+        {
+            return m_valid == other.m_valid;
+        }
+
         bool operator!=(const recursive_directory_iterator &other) const
         {
             return m_valid != other.m_valid;
@@ -398,16 +403,136 @@ namespace fs
         bool m_valid;
     };
 } // namespace fs
+
+// Namespace auxiliar para funções helper (sempre disponível)
+namespace fs_helper
+{
+    inline bool is_regular_file(const fs::recursive_directory_iterator& iter)
+    {
+        return iter.is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter.path();
+    }
+
+    inline std::string get_extension_string(const fs::path& p)
+    {
+        return p.extension(); // Custom implementation retorna string diretamente
+    }
+
+    inline std::string get_filename_string(const fs::path& p)
+    {
+        return p.filename(); // Custom implementation retorna string diretamente
+    }
+}
 #elif defined(_WIN32) && defined(__GNUC__) && __GNUC__ >= 8 && __cplusplus >= 201703L
 #include <filesystem>
 namespace fs = std::filesystem;
+
+// Namespace auxiliar para funções helper (sempre disponível)
+namespace fs_helper
+{
+    inline bool is_regular_file(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline std::string get_extension_string(const fs::path& p)
+    {
+        return p.extension().string(); // std::filesystem retorna path, precisa .string()
+    }
+
+    inline std::string get_filename_string(const fs::path& p)
+    {
+        return p.filename().string(); // std::filesystem retorna path, precisa .string()
+    }
+}
 #elif __cplusplus >= 201703L && (!defined(_WIN32) || (defined(_MSC_VER) && _MSC_VER >= 1914))
 #include <filesystem>
 namespace fs = std::filesystem;
+
+// Namespace auxiliar para funções helper (sempre disponível)
+namespace fs_helper
+{
+    inline bool is_regular_file(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline std::string get_extension_string(const fs::path& p)
+    {
+        return p.extension().string(); // std::filesystem retorna path, precisa .string()
+    }
+
+    inline std::string get_filename_string(const fs::path& p)
+    {
+        return p.filename().string(); // std::filesystem retorna path, precisa .string()
+    }
+}
 #elif defined(__GNUC__) && __GNUC__ >= 8
 #include <filesystem>
 namespace fs = std::filesystem;
+
+// Namespace auxiliar para funções helper (sempre disponível)
+namespace fs_helper
+{
+    inline bool is_regular_file(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline std::string get_extension_string(const fs::path& p)
+    {
+        return p.extension().string(); // std::filesystem retorna path, precisa .string()
+    }
+
+    inline std::string get_filename_string(const fs::path& p)
+    {
+        return p.filename().string(); // std::filesystem retorna path, precisa .string()
+    }
+}
 #else
 #include <experimental/filesystem>
 namespace fs = std::experimental::filesystem;
+
+// Namespace auxiliar para funções helper (sempre disponível)
+namespace fs_helper
+{
+    inline bool is_regular_file(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline std::string get_extension_string(const fs::path& p)
+    {
+        return p.extension().string(); // std::experimental::filesystem retorna path, precisa .string()
+    }
+
+    inline std::string get_filename_string(const fs::path& p)
+    {
+        return p.filename().string(); // std::experimental::filesystem retorna path, precisa .string()
+    }
+}
 #endif

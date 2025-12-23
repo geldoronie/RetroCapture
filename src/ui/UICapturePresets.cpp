@@ -382,11 +382,11 @@ void UICapturePresets::loadAllThumbnails()
 
 void UICapturePresets::clearThumbnails()
 {
-    for (auto& [name, texture] : m_thumbnailTextures)
+    for (auto& pair : m_thumbnailTextures)
     {
-        if (texture != 0)
+        if (pair.second != 0)
         {
-            glDeleteTextures(1, &texture);
+            glDeleteTextures(1, &pair.second);
         }
     }
     m_thumbnailTextures.clear();

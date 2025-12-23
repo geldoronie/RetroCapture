@@ -3113,9 +3113,9 @@ void Application::applyPreset(const std::string& presetName)
         if (m_shaderEngine->loadPreset(shaderPath))
         {
             // Apply shader parameters
-            for (const auto& [name, value] : data.shaderParameters)
+            for (const auto& param : data.shaderParameters)
             {
-                m_shaderEngine->setShaderParameter(name, value);
+                m_shaderEngine->setShaderParameter(param.first, param.second);
             }
             
             // Update UI with shader path (use the relative path from preset)
@@ -3262,9 +3262,9 @@ void Application::applyPreset(const std::string& presetName)
     // 5. Apply V4L2 controls
     if (m_capture && !data.v4l2Controls.empty())
     {
-        for (const auto& [name, value] : data.v4l2Controls)
+        for (const auto& control : data.v4l2Controls)
         {
-            m_capture->setControl(name, value);
+            m_capture->setControl(control.first, control.second);
         }
     }
 

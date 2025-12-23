@@ -612,12 +612,24 @@ elseif(ARCH_ARM32)
 elseif(ARCH_ARM64)
     # ARM64 (aarch64): usar flags específicas para ARM64
     # Reduzir otimização de -O3 para -O2 para evitar segmentation fault do GCC
+    # Aplicar também ao ImGui para evitar segmentation fault durante compilação
     target_compile_options(retrocapture PRIVATE
         $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
         $<$<CONFIG:Release>:-O2 -DNDEBUG -march=native>
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
         $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
     )
+
+    # Aplicar mesmas flags ao ImGui para evitar segmentation fault no GCC 14+
+    # Usar -O1 ou -O0 para evitar bugs do compilador durante compilação
+    if(TARGET imgui)
+        target_compile_options(imgui PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls>
+            $<$<CONFIG:Release>:-O1 -DNDEBUG -fno-optimize-sibling-calls>
+            $<$<CONFIG:RelWithDebInfo>:-O1 -g -DNDEBUG -fno-optimize-sibling-calls>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -fno-optimize-sibling-calls>
+        )
+    endif()
 else()
     # Arquitetura genérica: sem flags específicas de arquitetura
     target_compile_options(retrocapture PRIVATE

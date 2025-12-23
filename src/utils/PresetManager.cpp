@@ -258,9 +258,9 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
             if (!data.shaderParameters.empty())
             {
                 json params;
-                for (const auto& [key, value] : data.shaderParameters)
+                for (const auto& param : data.shaderParameters)
                 {
-                    params[key] = value;
+                    params[param.first] = param.second;
                 }
                 presetJson["shader"]["parameters"] = params;
             }
@@ -325,9 +325,9 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         if (!data.v4l2Controls.empty())
         {
             json v4l2Json;
-            for (const auto& [key, value] : data.v4l2Controls)
+            for (const auto& control : data.v4l2Controls)
             {
-                v4l2Json[key] = value;
+                v4l2Json[control.first] = control.second;
             }
             presetJson["v4l2Controls"] = v4l2Json;
         }
@@ -410,9 +410,9 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (shader.contains("parameters"))
             {
                 data.shaderParameters.clear();
-                for (const auto& [key, value] : shader["parameters"].items())
+                for (const auto& item : shader["parameters"].items())
                 {
-                    data.shaderParameters[key] = value.get<float>();
+                    data.shaderParameters[item.key()] = item.value().get<float>();
                 }
             }
         }
@@ -531,9 +531,9 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
         if (presetJson.contains("v4l2Controls"))
         {
             data.v4l2Controls.clear();
-            for (const auto& [key, value] : presetJson["v4l2Controls"].items())
+            for (const auto& item : presetJson["v4l2Controls"].items())
             {
-                data.v4l2Controls[key] = value.get<int32_t>();
+                data.v4l2Controls[item.key()] = item.value().get<int32_t>();
             }
         }
 
@@ -605,15 +605,23 @@ std::vector<std::string> PresetManager::listPresets()
 
     try
     {
-        for (const auto& entry : fs::recursive_directory_iterator(m_presetsDir))
+        fs::recursive_directory_iterator iter(m_presetsDir);
+        fs::recursive_directory_iterator end;
+        for (; iter != end; ++iter)
         {
-            if (entry.is_regular_file() && entry.path().extension() == ".json")
+            // Usar funções helper do namespace fs_helper (compatível com todas as plataformas)
+            if (fs_helper::is_regular_file(iter))
             {
-                std::string filename = entry.path().filename().string();
-                // Remove .json extension
-                if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".json")
+                fs::path entryPath = fs_helper::get_path(iter);
+                std::string ext = fs_helper::get_extension_string(entryPath);
+                if (ext == ".json")
                 {
-                    presets.push_back(filename.substr(0, filename.size() - 5));
+                    std::string filename = fs_helper::get_filename_string(entryPath);
+                    // Remove .json extension
+                    if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".json")
+                    {
+                        presets.push_back(filename.substr(0, filename.size() - 5));
+                    }
                 }
             }
         }

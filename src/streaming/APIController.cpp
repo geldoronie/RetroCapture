@@ -1399,12 +1399,12 @@ bool APIController::handleGETPreset(int clientFd, const std::string& presetName)
         response << "\"path\": " << jsonString(data.shaderPath) << ",";
         response << "\"parameters\": {";
         bool firstParam = true;
-        for (const auto& [key, value] : data.shaderParameters)
+        for (const auto& param : data.shaderParameters)
         {
             if (!firstParam)
                 response << ",";
             firstParam = false;
-            response << jsonString(key) << ": " << jsonNumber(value);
+            response << jsonString(param.first) << ": " << jsonNumber(param.second);
         }
         response << "}},";
         response << "\"capture\": {";
