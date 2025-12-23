@@ -21,11 +21,10 @@ RUN git config --global --add safe.directory '*'
 # Instalar dependências do RetroCapture
 # Debian Trixie tem FFmpeg 6.1 (libavcodec61, libavformat61, etc.)
 # Incluir SDL2 e DirectFB para suporte a DirectFB/framebuffer em sistemas embarcados ARM
+# Nota: DirectFB pode não estar disponível em todas as versões do Debian, então é instalado separadamente
 RUN apt-get update && apt-get install -y \
     libglfw3-dev \
     libsdl2-dev \
-    libdirectfb-dev \
-    directfb \
     libssl-dev \
     libpng-dev \
     libavcodec-dev \
@@ -39,6 +38,10 @@ RUN apt-get update && apt-get install -y \
     libpulse-dev \
     libx11-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Instalar DirectFB opcionalmente (pode falhar se não estiver disponível no repositório)
+# O código tem fallback para framebuffer se DirectFB não estiver disponível
+RUN apt-get update && (apt-get install -y libdirectfb-dev directfb || true) && rm -rf /var/lib/apt/lists/*
 
 # Script de build
 COPY docker-build-linux-arm64.sh /usr/local/bin/

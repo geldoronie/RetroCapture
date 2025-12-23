@@ -134,6 +134,7 @@ int main(int argc, char *argv[])
     int v4l2Gamma = -1;
     int v4l2WhiteBalance = -1;
 
+#ifdef _WIN32
     // Controles DirectShow (-1 significa não configurar)
     int dsBrightness = -1;
     int dsContrast = -1;
@@ -144,6 +145,7 @@ int main(int argc, char *argv[])
     int dsSharpness = -1;
     int dsGamma = -1;
     int dsWhiteBalance = -1;
+#endif
 
     // Streaming options
     bool streamingEnabled = false;

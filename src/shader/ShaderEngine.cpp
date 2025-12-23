@@ -858,7 +858,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // IMPORTANTE: Verificar se temos passes válidos (program != 0), não apenas parameterInfo
         // Isso garante que se um shader falhou na compilação, tentamos recarregar
         bool hasValidPass = false;
-        bool hasParameterInfo = false;
 
         if (!m_passes.empty())
         {
@@ -867,10 +866,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 if (pass.program != 0)
                 {
                     hasValidPass = true;
-                }
-                if (!pass.parameterInfo.empty())
-                {
-                    hasParameterInfo = true;
                 }
             }
         }
@@ -938,10 +933,6 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             return inputTexture;
         }
-
-        // Resetar contador de erro se temos passes válidos
-        static int errorLogCounter = 0;
-        errorLogCounter = 0;
 
         // OTIMIZAÇÃO: Limitar resolução de processamento para ARM
         // Reduzir resolução de processamento para melhorar performance drasticamente
