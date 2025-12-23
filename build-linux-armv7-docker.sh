@@ -3,7 +3,28 @@ set -e
 
 # Build type: Release (default) or Debug
 BUILD_TYPE="${1:-Release}"
-FORCE_REBUILD="${2:-}"
+FORCE_REBUILD=""
+BUILD_WITH_SDL2_ARG=""
+
+# Processar argumentos
+for arg in "$@"; do
+    case "$arg" in
+        Release|Debug)
+            BUILD_TYPE="$arg"
+            ;;
+        --rebuild)
+            FORCE_REBUILD="--rebuild"
+            ;;
+        SDL2|sdl2|ON|on)
+            BUILD_WITH_SDL2_ARG="$arg"
+            ;;
+        *)
+            if [ "$arg" != "$BUILD_TYPE" ]; then
+                echo "⚠️  Argumento desconhecido: $arg (ignorado)"
+            fi
+            ;;
+    esac
+done
 
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
@@ -15,6 +36,13 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "  --rebuild - Força rebuild completo da imagem Docker (mais lento)"
     echo "  SDL2    - Compilar com SDL2 (suporte DirectFB/framebuffer)"
     exit 1
+fi
+
+# Verificar se SDL2 foi solicitado e mostrar mensagem inicial
+if [ "$BUILD_WITH_SDL2_ARG" = "SDL2" ] || [ "$BUILD_WITH_SDL2_ARG" = "sdl2" ] || \
+   [ "$BUILD_WITH_SDL2_ARG" = "ON" ] || [ "$BUILD_WITH_SDL2_ARG" = "on" ]; then
+    echo "🔧 Build com SDL2 habilitado (DirectFB/framebuffer)"
+    echo ""
 fi
 
 echo "🐳 RetroCapture - Build para Linux ARMv7 usando Docker"
@@ -128,7 +156,7 @@ echo "   ✅ Builder ativo: $CURRENT_BUILDER"
 
 echo ""
 echo "📦 Construindo imagem Docker para ARMv7..."
-if [ "$FORCE_REBUILD" = "--rebuild" ]; then
+if [ -n "$FORCE_REBUILD" ]; then
     echo "   🔄 Forçando rebuild completo (sem cache)..."
     echo "   Isso pode demorar vários minutos..."
     BUILD_FLAGS="--no-cache"
@@ -151,7 +179,7 @@ echo ""
 # Construir a imagem usando buildx com --load
 # Nota: --load requer QEMU configurado via binfmt_misc
 BUILD_ARGS="--platform linux/arm/v7 --file Dockerfile.linux-armv7 --tag $IMAGE_TAG --load"
-if [ "$FORCE_REBUILD" = "--rebuild" ]; then
+if [ -n "$FORCE_REBUILD" ]; then
     BUILD_ARGS="$BUILD_ARGS --no-cache"
 fi
 
@@ -174,9 +202,9 @@ echo "🔨 Compilando RetroCapture no container ARMv7..."
 echo ""
 
 # Executar o container usando a imagem construída
-# BUILD_WITH_SDL2 pode ser passado como terceiro argumento
-BUILD_WITH_SDL2="${3:-OFF}"
-if [ "$BUILD_WITH_SDL2" = "ON" ] || [ "$BUILD_WITH_SDL2" = "on" ]; then
+# BUILD_WITH_SDL2 já foi processado acima
+if [ "$BUILD_WITH_SDL2_ARG" = "SDL2" ] || [ "$BUILD_WITH_SDL2_ARG" = "sdl2" ] || \
+   [ "$BUILD_WITH_SDL2_ARG" = "ON" ] || [ "$BUILD_WITH_SDL2_ARG" = "on" ]; then
     echo "   🔧 Build com SDL2 habilitado (DirectFB/framebuffer)"
     BUILD_WITH_SDL2="ON"
 else
@@ -202,5 +230,11 @@ echo ""
 echo "✅ Concluído!"
 echo "📁 Executável: ./build-linux-armv7/bin/retrocapture"
 echo ""
-echo "ℹ️  Nota: Este executável foi compilado para ARMv7 (Raspberry Pi 3)"
-echo "   Para executar, transfira para sua Raspberry Pi 3"
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-armv7/bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-armv7/bin/retrocapture"
+else
+    echo "ℹ️  Nota: Este executável foi compilado para ARMv7 (Raspberry Pi 3)"
+    echo "   Para executar, transfira para sua Raspberry Pi 3"
+fi

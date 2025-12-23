@@ -22,6 +22,13 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Limpar CMakeCache.txt do diretório raiz se existir (pode ser de build anterior)
+if [ -f "CMakeCache.txt" ]; then
+    echo "🧹 Limpando CMakeCache.txt do diretório raiz..."
+    rm -f CMakeCache.txt
+    rm -rf CMakeFiles
+fi
+
 # Configurar Git ANTES de qualquer operação (resolve "dubious ownership" no Docker)
 # Isso deve ser feito antes de entrar no diretório de build
 echo "⚙️  Configurando Git..."
@@ -67,3 +74,9 @@ echo ""
 echo "✅ Build concluído!"
 echo ""
 echo "📁 Executável: $(pwd)/bin/retrocapture"
+echo ""
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./bin/retrocapture"
+fi

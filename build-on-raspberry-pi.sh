@@ -37,6 +37,13 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Limpar CMakeCache.txt do diretório raiz se existir (pode ser de build anterior)
+if [ -f "CMakeCache.txt" ]; then
+    echo "🧹 Limpando CMakeCache.txt do diretório raiz..."
+    rm -f CMakeCache.txt
+    rm -rf CMakeFiles
+fi
+
 # Instalar dependências de desenvolvimento se necessário
 echo "📦 Verificando dependências..."
 NEED_INSTALL=false
