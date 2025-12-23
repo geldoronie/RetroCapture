@@ -123,13 +123,14 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
 
     // Configurar callback de escrita com tamanho configurável
     // Diferentes versões do FFmpeg esperam assinaturas diferentes:
-    // - FFmpeg 6.1+ (ARM64): const uint8_t* - usar writeCallback diretamente
+    // - FFmpeg 6.1+ (ARM64/ARMv7): const uint8_t* - usar writeCallback diretamente
     // - FFmpeg 6.0- (x86_64): uint8_t* - usar writeCallbackNonConst
     const size_t bufferSize = avioBufferSize; // Tamanho já validado em initialize()
     
     // Usar callback apropriado baseado na arquitetura
-    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__)
-        // ARM64: FFmpeg espera const uint8_t* - passar diretamente
+    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__) || \
+        defined(__arm__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7__)
+        // ARM64/ARMv7: FFmpeg espera const uint8_t* - passar diretamente
         formatCtx->pb = avio_alloc_context(
             static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
             1, this, nullptr, writeCallback, nullptr);

@@ -1624,8 +1624,9 @@ bool HTTPTSStreamer::initializeMuxers()
     // Mas mantemos para compatibilidade. Se houver erro de compilação aqui, pode ser ignorado
     // pois esta função não é mais chamada (o streaming usa MediaMuxer via initializeEncoding())
     // Usar callback apropriado baseado na arquitetura
-    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__)
-        // ARM64: FFmpeg espera const uint8_t* - passar diretamente
+    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__) || \
+        defined(__arm__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7__)
+        // ARM64/ARMv7: FFmpeg espera const uint8_t* - passar diretamente
         formatCtx->pb = avio_alloc_context(
             avioBuffer, static_cast<int>(bufferSize),
             1, this, nullptr, ::writeCallback, nullptr);
