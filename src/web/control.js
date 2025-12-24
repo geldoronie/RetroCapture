@@ -1725,7 +1725,7 @@ async function createPreset() {
     
     try {
         // Note: thumbnail capture is handled server-side, so we just pass the flag
-        await api.createPreset(name, description);
+        await api.createPreset(name, description, captureThumbnail);
         
         const modal = bootstrap.Modal.getInstance(document.getElementById('createPresetModal'));
         modal.hide();

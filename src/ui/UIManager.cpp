@@ -1116,14 +1116,10 @@ void UIManager::renderStreamingPanel()
     int port = static_cast<int>(m_streamingPort);
     if (ImGui::InputInt("Porta", &port, 1, 100))
     {
+        // Validation is done in setStreamingPort/triggerStreamingPortChange
         if (port >= 1024 && port <= 65535)
         {
-            m_streamingPort = static_cast<uint16_t>(port);
-            if (m_onStreamingPortChanged)
-            {
-                m_onStreamingPortChanged(m_streamingPort);
-            }
-            saveConfig();
+            triggerStreamingPortChange(static_cast<uint16_t>(port));
         }
     }
 
@@ -1669,12 +1665,26 @@ void UIManager::setSourceType(SourceType sourceType)
     saveConfig();
 }
 
+void UIManager::setStreamingPort(uint16_t port)
+{
+    // Validate port range (1024-65535)
+    if (port >= 1024 && port <= 65535)
+    {
+        m_streamingPort = port;
+    }
+    else
+    {
+        LOG_WARN("Invalid streaming port: " + std::to_string(port) + " (must be between 1024 and 65535)");
+    }
+}
+
 void UIManager::triggerStreamingPortChange(uint16_t port)
 {
-    m_streamingPort = port;
+    // Validate and set port (validation is done in setStreamingPort)
+    setStreamingPort(port);
     if (m_onStreamingPortChanged)
     {
-        m_onStreamingPortChanged(port);
+        m_onStreamingPortChanged(m_streamingPort);
     }
     saveConfig();
 }

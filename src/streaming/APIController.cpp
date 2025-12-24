@@ -1450,9 +1450,10 @@ bool APIController::handleCreatePreset(int clientFd, const std::string& body)
         
         std::string name = json["name"].get<std::string>();
         std::string description = json.contains("description") ? json["description"].get<std::string>() : "";
+        bool captureThumbnail = json.contains("captureThumbnail") && json["captureThumbnail"].get<bool>();
         
-        // Create preset from current state
-        m_application->createPresetFromCurrentState(name, description);
+        // Create preset from current state (handles thumbnail capture internally)
+        m_application->createPresetFromCurrentState(name, description, captureThumbnail);
         
         std::ostringstream response;
         response << "{\"success\": true, \"name\": " << jsonString(name) << "}";

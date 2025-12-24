@@ -423,51 +423,9 @@ void UICapturePresets::createPresetFromCurrentState()
 
     std::string description(m_newPresetDescription);
 
-    // Capture thumbnail if requested (must be done before creating preset)
-    std::string thumbnailPath;
-    if (m_captureThumbnail && m_thumbnailGenerator)
-    {
-        std::string sanitizedName = PresetManager::sanitizeName(presetName);
-        fs::path thumbPath = fs::path(m_presetManager->getThumbnailsDirectory()) / (sanitizedName + ".png");
-        
-        if (m_thumbnailGenerator->captureAndSaveThumbnail(thumbPath.string(), 320, 240))
-        {
-            // Store thumbnail path as relative to thumbnails directory
-            fs::path thumbnailsDir = fs::path(m_presetManager->getThumbnailsDirectory());
-            try
-            {
-                fs::path relativePath = fs::relative(thumbPath, thumbnailsDir);
-                if (!relativePath.empty() && relativePath.string() != ".")
-                {
-                    thumbnailPath = relativePath.string();
-                }
-                else
-                {
-                    // If relative fails, use just the filename
-                    thumbnailPath = (sanitizedName + ".png");
-                }
-            }
-            catch (...)
-            {
-                // If relative conversion fails, use just the filename
-                thumbnailPath = (sanitizedName + ".png");
-            }
-        }
-    }
-
-    // Use Application's createPresetFromCurrentState method
-    m_application->createPresetFromCurrentState(presetName, description);
-    
-    // Update thumbnail path in preset if captured
-    if (!thumbnailPath.empty())
-    {
-        PresetManager::PresetData data;
-        if (m_presetManager->loadPreset(presetName, data))
-        {
-            data.thumbnailPath = thumbnailPath;
-            m_presetManager->savePreset(presetName, data);
-        }
-    }
+    // Use Application's createPresetFromCurrentState method (handles thumbnail capture internally)
+    bool captureThumbnail = m_captureThumbnail && m_thumbnailGenerator != nullptr;
+    m_application->createPresetFromCurrentState(presetName, description, captureThumbnail);
 }
 
 bool UICapturePresets::loadThumbnailTexture(const std::string& thumbnailPath, GLuint& texture, uint32_t& width, uint32_t& height)

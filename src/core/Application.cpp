@@ -672,16 +672,8 @@ bool Application::initUI()
                 m_shaderEngine->disableShader();
                 LOG_INFO("Shader disabled");
             } else {
-                // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
-                const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-                fs::path shaderBasePath;
-                if (envShaderPath && fs::exists(envShaderPath)) {
-                    shaderBasePath = fs::path(envShaderPath);
-                } else {
-                    shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-                }
-                fs::path fullPath = shaderBasePath / shaderPath;
-                if (m_shaderEngine->loadPreset(fullPath.string())) {
+                std::string fullPath = resolveShaderPath(shaderPath);
+                if (m_shaderEngine->loadPreset(fullPath)) {
                     LOG_INFO("Shader loaded via UI: " + shaderPath);
                 } else {
                     LOG_ERROR("Failed to load shader via UI: " + shaderPath);
@@ -978,19 +970,9 @@ bool Application::initUI()
     std::string loadedShader = m_ui->getCurrentShader();
     if (!loadedShader.empty() && m_shaderEngine)
     {
-        // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
-        const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        fs::path fullPath = shaderBasePath / loadedShader;
-        if (m_shaderEngine->loadPreset(fullPath.string()))
+        // Use centralized shader path resolution
+        std::string fullPath = resolveShaderPath(loadedShader);
+        if (m_shaderEngine->loadPreset(fullPath))
         {
             LOG_INFO("Shader loaded from configuration: " + loadedShader);
         }
@@ -3081,27 +3063,15 @@ void Application::applyPreset(const std::string& presetName)
     // 1. Apply shader
     if (!data.shaderPath.empty() && m_shaderEngine)
     {
-        // Resolve relative shader path to absolute
+        // Resolve relative shader path to absolute using centralized method
         std::string shaderPath = data.shaderPath;
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        
-        // If path is relative, make it absolute
         fs::path shaderPathObj(shaderPath);
         if (shaderPathObj.is_relative())
         {
-            fs::path absolutePath = shaderBasePath / shaderPathObj;
-            if (fs::exists(absolutePath))
+            std::string resolvedPath = resolveShaderPath(shaderPath);
+            if (fs::exists(resolvedPath))
             {
-                shaderPath = absolutePath.string();
+                shaderPath = resolvedPath;
             }
             else
             {
@@ -3291,7 +3261,7 @@ void Application::applyPreset(const std::string& presetName)
     LOG_INFO("Preset applied successfully: " + presetName);
 }
 
-void Application::createPresetFromCurrentState(const std::string& name, const std::string& description)
+void Application::createPresetFromCurrentState(const std::string& name, const std::string& description, bool captureThumbnail)
 {
     if (!m_initialized)
     {
@@ -3300,9 +3270,50 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     }
 
     PresetManager presetManager;
+    
+    // Capture thumbnail if requested (must be done before creating preset)
+    std::string thumbnailPath;
+    if (captureThumbnail)
+    {
+        ThumbnailGenerator thumbnailGenerator;
+        std::string sanitizedName = PresetManager::sanitizeName(name);
+        fs::path thumbPath = fs::path(presetManager.getThumbnailsDirectory()) / (sanitizedName + ".png");
+        
+        if (thumbnailGenerator.captureAndSaveThumbnail(thumbPath.string(), 320, 240))
+        {
+            // Store thumbnail path as relative to thumbnails directory
+            fs::path thumbnailsDir = fs::path(presetManager.getThumbnailsDirectory());
+            try
+            {
+                fs::path relativePath = fs::relative(thumbPath, thumbnailsDir);
+                if (!relativePath.empty() && relativePath.string() != ".")
+                {
+                    thumbnailPath = relativePath.string();
+                }
+                else
+                {
+                    // If relative fails, use just the filename
+                    thumbnailPath = (sanitizedName + ".png");
+                }
+            }
+            catch (...)
+            {
+                // If relative conversion fails, use just the filename
+                thumbnailPath = (sanitizedName + ".png");
+            }
+            
+            LOG_INFO("Thumbnail captured for preset: " + name);
+        }
+        else
+        {
+            LOG_WARN("Failed to capture thumbnail for preset: " + name);
+        }
+    }
+    
     PresetManager::PresetData data;
     data.name = name;
     data.description = description;
+    data.thumbnailPath = thumbnailPath; // Set thumbnail path if captured
 
     // Collect shader information
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
@@ -3310,19 +3321,9 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
         std::string shaderPath = m_shaderEngine->getPresetPath();
         
         // Convert shader path to relative path (relative to shaders/shaders_glsl)
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        
-        // Make path relative to shader base
+        fs::path shaderBasePath = getShaderBasePath();
         fs::path shaderPathObj(shaderPath);
+        
         if (shaderPathObj.is_absolute())
         {
             try
@@ -3459,4 +3460,30 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     {
         LOG_ERROR("Failed to create preset: " + name);
     }
+}
+
+fs::path Application::getShaderBasePath() const
+{
+    const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+    if (envShaderPath && fs::exists(envShaderPath))
+    {
+        return fs::path(envShaderPath);
+    }
+    else
+    {
+        return fs::current_path() / "shaders" / "shaders_glsl";
+    }
+}
+
+std::string Application::resolveShaderPath(const std::string& shaderPath) const
+{
+    if (shaderPath.empty())
+    {
+        return "";
+    }
+    
+    fs::path shaderBasePath = getShaderBasePath();
+    fs::path fullPath = shaderBasePath / shaderPath;
+    
+    return fullPath.string();
 }

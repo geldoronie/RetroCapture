@@ -223,7 +223,7 @@ public:
     void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
     void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
     bool isStreamingProcessing() const { return m_streamingProcessing; }
-    void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }

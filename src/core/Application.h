@@ -11,6 +11,7 @@
 #include <vector>
 #include <queue>
 #include "../renderer/glad_loader.h"
+#include "../utils/FilesystemCompat.h"
 
 class IVideoCapture;
 class IAudioCapture;
@@ -112,7 +113,11 @@ public:
     // Preset management
     void applyPreset(const std::string& presetName);
     void schedulePresetApplication(const std::string& presetName); // Thread-safe: schedules for main thread
-    void createPresetFromCurrentState(const std::string& name, const std::string& description);
+    void createPresetFromCurrentState(const std::string& name, const std::string& description, bool captureThumbnail = false);
+    
+    // Shader path resolution (centralized)
+    std::string resolveShaderPath(const std::string& shaderPath) const;
+    fs::path getShaderBasePath() const;
     
     // Thread-safe resolution change scheduling
     void scheduleResolutionChange(uint32_t width, uint32_t height); // Thread-safe: schedules for main thread
