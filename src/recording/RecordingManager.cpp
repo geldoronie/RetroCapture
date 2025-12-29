@@ -402,19 +402,19 @@ void RecordingManager::encodingThread()
     }
 }
 
-uint64_t RecordingManager::getCurrentDurationUs() const
+uint64_t RecordingManager::getCurrentDurationUs()
 {
     std::lock_guard<std::mutex> lock(m_statusMutex);
     return m_currentDurationUs;
 }
 
-uint64_t RecordingManager::getCurrentFileSize() const
+uint64_t RecordingManager::getCurrentFileSize()
 {
     std::lock_guard<std::mutex> lock(m_statusMutex);
     return m_currentFileSize;
 }
 
-std::string RecordingManager::getCurrentFilename() const
+std::string RecordingManager::getCurrentFilename()
 {
     std::lock_guard<std::mutex> lock(m_statusMutex);
     return m_currentFilename;

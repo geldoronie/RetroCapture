@@ -213,7 +213,7 @@ void FileRecorder::cleanup()
     m_startTimestampUs = 0;
 }
 
-uint64_t FileRecorder::getFileSize() const
+uint64_t FileRecorder::getFileSize()
 {
     std::lock_guard<std::mutex> lock(m_fileMutex);
     
@@ -224,18 +224,12 @@ uint64_t FileRecorder::getFileSize() const
 
     try
     {
-        // Get current position (file size)
-        std::streampos pos = m_outputFile.tellp();
-        if (pos == std::streampos(-1))
+        // Try to get file size from filesystem (more reliable)
+        if (fs::exists(m_outputPath))
         {
-            // Try to get file size from filesystem
-            if (fs::exists(m_outputPath))
-            {
-                return static_cast<uint64_t>(fs::file_size(m_outputPath));
-            }
-            return 0;
+            return static_cast<uint64_t>(fs::file_size(m_outputPath));
         }
-        return static_cast<uint64_t>(pos);
+        return 0;
     }
     catch (const std::exception& e)
     {

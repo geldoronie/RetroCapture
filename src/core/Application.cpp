@@ -3807,7 +3807,7 @@ bool Application::isRecording() const
     return false;
 }
 
-uint64_t Application::getRecordingDurationUs() const
+uint64_t Application::getRecordingDurationUs()
 {
     if (m_recordingManager)
     {
@@ -3816,7 +3816,7 @@ uint64_t Application::getRecordingDurationUs() const
     return 0;
 }
 
-uint64_t Application::getRecordingFileSize() const
+uint64_t Application::getRecordingFileSize()
 {
     if (m_recordingManager)
     {
@@ -3825,7 +3825,7 @@ uint64_t Application::getRecordingFileSize() const
     return 0;
 }
 
-std::string Application::getRecordingFilename() const
+std::string Application::getRecordingFilename()
 {
     if (m_recordingManager)
     {

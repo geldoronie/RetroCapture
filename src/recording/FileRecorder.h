@@ -46,7 +46,7 @@ public:
 
     // Get metadata
     std::string getOutputPath() const { return m_outputPath; }
-    uint64_t getFileSize() const;
+    uint64_t getFileSize();
     uint64_t getDurationUs() const { return m_durationUs; }
 
 private:

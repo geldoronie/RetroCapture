@@ -41,9 +41,9 @@ public:
     RecordingSettings getRecordingSettings() const { return m_settings; }
 
     // Status
-    uint64_t getCurrentDurationUs() const;
-    uint64_t getCurrentFileSize() const;
-    std::string getCurrentFilename() const;
+    uint64_t getCurrentDurationUs();
+    uint64_t getCurrentFileSize();
+    std::string getCurrentFilename();
 
     // Frame/Audio input (called by Application)
     void pushFrame(const uint8_t* data, uint32_t width, uint32_t height);

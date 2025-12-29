@@ -117,9 +117,9 @@ public:
     bool startRecording();
     void stopRecording();
     bool isRecording() const;
-    uint64_t getRecordingDurationUs() const;
-    uint64_t getRecordingFileSize() const;
-    std::string getRecordingFilename() const;
+    uint64_t getRecordingDurationUs();
+    uint64_t getRecordingFileSize();
+    std::string getRecordingFilename();
     std::vector<struct RecordingMetadata> listRecordings();
     bool deleteRecording(const std::string& recordingId);
     std::string getRecordingPath(const std::string& recordingId);

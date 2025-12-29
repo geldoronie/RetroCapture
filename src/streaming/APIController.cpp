@@ -1634,8 +1634,8 @@ bool APIController::handleGETRecordingStatus(int clientFd)
     std::ostringstream json;
     json << "{"
          << "\"isRecording\": " << (isRecording ? "true" : "false") << ", "
-         << "\"duration\": " << durationUs << ", "
-         << "\"fileSize\": " << fileSize << ", "
+         << "\"duration\": " << jsonNumber(durationUs) << ", "
+         << "\"fileSize\": " << jsonNumber(fileSize) << ", "
          << "\"currentFile\": " << jsonString(filename);
     
     if (isRecording)
