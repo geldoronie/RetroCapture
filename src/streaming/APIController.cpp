@@ -534,7 +534,9 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
-         << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex())
+         << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
+         << "\"outputWidth\": " << jsonNumber(m_uiManager->getOutputWidth()) << ", "
+         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -993,6 +995,14 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
             updated = true;
         }
 
+        if (json.contains("outputWidth") && json.contains("outputHeight"))
+        {
+            uint32_t outputWidth = json["outputWidth"].get<uint32_t>();
+            uint32_t outputHeight = json["outputHeight"].get<uint32_t>();
+            m_uiManager->setOutputResolution(outputWidth, outputHeight);
+            updated = true;
+        }
+
         std::ostringstream response;
         response << "{\"success\": " << jsonBool(updated) << "}";
         sendJSONResponse(clientFd, 200, response.str());
@@ -1389,12 +1399,12 @@ bool APIController::handleGETPreset(int clientFd, const std::string& presetName)
         response << "\"path\": " << jsonString(data.shaderPath) << ",";
         response << "\"parameters\": {";
         bool firstParam = true;
-        for (const auto& [key, value] : data.shaderParameters)
+        for (const auto& param : data.shaderParameters)
         {
             if (!firstParam)
                 response << ",";
             firstParam = false;
-            response << jsonString(key) << ": " << jsonNumber(value);
+            response << jsonString(param.first) << ": " << jsonNumber(param.second);
         }
         response << "}},";
         response << "\"capture\": {";
@@ -1440,9 +1450,10 @@ bool APIController::handleCreatePreset(int clientFd, const std::string& body)
         
         std::string name = json["name"].get<std::string>();
         std::string description = json.contains("description") ? json["description"].get<std::string>() : "";
+        bool captureThumbnail = json.contains("captureThumbnail") && json["captureThumbnail"].get<bool>();
         
-        // Create preset from current state
-        m_application->createPresetFromCurrentState(name, description);
+        // Create preset from current state (handles thumbnail capture internally)
+        m_application->createPresetFromCurrentState(name, description, captureThumbnail);
         
         std::ostringstream response;
         response << "{\"success\": true, \"name\": " << jsonString(name) << "}";

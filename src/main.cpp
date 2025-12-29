@@ -123,6 +123,7 @@ int main(int argc, char *argv[])
     float brightness = 1.0f;
     float contrast = 1.0f;
 
+#ifdef __linux__
     // Controles V4L2 (-1 significa não configurar)
     int v4l2Brightness = -1;
     int v4l2Contrast = -1;
@@ -133,7 +134,9 @@ int main(int argc, char *argv[])
     int v4l2Sharpness = -1;
     int v4l2Gamma = -1;
     int v4l2WhiteBalance = -1;
+#endif
 
+#ifdef _WIN32
     // Controles DirectShow (-1 significa não configurar)
     int dsBrightness = -1;
     int dsContrast = -1;
@@ -144,6 +147,7 @@ int main(int argc, char *argv[])
     int dsSharpness = -1;
     int dsGamma = -1;
     int dsWhiteBalance = -1;
+#endif
 
     // Streaming options
     bool streamingEnabled = false;

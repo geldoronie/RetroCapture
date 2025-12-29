@@ -11,8 +11,9 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     exit 1
 fi
 
-echo "🚀 Compilando RetroCapture para Linux..."
+echo "🚀 Compilando RetroCapture para Linux ARM64 (Raspberry Pi 4/5)..."
 echo "📦 Build type: $BUILD_TYPE"
+echo "🏗️  Arquitetura: ARM64 (aarch64)"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -21,13 +22,20 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Limpar CMakeCache.txt do diretório raiz se existir (pode ser de build anterior)
+if [ -f "CMakeCache.txt" ]; then
+    echo "🧹 Limpando CMakeCache.txt do diretório raiz..."
+    rm -f CMakeCache.txt
+    rm -rf CMakeFiles
+fi
+
 # Configurar Git ANTES de qualquer operação (resolve "dubious ownership" no Docker)
 # Isso deve ser feito antes de entrar no diretório de build
 echo "⚙️  Configurando Git..."
 git config --global --add safe.directory '*' || true
 
 # Criar diretório de build (limpar cache CMake se existir)
-BUILD_DIR="build-linux"
+BUILD_DIR="build-linux-arm64"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
@@ -46,8 +54,17 @@ if [ -d "_deps" ]; then
 fi
 
 echo "⚙️  Configurando CMake..."
-cmake .. \
--DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+# BUILD_WITH_SDL2 pode ser passado via variável de ambiente
+BUILD_WITH_SDL2="${BUILD_WITH_SDL2:-OFF}"
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    echo "   🔧 Compilando com SDL2 (suporte DirectFB/framebuffer)"
+    cmake .. \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DBUILD_WITH_SDL2=ON
+else
+    cmake .. \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+fi
 
 echo ""
 echo "🔨 Compilando..."
@@ -57,3 +74,9 @@ echo ""
 echo "✅ Build concluído!"
 echo ""
 echo "📁 Executável: $(pwd)/bin/retrocapture"
+echo ""
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./bin/retrocapture"
+fi

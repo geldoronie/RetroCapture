@@ -8,7 +8,12 @@
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
 #include "../renderer/OpenGLRenderer.h"
+#include "../renderer/PBOManager.h"
+#ifdef USE_SDL2
+#include "../output/WindowManagerSDL.h"
+#else
 #include "../output/WindowManager.h"
+#endif
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../ui/UICapturePresets.h"
@@ -19,8 +24,13 @@
 #include "../audio/AudioCaptureFactory.h"
 #include "../utils/PresetManager.h"
 #include "../utils/ThumbnailGenerator.h"
+#ifdef USE_SDL2
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_keyboard.h>
+#else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#endif
 #ifdef PLATFORM_LINUX
 #include <linux/videodev2.h>
 #endif
@@ -118,7 +128,11 @@ bool Application::init()
 
 bool Application::initWindow()
 {
+#ifdef USE_SDL2
+    m_window = std::make_unique<WindowManagerSDL>();
+#else
     m_window = std::make_unique<WindowManager>();
+#endif
 
     WindowConfig config;
     config.width = m_windowWidth;
@@ -187,7 +201,14 @@ bool Application::initRenderer()
     LOG_INFO("Creating FrameProcessor...");
     m_frameProcessor = std::make_unique<FrameProcessor>();
     m_frameProcessor->init(m_renderer.get());
+    // Aplicar configuração de texture filtering
+    m_frameProcessor->setTextureFilterLinear(m_textureFilterLinear);
     LOG_INFO("FrameProcessor created");
+
+    // Initialize PBO Manager for async pixel reading
+    LOG_INFO("Creating PBOManager...");
+    m_pboManager = std::make_unique<PBOManager>();
+    LOG_INFO("PBOManager created");
 
     // Initialize ShaderEngine
     LOG_INFO("Creating ShaderEngine...");
@@ -627,11 +648,11 @@ bool Application::initUI()
 
     m_ui = std::make_unique<UIManager>();
 
-    // Get GLFWwindow* from WindowManager
-    GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
+    // Get window pointer from WindowManager (GLFW or SDL2)
+    void *window = m_window->getWindow();
     if (!window)
     {
-        LOG_ERROR("Failed to get GLFW window for ImGui");
+        LOG_ERROR("Failed to get window pointer for ImGui");
         m_ui.reset();
         return false;
     }
@@ -651,16 +672,8 @@ bool Application::initUI()
                 m_shaderEngine->disableShader();
                 LOG_INFO("Shader disabled");
             } else {
-                // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
-                const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-                fs::path shaderBasePath;
-                if (envShaderPath && fs::exists(envShaderPath)) {
-                    shaderBasePath = fs::path(envShaderPath);
-                } else {
-                    shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-                }
-                fs::path fullPath = shaderBasePath / shaderPath;
-                if (m_shaderEngine->loadPreset(fullPath.string())) {
+                std::string fullPath = resolveShaderPath(shaderPath);
+                if (m_shaderEngine->loadPreset(fullPath)) {
                     LOG_INFO("Shader loaded via UI: " + shaderPath);
                 } else {
                     LOG_ERROR("Failed to load shader via UI: " + shaderPath);
@@ -705,6 +718,14 @@ bool Application::initUI()
                 m_shaderEngine->setViewport(currentWidth, currentHeight);
             }
         } });
+
+    m_ui->setOnOutputResolutionChanged([this](uint32_t width, uint32_t height)
+                                      {
+        LOG_INFO("Output resolution changed: " + std::to_string(width) + "x" + std::to_string(height) + 
+                 (width == 0 && height == 0 ? " (automatic)" : ""));
+        m_outputWidth = width;
+        m_outputHeight = height;
+    });
 
     m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
                                   {
@@ -949,19 +970,9 @@ bool Application::initUI()
     std::string loadedShader = m_ui->getCurrentShader();
     if (!loadedShader.empty() && m_shaderEngine)
     {
-        // Use RETROCAPTURE_SHADER_PATH if available (for AppImage)
-        const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        fs::path fullPath = shaderBasePath / loadedShader;
-        if (m_shaderEngine->loadPreset(fullPath.string()))
+        // Use centralized shader path resolution
+        std::string fullPath = resolveShaderPath(loadedShader);
+        if (m_shaderEngine->loadPreset(fullPath))
         {
             LOG_INFO("Shader loaded from configuration: " + loadedShader);
         }
@@ -1830,6 +1841,27 @@ void Application::handleKeyInput()
     if (!m_ui || !m_window)
         return;
 
+#ifdef USE_SDL2
+    // SDL2: Check F12 key via WindowManagerSDL
+    WindowManagerSDL *sdlWindow = static_cast<WindowManagerSDL *>(m_window.get());
+    if (sdlWindow)
+    {
+        static bool f12Pressed = false;
+        // SDLK_F12 está definido em SDL_keyboard.h (já incluído)
+        bool f12CurrentlyPressed = sdlWindow->isKeyPressed(SDLK_F12);
+        
+        if (f12CurrentlyPressed && !f12Pressed)
+        {
+            m_ui->toggle();
+            LOG_INFO("UI toggled: " + std::string(m_ui->isVisible() ? "VISIBLE" : "HIDDEN"));
+            f12Pressed = true;
+        }
+        else if (!f12CurrentlyPressed)
+        {
+            f12Pressed = false;
+        }
+    }
+#else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
     if (!window)
         return;
@@ -1849,6 +1881,7 @@ void Application::handleKeyInput()
     {
         f12Pressed = false;
     }
+#endif // USE_SDL2
 }
 
 bool Application::initStreaming()
@@ -1865,8 +1898,6 @@ bool Application::initStreaming()
         LOG_INFO("Stopping independent Web Portal before starting streaming...");
         stopWebPortal();
     }
-
-    // OPTION A: No more streaming thread to clean up
 
     // IMPORTANT: Clear existing streamManager BEFORE creating a new one
     // This prevents double free problems when there are configuration changes
@@ -2469,6 +2500,8 @@ void Application::run()
                 lastViewportHeight = currentHeight;
             }
 
+            // Usar resolução da janela (sem limitações hardcoded)
+            // O usuário pode controlar a resolução de saída via setOutputResolution()
             glViewport(0, 0, currentWidth, currentHeight);
 
             // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
@@ -2517,6 +2550,94 @@ void Application::run()
                 renderHeight = m_frameProcessor->getTextureHeight();
             }
 
+            // NOVO: Aplicar resolução de saída configurável (se definida)
+            // Isso permite que o usuário controle a resolução final antes de esticar para a janela
+            // 0 = automático (usar resolução do source)
+            GLuint finalTexture = textureToRender;
+            uint32_t finalRenderWidth = renderWidth;
+            uint32_t finalRenderHeight = renderHeight;
+            
+            if (m_outputWidth > 0 && m_outputHeight > 0)
+            {
+                // Resolução de saída configurada - fazer downscale/upscale da textura
+                // Criar framebuffer temporário para redimensionar
+                static GLuint outputFramebuffer = 0;
+                static GLuint outputTexture = 0;
+                static uint32_t lastOutputWidth = 0;
+                static uint32_t lastOutputHeight = 0;
+                
+                // Recriar framebuffer se necessário
+                if (outputFramebuffer == 0 || outputTexture == 0 || 
+                    lastOutputWidth != m_outputWidth || lastOutputHeight != m_outputHeight)
+                {
+                    // Limpar recursos antigos
+                    if (outputFramebuffer != 0)
+                    {
+                        glDeleteFramebuffers(1, &outputFramebuffer);
+                        outputFramebuffer = 0;
+                    }
+                    if (outputTexture != 0)
+                    {
+                        glDeleteTextures(1, &outputTexture);
+                        outputTexture = 0;
+                    }
+                    
+                    // Criar nova textura
+                    glGenTextures(1, &outputTexture);
+                    glBindTexture(GL_TEXTURE_2D, outputTexture);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_outputWidth, m_outputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    
+                    // Criar framebuffer
+                    glGenFramebuffers(1, &outputFramebuffer);
+                    glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
+                    
+                    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                    {
+                        LOG_ERROR("Failed to create output resolution framebuffer");
+                        glDeleteFramebuffers(1, &outputFramebuffer);
+                        glDeleteTextures(1, &outputTexture);
+                        outputFramebuffer = 0;
+                        outputTexture = 0;
+                    }
+                    else
+                    {
+                        lastOutputWidth = m_outputWidth;
+                        lastOutputHeight = m_outputHeight;
+                        LOG_INFO("Output resolution framebuffer created: " + 
+                                 std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                    }
+                    
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                }
+                
+                // Renderizar textura original para o framebuffer de saída (redimensionando)
+                if (outputFramebuffer != 0 && outputTexture != 0)
+                {
+                    glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
+                    glViewport(0, 0, m_outputWidth, m_outputHeight);
+                    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                    glClear(GL_COLOR_BUFFER_BIT);
+                    
+                    // Renderizar textura original redimensionada
+                    m_renderer->renderTexture(textureToRender, m_outputWidth, m_outputHeight,
+                                              false, isShaderTexture, 1.0f, 1.0f,
+                                              false, renderWidth, renderHeight);
+                    
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    
+                    // Usar textura redimensionada
+                    finalTexture = outputTexture;
+                    finalRenderWidth = m_outputWidth;
+                    finalRenderHeight = m_outputHeight;
+                }
+            }
+
             // IMPORTANT: Camera image comes inverted (Y inverted)
             // Shaders also render inverted, so both need Y inversion
             // flipY: true for both (camera and shader need to invert)
@@ -2530,10 +2651,10 @@ void Application::run()
             GLsizei viewportWidth = windowWidth;
             GLsizei viewportHeight = windowHeight;
 
-            if (m_maintainAspect && renderWidth > 0 && renderHeight > 0)
+            if (m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
             {
                 // Calculate texture and window aspect ratio (same as renderTexture)
-                float textureAspect = static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
+                float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
                 float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
 
                 if (textureAspect > windowAspect)
@@ -2550,10 +2671,19 @@ void Application::run()
                 }
             }
 
-            m_renderer->renderTexture(textureToRender, m_window->getWidth(), m_window->getHeight(),
+            // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            
+            // Renderizar textura final na janela (sempre preenche a janela completamente)
+            m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
-                                      m_maintainAspect, renderWidth, renderHeight);
+                                      m_maintainAspect, finalRenderWidth, finalRenderHeight);
+            
+            // IMPORTANTE: Aguardar que a renderização seja concluída
+            glFinish();
 
+            // IMPORTANTE: Para streaming, capturar diretamente da textura final ao invés do framebuffer
+            // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             if (m_streamManager && m_streamManager->isActive())
             {
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -2563,31 +2693,100 @@ void Application::run()
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    size_t readRowSizeUnpadded = static_cast<size_t>(captureWidth) * 3;
-                    size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
-                    size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(captureHeight);
-
-                    std::vector<uint8_t> frameDataWithPadding;
-                    frameDataWithPadding.resize(totalSizeWithPadding);
-
-                    glReadPixels(viewportX, viewportY, static_cast<GLsizei>(captureWidth), static_cast<GLsizei>(captureHeight),
-                                 GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
-
-                    std::vector<uint8_t> frameData;
-                    frameData.resize(captureDataSize);
-
-                    for (uint32_t row = 0; row < captureHeight; row++)
+                    // TEMPORÁRIO: Desabilitar PBO para debug - usar sempre método síncrono
+                    // TODO: Reabilitar PBO após confirmar que streaming funciona
+                    bool usePBO = false; // false = usar sempre método síncrono
+                    
+                    if (usePBO)
                     {
-                        uint32_t srcRow = captureHeight - 1 - row; // Vertical flip
-                        uint32_t dstRow = row;
-
-                        const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
-                        uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
-                        memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                        // Inicializar PBO se necessário
+                        if (m_pboManager && !m_pboManager->isInitialized())
+                        {
+                            if (!m_pboManager->init(captureWidth, captureHeight))
+                            {
+                                LOG_WARN("Failed to initialize PBO, falling back to synchronous glReadPixels");
+                            }
+                        }
+                        
+                        // Tentar usar PBO se disponível
+                        if (m_pboManager && m_pboManager->isInitialized())
+                        {
+                            // Primeiro, iniciar leitura assíncrona para ESTE frame
+                            // (isso será lido no próximo frame)
+                            m_pboManager->startAsyncRead(viewportX, viewportY, 
+                                                        static_cast<GLsizei>(captureWidth), 
+                                                        static_cast<GLsizei>(captureHeight));
+                            
+                            // Tentar obter dados do PBO anterior (frame anterior)
+                            // Isso não bloqueia se os dados ainda não estão prontos
+                            std::vector<uint8_t> frameData;
+                            frameData.resize(captureDataSize);
+                            
+                            if (m_pboManager->getReadData(frameData.data(), captureWidth, captureHeight))
+                            {
+                                // Dados disponíveis, enviar para streaming
+                                if (m_streamManager)
+                                {
+                                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                                }
+                            }
+                            // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
+                            // não enviamos este frame - isso é normal e esperado
+                        }
+                        else
+                        {
+                            // Fallback: usar glReadPixels síncrono se PBO não está disponível
+                            usePBO = false; // Forçar método síncrono
+                        }
                     }
-                    if (m_streamManager)
+                    
+                    // Usar método síncrono (fallback ou se PBO desabilitado)
+                    if (!usePBO)
                     {
-                        m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                        // SIMPLIFICADO: Capturar diretamente do framebuffer padrão (janela) após renderização
+                        // Garantir que estamos lendo do framebuffer correto
+                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                        glViewport(0, 0, windowWidth, windowHeight);
+                        
+                        // Usar dimensões do viewport renderizado
+                        uint32_t actualCaptureWidth = static_cast<uint32_t>(viewportWidth);
+                        uint32_t actualCaptureHeight = static_cast<uint32_t>(viewportHeight);
+                        size_t rgbDataSize = static_cast<size_t>(actualCaptureWidth) * static_cast<size_t>(actualCaptureHeight) * 3;
+                        
+                        // Preparar buffer com padding para glReadPixels
+                        size_t readRowSizeUnpadded = static_cast<size_t>(actualCaptureWidth) * 3;
+                        size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                        size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
+                        
+                        std::vector<uint8_t> frameDataWithPadding;
+                        frameDataWithPadding.resize(totalSizeWithPadding);
+                        
+                        // glReadPixels usa coordenadas bottom-left, converter viewportY
+                        GLint readY = static_cast<GLint>(windowHeight) - viewportY - static_cast<GLint>(actualCaptureHeight);
+                        
+                        // Capturar do framebuffer padrão como RGB
+                        glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
+                                     GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+                        
+                        // Converter dados com padding para dados sem padding e inverter verticalmente
+                        std::vector<uint8_t> frameData;
+                        frameData.resize(rgbDataSize);
+                        
+                        // glReadPixels retorna bottom-to-top, precisamos top-to-bottom
+                        for (uint32_t row = 0; row < actualCaptureHeight; row++)
+                        {
+                            uint32_t srcRow = actualCaptureHeight - 1 - row; // Inverter verticalmente
+                            uint32_t dstRow = row;
+                            
+                            const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
+                            uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
+                            memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                        }
+                        
+                        if (m_streamManager)
+                        {
+                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                        }
                     }
                 }
             }
@@ -2753,8 +2952,6 @@ void Application::shutdown()
 
     // SwsContext for resize was removed - now done in encoding
 
-    // OPTION A: No more streaming thread to clean up
-
     if (m_streamManager)
     {
         m_streamManager->cleanup();
@@ -2866,27 +3063,15 @@ void Application::applyPreset(const std::string& presetName)
     // 1. Apply shader
     if (!data.shaderPath.empty() && m_shaderEngine)
     {
-        // Resolve relative shader path to absolute
+        // Resolve relative shader path to absolute using centralized method
         std::string shaderPath = data.shaderPath;
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        
-        // If path is relative, make it absolute
         fs::path shaderPathObj(shaderPath);
         if (shaderPathObj.is_relative())
         {
-            fs::path absolutePath = shaderBasePath / shaderPathObj;
-            if (fs::exists(absolutePath))
+            std::string resolvedPath = resolveShaderPath(shaderPath);
+            if (fs::exists(resolvedPath))
             {
-                shaderPath = absolutePath.string();
+                shaderPath = resolvedPath;
             }
             else
             {
@@ -2898,9 +3083,9 @@ void Application::applyPreset(const std::string& presetName)
         if (m_shaderEngine->loadPreset(shaderPath))
         {
             // Apply shader parameters
-            for (const auto& [name, value] : data.shaderParameters)
+            for (const auto& param : data.shaderParameters)
             {
-                m_shaderEngine->setShaderParameter(name, value);
+                m_shaderEngine->setShaderParameter(param.first, param.second);
             }
             
             // Update UI with shader path (use the relative path from preset)
@@ -3047,9 +3232,9 @@ void Application::applyPreset(const std::string& presetName)
     // 5. Apply V4L2 controls
     if (m_capture && !data.v4l2Controls.empty())
     {
-        for (const auto& [name, value] : data.v4l2Controls)
+        for (const auto& control : data.v4l2Controls)
         {
-            m_capture->setControl(name, value);
+            m_capture->setControl(control.first, control.second);
         }
     }
 
@@ -3076,7 +3261,7 @@ void Application::applyPreset(const std::string& presetName)
     LOG_INFO("Preset applied successfully: " + presetName);
 }
 
-void Application::createPresetFromCurrentState(const std::string& name, const std::string& description)
+void Application::createPresetFromCurrentState(const std::string& name, const std::string& description, bool captureThumbnail)
 {
     if (!m_initialized)
     {
@@ -3085,9 +3270,50 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     }
 
     PresetManager presetManager;
+    
+    // Capture thumbnail if requested (must be done before creating preset)
+    std::string thumbnailPath;
+    if (captureThumbnail)
+    {
+        ThumbnailGenerator thumbnailGenerator;
+        std::string sanitizedName = PresetManager::sanitizeName(name);
+        fs::path thumbPath = fs::path(presetManager.getThumbnailsDirectory()) / (sanitizedName + ".png");
+        
+        if (thumbnailGenerator.captureAndSaveThumbnail(thumbPath.string(), 320, 240))
+        {
+            // Store thumbnail path as relative to thumbnails directory
+            fs::path thumbnailsDir = fs::path(presetManager.getThumbnailsDirectory());
+            try
+            {
+                fs::path relativePath = fs::relative(thumbPath, thumbnailsDir);
+                if (!relativePath.empty() && relativePath.string() != ".")
+                {
+                    thumbnailPath = relativePath.string();
+                }
+                else
+                {
+                    // If relative fails, use just the filename
+                    thumbnailPath = (sanitizedName + ".png");
+                }
+            }
+            catch (...)
+            {
+                // If relative conversion fails, use just the filename
+                thumbnailPath = (sanitizedName + ".png");
+            }
+            
+            LOG_INFO("Thumbnail captured for preset: " + name);
+        }
+        else
+        {
+            LOG_WARN("Failed to capture thumbnail for preset: " + name);
+        }
+    }
+    
     PresetManager::PresetData data;
     data.name = name;
     data.description = description;
+    data.thumbnailPath = thumbnailPath; // Set thumbnail path if captured
 
     // Collect shader information
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
@@ -3095,19 +3321,9 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
         std::string shaderPath = m_shaderEngine->getPresetPath();
         
         // Convert shader path to relative path (relative to shaders/shaders_glsl)
-        const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
-        fs::path shaderBasePath;
-        if (envShaderPath && fs::exists(envShaderPath))
-        {
-            shaderBasePath = fs::path(envShaderPath);
-        }
-        else
-        {
-            shaderBasePath = fs::current_path() / "shaders" / "shaders_glsl";
-        }
-        
-        // Make path relative to shader base
+        fs::path shaderBasePath = getShaderBasePath();
         fs::path shaderPathObj(shaderPath);
+        
         if (shaderPathObj.is_absolute())
         {
             try
@@ -3244,4 +3460,30 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     {
         LOG_ERROR("Failed to create preset: " + name);
     }
+}
+
+fs::path Application::getShaderBasePath() const
+{
+    const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+    if (envShaderPath && fs::exists(envShaderPath))
+    {
+        return fs::path(envShaderPath);
+    }
+    else
+    {
+        return fs::current_path() / "shaders" / "shaders_glsl";
+    }
+}
+
+std::string Application::resolveShaderPath(const std::string& shaderPath) const
+{
+    if (shaderPath.empty())
+    {
+        return "";
+    }
+    
+    fs::path shaderBasePath = getShaderBasePath();
+    fs::path fullPath = shaderBasePath / shaderPath;
+    
+    return fullPath.string();
 }

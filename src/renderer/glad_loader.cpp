@@ -1,8 +1,17 @@
 #include "glad_loader.h"
+#include <cstring>
+#include <string>
+#include "../utils/Logger.h"
+
+#ifdef USE_SDL2
+// SDL2: Apenas incluir SDL.h para SDL_GL_GetProcAddress
+// NÃO incluir SDL_opengl.h pois ele declara as funções OpenGL como funções normais
+// e conflita com nossas declarações de ponteiros de função
+#include <SDL2/SDL.h>
+#else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#include <cstring>
-#include "../utils/Logger.h"
+#endif
 
 // Definir os ponteiros de função
 GLuint (*glCreateShader)(GLenum) = nullptr;
@@ -25,6 +34,8 @@ void (*glGenBuffers)(GLsizei, GLuint *) = nullptr;
 void (*glDeleteBuffers)(GLsizei, const GLuint *) = nullptr;
 void (*glBindBuffer)(GLenum, GLuint) = nullptr;
 void (*glBufferData)(GLenum, GLsizeiptr, const void *, GLenum) = nullptr;
+void* (*glMapBuffer)(GLenum, GLenum) = nullptr;
+GLboolean (*glUnmapBuffer)(GLenum) = nullptr;
 void (*glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void *) = nullptr;
 void (*glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*glGenTextures)(GLsizei, GLuint *) = nullptr;
@@ -57,9 +68,25 @@ void (*glGetIntegerv)(GLenum, GLint*) = nullptr;
 
 bool loadOpenGLFunctions()
 {
-    // Carregar funções via glfwGetProcAddress (forma recomendada)
+#ifdef USE_SDL2
+    // SDL2: Verificar se SDL foi inicializado
+    if (SDL_WasInit(SDL_INIT_VIDEO) == 0)
+    {
+        LOG_ERROR("SDL2 não foi inicializado - não é possível carregar funções OpenGL");
+        return false;
+    }
+
+    // SDL2: Usar SDL_GL_GetProcAddress para carregar funções OpenGL
+#define LOAD_FUNC(name)                                                 \
+    name = reinterpret_cast<decltype(name)>(SDL_GL_GetProcAddress(#name)); \
+    if (!name)                                                          \
+    {                                                                   \
+        LOG_ERROR("Falha ao carregar função OpenGL: " #name);           \
+        return false;                                                   \
+    }
+#else
+    // GLFW: Carregar funções via glfwGetProcAddress (forma recomendada)
     // Isso funciona tanto com OpenGL quanto com OpenGL ES
-    // GLFW já está incluído no topo do arquivo
 
     // Verificar se o contexto OpenGL está ativo
     if (!glfwGetCurrentContext())
@@ -75,6 +102,7 @@ bool loadOpenGLFunctions()
         LOG_ERROR("Falha ao carregar função OpenGL: " #name);           \
         return false;                                                   \
     }
+#endif
 
     // Funções OpenGL 3.3+ Core (precisam ser carregadas dinamicamente)
     LOAD_FUNC(glCreateShader)
@@ -97,6 +125,8 @@ bool loadOpenGLFunctions()
     LOAD_FUNC(glDeleteBuffers)
     LOAD_FUNC(glBindBuffer)
     LOAD_FUNC(glBufferData)
+    LOAD_FUNC(glMapBuffer)
+    LOAD_FUNC(glUnmapBuffer)
     LOAD_FUNC(glVertexAttribPointer)
     LOAD_FUNC(glEnableVertexAttribArray)
 
@@ -147,4 +177,157 @@ bool loadOpenGLFunctions()
 
     LOG_INFO("Funções OpenGL carregadas com sucesso");
     return true;
+}
+
+// Funções para detectar versão OpenGL
+bool isOpenGLES()
+{
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (!version) return false;
+    
+    std::string versionStr(version);
+    
+    // Verificar se contém "OpenGL ES" explicitamente
+    if (versionStr.find("OpenGL ES") != std::string::npos) {
+        return true;
+    }
+    
+    // Verificar outras pistas de OpenGL ES:
+    // - Mesa em sistemas ARM geralmente usa OpenGL ES quando via framebuffer
+    // - Verificar se contém "Mesa" e estamos em ARM
+    #if defined(__arm__) || defined(__aarch64__) || defined(ARCH_ARM) || defined(ARCH_ARM32) || defined(ARCH_ARM64)
+        if (versionStr.find("Mesa") != std::string::npos) {
+            // Em ARM com Mesa via framebuffer, geralmente é OpenGL ES
+            // Verificar se não é explicitamente Desktop OpenGL
+            // Se não contém "OpenGL" ou contém "OpenGL ES", é ES
+            if (versionStr.find("OpenGL") == std::string::npos) {
+                // String não menciona "OpenGL" explicitamente - provavelmente ES
+                return true;
+            }
+            // Se menciona "OpenGL" mas não "OpenGL ES", verificar contexto
+            // Em ARM com Mesa via framebuffer, mesmo contexto 2.1 pode ser ES
+            const char* video_driver = std::getenv("SDL_VIDEODRIVER");
+            if (video_driver && (std::string(video_driver) == "fbcon" || std::string(video_driver) == "directfb")) {
+                // Usando framebuffer ou DirectFB em ARM - provavelmente ES
+                return true;
+            }
+        }
+        
+        // Em ARM, se estamos usando framebuffer/DirectFB, assumir ES mesmo que
+        // a string de versão não diga explicitamente
+        const char* video_driver = std::getenv("SDL_VIDEODRIVER");
+        if (video_driver && (std::string(video_driver) == "fbcon" || std::string(video_driver) == "directfb")) {
+            // Verificar se não é explicitamente Desktop
+            if (versionStr.find("OpenGL") == std::string::npos || 
+                versionStr.find("OpenGL ES") != std::string::npos) {
+                return true;
+            }
+        }
+    #endif
+    
+    return false;
+}
+
+int getOpenGLMajorVersion()
+{
+    // glGetString está disponível estaticamente desde OpenGL 1.0
+    
+    // Tentar usar GL_MAJOR_VERSION primeiro (OpenGL 3.0+)
+    if (glGetIntegerv) {
+        GLint major = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        if (major > 0) {
+            return static_cast<int>(major);
+        }
+    }
+    
+    // Fallback: fazer parsing de GL_VERSION (funciona em todas as versões)
+    const char* versionStr = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (!versionStr) return 0;
+    
+    std::string version(versionStr);
+    // Formato típico: "X.Y" ou "X.Y.Z" ou "OpenGL ES X.Y"
+    size_t firstDot = version.find('.');
+    if (firstDot != std::string::npos) {
+        // Encontrar início do número
+        size_t start = 0;
+        // Pular "OpenGL ES " se presente
+        size_t esPos = version.find("OpenGL ES");
+        if (esPos != std::string::npos) {
+            start = version.find(' ', esPos);
+            if (start != std::string::npos) start++;
+            else start = esPos + 9; // "OpenGL ES" = 9 chars
+        }
+        
+        try {
+            int major = std::stoi(version.substr(start, firstDot - start));
+            return major;
+        } catch (...) {
+            // Ignorar erro de conversão
+        }
+    }
+    
+    return 0; // Não foi possível detectar
+}
+
+std::string getGLSLVersionString()
+{
+    // Tentar detectar versão OpenGL
+    // glGetString está disponível estaticamente desde OpenGL 1.0
+    bool isES = isOpenGLES();
+    int major = getOpenGLMajorVersion();
+    
+    // Se não conseguimos detectar, usar fallback seguro
+    if (major == 0) {
+        LOG_WARN("Não foi possível detectar versão OpenGL, usando GLSL 1.20 como fallback");
+        return "#version 120";
+    }
+    
+    LOG_INFO("OpenGL versão detectada: " + std::to_string(major) + (isES ? " (ES)" : " (Desktop)"));
+    
+    if (isES) {
+        // OpenGL ES
+        if (major >= 3) {
+            return "#version 300 es";
+        } else {
+            return "#version 100"; // OpenGL ES 2.0
+        }
+    } else {
+        // OpenGL Desktop
+        if (major >= 3) {
+            // OpenGL 3.0+ - tentar detectar versão GLSL disponível
+            {
+                const char* glslVersion = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+                if (glslVersion) {
+                    std::string glslStr(glslVersion);
+                    // Extrair versão major (formato: "X.Y" ou "X.Y.Z")
+                    size_t dotPos = glslStr.find('.');
+                    if (dotPos != std::string::npos) {
+                        try {
+                            int glslMajor = std::stoi(glslStr.substr(0, dotPos));
+                            if (glslMajor >= 3) {
+                                return "#version 330";
+                            } else if (glslMajor >= 1) {
+                                return "#version 130";
+                            }
+                        } catch (...) {
+                            // Ignorar erro de conversão
+                        }
+                    }
+                }
+            }
+            // Fallback baseado na versão OpenGL
+            if (major >= 3) {
+                return "#version 330";
+            }
+            return "#version 130";
+        } else if (major == 2) {
+            // OpenGL 2.1
+            LOG_INFO("Usando GLSL 1.20 para OpenGL 2.1");
+            return "#version 120";
+        } else {
+            // OpenGL 1.x
+            return "#version 110";
+        }
+    }
 }

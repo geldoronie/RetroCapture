@@ -3,6 +3,10 @@
 #include "glad_loader.h"
 #include <cstdint>
 #include <vector>
+#include <memory>
+
+// Forward declaration
+class OpenGLStateTracker;
 
 class OpenGLRenderer {
 public:
@@ -36,6 +40,9 @@ private:
     GLuint m_VAO = 0;
     GLuint m_VBO = 0;
     GLuint m_EBO = 0;
+    
+    // State tracker para evitar mudanças desnecessárias de estado OpenGL
+    std::unique_ptr<OpenGLStateTracker> m_stateTracker;
     
     bool createShaderProgram();
     void createQuad();

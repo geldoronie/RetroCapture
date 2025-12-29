@@ -171,8 +171,8 @@ class RetroCaptureAPI {
         return await this.request('POST', '/streaming/control', { action });
     }
 
-    async createPreset(name, description) {
-        return await this.request('POST', '/presets', { name, description });
+    async createPreset(name, description, captureThumbnail = true) {
+        return await this.request('POST', '/presets', { name, description, captureThumbnail });
     }
 
     async applyPreset(name) {

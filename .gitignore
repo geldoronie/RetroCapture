@@ -41,11 +41,15 @@ linuxdeploy-x86_64.AppImage
 appimagetool-x86_64.AppImage
 linuxdeploy-plugins/
 
-# Linux
-build-linux/
+# Linux ARM
+build-linux-armv7/
+build-linux-arm64/
 
-# Windows
-build-windows/
+# Linux x86_64
+build-linux-x86_64/
+
+# Windows x86_64
+build-windows-x86_64/
 *.exe
 *.dll
 *.lib

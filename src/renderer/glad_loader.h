@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 
 // Header simples para carregar funções OpenGL via GLFW
 // GLFW pode carregar as funções OpenGL diretamente
@@ -51,6 +52,8 @@ extern void (*glGenBuffers)(GLsizei n, GLuint* buffers);
 extern void (*glDeleteBuffers)(GLsizei n, const GLuint* buffers);
 extern void (*glBindBuffer)(GLenum target, GLuint buffer);
 extern void (*glBufferData)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+extern void* (*glMapBuffer)(GLenum target, GLenum access);
+extern GLboolean (*glUnmapBuffer)(GLenum target);
 extern void (*glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*glEnableVertexAttribArray)(GLuint index);
 extern void (*glGenTextures)(GLsizei n, GLuint* textures);
@@ -91,6 +94,8 @@ void glDisable(GLenum cap);
 void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+void glFinish(void);
+void glFlush(void);
 #ifdef __cplusplus
 }
 #endif
@@ -144,6 +149,11 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_NEAREST_MIPMAP_NEAREST 0x2700
 #define GL_SRGB8_ALPHA8 0x8C43
 #define GL_CULL_FACE 0x0B44
+
+// PBO (Pixel Buffer Object) constants
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_STREAM_READ 0x88E1
+#define GL_READ_ONLY 0x88B8
 #define GL_DEPTH_TEST 0x0B71
 #define GL_ACTIVE_UNIFORMS 0x8B86
 #define GL_FLOAT_VEC2 0x8B50
@@ -153,8 +163,29 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_FALSE 0
 #define GL_VIEWPORT 0x0BA2
 #define GL_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_VERSION 0x1F02
+#define GL_SHADING_LANGUAGE_VERSION 0x8B8C
+#define GL_MAJOR_VERSION 0x821B
+
+// Funções básicas do OpenGL que podem estar disponíveis estaticamente
+// glGetString está disponível desde OpenGL 1.0, então pode ser linkado estaticamente
+#ifdef __cplusplus
+extern "C" {
+#endif
+const GLubyte* glGetString(GLenum name);
+#ifdef __cplusplus
+}
+#endif
 
 bool loadOpenGLFunctions();
+
+// Funções para detectar versão OpenGL e GLSL
+// Retorna a versão GLSL apropriada baseada na versão OpenGL disponível
+std::string getGLSLVersionString();
+// Retorna true se OpenGL ES está sendo usado
+bool isOpenGLES();
+// Retorna a versão major do OpenGL (3, 2, etc.)
+int getOpenGLMajorVersion();
 
 #ifdef __cplusplus
 }

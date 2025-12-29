@@ -993,6 +993,8 @@ async function loadImageSettings() {
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
+        const outputWidthEl = document.getElementById('outputWidth');
+        const outputHeightEl = document.getElementById('outputHeight');
         
         if (brightnessEl) {
             brightnessEl.value = settings.brightness || 0;
@@ -1021,9 +1023,46 @@ async function loadImageSettings() {
         if (monitorIndexEl) {
             monitorIndexEl.value = settings.monitorIndex !== undefined ? settings.monitorIndex : -1;
         }
+        
+        if (outputWidthEl) {
+            outputWidthEl.value = settings.outputWidth !== undefined ? settings.outputWidth : 0;
+            const outputWidthValueEl = document.getElementById('outputWidthValue');
+            if (outputWidthValueEl) {
+                outputWidthValueEl.textContent = (settings.outputWidth || 0) + (settings.outputWidth === 0 ? ' (auto)' : '');
+            }
+        }
+        
+        if (outputHeightEl) {
+            outputHeightEl.value = settings.outputHeight !== undefined ? settings.outputHeight : 0;
+            const outputHeightValueEl = document.getElementById('outputHeightValue');
+            if (outputHeightValueEl) {
+                outputHeightValueEl.textContent = (settings.outputHeight || 0) + (settings.outputHeight === 0 ? ' (auto)' : '');
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar configurações de imagem:', error);
     }
+}
+
+/**
+ * Define resolução de saída (helper function)
+ */
+function setOutputResolution(width, height) {
+    const outputWidthEl = document.getElementById('outputWidth');
+    const outputHeightEl = document.getElementById('outputHeight');
+    if (outputWidthEl) outputWidthEl.value = width;
+    if (outputHeightEl) outputHeightEl.value = height;
+    
+    const outputWidthValueEl = document.getElementById('outputWidthValue');
+    const outputHeightValueEl = document.getElementById('outputHeightValue');
+    if (outputWidthValueEl) {
+        outputWidthValueEl.textContent = width + (width === 0 ? ' (auto)' : '');
+    }
+    if (outputHeightValueEl) {
+        outputHeightValueEl.textContent = height + (height === 0 ? ' (auto)' : '');
+    }
+    
+    updateImageSettings();
 }
 
 /**
@@ -1036,13 +1075,17 @@ async function updateImageSettings() {
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
+        const outputWidthEl = document.getElementById('outputWidth');
+        const outputHeightEl = document.getElementById('outputHeight');
         
         const settings = {
             brightness: brightnessEl ? parseFloat(brightnessEl.value) : 0,
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
-            monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1
+            monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1,
+            outputWidth: outputWidthEl ? parseInt(outputWidthEl.value) : 0,
+            outputHeight: outputHeightEl ? parseInt(outputHeightEl.value) : 0
         };
         
         await api.setImageSettings(settings);
@@ -1443,6 +1486,27 @@ document.addEventListener('DOMContentLoaded', function() {
         monitorIndex.addEventListener('change', updateImageSettingsDebounced);
     }
     
+    const outputWidth = document.getElementById('outputWidth');
+    const outputHeight = document.getElementById('outputHeight');
+    if (outputWidth) {
+        outputWidth.addEventListener('input', function() {
+            const outputWidthValueEl = document.getElementById('outputWidthValue');
+            if (outputWidthValueEl) {
+                outputWidthValueEl.textContent = outputWidth.value + (outputWidth.value == 0 ? ' (auto)' : '');
+            }
+            updateImageSettingsDebounced();
+        });
+    }
+    if (outputHeight) {
+        outputHeight.addEventListener('input', function() {
+            const outputHeightValueEl = document.getElementById('outputHeightValue');
+            if (outputHeightValueEl) {
+                outputHeightValueEl.textContent = outputHeight.value + (outputHeight.value == 0 ? ' (auto)' : '');
+            }
+            updateImageSettingsDebounced();
+        });
+    }
+    
     // Streaming settings - atualização em tempo real com debounce
     let streamingSettingsTimeout = null;
     function updateStreamingSettingsDebounced() {
@@ -1661,7 +1725,7 @@ async function createPreset() {
     
     try {
         // Note: thumbnail capture is handled server-side, so we just pass the flag
-        await api.createPreset(name, description);
+        await api.createPreset(name, description, captureThumbnail);
         
         const modal = bootstrap.Modal.getInstance(document.getElementById('createPresetModal'));
         modal.hide();

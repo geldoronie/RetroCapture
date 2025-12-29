@@ -10,6 +10,9 @@
 #include "../capture/IVideoCapture.h"
 
 struct GLFWwindow;
+#ifdef USE_SDL2
+struct SDL_Window;
+#endif
 
 class IVideoCapture;
 class ShaderEngine;
@@ -25,7 +28,7 @@ public:
     UIManager();
     ~UIManager();
 
-    bool init(GLFWwindow *window);
+    bool init(void *window); // Accepts GLFWwindow* or SDL_Window*
     void shutdown();
 
     void beginFrame();
@@ -102,6 +105,20 @@ public:
         }
     }
     void setOnMonitorIndexChanged(std::function<void(int)> callback) { m_onMonitorIndexChanged = callback; }
+    
+    // Resolução de saída configurável
+    void setOutputResolution(uint32_t width, uint32_t height)
+    {
+        m_outputWidth = width;
+        m_outputHeight = height;
+        if (m_onOutputResolutionChanged)
+        {
+            m_onOutputResolutionChanged(width, height);
+        }
+    }
+    void setOnOutputResolutionChanged(std::function<void(uint32_t, uint32_t)> callback) { m_onOutputResolutionChanged = callback; }
+    uint32_t getOutputWidth() const { return m_outputWidth; }
+    uint32_t getOutputHeight() const { return m_outputHeight; }
 
     // Controles V4L2
     void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
@@ -206,7 +223,7 @@ public:
     void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
     void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
     bool isStreamingProcessing() const { return m_streamingProcessing; }
-    void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
@@ -489,7 +506,7 @@ private:
     std::unique_ptr<class UIConfiguration> m_configWindow;
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
-    GLFWwindow *m_window = nullptr;
+    void *m_window = nullptr; // GLFWwindow* or SDL_Window*
 
     // Shader selection
     std::vector<std::string> m_shaderList;
@@ -513,6 +530,11 @@ private:
     int m_monitorIndex = -1; // -1 = usar monitor primário
     std::function<void(bool)> m_onFullscreenChanged;
     std::function<void(int)> m_onMonitorIndexChanged;
+    
+    // Resolução de saída configurável (0 = automático, usar source)
+    uint32_t m_outputWidth = 0;
+    uint32_t m_outputHeight = 0;
+    std::function<void(uint32_t, uint32_t)> m_onOutputResolutionChanged;
 
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;

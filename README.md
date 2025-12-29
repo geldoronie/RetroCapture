@@ -158,7 +158,7 @@ A forma mais simples para distribuir:
 
 ```bash
 # Gerar instalador Windows completo
-./build-windows-installer.sh
+./tools/build-windows-installer.sh
 ```
 
 Isso irá:
@@ -180,7 +180,7 @@ docker-compose run --rm build-windows
 docker-compose run --rm build-windows
 ```
 
-O executável estará em `./build-windows/bin/retrocapture.exe`
+O executável estará em `./build-windows-x86_64/bin/retrocapture.exe`
 
 ## 📖 Usage
 
@@ -367,7 +367,7 @@ The web portal provides a complete remote control interface accessible from any 
 ## 📦 Building AppImage
 
 ```bash
-./build-appimage.sh
+./tools/build-linux-appimage-x86_64.sh
 ```
 
 This will generate a `RetroCapture-<version>-x86_64.AppImage` file that can be run on any compatible Linux distribution without installation.

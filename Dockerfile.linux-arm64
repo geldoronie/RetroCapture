@@ -1,0 +1,52 @@
+# Dockerfile para build do RetroCapture no Linux ARM64 (Raspberry Pi 4/5, etc.)
+# Usa arm64v8/debian:trixie para compatibilidade com FFmpeg 6.1 (Debian Trixie)
+# Isso garante que o binário compilado seja compatível com sistemas Debian Trixie ARM64
+FROM arm64v8/debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar dependências do sistema e ferramentas de build
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configurar Git para evitar erro de "dubious ownership" no Docker
+# Isso permite que o Git trabalhe com repositórios clonados pelo FetchContent
+RUN git config --global --add safe.directory '*'
+
+# Instalar dependências do RetroCapture
+# Debian Trixie tem FFmpeg 6.1 (libavcodec61, libavformat61, etc.)
+# Incluir SDL2 e DirectFB para suporte a DirectFB/framebuffer em sistemas embarcados ARM
+# Nota: DirectFB pode não estar disponível em todas as versões do Debian, então é instalado separadamente
+RUN apt-get update && apt-get install -y \
+    libglfw3-dev \
+    libsdl2-dev \
+    libssl-dev \
+    libpng-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
+    libavdevice-dev \
+    libv4l-dev \
+    libpulse-dev \
+    libx11-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar DirectFB opcionalmente (pode falhar se não estiver disponível no repositório)
+# O código tem fallback para framebuffer se DirectFB não estiver disponível
+RUN apt-get update && (apt-get install -y libdirectfb-dev directfb || true) && rm -rf /var/lib/apt/lists/*
+
+# Script de build
+COPY tools/docker-build-linux-arm64.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build-linux-arm64.sh
+
+WORKDIR /work
+
+ENTRYPOINT ["/usr/local/bin/docker-build-linux-arm64.sh"]

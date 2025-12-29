@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Opções de build
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_DOCS "Build documentation" OFF)
+option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -31,58 +32,107 @@ else()
     message(FATAL_ERROR "Plataforma não suportada")
 endif()
 
+# Detectar arquitetura do processador
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    set(ARCH_ARM ON)
+
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        set(ARCH_ARM64 ON)
+        message(STATUS "Arquitetura: ARM64 (aarch64)")
+    else()
+        set(ARCH_ARM32 ON)
+        message(STATUS "Arquitetura: ARM32 (armv7/armhf)")
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "amd64")
+    set(ARCH_X86_64 ON)
+    message(STATUS "Arquitetura: x86_64 (amd64)")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i386" OR CMAKE_SYSTEM_PROCESSOR MATCHES "i686")
+    set(ARCH_X86 ON)
+    message(STATUS "Arquitetura: x86 (i386/i686)")
+else()
+    message(STATUS "Arquitetura: ${CMAKE_SYSTEM_PROCESSOR} (genérica)")
+endif()
+
 # Encontrar dependências
 # OpenGL
 find_package(OpenGL REQUIRED)
 
-# GLFW
-find_package(glfw3 QUIET)
+# GLFW (apenas se não estiver usando SDL2)
+if(NOT BUILD_WITH_SDL2)
+    find_package(glfw3 QUIET)
 
-if(NOT glfw3_FOUND)
-    if(PLATFORM_LINUX)
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(GLFW REQUIRED glfw3)
-        set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
-        set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
-    elseif(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
-        # Cross-compiling: primeiro tentar find_package (funciona com MXE)
-        # MXE fornece arquivos CMake config para glfw3
-        find_package(glfw3 QUIET)
+    if(NOT glfw3_FOUND)
+        if(PLATFORM_LINUX)
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(GLFW REQUIRED glfw3)
+            set(GLFW_LIBRARIES ${GLFW_LIBRARIES})
+            set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIRS})
+        elseif(PLATFORM_WINDOWS AND CMAKE_CROSSCOMPILING)
+            # Cross-compiling: primeiro tentar find_package (funciona com MXE)
+            # MXE fornece arquivos CMake config para glfw3
+            find_package(glfw3 QUIET)
 
-        if(NOT glfw3_FOUND)
-            # Fallback: tentar encontrar GLFW manualmente no sistema MinGW-w64
-            find_path(GLFW_INCLUDE_DIR GLFW/glfw3.h
-                PATHS
-                /usr/x86_64-w64-mingw32/include
-                /usr/x86_64-w64-mingw32/include/GLFW
-                ${CMAKE_FIND_ROOT_PATH}/include
-                ${CMAKE_FIND_ROOT_PATH}/include/GLFW
-            )
-            find_library(GLFW_LIBRARY
-                NAMES glfw3 glfw
-                PATHS
-                /usr/x86_64-w64-mingw32/lib
-                ${CMAKE_FIND_ROOT_PATH}/lib
-            )
+            if(NOT glfw3_FOUND)
+                # Fallback: tentar encontrar GLFW manualmente no sistema MinGW-w64
+                find_path(GLFW_INCLUDE_DIR GLFW/glfw3.h
+                    PATHS
+                    /usr/x86_64-w64-mingw32/include
+                    /usr/x86_64-w64-mingw32/include/GLFW
+                    ${CMAKE_FIND_ROOT_PATH}/include
+                    ${CMAKE_FIND_ROOT_PATH}/include/GLFW
+                )
+                find_library(GLFW_LIBRARY
+                    NAMES glfw3 glfw
+                    PATHS
+                    /usr/x86_64-w64-mingw32/lib
+                    ${CMAKE_FIND_ROOT_PATH}/lib
+                )
 
-            if(GLFW_INCLUDE_DIR AND GLFW_LIBRARY)
-                set(glfw3_FOUND TRUE)
-                set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIR})
-                set(GLFW_LIBRARIES ${GLFW_LIBRARY})
+                if(GLFW_INCLUDE_DIR AND GLFW_LIBRARY)
+                    set(glfw3_FOUND TRUE)
+                    set(GLFW_INCLUDE_DIRS ${GLFW_INCLUDE_DIR})
+                    set(GLFW_LIBRARIES ${GLFW_LIBRARY})
+                endif()
             endif()
-        endif()
 
-        if(NOT glfw3_FOUND)
-            message(WARNING "GLFW não encontrado para MinGW-w64.")
-            message(WARNING "Opções:")
-            message(WARNING "  1. Compilar GLFW manualmente para MinGW-w64")
-            message(WARNING "  2. Usar MXE para compilar dependências: ./setup-mxe.sh")
-            message(WARNING "  3. Usar bibliotecas pré-compiladas")
-            message(FATAL_ERROR "GLFW é necessário. Veja docs/STATUS_WINDOWS_PORT.md e docs/WINDOWS_CROSS_COMPILE.md para mais informações.")
+            if(NOT glfw3_FOUND)
+                message(WARNING "GLFW não encontrado para MinGW-w64.")
+                message(WARNING "Opções:")
+                message(WARNING "  1. Compilar GLFW manualmente para MinGW-w64")
+                message(WARNING "  2. Usar MXE para compilar dependências: ./setup-mxe.sh")
+                message(WARNING "  3. Usar bibliotecas pré-compiladas")
+                message(FATAL_ERROR "GLFW é necessário. Veja docs/STATUS_WINDOWS_PORT.md e docs/WINDOWS_CROSS_COMPILE.md para mais informações.")
+            endif()
+        else()
+            message(FATAL_ERROR "GLFW não encontrado. Instale glfw3.")
         endif()
-    else()
-        message(FATAL_ERROR "GLFW não encontrado. Instale glfw3.")
+    endif() # NOT BUILD_WITH_SDL2
+endif() # NOT BUILD_WITH_SDL2
+
+# SDL2 (opcional, para DirectFB/framebuffer support)
+if(BUILD_WITH_SDL2)
+    find_package(SDL2 QUIET)
+
+    if(NOT SDL2_FOUND)
+        if(PLATFORM_LINUX)
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(SDL2 REQUIRED sdl2)
+            set(SDL2_LIBRARIES ${SDL2_LIBRARIES})
+            set(SDL2_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
+        else()
+            message(FATAL_ERROR "SDL2 não encontrado. Instale libsdl2-dev.")
+        endif()
     endif()
+
+    message(STATUS "SDL2 encontrado - usando SDL2 em vez de GLFW")
+    message(STATUS "  SDL2 version: ${SDL2_VERSION}")
+    message(STATUS "  SDL2 libraries: ${SDL2_LIBRARIES}")
+    message(STATUS "  SDL2 include dirs: ${SDL2_INCLUDE_DIRS}")
+
+    # Definir macro para código
+    add_compile_definitions(USE_SDL2)
+else()
+    message(STATUS "Usando GLFW (padrão). Use -DBUILD_WITH_SDL2=ON para usar SDL2.")
 endif()
 
 # PNG (via libpng)
@@ -195,11 +245,11 @@ endif()
 # Verificar se FetchContent está disponível (CMake 3.11+)
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
     include(FetchContent)
-    
+
     # Configurar FetchContent para não tentar fazer update (evita erro de "dubious ownership")
     # Se o diretório já existe, usamos ele; caso contrário, baixamos do zero
     set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
-    
+
     FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -263,28 +313,53 @@ else()
 endif()
 
 # Criar target para ImGui
-add_library(imgui STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_demo.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-)
+if(BUILD_WITH_SDL2)
+    # ImGui com backend SDL2
+    add_library(imgui STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    )
+else()
+    # ImGui com backend GLFW (padrão)
+    add_library(imgui STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    )
+endif()
 
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
 
-target_link_libraries(imgui PUBLIC
-    glfw
-    OpenGL::GL
-)
+if(BUILD_WITH_SDL2)
+    target_include_directories(imgui PUBLIC ${SDL2_INCLUDE_DIRS})
+endif()
 
-if(PLATFORM_LINUX)
-    target_link_libraries(imgui PUBLIC X11 dl)
+if(BUILD_WITH_SDL2)
+    target_link_libraries(imgui PUBLIC
+        ${SDL2_LIBRARIES}
+        OpenGL::GL
+    )
+else()
+    target_link_libraries(imgui PUBLIC
+        glfw
+        OpenGL::GL
+    )
+
+    if(PLATFORM_LINUX)
+        target_link_libraries(imgui PUBLIC X11 dl)
+    endif()
 endif()
 
 # Fontes
@@ -300,6 +375,15 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+
+    # Excluir WindowManager baseado na opção BUILD_WITH_SDL2
+    if(BUILD_WITH_SDL2)
+        # Usar SDL2: excluir WindowManager.cpp (GLFW)
+        list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManager\\.cpp$")
+    else()
+        # Usar GLFW: excluir WindowManagerSDL.cpp
+        list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
+    endif()
 elseif(PLATFORM_WINDOWS)
     # No Windows, excluir implementações Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
@@ -328,12 +412,12 @@ if(PLATFORM_WINDOWS)
         add_custom_command(
             OUTPUT "${CMAKE_BINARY_DIR}/logo.ico"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/assets/logo.ico"
-                "${CMAKE_BINARY_DIR}/logo.ico"
+            "${CMAKE_SOURCE_DIR}/assets/logo.ico"
+            "${CMAKE_BINARY_DIR}/logo.ico"
             DEPENDS "${CMAKE_SOURCE_DIR}/assets/logo.ico"
             COMMENT "Copying logo.ico for resource compilation"
         )
-        
+
         add_executable(retrocapture
             ${SOURCES}
             ${CMAKE_SOURCE_DIR}/src/retrocapture.rc
@@ -377,10 +461,17 @@ set(LINK_LIBS
     imgui
 )
 
-if(glfw3_FOUND)
-    list(APPEND LINK_LIBS glfw)
+if(BUILD_WITH_SDL2)
+    # Link SDL2 quando usando SDL2
+    list(APPEND LINK_LIBS ${SDL2_LIBRARIES})
+    target_include_directories(retrocapture PRIVATE ${SDL2_INCLUDE_DIRS})
 else()
-    list(APPEND LINK_LIBS ${GLFW_LIBRARIES})
+    # Link GLFW quando usando GLFW (padrão)
+    if(glfw3_FOUND)
+        list(APPEND LINK_LIBS glfw)
+    else()
+        list(APPEND LINK_LIBS ${GLFW_LIBRARIES})
+    endif()
 endif()
 
 list(APPEND LINK_LIBS
@@ -396,20 +487,24 @@ list(APPEND LINK_LIBS
 if(PLATFORM_LINUX)
     # X11 is needed for WM_CLASS setting in WindowManager
     find_package(X11 QUIET)
+
     if(X11_FOUND)
         list(APPEND LINK_LIBS ${X11_LIBRARIES})
         list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIR})
     else()
         # Fallback: try to find X11 via pkg-config
         find_package(PkgConfig QUIET)
+
         if(PkgConfig_FOUND)
             pkg_check_modules(X11 QUIET x11)
+
             if(X11_FOUND)
                 list(APPEND LINK_LIBS ${X11_LIBRARIES})
                 list(APPEND INCLUDE_DIRS ${X11_INCLUDE_DIRS})
             endif()
         endif()
     endif()
+
     list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
@@ -483,7 +578,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
@@ -494,13 +589,56 @@ target_compile_options(retrocapture PRIVATE
     -Wpedantic
 )
 
-# Flags específicas por build type
-target_compile_options(retrocapture PRIVATE
-    $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
-    $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
-    $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
-)
+# Flags específicas por build type e arquitetura
+if(ARCH_X86_64)
+    # x86_64: usar -march=native para otimização máxima
+    target_compile_options(retrocapture PRIVATE
+        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+    )
+elseif(ARCH_ARM32)
+    # ARM32 (armv7/armhf): usar flags específicas para ARM
+    # -march=armv7-a: suporta ARMv7-A (Raspberry Pi 3)
+    # -mfpu=neon-vfpv4: usa NEON e VFPv4 (disponível no Pi 3)
+    # -mfloat-abi=hard: usa hardware floating point
+    target_compile_options(retrocapture PRIVATE
+        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard>
+        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard>
+    )
+elseif(ARCH_ARM64)
+    # ARM64 (aarch64): usar flags específicas para ARM64
+    # Reduzir otimização de -O3 para -O2 para evitar segmentation fault do GCC
+    # Aplicar também ao ImGui para evitar segmentation fault durante compilação
+    target_compile_options(retrocapture PRIVATE
+        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+        $<$<CONFIG:Release>:-O2 -DNDEBUG -march=native>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+    )
+
+    # Aplicar mesmas flags ao ImGui para evitar segmentation fault no GCC 14+
+    # Usar -O1 ou -O0 para evitar bugs do compilador durante compilação
+    if(TARGET imgui)
+        target_compile_options(imgui PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls>
+            $<$<CONFIG:Release>:-O1 -DNDEBUG -fno-optimize-sibling-calls>
+            $<$<CONFIG:RelWithDebInfo>:-O1 -g -DNDEBUG -fno-optimize-sibling-calls>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -fno-optimize-sibling-calls>
+        )
+    endif()
+else()
+    # Arquitetura genérica: sem flags específicas de arquitetura
+    target_compile_options(retrocapture PRIVATE
+        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+    )
+endif()
 
 # Linker flags específicas por build type
 # target_link_options não disponível no CMake 3.10 (requer 3.13+)

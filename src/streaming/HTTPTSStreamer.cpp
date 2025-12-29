@@ -28,11 +28,20 @@ extern "C"
 }
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
-// FFmpeg antigo espera uint8_t* (não const), mas não modifica o buffer
-static int writeCallback(void *opaque, uint8_t *buf, int buf_size)
+// Diferentes versões do FFmpeg têm assinaturas diferentes:
+// - FFmpeg 6.1+ (ARM64): const uint8_t*
+// - FFmpeg 6.0- (x86_64): uint8_t*
+// Usamos const uint8_t* (mais seguro) e fazemos cast quando necessário
+static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
     HTTPTSStreamer *streamer = static_cast<HTTPTSStreamer *>(opaque);
-    return streamer->writeToClients(const_cast<const uint8_t *>(buf), buf_size);
+    return streamer->writeToClients(buf, buf_size);
+}
+
+// Wrapper para compatibilidade com versões antigas do FFmpeg que esperam uint8_t* (não const)
+static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
+{
+    return writeCallback(opaque, const_cast<const uint8_t*>(buf), buf_size);
 }
 
 HTTPTSStreamer::HTTPTSStreamer()
@@ -1614,9 +1623,19 @@ bool HTTPTSStreamer::initializeMuxers()
     // NOTA: Esta função initializeMuxers() é código legado - o streaming agora usa MediaMuxer
     // Mas mantemos para compatibilidade. Se houver erro de compilação aqui, pode ser ignorado
     // pois esta função não é mais chamada (o streaming usa MediaMuxer via initializeEncoding())
-    formatCtx->pb = avio_alloc_context(
-        avioBuffer, static_cast<int>(bufferSize),
-        1, this, nullptr, ::writeCallback, nullptr);
+    // Usar callback apropriado baseado na arquitetura
+    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__) || \
+        defined(__arm__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7__)
+        // ARM64/ARMv7: FFmpeg espera const uint8_t* - passar diretamente
+        formatCtx->pb = avio_alloc_context(
+            avioBuffer, static_cast<int>(bufferSize),
+            1, this, nullptr, ::writeCallback, nullptr);
+    #else
+        // x86_64: FFmpeg espera uint8_t* (não const) - usar wrapper
+        formatCtx->pb = avio_alloc_context(
+            avioBuffer, static_cast<int>(bufferSize),
+            1, this, nullptr, ::writeCallbackNonConst, nullptr);
+    #endif
     if (!formatCtx->pb)
     {
         LOG_ERROR("Failed to allocate AVIO context");
