@@ -100,6 +100,10 @@ private:
     bool handleGETCaptureFPS(int clientFd);
     bool handleGETImageSettings(int clientFd);
     bool handleGETStreamingSettings(int clientFd);
+    bool handleGETRecordingSettings(int clientFd);
+    bool handleGETRecordingStatus(int clientFd);
+    bool handleGETRecordings(int clientFd);
+    bool handleGETRecording(int clientFd, const std::string& recordingId);
     bool handleGETV4L2Devices(int clientFd);
     bool handleGETV4L2Controls(int clientFd);
     bool handleGETStatus(int clientFd);
@@ -121,6 +125,9 @@ private:
     bool handleSetImageSettings(int clientFd, const std::string &body);
     bool handleSetStreamingSettings(int clientFd, const std::string &body);
     bool handleSetStreamingControl(int clientFd, const std::string &body);
+    bool handleSetRecordingSettings(int clientFd, const std::string &body);
+    bool handleSetRecordingControl(int clientFd, const std::string &body);
+    bool handleDeleteRecording(int clientFd, const std::string &recordingId);
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
     bool handleSetDSDevice(int clientFd, const std::string &body);

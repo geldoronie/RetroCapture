@@ -22,6 +22,9 @@
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../recording/RecordingManager.h"
+#include "../recording/RecordingSettings.h"
+#include "../recording/RecordingMetadata.h"
 #include "../utils/PresetManager.h"
 #include "../utils/ThumbnailGenerator.h"
 #ifdef USE_SDL2
@@ -862,6 +865,29 @@ bool Application::initUI()
     m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();
     m_streamingAVIOBufferSize = m_ui->getStreamingAVIOBufferSize();
 
+    // Load recording settings from UI
+    if (m_recordingManager)
+    {
+        RecordingSettings settings;
+        settings.width = m_ui->getRecordingWidth();
+        settings.height = m_ui->getRecordingHeight();
+        settings.fps = m_ui->getRecordingFps();
+        settings.bitrate = m_ui->getRecordingBitrate();
+        settings.codec = m_ui->getRecordingVideoCodec();
+        settings.preset = (settings.codec == "h264") ? m_ui->getRecordingH264Preset() : m_ui->getRecordingH265Preset();
+        settings.h265Profile = m_ui->getRecordingH265Profile();
+        settings.h265Level = m_ui->getRecordingH265Level();
+        settings.vp8Speed = m_ui->getRecordingVP8Speed();
+        settings.vp9Speed = m_ui->getRecordingVP9Speed();
+        settings.audioBitrate = m_ui->getRecordingAudioBitrate();
+        settings.audioCodec = m_ui->getRecordingAudioCodec();
+        settings.container = m_ui->getRecordingContainer();
+        settings.outputPath = m_ui->getRecordingOutputPath();
+        settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
+        settings.includeAudio = m_ui->getRecordingIncludeAudio();
+        m_recordingManager->setRecordingSettings(settings);
+    }
+
     // Load buffer settings (already loaded by UIManager from config file)
 
     // Load Web Portal settings
@@ -1265,6 +1291,176 @@ bool Application::initUI()
                 m_streamingMaxBufferTimeSeconds,
                 m_streamingAVIOBufferSize);
         } });
+
+    // Recording callbacks
+    m_ui->setOnRecordingStartStop([this](bool start)
+                                  {
+        if (start) {
+            if (m_recordingManager) {
+                RecordingSettings settings;
+                settings.width = m_ui->getRecordingWidth();
+                settings.height = m_ui->getRecordingHeight();
+                settings.fps = m_ui->getRecordingFps();
+                settings.bitrate = m_ui->getRecordingBitrate();
+                settings.codec = m_ui->getRecordingVideoCodec();
+                settings.preset = (settings.codec == "h264") ? m_ui->getRecordingH264Preset() : m_ui->getRecordingH265Preset();
+                settings.h265Profile = m_ui->getRecordingH265Profile();
+                settings.h265Level = m_ui->getRecordingH265Level();
+                settings.vp8Speed = m_ui->getRecordingVP8Speed();
+                settings.vp9Speed = m_ui->getRecordingVP9Speed();
+                settings.audioBitrate = m_ui->getRecordingAudioBitrate();
+                settings.audioCodec = m_ui->getRecordingAudioCodec();
+                settings.container = m_ui->getRecordingContainer();
+                settings.outputPath = m_ui->getRecordingOutputPath();
+                settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
+                settings.includeAudio = m_ui->getRecordingIncludeAudio();
+                
+                if (m_recordingManager->startRecording(settings)) {
+                    m_ui->setRecordingActive(true);
+                }
+            }
+        } else {
+            if (m_recordingManager) {
+                m_recordingManager->stopRecording();
+                m_ui->setRecordingActive(false);
+            }
+        } });
+
+    m_ui->setOnRecordingWidthChanged([this](uint32_t width) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.width = width;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingHeightChanged([this](uint32_t height) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.height = height;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingFpsChanged([this](uint32_t fps) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.fps = fps;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingBitrateChanged([this](uint32_t bitrate) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.bitrate = bitrate;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingAudioBitrateChanged([this](uint32_t bitrate) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.audioBitrate = bitrate;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingVideoCodecChanged([this](const std::string& codec) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.codec = codec;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingAudioCodecChanged([this](const std::string& codec) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.audioCodec = codec;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingH264PresetChanged([this](const std::string& preset) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.preset = preset;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingH265PresetChanged([this](const std::string& preset) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.preset = preset;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingH265ProfileChanged([this](const std::string& profile) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.h265Profile = profile;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingH265LevelChanged([this](const std::string& level) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.h265Level = level;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingVP8SpeedChanged([this](int speed) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.vp8Speed = speed;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingVP9SpeedChanged([this](int speed) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.vp9Speed = speed;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingContainerChanged([this](const std::string& container) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.container = container;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingOutputPathChanged([this](const std::string& path) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.outputPath = path;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingFilenameTemplateChanged([this](const std::string& template_) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.filenameTemplate = template_;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
+
+    m_ui->setOnRecordingIncludeAudioChanged([this](bool include) { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.includeAudio = include;
+            m_recordingManager->setRecordingSettings(settings);
+        }
+    });
 
     // Web Portal callbacks
     m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
@@ -2193,6 +2389,14 @@ bool Application::initAudioCapture()
         return false;
     }
 
+    // Initialize RecordingManager
+    m_recordingManager = std::make_unique<RecordingManager>();
+    if (!m_recordingManager->initialize())
+    {
+        LOG_ERROR("Failed to initialize RecordingManager");
+        return false;
+    }
+
     // Open default audio device (will create virtual sink)
     if (!m_audioCapture->open())
     {
@@ -2212,6 +2416,12 @@ bool Application::initAudioCapture()
 
     LOG_INFO("Audio capture started: " + std::to_string(m_audioCapture->getSampleRate()) +
              "Hz, " + std::to_string(m_audioCapture->getChannels()) + " channels");
+
+    // Set audio format for RecordingManager
+    if (m_recordingManager)
+    {
+        m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+    }
 
     return true;
 }
@@ -2316,7 +2526,15 @@ void Application::run()
 
                     if (samplesRead > 0)
                     {
-                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                        // Share audio data between streaming and recording
+                        if (m_streamManager && m_streamManager->isActive())
+                        {
+                            m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                        }
+                        if (m_recordingManager && m_recordingManager->isRecording())
+                        {
+                            m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        }
 
                         // If we read less than expected, no more samples available
                         if (samplesRead < samplesPerVideoFrame)
@@ -2344,9 +2562,41 @@ void Application::run()
                     }
                 }
             }
+            else if (m_recordingManager && m_recordingManager->isRecording())
+            {
+                // Recording is active (but streaming is not), process audio for recording
+                uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+                uint32_t videoFps = m_captureFps;
+                size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                                  ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                                  : 512;
+                samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+                
+                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+                const int maxIterations = 10;
+                int iteration = 0;
+                
+                while (iteration < maxIterations)
+                {
+                    size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+                    if (samplesRead > 0)
+                    {
+                        m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        if (samplesRead < samplesPerVideoFrame)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        break;
+                    }
+                    iteration++;
+                }
+            }
             else
             {
-                // Streaming is not active, but we still need to process mainloop
+                // Neither streaming nor recording active, but we still need to process mainloop
                 // to prevent PulseAudio from freezing system audio
                 // Read and discard samples to keep buffer clean
                 const size_t maxSamples = 4096; // Temporary buffer
@@ -2783,9 +3033,14 @@ void Application::run()
                             memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                         }
                         
-                        if (m_streamManager)
+                        // Share frame data between streaming and recording
+                        if (m_streamManager && m_streamManager->isActive())
                         {
                             m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                        }
+                        if (m_recordingManager && m_recordingManager->isRecording())
+                        {
+                            m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                         }
                     }
                 }
@@ -2846,6 +3101,19 @@ void Application::run()
                     // If no StreamManager, can start
                     m_ui->setCanStartStreaming(true);
                     m_ui->setStreamingCooldownRemainingMs(0);
+                }
+            }
+
+            // Update recording status
+            if (m_ui && m_recordingManager)
+            {
+                bool isRecording = m_recordingManager->isRecording();
+                m_ui->setRecordingActive(isRecording);
+                if (isRecording)
+                {
+                    m_ui->setRecordingDurationUs(m_recordingManager->getCurrentDurationUs());
+                    m_ui->setRecordingFileSize(m_recordingManager->getCurrentFileSize());
+                    m_ui->setRecordingFilename(m_recordingManager->getCurrentFilename());
                 }
             }
 
@@ -2912,6 +3180,12 @@ void Application::shutdown()
     if (m_frameProcessor)
     {
         m_frameProcessor->deleteTexture();
+    }
+
+    if (m_recordingManager)
+    {
+        m_recordingManager->shutdown();
+        m_recordingManager.reset();
     }
 
     if (m_capture)
@@ -3486,4 +3760,103 @@ std::string Application::resolveShaderPath(const std::string& shaderPath) const
     fs::path fullPath = shaderBasePath / shaderPath;
     
     return fullPath.string();
+}
+
+// Recording methods
+void Application::setRecordingSettings(const RecordingSettings& settings)
+{
+    if (m_recordingManager)
+    {
+        m_recordingManager->setRecordingSettings(settings);
+    }
+}
+
+RecordingSettings Application::getRecordingSettings() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getRecordingSettings();
+    }
+    return RecordingSettings();
+}
+
+bool Application::startRecording()
+{
+    if (m_recordingManager)
+    {
+        RecordingSettings settings = m_recordingManager->getRecordingSettings();
+        return m_recordingManager->startRecording(settings);
+    }
+    return false;
+}
+
+void Application::stopRecording()
+{
+    if (m_recordingManager)
+    {
+        m_recordingManager->stopRecording();
+    }
+}
+
+bool Application::isRecording() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->isRecording();
+    }
+    return false;
+}
+
+uint64_t Application::getRecordingDurationUs() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentDurationUs();
+    }
+    return 0;
+}
+
+uint64_t Application::getRecordingFileSize() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentFileSize();
+    }
+    return 0;
+}
+
+std::string Application::getRecordingFilename() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentFilename();
+    }
+    return "";
+}
+
+std::vector<RecordingMetadata> Application::listRecordings()
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->listRecordings();
+    }
+    return std::vector<RecordingMetadata>();
+}
+
+bool Application::deleteRecording(const std::string& recordingId)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->deleteRecording(recordingId);
+    }
+    return false;
+}
+
+std::string Application::getRecordingPath(const std::string& recordingId)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getRecordingPath(recordingId);
+    }
+    return "";
 }

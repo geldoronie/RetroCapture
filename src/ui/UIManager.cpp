@@ -2791,3 +2791,182 @@ void UIManager::renderWebPortalPanel()
     std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
     ImGui::Text("URL: %s", portalUrl.c_str());
 }
+
+// Recording trigger methods
+void UIManager::triggerRecordingWidthChange(uint32_t width)
+{
+    m_recordingWidth = width;
+    if (m_onRecordingWidthChanged)
+    {
+        m_onRecordingWidthChanged(width);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingHeightChange(uint32_t height)
+{
+    m_recordingHeight = height;
+    if (m_onRecordingHeightChanged)
+    {
+        m_onRecordingHeightChanged(height);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingFpsChange(uint32_t fps)
+{
+    m_recordingFps = fps;
+    if (m_onRecordingFpsChanged)
+    {
+        m_onRecordingFpsChanged(fps);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
+{
+    m_recordingBitrate = bitrate;
+    if (m_onRecordingBitrateChanged)
+    {
+        m_onRecordingBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
+{
+    m_recordingAudioBitrate = bitrate;
+    if (m_onRecordingAudioBitrateChanged)
+    {
+        m_onRecordingAudioBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
+{
+    m_recordingVideoCodec = codec;
+    if (m_onRecordingVideoCodecChanged)
+    {
+        m_onRecordingVideoCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
+{
+    m_recordingAudioCodec = codec;
+    if (m_onRecordingAudioCodecChanged)
+    {
+        m_onRecordingAudioCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
+{
+    m_recordingH264Preset = preset;
+    if (m_onRecordingH264PresetChanged)
+    {
+        m_onRecordingH264PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
+{
+    m_recordingH265Preset = preset;
+    if (m_onRecordingH265PresetChanged)
+    {
+        m_onRecordingH265PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
+{
+    m_recordingH265Profile = profile;
+    if (m_onRecordingH265ProfileChanged)
+    {
+        m_onRecordingH265ProfileChanged(profile);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265LevelChange(const std::string& level)
+{
+    m_recordingH265Level = level;
+    if (m_onRecordingH265LevelChanged)
+    {
+        m_onRecordingH265LevelChanged(level);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVP8SpeedChange(int speed)
+{
+    m_recordingVP8Speed = speed;
+    if (m_onRecordingVP8SpeedChanged)
+    {
+        m_onRecordingVP8SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVP9SpeedChange(int speed)
+{
+    m_recordingVP9Speed = speed;
+    if (m_onRecordingVP9SpeedChanged)
+    {
+        m_onRecordingVP9SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingContainerChange(const std::string& container)
+{
+    m_recordingContainer = container;
+    if (m_onRecordingContainerChanged)
+    {
+        m_onRecordingContainerChanged(container);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingOutputPathChange(const std::string& path)
+{
+    m_recordingOutputPath = path;
+    if (m_onRecordingOutputPathChanged)
+    {
+        m_onRecordingOutputPathChanged(path);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingFilenameTemplateChange(const std::string& template_)
+{
+    m_recordingFilenameTemplate = template_;
+    if (m_onRecordingFilenameTemplateChanged)
+    {
+        m_onRecordingFilenameTemplateChanged(template_);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingIncludeAudioChange(bool include)
+{
+    m_recordingIncludeAudio = include;
+    if (m_onRecordingIncludeAudioChanged)
+    {
+        m_onRecordingIncludeAudioChanged(include);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingStartStop(bool start)
+{
+    if (m_onRecordingStartStop)
+    {
+        m_onRecordingStartStop(start);
+    }
+}

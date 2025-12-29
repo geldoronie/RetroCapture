@@ -124,6 +124,22 @@ class RetroCaptureAPI {
         return await this.request('GET', `/presets/${encodeURIComponent(name)}`);
     }
 
+    async getRecordingSettings() {
+        return await this.request('GET', '/recording/settings');
+    }
+
+    async getRecordingStatus() {
+        return await this.request('GET', '/recording/status');
+    }
+
+    async getRecordings() {
+        return await this.request('GET', '/recordings');
+    }
+
+    async getRecording(id) {
+        return await this.request('GET', `/recordings/${encodeURIComponent(id)}`);
+    }
+
     // ========== SET Methods ==========
 
     async setSource(sourceType) {
@@ -181,6 +197,19 @@ class RetroCaptureAPI {
 
     async deletePreset(name) {
         return await this.request('DELETE', `/presets/${encodeURIComponent(name)}`);
+    }
+
+    async setRecordingSettings(settings) {
+        return await this.request('POST', '/recording/settings', settings);
+    }
+
+    async setRecordingControl(action) {
+        // action deve ser 'start' ou 'stop'
+        return await this.request('POST', '/recording/control', { action });
+    }
+
+    async deleteRecording(id) {
+        return await this.request('DELETE', `/recordings/${encodeURIComponent(id)}`);
     }
 }
 

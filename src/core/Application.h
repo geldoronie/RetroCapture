@@ -13,6 +13,10 @@
 #include "../renderer/glad_loader.h"
 #include "../utils/FilesystemCompat.h"
 
+// Forward declarations for recording
+struct RecordingSettings;
+struct RecordingMetadata;
+
 class IVideoCapture;
 class IAudioCapture;
 class WindowManager;
@@ -26,6 +30,7 @@ class FrameProcessor;
 class StreamManager;
 class HTTPTSStreamer;
 class PBOManager;
+class RecordingManager;
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -106,9 +111,23 @@ public:
     void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
     void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
 
+    // Recording configuration
+    void setRecordingSettings(const struct RecordingSettings& settings);
+    struct RecordingSettings getRecordingSettings() const;
+    bool startRecording();
+    void stopRecording();
+    bool isRecording() const;
+    uint64_t getRecordingDurationUs() const;
+    uint64_t getRecordingFileSize() const;
+    std::string getRecordingFilename() const;
+    std::vector<struct RecordingMetadata> listRecordings();
+    bool deleteRecording(const std::string& recordingId);
+    std::string getRecordingPath(const std::string& recordingId);
+
     // API access methods
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
     UIManager *getUIManager() { return m_ui.get(); }
+    RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
 
     // Preset management
     void applyPreset(const std::string& presetName);
@@ -139,6 +158,7 @@ private:
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
+    std::unique_ptr<RecordingManager> m_recordingManager;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 

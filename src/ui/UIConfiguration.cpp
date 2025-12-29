@@ -4,6 +4,7 @@
 #include "UIConfigurationShader.h"
 #include "UIConfigurationImage.h"
 #include "UIConfigurationStreaming.h"
+#include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
 #include "UIInfoPanel.h"
 #include "../utils/Logger.h"
@@ -67,6 +68,7 @@ void UIConfiguration::render()
     static UIConfigurationShader shaderTab(m_uiManager);
     static UIConfigurationImage imageTab(m_uiManager);
     static UIConfigurationStreaming streamingTab(m_uiManager);
+    static UIConfigurationRecording recordingTab(m_uiManager);
     static UIConfigurationWebPortal webPortalTab(m_uiManager);
     static UIInfoPanel infoTab(m_uiManager);
 
@@ -100,6 +102,12 @@ void UIConfiguration::render()
         if (ImGui::BeginTabItem("Streaming"))
         {
             streamingTab.render();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Recording"))
+        {
+            recordingTab.render();
             ImGui::EndTabItem();
         }
 

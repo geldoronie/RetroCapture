@@ -338,6 +338,92 @@ public:
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
     void setOnStreamingAVIOBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingAVIOBufferSizeChanged = callback; }
 
+    // Recording info setters (public)
+    void setRecordingActive(bool active) { m_recordingActive = active; }
+    void setRecordingDurationUs(uint64_t durationUs) { m_recordingDurationUs = durationUs; }
+    void setRecordingFileSize(uint64_t fileSize) { m_recordingFileSize = fileSize; }
+    void setRecordingFilename(const std::string& filename) { m_recordingFilename = filename; }
+    void setRecordingWidth(uint32_t width) { m_recordingWidth = width; }
+    void setRecordingHeight(uint32_t height) { m_recordingHeight = height; }
+    void setRecordingFps(uint32_t fps) { m_recordingFps = fps; }
+    void setRecordingBitrate(uint32_t bitrate) { m_recordingBitrate = bitrate; }
+    void setRecordingAudioBitrate(uint32_t bitrate) { m_recordingAudioBitrate = bitrate; }
+    void setRecordingVideoCodec(const std::string& codec) { m_recordingVideoCodec = codec; }
+    void setRecordingAudioCodec(const std::string& codec) { m_recordingAudioCodec = codec; }
+    void setRecordingH264Preset(const std::string& preset) { m_recordingH264Preset = preset; }
+    void setRecordingH265Preset(const std::string& preset) { m_recordingH265Preset = preset; }
+    void setRecordingH265Profile(const std::string& profile) { m_recordingH265Profile = profile; }
+    void setRecordingH265Level(const std::string& level) { m_recordingH265Level = level; }
+    void setRecordingVP8Speed(int speed) { m_recordingVP8Speed = speed; }
+    void setRecordingVP9Speed(int speed) { m_recordingVP9Speed = speed; }
+    void setRecordingContainer(const std::string& container) { m_recordingContainer = container; }
+    void setRecordingOutputPath(const std::string& path) { m_recordingOutputPath = path; }
+    void setRecordingFilenameTemplate(const std::string& template_) { m_recordingFilenameTemplate = template_; }
+    void setRecordingIncludeAudio(bool include) { m_recordingIncludeAudio = include; }
+
+    // Recording info getters (public)
+    bool getRecordingActive() const { return m_recordingActive; }
+    uint64_t getRecordingDurationUs() const { return m_recordingDurationUs; }
+    uint64_t getRecordingFileSize() const { return m_recordingFileSize; }
+    std::string getRecordingFilename() const { return m_recordingFilename; }
+    uint32_t getRecordingWidth() const { return m_recordingWidth; }
+    uint32_t getRecordingHeight() const { return m_recordingHeight; }
+    uint32_t getRecordingFps() const { return m_recordingFps; }
+    uint32_t getRecordingBitrate() const { return m_recordingBitrate; }
+    uint32_t getRecordingAudioBitrate() const { return m_recordingAudioBitrate; }
+    std::string getRecordingVideoCodec() const { return m_recordingVideoCodec; }
+    std::string getRecordingAudioCodec() const { return m_recordingAudioCodec; }
+    std::string getRecordingH264Preset() const { return m_recordingH264Preset; }
+    std::string getRecordingH265Preset() const { return m_recordingH265Preset; }
+    std::string getRecordingH265Profile() const { return m_recordingH265Profile; }
+    std::string getRecordingH265Level() const { return m_recordingH265Level; }
+    int getRecordingVP8Speed() const { return m_recordingVP8Speed; }
+    int getRecordingVP9Speed() const { return m_recordingVP9Speed; }
+    std::string getRecordingContainer() const { return m_recordingContainer; }
+    std::string getRecordingOutputPath() const { return m_recordingOutputPath; }
+    std::string getRecordingFilenameTemplate() const { return m_recordingFilenameTemplate; }
+    bool getRecordingIncludeAudio() const { return m_recordingIncludeAudio; }
+
+    // Recording setters with callbacks
+    void triggerRecordingWidthChange(uint32_t width);
+    void triggerRecordingHeightChange(uint32_t height);
+    void triggerRecordingFpsChange(uint32_t fps);
+    void triggerRecordingBitrateChange(uint32_t bitrate);
+    void triggerRecordingAudioBitrateChange(uint32_t bitrate);
+    void triggerRecordingVideoCodecChange(const std::string& codec);
+    void triggerRecordingAudioCodecChange(const std::string& codec);
+    void triggerRecordingH264PresetChange(const std::string& preset);
+    void triggerRecordingH265PresetChange(const std::string& preset);
+    void triggerRecordingH265ProfileChange(const std::string& profile);
+    void triggerRecordingH265LevelChange(const std::string& level);
+    void triggerRecordingVP8SpeedChange(int speed);
+    void triggerRecordingVP9SpeedChange(int speed);
+    void triggerRecordingContainerChange(const std::string& container);
+    void triggerRecordingOutputPathChange(const std::string& path);
+    void triggerRecordingFilenameTemplateChange(const std::string& template_);
+    void triggerRecordingIncludeAudioChange(bool include);
+    void triggerRecordingStartStop(bool start);
+
+    // Recording callbacks
+    void setOnRecordingStartStop(std::function<void(bool)> callback) { m_onRecordingStartStop = callback; }
+    void setOnRecordingWidthChanged(std::function<void(uint32_t)> callback) { m_onRecordingWidthChanged = callback; }
+    void setOnRecordingHeightChanged(std::function<void(uint32_t)> callback) { m_onRecordingHeightChanged = callback; }
+    void setOnRecordingFpsChanged(std::function<void(uint32_t)> callback) { m_onRecordingFpsChanged = callback; }
+    void setOnRecordingBitrateChanged(std::function<void(uint32_t)> callback) { m_onRecordingBitrateChanged = callback; }
+    void setOnRecordingAudioBitrateChanged(std::function<void(uint32_t)> callback) { m_onRecordingAudioBitrateChanged = callback; }
+    void setOnRecordingVideoCodecChanged(std::function<void(const std::string&)> callback) { m_onRecordingVideoCodecChanged = callback; }
+    void setOnRecordingAudioCodecChanged(std::function<void(const std::string&)> callback) { m_onRecordingAudioCodecChanged = callback; }
+    void setOnRecordingH264PresetChanged(std::function<void(const std::string&)> callback) { m_onRecordingH264PresetChanged = callback; }
+    void setOnRecordingH265PresetChanged(std::function<void(const std::string&)> callback) { m_onRecordingH265PresetChanged = callback; }
+    void setOnRecordingH265ProfileChanged(std::function<void(const std::string&)> callback) { m_onRecordingH265ProfileChanged = callback; }
+    void setOnRecordingH265LevelChanged(std::function<void(const std::string&)> callback) { m_onRecordingH265LevelChanged = callback; }
+    void setOnRecordingVP8SpeedChanged(std::function<void(int)> callback) { m_onRecordingVP8SpeedChanged = callback; }
+    void setOnRecordingVP9SpeedChanged(std::function<void(int)> callback) { m_onRecordingVP9SpeedChanged = callback; }
+    void setOnRecordingContainerChanged(std::function<void(const std::string&)> callback) { m_onRecordingContainerChanged = callback; }
+    void setOnRecordingOutputPathChanged(std::function<void(const std::string&)> callback) { m_onRecordingOutputPathChanged = callback; }
+    void setOnRecordingFilenameTemplateChanged(std::function<void(const std::string&)> callback) { m_onRecordingFilenameTemplateChanged = callback; }
+    void setOnRecordingIncludeAudioChanged(std::function<void(bool)> callback) { m_onRecordingIncludeAudioChanged = callback; }
+
     // Web Portal settings
     void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
     void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
@@ -639,6 +725,49 @@ private:
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;
     std::function<void(size_t)> m_onStreamingAVIOBufferSizeChanged;
+
+    // Recording state
+    bool m_recordingActive = false;
+    uint64_t m_recordingDurationUs = 0;
+    uint64_t m_recordingFileSize = 0;
+    std::string m_recordingFilename;
+    uint32_t m_recordingWidth = 1920;
+    uint32_t m_recordingHeight = 1080;
+    uint32_t m_recordingFps = 60;
+    uint32_t m_recordingBitrate = 8000000;
+    uint32_t m_recordingAudioBitrate = 256000;
+    std::string m_recordingVideoCodec = "h264";
+    std::string m_recordingAudioCodec = "aac";
+    std::string m_recordingH264Preset = "veryfast";
+    std::string m_recordingH265Preset = "veryfast";
+    std::string m_recordingH265Profile = "main";
+    std::string m_recordingH265Level = "auto";
+    int m_recordingVP8Speed = 12;
+    int m_recordingVP9Speed = 6;
+    std::string m_recordingContainer = "mp4";
+    std::string m_recordingOutputPath = "recordings/";
+    std::string m_recordingFilenameTemplate = "recording_%Y%m%d_%H%M%S";
+    bool m_recordingIncludeAudio = true;
+
+    // Recording callbacks
+    std::function<void(bool)> m_onRecordingStartStop;
+    std::function<void(uint32_t)> m_onRecordingWidthChanged;
+    std::function<void(uint32_t)> m_onRecordingHeightChanged;
+    std::function<void(uint32_t)> m_onRecordingFpsChanged;
+    std::function<void(uint32_t)> m_onRecordingBitrateChanged;
+    std::function<void(uint32_t)> m_onRecordingAudioBitrateChanged;
+    std::function<void(const std::string&)> m_onRecordingVideoCodecChanged;
+    std::function<void(const std::string&)> m_onRecordingAudioCodecChanged;
+    std::function<void(const std::string&)> m_onRecordingH264PresetChanged;
+    std::function<void(const std::string&)> m_onRecordingH265PresetChanged;
+    std::function<void(const std::string&)> m_onRecordingH265ProfileChanged;
+    std::function<void(const std::string&)> m_onRecordingH265LevelChanged;
+    std::function<void(int)> m_onRecordingVP8SpeedChanged;
+    std::function<void(int)> m_onRecordingVP9SpeedChanged;
+    std::function<void(const std::string&)> m_onRecordingContainerChanged;
+    std::function<void(const std::string&)> m_onRecordingOutputPathChanged;
+    std::function<void(const std::string&)> m_onRecordingFilenameTemplateChanged;
+    std::function<void(bool)> m_onRecordingIncludeAudioChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão
