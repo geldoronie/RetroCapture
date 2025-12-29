@@ -12,8 +12,8 @@ extern "C"
 
 // Callback wrapper para FFmpeg (precisa ser estático)
 // Diferentes versões do FFmpeg têm assinaturas diferentes:
-// - FFmpeg 6.1+ (ARM64): const uint8_t*
-// - FFmpeg 6.0- (x86_64): uint8_t*
+// - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
+// - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
 // Usamos const uint8_t* (mais seguro) e fazemos cast quando necessário
 static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
@@ -32,11 +32,15 @@ static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
     return muxer->callWriteCallback(buf, buf_size);
 }
 
-// Wrapper para compatibilidade com versões antigas do FFmpeg que esperam uint8_t* (não const)
+// Wrapper para compatibilidade com versões do FFmpeg que esperam uint8_t* (não const)
+// FFmpeg 6.0 (libavformat 60) ainda usa uint8_t* (não const)
 static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
 {
     return writeCallback(opaque, const_cast<const uint8_t*>(buf), buf_size);
 }
+
+// Incluir FFmpegCompat.h após definir callbacks para ter acesso às macros
+#include "../utils/FFmpegCompat.h"
 
 MediaMuxer::MediaMuxer()
 {
@@ -123,19 +127,18 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
 
     // Configurar callback de escrita com tamanho configurável
     // Diferentes versões do FFmpeg esperam assinaturas diferentes:
-    // - FFmpeg 6.1+ (ARM64/ARMv7): const uint8_t* - usar writeCallback diretamente
-    // - FFmpeg 6.0- (x86_64): uint8_t* - usar writeCallbackNonConst
+    // - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
+    // - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
     const size_t bufferSize = avioBufferSize; // Tamanho já validado em initialize()
     
-    // Usar callback apropriado baseado na arquitetura
-    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__) || \
-        defined(__arm__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7__)
-        // ARM64/ARMv7: FFmpeg espera const uint8_t* - passar diretamente
+    // Usar callback apropriado baseado na versão
+    #if FFMPEG_USE_CONST_WRITE_CALLBACK
+        // FFmpeg 6.1+: usar callback com const uint8_t*
         formatCtx->pb = avio_alloc_context(
             static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
             1, this, nullptr, writeCallback, nullptr);
     #else
-        // x86_64: FFmpeg espera uint8_t* (não const) - usar wrapper
+        // FFmpeg 6.0-: usar wrapper com uint8_t* (não const)
         formatCtx->pb = avio_alloc_context(
             static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
             1, this, nullptr, writeCallbackNonConst, nullptr);
@@ -229,11 +232,7 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
                     memset(dummyFrame->data[2], 128, dummyFrame->linesize[2] * dummyFrame->height / 2);
 
                 dummyFrame->pts = 0;
-                #if LIBAVCODEC_VERSION_MAJOR >= 59
-                dummyFrame->flags |= AV_FRAME_FLAG_KEY;
-                #else
-                dummyFrame->key_frame = 1;
-                #endif
+                FFmpegCompat::setKeyFrame(dummyFrame, true);
 
                 if (avcodec_send_frame(videoCtx, dummyFrame) >= 0)
                 {

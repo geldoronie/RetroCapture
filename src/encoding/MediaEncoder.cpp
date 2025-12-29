@@ -11,6 +11,8 @@ extern "C"
 #include <libswresample/swresample.h>
 }
 
+#include "../utils/FFmpegCompat.h"
+
 MediaEncoder::MediaEncoder()
 {
 }
@@ -275,12 +277,7 @@ bool MediaEncoder::initializeAudioCodec()
     codecCtx->codec_id = codec->id;
     codecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
     codecCtx->sample_rate = m_audioConfig.sampleRate;
-    #if LIBAVCODEC_VERSION_MAJOR >= 59
-    av_channel_layout_default(&codecCtx->ch_layout, m_audioConfig.channels);
-    #else
-    codecCtx->channels = m_audioConfig.channels;
-    codecCtx->channel_layout = av_get_default_channel_layout(m_audioConfig.channels);
-    #endif
+    FFmpegCompat::setChannelLayout(codecCtx, m_audioConfig.channels);
     codecCtx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     codecCtx->bit_rate = m_audioConfig.bitrate;
     codecCtx->thread_count = 4;
@@ -362,12 +359,7 @@ bool MediaEncoder::initializeAudioCodec()
     }
 
     audioFrame->format = AV_SAMPLE_FMT_FLTP;
-    #if LIBAVCODEC_VERSION_MAJOR >= 59
-    av_channel_layout_default(&audioFrame->ch_layout, m_audioConfig.channels);
-    #else
-    audioFrame->channels = m_audioConfig.channels;
-    audioFrame->channel_layout = av_get_default_channel_layout(m_audioConfig.channels);
-    #endif
+    FFmpegCompat::setFrameChannelLayout(audioFrame, m_audioConfig.channels);
     audioFrame->sample_rate = m_audioConfig.sampleRate;
     audioFrame->nb_samples = codecCtx->frame_size;
     if (av_frame_get_buffer(audioFrame, 0) < 0)
@@ -769,11 +761,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     if (forceKeyframe)
     {
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
-        #if LIBAVCODEC_VERSION_MAJOR >= 59
-        videoFrame->flags |= AV_FRAME_FLAG_KEY;
-        #else
-        videoFrame->key_frame = 1;
-        #endif
+        FFmpegCompat::setKeyFrame(videoFrame, true);
     }
     m_videoFrameCount++;
 

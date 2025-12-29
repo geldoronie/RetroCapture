@@ -29,8 +29,8 @@ extern "C"
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
 // Diferentes versões do FFmpeg têm assinaturas diferentes:
-// - FFmpeg 6.1+ (ARM64): const uint8_t*
-// - FFmpeg 6.0- (x86_64): uint8_t*
+// - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
+// - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
 // Usamos const uint8_t* (mais seguro) e fazemos cast quando necessário
 static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
@@ -38,11 +38,15 @@ static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
     return streamer->writeToClients(buf, buf_size);
 }
 
-// Wrapper para compatibilidade com versões antigas do FFmpeg que esperam uint8_t* (não const)
+// Wrapper para compatibilidade com versões do FFmpeg que esperam uint8_t* (não const)
+// FFmpeg 6.0 (libavformat 60) ainda usa uint8_t* (não const)
 static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
 {
     return writeCallback(opaque, const_cast<const uint8_t*>(buf), buf_size);
 }
+
+// Incluir FFmpegCompat.h após definir callbacks para ter acesso às macros
+#include "../utils/FFmpegCompat.h"
 
 HTTPTSStreamer::HTTPTSStreamer()
 {
@@ -1405,12 +1409,7 @@ bool HTTPTSStreamer::initializeAudioCodec()
     codecCtx->codec_id = codec->id;
     codecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
     codecCtx->sample_rate = m_audioSampleRate;
-#if LIBAVCODEC_VERSION_MAJOR >= 59
-    av_channel_layout_default(&codecCtx->ch_layout, m_audioChannelsCount);
-#else
-    codecCtx->channels = m_audioChannelsCount;
-    codecCtx->channel_layout = av_get_default_channel_layout(m_audioChannelsCount);
-#endif
+    FFmpegCompat::setChannelLayout(codecCtx, m_audioChannelsCount);
     // AAC requer float planar (fltp), não s16
     codecCtx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     codecCtx->bit_rate = m_audioBitrate;
@@ -1496,12 +1495,7 @@ bool HTTPTSStreamer::initializeAudioCodec()
     }
 
     audioFrame->format = AV_SAMPLE_FMT_FLTP;
-#if LIBAVCODEC_VERSION_MAJOR >= 59
-    av_channel_layout_default(&audioFrame->ch_layout, m_audioChannelsCount);
-#else
-    audioFrame->channels = m_audioChannelsCount;
-    audioFrame->channel_layout = av_get_default_channel_layout(m_audioChannelsCount);
-#endif
+    FFmpegCompat::setFrameChannelLayout(audioFrame, m_audioChannelsCount);
     audioFrame->sample_rate = m_audioSampleRate;
     audioFrame->nb_samples = codecCtx->frame_size;
     if (av_frame_get_buffer(audioFrame, 0) < 0)
@@ -1624,14 +1618,16 @@ bool HTTPTSStreamer::initializeMuxers()
     // Mas mantemos para compatibilidade. Se houver erro de compilação aqui, pode ser ignorado
     // pois esta função não é mais chamada (o streaming usa MediaMuxer via initializeEncoding())
     // Usar callback apropriado baseado na arquitetura
-    #if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_ARCH_8A__) || \
-        defined(__arm__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7__)
-        // ARM64/ARMv7: FFmpeg espera const uint8_t* - passar diretamente
+    // Diferentes versões do FFmpeg esperam assinaturas diferentes:
+    // - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
+    // - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
+    #if FFMPEG_USE_CONST_WRITE_CALLBACK
+        // FFmpeg 6.1+: usar callback com const uint8_t*
         formatCtx->pb = avio_alloc_context(
             avioBuffer, static_cast<int>(bufferSize),
             1, this, nullptr, ::writeCallback, nullptr);
     #else
-        // x86_64: FFmpeg espera uint8_t* (não const) - usar wrapper
+        // FFmpeg 6.0-: usar wrapper com uint8_t* (não const)
         formatCtx->pb = avio_alloc_context(
             avioBuffer, static_cast<int>(bufferSize),
             1, this, nullptr, ::writeCallbackNonConst, nullptr);
@@ -1675,11 +1671,7 @@ bool HTTPTSStreamer::initializeMuxers()
                     memset(dummyFrame->data[2], 128, dummyFrame->linesize[2] * dummyFrame->height / 2);
 
                 dummyFrame->pts = 0;
-#if LIBAVCODEC_VERSION_MAJOR >= 59
-                dummyFrame->flags |= AV_FRAME_FLAG_KEY;
-#else
-                dummyFrame->key_frame = 1;
-#endif
+                FFmpegCompat::setKeyFrame(dummyFrame, true);
 
                 // Enviar frame dummy para gerar extradata
                 if (avcodec_send_frame(videoCtx, dummyFrame) >= 0)
@@ -2029,11 +2021,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     {
         videoFrame->pict_type = AV_PICTURE_TYPE_I;
 // Usar flags do frame para garantir que o codec respeite o keyframe
-#if LIBAVCODEC_VERSION_MAJOR >= 59
-        videoFrame->flags |= AV_FRAME_FLAG_KEY;
-#else
-        videoFrame->key_frame = 1;
-#endif
+        FFmpegCompat::setKeyFrame(videoFrame, true);
     }
     m_videoFrameCount++;
 
