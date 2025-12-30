@@ -41,9 +41,12 @@ int FileRecorder::writeToFile(const uint8_t* data, size_t size)
 {
     std::lock_guard<std::mutex> lock(m_fileMutex);
     
+    // During cleanup, av_write_trailer() may call this after file is closed
+    // Return success to avoid FFmpeg errors, but don't try to write
     if (!m_outputFile.is_open())
     {
-        return -1;
+        // File closed - return success to avoid FFmpeg errors during cleanup
+        return static_cast<int>(size);
     }
 
     try
@@ -54,7 +57,7 @@ int FileRecorder::writeToFile(const uint8_t* data, size_t size)
             LOG_ERROR("FileRecorder: Failed to write to file");
             return -1;
         }
-        m_outputFile.flush();
+        // Don't flush on every write - only flush when stopping/cleaning up
         return static_cast<int>(size);
     }
     catch (const std::exception& e)
@@ -155,19 +158,26 @@ void FileRecorder::stopRecording()
         return;
     }
 
-    // Flush pending packets
-    flush();
+    // Flush muxer first to ensure all data is written (file must be open)
+    if (m_initialized)
+    {
+        m_muxer.flush();
+    }
 
-    // Close file
+    // Set flag to prevent new packets
+    // IMPORTANT: Keep file open - cleanup() needs it for av_write_trailer()
+    m_recording = false;
+
+    // Flush file buffer but keep file open for cleanup()
     {
         std::lock_guard<std::mutex> lock(m_fileMutex);
         if (m_outputFile.is_open())
         {
-            m_outputFile.close();
+            m_outputFile.flush(); // Ensure all data is written to disk
+            // Don't close here - cleanup() will close after av_write_trailer()
         }
     }
 
-    m_recording = false;
     LOG_INFO("FileRecorder: Stopped recording. Duration: " + 
              std::to_string(m_durationUs / 1000000) + " seconds");
 }
@@ -182,6 +192,7 @@ bool FileRecorder::muxPacket(const MediaEncoder::EncodedPacket& packet)
     // Update duration based on packet timestamp
     if (packet.captureTimestampUs > 0 && m_startTimestampUs > 0)
     {
+        std::lock_guard<std::mutex> lock(m_fileMutex);
         m_durationUs = packet.captureTimestampUs - m_startTimestampUs;
     }
 
@@ -198,19 +209,61 @@ void FileRecorder::flush()
 
 void FileRecorder::cleanup()
 {
-    stopRecording();
-
-    if (m_initialized)
+    LOG_INFO("FileRecorder: Starting cleanup");
+    
+    // Stop recording first (flushes but keeps file open for av_write_trailer)
+    if (m_recording)
     {
-        m_muxer.cleanup();
-        m_initialized = false;
+        LOG_INFO("FileRecorder: Flushing muxer before cleanup");
+        // Flush muxer while file is still open
+        if (m_initialized)
+        {
+            m_muxer.flush();
+        }
+        m_recording = false;
     }
 
+    // Cleanup muxer (av_write_trailer may write to file, so file must be open)
+    // After cleanup, close the file
+    if (m_initialized)
+    {
+        LOG_INFO("FileRecorder: Ensuring file is open for av_write_trailer");
+        {
+            std::lock_guard<std::mutex> lock(m_fileMutex);
+            // Ensure file is open for av_write_trailer
+            if (!m_outputFile.is_open() && !m_outputPath.empty())
+            {
+                LOG_INFO("FileRecorder: Reopening file for cleanup");
+                m_outputFile.open(m_outputPath, std::ios::binary | std::ios::out | std::ios::app);
+            }
+        }
+        
+        LOG_INFO("FileRecorder: Calling muxer.cleanup() (will call av_write_trailer)");
+        // Cleanup muxer (this calls av_write_trailer which may write to file)
+        m_muxer.cleanup();
+        m_initialized = false;
+        
+        LOG_INFO("FileRecorder: Closing file after muxer cleanup");
+        // Now close the file
+        {
+            std::lock_guard<std::mutex> lock(m_fileMutex);
+            if (m_outputFile.is_open())
+            {
+                m_outputFile.flush();
+                m_outputFile.close();
+                LOG_INFO("FileRecorder: File closed successfully");
+            }
+        }
+    }
+
+    // Clear state
     m_outputPath.clear();
     m_videoCodecContext = nullptr;
     m_audioCodecContext = nullptr;
     m_durationUs = 0;
     m_startTimestampUs = 0;
+    
+    LOG_INFO("FileRecorder: Cleanup completed");
 }
 
 uint64_t FileRecorder::getFileSize()

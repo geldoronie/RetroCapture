@@ -101,17 +101,40 @@ bool Application::init()
         m_ui->setShaderEngine(m_shaderEngine.get());
     }
 
+    // Initialize RecordingManager (independent of streaming/audio)
+    LOG_INFO("Initializing RecordingManager...");
+    m_recordingManager = std::make_unique<RecordingManager>();
+    if (!m_recordingManager->initialize())
+    {
+        LOG_ERROR("Failed to initialize RecordingManager");
+        m_recordingManager.reset();
+        // Don't return false, continue without recording
+    }
+    else
+    {
+        LOG_INFO("RecordingManager initialized");
+    }
+
     if (!initStreaming())
     {
         LOG_WARN("Failed to initialize streaming - continuing without streaming");
     }
 
-    // Initialize audio capture (always required for streaming)
-    if (m_streamingEnabled)
+    // Initialize audio capture (required for streaming and/or recording)
+    // Audio is needed for recording even if streaming is not enabled
+    if (m_streamingEnabled || m_recordingManager)
     {
         if (!initAudioCapture())
         {
             LOG_WARN("Failed to initialize audio capture - continuing without audio");
+        }
+        else
+        {
+            // Set audio format for RecordingManager if audio is available
+            if (m_recordingManager && m_audioCapture)
+            {
+                m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+            }
         }
     }
 
@@ -1315,8 +1338,15 @@ bool Application::initUI()
                 settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
                 settings.includeAudio = m_ui->getRecordingIncludeAudio();
                 
-                if (m_recordingManager->startRecording(settings)) {
+                if (!m_recordingManager) {
+                    LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
+                    m_ui->setRecordingActive(false);
+                } else if (m_recordingManager->startRecording(settings)) {
+                    LOG_INFO("Application: Recording started successfully");
                     m_ui->setRecordingActive(true);
+                } else {
+                    LOG_ERROR("Application: Failed to start recording. Check logs for details.");
+                    m_ui->setRecordingActive(false);
                 }
             }
         } else {
@@ -2377,9 +2407,11 @@ void Application::stopWebPortal()
 
 bool Application::initAudioCapture()
 {
-    if (!m_streamingEnabled)
+    // Audio is needed for streaming or recording
+    // If neither is enabled, we can skip audio initialization
+    if (!m_streamingEnabled && !m_recordingManager)
     {
-        return true; // Audio not enabled, not an error
+        return true; // Audio not needed, not an error
     }
 
     m_audioCapture = AudioCaptureFactory::create();
@@ -2389,12 +2421,11 @@ bool Application::initAudioCapture()
         return false;
     }
 
-    // Initialize RecordingManager
-    m_recordingManager = std::make_unique<RecordingManager>();
-    if (!m_recordingManager->initialize())
+    // RecordingManager is now initialized in Application::init() before audio capture
+    // Just set audio format here if RecordingManager exists
+    if (!m_recordingManager)
     {
-        LOG_ERROR("Failed to initialize RecordingManager");
-        return false;
+        LOG_WARN("RecordingManager not initialized - recording will not be available");
     }
 
     // Open default audio device (will create virtual sink)
@@ -2417,11 +2448,7 @@ bool Application::initAudioCapture()
     LOG_INFO("Audio capture started: " + std::to_string(m_audioCapture->getSampleRate()) +
              "Hz, " + std::to_string(m_audioCapture->getChannels()) + " channels");
 
-    // Set audio format for RecordingManager
-    if (m_recordingManager)
-    {
-        m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
-    }
+    // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;
 }
@@ -2932,9 +2959,12 @@ void Application::run()
             // IMPORTANTE: Aguardar que a renderização seja concluída
             glFinish();
 
-            // IMPORTANTE: Para streaming, capturar diretamente da textura final ao invés do framebuffer
+            // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
-            if (m_streamManager && m_streamManager->isActive())
+            bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) || 
+                                    (m_recordingManager && m_recordingManager->isRecording());
+            
+            if (needsFrameCapture)
             {
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
                 uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
@@ -2974,10 +3004,30 @@ void Application::run()
                             
                             if (m_pboManager->getReadData(frameData.data(), captureWidth, captureHeight))
                             {
-                                // Dados disponíveis, enviar para streaming
-                                if (m_streamManager)
+                                // Dados disponíveis, enviar para streaming e recording
+                                if (m_streamManager && m_streamManager->isActive())
                                 {
                                     m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                                }
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    static int pboFrameCount = 0;
+                                    pboFrameCount++;
+                                    if (pboFrameCount == 1 || pboFrameCount % 60 == 0)
+                                    {
+                                        LOG_INFO("Application: Pushing frame to RecordingManager via PBO (frame " + std::to_string(pboFrameCount) + ")");
+                                    }
+                                    m_recordingManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                                }
+                            }
+                            else
+                            {
+                                // PBO data not ready yet - this is normal for first frame
+                                static int pboNotReadyCount = 0;
+                                pboNotReadyCount++;
+                                if (pboNotReadyCount <= 3)
+                                {
+                                    LOG_INFO("Application: PBO data not ready yet (count: " + std::to_string(pboNotReadyCount) + ")");
                                 }
                             }
                             // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
@@ -2993,6 +3043,13 @@ void Application::run()
                     // Usar método síncrono (fallback ou se PBO desabilitado)
                     if (!usePBO)
                     {
+                        static int syncCaptureCount = 0;
+                        syncCaptureCount++;
+                        if (syncCaptureCount == 1 || syncCaptureCount % 60 == 0)
+                        {
+                            LOG_INFO("Application: Using synchronous capture method (frame " + std::to_string(syncCaptureCount) + ")");
+                        }
+                        
                         // SIMPLIFICADO: Capturar diretamente do framebuffer padrão (janela) após renderização
                         // Garantir que estamos lendo do framebuffer correto
                         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -3040,6 +3097,12 @@ void Application::run()
                         }
                         if (m_recordingManager && m_recordingManager->isRecording())
                         {
+                            static int syncFrameCount = 0;
+                            syncFrameCount++;
+                            if (syncFrameCount == 1 || syncFrameCount % 60 == 0)
+                            {
+                                LOG_INFO("Application: Pushing frame to RecordingManager via sync method (frame " + std::to_string(syncFrameCount) + ")");
+                            }
                             m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                         }
                     }

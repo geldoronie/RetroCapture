@@ -6,6 +6,8 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 
 RecordingManager::RecordingManager()
 {
@@ -151,10 +153,17 @@ bool RecordingManager::startRecording(const RecordingSettings& settings)
     videoConfig.vp9Speed = settings.vp9Speed;
 
     MediaEncoder::AudioConfig audioConfig;
-    audioConfig.sampleRate = m_audioSampleRate;
-    audioConfig.channels = m_audioChannels;
+    // Use default values if audio format not set (when streaming/audio not enabled)
+    audioConfig.sampleRate = (m_audioSampleRate > 0) ? m_audioSampleRate : 44100;
+    audioConfig.channels = (m_audioChannels > 0) ? m_audioChannels : 2;
     audioConfig.bitrate = settings.audioBitrate;
     audioConfig.codec = settings.audioCodec;
+    
+    // If audio is not included, disable audio encoding
+    if (!settings.includeAudio)
+    {
+        audioConfig.codec = ""; // Empty codec means no audio
+    }
 
     if (!m_encoder.initialize(videoConfig, audioConfig))
     {
@@ -214,36 +223,61 @@ void RecordingManager::stopRecording()
         m_encodingThread.join();
     }
 
-    // Flush encoder
+    // Flush encoder and get remaining packets
     if (m_encoder.isInitialized())
     {
         std::vector<MediaEncoder::EncodedPacket> packets;
         m_encoder.flush(packets);
 
-        // Mux remaining packets
+        // Mux remaining packets before stopping
         for (const auto& packet : packets)
         {
-            m_recorder.muxPacket(packet);
+            if (m_recorder.isRecording())
+            {
+                m_recorder.muxPacket(packet);
+            }
         }
     }
 
-    // Stop recorder
-    m_recorder.stopRecording();
+    // Flush recorder to ensure all data is written
+    // Note: stopRecording() will flush and close file, but cleanup() needs file open for av_write_trailer
+    if (m_recorder.isRecording())
+    {
+        m_recorder.flush();
+        // Stop recorder (flushes but keeps file open for cleanup)
+        m_recorder.stopRecording();
+    }
 
-    // Finalize metadata
+    // Finalize metadata before cleanup
     {
         std::lock_guard<std::mutex> lock(m_statusMutex);
         m_currentMetadata.fileSize = m_recorder.getFileSize();
         m_currentMetadata.durationUs = m_recorder.getDurationUs();
     }
 
-    // Add to recordings list
+    // Add to recordings list (before cleanup to save metadata)
     finalizeCurrentRecording();
 
-    // Cleanup
-    m_encoder.cleanup();
+    // Cleanup in correct order: 
+    // 1. Flush and stop recorder (but keep file open for av_write_trailer)
+    // 2. Cleanup recorder (calls av_write_trailer, then closes file)
+    // 3. Cleanup encoder
+    // 4. Clear synchronizer
+    LOG_INFO("RecordingManager: Starting cleanup sequence");
     m_recorder.cleanup();
+    LOG_INFO("RecordingManager: Recorder cleaned up, cleaning encoder");
+    m_encoder.cleanup();
+    LOG_INFO("RecordingManager: Encoder cleaned up, clearing synchronizer");
     m_synchronizer.clear();
+    LOG_INFO("RecordingManager: Cleanup sequence completed");
+
+    // Reset state
+    {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        m_currentFilename.clear();
+        m_currentFileSize = 0;
+        m_currentDurationUs = 0;
+    }
 
     m_recording = false;
     m_running = false;
@@ -260,7 +294,26 @@ void RecordingManager::pushFrame(const uint8_t* data, uint32_t width, uint32_t h
     }
 
     int64_t timestampUs = getTimestampUs();
-    m_synchronizer.addVideoFrame(data, width, height, timestampUs);
+    bool added = m_synchronizer.addVideoFrame(data, width, height, timestampUs);
+    
+    static int frameCount = 0;
+    static int logCount = 0;
+    frameCount++;
+    
+    if (!added)
+    {
+        if (logCount < 3)
+        {
+            LOG_WARN("RecordingManager: Failed to add video frame to synchronizer");
+            logCount++;
+        }
+    }
+    else if (frameCount == 1 || frameCount % 60 == 0)
+    {
+        // Log first frame and every 60 frames (1 second at 60fps)
+        LOG_INFO("RecordingManager: Pushed frame " + std::to_string(frameCount) + 
+                 " (" + std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
 }
 
 void RecordingManager::pushAudio(const int16_t* samples, size_t sampleCount)
@@ -276,6 +329,7 @@ void RecordingManager::pushAudio(const int16_t* samples, size_t sampleCount)
 
 void RecordingManager::encodingThread()
 {
+    LOG_INFO("RecordingManager: Encoding thread started");
     // Wait a bit before starting to avoid processing very old frames
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -299,12 +353,72 @@ void RecordingManager::encodingThread()
         size_t audioBufferSize = m_synchronizer.getAudioBufferSize();
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
+        // Log buffer status periodically
+        static int bufferLogCounter = 0;
+        bufferLogCounter++;
+        if (bufferLogCounter == 1 || bufferLogCounter % 100 == 0)
+        {
+            LOG_INFO("RecordingManager: Buffer status - Video: " + std::to_string(videoBufferSize) + 
+                     ", Audio: " + std::to_string(audioBufferSize) + 
+                     ", IncludeAudio: " + std::string(m_settings.includeAudio ? "true" : "false") +
+                     ", AudioSR: " + std::to_string(m_audioSampleRate) +
+                     ", AudioCh: " + std::to_string(m_audioChannels));
+        }
+
         // Calculate sync zone
         StreamSynchronizer::SyncZone syncZone = m_synchronizer.calculateSyncZone();
 
-        if (syncZone.isValid())
+        // If no valid sync zone, check if we can process video-only
+        if (!syncZone.isValid())
         {
-            // Get synchronized video frames
+            // If audio is not included or not available, process video-only
+            if (!m_settings.includeAudio || m_audioSampleRate == 0 || m_audioChannels == 0)
+            {
+                // Process video frames without audio synchronization
+                size_t videoBufferSize = m_synchronizer.getVideoBufferSize();
+                if (videoBufferSize > 0)
+                {
+                    // Create a fake sync zone for video-only processing
+                    // Note: isValid() requires audioEndIdx > audioStartIdx, so we set it to 1
+                    syncZone = StreamSynchronizer::SyncZone();
+                    syncZone.videoStartIdx = 0;
+                    syncZone.videoEndIdx = std::min(videoBufferSize, static_cast<size_t>(2)); // Process up to 2 frames
+                    syncZone.audioStartIdx = 0;
+                    syncZone.audioEndIdx = 1; // Set to 1 to pass isValid() check, but we won't process audio
+                    syncZone.startTimeUs = 0;
+                    syncZone.endTimeUs = 1; // Set to 1 to pass isValid() check (startTimeUs < endTimeUs)
+                    
+                    static bool firstVideoOnlyLog = false;
+                    if (!firstVideoOnlyLog)
+                    {
+                        LOG_INFO("RecordingManager: Processing video-only (no audio sync required)");
+                        firstVideoOnlyLog = true;
+                    }
+                }
+                else
+                {
+                    // No video frames yet - wait a bit
+                    static int noFramesLogCounter = 0;
+                    noFramesLogCounter++;
+                    if (noFramesLogCounter == 1 || noFramesLogCounter % 100 == 0)
+                    {
+                        LOG_INFO("RecordingManager: Waiting for video frames (buffer empty)");
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+            }
+            else
+            {
+                // Audio is required but sync zone is invalid - wait for both
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+        }
+        
+        if (syncZone.isValid() && syncZone.videoEndIdx > syncZone.videoStartIdx)
+        {
+            // Get synchronized video frames (or video-only if audio not included)
             auto videoFrames = m_synchronizer.getVideoFrames(syncZone);
 
             // Process video frames
@@ -333,16 +447,39 @@ void RecordingManager::encodingThread()
                         // Mux packets
                         for (const auto& packet : packets)
                         {
-                            m_recorder.muxPacket(packet);
+                            if (!m_recorder.muxPacket(packet))
+                            {
+                                LOG_ERROR("RecordingManager: Failed to mux packet");
+                            }
                         }
                         processedAny = true;
                         framesProcessed++;
+                        
+                        // Log first successful frame
+                        static bool firstFrameLogged = false;
+                        if (!firstFrameLogged)
+                        {
+                            LOG_INFO("RecordingManager: First frame encoded and muxed successfully");
+                            firstFrameLogged = true;
+                        }
+                    }
+                    else
+                    {
+                        static int encodeErrorCount = 0;
+                        if (encodeErrorCount++ < 3)
+                        {
+                            LOG_WARN("RecordingManager: Failed to encode video frame");
+                        }
                     }
                 }
             }
 
-            // Get synchronized audio chunks
-            auto audioChunks = m_synchronizer.getAudioChunks(syncZone);
+            // Get synchronized audio chunks (only if audio is included and available)
+            std::vector<StreamSynchronizer::TimestampedAudio> audioChunks;
+            if (m_settings.includeAudio && m_audioSampleRate > 0 && m_audioChannels > 0 && syncZone.audioEndIdx > syncZone.audioStartIdx)
+            {
+                audioChunks = m_synchronizer.getAudioChunks(syncZone);
+            }
 
             // Process audio chunks
             size_t chunksProcessed = 0;
@@ -380,7 +517,10 @@ void RecordingManager::encodingThread()
 
             // Mark data as processed
             m_synchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
-            m_synchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
+            if (syncZone.audioEndIdx > syncZone.audioStartIdx)
+            {
+                m_synchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
+            }
 
             // Update status
             {

@@ -557,21 +557,34 @@ void MediaMuxer::cleanup()
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
         if (formatCtx)
         {
+            // Write trailer if format and IO context are valid
             if (formatCtx->oformat && formatCtx->pb)
             {
-                av_write_trailer(formatCtx);
+                // av_write_trailer may write to the file, ensure it's safe to call
+                int ret = av_write_trailer(formatCtx);
+                if (ret < 0)
+                {
+                    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+                    av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+                    LOG_WARN("MediaMuxer: av_write_trailer returned error: " + std::string(errbuf));
+                }
             }
 
+            // Free IO context (this may trigger write callbacks, so file should still be open)
             if (formatCtx->pb)
             {
                 avio_context_free(&formatCtx->pb);
+                formatCtx->pb = nullptr;
             }
 
+            // Free URL string if allocated
             if (formatCtx->url)
             {
                 av_free(const_cast<char *>(formatCtx->url));
+                formatCtx->url = nullptr;
             }
 
+            // Free format context
             avformat_free_context(formatCtx);
         }
         m_muxerContext = nullptr;
