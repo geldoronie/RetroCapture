@@ -131,6 +131,11 @@ bool RecordingManager::startRecording(const RecordingSettings& settings)
     std::stringstream timeStr;
     timeStr << std::put_time(tm, "%Y-%m-%dT%H:%M:%SZ");
     m_currentMetadata.createdAt = timeStr.str();
+    
+    // Reset timestamp tracking (not needed with absolute timestamps, but keep for cleanup)
+    m_recordingStartTimestampUs = 0;
+    m_videoFrameCount = 0;
+    m_audioSampleCount = 0;
 
     // Configure StreamSynchronizer
     m_synchronizer.setMaxBufferTime(5 * 1000000LL); // 5 seconds
@@ -282,6 +287,11 @@ void RecordingManager::stopRecording()
     m_recording = false;
     m_running = false;
     m_stopRequest = false;
+    
+    // Reset timestamp tracking
+    m_recordingStartTimestampUs = 0;
+    m_videoFrameCount = 0;
+    m_audioSampleCount = 0;
 
     LOG_INFO("RecordingManager: Stopped recording");
 }
@@ -293,7 +303,10 @@ void RecordingManager::pushFrame(const uint8_t* data, uint32_t width, uint32_t h
         return;
     }
 
+    // Use absolute timestamp when frame arrives
+    // This ensures frames are timestamped based on when they're actually captured
     int64_t timestampUs = getTimestampUs();
+    
     bool added = m_synchronizer.addVideoFrame(data, width, height, timestampUs);
     
     static int frameCount = 0;
@@ -323,7 +336,10 @@ void RecordingManager::pushAudio(const int16_t* samples, size_t sampleCount)
         return;
     }
 
+    // Use absolute timestamp when audio chunk arrives
+    // This ensures audio is timestamped based on when it's actually captured
     int64_t timestampUs = getTimestampUs();
+    
     m_synchronizer.addAudioChunk(samples, sampleCount, timestampUs, m_audioSampleRate, m_audioChannels);
 }
 
@@ -331,6 +347,7 @@ void RecordingManager::encodingThread()
 {
     LOG_INFO("RecordingManager: Encoding thread started");
     // Wait a bit before starting to avoid processing very old frames
+    // Same delay as streaming for consistency
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     int cleanupCounter = 0;
@@ -367,6 +384,26 @@ void RecordingManager::encodingThread()
 
         // Calculate sync zone
         StreamSynchronizer::SyncZone syncZone = m_synchronizer.calculateSyncZone();
+        
+        // Log sync zone status periodically
+        static int syncZoneLogCounter = 0;
+        syncZoneLogCounter++;
+        if (syncZoneLogCounter == 1 || syncZoneLogCounter % 100 == 0)
+        {
+            if (syncZone.isValid())
+            {
+                LOG_INFO("RecordingManager: SyncZone valid - Video: [" + std::to_string(syncZone.videoStartIdx) + 
+                         "-" + std::to_string(syncZone.videoEndIdx) + "], Audio: [" + 
+                         std::to_string(syncZone.audioStartIdx) + "-" + std::to_string(syncZone.audioEndIdx) + 
+                         "], Time: [" + std::to_string(syncZone.startTimeUs) + "-" + 
+                         std::to_string(syncZone.endTimeUs) + "]");
+            }
+            else
+            {
+                LOG_INFO("RecordingManager: SyncZone invalid - Video buffer: " + std::to_string(videoBufferSize) + 
+                         ", Audio buffer: " + std::to_string(audioBufferSize));
+            }
+        }
 
         // If no valid sync zone, check if we can process video-only
         if (!syncZone.isValid())
@@ -411,6 +448,7 @@ void RecordingManager::encodingThread()
             else
             {
                 // Audio is required but sync zone is invalid - wait for both
+                // Don't process video-only when audio is required to maintain sync
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -422,8 +460,9 @@ void RecordingManager::encodingThread()
             auto videoFrames = m_synchronizer.getVideoFrames(syncZone);
 
             // Process video frames
+            // Use same limits as streaming for consistency
             size_t framesProcessed = 0;
-            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2;
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2; // Same as streaming
 
             for (const auto& frame : videoFrames)
             {
@@ -482,8 +521,9 @@ void RecordingManager::encodingThread()
             }
 
             // Process audio chunks
+            // Use same limits as streaming for consistency
             size_t chunksProcessed = 0;
-            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3;
+            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3; // Same as streaming
 
             for (const auto& chunk : audioChunks)
             {
@@ -507,10 +547,35 @@ void RecordingManager::encodingThread()
                         // Mux packets
                         for (const auto& packet : packets)
                         {
-                            m_recorder.muxPacket(packet);
+                            if (!m_recorder.muxPacket(packet))
+                            {
+                                static int audioMuxErrorCount = 0;
+                                if (audioMuxErrorCount++ < 3)
+                                {
+                                    LOG_ERROR("RecordingManager: Failed to mux audio packet");
+                                }
+                            }
                         }
                         processedAny = true;
                         chunksProcessed++;
+                        
+                        // Log first successful audio chunk
+                        static bool firstAudioLogged = false;
+                        if (!firstAudioLogged)
+                        {
+                            LOG_INFO("RecordingManager: First audio chunk encoded and muxed successfully (" + 
+                                     std::to_string(chunk.sampleCount) + " samples)");
+                            firstAudioLogged = true;
+                        }
+                    }
+                    else
+                    {
+                        static int audioEncodeErrorCount = 0;
+                        if (audioEncodeErrorCount++ < 3)
+                        {
+                            LOG_WARN("RecordingManager: Failed to encode audio chunk (" + 
+                                     std::to_string(chunk.sampleCount) + " samples)");
+                        }
                     }
                 }
             }
@@ -530,14 +595,28 @@ void RecordingManager::encodingThread()
             }
         }
 
-        // Small delay to avoid busy waiting
-        if (!processedAny)
+        // Add delay based on FPS (same as streaming) to maintain natural rate
+        // Reduce delay when there's backlog to process faster
+        if (processedAny)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (hasBacklog)
+            {
+                // When there's backlog, minimal delay to not consume 100% CPU but process fast
+                std::this_thread::sleep_for(std::chrono::microseconds(100)); // 100µs only
+            }
+            else
+            {
+                // No backlog: delay based on FPS to maintain natural rate
+                // For 60 FPS: ~16.67ms per frame, but we process 2 frames, so ~8ms
+                int64_t frameTimeUs = 1000000LL / static_cast<int64_t>(m_settings.fps > 0 ? m_settings.fps : 60);
+                int64_t delayUs = frameTimeUs / 2; // Delay proportional (since we process 2 frames)
+                std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+            }
         }
         else
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // No data processed, wait a bit
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 }

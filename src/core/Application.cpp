@@ -1321,9 +1321,12 @@ bool Application::initUI()
         if (start) {
             if (m_recordingManager) {
                 RecordingSettings settings;
-                settings.width = m_ui->getRecordingWidth();
-                settings.height = m_ui->getRecordingHeight();
-                settings.fps = m_ui->getRecordingFps();
+                // Use actual capture resolution and FPS, not UI settings
+                // This ensures the recording matches what's being captured
+                // CRITICAL: Use actual capture FPS to prevent video appearing sped up
+                settings.width = m_captureWidth;
+                settings.height = m_captureHeight;
+                settings.fps = m_captureFps; // Use actual capture FPS, not UI setting
                 settings.bitrate = m_ui->getRecordingBitrate();
                 settings.codec = m_ui->getRecordingVideoCodec();
                 settings.preset = (settings.codec == "h264") ? m_ui->getRecordingH264Preset() : m_ui->getRecordingH265Preset();

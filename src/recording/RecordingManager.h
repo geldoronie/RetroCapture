@@ -102,5 +102,10 @@ private:
     uint32_t m_audioSampleRate = 44100;
     uint32_t m_audioChannels = 2;
     
+    // Timestamp tracking for synchronization
+    int64_t m_recordingStartTimestampUs = 0; // Timestamp absoluto do início da gravação
+    uint64_t m_videoFrameCount = 0;          // Contador de frames desde o início
+    uint64_t m_audioSampleCount = 0;         // Contador de samples desde o início
+    
     bool m_initialized = false;
 };

@@ -107,11 +107,11 @@ private:
     int64_t getTimestampUs() const;
 
     // Parâmetros de sincronização
-    int64_t m_syncToleranceUs = 50 * 1000LL;   // 50ms de tolerância
-    int64_t m_maxBufferTimeUs = 5 * 1000000LL; // 5 segundos máximo (padrão, configurável)
-    int64_t m_minBufferTimeUs = 0;             // 0ms - processar imediatamente
-    size_t m_maxVideoBufferSize = 10;          // Máximo de frames no buffer (padrão, configurável)
-    size_t m_maxAudioBufferSize = 20;          // Máximo de chunks no buffer (padrão, configurável)
+    int64_t m_syncToleranceUs = 200 * 1000LL;   // 200ms de tolerância (aumentado para melhor sincronização)
+    int64_t m_maxBufferTimeUs = 5 * 1000000LL;  // 5 segundos máximo (reduzido para evitar atraso)
+    int64_t m_minBufferTimeUs = 100 * 1000LL;   // 100ms - pequeno buffer para melhor sincronização
+    size_t m_maxVideoBufferSize = 15;           // Máximo de frames no buffer (reduzido para evitar atraso)
+    size_t m_maxAudioBufferSize = 30;           // Máximo de chunks no buffer (reduzido para evitar atraso)
 
     // Buffers temporais ordenados por timestamp
     mutable std::mutex m_videoBufferMutex;

@@ -130,11 +130,15 @@ private:
     uint32_t m_swsDstWidth = 0;
     uint32_t m_swsDstHeight = 0;
 
-    // Timestamps de referência (primeiro frame/chunk)
+    // Timestamps de referência (primeiro frame/chunk) - apenas para referência
     int64_t m_firstVideoTimestampUs = 0;
     int64_t m_firstAudioTimestampUs = 0;
     bool m_firstVideoTimestampSet = false;
     bool m_firstAudioTimestampSet = false;
+    
+    // Contadores precisos para cálculo de PTS (baseado em samples/frames, não timestamps)
+    int64_t m_audioFrameCount = 0;  // Número de frames de áudio processados
+    int64_t m_videoFrameCountForPTS = 0;  // Número de frames de vídeo processados (para PTS)
 
     // Rastreamento de PTS/DTS para garantir monotonicidade
     std::mutex m_ptsMutex;
@@ -151,6 +155,9 @@ private:
     // Audio accumulator para acumular samples até ter um frame completo
     std::mutex m_audioAccumulatorMutex;
     std::vector<int16_t> m_audioAccumulator;
+    
+    // Track total samples processed for correct PTS calculation when multiple frames are generated
+    int64_t m_totalAudioSamplesProcessed = 0;
 
     // Detecção de dessincronização
     int m_desyncFrameCount = 0;

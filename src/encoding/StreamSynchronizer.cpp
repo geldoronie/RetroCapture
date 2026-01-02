@@ -79,6 +79,10 @@ bool StreamSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCoun
     }
 
     // Calcular duração deste chunk de áudio
+    // sampleCount é o número total de samples (todos os canais)
+    // Para calcular a duração: samples_por_canal / sample_rate
+    // samples_por_canal = sampleCount / channels
+    // duração = (sampleCount / channels) * 1000000LL / sampleRate
     int64_t durationUs = (sampleCount * 1000000LL) / (sampleRate * channels);
 
     TimestampedAudio audio;
@@ -118,6 +122,9 @@ StreamSynchronizer::SyncZone StreamSynchronizer::calculateSyncZone()
     std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
     std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
 
+    // If either buffer is empty, return invalid zone
+    // BUT: if audio is not required, we can still process video-only
+    // This check is done in RecordingManager, so we return invalid here
     if (m_videoBuffer.empty() || m_audioBuffer.empty())
     {
         return SyncZone::invalid();
@@ -214,6 +221,13 @@ std::vector<StreamSynchronizer::TimestampedFrame> StreamSynchronizer::getVideoFr
         {
             frames.push_back(m_videoBuffer[i]);
         }
+        
+        // CRITICAL: Sort frames by timestamp to ensure correct playback order
+        // Frames may arrive out of order due to capture timing, so we must sort them
+        std::sort(frames.begin(), frames.end(), 
+                  [](const TimestampedFrame &a, const TimestampedFrame &b) {
+                      return a.captureTimestampUs < b.captureTimestampUs;
+                  });
     }
 
     return frames;
@@ -230,6 +244,13 @@ std::vector<StreamSynchronizer::TimestampedAudio> StreamSynchronizer::getAudioCh
         {
             chunks.push_back(m_audioBuffer[i]);
         }
+        
+        // CRITICAL: Sort chunks by timestamp to ensure correct playback order
+        // Audio chunks may arrive out of order, so we must sort them
+        std::sort(chunks.begin(), chunks.end(), 
+                  [](const TimestampedAudio &a, const TimestampedAudio &b) {
+                      return a.captureTimestampUs < b.captureTimestampUs;
+                  });
     }
 
     return chunks;
