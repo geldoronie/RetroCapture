@@ -137,7 +137,7 @@ bool RecordingManager::startRecording(const RecordingSettings& settings)
     m_videoFrameCount = 0;
     m_audioSampleCount = 0;
 
-    // Configure StreamSynchronizer
+    // Configure MediaSynchronizer
     m_synchronizer.setMaxBufferTime(5 * 1000000LL); // 5 seconds
     m_synchronizer.setMaxVideoBufferSize(10);
     m_synchronizer.setMaxAudioBufferSize(20);
@@ -383,7 +383,7 @@ void RecordingManager::encodingThread()
         }
 
         // Calculate sync zone
-        StreamSynchronizer::SyncZone syncZone = m_synchronizer.calculateSyncZone();
+        MediaSynchronizer::SyncZone syncZone = m_synchronizer.calculateSyncZone();
         
         // Log sync zone status periodically
         static int syncZoneLogCounter = 0;
@@ -417,7 +417,7 @@ void RecordingManager::encodingThread()
                 {
                     // Create a fake sync zone for video-only processing
                     // Note: isValid() requires audioEndIdx > audioStartIdx, so we set it to 1
-                    syncZone = StreamSynchronizer::SyncZone();
+                    syncZone = MediaSynchronizer::SyncZone();
                     syncZone.videoStartIdx = 0;
                     syncZone.videoEndIdx = std::min(videoBufferSize, static_cast<size_t>(2)); // Process up to 2 frames
                     syncZone.audioStartIdx = 0;
@@ -514,7 +514,7 @@ void RecordingManager::encodingThread()
             }
 
             // Get synchronized audio chunks (only if audio is included and available)
-            std::vector<StreamSynchronizer::TimestampedAudio> audioChunks;
+            std::vector<MediaSynchronizer::TimestampedAudio> audioChunks;
             if (m_settings.includeAudio && m_audioSampleRate > 0 && m_audioChannels > 0 && syncZone.audioEndIdx > syncZone.audioStartIdx)
             {
                 audioChunks = m_synchronizer.getAudioChunks(syncZone);

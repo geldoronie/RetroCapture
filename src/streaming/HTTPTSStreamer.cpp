@@ -134,7 +134,7 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     // Capturar timestamp de captura (quando o frame chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Adicionar frame ao StreamSynchronizer
+    // Adicionar frame ao MediaSynchronizer
     return m_streamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 
@@ -153,7 +153,7 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
     // Capturar timestamp de captura (quando o áudio chega ao streamer)
     int64_t captureTimestampUs = getTimestampUs();
 
-    // Adicionar áudio ao StreamSynchronizer
+    // Adicionar áudio ao MediaSynchronizer
     return m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
 }
 
@@ -1031,7 +1031,7 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
 
 bool HTTPTSStreamer::initializeEncoding()
 {
-    // Configurar StreamSynchronizer com valores configuráveis
+    // Configurar MediaSynchronizer com valores configuráveis
     m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
     m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
@@ -2626,7 +2626,7 @@ int64_t HTTPTSStreamer::getTimestampUs() const
 
 void HTTPTSStreamer::cleanupOldData()
 {
-    // StreamSynchronizer já faz cleanup internamente
+    // MediaSynchronizer já faz cleanup internamente
     m_streamSynchronizer.cleanupOldData();
 }
 
@@ -2680,7 +2680,7 @@ void HTTPTSStreamer::encodingThread()
 
         bool processedAny = false;
 
-        // Limpar dados antigos do StreamSynchronizer apenas ocasionalmente (não a cada iteração)
+        // Limpar dados antigos do MediaSynchronizer apenas ocasionalmente (não a cada iteração)
         // Isso evita remover dados muito agressivamente antes de serem processados
         cleanupCounter++;
         if (cleanupCounter >= CLEANUP_INTERVAL)
@@ -2695,7 +2695,7 @@ void HTTPTSStreamer::encodingThread()
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
         // Calcular zona de sincronização
-        StreamSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
+        MediaSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
 
         if (syncZone.isValid())
         {

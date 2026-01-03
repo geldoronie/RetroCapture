@@ -4,7 +4,7 @@
 #include "RecordingMetadata.h"
 #include "FileRecorder.h"
 #include "../encoding/MediaEncoder.h"
-#include "../encoding/StreamSynchronizer.h"
+#include "../encoding/MediaSynchronizer.h"
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -78,7 +78,7 @@ private:
 
     FileRecorder m_recorder;
     MediaEncoder m_encoder;
-    StreamSynchronizer m_synchronizer;
+    MediaSynchronizer m_synchronizer;
     
     RecordingSettings m_settings;
     RecordingMetadata m_currentMetadata;
