@@ -1,25 +1,25 @@
-#include "StreamSynchronizer.h"
+#include "MediaSynchronizer.h"
 #include "../utils/Logger.h"
 #include <algorithm>
 #include <ctime>
 
-StreamSynchronizer::StreamSynchronizer()
+MediaSynchronizer::MediaSynchronizer()
 {
 }
 
-StreamSynchronizer::~StreamSynchronizer()
+MediaSynchronizer::~MediaSynchronizer()
 {
     clear();
 }
 
-int64_t StreamSynchronizer::getTimestampUs() const
+int64_t MediaSynchronizer::getTimestampUs() const
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
 }
 
-bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
+bool MediaSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!data || width == 0 || height == 0)
     {
@@ -29,7 +29,7 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
     size_t expectedSize = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
     if (expectedSize == 0 || expectedSize > 100 * 1024 * 1024)
     {
-        LOG_ERROR("StreamSynchronizer: Invalid frame size");
+        LOG_ERROR("MediaSynchronizer: Invalid frame size");
         return false;
     }
 
@@ -42,7 +42,7 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
 
     if (frame.data->size() != expectedSize)
     {
-        LOG_ERROR("StreamSynchronizer: Frame data size mismatch");
+        LOG_ERROR("MediaSynchronizer: Frame data size mismatch");
         return false;
     }
 
@@ -71,7 +71,7 @@ bool StreamSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint
     return true;
 }
 
-bool StreamSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs, uint32_t sampleRate, uint32_t channels)
+bool MediaSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs, uint32_t sampleRate, uint32_t channels)
 {
     if (!samples || sampleCount == 0)
     {
@@ -117,7 +117,7 @@ bool StreamSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCoun
     return true;
 }
 
-StreamSynchronizer::SyncZone StreamSynchronizer::calculateSyncZone()
+MediaSynchronizer::SyncZone MediaSynchronizer::calculateSyncZone()
 {
     std::lock_guard<std::mutex> videoLock(m_videoBufferMutex);
     std::lock_guard<std::mutex> audioLock(m_audioBufferMutex);
@@ -210,7 +210,7 @@ StreamSynchronizer::SyncZone StreamSynchronizer::calculateSyncZone()
     return zone;
 }
 
-std::vector<StreamSynchronizer::TimestampedFrame> StreamSynchronizer::getVideoFrames(const SyncZone &zone)
+std::vector<MediaSynchronizer::TimestampedFrame> MediaSynchronizer::getVideoFrames(const SyncZone &zone)
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);
     std::vector<TimestampedFrame> frames;
@@ -241,7 +241,7 @@ std::vector<StreamSynchronizer::TimestampedFrame> StreamSynchronizer::getVideoFr
     return frames;
 }
 
-std::vector<StreamSynchronizer::TimestampedAudio> StreamSynchronizer::getAudioChunks(const SyncZone &zone)
+std::vector<MediaSynchronizer::TimestampedAudio> MediaSynchronizer::getAudioChunks(const SyncZone &zone)
 {
     std::lock_guard<std::mutex> lock(m_audioBufferMutex);
     std::vector<TimestampedAudio> chunks;
@@ -264,7 +264,7 @@ std::vector<StreamSynchronizer::TimestampedAudio> StreamSynchronizer::getAudioCh
     return chunks;
 }
 
-void StreamSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
+void MediaSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);
     if (endIdx > startIdx && endIdx <= m_videoBuffer.size())
@@ -276,7 +276,7 @@ void StreamSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
     }
 }
 
-void StreamSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
+void MediaSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
 {
     std::lock_guard<std::mutex> lock(m_audioBufferMutex);
     if (endIdx > startIdx && endIdx <= m_audioBuffer.size())
@@ -288,7 +288,7 @@ void StreamSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
     }
 }
 
-void StreamSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
+void MediaSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);
     // Find frame with matching timestamp and mark it as processed
@@ -302,7 +302,7 @@ void StreamSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
     }
 }
 
-void StreamSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
+void MediaSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
 {
     std::lock_guard<std::mutex> lock(m_audioBufferMutex);
     // Find chunk with matching timestamp and mark it as processed
@@ -316,7 +316,7 @@ void StreamSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
     }
 }
 
-void StreamSynchronizer::cleanupOldData()
+void MediaSynchronizer::cleanupOldData()
 {
     // Calcular timestamp mais antigo permitido (janela temporal)
     int64_t oldestAllowedVideoUs = m_latestVideoTimestampUs - m_maxBufferTimeUs;
@@ -367,7 +367,7 @@ void StreamSynchronizer::cleanupOldData()
     }
 }
 
-void StreamSynchronizer::clear()
+void MediaSynchronizer::clear()
 {
     {
         std::lock_guard<std::mutex> lock(m_videoBufferMutex);
@@ -384,13 +384,13 @@ void StreamSynchronizer::clear()
     }
 }
 
-size_t StreamSynchronizer::getVideoBufferSize() const
+size_t MediaSynchronizer::getVideoBufferSize() const
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);
     return m_videoBuffer.size();
 }
 
-size_t StreamSynchronizer::getAudioBufferSize() const
+size_t MediaSynchronizer::getAudioBufferSize() const
 {
     std::lock_guard<std::mutex> lock(m_audioBufferMutex);
     return m_audioBuffer.size();

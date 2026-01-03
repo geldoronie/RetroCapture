@@ -7,12 +7,12 @@
 #include <mutex>
 
 /**
- * StreamSynchronizer - Classe responsável por sincronização de áudio e vídeo
+ * MediaSynchronizer - Classe responsável por sincronização de áudio e vídeo
  *
  * Gerencia buffers temporais de vídeo e áudio, calcula zonas de sincronização
- * e fornece dados sincronizados para encoding.
+ * e fornece dados sincronizados para encoding (streaming e gravação).
  */
-class StreamSynchronizer
+class MediaSynchronizer
 {
 public:
     // Frame de vídeo com timestamp
@@ -61,8 +61,8 @@ public:
         }
     };
 
-    StreamSynchronizer();
-    ~StreamSynchronizer();
+    MediaSynchronizer();
+    ~MediaSynchronizer();
 
     // Configurar parâmetros de sincronização
     void setSyncTolerance(int64_t toleranceUs) { m_syncToleranceUs = toleranceUs; }
