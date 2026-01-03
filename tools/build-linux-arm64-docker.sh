@@ -107,12 +107,27 @@ BUILDX_VERSION=$($DOCKER_CMD buildx version 2>/dev/null | head -1)
 echo "   ✅ Docker Buildx encontrado: $BUILDX_VERSION"
 
 # Verificar se QEMU está disponível para emulação ARM
-if [ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+QEMU_CONFIGURED=false
+if [ -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+    QEMU_CONFIGURED=true
+    echo "   ✅ QEMU para ARM64 está configurado"
+elif command -v qemu-aarch64-static &>/dev/null || command -v qemu-aarch64 &>/dev/null; then
+    QEMU_CONFIGURED=true
+    echo "   ✅ QEMU para ARM64 está disponível"
+else
     echo "⚠️  QEMU para ARM64 não está configurado no sistema"
-    echo "   Tentando instalar qemu-user-static..."
+    echo "   Tentando configurar automaticamente..."
     if command -v apt-get &>/dev/null; then
-        echo "   Execute: sudo apt-get install -y qemu-user-static binfmt-support"
-        echo "   Ou: sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
+        if sudo apt-get install -y qemu-user-static binfmt-support 2>/dev/null; then
+            QEMU_CONFIGURED=true
+            echo "   ✅ QEMU instalado com sucesso"
+        else
+            echo "   ⚠️  Falha ao instalar QEMU automaticamente"
+            echo "   Execute manualmente: sudo apt-get install -y qemu-user-static binfmt-support"
+            echo "   Ou: sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
+        fi
+    else
+        echo "   Execute: sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
     fi
     echo ""
 fi
@@ -199,18 +214,37 @@ else
     BUILD_WITH_SDL2="OFF"
 fi
 
-$DOCKER_CMD run --rm \
+# Executar o container com emulação ARM64
+# Se QEMU não estiver configurado, tentar usar --privileged para permitir emulação
+if [ "$QEMU_CONFIGURED" != "true" ]; then
+    echo "⚠️  Executando com --privileged (QEMU pode não estar configurado corretamente)"
+    DOCKER_RUN_ARGS="--privileged"
+else
+    DOCKER_RUN_ARGS=""
+fi
+
+if ! $DOCKER_CMD run --rm $DOCKER_RUN_ARGS \
     --platform linux/arm64 \
     -e BUILD_TYPE="$BUILD_TYPE" \
     -e BUILD_WITH_SDL2="$BUILD_WITH_SDL2" \
     -v "$(pwd):/work:ro" \
     -v "$(pwd)/build-linux-arm64:/work/build-linux-arm64:rw" \
     -w /work \
-    "$IMAGE_TAG" > build-linux-arm64.log 2>&1
-
-if [ $? -ne 0 ]; then
+    "$IMAGE_TAG" > build-linux-arm64.log 2>&1; then
     echo "❌ Falha na compilação!"
     echo "   Verifique build-linux-arm64.log para detalhes"
+    echo ""
+    if grep -q "exec format error" build-linux-arm64.log 2>/dev/null; then
+        echo "💡 Erro detectado: 'exec format error'"
+        echo "   Isso indica que o QEMU não está configurado corretamente para emular ARM64"
+        echo ""
+        echo "   Para corrigir, execute:"
+        echo "   sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
+        echo ""
+        echo "   Ou instale manualmente:"
+        echo "   sudo apt-get install -y qemu-user-static binfmt-support"
+        echo "   sudo systemctl restart docker"
+    fi
     exit 1
 fi
 

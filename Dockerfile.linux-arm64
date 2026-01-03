@@ -49,4 +49,4 @@ RUN chmod +x /usr/local/bin/docker-build-linux-arm64.sh
 
 WORKDIR /work
 
-ENTRYPOINT ["/usr/local/bin/docker-build-linux-arm64.sh"]
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/docker-build-linux-arm64.sh"]
