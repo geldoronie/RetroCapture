@@ -110,7 +110,7 @@ bool RecordingManager::startRecording(const RecordingSettings& settings)
     
     // Initialize metadata
     m_currentMetadata = RecordingMetadata();
-    m_currentMetadata.filename = fs::path(outputPath).filename().string();
+    m_currentMetadata.filename = fs_helper::get_filename_string(fs::path(outputPath));
     m_currentMetadata.filepath = fs::absolute(fs::path(outputPath)).string();
     m_currentMetadata.container = settings.container;
     m_currentMetadata.videoCodec = settings.codec;
