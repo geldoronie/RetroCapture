@@ -11,9 +11,9 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     exit 1
 fi
 
-echo "🚀 Compilando RetroCapture para Linux ARMv7 (Raspberry Pi 3)..."
+echo "🚀 Compilando RetroCapture para Linux ARM64 (Raspberry Pi 4/5)..."
 echo "📦 Build type: $BUILD_TYPE"
-echo "🏗️  Arquitetura: ARMv7 (armhf)"
+echo "🏗️  Arquitetura: ARM64 (aarch64)"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -35,7 +35,7 @@ echo "⚙️  Configurando Git..."
 git config --global --add safe.directory '*' || true
 
 # Criar diretório de build (limpar cache CMake se existir)
-BUILD_DIR="build-linux-armv7"
+BUILD_DIR="build-linux-arm64v8"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 

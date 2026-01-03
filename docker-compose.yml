@@ -19,28 +19,28 @@ services:
       - ./build-linux-x86_64:/work/build-linux-x86_64:rw
     working_dir: /work
 
-  build-linux-armv7:
+  build-linux-arm32v7:
     build:
       context: .
-      dockerfile: Dockerfile.linux-armv7
+      dockerfile: Dockerfile.linux-arm32v7
       platforms:
         - linux/arm/v7
-    image: retrocapture-linux-armv7-builder:latest
+    image: retrocapture-linux-arm32v7-builder:latest
     platform: linux/arm/v7
     volumes:
       - .:/work:ro
-      - ./build-linux-armv7:/work/build-linux-armv7:rw
+      - ./build-linux-arm32v7:/work/build-linux-arm32v7:rw
     working_dir: /work
 
-  build-linux-arm64:
+  build-linux-arm64v8:
     build:
       context: .
-      dockerfile: Dockerfile.linux-arm64
+      dockerfile: Dockerfile.linux-arm64v8
       platforms:
         - linux/arm64
-    image: retrocapture-linux-arm64-builder:latest
+    image: retrocapture-linux-arm64v8-builder:latest
     platform: linux/arm64
     volumes:
       - .:/work:ro
-      - ./build-linux-arm64:/work/build-linux-arm64:rw
+      - ./build-linux-arm64v8:/work/build-linux-arm64v8:rw
     working_dir: /work

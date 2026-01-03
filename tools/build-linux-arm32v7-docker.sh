@@ -45,10 +45,10 @@ if [ "$BUILD_WITH_SDL2_ARG" = "SDL2" ] || [ "$BUILD_WITH_SDL2_ARG" = "sdl2" ] ||
     echo ""
 fi
 
-echo "🐳 RetroCapture - Build para Linux ARMv7 usando Docker"
+echo "🐳 RetroCapture - Build para Linux ARM32v7 usando Docker"
 echo "======================================================"
 echo "📦 Build type: $BUILD_TYPE"
-echo "🏗️  Arquitetura: ARMv7 (armhf) - Raspberry Pi 3"
+echo "🏗️  Arquitetura: ARM32v7 (armhf) - Raspberry Pi 3"
 echo "🔧 Base: arm32v7/debian:trixie (FFmpeg 6.1)"
 echo "✅ Compatível com: Debian Trixie, Raspberry Pi OS (Debian Trixie)"
 echo ""
@@ -125,7 +125,7 @@ if [ ! -f /proc/sys/fs/binfmt_misc/qemu-arm ]; then
 fi
 
 # Criar builder multiplataforma se não existir
-BUILDER_NAME="retrocapture-armv7-builder"
+BUILDER_NAME="retrocapture-arm32v7-builder"
 echo "   📦 Configurando builder multiplataforma..."
 
 # Verificar se o builder já existe
@@ -155,7 +155,7 @@ CURRENT_BUILDER=$($DOCKER_CMD buildx ls 2>/dev/null | grep '*' | awk '{print $1}
 echo "   ✅ Builder ativo: $CURRENT_BUILDER"
 
 echo ""
-echo "📦 Construindo imagem Docker para ARMv7..."
+echo "📦 Construindo imagem Docker para ARM32v7..."
 if [ -n "$FORCE_REBUILD" ]; then
     echo "   🔄 Forçando rebuild completo (sem cache)..."
     echo "   Isso pode demorar vários minutos..."
@@ -168,24 +168,21 @@ echo "   (Cross-compilation via QEMU em sistema x86_64)"
 echo ""
 
 # Usar docker buildx build diretamente com plataforma específica
-IMAGE_NAME="retrocapture-linux-armv7-builder"
+IMAGE_NAME="retrocapture-linux-arm32v7-builder"
 IMAGE_TAG="$IMAGE_NAME:latest"
-
-echo ""
-echo "📦 Construindo imagem Docker para ARMv7..."
 echo "   (Isso pode demorar bastante na primeira vez devido à emulação QEMU)"
 echo ""
 
 # Construir a imagem usando buildx com --load
 # Nota: --load requer QEMU configurado via binfmt_misc
-BUILD_ARGS="--platform linux/arm/v7 --file Dockerfile.linux-armv7 --tag $IMAGE_TAG --load"
+BUILD_ARGS="--platform linux/arm/v7 --file Dockerfile.linux-arm32v7 --tag $IMAGE_TAG --load"
 if [ -n "$FORCE_REBUILD" ]; then
     BUILD_ARGS="$BUILD_ARGS --no-cache"
 fi
 
-if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-armv7-image.log 2>&1; then
+if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-arm32v7-image.log 2>&1; then
     echo "❌ Falha ao construir imagem Docker!"
-    echo "   Verifique build-linux-armv7-image.log para detalhes"
+    echo "   Verifique build-linux-arm32v7-image.log para detalhes"
     echo ""
     echo "💡 Solução: Configure QEMU para emulação ARM executando:"
     echo "   sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
@@ -198,7 +195,7 @@ fi
 
 echo ""
 echo "✅ Imagem construída com sucesso!"
-echo "🔨 Compilando RetroCapture no container ARMv7..."
+echo "🔨 Compilando RetroCapture no container ARM32v7..."
 echo ""
 
 # Executar o container usando a imagem construída
@@ -216,25 +213,25 @@ $DOCKER_CMD run --rm \
     -e BUILD_TYPE="$BUILD_TYPE" \
     -e BUILD_WITH_SDL2="$BUILD_WITH_SDL2" \
     -v "$(pwd):/work:ro" \
-    -v "$(pwd)/build-linux-armv7:/work/build-linux-armv7:rw" \
+    -v "$(pwd)/build-linux-arm32v7:/work/build-linux-arm32v7:rw" \
     -w /work \
-    "$IMAGE_TAG" > build-linux-armv7.log 2>&1
+    "$IMAGE_TAG" > build-linux-arm32v7.log 2>&1
 
 if [ $? -ne 0 ]; then
     echo "❌ Falha na compilação!"
-    echo "   Verifique build-linux-armv7.log para detalhes"
+    echo "   Verifique build-linux-arm32v7.log para detalhes"
     exit 1
 fi
 
 echo ""
 echo "✅ Concluído!"
-echo "📁 Executável: ./build-linux-armv7/bin/retrocapture"
+echo "📁 Executável: ./build-linux-arm32v7/bin/retrocapture"
 echo ""
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
-    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-armv7/bin/retrocapture"
-    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-armv7/bin/retrocapture"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm32v7/bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-arm32v7/bin/retrocapture"
 else
-    echo "ℹ️  Nota: Este executável foi compilado para ARMv7 (Raspberry Pi 3)"
+    echo "ℹ️  Nota: Este executável foi compilado para ARM32v7 (Raspberry Pi 3)"
     echo "   Para executar, transfira para sua Raspberry Pi 3"
 fi

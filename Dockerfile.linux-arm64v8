@@ -44,9 +44,9 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && (apt-get install -y libdirectfb-dev directfb || true) && rm -rf /var/lib/apt/lists/*
 
 # Script de build
-COPY tools/docker-build-linux-arm64.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-build-linux-arm64.sh
+COPY tools/docker-build-linux-arm64v8.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build-linux-arm64v8.sh
 
 WORKDIR /work
 
-ENTRYPOINT ["/bin/bash", "/usr/local/bin/docker-build-linux-arm64.sh"]
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/docker-build-linux-arm64v8.sh"]

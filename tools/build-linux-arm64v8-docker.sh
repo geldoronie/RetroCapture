@@ -133,7 +133,7 @@ else
 fi
 
 # Criar builder multiplataforma se não existir
-BUILDER_NAME="retrocapture-arm64-builder"
+BUILDER_NAME="retrocapture-arm64v8-builder"
 echo "   📦 Configurando builder multiplataforma..."
 
 # Verificar se o builder já existe
@@ -176,19 +176,19 @@ echo "   (Cross-compilation via QEMU em sistema x86_64)"
 echo ""
 
 # Usar docker buildx build diretamente com plataforma específica
-IMAGE_NAME="retrocapture-linux-arm64-builder"
+IMAGE_NAME="retrocapture-linux-arm64v8-builder"
 IMAGE_TAG="$IMAGE_NAME:latest"
 
 # Construir a imagem usando buildx com --load
 # Nota: --load requer QEMU configurado via binfmt_misc
-BUILD_ARGS="--platform linux/arm64 --file Dockerfile.linux-arm64 --tag $IMAGE_TAG --load"
+BUILD_ARGS="--platform linux/arm64 --file Dockerfile.linux-arm64v8 --tag $IMAGE_TAG --load"
 if [ -n "$FORCE_REBUILD" ]; then
     BUILD_ARGS="$BUILD_ARGS --no-cache"
 fi
 
-if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-arm64-image.log 2>&1; then
+if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-arm64v8-image.log 2>&1; then
     echo "❌ Falha ao construir imagem Docker!"
-    echo "   Verifique build-linux-arm64-image.log para detalhes"
+    echo "   Verifique build-linux-arm64v8-image.log para detalhes"
     echo ""
     echo "💡 Solução: Configure QEMU para emulação ARM64 executando:"
     echo "   sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
@@ -228,13 +228,13 @@ if ! $DOCKER_CMD run --rm $DOCKER_RUN_ARGS \
     -e BUILD_TYPE="$BUILD_TYPE" \
     -e BUILD_WITH_SDL2="$BUILD_WITH_SDL2" \
     -v "$(pwd):/work:ro" \
-    -v "$(pwd)/build-linux-arm64:/work/build-linux-arm64:rw" \
+    -v "$(pwd)/build-linux-arm64v8:/work/build-linux-arm64v8:rw" \
     -w /work \
-    "$IMAGE_TAG" > build-linux-arm64.log 2>&1; then
+    "$IMAGE_TAG" > build-linux-arm64v8.log 2>&1; then
     echo "❌ Falha na compilação!"
-    echo "   Verifique build-linux-arm64.log para detalhes"
+    echo "   Verifique build-linux-arm64v8.log para detalhes"
     echo ""
-    if grep -q "exec format error" build-linux-arm64.log 2>/dev/null; then
+    if grep -q "exec format error" build-linux-arm64v8.log 2>/dev/null; then
         echo "💡 Erro detectado: 'exec format error'"
         echo "   Isso indica que o QEMU não está configurado corretamente para emular ARM64"
         echo ""
@@ -250,12 +250,12 @@ fi
 
 echo ""
 echo "✅ Concluído!"
-echo "📁 Executável: ./build-linux-arm64/bin/retrocapture"
+echo "📁 Executável: ./build-linux-arm64v8/bin/retrocapture"
 echo ""
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
-    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm64/bin/retrocapture"
-    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-arm64/bin/retrocapture"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm64v8/bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-arm64v8/bin/retrocapture"
 else
     echo "ℹ️  Nota: Este executável foi compilado para ARM64 (aarch64)"
     echo "   Compatível com Raspberry Pi 4/5 e outros sistemas ARM64"

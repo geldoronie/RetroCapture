@@ -29,40 +29,40 @@ Compila RetroCapture diretamente na Raspberry Pi (recomendado para compatibilida
 
 ### Build via Docker (Cross-compilation)
 
-#### `build-linux-arm64-docker.sh`
+#### `build-linux-arm64v8-docker.sh`
 
-Compila para Linux ARM64 (Raspberry Pi 4/5) usando Docker.
+Compila para Linux ARM64v8 (Raspberry Pi 4/5) usando Docker.
 
 ```bash
-./tools/build-linux-arm64-docker.sh [Release|Debug] [--rebuild] [SDL2]
+./tools/build-linux-arm64v8-docker.sh [Release|Debug] [--rebuild] [SDL2]
 ```
 
 **Exemplos:**
 
 ```bash
 # Build Release padrão
-./tools/build-linux-arm64-docker.sh Release
+./tools/build-linux-arm64v8-docker.sh Release
 
 # Build Release com SDL2
-./tools/build-linux-arm64-docker.sh Release SDL2
+./tools/build-linux-arm64v8-docker.sh Release SDL2
 
 # Build com rebuild completo da imagem Docker
-./tools/build-linux-arm64-docker.sh Release --rebuild SDL2
+./tools/build-linux-arm64v8-docker.sh Release --rebuild SDL2
 ```
 
-#### `build-linux-armv7-docker.sh`
+#### `build-linux-arm32v7-docker.sh`
 
-Compila para Linux ARMv7 (Raspberry Pi 3) usando Docker.
+Compila para Linux ARM32v7 (Raspberry Pi 3) usando Docker.
 
 ```bash
-./tools/build-linux-armv7-docker.sh [Release|Debug] [--rebuild] [SDL2]
+./tools/build-linux-arm32v7-docker.sh [Release|Debug] [--rebuild] [SDL2]
 ```
 
 **Exemplos:**
 
 ```bash
 # Build Release com SDL2
-./tools/build-linux-armv7-docker.sh Release SDL2
+./tools/build-linux-arm32v7-docker.sh Release SDL2
 ```
 
 #### `build-linux-x86_64-docker.sh`
@@ -162,8 +162,8 @@ O script configura automaticamente autenticação por chave SSH para evitar soli
 
 Estes scripts são usados dentro dos containers Docker durante o build:
 
-- `docker-build-linux-arm64.sh` - Build dentro do container ARM64
-- `docker-build-linux-armv7.sh` - Build dentro do container ARMv7
+- `docker-build-linux-arm64v8.sh` - Build dentro do container ARM64v8
+- `docker-build-linux-arm32v7.sh` - Build dentro do container ARM32v7
 - `docker-build-linux-x86_64.sh` - Build dentro do container Linux x86_64
 - `docker-build-windows-x86_64.sh` - Build dentro do container Windows
 
@@ -185,17 +185,17 @@ Estes scripts são usados dentro dos containers Docker durante o build:
 ./tools/build-on-raspberry-pi.sh Release SDL2
 
 # Ou via Docker (cross-compilation de outro sistema)
-./tools/build-linux-arm64-docker.sh Release SDL2
+./tools/build-linux-arm64v8-docker.sh Release SDL2
 ```
 
-### Para Raspberry Pi 3 (ARMv7):
+### Para Raspberry Pi 3 (ARM32v7):
 
 ```bash
 # Build direto na Raspberry
 ./tools/build-on-raspberry-pi.sh Release SDL2
 
 # Ou via Docker
-./tools/build-linux-armv7-docker.sh Release SDL2
+./tools/build-linux-arm32v7-docker.sh Release SDL2
 ```
 
 ### Para Linux x86_64:
