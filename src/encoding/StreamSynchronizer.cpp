@@ -217,17 +217,25 @@ std::vector<StreamSynchronizer::TimestampedFrame> StreamSynchronizer::getVideoFr
 
     if (zone.videoEndIdx > zone.videoStartIdx && zone.videoEndIdx <= m_videoBuffer.size())
     {
+        // Create vector with indices to track original positions
+        std::vector<std::pair<size_t, TimestampedFrame>> indexedFrames;
         for (size_t i = zone.videoStartIdx; i < zone.videoEndIdx; i++)
         {
-            frames.push_back(m_videoBuffer[i]);
+            indexedFrames.push_back({i, m_videoBuffer[i]});
         }
         
         // CRITICAL: Sort frames by timestamp to ensure correct playback order
         // Frames may arrive out of order due to capture timing, so we must sort them
-        std::sort(frames.begin(), frames.end(), 
-                  [](const TimestampedFrame &a, const TimestampedFrame &b) {
-                      return a.captureTimestampUs < b.captureTimestampUs;
+        std::sort(indexedFrames.begin(), indexedFrames.end(), 
+                  [](const std::pair<size_t, TimestampedFrame> &a, const std::pair<size_t, TimestampedFrame> &b) {
+                      return a.second.captureTimestampUs < b.second.captureTimestampUs;
                   });
+        
+        // Extract sorted frames (without indices for return)
+        for (const auto &pair : indexedFrames)
+        {
+            frames.push_back(pair.second);
+        }
     }
 
     return frames;
@@ -276,6 +284,34 @@ void StreamSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
         for (size_t i = startIdx; i < endIdx; i++)
         {
             m_audioBuffer[i].processed = true;
+        }
+    }
+}
+
+void StreamSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
+{
+    std::lock_guard<std::mutex> lock(m_videoBufferMutex);
+    // Find frame with matching timestamp and mark it as processed
+    for (auto &frame : m_videoBuffer)
+    {
+        if (frame.captureTimestampUs == timestampUs && !frame.processed)
+        {
+            frame.processed = true;
+            break; // Only mark first match (should be unique)
+        }
+    }
+}
+
+void StreamSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
+{
+    std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+    // Find chunk with matching timestamp and mark it as processed
+    for (auto &chunk : m_audioBuffer)
+    {
+        if (chunk.captureTimestampUs == timestampUs && !chunk.processed)
+        {
+            chunk.processed = true;
+            break; // Only mark first match (should be unique)
         }
     }
 }

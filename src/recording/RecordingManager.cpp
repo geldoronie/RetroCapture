@@ -580,11 +580,26 @@ void RecordingManager::encodingThread()
                 }
             }
 
-            // Mark data as processed
-            m_synchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+            // CRITICAL: Mark only frames that were actually processed
+            // Since frames are sorted by timestamp, we need to mark them individually
+            // to avoid marking wrong frames as processed
+            for (const auto& frame : videoFrames)
+            {
+                if (frame.processed || !frame.data) continue; // Skip if already processed or invalid
+                
+                // Find and mark this specific frame in the buffer
+                // We need to find it by timestamp since order may have changed
+                m_synchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
+            }
+            
+            // Mark audio chunks as processed
             if (syncZone.audioEndIdx > syncZone.audioStartIdx)
             {
-                m_synchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
+                for (const auto& chunk : audioChunks)
+                {
+                    if (chunk.processed || !chunk.samples) continue;
+                    m_synchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
+                }
             }
 
             // Update status

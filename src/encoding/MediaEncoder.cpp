@@ -603,22 +603,21 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
     // Increment frame count for statistics (but don't use it for PTS calculation)
     m_videoFrameCountForPTS++;
 
-    // CRITICAL: Ensure PTS is monotonic based on the last PTS actually sent to codec
-    // This prevents glitches when frames are processed out of order or in batches
+    // Log PTS calculation occasionally for debugging
+    static int ptsLogCounter = 0;
+    ptsLogCounter++;
+    if (ptsLogCounter == 1 || ptsLogCounter % 300 == 0) // Every 5 seconds at 60fps
     {
-        std::lock_guard<std::mutex> lock(m_ptsMutex);
-        // Use m_lastVideoPTS (last PTS actually sent) instead of m_lastVideoFramePTS
-        // This ensures consistency with ensureMonotonicPTS
-        if (m_lastVideoPTS >= 0 && calculatedPTS <= m_lastVideoPTS)
-        {
-            // If calculated PTS is not greater than last, increment by minimum step
-            // Minimum step is 1 in time_base units
-            calculatedPTS = m_lastVideoPTS + 1;
-        }
-        // Don't update m_lastVideoPTS here - it will be updated in ensureMonotonicPTS
-        // when the packet is actually created
-        m_lastVideoFramePTS = calculatedPTS;
+        LOG_INFO("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
+                 ", relativeTimeUs: " + std::to_string(relativeTimeUs) + 
+                 ", relativeTimeSeconds: " + std::to_string(relativeTimeSeconds) +
+                 ", timeBase: " + std::to_string(timeBase.num) + "/" + std::to_string(timeBase.den) +
+                 ", fps: " + std::to_string(m_videoConfig.fps));
     }
+
+    // Use timestamp-based PTS directly - let MediaMuxer handle monotonicity
+    // This ensures correct speed based on actual timestamps
+    // MediaMuxer will ensure PTS doesn't go backwards when writing packets
 
     return calculatedPTS;
 }
@@ -1117,8 +1116,111 @@ void MediaEncoder::flush(std::vector<EncodedPacket> &packets)
     }
 
     AVCodecContext *audioCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
-    if (audioCtx)
+    AVFrame *audioFrame = static_cast<AVFrame *>(m_audioFrame);
+    if (audioCtx && audioFrame)
     {
+        // CRITICAL: Process all remaining samples in accumulator before flushing
+        // This ensures no audio is lost at the end of recording
+        const int samplesPerFrame = audioCtx->frame_size;
+        if (samplesPerFrame > 0)
+        {
+            const int totalSamplesNeeded = samplesPerFrame * m_audioConfig.channels;
+            
+            while (true)
+            {
+                std::vector<int16_t> samplesToProcess;
+                {
+                    std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
+                    if (static_cast<int>(m_audioAccumulator.size()) < totalSamplesNeeded)
+                    {
+                        break; // Not enough samples for a complete frame
+                    }
+                    samplesToProcess.assign(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
+                }
+                
+                // Convert and encode remaining samples
+                if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
+                {
+                    int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
+                    
+                    // Calculate PTS for this frame
+                    int64_t calculatedPTS = calculateAudioPTS(0, actualFrameSamples * m_audioConfig.channels);
+                    audioFrame->pts = calculatedPTS;
+                    m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
+                    
+                    // Send to codec
+                    int ret = avcodec_send_frame(audioCtx, audioFrame);
+                    if (ret < 0 && ret != AVERROR(EAGAIN))
+                    {
+                        break;
+                    }
+                    
+                    // Receive packets
+                    receiveAudioPackets(packets, 0);
+                    
+                    // Remove processed samples
+                    {
+                        std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
+                        m_audioAccumulator.erase(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
+                    }
+                }
+                else
+                {
+                    break; // Conversion failed
+                }
+            }
+            
+            // Flush resampler: send null input to get remaining samples from internal buffer
+            // This ensures all audio is processed, not lost
+            SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
+            if (swrCtx && audioFrame)
+            {
+                // Check if resampler has delayed samples
+                int64_t delay = swr_get_delay(swrCtx, m_audioConfig.sampleRate);
+                if (delay > 0)
+                {
+                    // Flush resampler by sending null input
+                    const uint8_t *nullInput[1] = {nullptr};
+                    int flushedSamples = swr_convert(swrCtx, audioFrame->data, samplesPerFrame,
+                                                      nullInput, 0);
+                    
+                    if (flushedSamples > 0)
+                    {
+                        audioFrame->nb_samples = flushedSamples;
+                        int64_t calculatedPTS = calculateAudioPTS(0, flushedSamples * m_audioConfig.channels);
+                        audioFrame->pts = calculatedPTS;
+                        m_totalAudioSamplesProcessed += (flushedSamples * m_audioConfig.channels);
+                        
+                        avcodec_send_frame(audioCtx, audioFrame);
+                        receiveAudioPackets(packets, 0);
+                    }
+                }
+            }
+            
+            // Process any remaining samples in accumulator (pad with zeros if needed)
+            {
+                std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
+                if (!m_audioAccumulator.empty() && m_audioAccumulator.size() < static_cast<size_t>(totalSamplesNeeded))
+                {
+                    // Pad with zeros to complete a frame
+                    m_audioAccumulator.resize(totalSamplesNeeded, 0);
+                    std::vector<int16_t> samplesToProcess = m_audioAccumulator;
+                    
+                    if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
+                    {
+                        int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
+                        int64_t calculatedPTS = calculateAudioPTS(0, actualFrameSamples * m_audioConfig.channels);
+                        audioFrame->pts = calculatedPTS;
+                        m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
+                        
+                        avcodec_send_frame(audioCtx, audioFrame);
+                        receiveAudioPackets(packets, 0);
+                    }
+                }
+            }
+        }
+        
+        // Now flush the codec
         avcodec_send_frame(audioCtx, nullptr);
         receiveAudioPackets(packets, 0);
     }

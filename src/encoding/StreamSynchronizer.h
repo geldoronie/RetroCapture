@@ -89,6 +89,11 @@ public:
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
     void markAudioProcessed(size_t startIdx, size_t endIdx);
+    
+    // Marcar frame/chunk específico como processado por timestamp
+    // Used when frames are sorted and indices don't match
+    void markVideoFrameProcessedByTimestamp(int64_t timestampUs);
+    void markAudioChunkProcessedByTimestamp(int64_t timestampUs);
 
     // Limpar dados antigos (baseado em tempo)
     void cleanupOldData();

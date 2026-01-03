@@ -258,6 +258,8 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     }
 
     // Escrever header do formato
+    // CRITICAL: avformat_write_header may change stream->time_base!
+    // We need to use the time_base AFTER writing the header
     if (avformat_write_header(formatCtx, nullptr) < 0)
     {
         LOG_ERROR("MediaMuxer: Failed to write format header");
@@ -265,6 +267,24 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         av_free(const_cast<char *>(formatCtx->url));
         avformat_free_context(formatCtx);
         return false;
+    }
+    
+    // Log actual time_base after header (FFmpeg may have changed it)
+    if (videoStream)
+    {
+        LOG_INFO("MediaMuxer: Video stream time_base after header: " + 
+                 std::to_string(videoStream->time_base.num) + "/" + 
+                 std::to_string(videoStream->time_base.den) + 
+                 " (codec: " + std::to_string(videoCtx->time_base.num) + "/" + 
+                 std::to_string(videoCtx->time_base.den) + ")");
+    }
+    if (audioStream)
+    {
+        LOG_INFO("MediaMuxer: Audio stream time_base after header: " + 
+                 std::to_string(audioStream->time_base.num) + "/" + 
+                 std::to_string(audioStream->time_base.den) + 
+                 " (codec: " + std::to_string(audioCtx->time_base.num) + "/" + 
+                 std::to_string(audioCtx->time_base.den) + ")");
     }
 
     m_muxerContext = formatCtx;
@@ -461,11 +481,28 @@ void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &
     AVRational codecTimeBase = codecCtx->time_base;
     AVRational streamTimeBase = stream->time_base;
 
+    // Log time_base mismatch occasionally for debugging
+    static int timeBaseLogCounter = 0;
+    timeBaseLogCounter++;
+    if (timeBaseLogCounter == 1 || timeBaseLogCounter % 300 == 0)
+    {
+        LOG_INFO("MediaMuxer: PTS conversion - codec time_base: " + std::to_string(codecTimeBase.num) + "/" + std::to_string(codecTimeBase.den) +
+                 ", stream time_base: " + std::to_string(streamTimeBase.num) + "/" + std::to_string(streamTimeBase.den) +
+                 ", original PTS: " + std::to_string(pts));
+    }
+
     bool needsConversion = (codecTimeBase.num != streamTimeBase.num || codecTimeBase.den != streamTimeBase.den);
 
     if (pts != AV_NOPTS_VALUE && pts != -1 && needsConversion)
     {
+        int64_t originalPTS = pts;
         pts = av_rescale_q(pts, codecTimeBase, streamTimeBase);
+        
+        if (timeBaseLogCounter == 1 || timeBaseLogCounter % 300 == 0)
+        {
+            LOG_INFO("MediaMuxer: PTS converted - original: " + std::to_string(originalPTS) + 
+                     ", converted: " + std::to_string(pts));
+        }
     }
 
     if (dts != AV_NOPTS_VALUE && dts != -1 && needsConversion)
@@ -484,10 +521,34 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
     {
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            if (m_lastVideoPTS >= 0 && pts < m_lastVideoPTS)
+            // CRITICAL: Only prevent retrocession (PTS going backwards)
+            // Don't force minimum increment - use PTS as calculated for correct speed
+            // This ensures video speed matches reality based on timestamps
+            if (m_lastVideoPTS >= 0 && pts <= m_lastVideoPTS)
             {
+                // Log when we prevent retrocession
+                static int retroLogCounter = 0;
+                if (retroLogCounter++ < 5)
+                {
+                    LOG_WARN("MediaMuxer: Preventing PTS retrocession - last: " + std::to_string(m_lastVideoPTS) + 
+                             ", calculated: " + std::to_string(pts) + ", adjusted to: " + std::to_string(m_lastVideoPTS + 1));
+                }
+                // PTS would go backwards - just increment by 1 to prevent retrocession
+                // But don't force a large increment that would slow down the video
                 pts = m_lastVideoPTS + 1;
             }
+            // Otherwise, use PTS as-is for correct speed
+            
+            // Log PTS progression occasionally
+            static int muxLogCounter = 0;
+            muxLogCounter++;
+            if (muxLogCounter == 1 || muxLogCounter % 300 == 0)
+            {
+                LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) + 
+                         ", last: " + std::to_string(m_lastVideoPTS) + 
+                         ", increment: " + std::to_string(pts - m_lastVideoPTS));
+            }
+            
             m_lastVideoPTS = pts;
         }
         if (dts != AV_NOPTS_VALUE_LOCAL)
