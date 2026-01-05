@@ -4,6 +4,9 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <thread>
+#include <atomic>
+#include <future>
 #include "../recording/RecordingMetadata.h"
 
 // Forward declarations

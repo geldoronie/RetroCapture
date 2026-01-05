@@ -307,29 +307,46 @@ void UIRecordings::renderDeleteDialog()
     
     if (ImGui::BeginPopupModal("Delete Recording", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("Are you sure you want to delete this recording?");
-        ImGui::Text("%s", m_deleteRecordingName.c_str());
-        ImGui::Separator();
-        
-        if (ImGui::Button("Yes, Delete", ImVec2(120, 0)))
+        if (!m_deleteRecordingId.empty())
         {
-            std::string idToDelete = m_deleteRecordingId;
-            deleteRecording(idToDelete);
-            m_deleteRecordingId.clear();
-            m_deleteRecordingName.clear();
-            if (m_selectedRecordingId == idToDelete)
+            // Mostrar confirmação
+            ImGui::Text("Are you sure you want to delete this recording?");
+            ImGui::Text("%s", m_deleteRecordingName.c_str());
+            ImGui::Separator();
+            
+            if (ImGui::Button("Yes, Delete", ImVec2(120, 0)))
             {
-                m_selectedRecordingId.clear();
+                std::string idToDelete = m_deleteRecordingId;
+                std::string nameToDelete = m_deleteRecordingName;
+                
+                LOG_INFO("UIRecordings: Deleting recording: " + idToDelete);
+                
+                // Executar delete de forma síncrona (rápido, não deve travar)
+                deleteRecording(idToDelete);
+                
+                // Limpar seleção se necessário
+                if (m_selectedRecordingId == idToDelete)
+                {
+                    m_selectedRecordingId.clear();
+                }
+                
+                // Limpar flags
+                m_deleteRecordingId.clear();
+                m_deleteRecordingName.clear();
+                
+                // Atualizar lista
+                refreshRecordings();
+                
+                // Fechar popup
+                ImGui::CloseCurrentPopup();
             }
-            refreshRecordings();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0)))
-        {
-            m_deleteRecordingId.clear();
-            m_deleteRecordingName.clear();
-            ImGui::CloseCurrentPopup();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0)))
+            {
+                m_deleteRecordingId.clear();
+                m_deleteRecordingName.clear();
+                ImGui::CloseCurrentPopup();
+            }
         }
         
         ImGui::EndPopup();
@@ -382,6 +399,8 @@ void UIRecordings::deleteRecording(const std::string& recordingId)
         return;
     }
 
+    // Não limpar m_deleteRecordingId aqui - será limpo na thread principal
+    // após o join, para que possamos detectar quando a thread termina
     if (m_application->deleteRecording(recordingId))
     {
         LOG_INFO("UIRecordings: Deleted recording: " + recordingId);
