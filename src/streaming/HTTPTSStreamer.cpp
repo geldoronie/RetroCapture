@@ -1080,6 +1080,7 @@ bool HTTPTSStreamer::initializeEncoding()
     if (!m_mediaMuxer.initialize(videoConfig, audioConfig,
                                  m_mediaEncoder.getVideoCodecContext(),
                                  m_mediaEncoder.getAudioCodecContext(),
+                                 "", // filePath vazio para streaming (usa callback)
                                  writeCallback,
                                  m_avioBufferSize))
     {

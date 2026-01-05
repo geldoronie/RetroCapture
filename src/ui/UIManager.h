@@ -21,6 +21,7 @@ class ShaderEngine;
 class UIConfiguration;
 class UICredits;
 class UICapturePresets;
+class UIRecordings;
 
 class UIManager
 {
@@ -54,6 +55,9 @@ public:
     
     // Get preset window for Application connection
     UICapturePresets* getCapturePresetsWindow() { return m_capturePresetsWindow.get(); }
+    
+    // Get recordings window for Application connection
+    UIRecordings* getRecordingsWindow() { return m_recordingsWindow.get(); }
     void setOnSavePreset(std::function<void(const std::string &, bool)> callback) { m_onSavePreset = callback; }
     const std::function<void(const std::string &, bool)> &getOnSavePreset() const { return m_onSavePreset; }
     const std::vector<std::string> &getScannedShaders() const { return m_scannedShaders; }
@@ -592,6 +596,7 @@ private:
     std::unique_ptr<class UIConfiguration> m_configWindow;
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
+    std::unique_ptr<class UIRecordings> m_recordingsWindow;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
 
     // Shader selection

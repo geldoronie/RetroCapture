@@ -50,7 +50,8 @@ public:
     uint64_t getDurationUs() const { return m_durationUs; }
 
 private:
-    // File write callback for MediaMuxer
+    // File write callback for MediaMuxer (não usado mais - FFmpeg abre arquivo diretamente)
+    // Mantido para compatibilidade, mas não é mais chamado
     int writeToFile(const uint8_t* data, size_t size);
 
     // Create output directory if needed

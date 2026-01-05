@@ -810,6 +810,53 @@ std::string RecordingManager::getRecordingPath(const std::string& recordingId)
     return "";
 }
 
+bool RecordingManager::renameRecording(const std::string& recordingId, const std::string& newName)
+{
+    std::lock_guard<std::mutex> lock(m_recordingsMutex);
+
+    auto it = std::find_if(m_recordings.begin(), m_recordings.end(),
+                          [&recordingId](const RecordingMetadata& m) { return m.id == recordingId; });
+
+    if (it == m_recordings.end())
+    {
+        return false;
+    }
+
+    // Get old file path
+    std::string oldPath = it->filepath;
+    fs::path oldFilePath(oldPath);
+    
+    // Create new file path with new name
+    fs::path newFilePath = oldFilePath.parent_path() / newName;
+    
+    // If new name doesn't have extension, preserve old extension
+    if (newFilePath.extension().empty() && !oldFilePath.extension().empty())
+    {
+        newFilePath.replace_extension(oldFilePath.extension());
+    }
+
+    // Rename file
+    try
+    {
+        if (fs::exists(oldPath))
+        {
+            fs::rename(oldPath, newFilePath.string());
+        }
+    }
+    catch (const std::exception& e)
+    {
+        LOG_ERROR("RecordingManager: Failed to rename file: " + std::string(e.what()));
+        return false;
+    }
+
+    // Update metadata
+    it->filename = fs_helper::get_filename_string(newFilePath);
+    it->filepath = fs::absolute(newFilePath).string();
+
+    // Save metadata
+    return saveRecordingsMetadata();
+}
+
 void RecordingManager::setAudioFormat(uint32_t sampleRate, uint32_t channels)
 {
     m_audioSampleRate = sampleRate;

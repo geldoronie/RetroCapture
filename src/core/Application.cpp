@@ -17,6 +17,7 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../ui/UICapturePresets.h"
+#include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
@@ -862,6 +863,11 @@ bool Application::initUI()
     if (m_ui->getCapturePresetsWindow())
     {
         m_ui->getCapturePresetsWindow()->setApplication(this);
+    }
+    
+    if (m_ui->getRecordingsWindow())
+    {
+        m_ui->getRecordingsWindow()->setApplication(this);
     }
 
     // IMPORTANT: After init(), UIManager has already loaded saved configurations
@@ -3914,6 +3920,15 @@ bool Application::deleteRecording(const std::string& recordingId)
     if (m_recordingManager)
     {
         return m_recordingManager->deleteRecording(recordingId);
+    }
+    return false;
+}
+
+bool Application::renameRecording(const std::string& recordingId, const std::string& newName)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->renameRecording(recordingId, newName);
     }
     return false;
 }

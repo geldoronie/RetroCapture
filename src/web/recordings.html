@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Gerenciar gravações do RetroCapture">
+    <meta name="theme-color" content="#0A7A83">
+    
+    <title>Recordings - RetroCapture</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/style.css">
+    
+    <style>
+        .recordings-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .recording-card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .recording-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        .video-player-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: none;
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .video-player-container.active {
+            display: flex;
+        }
+        
+        .video-player-wrapper {
+            max-width: 90%;
+            max-height: 90%;
+            position: relative;
+        }
+        
+        .video-player-wrapper video {
+            max-width: 100%;
+            max-height: 100%;
+        }
+        
+        .close-player {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+            background: none;
+            border: none;
+        }
+        
+        .recording-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="portal-header">
+        <div class="container-fluid px-4 py-3">
+            <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                    <div class="logo-container me-3">
+                        <i class="bi bi-controller fs-2"></i>
+                    </div>
+                    <div>
+                        <h1 class="portal-title mb-0">Recordings</h1>
+                        <p class="portal-subtitle mb-0">Gerenciar gravações de vídeo</p>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <a href="/" class="btn btn-icon" title="Voltar ao Painel">
+                        <i class="bi bi-arrow-left"></i>
+                    </a>
+                    <button class="btn btn-icon" onclick="refreshRecordings()" title="Atualizar Lista">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Alert Container -->
+    <div class="alert-container" id="alertContainer"></div>
+
+    <!-- Main Content -->
+    <main class="portal-main">
+        <div class="container-fluid px-4 py-4">
+            <div class="recordings-container">
+                <!-- Search Bar -->
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <div class="row g-3 align-items-center">
+                            <div class="col-md-6">
+                                <label for="searchInput" class="form-label">Buscar:</label>
+                                <input type="text" class="form-control" id="searchInput" placeholder="Buscar por nome de arquivo..." onkeyup="filterRecordings()">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">&nbsp;</label>
+                                <div>
+                                    <button class="btn btn-primary" onclick="refreshRecordings()">
+                                        <i class="bi bi-arrow-clockwise"></i> Atualizar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recordings List -->
+                <div id="recordingsList" class="row g-4">
+                    <div class="col-12">
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Carregando...</span>
+                            </div>
+                            <p class="mt-3">Carregando gravações...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Video Player Modal -->
+    <div class="video-player-container" id="videoPlayerContainer">
+        <div class="video-player-wrapper">
+            <button class="close-player" onclick="closeVideoPlayer()">
+                <i class="bi bi-x-circle"></i>
+            </button>
+            <video id="videoPlayer" controls>
+                Seu navegador não suporta a reprodução de vídeo.
+            </video>
+        </div>
+    </div>
+
+    <!-- Rename Modal -->
+    <div class="modal fade" id="renameModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Renomear Gravação</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="renameInput" class="form-label">Novo nome:</label>
+                        <input type="text" class="form-control" id="renameInput">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" onclick="confirmRename()">Renomear</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Confirmar Exclusão</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Tem certeza que deseja excluir esta gravação?</p>
+                    <p class="text-muted" id="deleteRecordingName"></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-danger" onclick="confirmDelete()">Excluir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/api.js"></script>
+    <script>
+        let recordings = [];
+        let currentRenameId = null;
+        let currentDeleteId = null;
+        const renameModal = new bootstrap.Modal(document.getElementById('renameModal'));
+        const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+
+        function formatDuration(durationUs) {
+            const seconds = Math.floor(durationUs / 1000000);
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (hours > 0) {
+                return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            }
+            return `${minutes}:${String(secs).padStart(2, '0')}`;
+        }
+
+        function formatFileSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let size = bytes;
+            let unitIndex = 0;
+            
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            
+            return `${size.toFixed(2)} ${units[unitIndex]}`;
+        }
+
+        function renderRecordings(filteredRecordings = null) {
+            const list = document.getElementById('recordingsList');
+            const recordingsToRender = filteredRecordings || recordings;
+            
+            if (recordingsToRender.length === 0) {
+                list.innerHTML = `
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-body text-center py-5">
+                                <i class="bi bi-inbox fs-1 text-muted"></i>
+                                <p class="mt-3 text-muted">Nenhuma gravação encontrada.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            list.innerHTML = recordingsToRender.map(recording => `
+                <div class="col-md-6 col-lg-4">
+                    <div class="card recording-card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title">${escapeHtml(recording.filename)}</h5>
+                            <div class="mb-2">
+                                <small class="text-muted">
+                                    <i class="bi bi-aspect-ratio"></i> ${recording.width}x${recording.height} @ ${recording.fps} fps
+                                </small>
+                            </div>
+                            <div class="mb-2">
+                                <small class="text-muted">
+                                    <i class="bi bi-clock"></i> ${formatDuration(recording.duration)}
+                                </small>
+                            </div>
+                            <div class="mb-3">
+                                <small class="text-muted">
+                                    <i class="bi bi-hdd"></i> ${formatFileSize(recording.fileSize)}
+                                </small>
+                            </div>
+                            <div class="recording-actions">
+                                <button class="btn btn-sm btn-primary" onclick="playRecording('${recording.id}')" title="Reproduzir">
+                                    <i class="bi bi-play-fill"></i>
+                                </button>
+                                <button class="btn btn-sm btn-secondary" onclick="renameRecording('${recording.id}', '${escapeHtml(recording.filename)}')" title="Renomear">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteRecording('${recording.id}', '${escapeHtml(recording.filename)}')" title="Excluir">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-footer text-muted">
+                            <small><i class="bi bi-calendar"></i> ${recording.createdAt}</small>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function filterRecordings() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const filtered = recordings.filter(r => r.filename.toLowerCase().includes(searchTerm));
+            renderRecordings(filtered);
+        }
+
+        async function refreshRecordings() {
+            try {
+                const response = await api.getRecordings();
+                recordings = response.recordings || [];
+                recordings.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                renderRecordings();
+                showAlert('Gravações atualizadas com sucesso!', 'success');
+            } catch (error) {
+                console.error('Error loading recordings:', error);
+                showAlert('Erro ao carregar gravações: ' + error.message, 'danger');
+            }
+        }
+
+        function playRecording(id) {
+            const videoUrl = `/api/v1/recordings/${encodeURIComponent(id)}/file`;
+            const player = document.getElementById('videoPlayer');
+            const container = document.getElementById('videoPlayerContainer');
+            
+            player.src = videoUrl;
+            container.classList.add('active');
+            player.play();
+        }
+
+        function closeVideoPlayer() {
+            const container = document.getElementById('videoPlayerContainer');
+            const player = document.getElementById('videoPlayer');
+            
+            container.classList.remove('active');
+            player.pause();
+            player.src = '';
+        }
+
+        function renameRecording(id, currentName) {
+            currentRenameId = id;
+            document.getElementById('renameInput').value = currentName.replace(/\.[^/.]+$/, ''); // Remove extension
+            renameModal.show();
+        }
+
+        async function confirmRename() {
+            if (!currentRenameId) return;
+            
+            const newName = document.getElementById('renameInput').value.trim();
+            if (!newName) {
+                showAlert('O nome não pode estar vazio!', 'warning');
+                return;
+            }
+
+            try {
+                await api.renameRecording(currentRenameId, newName);
+                showAlert('Gravação renomeada com sucesso!', 'success');
+                renameModal.hide();
+                refreshRecordings();
+            } catch (error) {
+                console.error('Error renaming recording:', error);
+                showAlert('Erro ao renomear gravação: ' + error.message, 'danger');
+            }
+        }
+
+        function deleteRecording(id, name) {
+            currentDeleteId = id;
+            document.getElementById('deleteRecordingName').textContent = name;
+            deleteModal.show();
+        }
+
+        async function confirmDelete() {
+            if (!currentDeleteId) return;
+
+            try {
+                await api.deleteRecording(currentDeleteId);
+                showAlert('Gravação excluída com sucesso!', 'success');
+                deleteModal.hide();
+                refreshRecordings();
+            } catch (error) {
+                console.error('Error deleting recording:', error);
+                showAlert('Erro ao excluir gravação: ' + error.message, 'danger');
+            }
+        }
+
+        function showAlert(message, type) {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type} alert-dismissible fade show`;
+            alert.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            container.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        // Close video player on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeVideoPlayer();
+            }
+        });
+
+        // Load recordings on page load
+        refreshRecordings();
+    </script>
+</body>
+</html>

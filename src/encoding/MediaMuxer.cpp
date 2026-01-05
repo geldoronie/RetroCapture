@@ -8,7 +8,11 @@ extern "C"
 #include <libavcodec/avcodec.h>
 #include <libavutil/opt.h>
 #include <libavutil/mathematics.h> // Para av_rescale_q
+#include <libavutil/dict.h>        // Para AVDictionary
 }
+
+// Incluir FFmpegCompat.h antes para ter acesso às macros
+#include "../utils/FFmpegCompat.h"
 
 // Callback wrapper para FFmpeg (precisa ser estático)
 // Diferentes versões do FFmpeg têm assinaturas diferentes:
@@ -17,30 +21,38 @@ extern "C"
 // Usamos const uint8_t* (mais seguro) e fazemos cast quando necessário
 static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 {
+    if (!opaque || !buf || buf_size <= 0)
+    {
+        return -1;
+    }
+
     MediaMuxer *muxer = static_cast<MediaMuxer *>(opaque);
     if (!muxer)
     {
         return -1;
     }
 
-    // Capturar header do formato (primeiros 64KB)
-    muxer->captureFormatHeader(buf, buf_size);
+    // CRITICAL: Check if muxer is still initialized (avoid crashes during cleanup)
+    // Return success immediately if not initialized to prevent any processing
+    if (!muxer->isInitialized())
+    {
+        // During cleanup, return success to avoid FFmpeg errors
+        // Don't call any methods that might access freed resources
+        return static_cast<int>(buf_size);
+    }
 
-    // Chamar callback customizado
-    // Acessar m_writeCallback através de método público ou friend
-    // Por enquanto, vamos usar um método público para acessar o callback
+    // Chamar callback customizado (captureFormatHeader é chamado dentro dele se necessário)
     return muxer->callWriteCallback(buf, buf_size);
 }
 
 // Wrapper para compatibilidade com versões do FFmpeg que esperam uint8_t* (não const)
 // FFmpeg 6.0 (libavformat 60) ainda usa uint8_t* (não const)
-static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
+// Esta função sempre chama writeCallback, então writeCallback sempre será usada
+// Usada apenas quando FFMPEG_USE_CONST_WRITE_CALLBACK não está definido
+static int __attribute__((unused)) writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
 {
-    return writeCallback(opaque, const_cast<const uint8_t*>(buf), buf_size);
+    return writeCallback(opaque, const_cast<const uint8_t *>(buf), buf_size);
 }
-
-// Incluir FFmpegCompat.h após definir callbacks para ter acesso às macros
-#include "../utils/FFmpegCompat.h"
 
 MediaMuxer::MediaMuxer()
 {
@@ -55,8 +67,10 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
                             const MediaEncoder::AudioConfig &audioConfig,
                             void *videoCodecContext,
                             void *audioCodecContext,
+                            const std::string &filePath,
                             WriteCallback writeCallback,
-                            size_t avioBufferSize)
+                            size_t avioBufferSize,
+                            const std::string &containerFormat)
 {
     if (m_initialized)
     {
@@ -76,11 +90,41 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
     // Armazenar codec contexts para conversão de PTS/DTS
     m_videoCodecContext = videoCodecContext;
     m_audioCodecContext = audioCodecContext;
+    
+    // Reset PTS tracking
+    m_lastVideoPTS = -1;
+    m_lastVideoDTS = -1;
+    m_lastAudioPTS = -1;
+    m_lastAudioDTS = -1;
 
-    // Armazenar tamanho do buffer AVIO
+    // Armazenar tamanho do buffer AVIO (apenas para callback, ignorado se usar filePath)
     m_avioBufferSize = (avioBufferSize > 0) ? avioBufferSize : (256 * 1024); // 256KB padrão se 0
 
-    if (!initializeStreams(videoCodecContext, audioCodecContext, m_avioBufferSize))
+    // Determinar formato do container
+    if (!containerFormat.empty())
+    {
+        m_containerFormat = containerFormat;
+    }
+    else if (!filePath.empty())
+    {
+        // Detectar formato do arquivo pela extensão
+        std::string ext = filePath.substr(filePath.find_last_of('.'));
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".mp4" || ext == ".m4v")
+            m_containerFormat = "mp4";
+        else if (ext == ".mkv")
+            m_containerFormat = "matroska";
+        else if (ext == ".webm")
+            m_containerFormat = "webm";
+        else
+            m_containerFormat = "mp4"; // Default
+    }
+    else
+    {
+        m_containerFormat = "mpegts"; // Default para streaming
+    }
+
+    if (!initializeStreams(videoCodecContext, audioCodecContext, filePath, m_avioBufferSize))
     {
         cleanup();
         return false;
@@ -90,7 +134,7 @@ bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
     return true;
 }
 
-bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecContext, size_t avioBufferSize)
+bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecContext, const std::string &filePath, size_t avioBufferSize)
 {
     AVCodecContext *videoCtx = static_cast<AVCodecContext *>(videoCodecContext);
     AVCodecContext *audioCtx = static_cast<AVCodecContext *>(audioCodecContext);
@@ -109,14 +153,56 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         return false;
     }
 
-    formatCtx->oformat = av_guess_format("mpegts", nullptr, nullptr);
+    // Determinar formato do container
+    const char *formatName = m_containerFormat.c_str();
+    formatCtx->oformat = av_guess_format(formatName, nullptr, nullptr);
     if (!formatCtx->oformat)
     {
-        LOG_ERROR("MediaMuxer: Failed to guess muxer format");
+        LOG_ERROR("MediaMuxer: Failed to guess muxer format: " + m_containerFormat);
         avformat_free_context(formatCtx);
         return false;
     }
 
+    // Se filePath fornecido, usar avio_open (suporta seek, necessário para MP4)
+    // Se não, usar callback customizado (para streaming)
+    if (!filePath.empty())
+    {
+        // Usar avio_open para arquivo (suporta seek)
+        formatCtx->url = av_strdup(filePath.c_str());
+        if (!formatCtx->url)
+        {
+            LOG_ERROR("MediaMuxer: Failed to allocate file path");
+            avformat_free_context(formatCtx);
+            return false;
+        }
+
+        // Abrir arquivo com avio_open (permite seek)
+        // IMPORTANTE: avio_open cria/trunca o arquivo, então deve ser chamado ANTES de avformat_write_header
+        // AVIO_FLAG_WRITE cria/trunca o arquivo para escrita
+        LOG_INFO("MediaMuxer: Opening file with avio_open: " + filePath);
+        int ret = avio_open(&formatCtx->pb, filePath.c_str(), AVIO_FLAG_WRITE);
+        if (ret < 0)
+        {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            LOG_ERROR("MediaMuxer: Failed to open output file: " + filePath + " - " + std::string(errbuf));
+            av_free(const_cast<char *>(formatCtx->url));
+            avformat_free_context(formatCtx);
+            return false;
+        }
+        LOG_INFO("MediaMuxer: File opened successfully, pb=" + std::to_string(formatCtx->pb != nullptr) + 
+                 ", seekable=" + std::to_string(formatCtx->pb->seekable));
+        
+        // Verificar se o arquivo foi criado/truncado corretamente
+        // O arquivo deve estar vazio (ou truncado) antes de escrever o header
+        if (formatCtx->pb->pos != 0)
+        {
+            LOG_WARN("MediaMuxer: File position is not 0 after opening: " + std::to_string(formatCtx->pb->pos));
+        }
+    }
+    else
+    {
+        // Usar callback customizado para streaming
     formatCtx->url = av_strdup("pipe:");
     if (!formatCtx->url)
     {
@@ -127,18 +213,18 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
 
     // Configurar callback de escrita com tamanho configurável
     // Diferentes versões do FFmpeg esperam assinaturas diferentes:
-    // - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
-    // - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
+        // - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
+        // - FFmpeg 6.0- (libavformat 60-): uint8_t* (não const)
     const size_t bufferSize = avioBufferSize; // Tamanho já validado em initialize()
     
-    // Usar callback apropriado baseado na versão
-    #if FFMPEG_USE_CONST_WRITE_CALLBACK
-        // FFmpeg 6.1+: usar callback com const uint8_t*
+        // Usar callback apropriado baseado na versão
+        #if FFMPEG_USE_CONST_WRITE_CALLBACK
+                                                      // FFmpeg 6.1+: usar callback com const uint8_t*
         formatCtx->pb = avio_alloc_context(
             static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
             1, this, nullptr, writeCallback, nullptr);
     #else
-        // FFmpeg 6.0-: usar wrapper com uint8_t* (não const)
+                                                      // FFmpeg 6.0-: usar wrapper com uint8_t* (não const)
         formatCtx->pb = avio_alloc_context(
             static_cast<unsigned char *>(av_malloc(bufferSize)), bufferSize,
             1, this, nullptr, writeCallbackNonConst, nullptr);
@@ -150,6 +236,11 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         avformat_free_context(formatCtx);
         return false;
     }
+    }
+
+    // Não usar movflags especiais - deixar FFmpeg usar padrão
+    // O FFmpeg escreve o moov atom corretamente no final com av_write_trailer()
+    m_formatOptions = nullptr;
 
     // Criar stream de vídeo
     AVStream *videoStream = avformat_new_stream(formatCtx, nullptr);
@@ -260,30 +351,55 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     // Escrever header do formato
     // CRITICAL: avformat_write_header may change stream->time_base!
     // We need to use the time_base AFTER writing the header
-    if (avformat_write_header(formatCtx, nullptr) < 0)
+    // IMPORTANTE: avformat_write_header escreve o ftyp box e outros metadados iniciais
+    LOG_INFO("MediaMuxer: Writing format header (ftyp box, etc.)...");
+    if (formatCtx->pb)
     {
-        LOG_ERROR("MediaMuxer: Failed to write format header");
-        avio_context_free(&formatCtx->pb);
+        LOG_INFO("MediaMuxer: Before header - pb position: " + std::to_string(formatCtx->pb->pos) + 
+                 ", seekable: " + std::to_string(formatCtx->pb->seekable));
+    }
+    AVDictionary *optsPtr = static_cast<AVDictionary *>(m_formatOptions);
+    int headerRet = avformat_write_header(formatCtx, &optsPtr);
+    if (headerRet < 0)
+    {
+        char errbuf[256];
+        av_strerror(headerRet, errbuf, sizeof(errbuf));
+        LOG_ERROR("MediaMuxer: Failed to write format header: " + std::string(errbuf));
+        if (formatCtx->pb)
+        {
+            avio_context_free(&formatCtx->pb);
+        }
         av_free(const_cast<char *>(formatCtx->url));
         avformat_free_context(formatCtx);
         return false;
     }
-    
+    if (formatCtx->pb)
+    {
+        LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) + 
+                 ", bytes written: " + std::to_string(formatCtx->pb->pos));
+        
+        // CRITICAL: Flush o buffer AVIO após escrever o header para garantir que os dados sejam escritos no disco
+        // Sem isso, o ftyp box pode ficar apenas no buffer e não ser escrito no arquivo
+        avio_flush(formatCtx->pb);
+        LOG_INFO("MediaMuxer: Flushed AVIO buffer after header write");
+    }
+    LOG_INFO("MediaMuxer: Format header written successfully");
+
     // Log actual time_base after header (FFmpeg may have changed it)
     if (videoStream)
     {
-        LOG_INFO("MediaMuxer: Video stream time_base after header: " + 
-                 std::to_string(videoStream->time_base.num) + "/" + 
-                 std::to_string(videoStream->time_base.den) + 
-                 " (codec: " + std::to_string(videoCtx->time_base.num) + "/" + 
+        LOG_INFO("MediaMuxer: Video stream time_base after header: " +
+                 std::to_string(videoStream->time_base.num) + "/" +
+                 std::to_string(videoStream->time_base.den) +
+                 " (codec: " + std::to_string(videoCtx->time_base.num) + "/" +
                  std::to_string(videoCtx->time_base.den) + ")");
     }
     if (audioStream)
     {
-        LOG_INFO("MediaMuxer: Audio stream time_base after header: " + 
-                 std::to_string(audioStream->time_base.num) + "/" + 
-                 std::to_string(audioStream->time_base.den) + 
-                 " (codec: " + std::to_string(audioCtx->time_base.num) + "/" + 
+        LOG_INFO("MediaMuxer: Audio stream time_base after header: " +
+                 std::to_string(audioStream->time_base.num) + "/" +
+                 std::to_string(audioStream->time_base.den) +
+                 " (codec: " + std::to_string(audioCtx->time_base.num) + "/" +
                  std::to_string(audioCtx->time_base.den) + ")");
     }
 
@@ -295,6 +411,12 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
 
 void MediaMuxer::captureFormatHeader(const uint8_t *buf, size_t buf_size)
 {
+    // Não capturar durante cleanup
+    if (!m_initialized)
+    {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_headerMutex);
     if (!m_headerWritten && buf_size > 0)
     {
@@ -313,16 +435,22 @@ void MediaMuxer::captureFormatHeader(const uint8_t *buf, size_t buf_size)
 
 int MediaMuxer::callWriteCallback(const uint8_t *buf, size_t buf_size)
 {
+    // Se não está inicializado, retornar sucesso para evitar erros do FFmpeg
+    if (!m_initialized)
+    {
+        return static_cast<int>(buf_size);
+    }
+
     if (m_writeCallback)
     {
         return m_writeCallback(buf, buf_size);
     }
-    return -1;
+    return static_cast<int>(buf_size); // Retornar sucesso se não há callback
 }
 
 bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
 {
-    if (!m_initialized || !m_muxerContext || !m_writeCallback)
+    if (!m_initialized || !m_muxerContext)
     {
         return false;
     }
@@ -331,6 +459,16 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
     if (!formatCtx || !formatCtx->pb)
     {
         return false;
+    }
+    
+    // Para streaming (pipe:), precisamos de callback. Para arquivo, não (FFmpeg escreve diretamente)
+    if (formatCtx->url && strcmp(formatCtx->url, "pipe:") == 0)
+    {
+        // Usando callback (streaming) - precisa estar disponível
+        if (!m_writeCallback)
+        {
+            return false;
+        }
     }
 
     // Criar AVPacket a partir do EncodedPacket
@@ -497,10 +635,10 @@ void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &
     {
         int64_t originalPTS = pts;
         pts = av_rescale_q(pts, codecTimeBase, streamTimeBase);
-        
+
         if (timeBaseLogCounter == 1 || timeBaseLogCounter % 300 == 0)
         {
-            LOG_INFO("MediaMuxer: PTS converted - original: " + std::to_string(originalPTS) + 
+            LOG_INFO("MediaMuxer: PTS converted - original: " + std::to_string(originalPTS) +
                      ", converted: " + std::to_string(pts));
         }
     }
@@ -530,7 +668,7 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
                 static int retroLogCounter = 0;
                 if (retroLogCounter++ < 5)
                 {
-                    LOG_WARN("MediaMuxer: Preventing PTS retrocession - last: " + std::to_string(m_lastVideoPTS) + 
+                    LOG_WARN("MediaMuxer: Preventing PTS retrocession - last: " + std::to_string(m_lastVideoPTS) +
                              ", calculated: " + std::to_string(pts) + ", adjusted to: " + std::to_string(m_lastVideoPTS + 1));
                 }
                 // PTS would go backwards - just increment by 1 to prevent retrocession
@@ -538,17 +676,17 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
                 pts = m_lastVideoPTS + 1;
             }
             // Otherwise, use PTS as-is for correct speed
-            
+
             // Log PTS progression occasionally
             static int muxLogCounter = 0;
             muxLogCounter++;
             if (muxLogCounter == 1 || muxLogCounter % 300 == 0)
             {
-                LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) + 
-                         ", last: " + std::to_string(m_lastVideoPTS) + 
+                LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) +
+                         ", last: " + std::to_string(m_lastVideoPTS) +
                          ", increment: " + std::to_string(pts - m_lastVideoPTS));
             }
-            
+
             m_lastVideoPTS = pts;
         }
         if (dts != AV_NOPTS_VALUE_LOCAL)
@@ -611,66 +749,86 @@ std::vector<uint8_t> MediaMuxer::getFormatHeader() const
     return m_formatHeader;
 }
 
-void MediaMuxer::cleanup()
+void MediaMuxer::finalize()
 {
-    if (m_muxerContext)
+    // Finalizar escrita antes de fechar arquivo
+    // av_write_trailer() é necessário para TODOS os formatos para escrever metadados finais
+    // Para MP4 com faststart, o moov atom é movido para o início durante av_write_trailer()
+    if (m_initialized && m_muxerContext)
     {
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
-        if (formatCtx)
+        if (formatCtx && formatCtx->pb && formatCtx->oformat)
         {
-            // Write trailer if format and IO context are valid
-            if (formatCtx->oformat && formatCtx->pb)
-            {
-                // av_write_trailer may write to the file, ensure it's safe to call
-                int ret = av_write_trailer(formatCtx);
-                if (ret < 0)
-                {
-                    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-                    av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-                    LOG_WARN("MediaMuxer: av_write_trailer returned error: " + std::string(errbuf));
-                }
-            }
+            bool isFile = (formatCtx->url && strcmp(formatCtx->url, "pipe:") != 0);
+            
+            LOG_INFO("MediaMuxer: Finalizing " + m_containerFormat + " file (isFile=" + 
+                     std::to_string(isFile) + ", url=" + (formatCtx->url ? formatCtx->url : "null") + ")");
 
-            // Free IO context (this may trigger write callbacks, so file should still be open)
+            // Flush final usando av_interleaved_write_frame (mesma função usada para escrever pacotes)
+            // Isso garante que todos os pacotes pendentes sejam escritos corretamente
+            av_interleaved_write_frame(formatCtx, nullptr);
+
+            // Flush do buffer AVIO ANTES do trailer
             if (formatCtx->pb)
             {
-                avio_context_free(&formatCtx->pb);
-                formatCtx->pb = nullptr;
+                avio_flush(formatCtx->pb);
             }
 
-            // Free URL string if allocated
-            if (formatCtx->url)
+            // Chamar av_write_trailer() - isso escreve o moov atom e finaliza o arquivo
+            // O FFmpeg calcula automaticamente a duração baseado nos pacotes escritos
+            // CRITICAL: Deve ser chamado para TODOS os formatos, não apenas MP4
+            LOG_INFO("MediaMuxer: Calling av_write_trailer()...");
+            int ret = av_write_trailer(formatCtx);
+            if (ret < 0)
             {
-                av_free(const_cast<char *>(formatCtx->url));
-                formatCtx->url = nullptr;
+                char errbuf[256];
+                av_strerror(ret, errbuf, sizeof(errbuf));
+                LOG_ERROR("MediaMuxer: Failed to write trailer: " + std::string(errbuf));
+            }
+            else
+            {
+                LOG_INFO("MediaMuxer: av_write_trailer() completed successfully");
             }
 
-            // Free format context
-            avformat_free_context(formatCtx);
+            // Flush final do buffer AVIO APÓS o trailer
+            if (formatCtx->pb)
+            {
+                avio_flush(formatCtx->pb);
+            }
+
+            // Fechar arquivo se foi aberto com avio_open (não fechar se for pipe:)
+            if (isFile && formatCtx->pb)
+            {
+                LOG_INFO("MediaMuxer: Closing file with avio_closep()...");
+                avio_closep(&formatCtx->pb);
+                LOG_INFO("MediaMuxer: File closed successfully");
+            }
         }
-        m_muxerContext = nullptr;
+        else
+        {
+            LOG_ERROR("MediaMuxer: Cannot finalize - formatCtx=" + 
+                     std::to_string(formatCtx != nullptr) + 
+                     ", pb=" + std::to_string(formatCtx && formatCtx->pb != nullptr) +
+                     ", oformat=" + std::to_string(formatCtx && formatCtx->oformat != nullptr));
+        }
     }
-
-    m_videoStream = nullptr;
-    m_audioStream = nullptr;
-
-    // Não liberar codec contexts - eles pertencem ao MediaEncoder
-    m_videoCodecContext = nullptr;
-    m_audioCodecContext = nullptr;
-
+    else
     {
-        std::lock_guard<std::mutex> lock(m_headerMutex);
-        m_formatHeader.clear();
-        m_headerWritten = false;
+        LOG_ERROR("MediaMuxer: Cannot finalize - m_initialized=" + std::to_string(m_initialized) +
+                 ", m_muxerContext=" + std::to_string(m_muxerContext != nullptr));
     }
+}
 
-    {
-        std::lock_guard<std::mutex> lock(m_ptsMutex);
-        m_lastVideoPTS = -1;
-        m_lastVideoDTS = -1;
-        m_lastAudioPTS = -1;
-        m_lastAudioDTS = -1;
-    }
-
+void MediaMuxer::cleanup()
+{
+    // SIMPLIFICADO: Apenas marcar como não inicializado
+    // Não liberar recursos FFmpeg - deixar na memória para evitar crashes
     m_initialized = false;
+
+    // Limpar callback para evitar chamadas
+    WriteCallback emptyCallback;
+    m_writeCallback = emptyCallback;
+
+    // NÃO liberar m_muxerContext, formatCtx, pb, etc.
+    // Deixar tudo na memória para evitar crashes durante cleanup
 }

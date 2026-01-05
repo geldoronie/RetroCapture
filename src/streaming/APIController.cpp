@@ -12,6 +12,10 @@
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <fstream>
+#include <cstdint>
+#include <climits>
+#include "../utils/FilesystemCompat.h"
 
 // Simple JSON helper functions
 namespace
@@ -112,7 +116,7 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
 
     if (method == "GET")
     {
-        return handleGET(clientFd, path);
+        return handleGET(clientFd, path, request);
     }
     else if (method == "POST" || method == "PUT")
     {
@@ -222,6 +226,62 @@ std::string APIController::extractBody(const std::string &request) const
     return request.substr(bodyStart);
 }
 
+std::pair<uint64_t, uint64_t> APIController::extractRange(const std::string &request, uint64_t fileSize) const
+{
+    // Procurar pelo header Range: bytes=start-end
+    size_t rangePos = request.find("Range: bytes=");
+    if (rangePos == std::string::npos)
+    {
+        rangePos = request.find("range: bytes=");
+    }
+    if (rangePos == std::string::npos)
+    {
+        // Return special value to indicate no range (use UINT64_MAX as marker)
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    rangePos += 13; // Skip "Range: bytes="
+    size_t rangeEnd = request.find("\r\n", rangePos);
+    if (rangeEnd == std::string::npos)
+    {
+        rangeEnd = request.find("\n", rangePos);
+    }
+    if (rangeEnd == std::string::npos)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    std::string rangeStr = request.substr(rangePos, rangeEnd - rangePos);
+    
+    // Parse "start-end" ou "start-"
+    size_t dashPos = rangeStr.find('-');
+    if (dashPos == std::string::npos)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    uint64_t start = 0;
+    uint64_t end = fileSize - 1;
+
+    if (dashPos > 0)
+    {
+        start = std::stoull(rangeStr.substr(0, dashPos));
+    }
+
+    if (dashPos < rangeStr.length() - 1)
+    {
+        end = std::stoull(rangeStr.substr(dashPos + 1));
+    }
+
+    // Validar range
+    if (start >= fileSize || end >= fileSize || start > end)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    return std::make_pair(start, end);
+}
+
 void APIController::sendJSONResponse(int clientFd, int statusCode, const std::string &json) const
 {
     std::ostringstream response;
@@ -256,7 +316,7 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     return m_httpServer->sendData(clientFd, data, size);
 }
 
-bool APIController::handleGET(int clientFd, const std::string &path)
+bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
     if (path == "/api/v1/source")
     {
@@ -304,11 +364,23 @@ bool APIController::handleGET(int clientFd, const std::string &path)
     }
     else if (path.find("/api/v1/recordings/") == 0)
     {
-        // Extract recording ID from path: /api/v1/recordings/{id}
-        std::string recordingId = path.substr(18); // Length of "/api/v1/recordings/"
-        if (!recordingId.empty())
+        std::string remaining = path.substr(19); // Length of "/api/v1/recordings/"
+        
+        // Check if it's /api/v1/recordings/{id}/file
+        size_t filePos = remaining.find("/file");
+        if (filePos != std::string::npos)
         {
-            return handleGETRecording(clientFd, recordingId);
+            // Extract recording ID from path: /api/v1/recordings/{id}/file
+            std::string recordingId = remaining.substr(0, filePos);
+            if (!recordingId.empty())
+            {
+                return handleGETRecordingFile(clientFd, recordingId, request);
+            }
+        }
+        else if (!remaining.empty())
+        {
+            // Extract recording ID from path: /api/v1/recordings/{id}
+            return handleGETRecording(clientFd, remaining);
         }
     }
     else if (path == "/api/v1/v4l2/devices")
@@ -439,7 +511,17 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
 
 bool APIController::handlePUT(int clientFd, const std::string &path, const std::string &body)
 {
-    // PUT usa os mesmos handlers que POST
+    // Handle PUT /api/v1/recordings/{id} for renaming
+    if (path.find("/api/v1/recordings/") == 0)
+    {
+        std::string recordingId = path.substr(19); // Length of "/api/v1/recordings/"
+        if (!recordingId.empty() && recordingId.find("/") == std::string::npos)
+        {
+            return handlePUTRecording(clientFd, recordingId, body);
+        }
+    }
+    
+    // PUT usa os mesmos handlers que POST para outros endpoints
     return handlePOST(clientFd, path, body);
 }
 
@@ -1831,6 +1913,184 @@ bool APIController::handleDeleteRecording(int clientFd, const std::string& recor
     catch (const std::exception& e)
     {
         sendErrorResponse(clientFd, 500, "Error deleting recording: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handlePUTRecording(int clientFd, const std::string& recordingId, const std::string& body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (!json.contains("name") || !json["name"].is_string())
+        {
+            sendErrorResponse(clientFd, 400, "Missing or invalid 'name' field");
+            return true;
+        }
+
+        std::string newName = json["name"].get<std::string>();
+        if (newName.empty())
+        {
+            sendErrorResponse(clientFd, 400, "Name cannot be empty");
+            return true;
+        }
+
+        if (!m_application->renameRecording(recordingId, newName))
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        std::ostringstream response;
+        response << "{\"success\": true, \"id\": " << jsonString(recordingId) 
+                 << ", \"name\": " << jsonString(newName) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error renaming recording: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETRecordingFile(int clientFd, const std::string& recordingId, const std::string& request)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        std::string filepath = m_application->getRecordingPath(recordingId);
+        if (filepath.empty())
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        // Check if file exists
+        if (!fs::exists(filepath))
+        {
+            sendErrorResponse(clientFd, 404, "Recording file not found");
+            return true;
+        }
+
+        // Get file size
+        uint64_t fileSize = fs::file_size(filepath);
+
+        // Determine content type based on extension
+        std::string contentType = "video/mp4"; // Default
+        fs::path filePath(filepath);
+        std::string ext = filePath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        
+        if (ext == ".mkv")
+            contentType = "video/x-matroska";
+        else if (ext == ".webm")
+            contentType = "video/webm";
+        else if (ext == ".mp4")
+            contentType = "video/mp4";
+
+        // Check for Range request
+        auto range = extractRange(request, fileSize);
+        // UINT64_MAX indicates no range header
+        bool isRangeRequest = (range.first != UINT64_MAX && range.second != UINT64_MAX);
+
+        // Open file
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            sendErrorResponse(clientFd, 500, "Failed to open recording file");
+            return true;
+        }
+
+        uint64_t startByte = 0;
+        uint64_t endByte = fileSize - 1;
+        uint64_t contentLength = fileSize;
+
+        if (isRangeRequest)
+        {
+            startByte = range.first;
+            endByte = range.second;
+            contentLength = endByte - startByte + 1;
+        }
+
+        // Seek to start position
+        file.seekg(startByte, std::ios::beg);
+
+        // Prepare response headers
+        std::ostringstream response;
+        if (isRangeRequest)
+        {
+            // 206 Partial Content
+            response << "HTTP/1.1 206 Partial Content\r\n";
+            response << "Content-Range: bytes " << startByte << "-" << endByte << "/" << fileSize << "\r\n";
+        }
+        else
+        {
+            // 200 OK
+            response << "HTTP/1.1 200 OK\r\n";
+        }
+
+        response << "Content-Type: " << contentType << "\r\n";
+        response << "Content-Length: " << contentLength << "\r\n";
+        response << "Accept-Ranges: bytes\r\n";
+        response << "Content-Disposition: inline; filename=\"" << fs_helper::get_filename_string(filePath) << "\"\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+
+        std::string headerStr = response.str();
+        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
+        if (sent < 0)
+        {
+            file.close();
+            return true;
+        }
+
+        // Stream file content in chunks (64KB at a time)
+        const size_t chunkSize = 64 * 1024; // 64KB chunks
+        std::vector<char> buffer(chunkSize);
+        uint64_t remaining = contentLength;
+
+        while (remaining > 0 && file.good())
+        {
+            size_t toRead = (remaining > chunkSize) ? chunkSize : static_cast<size_t>(remaining);
+            file.read(buffer.data(), toRead);
+            size_t bytesRead = file.gcount();
+
+            if (bytesRead == 0)
+                break;
+
+            sent = sendData(clientFd, buffer.data(), bytesRead);
+            if (sent < 0)
+            {
+                file.close();
+                return true;
+            }
+
+            remaining -= bytesRead;
+        }
+
+        file.close();
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error serving recording file: " + std::string(e.what()));
         return true;
     }
 }

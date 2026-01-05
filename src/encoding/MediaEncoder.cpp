@@ -1228,47 +1228,10 @@ void MediaEncoder::flush(std::vector<EncodedPacket> &packets)
 
 void MediaEncoder::cleanup()
 {
-    if (m_swsContext)
-    {
-        sws_freeContext(static_cast<SwsContext *>(m_swsContext));
-        m_swsContext = nullptr;
-    }
-
-    if (m_swrContext)
-    {
-        SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
-        swr_free(&swrCtx);
-        m_swrContext = nullptr;
-    }
-
-    if (m_videoFrame)
-    {
-        AVFrame *frame = static_cast<AVFrame *>(m_videoFrame);
-        av_frame_free(&frame);
-        m_videoFrame = nullptr;
-    }
-
-    if (m_audioFrame)
-    {
-        AVFrame *frame = static_cast<AVFrame *>(m_audioFrame);
-        av_frame_free(&frame);
-        m_audioFrame = nullptr;
-    }
-
-    if (m_videoCodecContext)
-    {
-        AVCodecContext *ctx = static_cast<AVCodecContext *>(m_videoCodecContext);
-        avcodec_free_context(&ctx);
-        m_videoCodecContext = nullptr;
-    }
-
-    if (m_audioCodecContext)
-    {
-        AVCodecContext *ctx = static_cast<AVCodecContext *>(m_audioCodecContext);
-        avcodec_free_context(&ctx);
-        m_audioCodecContext = nullptr;
-    }
-
+    // SIMPLIFICADO: Apenas marcar como não inicializado e limpar estado
+    // Não liberar recursos FFmpeg - deixar na memória para evitar crashes
+    
+    // Limpar apenas o acumulador de áudio (é seguro)
     {
         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
         m_audioAccumulator.clear();
@@ -1293,4 +1256,8 @@ void MediaEncoder::cleanup()
         m_lastAudioDTS = -1;
         m_lastAudioFramePTS = -1;
     }
+    
+    // NÃO liberar: m_swsContext, m_swrContext, m_videoFrame, m_audioFrame,
+    // m_videoCodecContext, m_audioCodecContext
+    // Deixar tudo na memória para evitar crashes durante cleanup
 }

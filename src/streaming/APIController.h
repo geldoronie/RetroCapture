@@ -71,6 +71,12 @@ private:
     std::string extractBody(const std::string &request) const;
 
     /**
+     * Extrai o header Range da requisição (para Range Requests)
+     * Retorna pair<start, end> ou pair<0, 0> se não houver Range header
+     */
+    std::pair<uint64_t, uint64_t> extractRange(const std::string &request, uint64_t fileSize) const;
+
+    /**
      * Envia resposta JSON
      */
     void sendJSONResponse(int clientFd, int statusCode, const std::string &json) const;
@@ -91,7 +97,7 @@ private:
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
     // Endpoints GET (leitura)
-    bool handleGET(int clientFd, const std::string &path);
+    bool handleGET(int clientFd, const std::string &path, const std::string &request);
     bool handleGETSource(int clientFd);
     bool handleGETShader(int clientFd);
     bool handleGETShaderList(int clientFd);
@@ -128,6 +134,8 @@ private:
     bool handleSetRecordingSettings(int clientFd, const std::string &body);
     bool handleSetRecordingControl(int clientFd, const std::string &body);
     bool handleDeleteRecording(int clientFd, const std::string &recordingId);
+    bool handlePUTRecording(int clientFd, const std::string &recordingId, const std::string &body);
+    bool handleGETRecordingFile(int clientFd, const std::string &recordingId, const std::string &request);
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
     bool handleSetDSDevice(int clientFd, const std::string &body);

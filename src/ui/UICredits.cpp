@@ -57,9 +57,17 @@ void UICredits::render()
         {
             // Abrir URL no navegador
 #ifdef PLATFORM_LINUX
+            // Ignore return value - we don't care if xdg-open succeeds or fails
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wunused-result"
             system("xdg-open https://github.com/geldoronie/RetroCapture &");
+            #pragma GCC diagnostic pop
 #elif defined(_WIN32)
+            // Ignore return value - we don't care if start succeeds or fails
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wunused-result"
             system("start https://github.com/geldoronie/RetroCapture");
+            #pragma GCC diagnostic pop
 #endif
         }
         ImGui::Spacing();

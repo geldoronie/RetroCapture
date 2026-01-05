@@ -55,6 +55,7 @@ public:
     // Recording list
     std::vector<RecordingMetadata> listRecordings();
     bool deleteRecording(const std::string& recordingId);
+    bool renameRecording(const std::string& recordingId, const std::string& newName);
     std::string getRecordingPath(const std::string& recordingId);
 
 private:

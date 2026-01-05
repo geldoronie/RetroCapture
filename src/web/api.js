@@ -211,6 +211,10 @@ class RetroCaptureAPI {
     async deleteRecording(id) {
         return await this.request('DELETE', `/recordings/${encodeURIComponent(id)}`);
     }
+
+    async renameRecording(id, newName) {
+        return await this.request('PUT', `/recordings/${encodeURIComponent(id)}`, { name: newName });
+    }
 }
 
 // Instância global da API

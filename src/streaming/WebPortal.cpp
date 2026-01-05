@@ -1190,9 +1190,14 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     }
 
     // Verificar se é um arquivo estático conhecido
+    // Excluir index.html que é tratado separadamente
+    bool isIndexHtml = (path == "index.html" || path == "/index.html" || 
+                        path.find("/index.html") != std::string::npos);
+    
     bool isStaticFile = (path.find("style.css") != std::string::npos ||
                          path.find(".css") != std::string::npos ||
-                         path.find(".js") != std::string::npos);
+                         path.find(".js") != std::string::npos ||
+                         (path.find(".html") != std::string::npos && !isIndexHtml));
 
     if (!isStaticFile)
     {

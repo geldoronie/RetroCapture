@@ -2,6 +2,7 @@
 #include "UIConfiguration.h"
 #include "UICredits.h"
 #include "UICapturePresets.h"
+#include "UIRecordings.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
@@ -46,6 +47,7 @@ UIManager::~UIManager()
     m_configWindow.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
+    m_recordingsWindow.reset();
     shutdown();
 }
 
@@ -135,6 +137,7 @@ bool UIManager::init(void *window)
     m_configWindow = std::make_unique<UIConfiguration>(this);
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
+    m_recordingsWindow = std::make_unique<UIRecordings>(this);
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -257,6 +260,14 @@ void UIManager::render()
                     m_capturePresetsWindow->setVisible(!visible);
                 }
             }
+            if (m_recordingsWindow)
+            {
+                bool visible = m_recordingsWindow->isVisible();
+                if (ImGui::MenuItem("Recordings", nullptr, visible))
+                {
+                    m_recordingsWindow->setVisible(!visible);
+                }
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help"))
@@ -290,6 +301,12 @@ void UIManager::render()
     if (m_capturePresetsWindow)
     {
         m_capturePresetsWindow->render();
+    }
+
+    // Renderizar janela de gravações
+    if (m_recordingsWindow)
+    {
+        m_recordingsWindow->render();
     }
 }
 
