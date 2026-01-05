@@ -88,6 +88,7 @@ public:
         {
             m_onMaintainAspectChanged(maintain);
         }
+        saveConfig(); // Salvar configuração quando mudar (via API ou UI)
     }
     void setOnMaintainAspectChanged(std::function<void(bool)> callback) { m_onMaintainAspectChanged = callback; }
 
@@ -175,6 +176,7 @@ public:
         {
             m_onResolutionChanged(width, height);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     void triggerFramerateChange(uint32_t fps)
@@ -184,6 +186,7 @@ public:
         {
             m_onFramerateChanged(fps);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     void triggerV4L2ControlChange(const std::string &name, int32_t value)

@@ -185,6 +185,21 @@ async function loadStatus() {
         const canStart = status.streamingCanStart !== undefined ? status.streamingCanStart : true;
         const cooldownMs = status.streamingCooldownRemainingMs !== undefined ? status.streamingCooldownRemainingMs : 0;
         updateStreamingButton(isActive, canStart, cooldownMs);
+        
+        // Sincronizar configurações de imagem se disponíveis no status
+        if (status.image) {
+            const maintainAspectEl = document.getElementById('maintainAspect');
+            if (maintainAspectEl && status.image.maintainAspect !== undefined) {
+                // Só atualizar se o valor mudou para evitar flicker
+                if (maintainAspectEl.checked !== status.image.maintainAspect) {
+                    maintainAspectEl.checked = status.image.maintainAspect;
+                    // Atualizar appState
+                    if (appState.image) {
+                        appState.image.maintainAspect = status.image.maintainAspect;
+                    }
+                }
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar status:', error);
     }
@@ -1093,6 +1108,15 @@ async function updateImageSettings() {
         };
         
         await api.setImageSettings(settings);
+        
+        // Atualizar appState para manter sincronizado
+        appState.image = {
+            brightness: settings.brightness,
+            contrast: settings.contrast,
+            maintainAspect: settings.maintainAspect,
+            fullscreen: settings.fullscreen
+        };
+        
         // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
         console.error('Erro ao atualizar configurações de imagem:', error);

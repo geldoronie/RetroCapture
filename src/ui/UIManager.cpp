@@ -730,6 +730,7 @@ void UIManager::renderV4L2Controls()
             {
                 m_onResolutionChanged(m_captureWidth, m_captureHeight);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
 
@@ -751,6 +752,7 @@ void UIManager::renderV4L2Controls()
             {
                 m_onFramerateChanged(m_captureFps);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
 
@@ -763,6 +765,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(30);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("60"))
@@ -772,6 +775,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(60);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("120"))
@@ -781,6 +785,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(120);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -795,6 +800,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(320, 240);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("640x480"))
@@ -805,6 +811,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(640, 480);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("800x600"))
@@ -815,6 +822,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(800, 600);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("1024x768"))
     {
@@ -824,6 +832,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1024, 768);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1280x960"))
@@ -834,6 +843,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1280, 960);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1600x1200"))
@@ -844,6 +854,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1600, 1200);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("2048x1536"))
     {
@@ -853,6 +864,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2048, 1536);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("2560x1920"))
@@ -863,6 +875,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2560, 1920);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -877,6 +890,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1280, 720);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1920x1080"))
@@ -887,6 +901,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1920, 1080);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("2560x1440"))
@@ -897,6 +912,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2560, 1440);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("3840x2160"))
     {
@@ -906,6 +922,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(3840, 2160);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -2118,6 +2135,18 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar configurações de captura
+        if (config.contains("capture"))
+        {
+            auto &capture = config["capture"];
+            if (capture.contains("width"))
+                m_captureWidth = capture["width"].get<uint32_t>();
+            if (capture.contains("height"))
+                m_captureHeight = capture["height"].get<uint32_t>();
+            if (capture.contains("fps"))
+                m_captureFps = capture["fps"].get<uint32_t>();
+        }
+
         // Carregar configurações de imagem
         if (config.contains("image"))
         {
@@ -2399,6 +2428,12 @@ void UIManager::saveConfig()
             {"backgroundImagePath", m_webPortalBackgroundImagePath},
             {"texts", {{"streamInfo", m_webPortalTextStreamInfo}, {"quickActions", m_webPortalTextQuickActions}, {"compatibility", m_webPortalTextCompatibility}, {"status", m_webPortalTextStatus}, {"codec", m_webPortalTextCodec}, {"resolution", m_webPortalTextResolution}, {"streamUrl", m_webPortalTextStreamUrl}, {"copyUrl", m_webPortalTextCopyUrl}, {"openNewTab", m_webPortalTextOpenNewTab}, {"supported", m_webPortalTextSupported}, {"format", m_webPortalTextFormat}, {"codecInfo", m_webPortalTextCodecInfo}, {"supportedBrowsers", m_webPortalTextSupportedBrowsers}, {"formatInfo", m_webPortalTextFormatInfo}, {"codecInfoValue", m_webPortalTextCodecInfoValue}, {"connecting", m_webPortalTextConnecting}}},
             {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"primaryLight", {m_webPortalColorPrimaryLight[0], m_webPortalColorPrimaryLight[1], m_webPortalColorPrimaryLight[2], m_webPortalColorPrimaryLight[3]}}, {"primaryDark", {m_webPortalColorPrimaryDark[0], m_webPortalColorPrimaryDark[1], m_webPortalColorPrimaryDark[2], m_webPortalColorPrimaryDark[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"secondaryHighlight", {m_webPortalColorSecondaryHighlight[0], m_webPortalColorSecondaryHighlight[1], m_webPortalColorSecondaryHighlight[2], m_webPortalColorSecondaryHighlight[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}, {"info", {m_webPortalColorInfo[0], m_webPortalColorInfo[1], m_webPortalColorInfo[2], m_webPortalColorInfo[3]}}}}};
+
+        // Salvar configurações de captura
+        config["capture"] = {
+            {"width", m_captureWidth},
+            {"height", m_captureHeight},
+            {"fps", m_captureFps}};
 
         // Salvar shader atual
         config["shader"] = {

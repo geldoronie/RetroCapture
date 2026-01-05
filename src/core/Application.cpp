@@ -799,12 +799,72 @@ bool Application::initUI()
             }
         } });
 
-    // Configure initial values
-    m_ui->setBrightness(m_brightness);
-    m_ui->setContrast(m_contrast);
-    m_ui->setMaintainAspect(m_maintainAspect);
-    m_ui->setFullscreen(m_fullscreen);
-    m_ui->setMonitorIndex(m_monitorIndex);
+    // IMPORTANT: UIManager has already loaded saved configurations in its constructor
+    // So we should read FROM UI first, then set callbacks
+    // This ensures saved values are not overwritten by default values
+    
+    // Read saved values from UI (loaded from config file)
+    m_brightness = m_ui->getBrightness();
+    m_contrast = m_ui->getContrast();
+    m_maintainAspect = m_ui->getMaintainAspect();
+    m_fullscreen = m_ui->getFullscreen();
+    m_monitorIndex = m_ui->getMonitorIndex();
+    
+    // Read saved capture resolution from UI (loaded from config file)
+    // The UIManager loads config in its constructor, so values are available here
+    uint32_t savedWidth = m_ui->getCaptureWidth();
+    uint32_t savedHeight = m_ui->getCaptureHeight();
+    uint32_t savedFps = m_ui->getCaptureFps();
+    
+    // Use saved values if they exist (savedWidth/Height > 0 means config was loaded)
+    // Only override if we have valid saved values
+    bool useSavedResolution = (savedWidth > 0 && savedHeight > 0);
+    
+    // Check if current values are the defaults (1920x1080) - if so, likely not set via command line
+    bool isDefaultResolution = (m_captureWidth == 1920 && m_captureHeight == 1080);
+    
+    if (useSavedResolution && (m_captureWidth == 0 && m_captureHeight == 0 || isDefaultResolution))
+    {
+        LOG_INFO("Using saved capture resolution: " + 
+                 std::to_string(savedWidth) + "x" + std::to_string(savedHeight) + 
+                 " @ " + std::to_string(savedFps) + "fps");
+        m_captureWidth = savedWidth;
+        m_captureHeight = savedHeight;
+        if (savedFps > 0)
+        {
+            m_captureFps = savedFps;
+        }
+        
+        // If capture is already initialized, reconfigure it with saved resolution
+        if (m_capture && (m_capture->isOpen() || m_capture->isDummyMode()))
+        {
+            LOG_INFO("Reconfiguring capture with saved resolution...");
+            if (m_capture->isDummyMode() || !m_capture->isOpen())
+            {
+                // For dummy mode or closed device, just reconfigure
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->setDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                {
+                    m_capture->startCapture();
+                    if (m_ui)
+                    {
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                           m_captureFps, "None (Dummy)");
+                    }
+                }
+            }
+            else
+            {
+                // For real device, use reconfigureCapture
+                reconfigureCapture(m_captureWidth, m_captureHeight, m_captureFps);
+            }
+        }
+    }
+    
+    // Now set callbacks so future changes are synchronized
+    // (Values are already set above, so this won't overwrite saved config)
 
     // Check initial source type and configure appropriately
     if (m_ui->getSourceType() == UIManager::SourceType::None)
