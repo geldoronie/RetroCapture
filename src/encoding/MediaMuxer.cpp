@@ -367,187 +367,40 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     audioStream->time_base = audioCtx->time_base;
     m_audioStream = audioStream;
 
-    // Para H.264, VP8/VP9, enviar frame dummy para gerar extradata
-    // Isso é necessário para alguns formatos como MKV que precisam do extradata no header
-    if (videoCtx->codec_id == AV_CODEC_ID_H264 || 
-        videoCtx->codec_id == AV_CODEC_ID_VP8 || 
-        videoCtx->codec_id == AV_CODEC_ID_VP9)
+    // Copiar parâmetros do codec de vídeo para o stream
+    // Com AV_CODEC_FLAG_GLOBAL_HEADER, o FFmpeg já coloca o extradata no codec context
+    // e avcodec_parameters_from_context copia isso automaticamente
+    if (avcodec_parameters_from_context(videoStream->codecpar, videoCtx) < 0)
     {
-        AVFrame *dummyFrame = av_frame_alloc();
-        if (dummyFrame)
+        LOG_ERROR("MediaMuxer: Failed to copy video codec parameters");
+        bool isFile = (formatCtx->url && strcmp(formatCtx->url, "pipe:") != 0);
+        if (formatCtx->pb)
         {
-            dummyFrame->format = videoCtx->pix_fmt;
-            dummyFrame->width = videoCtx->width;
-            dummyFrame->height = videoCtx->height;
-            if (av_frame_get_buffer(dummyFrame, 32) >= 0)
+            if (isFile)
             {
-                // Preencher com dados YUV válidos (frame preto)
-                memset(dummyFrame->data[0], 0, dummyFrame->linesize[0] * dummyFrame->height);
-                if (dummyFrame->data[1])
-                    memset(dummyFrame->data[1], 128, dummyFrame->linesize[1] * dummyFrame->height / 2);
-                if (dummyFrame->data[2])
-                    memset(dummyFrame->data[2], 128, dummyFrame->linesize[2] * dummyFrame->height / 2);
-
-                dummyFrame->pts = 0;
-                FFmpegCompat::setKeyFrame(dummyFrame, true);
-
-                if (avcodec_send_frame(videoCtx, dummyFrame) >= 0)
-                {
-                    AVPacket *pkt = av_packet_alloc();
-                    if (pkt)
-                    {
-                        // Para H.264, o extradata pode estar no primeiro pacote keyframe
-                        // em vez de no codec context quando repeat-headers=1
-                        bool foundExtradata = false;
-                        while (avcodec_receive_packet(videoCtx, pkt) >= 0)
-                        {
-                            // Para H.264, tentar extrair SPS/PPS do primeiro pacote keyframe
-                            if (videoCtx->codec_id == AV_CODEC_ID_H264 && 
-                                (pkt->flags & AV_PKT_FLAG_KEY) && 
-                                !foundExtradata && 
-                                pkt->data && pkt->size > 0)
-                            {
-                                // Procurar por NAL units SPS (0x67) e PPS (0x68) no pacote
-                                const uint8_t *data = pkt->data;
-                                size_t size = pkt->size;
-                                size_t spsPos = 0, ppsPos = 0;
-                                size_t spsSize = 0, ppsSize = 0;
-                                
-                                // Procurar SPS (NAL type 7) e PPS (NAL type 8)
-                                for (size_t i = 0; i < size - 4; i++)
-                                {
-                                    if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01)
-                                    {
-                                        uint8_t nalType = data[i+4] & 0x1F;
-                                        if (nalType == 7 && spsSize == 0) // SPS
-                                        {
-                                            spsPos = i + 4;
-                                            // Encontrar próximo NAL unit
-                                            for (size_t j = i + 5; j < size - 4; j++)
-                                            {
-                                                if (data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x00 && data[j+3] == 0x01)
-                                                {
-                                                    spsSize = j - spsPos;
-                                                    break;
-                                                }
-                                            }
-                                            if (spsSize == 0)
-                                                spsSize = size - spsPos;
-                                        }
-                                        else if (nalType == 8 && ppsSize == 0) // PPS
-                                        {
-                                            ppsPos = i + 4;
-                                            // Encontrar próximo NAL unit
-                                            for (size_t j = i + 5; j < size - 4; j++)
-                                            {
-                                                if (data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x00 && data[j+3] == 0x01)
-                                                {
-                                                    ppsSize = j - ppsPos;
-                                                    break;
-                                                }
-                                            }
-                                            if (ppsSize == 0)
-                                                ppsSize = size - ppsPos;
-                                        }
-                                    }
-                                }
-                                
-                                // Se encontramos SPS e PPS, criar extradata
-                                if (spsSize > 0 && ppsSize > 0)
-                                {
-                                    // Formato extradata H.264 AVCC:
-                                    // 1 byte: version (0x01)
-                                    // 1 byte: profile
-                                    // 1 byte: profile compat
-                                    // 1 byte: level
-                                    // 1 byte: 6 bits reserved + 2 bits NAL length size - 1 (0xFF = length size 4)
-                                    // 1 byte: 3 bits reserved + 5 bits SPS count (0xE1 = 1 SPS)
-                                    // 2 bytes: SPS size
-                                    // SPS data
-                                    // 1 byte: PPS count (0x01)
-                                    // 2 bytes: PPS size
-                                    // PPS data
-                                    // Total: 11 bytes header + spsSize + ppsSize
-                                    size_t extradataSize = 11 + spsSize + ppsSize;
-                                    uint8_t *extradata = static_cast<uint8_t *>(av_malloc(extradataSize + AV_INPUT_BUFFER_PADDING_SIZE));
-                                    if (extradata)
-                                    {
-                                        size_t offset = 0;
-                                        extradata[offset++] = 0x01; // version
-                                        extradata[offset++] = data[spsPos + 1]; // profile
-                                        extradata[offset++] = data[spsPos + 2]; // profile compat
-                                        extradata[offset++] = data[spsPos + 3]; // level
-                                        extradata[offset++] = 0xFF; // 6 bits reserved + 2 bits NAL length size - 1
-                                        extradata[offset++] = 0xE1; // 3 bits reserved + 5 bits SPS count
-                                        extradata[offset++] = (spsSize >> 8) & 0xFF; // SPS size high
-                                        extradata[offset++] = spsSize & 0xFF; // SPS size low
-                                        memcpy(extradata + offset, data + spsPos, spsSize);
-                                        offset += spsSize;
-                                        extradata[offset++] = 0x01; // PPS count
-                                        extradata[offset++] = (ppsSize >> 8) & 0xFF; // PPS size high
-                                        extradata[offset++] = ppsSize & 0xFF; // PPS size low
-                                        memcpy(extradata + offset, data + ppsPos, ppsSize);
-                                        memset(extradata + extradataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
-                                        
-                                        // Atribuir extradata ao codecpar
-                                        av_freep(&videoStream->codecpar->extradata);
-                                        videoStream->codecpar->extradata = extradata;
-                                        videoStream->codecpar->extradata_size = extradataSize;
-                                        foundExtradata = true;
-                                        LOG_INFO("MediaMuxer: Extracted H.264 extradata from first keyframe - size: " + 
-                                                 std::to_string(extradataSize));
-                                    }
-                                }
-                            }
-                            av_packet_unref(pkt);
-                        }
-                        av_packet_free(&pkt);
-                    }
-
-                    // Atualizar codecpar - mas preservar extradata se foi extraído do pacote
-                    size_t preservedExtradataSize = 0;
-                    uint8_t *preservedExtradata = nullptr;
-                    if (videoStream->codecpar->extradata && videoStream->codecpar->extradata_size > 0)
-                    {
-                        preservedExtradataSize = videoStream->codecpar->extradata_size;
-                        preservedExtradata = static_cast<uint8_t *>(av_malloc(preservedExtradataSize + AV_INPUT_BUFFER_PADDING_SIZE));
-                        if (preservedExtradata)
-                        {
-                            memcpy(preservedExtradata, videoStream->codecpar->extradata, preservedExtradataSize);
-                            memset(preservedExtradata + preservedExtradataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
-                        }
-                    }
-                    
-                    // Copiar parâmetros do codec (isso pode sobrescrever o extradata)
-                    if (avcodec_parameters_from_context(videoStream->codecpar, videoCtx) >= 0)
-                    {
-                        videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-                        videoStream->codecpar->codec_id = videoCtx->codec_id;
-                        
-                        // Restaurar extradata extraído se tínhamos preservado
-                        if (preservedExtradata && preservedExtradataSize > 0)
-                        {
-                            av_freep(&videoStream->codecpar->extradata);
-                            videoStream->codecpar->extradata = preservedExtradata;
-                            videoStream->codecpar->extradata_size = preservedExtradataSize;
-                            LOG_INFO("MediaMuxer: Preserved extracted extradata - size: " + std::to_string(preservedExtradataSize));
-                        }
-                        else
-                        {
-                            LOG_INFO("MediaMuxer: Updated codecpar for codec " + std::to_string(videoCtx->codec_id) +
-                                     " - extradata_size: " + std::to_string(videoStream->codecpar->extradata_size));
-                        }
-                    }
-                    else if (preservedExtradata)
-                    {
-                        // Se falhou, liberar extradata preservado
-                        av_freep(&preservedExtradata);
-                    }
-                }
+                avio_closep(&formatCtx->pb);
             }
-            av_frame_free(&dummyFrame);
+            else
+            {
+                avio_context_free(&formatCtx->pb);
+            }
         }
+        if (formatCtx->url)
+        {
+            av_free(const_cast<char *>(formatCtx->url));
+        }
+        avformat_free_context(formatCtx);
+        return false;
     }
+    
+    // Garantir que codec_type e codec_id estão corretos
+    videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    videoStream->codecpar->codec_id = videoCtx->codec_id;
+    
+    LOG_INFO("MediaMuxer: Video codecpar - codec_id: " + std::to_string(videoStream->codecpar->codec_id) +
+             ", width: " + std::to_string(videoStream->codecpar->width) +
+             ", height: " + std::to_string(videoStream->codecpar->height) +
+             ", extradata_size: " + std::to_string(videoStream->codecpar->extradata_size));
 
     // Escrever header do formato
     // CRITICAL: avformat_write_header may change stream->time_base!

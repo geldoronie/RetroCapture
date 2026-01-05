@@ -56,7 +56,8 @@ public:
     ~MediaEncoder();
 
     // Inicializar encoder com configurações
-    bool initialize(const VideoConfig &videoConfig, const AudioConfig &audioConfig);
+    // forStreaming: true para streaming (usa repeat-headers), false para gravação em arquivo (usa global header)
+    bool initialize(const VideoConfig &videoConfig, const AudioConfig &audioConfig, bool forStreaming = false);
 
     // Encoding de vídeo: RGB → YUV → codec
     // Retorna true se frame foi enviado ao codec (pode gerar 0 ou mais pacotes)
@@ -113,6 +114,7 @@ private:
     VideoConfig m_videoConfig;
     AudioConfig m_audioConfig;
     bool m_initialized = false;
+    bool m_forStreaming = false; // true para streaming, false para gravação em arquivo
 
     // Codec contexts (void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*

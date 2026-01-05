@@ -170,7 +170,8 @@ bool RecordingManager::startRecording(const RecordingSettings& settings)
         audioConfig.codec = ""; // Empty codec means no audio
     }
 
-    if (!m_encoder.initialize(videoConfig, audioConfig))
+    // Inicializar encoder para gravação em arquivo (não streaming)
+    if (!m_encoder.initialize(videoConfig, audioConfig, false))
     {
         LOG_ERROR("RecordingManager: Failed to initialize MediaEncoder");
         return false;

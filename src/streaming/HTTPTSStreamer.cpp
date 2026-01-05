@@ -1061,7 +1061,8 @@ bool HTTPTSStreamer::initializeEncoding()
              std::to_string(videoConfig.width) + "x" + std::to_string(videoConfig.height) +
              "@" + std::to_string(videoConfig.fps) + "fps)");
 
-    if (!m_mediaEncoder.initialize(videoConfig, audioConfig))
+    // Inicializar encoder para streaming (usa repeat-headers)
+    if (!m_mediaEncoder.initialize(videoConfig, audioConfig, true))
     {
         LOG_ERROR("Failed to initialize MediaEncoder");
         return false;

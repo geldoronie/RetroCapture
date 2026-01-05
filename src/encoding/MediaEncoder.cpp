@@ -22,7 +22,7 @@ MediaEncoder::~MediaEncoder()
     cleanup();
 }
 
-bool MediaEncoder::initialize(const VideoConfig &videoConfig, const AudioConfig &audioConfig)
+bool MediaEncoder::initialize(const VideoConfig &videoConfig, const AudioConfig &audioConfig, bool forStreaming)
 {
     if (m_initialized)
     {
@@ -31,6 +31,7 @@ bool MediaEncoder::initialize(const VideoConfig &videoConfig, const AudioConfig 
 
     m_videoConfig = videoConfig;
     m_audioConfig = audioConfig;
+    m_forStreaming = forStreaming;
 
     if (!initializeVideoCodec())
     {
@@ -137,8 +138,17 @@ bool MediaEncoder::initializeVideoCodec()
     codecCtx->thread_count = 0;
     codecCtx->thread_type = FF_THREAD_SLICE;
 
+    // Configurar global header baseado no uso (streaming vs arquivo)
+    // Para gravação em arquivo: usar global header (extradata no header do container)
+    // Para streaming: não usar global header, usar repeat-headers (extradata em cada keyframe)
     if (codec->id == AV_CODEC_ID_HEVC || codec->id == AV_CODEC_ID_VP8 || codec->id == AV_CODEC_ID_VP9)
     {
+        codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+    else if (codec->id == AV_CODEC_ID_H264 && !m_forStreaming)
+    {
+        // Para H.264 em gravação de arquivo, usar global header para simplificar
+        // FFmpeg vai lidar com extradata automaticamente
         codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
@@ -155,7 +165,11 @@ bool MediaEncoder::initializeVideoCodec()
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
         av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
         av_dict_set_int(&opts, "scenecut", 0, 0);
-        av_dict_set_int(&opts, "repeat-headers", 1, 0);
+        // repeat-headers apenas para streaming (necessário para streaming, mas não para arquivos)
+        if (m_forStreaming)
+        {
+            av_dict_set_int(&opts, "repeat-headers", 1, 0);
+        }
     }
     else if (codec->id == AV_CODEC_ID_HEVC)
     {
