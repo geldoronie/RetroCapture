@@ -321,6 +321,9 @@
                                 <button class="btn btn-sm btn-primary" onclick="playRecording('${recording.id}')" title="Reproduzir">
                                     <i class="bi bi-play-fill"></i>
                                 </button>
+                                <button class="btn btn-sm btn-success" onclick="downloadRecording('${recording.id}', '${escapeHtml(recording.filename)}')" title="Download">
+                                    <i class="bi bi-download"></i>
+                                </button>
                                 <button class="btn btn-sm btn-secondary" onclick="renameRecording('${recording.id}', '${escapeHtml(recording.filename)}')" title="Renomear">
                                     <i class="bi bi-pencil"></i>
                                 </button>
@@ -371,6 +374,38 @@
             player.src = videoUrl;
             container.classList.add('active');
             player.play();
+        }
+
+        async function downloadRecording(id, filename) {
+            try {
+                const videoUrl = `/api/v1/recordings/${encodeURIComponent(id)}/file`;
+                
+                // Fetch the file
+                const response = await fetch(videoUrl);
+                if (!response.ok) {
+                    throw new Error('Failed to download recording');
+                }
+                
+                // Get the blob
+                const blob = await response.blob();
+                
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                
+                // Cleanup
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showAlert('Download iniciado!', 'success');
+            } catch (error) {
+                console.error('Error downloading recording:', error);
+                showAlert('Erro ao fazer download: ' + error.message, 'danger');
+            }
         }
 
         function closeVideoPlayer() {
