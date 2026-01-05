@@ -470,8 +470,7 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) + 
                  ", bytes written: " + std::to_string(formatCtx->pb->pos));
         
-        // CRITICAL: Flush o buffer AVIO após escrever o header para garantir que os dados sejam escritos no disco
-        // Sem isso, o ftyp box pode ficar apenas no buffer e não ser escrito no arquivo
+        // Flush buffer AVIO após escrever header para garantir que dados sejam escritos
         avio_flush(formatCtx->pb);
         LOG_INFO("MediaMuxer: Flushed AVIO buffer after header write");
     }
@@ -844,8 +843,6 @@ std::vector<uint8_t> MediaMuxer::getFormatHeader() const
 void MediaMuxer::finalize()
 {
     // Finalizar escrita antes de fechar arquivo
-    // av_write_trailer() é necessário para TODOS os formatos para escrever metadados finais
-    // Para MP4 com faststart, o moov atom é movido para o início durante av_write_trailer()
     if (m_initialized && m_muxerContext)
     {
         AVFormatContext *formatCtx = static_cast<AVFormatContext *>(m_muxerContext);
@@ -856,8 +853,7 @@ void MediaMuxer::finalize()
             LOG_INFO("MediaMuxer: Finalizing " + m_containerFormat + " file (isFile=" + 
                      std::to_string(isFile) + ", url=" + (formatCtx->url ? formatCtx->url : "null") + ")");
 
-            // Flush final usando av_interleaved_write_frame (mesma função usada para escrever pacotes)
-            // Isso garante que todos os pacotes pendentes sejam escritos corretamente
+            // Flush final de pacotes pendentes
             av_interleaved_write_frame(formatCtx, nullptr);
 
             // Flush do buffer AVIO ANTES do trailer
@@ -866,9 +862,7 @@ void MediaMuxer::finalize()
                 avio_flush(formatCtx->pb);
             }
 
-            // Chamar av_write_trailer() - isso escreve o moov atom e finaliza o arquivo
-            // O FFmpeg calcula automaticamente a duração baseado nos pacotes escritos
-            // CRITICAL: Deve ser chamado para TODOS os formatos, não apenas MP4
+            // av_write_trailer() escreve metadados finais e calcula duração automaticamente
             LOG_INFO("MediaMuxer: Calling av_write_trailer()...");
             int ret = av_write_trailer(formatCtx);
             if (ret < 0)

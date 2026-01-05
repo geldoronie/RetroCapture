@@ -903,7 +903,6 @@ bool APIController::handleSetSource(int clientFd, const std::string &body)
             int sourceTypeInt = json["type"].get<int>();
             UIManager::SourceType sourceType = static_cast<UIManager::SourceType>(sourceTypeInt);
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerSourceTypeChange(sourceType);
 
             std::ostringstream response;
@@ -1026,7 +1025,6 @@ bool APIController::handleSetCaptureResolution(int clientFd, const std::string &
             uint32_t width = json["width"].get<uint32_t>();
             uint32_t height = json["height"].get<uint32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerResolutionChange(width, height);
 
             std::ostringstream response;
@@ -1062,7 +1060,6 @@ bool APIController::handleSetCaptureFPS(int clientFd, const std::string &body)
         {
             uint32_t fps = json["fps"].get<uint32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerFramerateChange(fps);
 
             std::ostringstream response;
@@ -1352,7 +1349,6 @@ bool APIController::handleSetV4L2Control(int clientFd, const std::string &body)
             std::string name = json["name"].get<std::string>();
             int32_t value = json["value"].get<int32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerV4L2ControlChange(name, value);
 
             std::ostringstream response;

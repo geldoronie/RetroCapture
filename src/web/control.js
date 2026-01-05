@@ -381,7 +381,6 @@ function updateSourceUI(sourceType) {
     const dsContainer = document.getElementById('dsControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
 
-    // Esconder todos os containers primeiro
     if (v4l2Container) v4l2Container.style.display = 'none';
     if (dsContainer) dsContainer.style.display = 'none';
     if (noneMessage) noneMessage.style.display = 'none';
@@ -1128,7 +1127,6 @@ async function updateImageSettings() {
  * Atualiza controles específicos do codec
  */
 function updateCodecSpecificControls(codec) {
-    // Esconder todos os containers
     const h264PresetContainer = document.getElementById('h264PresetContainer');
     const h265PresetContainer = document.getElementById('h265PresetContainer');
     const h265ProfileContainer = document.getElementById('h265ProfileContainer');
@@ -1430,8 +1428,6 @@ document.addEventListener('DOMContentLoaded', function() {
             updateShaderParameter(name, value);
         }, 500);
     };
-    
-    // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
     
     // Resolução/FPS de captura (V4L2 e MF) - atualização em tempo real com debounce
     let captureSettingsTimeout = null;

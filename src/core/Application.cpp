@@ -2011,9 +2011,7 @@ bool Application::initUI()
             return;
         }
         
-        LOG_INFO("=== CALLBACK setOnDeviceChanged CALLED ===");
         LOG_INFO("Changing device to: " + devicePath);
-        std::cout << "[FORCE] setOnDeviceChanged called with devicePath: " << devicePath << std::endl;
         
         // Save current settings
         uint32_t oldWidth = m_captureWidth;
@@ -3042,9 +3040,7 @@ void Application::run()
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    // TEMPORÁRIO: Desabilitar PBO para debug - usar sempre método síncrono
-                    // TODO: Reabilitar PBO após confirmar que streaming funciona
-                    bool usePBO = false; // false = usar sempre método síncrono
+                    bool usePBO = false;
                     
                     if (usePBO)
                     {
@@ -3080,24 +3076,12 @@ void Application::run()
                                 }
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
-                                    static int pboFrameCount = 0;
-                                    pboFrameCount++;
-                                    if (pboFrameCount == 1 || pboFrameCount % 60 == 0)
-                                    {
-                                        LOG_INFO("Application: Pushing frame to RecordingManager via PBO (frame " + std::to_string(pboFrameCount) + ")");
-                                    }
                                     m_recordingManager->pushFrame(frameData.data(), captureWidth, captureHeight);
                                 }
                             }
                             else
                             {
                                 // PBO data not ready yet - this is normal for first frame
-                                static int pboNotReadyCount = 0;
-                                pboNotReadyCount++;
-                                if (pboNotReadyCount <= 3)
-                                {
-                                    LOG_INFO("Application: PBO data not ready yet (count: " + std::to_string(pboNotReadyCount) + ")");
-                                }
                             }
                             // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
                             // não enviamos este frame - isso é normal e esperado
@@ -3112,12 +3096,6 @@ void Application::run()
                     // Usar método síncrono (fallback ou se PBO desabilitado)
                     if (!usePBO)
                     {
-                        static int syncCaptureCount = 0;
-                        syncCaptureCount++;
-                        if (syncCaptureCount == 1 || syncCaptureCount % 60 == 0)
-                        {
-                            LOG_INFO("Application: Using synchronous capture method (frame " + std::to_string(syncCaptureCount) + ")");
-                        }
                         
                         // SIMPLIFICADO: Capturar diretamente do framebuffer padrão (janela) após renderização
                         // Garantir que estamos lendo do framebuffer correto
@@ -3166,12 +3144,6 @@ void Application::run()
                         }
                         if (m_recordingManager && m_recordingManager->isRecording())
                         {
-                            static int syncFrameCount = 0;
-                            syncFrameCount++;
-                            if (syncFrameCount == 1 || syncFrameCount % 60 == 0)
-                            {
-                                LOG_INFO("Application: Pushing frame to RecordingManager via sync method (frame " + std::to_string(syncFrameCount) + ")");
-                            }
                             m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                         }
                     }

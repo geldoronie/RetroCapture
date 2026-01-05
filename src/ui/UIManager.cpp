@@ -1835,16 +1835,10 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 
 void UIManager::triggerDeviceChange(const std::string &device)
 {
-    LOG_INFO("[FORCE-UI] triggerDeviceChange chamado com device: " + device);
     m_currentDevice = device;
     if (m_onDeviceChanged)
     {
-        LOG_INFO("[FORCE-UI] Callback m_onDeviceChanged existe, chamando...");
         m_onDeviceChanged(device);
-    }
-    else
-    {
-        LOG_ERROR("[FORCE-UI] ERRO: Callback m_onDeviceChanged é NULL!");
     }
 }
 
