@@ -1928,6 +1928,25 @@ async function toggleRecording() {
 }
 
 /**
+ * Define resolução rápida para gravação
+ */
+async function setRecordingResolution(width, height) {
+    try {
+        const widthInput = document.getElementById('recordingWidth');
+        const heightInput = document.getElementById('recordingHeight');
+        
+        if (widthInput) widthInput.value = width;
+        if (heightInput) heightInput.value = height;
+        
+        // Atualizar as configurações de gravação
+        await updateRecordingSettings();
+        showAlert(`Resolução de gravação definida para ${width}x${height}!`, 'success');
+    } catch (error) {
+        showAlert('Erro ao definir resolução de gravação: ' + error.message, 'danger');
+    }
+}
+
+/**
  * Atualiza configurações de recording
  */
 async function updateRecordingSettings() {

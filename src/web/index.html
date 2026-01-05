@@ -509,6 +509,37 @@
                                             <label class="form-label">FPS</label>
                                             <input type="number" class="form-control" id="recordingFPS" min="1" max="120">
                                         </div>
+                                        
+                                        <!-- Quick Resolution Presets -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6>Quick Resolution Presets</h6>
+                                            
+                                            <div class="mb-3">
+                                                <label class="form-label">4:3 Resolutions:</label>
+                                                <div class="d-flex flex-wrap gap-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(320, 240)">320x240</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(640, 480)">640x480</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(800, 600)">800x600</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1024, 768)">1024x768</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 960)">1280x960</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1600, 1200)">1600x1200</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2048, 1536)">2048x1536</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1920)">2560x1920</button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="mb-3">
+                                                <label class="form-label">16:9 Resolutions:</label>
+                                                <div class="d-flex flex-wrap gap-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 720)">1280x720</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1920, 1080)">1920x1080</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1440)">2560x1440</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(3840, 2160)">3840x2160</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
                                         <div class="col-md-6">
                                             <label class="form-label">Video Bitrate (bps)</label>
                                             <input type="number" class="form-control" id="recordingBitrate" min="1000000" step="1000000">
