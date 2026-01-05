@@ -136,6 +136,7 @@ private:
     bool handleDeleteRecording(int clientFd, const std::string &recordingId);
     bool handlePUTRecording(int clientFd, const std::string &recordingId, const std::string &body);
     bool handleGETRecordingFile(int clientFd, const std::string &recordingId, const std::string &request);
+    bool handleGETRecordingThumbnail(int clientFd, const std::string &recordingId);
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
     bool handleSetDSDevice(int clientFd, const std::string &body);

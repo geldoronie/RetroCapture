@@ -76,6 +76,9 @@ private:
 
     // Add current recording to metadata
     void finalizeCurrentRecording();
+    
+    // Generate thumbnail from video file (extract first frame)
+    bool generateThumbnail(const std::string& videoPath, const std::string& thumbnailPath);
 
     FileRecorder m_recorder;
     MediaEncoder m_encoder;

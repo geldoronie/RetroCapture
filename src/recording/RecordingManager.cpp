@@ -9,6 +9,14 @@
 #include <cstdint>
 #include <limits>
 
+extern "C"
+{
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
+}
+
 RecordingManager::RecordingManager()
 {
     // Default metadata path
@@ -261,9 +269,6 @@ void RecordingManager::stopRecording()
         m_currentMetadata.durationUs = m_recorder.getDurationUs();
     }
 
-    // Add to recordings list (before cleanup to save metadata)
-    finalizeCurrentRecording();
-
     // Cleanup in correct order:
     // 1. Flush and stop recorder (but keep file open for av_write_trailer)
     // 2. Cleanup recorder (calls av_write_trailer, then closes file)
@@ -276,6 +281,23 @@ void RecordingManager::stopRecording()
     LOG_INFO("RecordingManager: Encoder cleaned up, clearing synchronizer");
     m_synchronizer.clear();
     LOG_INFO("RecordingManager: Cleanup sequence completed");
+
+    // Update file size after cleanup (file is now finalized)
+    if (fs::exists(m_currentMetadata.filepath))
+    {
+        try
+        {
+            m_currentMetadata.fileSize = static_cast<uint64_t>(fs::file_size(m_currentMetadata.filepath));
+        }
+        catch (...)
+        {
+            // Ignore errors
+        }
+    }
+
+    // Add to recordings list (after cleanup, file is finalized)
+    // This will also generate thumbnail now that file is complete
+    finalizeCurrentRecording();
 
     // Reset state
     {
@@ -739,16 +761,21 @@ bool RecordingManager::saveRecordingsMetadata()
 
 void RecordingManager::finalizeCurrentRecording()
 {
-    // Update file size and duration from filesystem if needed
+    // Generate thumbnail from video file (file is already finalized at this point)
     if (fs::exists(m_currentMetadata.filepath))
     {
-        try
+        // Generate thumbnail path: same name as video but with .jpg extension
+        fs::path videoPath(m_currentMetadata.filepath);
+        fs::path thumbnailPath = videoPath.parent_path() / (videoPath.stem().string() + ".jpg");
+
+        if (generateThumbnail(m_currentMetadata.filepath, thumbnailPath.string()))
         {
-            m_currentMetadata.fileSize = static_cast<uint64_t>(fs::file_size(m_currentMetadata.filepath));
+            m_currentMetadata.thumbnailPath = thumbnailPath.string();
+            LOG_INFO("RecordingManager: Thumbnail generated: " + m_currentMetadata.thumbnailPath);
         }
-        catch (...)
+        else
         {
-            // Ignore errors
+            LOG_WARN("RecordingManager: Failed to generate thumbnail for: " + m_currentMetadata.filepath);
         }
     }
 
@@ -758,6 +785,208 @@ void RecordingManager::finalizeCurrentRecording()
     }
 
     saveRecordingsMetadata();
+}
+
+bool RecordingManager::generateThumbnail(const std::string &videoPath, const std::string &thumbnailPath)
+{
+    AVFormatContext *formatCtx = nullptr;
+    AVCodecContext *codecCtx = nullptr;
+    const AVCodec *codec = nullptr;
+    AVFrame *frame = nullptr;
+    AVFrame *yuvFrame = nullptr;
+    SwsContext *swsCtx = nullptr;
+    int videoStreamIndex = -1;
+    bool success = false;
+
+    // Open video file
+    if (avformat_open_input(&formatCtx, videoPath.c_str(), nullptr, nullptr) < 0)
+    {
+        LOG_ERROR("RecordingManager: Could not open video file: " + videoPath);
+        return false;
+    }
+
+    // Find stream info
+    if (avformat_find_stream_info(formatCtx, nullptr) < 0)
+    {
+        LOG_ERROR("RecordingManager: Could not find stream info");
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Find video stream
+    for (unsigned int i = 0; i < formatCtx->nb_streams; i++)
+    {
+        if (formatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            videoStreamIndex = i;
+            break;
+        }
+    }
+
+    if (videoStreamIndex == -1)
+    {
+        LOG_ERROR("RecordingManager: No video stream found");
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Get codec parameters
+    AVCodecParameters *codecpar = formatCtx->streams[videoStreamIndex]->codecpar;
+
+    // Find decoder
+    codec = avcodec_find_decoder(codecpar->codec_id);
+    if (!codec)
+    {
+        LOG_ERROR("RecordingManager: Codec not found");
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Allocate codec context
+    codecCtx = avcodec_alloc_context3(codec);
+    if (!codecCtx)
+    {
+        LOG_ERROR("RecordingManager: Could not allocate codec context");
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Copy codec parameters to context
+    if (avcodec_parameters_to_context(codecCtx, codecpar) < 0)
+    {
+        LOG_ERROR("RecordingManager: Could not copy codec parameters");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Open codec
+    if (avcodec_open2(codecCtx, codec, nullptr) < 0)
+    {
+        LOG_ERROR("RecordingManager: Could not open codec");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Allocate frame
+    frame = av_frame_alloc();
+    if (!frame)
+    {
+        LOG_ERROR("RecordingManager: Could not allocate frame");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return false;
+    }
+
+    // Read first frame
+    AVPacket *packet = av_packet_alloc();
+    if (!packet)
+    {
+        LOG_ERROR("RecordingManager: Could not allocate packet");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        av_frame_free(&frame);
+        return false;
+    }
+
+    // Seek to beginning
+    av_seek_frame(formatCtx, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
+
+    // Read until we get a video frame
+    while (av_read_frame(formatCtx, packet) >= 0)
+    {
+        if (packet->stream_index == videoStreamIndex)
+        {
+            // Send packet to decoder
+            if (avcodec_send_packet(codecCtx, packet) >= 0)
+            {
+                // Receive frame from decoder
+                if (avcodec_receive_frame(codecCtx, frame) >= 0)
+                {
+                    int width = codecCtx->width;
+                    int height = codecCtx->height;
+
+                    // Use MJPEG encoder to save as JPEG
+                    const AVCodec *jpegCodec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+                    if (jpegCodec)
+                    {
+                        AVCodecContext *jpegCtx = avcodec_alloc_context3(jpegCodec);
+                        if (jpegCtx)
+                        {
+                            jpegCtx->width = width;
+                            jpegCtx->height = height;
+                            jpegCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;
+                            jpegCtx->time_base = {1, 25};
+
+                            if (avcodec_open2(jpegCtx, jpegCodec, nullptr) >= 0)
+                            {
+                                // Allocate YUV frame
+                                yuvFrame = av_frame_alloc();
+                                if (yuvFrame)
+                                {
+                                    yuvFrame->format = AV_PIX_FMT_YUVJ420P;
+                                    yuvFrame->width = width;
+                                    yuvFrame->height = height;
+                                    if (av_frame_get_buffer(yuvFrame, 32) >= 0)
+                                    {
+                                        // Convert decoded frame to YUVJ420P
+                                        swsCtx = sws_getContext(
+                                            width, height, codecCtx->pix_fmt,
+                                            width, height, AV_PIX_FMT_YUVJ420P,
+                                            SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+                                        if (swsCtx)
+                                        {
+                                            sws_scale(swsCtx, frame->data, frame->linesize,
+                                                      0, height, yuvFrame->data, yuvFrame->linesize);
+
+                                            yuvFrame->pts = 0;
+
+                                            // Encode frame
+                                            if (avcodec_send_frame(jpegCtx, yuvFrame) >= 0)
+                                            {
+                                                AVPacket *jpegPacket = av_packet_alloc();
+                                                if (jpegPacket)
+                                                {
+                                                    if (avcodec_receive_packet(jpegCtx, jpegPacket) >= 0)
+                                                    {
+                                                        // Write to file
+                                                        std::ofstream outFile(thumbnailPath, std::ios::binary);
+                                                        if (outFile.is_open())
+                                                        {
+                                                            outFile.write(reinterpret_cast<const char *>(jpegPacket->data), jpegPacket->size);
+                                                            outFile.close();
+                                                            success = true;
+                                                        }
+                                                    }
+                                                    av_packet_free(&jpegPacket);
+                                                }
+                                            }
+                                            sws_freeContext(swsCtx);
+                                        }
+                                    }
+                                    av_frame_free(&yuvFrame);
+                                }
+                            }
+                            avcodec_free_context(&jpegCtx);
+                        }
+                    }
+
+                    break; // Got frame, exit loop
+                }
+            }
+        }
+        av_packet_unref(packet);
+    }
+
+    // Cleanup
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+    avcodec_free_context(&codecCtx);
+    avformat_close_input(&formatCtx);
+
+    return success;
 }
 
 std::vector<RecordingMetadata> RecordingManager::listRecordings()

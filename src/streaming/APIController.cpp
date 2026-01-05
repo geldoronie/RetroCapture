@@ -377,6 +377,16 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
                 return handleGETRecordingFile(clientFd, recordingId, request);
             }
         }
+        // Check if it's /api/v1/recordings/{id}/thumbnail
+        else if (remaining.find("/thumbnail") != std::string::npos)
+        {
+            size_t thumbPos = remaining.find("/thumbnail");
+            std::string recordingId = remaining.substr(0, thumbPos);
+            if (!recordingId.empty())
+            {
+                return handleGETRecordingThumbnail(clientFd, recordingId);
+            }
+        }
         else if (!remaining.empty())
         {
             // Extract recording ID from path: /api/v1/recordings/{id}
@@ -2091,6 +2101,74 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
     catch (const std::exception& e)
     {
         sendErrorResponse(clientFd, 500, "Error serving recording file: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETRecordingThumbnail(int clientFd, const std::string& recordingId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        auto recordings = m_application->listRecordings();
+        auto it = std::find_if(recordings.begin(), recordings.end(),
+                              [&recordingId](const RecordingMetadata& m) { return m.id == recordingId; });
+        
+        if (it == recordings.end())
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        // Check if thumbnail exists
+        if (it->thumbnailPath.empty() || !fs::exists(it->thumbnailPath))
+        {
+            sendErrorResponse(clientFd, 404, "Thumbnail not found");
+            return true;
+        }
+
+        // Get file size
+        uint64_t fileSize = fs::file_size(it->thumbnailPath);
+
+        // Open file
+        std::ifstream file(it->thumbnailPath, std::ios::binary);
+        if (!file.is_open())
+        {
+            sendErrorResponse(clientFd, 500, "Failed to open thumbnail file");
+            return true;
+        }
+
+        // Read file content
+        std::vector<char> buffer(fileSize);
+        file.read(buffer.data(), fileSize);
+        file.close();
+
+        // Prepare response headers
+        std::ostringstream response;
+        response << "HTTP/1.1 200 OK\r\n";
+        response << "Content-Type: image/jpeg\r\n";
+        response << "Content-Length: " << fileSize << "\r\n";
+        response << "Cache-Control: public, max-age=3600\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+
+        std::string headerStr = response.str();
+        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
+        if (sent >= 0)
+        {
+            sent = sendData(clientFd, buffer.data(), fileSize);
+        }
+
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error serving thumbnail: " + std::string(e.what()));
         return true;
     }
 }
