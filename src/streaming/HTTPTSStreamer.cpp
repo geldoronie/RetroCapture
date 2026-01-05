@@ -40,7 +40,7 @@ static int writeCallback(void *opaque, const uint8_t *buf, int buf_size)
 
 // Wrapper para compatibilidade com versões do FFmpeg que esperam uint8_t* (não const)
 // FFmpeg 6.0 (libavformat 60) ainda usa uint8_t* (não const)
-static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
+__attribute__((unused)) static int writeCallbackNonConst(void *opaque, uint8_t *buf, int buf_size)
 {
     return writeCallback(opaque, const_cast<const uint8_t*>(buf), buf_size);
 }

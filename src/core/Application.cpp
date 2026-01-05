@@ -823,7 +823,7 @@ bool Application::initUI()
     // Check if current values are the defaults (1920x1080) - if so, likely not set via command line
     bool isDefaultResolution = (m_captureWidth == 1920 && m_captureHeight == 1080);
     
-    if (useSavedResolution && (m_captureWidth == 0 && m_captureHeight == 0 || isDefaultResolution))
+    if (useSavedResolution && ((m_captureWidth == 0 && m_captureHeight == 0) || isDefaultResolution))
     {
         LOG_INFO("Using saved capture resolution: " + 
                  std::to_string(savedWidth) + "x" + std::to_string(savedHeight) + 

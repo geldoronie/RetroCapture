@@ -1,6 +1,7 @@
 #include "MediaMuxer.h"
 #include "../utils/Logger.h"
 #include <cstring>
+#include <algorithm>
 
 extern "C"
 {
