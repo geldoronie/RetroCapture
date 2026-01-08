@@ -1,0 +1,14 @@
+shaders = 2
+
+shader0 = ../denoisers/shaders/median_3x3.glsl
+filter_linear0 = false
+scale_type0 = source
+scale0 = 1.0
+
+shader1 = ../crt/shaders/fake-CRT-Geom.glsl
+filter_linear0 = "true"
+wrap_mode0 = "clamp_to_border"
+mipmap_input0 = "false"
+alias0 = ""
+float_framebuffer0 = "false"
+srgb_framebuffer0 = "false"
