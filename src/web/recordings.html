@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Gerenciar gravações do RetroCapture">
     <meta name="theme-color" content="#0A7A83">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     
     <title>Recordings - RetroCapture</title>
     
@@ -128,7 +131,7 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <a href="/" class="btn btn-icon" title="Voltar ao Painel">
+                    <a href="/" class="btn btn-icon" title="Voltar ao Painel" onclick="goToHome(event)">
                         <i class="bi bi-arrow-left"></i>
                     </a>
                     <button class="btn btn-icon" onclick="refreshRecordings()" title="Atualizar Lista">
@@ -485,8 +488,30 @@
             }
         });
 
+        // Função para navegar para a página inicial, forçando reload
+        function goToHome(event) {
+            event.preventDefault();
+            // Usar replace para não adicionar ao histórico e forçar navegação
+            window.location.replace('/');
+        }
+
         // Load recordings on page load
         refreshRecordings();
+
+        // Detectar quando a página é carregada do cache do histórico (back/forward cache)
+        // e forçar reload se necessário para evitar mostrar conteúdo antigo
+        window.addEventListener('pageshow', (event) => {
+            // Se a página foi carregada do cache do histórico (back/forward cache)
+            if (event.persisted) {
+                // Se estamos na raiz mas deveríamos estar em recordings.html, recarregar
+                if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
+                    // Se o título indica que estamos na página de gravações, recarregar
+                    if (document.title.includes('Recordings')) {
+                        window.location.reload();
+                    }
+                }
+            }
+        });
     </script>
 </body>
 </html>

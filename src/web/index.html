@@ -716,6 +716,21 @@
             console.log('PWA instalado com sucesso!');
             deferredPrompt = null;
         });
+
+        // Detectar quando a página é carregada do cache do histórico (back/forward cache)
+        // e forçar reload se necessário para evitar mostrar conteúdo antigo
+        window.addEventListener('pageshow', (event) => {
+            // Se a página foi carregada do cache do histórico (back/forward cache)
+            if (event.persisted) {
+                // Se estamos na raiz ou index.html, recarregar para garantir conteúdo correto
+                if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
+                    // Verificar se o título está correto (não deve ser "Recordings")
+                    if (document.title.includes('Recordings')) {
+                        window.location.reload();
+                    }
+                }
+            }
+        });
     </script>
 </body>
 </html>
