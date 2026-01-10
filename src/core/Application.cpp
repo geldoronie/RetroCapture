@@ -3234,13 +3234,15 @@ void Application::run()
                         uint32_t captureTextureWidth = finalRenderWidth;
                         uint32_t captureTextureHeight = finalRenderHeight;
                         
-                        // Se estamos gravando, determinar qual textura e dimensões usar
+                        // Se estamos gravando ou fazendo streaming, determinar qual textura e dimensões usar
                         // IMPORTANTE: Se há resolução de saída configurada, usar finalTexture
                         // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
-                        if (m_recordingManager && m_recordingManager->isRecording())
+                        // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
+                        bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
+                                                (m_streamManager && m_streamManager->isActive());
+                        
+                        if (needsFrameCapture)
                         {
-                            RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
-                            
                             // IMPORTANTE: Se há uma resolução de saída configurada, usar finalTexture que já foi redimensionada
                             // Se não há resolução de saída, mas há shader, usar textureToRender com as dimensões reais do shader
                             // Isso garante que capturamos a textura completa processada
@@ -3287,7 +3289,17 @@ void Application::run()
                                 LOG_INFO("renderWidth/Height: " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
                                 LOG_INFO("finalRenderWidth/Height: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight));
                                 LOG_INFO("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
-                                LOG_INFO("Recording resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                    LOG_INFO("Recording resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                }
+                                if (m_streamManager && m_streamManager->isActive() && m_ui)
+                                {
+                                    LOG_INFO("Streaming resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                }
+                                
                                 LOG_INFO("Selected - textureToCapture: " + std::to_string(textureToCapture) +
                                          ", size: " + std::to_string(captureTextureWidth) + "x" + std::to_string(captureTextureHeight));
                                 LOG_INFO("Textures - textureToRender: " + std::to_string(textureToRender) +
@@ -3371,18 +3383,31 @@ void Application::run()
                             uint32_t textureWidth = captureTextureWidth;
                             uint32_t textureHeight = captureTextureHeight;
                             
-                            // Log detalhado: verificar tamanho da textura vs resolução de gravação
+                            // Log detalhado: verificar tamanho da textura vs resolução de gravação/streaming
                             static int textureSizeLogCount = 0;
-                            if (textureSizeLogCount++ < 3 && m_recordingManager && m_recordingManager->isRecording())
+                            bool shouldLog = (textureSizeLogCount++ < 3) && 
+                                            ((m_recordingManager && m_recordingManager->isRecording()) ||
+                                             (m_streamManager && m_streamManager->isActive()));
+                            if (shouldLog)
                             {
-                                RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                 LOG_INFO("=== CAPTURE DETAILS ===");
                                 LOG_INFO("Capturing from texture: " + std::to_string(textureToCapture) +
                                          ", Size: " + std::to_string(textureWidth) + "x" + std::to_string(textureHeight));
-                                LOG_INFO("Recording target: " + 
-                                         std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                LOG_INFO("Will resize: " + std::string(
-                                    (textureWidth != recSettings.width || textureHeight != recSettings.height) ? "YES" : "NO"));
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                    LOG_INFO("Recording target: " + 
+                                             std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                    LOG_INFO("Will resize for recording: " + std::string(
+                                        (textureWidth != recSettings.width || textureHeight != recSettings.height) ? "YES" : "NO"));
+                                }
+                                if (m_streamManager && m_streamManager->isActive() && m_ui)
+                                {
+                                    LOG_INFO("Streaming target: " + 
+                                             std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                    LOG_INFO("Will resize for streaming: " + std::string(
+                                        (textureWidth != m_ui->getStreamingWidth() || textureHeight != m_ui->getStreamingHeight()) ? "YES" : "NO"));
+                                }
                                 LOG_INFO("======================");
                             }
                             
@@ -3462,28 +3487,13 @@ void Application::run()
                                 }
 
                             // Usar dimensões originais da textura
-                            // O MediaEncoder fará o redimensionamento para a resolução de gravação se necessário
+                            // O MediaEncoder fará o redimensionamento para a resolução de gravação/streaming se necessário
                             uint32_t actualCaptureWidth = textureWidth;
                             uint32_t actualCaptureHeight = textureHeight;
                             
-                            // Log detalhado antes de enviar para RecordingManager
-                            static int pushFrameLogCount = 0;
-                            if (pushFrameLogCount++ < 3 && m_recordingManager && m_recordingManager->isRecording())
-                            {
-                                RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
-                                LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
-                                LOG_INFO("Frame size being pushed: " + 
-                                         std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
-                                LOG_INFO("Recording target resolution: " + 
-                                         std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                LOG_INFO("MediaEncoder will resize: " + std::string(
-                                    (actualCaptureWidth != recSettings.width || actualCaptureHeight != recSettings.height) ? "YES" : "NO"));
-                                LOG_INFO("===================================");
-                            }
-                        
-                        // Verificar se o frame capturado está vazio/preto
-                                // Isso ajuda a diagnosticar problemas com DirectFB
-                                static int frameCheckCount = 0;
+                            // Verificar se o frame capturado está vazio/preto
+                            // Isso ajuda a diagnosticar problemas com DirectFB
+                            static int frameCheckCount = 0;
                                 if (frameCheckCount++ < 10 || frameCheckCount % 60 == 0)
                                 {
                                     // Verificar se todos os pixels são pretos (0,0,0) ou se há dados válidos
@@ -3511,7 +3521,7 @@ void Application::run()
                                     {
                                         LOG_WARN("Frame capture: " + std::to_string(static_cast<int>(blackRatio * 100)) +
                                                  "% of sampled pixels are black (may indicate DirectFB/framebuffer issue)");
-                                        LOG_WARN("Capture params: texture=" + std::to_string(finalTexture) +
+                                        LOG_WARN("Capture params: texture=" + std::to_string(textureToCapture) +
                                                  ", size=" + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight) +
                                                  ", FBO=" + std::to_string(captureFBO));
                                     }
@@ -3520,10 +3530,43 @@ void Application::run()
                                 // Share frame data between streaming and recording
                                 if (m_streamManager && m_streamManager->isActive())
                                 {
+                                    static int streamPushLogCount = 0;
+                                    if (streamPushLogCount++ < 3 && m_ui)
+                                    {
+                                        LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        LOG_INFO("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                        if (m_ui->getStreamingWidth() != actualCaptureWidth || m_ui->getStreamingHeight() != actualCaptureHeight)
+                                        {
+                                            LOG_INFO("MediaEncoder will resize for streaming: YES");
+                                        }
+                                        else
+                                        {
+                                            LOG_INFO("MediaEncoder will resize for streaming: NO");
+                                        }
+                                        LOG_INFO("----------------------------------");
+                                    }
                                     m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                                 }
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
+                                    static int recordingPushLogCount = 0;
+                                    if (recordingPushLogCount++ < 3)
+                                    {
+                                        LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                        LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                        if (recSettings.width != actualCaptureWidth || recSettings.height != actualCaptureHeight)
+                                        {
+                                            LOG_INFO("MediaEncoder will resize: YES");
+                                        }
+                                        else
+                                        {
+                                            LOG_INFO("MediaEncoder will resize: NO");
+                                        }
+                                        LOG_INFO("===================================");
+                                    }
                                     m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                                 }
                             } // fim do else (textura válida)
