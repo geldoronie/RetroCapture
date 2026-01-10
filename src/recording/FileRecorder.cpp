@@ -112,7 +112,7 @@ bool FileRecorder::initialize(const MediaEncoder::VideoConfig& videoConfig,
     // Determine container format from file extension
     std::string containerFormat = "";
     fs::path path(outputPath);
-    std::string ext = path.extension().string();
+    std::string ext = path.extension();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     if (ext == ".mkv")
         containerFormat = "matroska";

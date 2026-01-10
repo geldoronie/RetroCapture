@@ -766,7 +766,7 @@ void RecordingManager::finalizeCurrentRecording()
     {
         // Generate thumbnail path: same name as video but with .jpg extension
         fs::path videoPath(m_currentMetadata.filepath);
-        fs::path thumbnailPath = videoPath.parent_path() / (videoPath.stem().string() + ".jpg");
+        fs::path thumbnailPath = videoPath.parent_path() / (videoPath.stem() + ".jpg");
 
         if (generateThumbnail(m_currentMetadata.filepath, thumbnailPath.string()))
         {
@@ -1129,7 +1129,7 @@ bool RecordingManager::renameRecording(const std::string &recordingId, const std
     {
         if (fs::exists(oldPath))
         {
-            fs::rename(oldPath, newFilePath.string());
+            fs::rename(oldPath, newFilePath);
         }
     }
     catch (const std::exception &e)

@@ -619,9 +619,13 @@ bool WebPortal::serveStaticFile(int clientFd, const std::string &filePath) const
             LOG_INFO("WebPortal::serveStaticFile - Listing web directory contents:");
             try
             {
-                for (const auto &entry : fs::directory_iterator(webDir))
+                // Use manual loop for compatibility with custom filesystem implementation
+                fs::directory_iterator it(webDir);
+                fs::directory_iterator end;
+                for (; it != end; ++it)
                 {
-                    LOG_INFO("WebPortal::serveStaticFile -   " + entry.path().filename().string());
+                    std::string filename = it.path().filename();
+                    LOG_INFO("WebPortal::serveStaticFile -   " + filename);
                 }
             }
             catch (const std::exception &e)
@@ -1215,9 +1219,13 @@ std::string WebPortal::getWebDirectory() const
             try
             {
                 LOG_INFO("WebPortal::getWebDirectory - Directory contents:");
-                for (const auto &entry : fs::directory_iterator(webPath))
+                // Use manual loop for compatibility with custom filesystem implementation
+                fs::directory_iterator it(webPath);
+                fs::directory_iterator end;
+                for (; it != end; ++it)
                 {
-                    LOG_INFO("WebPortal::getWebDirectory -   " + entry.path().filename().string());
+                    std::string filename = it.path().filename();
+                    LOG_INFO("WebPortal::getWebDirectory -   " + filename);
                 }
             }
             catch (const std::exception &e)

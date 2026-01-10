@@ -2001,7 +2001,7 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
         // Determine content type based on extension
         std::string contentType = "video/mp4"; // Default
         fs::path filePath(filepath);
-        std::string ext = filePath.extension().string();
+        std::string ext = filePath.extension();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         
         if (ext == ".mkv")
