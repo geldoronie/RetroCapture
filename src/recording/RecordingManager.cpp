@@ -766,7 +766,13 @@ void RecordingManager::finalizeCurrentRecording()
     {
         // Generate thumbnail path: same name as video but with .jpg extension
         fs::path videoPath(m_currentMetadata.filepath);
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+        // Custom implementation: stem() returns std::string
         fs::path thumbnailPath = videoPath.parent_path() / (videoPath.stem() + ".jpg");
+#else
+        // std::filesystem: stem() returns path, need to convert to string
+        fs::path thumbnailPath = videoPath.parent_path() / (videoPath.stem().string() + ".jpg");
+#endif
 
         if (generateThumbnail(m_currentMetadata.filepath, thumbnailPath.string()))
         {
@@ -1010,8 +1016,9 @@ bool RecordingManager::deleteRecording(const std::string &recordingId)
     }
 
     std::string filepath = it->filepath; // Copiar antes de remover da lista
+    std::string thumbnailPath = it->thumbnailPath; // Copiar caminho do thumbnail
 
-    // Delete file (if it exists) - fazer ANTES de remover da lista para evitar problemas
+    // Delete video file (if it exists) - fazer ANTES de remover da lista para evitar problemas
     // If file doesn't exist, just log and continue - we'll remove the record anyway
     try
     {
@@ -1034,6 +1041,29 @@ bool RecordingManager::deleteRecording(const std::string &recordingId)
     {
         // Catch any other exception
         LOG_WARN("RecordingManager: Unknown error deleting file (continuing anyway)");
+    }
+
+    // Delete thumbnail file (if it exists)
+    if (!thumbnailPath.empty())
+    {
+        try
+        {
+            if (fs::exists(thumbnailPath))
+            {
+                fs::remove(thumbnailPath);
+                LOG_INFO("RecordingManager: Deleted thumbnail: " + thumbnailPath);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            // Log error but continue - thumbnail deletion failure shouldn't block deletion
+            LOG_WARN("RecordingManager: Failed to delete thumbnail (continuing anyway): " + std::string(e.what()));
+        }
+        catch (...)
+        {
+            // Catch any other exception
+            LOG_WARN("RecordingManager: Unknown error deleting thumbnail (continuing anyway)");
+        }
     }
 
     // Remove from list (always, even if file deletion failed or file doesn't exist)

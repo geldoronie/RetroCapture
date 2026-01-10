@@ -624,7 +624,13 @@ bool WebPortal::serveStaticFile(int clientFd, const std::string &filePath) const
                 fs::directory_iterator end;
                 for (; it != end; ++it)
                 {
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Custom implementation: path() is a method
                     std::string filename = it.path().filename();
+#else
+                    // std::filesystem: need to dereference iterator
+                    std::string filename = it->path().filename().string();
+#endif
                     LOG_INFO("WebPortal::serveStaticFile -   " + filename);
                 }
             }
@@ -1224,7 +1230,13 @@ std::string WebPortal::getWebDirectory() const
                 fs::directory_iterator end;
                 for (; it != end; ++it)
                 {
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Custom implementation: path() is a method
                     std::string filename = it.path().filename();
+#else
+                    // std::filesystem: need to dereference iterator
+                    std::string filename = it->path().filename().string();
+#endif
                     LOG_INFO("WebPortal::getWebDirectory -   " + filename);
                 }
             }
