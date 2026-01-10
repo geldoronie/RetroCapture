@@ -30,7 +30,16 @@ services:
     volumes:
       - .:/work:ro
       - ./build-linux-arm32v7:/work/build-linux-arm32v7:rw
+      - ccache-arm32v7:/root/.ccache
     working_dir: /work
+    deploy:
+      resources:
+        limits:
+          cpus: '20'
+          memory: 16G
+        reservations:
+          cpus: '8'
+          memory: 8G
 
   build-linux-arm64v8:
     build:
@@ -43,4 +52,16 @@ services:
     volumes:
       - .:/work:ro
       - ./build-linux-arm64v8:/work/build-linux-arm64v8:rw
+      - ccache-arm64v8:/root/.ccache
     working_dir: /work
+    deploy:
+      resources:
+        limits:
+          cpus: '20'
+          memory: 16G
+        reservations:
+          cpus: '8'
+          memory: 8G
+volumes:
+  ccache-arm32v7:
+  ccache-arm64v8:

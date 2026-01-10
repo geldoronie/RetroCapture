@@ -6,12 +6,14 @@ FROM arm32v7/debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Instalar dependências do sistema e ferramentas de build
+# Incluir ccache para acelerar builds incrementais
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     pkg-config \
     git \
     wget \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # Configurar Git para evitar erro de "dubious ownership" no Docker
@@ -42,6 +44,16 @@ RUN apt-get update && apt-get install -y \
 # Instalar DirectFB opcionalmente (pode falhar se não estiver disponível no repositório)
 # O código tem fallback para framebuffer se DirectFB não estiver disponível
 RUN apt-get update && (apt-get install -y libdirectfb-dev directfb || true) && rm -rf /var/lib/apt/lists/*
+
+# Configurar ccache para acelerar builds
+# Usar volume persistente para cache entre builds
+ENV CCACHE_DIR=/root/.ccache
+ENV CCACHE_MAXSIZE=10G
+ENV CCACHE_COMPRESS=1
+ENV CCACHE_COMPRESSLEVEL=6
+RUN ccache --set-config max_size=10G && \
+    ccache --set-config compression=true && \
+    ccache --set-config compression_level=6
 
 # Script de build
 COPY tools/docker-build-linux-arm32v7.sh /usr/local/bin/

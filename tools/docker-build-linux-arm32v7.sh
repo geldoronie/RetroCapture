@@ -53,22 +53,51 @@ if [ -d "_deps" ]; then
     rm -rf _deps
 fi
 
+# Configurar ccache se disponível
+if command -v ccache &> /dev/null; then
+    export CC="ccache gcc"
+    export CXX="ccache g++"
+    echo "⚡ ccache habilitado para acelerar builds incrementais"
+    ccache --show-stats || true
+fi
+
 echo "⚙️  Configurando CMake..."
 # BUILD_WITH_SDL2 pode ser passado via variável de ambiente
 BUILD_WITH_SDL2="${BUILD_WITH_SDL2:-OFF}"
+
+# Detectar número de CPUs disponíveis
+# Em containers Docker, pode ser limitado, então usar nproc ou variável de ambiente
+NUM_CPUS="${NUM_CPUS:-$(nproc)}"
+# Para Ryzen 9 5900x (12 cores, 24 threads), usar até 20 jobs para aproveitar melhor
+# Mas respeitar limites do container
+if [ "$NUM_CPUS" -gt 20 ]; then
+    NUM_CPUS=20
+fi
+
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "   🔧 Compilando com SDL2 (suporte DirectFB/framebuffer)"
     cmake .. \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-        -DBUILD_WITH_SDL2=ON
+        -DBUILD_WITH_SDL2=ON \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 else
     cmake .. \
-        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 fi
 
 echo ""
-echo "🔨 Compilando..."
-cmake --build . -j$(nproc)
+echo "🔨 Compilando com $NUM_CPUS jobs paralelos..."
+cmake --build . -j$NUM_CPUS
+
+# Mostrar estatísticas do ccache
+if command -v ccache &> /dev/null; then
+    echo ""
+    echo "📊 Estatísticas do ccache:"
+    ccache --show-stats || true
+fi
 
 echo ""
 echo "✅ Build concluído!"

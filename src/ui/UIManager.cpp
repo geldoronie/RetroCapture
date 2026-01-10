@@ -1702,7 +1702,8 @@ void UIManager::setSourceType(SourceType sourceType)
 void UIManager::setStreamingPort(uint16_t port)
 {
     // Validate port range (1024-65535)
-    if (port >= 1024 && port <= 65535)
+    // Note: uint16_t max is 65535, so we only need to check >= 1024
+    if (port >= 1024)
     {
         m_streamingPort = port;
     }
