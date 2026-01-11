@@ -119,6 +119,9 @@ private:
     bool handleRefreshDSDevices(int clientFd);
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
+    bool handleGETAudioInputSources(int clientFd);
+    bool handleGETAudioOutputSinks(int clientFd);
+    bool handleGETAudioStatus(int clientFd);
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
@@ -143,6 +146,10 @@ private:
     bool handleCreatePreset(int clientFd, const std::string &body);
     bool handleApplyPreset(int clientFd, const std::string &body);
     bool handleDeletePreset(int clientFd, const std::string &presetName);
+    bool handleSetAudioInputSource(int clientFd, const std::string &body);
+    bool handleSetAudioOutputSink(int clientFd, const std::string &body);
+    bool handleDisconnectAudioInput(int clientFd);
+    bool handleDisableAudioMonitoring(int clientFd);
 
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;

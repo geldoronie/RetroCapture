@@ -215,6 +215,35 @@ class RetroCaptureAPI {
     async renameRecording(id, newName) {
         return await this.request('PUT', `/recordings/${encodeURIComponent(id)}`, { name: newName });
     }
+
+    // Audio API methods
+    async getAudioInputSources() {
+        return await this.request('GET', '/audio/input-sources');
+    }
+
+    async getAudioOutputSinks() {
+        return await this.request('GET', '/audio/output-sinks');
+    }
+
+    async getAudioStatus() {
+        return await this.request('GET', '/audio/status');
+    }
+
+    async setAudioInputSource(sourceId) {
+        return await this.request('POST', '/audio/input-source', { sourceId });
+    }
+
+    async setAudioOutputSink(sinkId) {
+        return await this.request('POST', '/audio/output-sink', { sinkId });
+    }
+
+    async disconnectAudioInput() {
+        return await this.request('POST', '/audio/disconnect-input');
+    }
+
+    async disableAudioMonitoring() {
+        return await this.request('POST', '/audio/disable-monitoring');
+    }
 }
 
 // Instância global da API

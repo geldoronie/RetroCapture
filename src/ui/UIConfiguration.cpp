@@ -6,6 +6,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
+#include "UIConfigurationAudio.h"
 #include "UIInfoPanel.h"
 #include "../utils/Logger.h"
 #include <imgui.h>
@@ -70,6 +71,7 @@ void UIConfiguration::render()
     static UIConfigurationStreaming streamingTab(m_uiManager);
     static UIConfigurationRecording recordingTab(m_uiManager);
     static UIConfigurationWebPortal webPortalTab(m_uiManager);
+    static UIConfigurationAudio audioTab(m_uiManager);
     static UIInfoPanel infoTab(m_uiManager);
 
     // Tabs
@@ -114,6 +116,12 @@ void UIConfiguration::render()
         if (ImGui::BeginTabItem("Web Portal"))
         {
             webPortalTab.render();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Audio"))
+        {
+            audioTab.render();
             ImGui::EndTabItem();
         }
 

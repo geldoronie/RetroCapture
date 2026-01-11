@@ -14,6 +14,8 @@ struct pa_stream;
 struct pa_mainloop;
 struct pa_mainloop_api;
 struct pa_sink_info;
+struct pa_source_info;
+struct pa_sink_input_info;
 
 /**
  * @brief PulseAudio implementation of IAudioCapture for Linux
@@ -46,6 +48,21 @@ public:
     std::vector<std::string> getAvailableDevices();
     void setAudioCallback(std::function<void(const int16_t *data, size_t samples)> callback);
 
+    // Audio input/output management
+    // Input: connect audio source to RetroCapture sink (for capture)
+    bool connectInputSource(const std::string &sourceName);
+    void disconnectInputSource();
+    std::string getCurrentInputSource() const { return m_currentInputSourceName; }
+    
+    // Output: connect RetroCapture.monitor to output sink (for monitoring/hearing)
+    bool setMonitoringOutput(const std::string &outputSinkName);
+    void removeMonitoringOutput();
+    std::string getCurrentMonitoringOutput() const { return m_currentMonitoringOutputName; }
+    
+    // List available devices
+    std::vector<AudioDeviceInfo> listInputSources(); // Audio sources (inputs)
+    std::vector<AudioDeviceInfo> listOutputSinks();  // Audio sinks (outputs)
+
 private:
     // PulseAudio callbacks
     static void contextStateCallback(pa_context *c, void *userdata);
@@ -53,6 +70,7 @@ private:
     static void streamReadCallback(pa_stream *s, size_t length, void *userdata);
     static void streamSuccessCallback(pa_stream *s, int success, void *userdata);
     static void sinkInfoCallback(pa_context *c, const pa_sink_info *i, int eol, void *userdata);
+    static void sourceInfoCallback(pa_context *c, const pa_source_info *i, int eol, void *userdata);
     static void operationCallback(pa_context *c, uint32_t index, void *userdata);
 
     // Internal methods
@@ -63,14 +81,18 @@ private:
     void cleanupPulseAudio();
     bool createVirtualSink();
     void removeVirtualSink();
+    void waitForContextReady();
+    void cleanupOrphanedLoopbacks();
 
     // PulseAudio objects
     pa_mainloop *m_mainloop;
     pa_mainloop_api *m_mainloopApi;
     pa_context *m_context;
     pa_stream *m_stream;
-    uint32_t m_virtualSinkIndex;
-    uint32_t m_moduleIndex;
+    uint32_t m_virtualSinkIndex;      // RetroCapture sink index
+    uint32_t m_moduleIndex;            // Module index for RetroCapture sink
+    uint32_t m_inputLoopbackModuleIndex;  // Module index for input source loopback
+    uint32_t m_outputLoopbackModuleIndex; // Module index for monitoring output loopback
 
     // Audio format
     uint32_t m_sampleRate;
@@ -89,4 +111,8 @@ private:
     // Callbacks
     std::function<void(const int16_t *data, size_t samples)> m_audioCallback;
     std::function<void(const std::string &, bool)> m_deviceStateCallback;
+
+    // Input/Output management
+    std::string m_currentInputSourceName;      // Currently connected input source
+    std::string m_currentMonitoringOutputName; // Currently selected output sink for monitoring
 };

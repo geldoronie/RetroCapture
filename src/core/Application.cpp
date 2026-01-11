@@ -2514,6 +2514,12 @@ bool Application::initAudioCapture()
     LOG_INFO("Audio capture started: " + std::to_string(m_audioCapture->getSampleRate()) +
              "Hz, " + std::to_string(m_audioCapture->getChannels()) + " channels");
 
+    // Connect audio capture to UI
+    if (m_ui && m_audioCapture)
+    {
+        m_ui->setAudioCapture(m_audioCapture.get());
+    }
+
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;

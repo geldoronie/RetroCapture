@@ -2009,3 +2009,256 @@ async function updateRecordingSettings() {
         showAlert(`Erro ao atualizar configurações: ${error.message}`, 'danger');
     }
 }
+
+// Audio functions
+let audioState = {
+    inputSources: [],
+    outputSinks: [],
+    status: { available: false, open: false, currentInputSource: '', currentMonitoringOutput: '', monitoringEnabled: false }
+};
+
+/**
+ * Load audio status
+ */
+async function loadAudioStatus() {
+    try {
+        const status = await api.getAudioStatus();
+        audioState.status = status;
+        updateAudioUI();
+    } catch (error) {
+        console.error('Erro ao carregar status de áudio:', error);
+        audioState.status = { available: false, open: false, currentInputSource: '', currentMonitoringOutput: '', monitoringEnabled: false };
+        updateAudioUI();
+    }
+}
+
+/**
+ * Load audio input sources
+ */
+async function loadAudioInputSources() {
+    try {
+        const response = await api.getAudioInputSources();
+        audioState.inputSources = response.sources || [];
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao carregar fontes de entrada de áudio:', error);
+        showAlert('Erro ao carregar fontes de entrada de áudio', 'danger');
+    }
+}
+
+/**
+ * Load audio output sinks
+ */
+async function loadAudioOutputSinks() {
+    try {
+        const response = await api.getAudioOutputSinks();
+        audioState.outputSinks = response.sinks || [];
+        updateAudioOutputSinkSelect();
+    } catch (error) {
+        console.error('Erro ao carregar sinks de saída de áudio:', error);
+        showAlert('Erro ao carregar sinks de saída de áudio', 'danger');
+    }
+}
+
+/**
+ * Refresh audio input sources
+ */
+async function refreshAudioInputSources() {
+    await loadAudioInputSources();
+    showAlert('Input sources refreshed', 'success');
+}
+
+/**
+ * Refresh audio output sinks
+ */
+async function refreshAudioOutputSinks() {
+    await loadAudioOutputSinks();
+    showAlert('Output sinks refreshed', 'success');
+}
+
+/**
+ * Update audio input source select dropdown
+ */
+function updateAudioInputSourceSelect() {
+    const select = document.getElementById('audioInputSource');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Select input source...</option>';
+    
+    audioState.inputSources.forEach(source => {
+        const option = document.createElement('option');
+        option.value = source.id;
+        option.textContent = source.description || source.name;
+        if (source.id === audioState.status.currentInputSource) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+/**
+ * Update audio output sink select dropdown
+ */
+function updateAudioOutputSinkSelect() {
+    const select = document.getElementById('audioOutputSink');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Select output sink...</option>';
+    
+    audioState.outputSinks.forEach(sink => {
+        const option = document.createElement('option');
+        option.value = sink.id;
+        option.textContent = sink.description || sink.name;
+        if (sink.id === audioState.status.currentMonitoringOutput) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+/**
+ * Update audio UI based on current state
+ */
+function updateAudioUI() {
+    const statusInfo = document.getElementById('audioStatusInfo');
+    const currentInputSource = document.getElementById('currentInputSource');
+    const currentMonitoringOutput = document.getElementById('currentMonitoringOutput');
+    const connectBtn = document.getElementById('connectInputBtn');
+    const disconnectBtn = document.getElementById('disconnectInputBtn');
+    const enableMonitoringBtn = document.getElementById('enableMonitoringBtn');
+    const disableMonitoringBtn = document.getElementById('disableMonitoringBtn');
+
+    if (statusInfo) {
+        if (!audioState.status.available) {
+            statusInfo.textContent = 'Audio capture not available';
+        } else if (!audioState.status.open) {
+            statusInfo.textContent = 'Audio capture not open';
+        } else {
+            statusInfo.textContent = `Sample Rate: ${audioState.status.sampleRate} Hz, Channels: ${audioState.status.channels}`;
+        }
+    }
+
+    if (currentInputSource) {
+        if (audioState.status.currentInputSource) {
+            const source = audioState.inputSources.find(s => s.id === audioState.status.currentInputSource);
+            currentInputSource.textContent = `Connected: ${source ? (source.description || source.name) : audioState.status.currentInputSource}`;
+        } else {
+            currentInputSource.textContent = 'No source connected';
+        }
+    }
+
+    if (currentMonitoringOutput) {
+        if (audioState.status.monitoringEnabled && audioState.status.currentMonitoringOutput) {
+            const sink = audioState.outputSinks.find(s => s.id === audioState.status.currentMonitoringOutput);
+            currentMonitoringOutput.textContent = `Monitoring: ${sink ? (sink.description || sink.name) : audioState.status.currentMonitoringOutput}`;
+        } else {
+            currentMonitoringOutput.textContent = 'Monitoring disabled';
+        }
+    }
+
+    // Update button states
+    const hasInput = !!audioState.status.currentInputSource;
+    if (connectBtn) connectBtn.disabled = hasInput;
+    if (disconnectBtn) disconnectBtn.disabled = !hasInput;
+
+    const hasMonitoring = audioState.status.monitoringEnabled;
+    if (enableMonitoringBtn) enableMonitoringBtn.disabled = hasMonitoring;
+    if (disableMonitoringBtn) disableMonitoringBtn.disabled = !hasMonitoring;
+}
+
+/**
+ * Connect audio input source
+ */
+async function connectAudioInput() {
+    const select = document.getElementById('audioInputSource');
+    if (!select || !select.value) {
+        showAlert('Please select an input source', 'warning');
+        return;
+    }
+
+    try {
+        await api.setAudioInputSource(select.value);
+        showAlert('Input source connected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao conectar fonte de entrada:', error);
+        showAlert(`Erro ao conectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Disconnect audio input source
+ */
+async function disconnectAudioInput() {
+    try {
+        await api.disconnectAudioInput();
+        showAlert('Input source disconnected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao desconectar fonte de entrada:', error);
+        showAlert(`Erro ao desconectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Enable audio monitoring
+ */
+async function enableAudioMonitoring() {
+    const select = document.getElementById('audioOutputSink');
+    if (!select || !select.value) {
+        showAlert('Please select an output sink', 'warning');
+        return;
+    }
+
+    try {
+        await api.setAudioOutputSink(select.value);
+        showAlert('Monitoring enabled', 'success');
+        await loadAudioStatus();
+        updateAudioOutputSinkSelect();
+    } catch (error) {
+        console.error('Erro ao habilitar monitoramento:', error);
+        showAlert(`Erro ao habilitar monitoramento: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Disable audio monitoring
+ */
+async function disableAudioMonitoring() {
+    try {
+        await api.disableAudioMonitoring();
+        showAlert('Monitoring disabled', 'success');
+        await loadAudioStatus();
+        updateAudioOutputSinkSelect();
+    } catch (error) {
+        console.error('Erro ao desabilitar monitoramento:', error);
+        showAlert(`Erro ao desabilitar monitoramento: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Load all audio data
+ */
+async function loadAudioData() {
+    await loadAudioStatus();
+    await loadAudioInputSources();
+    await loadAudioOutputSinks();
+}
+
+// Load audio data when audio tab is shown
+document.addEventListener('DOMContentLoaded', () => {
+    const audioTab = document.getElementById('audio-tab');
+    if (audioTab) {
+        audioTab.addEventListener('shown.bs.tab', () => {
+            loadAudioData();
+        });
+    }
+    
+    // Also load on initial page load if audio tab is active
+    const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
+    if (activeTab) {
+        loadAudioData();
+    }
+});

@@ -16,6 +16,7 @@ struct SDL_Window;
 
 class IVideoCapture;
 class ShaderEngine;
+class IAudioCapture;
 
 // Forward declarations
 class UIConfiguration;
@@ -308,6 +309,10 @@ public:
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
     IVideoCapture *getCapture() const { return m_capture; }
+    
+    // Audio capture
+    void setAudioCapture(class IAudioCapture *audioCapture) { m_audioCapture = audioCapture; }
+    class IAudioCapture *getAudioCapture() const { return m_audioCapture; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -632,6 +637,7 @@ private:
 
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;
+    IAudioCapture *m_audioCapture = nullptr;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 

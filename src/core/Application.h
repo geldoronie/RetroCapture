@@ -129,6 +129,7 @@ public:
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
     UIManager *getUIManager() { return m_ui.get(); }
     RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
+    IAudioCapture* getAudioCapture() const { return m_audioCapture.get(); }
 
     // Preset management
     void applyPreset(const std::string& presetName);

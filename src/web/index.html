@@ -151,6 +151,11 @@
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio" type="button" role="tab">
+                                        <i class="bi bi-speaker me-2"></i>Audio
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="presets-tab" data-bs-toggle="tab" data-bs-target="#presets" type="button" role="tab">
                                         <i class="bi bi-bookmark me-2"></i>Presets
                                     </button>
@@ -597,6 +602,96 @@
                                             <button type="button" class="btn btn-danger btn-lg w-100" id="recordingStartStopBtn" onclick="toggleRecording()">
                                                 <span id="recordingStartStopText"><i class="bi bi-record-circle me-2"></i>Start Recording</span>
                                             </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Audio Tab -->
+                                <div class="tab-pane fade" id="audio" role="tabpanel">
+                                    <div class="row g-3">
+                                        <!-- Audio Status -->
+                                        <div class="col-12">
+                                            <div class="alert alert-info" id="audioStatusAlert" role="alert">
+                                                <div class="d-flex align-items-center">
+                                                    <i class="bi bi-info-circle me-2"></i>
+                                                    <div class="flex-grow-1">
+                                                        <strong>Audio Status</strong>
+                                                        <div id="audioStatusInfo" class="small">Loading...</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Input Source Selection -->
+                                        <div class="col-12">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0">
+                                                        <i class="bi bi-mic me-2"></i>Audio Input Source
+                                                    </h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Select Input Source</label>
+                                                        <div class="input-group">
+                                                            <select class="form-select" id="audioInputSource">
+                                                                <option value="">Loading sources...</option>
+                                                            </select>
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh sources">
+                                                                <i class="bi bi-arrow-clockwise"></i>
+                                                            </button>
+                                                        </div>
+                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
+                                                    </div>
+                                                    <div class="d-flex gap-2">
+                                                        <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
+                                                            <i class="bi bi-plug me-1"></i>Connect
+                                                        </button>
+                                                        <button type="button" class="btn btn-secondary" id="disconnectInputBtn" onclick="disconnectAudioInput()" disabled>
+                                                            <i class="bi bi-plug-fill me-1"></i>Disconnect
+                                                        </button>
+                                                    </div>
+                                                    <div class="mt-2">
+                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Output Sink Selection (Monitoring) -->
+                                        <div class="col-12">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0">
+                                                        <i class="bi bi-speaker me-2"></i>Audio Output (Monitoring)
+                                                    </h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Select Output Sink for Monitoring</label>
+                                                        <div class="input-group">
+                                                            <select class="form-select" id="audioOutputSink">
+                                                                <option value="">Loading sinks...</option>
+                                                            </select>
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioOutputSinks()" title="Refresh sinks">
+                                                                <i class="bi bi-arrow-clockwise"></i>
+                                                            </button>
+                                                        </div>
+                                                        <small class="form-text text-muted">Select the output sink to hear the captured audio</small>
+                                                    </div>
+                                                    <div class="d-flex gap-2">
+                                                        <button type="button" class="btn btn-primary" id="enableMonitoringBtn" onclick="enableAudioMonitoring()">
+                                                            <i class="bi bi-volume-up me-1"></i>Enable Monitoring
+                                                        </button>
+                                                        <button type="button" class="btn btn-secondary" id="disableMonitoringBtn" onclick="disableAudioMonitoring()" disabled>
+                                                            <i class="bi bi-volume-mute me-1"></i>Disable Monitoring
+                                                        </button>
+                                                    </div>
+                                                    <div class="mt-2">
+                                                        <small class="text-muted" id="currentMonitoringOutput">Monitoring disabled</small>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
