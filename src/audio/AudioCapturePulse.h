@@ -83,6 +83,7 @@ private:
     void removeVirtualSink();
     void waitForContextReady();
     void cleanupOrphanedLoopbacks();
+    void cleanupOrphanedSinkInputs();
 
     // PulseAudio objects
     pa_mainloop *m_mainloop;
