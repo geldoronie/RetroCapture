@@ -658,41 +658,6 @@
                                             </div>
                                         </div>
 
-                                        <!-- Output Sink Selection (Monitoring) -->
-                                        <div class="col-12">
-                                            <div class="card">
-                                                <div class="card-header">
-                                                    <h6 class="mb-0">
-                                                        <i class="bi bi-speaker me-2"></i>Audio Output (Monitoring)
-                                                    </h6>
-                                                </div>
-                                                <div class="card-body">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Select Output Sink for Monitoring</label>
-                                                        <div class="input-group">
-                                                            <select class="form-select" id="audioOutputSink">
-                                                                <option value="">Loading sinks...</option>
-                                                            </select>
-                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioOutputSinks()" title="Refresh sinks">
-                                                                <i class="bi bi-arrow-clockwise"></i>
-                                                            </button>
-                                                        </div>
-                                                        <small class="form-text text-muted">Select the output sink to hear the captured audio</small>
-                                                    </div>
-                                                    <div class="d-flex gap-2">
-                                                        <button type="button" class="btn btn-primary" id="enableMonitoringBtn" onclick="enableAudioMonitoring()">
-                                                            <i class="bi bi-volume-up me-1"></i>Enable Monitoring
-                                                        </button>
-                                                        <button type="button" class="btn btn-secondary" id="disableMonitoringBtn" onclick="disableAudioMonitoring()" disabled>
-                                                            <i class="bi bi-volume-mute me-1"></i>Disable Monitoring
-                                                        </button>
-                                                    </div>
-                                                    <div class="mt-2">
-                                                        <small class="text-muted" id="currentMonitoringOutput">Monitoring disabled</small>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
                                     </div>
                                 </div>
 

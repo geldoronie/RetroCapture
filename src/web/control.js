@@ -2013,8 +2013,7 @@ async function updateRecordingSettings() {
 // Audio functions
 let audioState = {
     inputSources: [],
-    outputSinks: [],
-    status: { available: false, open: false, currentInputSource: '', currentMonitoringOutput: '', monitoringEnabled: false }
+    status: { available: false, open: false, currentInputSource: '' }
 };
 
 /**
@@ -2027,7 +2026,7 @@ async function loadAudioStatus() {
         updateAudioUI();
     } catch (error) {
         console.error('Erro ao carregar status de áudio:', error);
-        audioState.status = { available: false, open: false, currentInputSource: '', currentMonitoringOutput: '', monitoringEnabled: false };
+        audioState.status = { available: false, open: false, currentInputSource: '' };
         updateAudioUI();
     }
 }
@@ -2047,33 +2046,11 @@ async function loadAudioInputSources() {
 }
 
 /**
- * Load audio output sinks
- */
-async function loadAudioOutputSinks() {
-    try {
-        const response = await api.getAudioOutputSinks();
-        audioState.outputSinks = response.sinks || [];
-        updateAudioOutputSinkSelect();
-    } catch (error) {
-        console.error('Erro ao carregar sinks de saída de áudio:', error);
-        showAlert('Erro ao carregar sinks de saída de áudio', 'danger');
-    }
-}
-
-/**
  * Refresh audio input sources
  */
 async function refreshAudioInputSources() {
     await loadAudioInputSources();
     showAlert('Input sources refreshed', 'success');
-}
-
-/**
- * Refresh audio output sinks
- */
-async function refreshAudioOutputSinks() {
-    await loadAudioOutputSinks();
-    showAlert('Output sinks refreshed', 'success');
 }
 
 /**
@@ -2096,25 +2073,6 @@ function updateAudioInputSourceSelect() {
     });
 }
 
-/**
- * Update audio output sink select dropdown
- */
-function updateAudioOutputSinkSelect() {
-    const select = document.getElementById('audioOutputSink');
-    if (!select) return;
-
-    select.innerHTML = '<option value="">Select output sink...</option>';
-    
-    audioState.outputSinks.forEach(sink => {
-        const option = document.createElement('option');
-        option.value = sink.id;
-        option.textContent = sink.description || sink.name;
-        if (sink.id === audioState.status.currentMonitoringOutput) {
-            option.selected = true;
-        }
-        select.appendChild(option);
-    });
-}
 
 /**
  * Update audio UI based on current state
@@ -2122,11 +2080,8 @@ function updateAudioOutputSinkSelect() {
 function updateAudioUI() {
     const statusInfo = document.getElementById('audioStatusInfo');
     const currentInputSource = document.getElementById('currentInputSource');
-    const currentMonitoringOutput = document.getElementById('currentMonitoringOutput');
     const connectBtn = document.getElementById('connectInputBtn');
     const disconnectBtn = document.getElementById('disconnectInputBtn');
-    const enableMonitoringBtn = document.getElementById('enableMonitoringBtn');
-    const disableMonitoringBtn = document.getElementById('disableMonitoringBtn');
 
     if (statusInfo) {
         if (!audioState.status.available) {
@@ -2147,23 +2102,10 @@ function updateAudioUI() {
         }
     }
 
-    if (currentMonitoringOutput) {
-        if (audioState.status.monitoringEnabled && audioState.status.currentMonitoringOutput) {
-            const sink = audioState.outputSinks.find(s => s.id === audioState.status.currentMonitoringOutput);
-            currentMonitoringOutput.textContent = `Monitoring: ${sink ? (sink.description || sink.name) : audioState.status.currentMonitoringOutput}`;
-        } else {
-            currentMonitoringOutput.textContent = 'Monitoring disabled';
-        }
-    }
-
     // Update button states
     const hasInput = !!audioState.status.currentInputSource;
     if (connectBtn) connectBtn.disabled = hasInput;
     if (disconnectBtn) disconnectBtn.disabled = !hasInput;
-
-    const hasMonitoring = audioState.status.monitoringEnabled;
-    if (enableMonitoringBtn) enableMonitoringBtn.disabled = hasMonitoring;
-    if (disableMonitoringBtn) disableMonitoringBtn.disabled = !hasMonitoring;
 }
 
 /**
@@ -2202,41 +2144,6 @@ async function disconnectAudioInput() {
     }
 }
 
-/**
- * Enable audio monitoring
- */
-async function enableAudioMonitoring() {
-    const select = document.getElementById('audioOutputSink');
-    if (!select || !select.value) {
-        showAlert('Please select an output sink', 'warning');
-        return;
-    }
-
-    try {
-        await api.setAudioOutputSink(select.value);
-        showAlert('Monitoring enabled', 'success');
-        await loadAudioStatus();
-        updateAudioOutputSinkSelect();
-    } catch (error) {
-        console.error('Erro ao habilitar monitoramento:', error);
-        showAlert(`Erro ao habilitar monitoramento: ${error.message}`, 'danger');
-    }
-}
-
-/**
- * Disable audio monitoring
- */
-async function disableAudioMonitoring() {
-    try {
-        await api.disableAudioMonitoring();
-        showAlert('Monitoring disabled', 'success');
-        await loadAudioStatus();
-        updateAudioOutputSinkSelect();
-    } catch (error) {
-        console.error('Erro ao desabilitar monitoramento:', error);
-        showAlert(`Erro ao desabilitar monitoramento: ${error.message}`, 'danger');
-    }
-}
 
 /**
  * Load all audio data
@@ -2244,7 +2151,6 @@ async function disableAudioMonitoring() {
 async function loadAudioData() {
     await loadAudioStatus();
     await loadAudioInputSources();
-    await loadAudioOutputSinks();
 }
 
 // Load audio data when audio tab is shown

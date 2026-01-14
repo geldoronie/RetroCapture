@@ -24,7 +24,10 @@ RUN git config --global --add safe.directory '*'
 # Debian Trixie tem FFmpeg 6.1 (libavcodec61, libavformat61, etc.)
 # Incluir SDL2 e DirectFB para suporte a DirectFB/framebuffer em sistemas embarcados ARM
 # Nota: DirectFB pode não estar disponível em todas as versões do Debian, então é instalado separadamente
-RUN apt-get update && apt-get install -y \
+# Corrigir dependências quebradas antes de instalar
+RUN apt-get update && \
+    apt-get install -f -y && \
+    apt-get install -y --fix-missing --fix-broken \
     libglfw3-dev \
     libsdl2-dev \
     libssl-dev \
@@ -39,7 +42,8 @@ RUN apt-get update && apt-get install -y \
     libv4l-dev \
     libpulse-dev \
     libx11-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Instalar DirectFB opcionalmente (pode falhar se não estiver disponível no repositório)
 # O código tem fallback para framebuffer se DirectFB não estiver disponível

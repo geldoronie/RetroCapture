@@ -313,6 +313,10 @@ public:
     // Audio capture
     void setAudioCapture(class IAudioCapture *audioCapture) { m_audioCapture = audioCapture; }
     class IAudioCapture *getAudioCapture() const { return m_audioCapture; }
+    
+    // Audio device configuration
+    void setAudioInputSourceId(const std::string &sourceId) { m_audioInputSourceId = sourceId; }
+    std::string getAudioInputSourceId() const { return m_audioInputSourceId; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -638,6 +642,9 @@ private:
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;
     IAudioCapture *m_audioCapture = nullptr;
+    
+    // Audio device configuration (saved/loaded from config)
+    std::string m_audioInputSourceId;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 

@@ -37,10 +37,6 @@ void UIConfigurationAudio::render()
     }
 
     renderInputSourceSelection();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    renderOutputSinkSelection();
 }
 
 void UIConfigurationAudio::refreshInputSources()
@@ -80,55 +76,29 @@ void UIConfigurationAudio::refreshInputSources()
                 }
             }
         }
-    }
-#endif
-
-    m_inputSourcesListNeedsRefresh = false;
-}
-
-void UIConfigurationAudio::refreshOutputSinks()
-{
-    m_outputSinkNames.clear();
-    m_outputSinkIds.clear();
-    m_selectedOutputSinkIndex = -1;
-
-    if (!m_audioCapture)
-    {
-        return;
-    }
-
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture);
-    if (pulseCapture)
-    {
-        // Get list of available output sinks
-        std::vector<AudioDeviceInfo> sinks = pulseCapture->listOutputSinks();
-
-        for (const auto &sink : sinks)
+        
+        // If no active connection found, check saved configuration from UIManager
+        if (m_selectedInputSourceIndex == -1 && m_uiManager)
         {
-            m_outputSinkNames.push_back(sink.name);
-            m_outputSinkIds.push_back(sink.id);
-        }
-
-        // Try to find current monitoring output
-        std::string currentOutput = pulseCapture->getCurrentMonitoringOutput();
-        if (!currentOutput.empty())
-        {
-            for (size_t i = 0; i < m_outputSinkIds.size(); ++i)
+            std::string savedInputSourceId = m_uiManager->getAudioInputSourceId();
+            if (!savedInputSourceId.empty())
             {
-                if (m_outputSinkIds[i] == currentOutput)
+                for (size_t i = 0; i < m_inputSourceIds.size(); ++i)
                 {
-                    m_selectedOutputSinkIndex = static_cast<int>(i);
-                    m_monitoringEnabled = true;
-                    break;
+                    if (m_inputSourceIds[i] == savedInputSourceId)
+                    {
+                        m_selectedInputSourceIndex = static_cast<int>(i);
+                        break;
+                    }
                 }
             }
         }
     }
 #endif
 
-    m_outputSinksListNeedsRefresh = false;
+    m_inputSourcesListNeedsRefresh = false;
 }
+
 
 void UIConfigurationAudio::renderInputSourceSelection()
 {
@@ -195,6 +165,12 @@ void UIConfigurationAudio::renderInputSourceSelection()
             if (pulseCapture->connectInputSource(selectedSourceId))
             {
                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Input source connected successfully");
+                // Save configuration
+                if (m_uiManager)
+                {
+                    m_uiManager->setAudioInputSourceId(selectedSourceId);
+                    m_uiManager->saveConfig();
+                }
             }
             else
             {
@@ -218,6 +194,12 @@ void UIConfigurationAudio::renderInputSourceSelection()
         {
             pulseCapture->disconnectInputSource();
             m_selectedInputSourceIndex = -1;
+            // Save configuration (clear saved source)
+            if (m_uiManager)
+            {
+                m_uiManager->setAudioInputSourceId("");
+                m_uiManager->saveConfig();
+            }
         }
     }
     else
@@ -229,120 +211,3 @@ void UIConfigurationAudio::renderInputSourceSelection()
 #endif
 }
 
-void UIConfigurationAudio::renderOutputSinkSelection()
-{
-    ImGui::Text("Audio Output (Monitoring)");
-    ImGui::Separator();
-    ImGui::TextWrapped("Select an output sink to hear the captured audio in real-time.");
-
-    if (!m_audioCapture)
-    {
-        ImGui::TextWrapped("Audio capture not available.");
-        return;
-    }
-
-    // Refresh button
-    if (ImGui::Button("Refresh Output Sinks"))
-    {
-        m_outputSinksListNeedsRefresh = true;
-    }
-
-    ImGui::SameLine();
-    if (m_outputSinksListNeedsRefresh)
-    {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Refreshing...");
-    }
-
-    ImGui::Spacing();
-
-    // Refresh sinks if needed
-    if (m_outputSinksListNeedsRefresh)
-    {
-        refreshOutputSinks();
-    }
-
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture);
-    if (!pulseCapture)
-    {
-        ImGui::TextWrapped("Audio output selection is only available on Linux with PulseAudio.");
-        return;
-    }
-
-    if (m_outputSinkNames.empty())
-    {
-        ImGui::TextWrapped("No audio output sinks found. Make sure PulseAudio is running and audio devices are available.");
-        return;
-    }
-
-    // Create C-style array for ImGui Combo
-    std::vector<const char *> sinkNamesCStr;
-    for (const auto &name : m_outputSinkNames)
-    {
-        sinkNamesCStr.push_back(name.c_str());
-    }
-
-    // Add "None" option at the beginning
-    std::vector<const char *> sinkNamesWithNone;
-    sinkNamesWithNone.push_back("None (Disable Monitoring)");
-    for (const auto &name : sinkNamesCStr)
-    {
-        sinkNamesWithNone.push_back(name);
-    }
-
-    // Output sink selection combo
-    int selectedIndex = m_monitoringEnabled ? (m_selectedOutputSinkIndex + 1) : 0; // +1 because "None" is at index 0
-    if (ImGui::Combo("Output Sink", &selectedIndex, sinkNamesWithNone.data(), static_cast<int>(sinkNamesWithNone.size())))
-    {
-        if (selectedIndex == 0)
-        {
-            // "None" selected - disable monitoring
-            pulseCapture->removeMonitoringOutput();
-            m_monitoringEnabled = false;
-            m_selectedOutputSinkIndex = -1;
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "Monitoring disabled");
-        }
-        else
-        {
-            // Output sink selected - enable monitoring
-            int sinkIndex = selectedIndex - 1; // -1 because "None" is at index 0
-            if (sinkIndex >= 0 && sinkIndex < static_cast<int>(m_outputSinkIds.size()))
-            {
-                std::string selectedSinkId = m_outputSinkIds[sinkIndex];
-                
-                if (pulseCapture->setMonitoringOutput(selectedSinkId))
-                {
-                    m_monitoringEnabled = true;
-                    m_selectedOutputSinkIndex = sinkIndex;
-                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Monitoring enabled");
-                }
-                else
-                {
-                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to enable monitoring");
-                    selectedIndex = 0; // Revert to "None"
-                    m_monitoringEnabled = false;
-                    m_selectedOutputSinkIndex = -1;
-                }
-            }
-        }
-    }
-
-    ImGui::Spacing();
-
-    // Current monitoring output info
-    std::string currentOutput = pulseCapture->getCurrentMonitoringOutput();
-    if (!currentOutput.empty())
-    {
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "● Monitoring Active");
-        ImGui::Text("Output: %s", currentOutput.c_str());
-        ImGui::TextWrapped("You should now hear the captured audio through the selected output sink.");
-    }
-    else
-    {
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "Monitoring disabled");
-        ImGui::TextWrapped("Select an output sink above to hear the captured audio in real-time.");
-    }
-#else
-    ImGui::TextWrapped("Audio output selection is only available on Linux with PulseAudio.");
-#endif
-}

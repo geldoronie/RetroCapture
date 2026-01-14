@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 AudioCapturePulse::AudioCapturePulse()
-    : m_mainloop(nullptr), m_mainloopApi(nullptr), m_context(nullptr), m_stream(nullptr), m_virtualSinkIndex(PA_INVALID_INDEX), m_moduleIndex(PA_INVALID_INDEX), m_inputLoopbackModuleIndex(PA_INVALID_INDEX), m_outputLoopbackModuleIndex(PA_INVALID_INDEX), m_sampleRate(44100), m_channels(2), m_bytesPerSample(2) // 16-bit
+    : m_mainloop(nullptr), m_mainloopApi(nullptr), m_context(nullptr), m_stream(nullptr), m_virtualSinkIndex(PA_INVALID_INDEX), m_moduleIndex(PA_INVALID_INDEX), m_inputLoopbackModuleIndex(PA_INVALID_INDEX), m_sampleRate(44100), m_channels(2), m_bytesPerSample(2) // 16-bit
       ,
       m_isOpen(false), m_isCapturing(false)
 {
@@ -66,7 +66,6 @@ void AudioCapturePulse::cleanupPulseAudio()
     // IMPORTANT: Clean up all loopbacks BEFORE removing virtual sink
     // This ensures we don't leave orphaned modules
     disconnectInputSource();
-    removeMonitoringOutput();
 
     // Also clean up any orphaned loopbacks that might exist
     cleanupOrphanedLoopbacks();
@@ -108,7 +107,6 @@ void AudioCapturePulse::cleanupPulseAudio()
     m_virtualSinkIndex = PA_INVALID_INDEX;
     m_moduleIndex = PA_INVALID_INDEX;
     m_inputLoopbackModuleIndex = PA_INVALID_INDEX;
-    m_outputLoopbackModuleIndex = PA_INVALID_INDEX;
 }
 
 void AudioCapturePulse::contextStateCallback(pa_context *c, void *userdata)
@@ -389,7 +387,6 @@ void AudioCapturePulse::close()
     // IMPORTANT: Disconnect all loopbacks BEFORE removing virtual sink
     // This ensures clean shutdown
     disconnectInputSource();
-    removeMonitoringOutput();
 
     // Also clean up any orphaned loopbacks that might exist
     cleanupOrphanedLoopbacks();
@@ -651,7 +648,10 @@ std::vector<AudioDeviceInfo> AudioCapturePulse::listInputSources()
 
     while (iteration < maxIterations)
     {
-        pa_mainloop_iterate(m_mainloop, 0, &ret);
+        {
+            std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+            pa_mainloop_iterate(m_mainloop, 0, &ret);
+        }
 
         // Check if operation is done (we can't directly check, so we wait a bit)
         if (iteration > 10) // Give it some time
@@ -679,107 +679,6 @@ std::vector<AudioDeviceInfo> AudioCapturePulse::listInputSources()
     return devices;
 }
 
-// Static variables for sink listing
-static std::vector<AudioDeviceInfo> g_availableSinks;
-static std::mutex g_sinksMutex;
-
-static void sinkInfoListCallback(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
-{
-    (void)c;
-    (void)userdata;
-
-    if (eol < 0)
-    {
-        return;
-    }
-
-    if (eol > 0)
-    {
-        return;
-    }
-
-    if (i)
-    {
-        // Only include real sinks (not null sinks we created)
-        // Skip RetroCapture sink itself
-        if (strcmp(i->name, "RetroCapture") != 0)
-        {
-            AudioDeviceInfo info;
-            info.id = i->name ? i->name : "";
-            info.name = i->description ? i->description : info.id;
-            info.description = i->description ? i->description : "";
-            info.available = (i->state == PA_SINK_RUNNING || i->state == PA_SINK_IDLE);
-
-            std::lock_guard<std::mutex> lock(g_sinksMutex);
-            g_availableSinks.push_back(info);
-        }
-    }
-}
-
-std::vector<AudioDeviceInfo> AudioCapturePulse::listOutputSinks()
-{
-    std::vector<AudioDeviceInfo> sinks;
-
-    if (!initializePulseAudio())
-    {
-        return sinks;
-    }
-
-    waitForContextReady();
-
-    if (pa_context_get_state(m_context) != PA_CONTEXT_READY)
-    {
-        LOG_ERROR("PulseAudio context not ready for listing sinks");
-        return sinks;
-    }
-
-    // Clear previous list
-    {
-        std::lock_guard<std::mutex> lock(g_sinksMutex);
-        g_availableSinks.clear();
-    }
-
-    // Request sink list
-    pa_operation *op = pa_context_get_sink_info_list(m_context, sinkInfoListCallback, this);
-    if (!op)
-    {
-        LOG_ERROR("Failed to request sink list");
-        return sinks;
-    }
-
-    // Wait for operation to complete
-    int ret = 0;
-    int maxIterations = 100;
-    int iteration = 0;
-
-    while (iteration < maxIterations)
-    {
-        pa_mainloop_iterate(m_mainloop, 0, &ret);
-
-        if (iteration > 10)
-        {
-            pa_operation_state_t opState = pa_operation_get_state(op);
-            if (opState == PA_OPERATION_DONE || opState == PA_OPERATION_CANCELLED)
-            {
-                break;
-            }
-        }
-
-        usleep(10000);
-        iteration++;
-    }
-
-    pa_operation_unref(op);
-
-    // Copy results
-    {
-        std::lock_guard<std::mutex> lock(g_sinksMutex);
-        sinks = g_availableSinks;
-    }
-
-    LOG_INFO("Found " + std::to_string(sinks.size()) + " audio output sinks");
-    return sinks;
-}
 
 std::vector<AudioDeviceInfo> AudioCapturePulse::listDevices()
 {
@@ -817,7 +716,6 @@ void AudioCapturePulse::setAudioCallback(std::function<void(const int16_t *data,
 static std::atomic<bool> g_sinkOperationSuccess{false};
 static std::atomic<uint32_t> g_sinkIndex{PA_INVALID_INDEX};
 static std::atomic<uint32_t> g_moduleIndex{PA_INVALID_INDEX};
-static std::atomic<uint32_t> g_monitoringModuleIndex{PA_INVALID_INDEX};
 static std::atomic<uint32_t> g_sinkInputIndex{PA_INVALID_INDEX};
 
 void AudioCapturePulse::sinkInfoCallback(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
@@ -854,7 +752,8 @@ static void unloadModuleCallback(pa_context *c, int success, void *userdata)
 {
     (void)c;
     (void)userdata;
-    g_sinkOperationSuccess = (success != 0);
+    // In PulseAudio, success is 0 for success, non-zero for failure
+    g_sinkOperationSuccess = (success == 0);
 }
 
 bool AudioCapturePulse::createVirtualSink()
@@ -1120,13 +1019,16 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
     disconnectInputSource();
 
     // Use module-loopback to connect source to sink
+    // IMPORTANT: In PipeWire, we need to ensure the connection goes to the sink input, not the monitor
     // Use sink_input_name to set the base name of the sink input
     // Use sink_input_properties with media.name for the display name
+    // Note: PipeWire may interpret sink=RetroCapture differently, so we explicitly avoid connecting to monitor
     std::string args = "source=" + sourceName + " sink=RetroCapture sink_input_name=RetroCaptureInputLoopback sink_input_properties=\"media.name=RetroCaptureInputLoopback\"";
 
     g_sinkOperationSuccess = false;
 
     LOG_INFO("Connecting input source '" + sourceName + "' to RetroCapture sink...");
+    LOG_INFO("Loopback args: " + args);
     pa_operation *op = pa_context_load_module(m_context, "module-loopback", args.c_str(), operationCallback, this);
 
     if (!op)
@@ -1141,12 +1043,15 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
 
     while (iteration < maxIterations)
     {
-        pa_mainloop_iterate(m_mainloop, 0, &ret);
+        {
+            std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+            pa_mainloop_iterate(m_mainloop, 0, &ret);
+        }
         if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX)
         {
             m_inputLoopbackModuleIndex = g_moduleIndex; // Store module index
             m_currentInputSourceName = sourceName;
-            LOG_INFO("Input source '" + sourceName + "' connected to RetroCapture sink");
+            LOG_INFO("Input source '" + sourceName + "' connected to RetroCapture sink (module index: " + std::to_string(g_moduleIndex) + ")");
             break;
         }
         usleep(10000);
@@ -1168,37 +1073,83 @@ void AudioCapturePulse::disconnectInputSource()
 {
     if (m_inputLoopbackModuleIndex == PA_INVALID_INDEX)
     {
+        LOG_INFO("No input source to disconnect (module index is invalid)");
+        // Try to find and remove any loopback connected to RetroCapture sink
+        cleanupOrphanedLoopbacks();
+        m_currentInputSourceName.clear();
         return;
     }
 
     if (!m_context || pa_context_get_state(m_context) != PA_CONTEXT_READY)
     {
+        LOG_WARN("PulseAudio context not ready, cannot disconnect input source");
         m_inputLoopbackModuleIndex = PA_INVALID_INDEX;
         m_currentInputSourceName.clear();
         return;
     }
 
-    LOG_INFO("Disconnecting input source from RetroCapture sink...");
+    LOG_INFO("Disconnecting input source from RetroCapture sink (module index: " + std::to_string(m_inputLoopbackModuleIndex) + ")...");
     g_sinkOperationSuccess = false;
     pa_operation *op = pa_context_unload_module(m_context, m_inputLoopbackModuleIndex, unloadModuleCallback, this);
 
-    if (op)
+    if (!op)
     {
-        int ret = 0;
-        int maxIterations = 50;
-        int iteration = 0;
+        LOG_ERROR("Failed to create operation to unload module (index: " + std::to_string(m_inputLoopbackModuleIndex) + ")");
+        // Try cleanup as fallback
+        cleanupOrphanedLoopbacks();
+        m_inputLoopbackModuleIndex = PA_INVALID_INDEX;
+        m_currentInputSourceName.clear();
+        return;
+    }
 
-        while (iteration < maxIterations)
+    int ret = 0;
+    int maxIterations = 100; // Increase timeout
+    int iteration = 0;
+
+    while (iteration < maxIterations)
+    {
         {
+            std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
             pa_mainloop_iterate(m_mainloop, 0, &ret);
+        }
+        
+        // Check operation state
+        pa_operation_state_t opState = pa_operation_get_state(op);
+        if (opState == PA_OPERATION_DONE)
+        {
             if (g_sinkOperationSuccess)
             {
-                break;
+                LOG_INFO("Module unloaded successfully");
             }
-            usleep(10000);
-            iteration++;
+            else
+            {
+                LOG_WARN("Module unload operation completed but callback indicates failure");
+            }
+            break;
         }
-        pa_operation_unref(op);
+        else if (opState == PA_OPERATION_CANCELLED)
+        {
+            LOG_WARN("Module unload operation was cancelled");
+            break;
+        }
+        
+        if (g_sinkOperationSuccess)
+        {
+            LOG_INFO("Module unloaded successfully (callback success)");
+            break;
+        }
+        
+        usleep(10000);
+        iteration++;
+    }
+
+    pa_operation_unref(op);
+
+    if (iteration >= maxIterations)
+    {
+        LOG_WARN("Timeout waiting for module unload (module index: " + std::to_string(m_inputLoopbackModuleIndex) + ")");
+        // Try cleanup as fallback
+        cleanupOrphanedLoopbacks();
     }
 
     m_inputLoopbackModuleIndex = PA_INVALID_INDEX;
@@ -1206,120 +1157,6 @@ void AudioCapturePulse::disconnectInputSource()
     LOG_INFO("Input source disconnected from RetroCapture sink");
 }
 
-bool AudioCapturePulse::setMonitoringOutput(const std::string &outputSinkName)
-{
-    if (outputSinkName.empty())
-    {
-        // Remove monitoring if empty string
-        removeMonitoringOutput();
-        return true;
-    }
-
-    if (!m_context || pa_context_get_state(m_context) != PA_CONTEXT_READY)
-    {
-        LOG_ERROR("PulseAudio context not ready");
-        return false;
-    }
-
-    if (m_virtualSinkIndex == PA_INVALID_INDEX)
-    {
-        LOG_ERROR("RetroCapture sink not created");
-        return false;
-    }
-
-    // Clean up orphaned loopbacks first
-    cleanupOrphanedLoopbacks();
-
-    // Remove previous monitoring if any
-    removeMonitoringOutput();
-
-    // Create loopback from RetroCapture.monitor to selected output sink
-    // This allows hearing what's being captured
-    // Use sink_input_name to set the base name of the sink input
-    // Use sink_input_properties with media.name for the display name
-    std::string args = "source=RetroCapture.monitor sink=" + outputSinkName + " sink_input_name=RetroCaptureMonitorLoopback sink_input_properties=\"media.name=RetroCaptureMonitorLoopback\"";
-
-    g_sinkOperationSuccess = false;
-
-    LOG_INFO("Setting monitoring output to '" + outputSinkName + "'...");
-    pa_operation *op = pa_context_load_module(m_context, "module-loopback", args.c_str(), operationCallback, this);
-
-    if (!op)
-    {
-        LOG_ERROR("Failed to create operation to load monitoring module-loopback");
-        return false;
-    }
-
-    int ret = 0;
-    int maxIterations = 100;
-    int iteration = 0;
-
-    while (iteration < maxIterations)
-    {
-        pa_mainloop_iterate(m_mainloop, 0, &ret);
-        if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX)
-        {
-            m_outputLoopbackModuleIndex = g_moduleIndex;
-            m_currentMonitoringOutputName = outputSinkName;
-            LOG_INFO("Monitoring output set to '" + outputSinkName + "' successfully");
-            break;
-        }
-        usleep(10000);
-        iteration++;
-    }
-
-    pa_operation_unref(op);
-
-    if (!g_sinkOperationSuccess || g_moduleIndex == PA_INVALID_INDEX)
-    {
-        LOG_ERROR("Failed to set monitoring output");
-        return false;
-    }
-
-    return true;
-}
-
-void AudioCapturePulse::removeMonitoringOutput()
-{
-    if (m_outputLoopbackModuleIndex == PA_INVALID_INDEX)
-    {
-        return;
-    }
-
-    if (!m_context || pa_context_get_state(m_context) != PA_CONTEXT_READY)
-    {
-        m_outputLoopbackModuleIndex = PA_INVALID_INDEX;
-        m_currentMonitoringOutputName.clear();
-        return;
-    }
-
-    LOG_INFO("Removing monitoring output...");
-    g_sinkOperationSuccess = false;
-    pa_operation *op = pa_context_unload_module(m_context, m_outputLoopbackModuleIndex, unloadModuleCallback, this);
-
-    if (op)
-    {
-        int ret = 0;
-        int maxIterations = 50;
-        int iteration = 0;
-
-        while (iteration < maxIterations)
-        {
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
-            if (g_sinkOperationSuccess)
-            {
-                break;
-            }
-            usleep(10000);
-            iteration++;
-        }
-        pa_operation_unref(op);
-    }
-
-    m_outputLoopbackModuleIndex = PA_INVALID_INDEX;
-    m_currentMonitoringOutputName.clear();
-    LOG_INFO("Monitoring output removed");
-}
 
 // Static callback for module info
 static void moduleInfoCallback(pa_context *c, const pa_module_info *i, int eol, void *userdata)
@@ -1348,20 +1185,15 @@ static void moduleInfoCallback(pa_context *c, const pa_module_info *i, int eol, 
             if (i->argument)
             {
                 std::string argStr = i->argument;
-                // Check for our named loopbacks (using sink_input_properties or sink_input_name)
+                // Check for our named input loopbacks (using sink_input_properties or sink_input_name)
                 if (argStr.find("media.name=RetroCaptureInputLoopback") != std::string::npos ||
                     argStr.find("sink_input_name=\"RetroCaptureInputLoopback\"") != std::string::npos ||
-                    argStr.find("sink_input_name=\"RetroCapture Input\"") != std::string::npos ||
-                    argStr.find("media.name=RetroCaptureMonitorLoopback") != std::string::npos ||
-                    argStr.find("sink_input_name=\"RetroCaptureMonitorLoopback\"") != std::string::npos ||
-                    argStr.find("sink_input_name=\"RetroCapture Monitor\"") != std::string::npos)
+                    argStr.find("sink_input_name=\"RetroCapture Input\"") != std::string::npos)
                 {
                     isRetroCaptureLoopback = true;
                 }
-                // Also check for connections to RetroCapture (for backward compatibility)
-                else if (argStr.find("RetroCapture") != std::string::npos ||
-                         argStr.find("sink=RetroCapture") != std::string::npos ||
-                         argStr.find("source=RetroCapture.monitor") != std::string::npos)
+                // Also check for connections to RetroCapture sink (for backward compatibility)
+                else if (argStr.find("sink=RetroCapture") != std::string::npos)
                 {
                     isRetroCaptureLoopback = true;
                 }
@@ -1414,8 +1246,7 @@ void AudioCapturePulse::cleanupOrphanedLoopbacks()
     // Remove orphaned modules (excluding the ones we're currently using)
     for (uint32_t moduleIndex : orphanedModules)
     {
-        if (moduleIndex != m_inputLoopbackModuleIndex &&
-            moduleIndex != m_outputLoopbackModuleIndex)
+        if (moduleIndex != m_inputLoopbackModuleIndex)
         {
             LOG_INFO("Removing orphaned loopback module: " + std::to_string(moduleIndex));
             g_sinkOperationSuccess = false;
@@ -1426,7 +1257,10 @@ void AudioCapturePulse::cleanupOrphanedLoopbacks()
                 int ret = 0;
                 for (int i = 0; i < 50; i++)
                 {
-                    pa_mainloop_iterate(m_mainloop, 0, &ret);
+                    {
+                        std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+                        pa_mainloop_iterate(m_mainloop, 0, &ret);
+                    }
                     if (g_sinkOperationSuccess)
                     {
                         break;
@@ -1527,7 +1361,10 @@ void AudioCapturePulse::cleanupOrphanedSinkInputs()
         int ret = 0;
         for (int i = 0; i < 50; i++)
         {
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
+            {
+                std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+                pa_mainloop_iterate(m_mainloop, 0, &ret);
+            }
             if (g_retroCaptureSinkIndex != PA_INVALID_INDEX)
             {
                 break;
@@ -1560,7 +1397,10 @@ void AudioCapturePulse::cleanupOrphanedSinkInputs()
 
         while (iteration < maxIterations)
         {
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
+            {
+                std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+                pa_mainloop_iterate(m_mainloop, 0, &ret);
+            }
 
             pa_operation_state_t opState = pa_operation_get_state(op);
             if (opState == PA_OPERATION_DONE || opState == PA_OPERATION_CANCELLED)
@@ -1592,7 +1432,10 @@ void AudioCapturePulse::cleanupOrphanedSinkInputs()
             int ret = 0;
             for (int i = 0; i < 20; i++)
             {
-                pa_mainloop_iterate(m_mainloop, 0, &ret);
+                {
+                    std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
+                    pa_mainloop_iterate(m_mainloop, 0, &ret);
+                }
                 usleep(10000);
             }
             pa_operation_unref(killOp);

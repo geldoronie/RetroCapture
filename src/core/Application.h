@@ -324,5 +324,6 @@ private:
     bool initWebPortal();
     void stopWebPortal();
     bool initAudioCapture();
+    void restoreAudioDeviceConnections();
     void handleKeyInput();
 };

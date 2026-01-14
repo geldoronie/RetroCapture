@@ -28,15 +28,6 @@ private:
     int m_selectedInputSourceIndex = -1;
     bool m_inputSourcesListNeedsRefresh = true;
     
-    // Output sinks
-    std::vector<std::string> m_outputSinkNames;
-    std::vector<std::string> m_outputSinkIds;
-    int m_selectedOutputSinkIndex = -1;
-    bool m_outputSinksListNeedsRefresh = true;
-    bool m_monitoringEnabled = false;
-    
     void renderInputSourceSelection();
-    void renderOutputSinkSelection();
     void refreshInputSources();
-    void refreshOutputSinks();
 };

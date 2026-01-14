@@ -23,6 +23,9 @@
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#ifdef __linux__
+#include "../audio/AudioCapturePulse.h"
+#endif
 #include "../recording/RecordingManager.h"
 #include "../recording/RecordingSettings.h"
 #include "../recording/RecordingMetadata.h"
@@ -136,6 +139,9 @@ bool Application::init()
             {
                 m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
             }
+            
+            // Restore saved audio device connections
+            restoreAudioDeviceConnections();
         }
     }
 
@@ -2523,6 +2529,45 @@ bool Application::initAudioCapture()
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;
+}
+
+void Application::restoreAudioDeviceConnections()
+{
+    if (!m_audioCapture || !m_ui)
+    {
+        return;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture.get());
+    if (!pulseCapture)
+    {
+        return;
+    }
+
+    // Restore input source connection
+    std::string savedInputSourceId = m_ui->getAudioInputSourceId();
+    LOG_INFO("Checking saved audio input source ID: '" + savedInputSourceId + "'");
+    if (!savedInputSourceId.empty())
+    {
+        LOG_INFO("Restoring audio input source: " + savedInputSourceId);
+        // Give PulseAudio a moment to be ready
+        usleep(500000); // 500ms
+        if (pulseCapture->connectInputSource(savedInputSourceId))
+        {
+            LOG_INFO("Audio input source restored successfully");
+        }
+        else
+        {
+            LOG_WARN("Failed to restore audio input source: " + savedInputSourceId);
+        }
+    }
+    else
+    {
+        LOG_INFO("No saved audio input source to restore");
+    }
+
+#endif
 }
 
 void Application::run()

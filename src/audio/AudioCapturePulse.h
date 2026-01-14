@@ -48,20 +48,14 @@ public:
     std::vector<std::string> getAvailableDevices();
     void setAudioCallback(std::function<void(const int16_t *data, size_t samples)> callback);
 
-    // Audio input/output management
-    // Input: connect audio source to RetroCapture sink (for capture)
+    // Audio input management
+    // Input: connect audio source directly to RetroCapture:input_FL/FR ports (for capture)
     bool connectInputSource(const std::string &sourceName);
     void disconnectInputSource();
     std::string getCurrentInputSource() const { return m_currentInputSourceName; }
     
-    // Output: connect RetroCapture.monitor to output sink (for monitoring/hearing)
-    bool setMonitoringOutput(const std::string &outputSinkName);
-    void removeMonitoringOutput();
-    std::string getCurrentMonitoringOutput() const { return m_currentMonitoringOutputName; }
-    
     // List available devices
     std::vector<AudioDeviceInfo> listInputSources(); // Audio sources (inputs)
-    std::vector<AudioDeviceInfo> listOutputSinks();  // Audio sinks (outputs)
 
 private:
     // PulseAudio callbacks
@@ -92,8 +86,7 @@ private:
     pa_stream *m_stream;
     uint32_t m_virtualSinkIndex;      // RetroCapture sink index
     uint32_t m_moduleIndex;            // Module index for RetroCapture sink
-    uint32_t m_inputLoopbackModuleIndex;  // Module index for input source loopback
-    uint32_t m_outputLoopbackModuleIndex; // Module index for monitoring output loopback
+    uint32_t m_inputLoopbackModuleIndex;  // Module index for input source connection
 
     // Audio format
     uint32_t m_sampleRate;
@@ -108,12 +101,14 @@ private:
     // Audio buffer (thread-safe)
     std::vector<int16_t> m_audioBuffer;
     std::mutex m_bufferMutex;
+    
+    // Mainloop mutex (thread-safe access to pa_mainloop)
+    std::mutex m_mainloopMutex;
 
     // Callbacks
     std::function<void(const int16_t *data, size_t samples)> m_audioCallback;
     std::function<void(const std::string &, bool)> m_deviceStateCallback;
 
-    // Input/Output management
+    // Input management
     std::string m_currentInputSourceName;      // Currently connected input source
-    std::string m_currentMonitoringOutputName; // Currently selected output sink for monitoring
 };

@@ -442,10 +442,6 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETAudioInputSources(clientFd);
     }
-    else if (path == "/api/v1/audio/output-sinks")
-    {
-        return handleGETAudioOutputSinks(clientFd);
-    }
     else if (path == "/api/v1/audio/status")
     {
         return handleGETAudioStatus(clientFd);
@@ -534,17 +530,9 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleSetAudioInputSource(clientFd, body);
     }
-    else if (path == "/api/v1/audio/output-sink")
-    {
-        return handleSetAudioOutputSink(clientFd, body);
-    }
     else if (path == "/api/v1/audio/disconnect-input")
     {
         return handleDisconnectAudioInput(clientFd);
-    }
-    else if (path == "/api/v1/audio/disable-monitoring")
-    {
-        return handleDisableAudioMonitoring(clientFd);
     }
 
     send404(clientFd);
@@ -2249,52 +2237,6 @@ bool APIController::handleGETAudioInputSources(int clientFd)
     return true;
 }
 
-bool APIController::handleGETAudioOutputSinks(int clientFd)
-{
-    if (!m_application)
-    {
-        sendErrorResponse(clientFd, 500, "Application not available");
-        return true;
-    }
-
-    IAudioCapture *audioCapture = m_application->getAudioCapture();
-    if (!audioCapture)
-    {
-        nlohmann::json response;
-        response["sinks"] = nlohmann::json::array();
-        sendJSONResponse(clientFd, 200, response.dump());
-        return true;
-    }
-
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
-    if (pulseCapture)
-    {
-        std::vector<AudioDeviceInfo> sinks = pulseCapture->listOutputSinks();
-        nlohmann::json response;
-        response["sinks"] = nlohmann::json::array();
-        
-        for (const auto &sink : sinks)
-        {
-            nlohmann::json sinkJson;
-            sinkJson["id"] = sink.id;
-            sinkJson["name"] = sink.name;
-            sinkJson["description"] = sink.description;
-            sinkJson["available"] = sink.available;
-            response["sinks"].push_back(sinkJson);
-        }
-        
-        sendJSONResponse(clientFd, 200, response.dump());
-        return true;
-    }
-#endif
-
-    // Fallback: return empty list
-    nlohmann::json response;
-    response["sinks"] = nlohmann::json::array();
-    sendJSONResponse(clientFd, 200, response.dump());
-    return true;
-}
 
 bool APIController::handleGETAudioStatus(int clientFd)
 {
@@ -2324,19 +2266,13 @@ bool APIController::handleGETAudioStatus(int clientFd)
     if (pulseCapture)
     {
         response["currentInputSource"] = pulseCapture->getCurrentInputSource();
-        response["currentMonitoringOutput"] = pulseCapture->getCurrentMonitoringOutput();
-        response["monitoringEnabled"] = !pulseCapture->getCurrentMonitoringOutput().empty();
     }
     else
     {
         response["currentInputSource"] = "";
-        response["currentMonitoringOutput"] = "";
-        response["monitoringEnabled"] = false;
     }
 #else
     response["currentInputSource"] = "";
-    response["currentMonitoringOutput"] = "";
-    response["monitoringEnabled"] = false;
 #endif
 
     sendJSONResponse(clientFd, 200, response.dump());
@@ -2375,6 +2311,14 @@ bool APIController::handleSetAudioInputSource(int clientFd, const std::string &b
         {
             if (pulseCapture->connectInputSource(sourceId))
             {
+                // Save configuration
+                if (m_uiManager)
+                {
+                    LOG_INFO("Saving audio input source ID via API: '" + sourceId + "'");
+                    m_uiManager->setAudioInputSourceId(sourceId);
+                    m_uiManager->saveConfig();
+                }
+                
                 nlohmann::json response;
                 response["success"] = true;
                 response["message"] = "Input source connected";
@@ -2394,69 +2338,6 @@ bool APIController::handleSetAudioInputSource(int clientFd, const std::string &b
         }
 #else
         sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
-        return true;
-#endif
-    }
-    catch (const std::exception &e)
-    {
-        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
-        return true;
-    }
-}
-
-bool APIController::handleSetAudioOutputSink(int clientFd, const std::string &body)
-{
-    if (!m_application)
-    {
-        sendErrorResponse(clientFd, 500, "Application not available");
-        return true;
-    }
-
-    IAudioCapture *audioCapture = m_application->getAudioCapture();
-    if (!audioCapture)
-    {
-        sendErrorResponse(clientFd, 400, "Audio capture not available");
-        return true;
-    }
-
-    try
-    {
-        nlohmann::json json = nlohmann::json::parse(body);
-        std::string sinkId = json.value("sinkId", "");
-        
-        // Empty sinkId means disable monitoring
-#ifdef __linux__
-        AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
-        if (pulseCapture)
-        {
-            if (pulseCapture->setMonitoringOutput(sinkId))
-            {
-                nlohmann::json response;
-                response["success"] = true;
-                if (sinkId.empty())
-                {
-                    response["message"] = "Monitoring disabled";
-                }
-                else
-                {
-                    response["message"] = "Monitoring enabled";
-                }
-                sendJSONResponse(clientFd, 200, response.dump());
-                return true;
-            }
-            else
-            {
-                sendErrorResponse(clientFd, 500, "Failed to set monitoring output");
-                return true;
-            }
-        }
-        else
-        {
-            sendErrorResponse(clientFd, 400, "Audio monitoring only available on Linux");
-            return true;
-        }
-#else
-        sendErrorResponse(clientFd, 400, "Audio monitoring only available on Linux");
         return true;
 #endif
     }
@@ -2487,6 +2368,15 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
     if (pulseCapture)
     {
         pulseCapture->disconnectInputSource();
+        
+        // Save configuration (clear saved source)
+        if (m_uiManager)
+        {
+            LOG_INFO("Clearing audio input source ID via API");
+            m_uiManager->setAudioInputSourceId("");
+            m_uiManager->saveConfig();
+        }
+        
         nlohmann::json response;
         response["success"] = true;
         response["message"] = "Input source disconnected";
@@ -2504,39 +2394,3 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
 #endif
 }
 
-bool APIController::handleDisableAudioMonitoring(int clientFd)
-{
-    if (!m_application)
-    {
-        sendErrorResponse(clientFd, 500, "Application not available");
-        return true;
-    }
-
-    IAudioCapture *audioCapture = m_application->getAudioCapture();
-    if (!audioCapture)
-    {
-        sendErrorResponse(clientFd, 400, "Audio capture not available");
-        return true;
-    }
-
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
-    if (pulseCapture)
-    {
-        pulseCapture->removeMonitoringOutput();
-        nlohmann::json response;
-        response["success"] = true;
-        response["message"] = "Monitoring disabled";
-        sendJSONResponse(clientFd, 200, response.dump());
-        return true;
-    }
-    else
-    {
-        sendErrorResponse(clientFd, 400, "Audio monitoring only available on Linux");
-        return true;
-    }
-#else
-    sendErrorResponse(clientFd, 400, "Audio monitoring only available on Linux");
-    return true;
-#endif
-}
