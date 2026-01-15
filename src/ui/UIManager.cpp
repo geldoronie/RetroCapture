@@ -2,6 +2,7 @@
 #include "UIConfiguration.h"
 #include "UICredits.h"
 #include "UICapturePresets.h"
+#include "UIRecordings.h"
 #include "../utils/Logger.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
@@ -46,6 +47,7 @@ UIManager::~UIManager()
     m_configWindow.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
+    m_recordingsWindow.reset();
     shutdown();
 }
 
@@ -135,6 +137,7 @@ bool UIManager::init(void *window)
     m_configWindow = std::make_unique<UIConfiguration>(this);
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
+    m_recordingsWindow = std::make_unique<UIRecordings>(this);
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -175,6 +178,24 @@ void UIManager::beginFrame()
         return;
     }
 
+    // Disable ImGui mouse input BEFORE processing events when UI is hidden
+    // This prevents ImGui from processing mouse events and controlling cursor
+    ImGuiIO& io = ImGui::GetIO();
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        // Also disable mouse buttons to prevent any mouse interaction
+        io.MouseDown[0] = false;
+        io.MouseDown[1] = false;
+        io.MouseDown[2] = false;
+        io.MouseDown[3] = false;
+        io.MouseDown[4] = false;
+    }
+    else
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
+    
     // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
 #ifdef USE_SDL2
@@ -183,6 +204,17 @@ void UIManager::beginFrame()
     ImGui_ImplGlfw_NewFrame();
 #endif
     ImGui::NewFrame();
+    
+    // CRITICAL: Ensure mouse is disabled after NewFrame
+    // ImGui backends (ImGui_ImplGlfw_NewFrame/ImGui_ImplSDL2_NewFrame) may re-enable mouse input
+    // and restore cursor visibility, so we must disable it again
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        // Also clear mouse position to prevent any mouse interaction
+        io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
+    }
 }
 
 void UIManager::endFrame()
@@ -201,6 +233,30 @@ void UIManager::endFrame()
     {
         // Quando oculta, ainda precisamos finalizar o frame para manter o estado correto
         ImGui::EndFrame();
+    }
+    
+    // Keep ImGui mouse disabled when UI is hidden
+    // This prevents ImGui from interfering with cursor visibility
+    ImGuiIO& io = ImGui::GetIO();
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    }
+    else
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
+}
+
+void UIManager::setVisible(bool visible)
+{
+    if (m_uiVisible != visible)
+    {
+        m_uiVisible = visible;
+        if (m_onVisibilityChanged)
+        {
+            m_onVisibilityChanged(visible);
+        }
     }
 }
 
@@ -238,7 +294,7 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Toggle UI", "F12"))
             {
-                m_uiVisible = !m_uiVisible;
+                setVisible(!m_uiVisible);
             }
             ImGui::Separator();
             if (m_configWindow)
@@ -255,6 +311,14 @@ void UIManager::render()
                 if (ImGui::MenuItem("Capture Presets", nullptr, visible))
                 {
                     m_capturePresetsWindow->setVisible(!visible);
+                }
+            }
+            if (m_recordingsWindow)
+            {
+                bool visible = m_recordingsWindow->isVisible();
+                if (ImGui::MenuItem("Recordings", nullptr, visible))
+                {
+                    m_recordingsWindow->setVisible(!visible);
                 }
             }
             ImGui::EndMenu();
@@ -290,6 +354,12 @@ void UIManager::render()
     if (m_capturePresetsWindow)
     {
         m_capturePresetsWindow->render();
+    }
+
+    // Renderizar janela de gravações
+    if (m_recordingsWindow)
+    {
+        m_recordingsWindow->render();
     }
 }
 
@@ -713,6 +783,7 @@ void UIManager::renderV4L2Controls()
             {
                 m_onResolutionChanged(m_captureWidth, m_captureHeight);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
 
@@ -734,6 +805,7 @@ void UIManager::renderV4L2Controls()
             {
                 m_onFramerateChanged(m_captureFps);
             }
+            saveConfig(); // Salvar configuração quando mudar
         }
     }
 
@@ -746,6 +818,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(30);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("60"))
@@ -755,6 +828,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(60);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("120"))
@@ -764,6 +838,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onFramerateChanged(120);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -778,6 +853,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(320, 240);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("640x480"))
@@ -788,6 +864,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(640, 480);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("800x600"))
@@ -798,6 +875,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(800, 600);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("1024x768"))
     {
@@ -807,6 +885,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1024, 768);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1280x960"))
@@ -817,6 +896,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1280, 960);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1600x1200"))
@@ -827,6 +907,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1600, 1200);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("2048x1536"))
     {
@@ -836,6 +917,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2048, 1536);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("2560x1920"))
@@ -846,6 +928,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2560, 1920);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -860,6 +943,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1280, 720);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("1920x1080"))
@@ -870,6 +954,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(1920, 1080);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     ImGui::SameLine();
     if (ImGui::Button("2560x1440"))
@@ -880,6 +965,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(2560, 1440);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
     if (ImGui::Button("3840x2160"))
     {
@@ -889,6 +975,7 @@ void UIManager::renderV4L2Controls()
         {
             m_onResolutionChanged(3840, 2160);
         }
+        saveConfig(); // Salvar configuração quando mudar
     }
 
     ImGui::Separator();
@@ -1668,7 +1755,8 @@ void UIManager::setSourceType(SourceType sourceType)
 void UIManager::setStreamingPort(uint16_t port)
 {
     // Validate port range (1024-65535)
-    if (port >= 1024 && port <= 65535)
+    // Note: uint16_t max is 65535, so we only need to check >= 1024
+    if (port >= 1024)
     {
         m_streamingPort = port;
     }
@@ -1801,16 +1889,10 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 
 void UIManager::triggerDeviceChange(const std::string &device)
 {
-    LOG_INFO("[FORCE-UI] triggerDeviceChange chamado com device: " + device);
     m_currentDevice = device;
     if (m_onDeviceChanged)
     {
-        LOG_INFO("[FORCE-UI] Callback m_onDeviceChanged existe, chamando...");
         m_onDeviceChanged(device);
-    }
-    else
-    {
-        LOG_ERROR("[FORCE-UI] ERRO: Callback m_onDeviceChanged é NULL!");
     }
 }
 
@@ -2101,6 +2183,18 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar configurações de captura
+        if (config.contains("capture"))
+        {
+            auto &capture = config["capture"];
+            if (capture.contains("width"))
+                m_captureWidth = capture["width"].get<uint32_t>();
+            if (capture.contains("height"))
+                m_captureHeight = capture["height"].get<uint32_t>();
+            if (capture.contains("fps"))
+                m_captureFps = capture["fps"].get<uint32_t>();
+        }
+
         // Carregar configurações de imagem
         if (config.contains("image"))
         {
@@ -2115,6 +2209,10 @@ void UIManager::loadConfig()
                 m_fullscreen = image["fullscreen"];
             if (image.contains("monitorIndex"))
                 m_monitorIndex = image["monitorIndex"];
+            if (image.contains("outputWidth"))
+                m_outputWidth = image["outputWidth"].get<uint32_t>();
+            if (image.contains("outputHeight"))
+                m_outputHeight = image["outputHeight"].get<uint32_t>();
         }
 
         // Carregar configurações do Web Portal
@@ -2328,6 +2426,56 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar configurações de áudio
+        if (config.contains("audio"))
+        {
+            auto &audio = config["audio"];
+            if (audio.contains("inputSourceId") && !audio["inputSourceId"].is_null())
+            {
+                m_audioInputSourceId = audio["inputSourceId"].get<std::string>();
+            }
+        }
+
+        // Carregar configurações de gravação
+        if (config.contains("recording"))
+        {
+            auto &recording = config["recording"];
+            if (recording.contains("width"))
+                m_recordingWidth = recording["width"].get<uint32_t>();
+            if (recording.contains("height"))
+                m_recordingHeight = recording["height"].get<uint32_t>();
+            if (recording.contains("fps"))
+                m_recordingFps = recording["fps"].get<uint32_t>();
+            if (recording.contains("bitrate"))
+                m_recordingBitrate = recording["bitrate"].get<uint32_t>();
+            if (recording.contains("audioBitrate"))
+                m_recordingAudioBitrate = recording["audioBitrate"].get<uint32_t>();
+            if (recording.contains("videoCodec"))
+                m_recordingVideoCodec = recording["videoCodec"].get<std::string>();
+            if (recording.contains("audioCodec"))
+                m_recordingAudioCodec = recording["audioCodec"].get<std::string>();
+            if (recording.contains("h264Preset"))
+                m_recordingH264Preset = recording["h264Preset"].get<std::string>();
+            if (recording.contains("h265Preset"))
+                m_recordingH265Preset = recording["h265Preset"].get<std::string>();
+            if (recording.contains("h265Profile"))
+                m_recordingH265Profile = recording["h265Profile"].get<std::string>();
+            if (recording.contains("h265Level"))
+                m_recordingH265Level = recording["h265Level"].get<std::string>();
+            if (recording.contains("vp8Speed"))
+                m_recordingVP8Speed = recording["vp8Speed"].get<int>();
+            if (recording.contains("vp9Speed"))
+                m_recordingVP9Speed = recording["vp9Speed"].get<int>();
+            if (recording.contains("container"))
+                m_recordingContainer = recording["container"].get<std::string>();
+            if (recording.contains("outputPath"))
+                m_recordingOutputPath = recording["outputPath"].get<std::string>();
+            if (recording.contains("filenameTemplate"))
+                m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
+            if (recording.contains("includeAudio"))
+                m_recordingIncludeAudio = recording["includeAudio"];
+        }
+
         LOG_INFO("Configuration loaded from: " + configPath);
     }
     catch (const std::exception &e)
@@ -2368,7 +2516,9 @@ void UIManager::saveConfig()
             {"contrast", m_contrast},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
-            {"monitorIndex", m_monitorIndex}};
+            {"monitorIndex", m_monitorIndex},
+            {"outputWidth", m_outputWidth},
+            {"outputHeight", m_outputHeight}};
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
@@ -2382,6 +2532,12 @@ void UIManager::saveConfig()
             {"backgroundImagePath", m_webPortalBackgroundImagePath},
             {"texts", {{"streamInfo", m_webPortalTextStreamInfo}, {"quickActions", m_webPortalTextQuickActions}, {"compatibility", m_webPortalTextCompatibility}, {"status", m_webPortalTextStatus}, {"codec", m_webPortalTextCodec}, {"resolution", m_webPortalTextResolution}, {"streamUrl", m_webPortalTextStreamUrl}, {"copyUrl", m_webPortalTextCopyUrl}, {"openNewTab", m_webPortalTextOpenNewTab}, {"supported", m_webPortalTextSupported}, {"format", m_webPortalTextFormat}, {"codecInfo", m_webPortalTextCodecInfo}, {"supportedBrowsers", m_webPortalTextSupportedBrowsers}, {"formatInfo", m_webPortalTextFormatInfo}, {"codecInfoValue", m_webPortalTextCodecInfoValue}, {"connecting", m_webPortalTextConnecting}}},
             {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"primaryLight", {m_webPortalColorPrimaryLight[0], m_webPortalColorPrimaryLight[1], m_webPortalColorPrimaryLight[2], m_webPortalColorPrimaryLight[3]}}, {"primaryDark", {m_webPortalColorPrimaryDark[0], m_webPortalColorPrimaryDark[1], m_webPortalColorPrimaryDark[2], m_webPortalColorPrimaryDark[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"secondaryHighlight", {m_webPortalColorSecondaryHighlight[0], m_webPortalColorSecondaryHighlight[1], m_webPortalColorSecondaryHighlight[2], m_webPortalColorSecondaryHighlight[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}, {"info", {m_webPortalColorInfo[0], m_webPortalColorInfo[1], m_webPortalColorInfo[2], m_webPortalColorInfo[3]}}}}};
+
+        // Salvar configurações de captura
+        config["capture"] = {
+            {"width", m_captureWidth},
+            {"height", m_captureHeight},
+            {"fps", m_captureFps}};
 
         // Salvar shader atual
         config["shader"] = {
@@ -2398,6 +2554,30 @@ void UIManager::saveConfig()
         // Salvar dispositivo DirectShow
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // Salvar configurações de áudio
+        config["audio"] = {
+            {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+
+        // Salvar configurações de gravação
+        config["recording"] = {
+            {"width", m_recordingWidth},
+            {"height", m_recordingHeight},
+            {"fps", m_recordingFps},
+            {"bitrate", m_recordingBitrate},
+            {"audioBitrate", m_recordingAudioBitrate},
+            {"videoCodec", m_recordingVideoCodec},
+            {"audioCodec", m_recordingAudioCodec},
+            {"h264Preset", m_recordingH264Preset},
+            {"h265Preset", m_recordingH265Preset},
+            {"h265Profile", m_recordingH265Profile},
+            {"h265Level", m_recordingH265Level},
+            {"vp8Speed", m_recordingVP8Speed},
+            {"vp9Speed", m_recordingVP9Speed},
+            {"container", m_recordingContainer},
+            {"outputPath", m_recordingOutputPath},
+            {"filenameTemplate", m_recordingFilenameTemplate},
+            {"includeAudio", m_recordingIncludeAudio}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -2790,4 +2970,183 @@ void UIManager::renderWebPortalPanel()
     std::string protocol = httpsEnabled ? "https" : "http";
     std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
     ImGui::Text("URL: %s", portalUrl.c_str());
+}
+
+// Recording trigger methods
+void UIManager::triggerRecordingWidthChange(uint32_t width)
+{
+    m_recordingWidth = width;
+    if (m_onRecordingWidthChanged)
+    {
+        m_onRecordingWidthChanged(width);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingHeightChange(uint32_t height)
+{
+    m_recordingHeight = height;
+    if (m_onRecordingHeightChanged)
+    {
+        m_onRecordingHeightChanged(height);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingFpsChange(uint32_t fps)
+{
+    m_recordingFps = fps;
+    if (m_onRecordingFpsChanged)
+    {
+        m_onRecordingFpsChanged(fps);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
+{
+    m_recordingBitrate = bitrate;
+    if (m_onRecordingBitrateChanged)
+    {
+        m_onRecordingBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
+{
+    m_recordingAudioBitrate = bitrate;
+    if (m_onRecordingAudioBitrateChanged)
+    {
+        m_onRecordingAudioBitrateChanged(bitrate);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
+{
+    m_recordingVideoCodec = codec;
+    if (m_onRecordingVideoCodecChanged)
+    {
+        m_onRecordingVideoCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
+{
+    m_recordingAudioCodec = codec;
+    if (m_onRecordingAudioCodecChanged)
+    {
+        m_onRecordingAudioCodecChanged(codec);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
+{
+    m_recordingH264Preset = preset;
+    if (m_onRecordingH264PresetChanged)
+    {
+        m_onRecordingH264PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
+{
+    m_recordingH265Preset = preset;
+    if (m_onRecordingH265PresetChanged)
+    {
+        m_onRecordingH265PresetChanged(preset);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
+{
+    m_recordingH265Profile = profile;
+    if (m_onRecordingH265ProfileChanged)
+    {
+        m_onRecordingH265ProfileChanged(profile);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingH265LevelChange(const std::string& level)
+{
+    m_recordingH265Level = level;
+    if (m_onRecordingH265LevelChanged)
+    {
+        m_onRecordingH265LevelChanged(level);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVP8SpeedChange(int speed)
+{
+    m_recordingVP8Speed = speed;
+    if (m_onRecordingVP8SpeedChanged)
+    {
+        m_onRecordingVP8SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVP9SpeedChange(int speed)
+{
+    m_recordingVP9Speed = speed;
+    if (m_onRecordingVP9SpeedChanged)
+    {
+        m_onRecordingVP9SpeedChanged(speed);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingContainerChange(const std::string& container)
+{
+    m_recordingContainer = container;
+    if (m_onRecordingContainerChanged)
+    {
+        m_onRecordingContainerChanged(container);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingOutputPathChange(const std::string& path)
+{
+    m_recordingOutputPath = path;
+    if (m_onRecordingOutputPathChanged)
+    {
+        m_onRecordingOutputPathChanged(path);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingFilenameTemplateChange(const std::string& template_)
+{
+    m_recordingFilenameTemplate = template_;
+    if (m_onRecordingFilenameTemplateChanged)
+    {
+        m_onRecordingFilenameTemplateChanged(template_);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingIncludeAudioChange(bool include)
+{
+    m_recordingIncludeAudio = include;
+    if (m_onRecordingIncludeAudioChanged)
+    {
+        m_onRecordingIncludeAudioChanged(include);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerRecordingStartStop(bool start)
+{
+    if (m_onRecordingStartStop)
+    {
+        m_onRecordingStartStop(start);
+    }
 }

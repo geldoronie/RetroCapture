@@ -43,6 +43,9 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <a href="/recordings.html" class="btn btn-icon" title="Gerenciar Gravações">
+                        <i class="bi bi-camera-video"></i>
+                    </a>
                     <button class="btn btn-icon" onclick="copyStreamUrl()" title="Copiar URL do Stream">
                         <i class="bi bi-clipboard"></i>
                     </button>
@@ -140,6 +143,16 @@
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="streaming-tab" data-bs-toggle="tab" data-bs-target="#streaming" type="button" role="tab">
                                         <i class="bi bi-broadcast me-2"></i>Streaming
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="recording-tab" data-bs-toggle="tab" data-bs-target="#recording" type="button" role="tab">
+                                        <i class="bi bi-record-circle me-2"></i>Recording
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio" type="button" role="tab">
+                                        <i class="bi bi-speaker me-2"></i>Audio
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
@@ -473,6 +486,181 @@
                                     </div>
                                 </div>
 
+                                <!-- Recording Tab -->
+                                <div class="tab-pane fade" id="recording" role="tabpanel">
+                                    <div class="row g-3">
+                                        <!-- Recording Status -->
+                                        <div class="col-12">
+                                            <div class="alert" id="recordingStatusAlert" role="alert">
+                                                <div class="d-flex align-items-center">
+                                                    <i class="bi bi-circle-fill me-2" id="recordingStatusIcon"></i>
+                                                    <div class="flex-grow-1">
+                                                        <strong id="recordingStatusText">Stopped</strong>
+                                                        <div id="recordingStatusInfo" class="small text-muted"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-md-4">
+                                            <label class="form-label">Width</label>
+                                            <input type="number" class="form-control" id="recordingWidth" min="1">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Height</label>
+                                            <input type="number" class="form-control" id="recordingHeight" min="1">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">FPS</label>
+                                            <input type="number" class="form-control" id="recordingFPS" min="1" max="120">
+                                        </div>
+                                        
+                                        <!-- Quick Resolution Presets -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6>Quick Resolution Presets</h6>
+                                            
+                                            <div class="mb-3">
+                                                <label class="form-label">4:3 Resolutions:</label>
+                                                <div class="d-flex flex-wrap gap-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(320, 240)">320x240</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(640, 480)">640x480</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(800, 600)">800x600</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1024, 768)">1024x768</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 960)">1280x960</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1600, 1200)">1600x1200</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2048, 1536)">2048x1536</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1920)">2560x1920</button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="mb-3">
+                                                <label class="form-label">16:9 Resolutions:</label>
+                                                <div class="d-flex flex-wrap gap-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 720)">1280x720</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1920, 1080)">1920x1080</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1440)">2560x1440</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(3840, 2160)">3840x2160</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-md-6">
+                                            <label class="form-label">Video Bitrate (bps)</label>
+                                            <input type="number" class="form-control" id="recordingBitrate" min="1000000" step="1000000">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Audio Bitrate (bps)</label>
+                                            <input type="number" class="form-control" id="recordingAudioBitrate" min="64000" step="32000">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Video Codec</label>
+                                            <select class="form-select" id="recordingVideoCodec">
+                                                <option value="h264">H.264</option>
+                                                <option value="h265">H.265</option>
+                                                <option value="vp8">VP8</option>
+                                                <option value="vp9">VP9</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Audio Codec</label>
+                                            <select class="form-select" id="recordingAudioCodec">
+                                                <option value="aac">AAC</option>
+                                                <option value="mp3">MP3</option>
+                                                <option value="opus">Opus</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Container</label>
+                                            <select class="form-select" id="recordingContainer">
+                                                <option value="mp4">MP4</option>
+                                                <option value="mkv">MKV</option>
+                                                <option value="avi">AVI</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Output Path</label>
+                                            <input type="text" class="form-control" id="recordingOutputPath" placeholder="recordings/">
+                                        </div>
+                                        <div class="col-md-12">
+                                            <label class="form-label">Filename Template</label>
+                                            <input type="text" class="form-control" id="recordingFilenameTemplate" placeholder="recording_%Y%m%d_%H%M%S">
+                                            <small class="form-text text-muted">strftime format (e.g., recording_%Y%m%d_%H%M%S)</small>
+                                        </div>
+                                        <div class="col-md-12">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="recordingIncludeAudio" checked>
+                                                <label class="form-check-label" for="recordingIncludeAudio">
+                                                    Include Audio
+                                                </label>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Start/Stop Button -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <button type="button" class="btn btn-danger btn-lg w-100" id="recordingStartStopBtn" onclick="toggleRecording()">
+                                                <span id="recordingStartStopText"><i class="bi bi-record-circle me-2"></i>Start Recording</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Audio Tab -->
+                                <div class="tab-pane fade" id="audio" role="tabpanel">
+                                    <div class="row g-3">
+                                        <!-- Audio Status -->
+                                        <div class="col-12">
+                                            <div class="alert alert-info" id="audioStatusAlert" role="alert">
+                                                <div class="d-flex align-items-center">
+                                                    <i class="bi bi-info-circle me-2"></i>
+                                                    <div class="flex-grow-1">
+                                                        <strong>Audio Status</strong>
+                                                        <div id="audioStatusInfo" class="small">Loading...</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Input Source Selection -->
+                                        <div class="col-12">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0">
+                                                        <i class="bi bi-mic me-2"></i>Audio Input Source
+                                                    </h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Select Input Source</label>
+                                                        <div class="input-group">
+                                                            <select class="form-select" id="audioInputSource">
+                                                                <option value="">Loading sources...</option>
+                                                            </select>
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh sources">
+                                                                <i class="bi bi-arrow-clockwise"></i>
+                                                            </button>
+                                                        </div>
+                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
+                                                    </div>
+                                                    <div class="d-flex gap-2">
+                                                        <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
+                                                            <i class="bi bi-plug me-1"></i>Connect
+                                                        </button>
+                                                        <button type="button" class="btn btn-secondary" id="disconnectInputBtn" onclick="disconnectAudioInput()" disabled>
+                                                            <i class="bi bi-plug-fill me-1"></i>Disconnect
+                                                        </button>
+                                                    </div>
+                                                    <div class="mt-2">
+                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                    </div>
+                                </div>
+
                                 <!-- Presets Tab -->
                                 <div class="tab-pane fade" id="presets" role="tabpanel">
                                     <div class="row g-3">
@@ -587,6 +775,21 @@
         window.addEventListener('appinstalled', () => {
             console.log('PWA instalado com sucesso!');
             deferredPrompt = null;
+        });
+
+        // Detectar quando a página é carregada do cache do histórico (back/forward cache)
+        // e forçar reload se necessário para evitar mostrar conteúdo antigo
+        window.addEventListener('pageshow', (event) => {
+            // Se a página foi carregada do cache do histórico (back/forward cache)
+            if (event.persisted) {
+                // Se estamos na raiz ou index.html, recarregar para garantir conteúdo correto
+                if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
+                    // Verificar se o título está correto (não deve ser "Recordings")
+                    if (document.title.includes('Recordings')) {
+                        window.location.reload();
+                    }
+                }
+            }
         });
     </script>
 </body>

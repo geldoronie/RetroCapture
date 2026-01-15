@@ -22,21 +22,29 @@ public:
     MediaMuxer();
     ~MediaMuxer();
 
-    // Inicializar muxer com configurações, codec contexts e callback
+    // Inicializar muxer com configurações, codec contexts e callback OU arquivo
     // Os codec contexts são necessários para configurar os streams corretamente
-    // avioBufferSize: tamanho do buffer AVIO (padrão: 256KB se 0)
+    // Para arquivos: usar filePath (FFmpeg abre o arquivo diretamente com avio_open, suporta seek)
+    // Para streaming: usar writeCallback (callback customizado, não suporta seek)
+    // avioBufferSize: tamanho do buffer AVIO (padrão: 256KB se 0, ignorado se usar filePath)
+    // containerFormat: formato do container (ex: "mp4", "mkv", "mpegts"). Se vazio, detecta do filePath ou usa "mpegts"
     bool initialize(const MediaEncoder::VideoConfig &videoConfig,
                     const MediaEncoder::AudioConfig &audioConfig,
                     void *videoCodecContext, // AVCodecContext* do MediaEncoder
                     void *audioCodecContext, // AVCodecContext* do MediaEncoder
-                    WriteCallback writeCallback,
-                    size_t avioBufferSize = 0); // 0 = usar padrão (256KB)
+                    const std::string &filePath = "", // Caminho do arquivo (se fornecido, usa avio_open)
+                    WriteCallback writeCallback = nullptr, // Callback customizado (se fornecido, usa callback)
+                    size_t avioBufferSize = 0, // 0 = usar padrão (256KB), ignorado se usar filePath
+                    const std::string &containerFormat = ""); // "" = detectar do filePath ou usar "mpegts"
 
     // Muxar um pacote codificado
     bool muxPacket(const MediaEncoder::EncodedPacket &packet);
 
     // Flush muxer - processar pacotes pendentes
     void flush();
+
+    // Finalizar escrita (garantir que todos os dados sejam escritos antes de fechar arquivo)
+    void finalize();
 
     // Limpar recursos
     void cleanup();
@@ -58,7 +66,7 @@ public:
 
 private:
     // Inicializar streams no muxer
-    bool initializeStreams(void *videoCodecContext, void *audioCodecContext, size_t avioBufferSize);
+    bool initializeStreams(void *videoCodecContext, void *audioCodecContext, const std::string &filePath, size_t avioBufferSize);
 
     // Converter PTS/DTS do time_base do codec para time_base do stream
     void convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &pts, int64_t &dts);
@@ -72,11 +80,13 @@ private:
     WriteCallback m_writeCallback;
     bool m_initialized = false;
     size_t m_avioBufferSize = 256 * 1024; // Tamanho do buffer AVIO (padrão: 256KB)
+    std::string m_containerFormat = "mpegts"; // Formato do container (padrão: mpegts)
 
     // Muxer context (void* para evitar incluir headers FFmpeg no .h)
     void *m_muxerContext = nullptr; // AVFormatContext*
     void *m_videoStream = nullptr;  // AVStream*
     void *m_audioStream = nullptr;  // AVStream*
+    void *m_formatOptions = nullptr; // AVDictionary* para opções de formato (ex: movflags)
 
     // Codec contexts (necessários para conversão de PTS/DTS)
     void *m_videoCodecContext = nullptr; // AVCodecContext*

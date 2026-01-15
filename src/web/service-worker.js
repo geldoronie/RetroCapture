@@ -58,6 +58,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Ignorar requisições para arquivos de vídeo grandes (não devem ser cacheados)
+  // Essas requisições devem passar direto pela rede sem interceptação
+  if (url.pathname.includes('/recordings/') && url.pathname.endsWith('/file')) {
+    return; // Deixar passar direto, sem interceptação
+  }
+
+  // Ignorar requisições para stream de vídeo
+  if (url.pathname === '/stream' || url.pathname.startsWith('/stream/')) {
+    return; // Deixar passar direto, sem interceptação
+  }
+
   // APIs sempre tentam rede primeiro (dados em tempo real)
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(

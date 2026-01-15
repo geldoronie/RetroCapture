@@ -26,19 +26,28 @@ WebPortal::WebPortal()
 
 bool WebPortal::isWebPortalRequest(const std::string &request) const
 {
+    // Log da requisição recebida para debug
+    size_t requestPreview = request.length() < 200 ? request.length() : 200;
+    LOG_INFO("WebPortal::isWebPortalRequest - Request preview: " + request.substr(0, requestPreview));
+    
     // NÃO capturar requisições de stream (deixar para HTTPTSStreamer processar)
     if (request.find("/stream") != std::string::npos ||
         request.find("/segment_") != std::string::npos ||
         request.find(".ts") != std::string::npos)
     {
+        LOG_INFO("WebPortal::isWebPortalRequest - Rejected (stream request)");
         return false;
     }
 
     // Verificar se é uma requisição para o portal web
     // Aceita tanto "/" quanto "/retrocapture/" ou outros prefixos
+    // Verificar arquivos HTML, CSS, JS e outros recursos estáticos
+    // Também aceita requisições com query string (ex: "/?t=...")
     if (request.find("GET / ") != std::string::npos ||
         request.find("GET / HTTP/") != std::string::npos ||
+        request.find("GET /?") != std::string::npos ||
         request.find("GET /index.html") != std::string::npos ||
+        request.find("GET /recordings.html") != std::string::npos ||
         request.find("GET /style.css") != std::string::npos ||
         request.find("GET /api.js") != std::string::npos ||
         request.find("GET /control.js") != std::string::npos ||
@@ -49,6 +58,7 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("GET /portal-background") != std::string::npos ||
         request.find("GET /icon-") != std::string::npos ||
         request.find("/index.html") != std::string::npos ||
+        request.find("/recordings.html") != std::string::npos ||
         request.find("/style.css") != std::string::npos ||
         request.find("/api.js") != std::string::npos ||
         request.find("/control.js") != std::string::npos ||
@@ -56,15 +66,38 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("/service-worker.js") != std::string::npos ||
         request.find("/portal-image") != std::string::npos ||
         request.find("/portal-background") != std::string::npos ||
-        request.find("/icon-") != std::string::npos)
+        request.find("/icon-") != std::string::npos ||
+        // Verificar se é qualquer arquivo estático (HTML, CSS, JS, etc.)
+        (request.find("GET /") != std::string::npos && 
+         (request.find(".html") != std::string::npos ||
+          request.find(".css") != std::string::npos ||
+          request.find(".js") != std::string::npos ||
+          request.find(".json") != std::string::npos ||
+          request.find(".png") != std::string::npos ||
+          request.find(".jpg") != std::string::npos ||
+          request.find(".jpeg") != std::string::npos ||
+          request.find(".svg") != std::string::npos ||
+          request.find(".ico") != std::string::npos)))
     {
+        LOG_INFO("WebPortal::isWebPortalRequest - Accepted as web portal request");
         return true;
     }
+    LOG_INFO("WebPortal::isWebPortalRequest - Rejected (not a web portal request)");
     return false;
 }
 
 bool WebPortal::handleRequest(int clientFd, const std::string &request) const
 {
+    // Log da requisição completa para debug
+    size_t requestPreview = request.length() < 500 ? request.length() : 500;
+    LOG_INFO("WebPortal::handleRequest - Received request (first 500 chars): " + request.substr(0, requestPreview));
+    
+    // Log específico para api.js e style.css
+    if (request.find("api.js") != std::string::npos || request.find("style.css") != std::string::npos)
+    {
+        LOG_INFO("WebPortal::handleRequest - DETECTED api.js or style.css request!");
+    }
+    
     // Ignorar favicon.ico
     if (request.find("GET /favicon.ico") != std::string::npos ||
         request.find("/favicon.ico") != std::string::npos)
@@ -259,34 +292,83 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         return true;
     }
 
-    // PRIMEIRO: Verificar se é arquivo estático (antes de verificar página principal)
-    // Isso é importante porque arquivos estáticos têm prioridade
+    // PRIMEIRO: Verificar se é arquivo estático (antes de verificar páginas HTML)
+    // Isso é importante porque arquivos estáticos têm prioridade sobre páginas
+    LOG_INFO("WebPortal::handleRequest - Extracting file path from request");
     std::string filePath = extractFilePath(request);
+    LOG_INFO("WebPortal::handleRequest - Extracted file path: '" + filePath + "'");
     if (!filePath.empty())
     {
-        LOG_INFO("Serving static file: " + filePath + " (basePrefix: " + basePrefix + ")");
+        LOG_INFO("WebPortal::handleRequest - Serving static file: " + filePath + " (basePrefix: " + basePrefix + ")");
         bool result = serveStaticFile(clientFd, filePath);
         if (result)
         {
+            LOG_INFO("WebPortal::handleRequest - Successfully served static file: " + filePath);
             return true;
         }
-        // Se falhou, continuar para verificar se é página principal
+        else
+        {
+            LOG_WARN("WebPortal::handleRequest - Failed to serve static file: " + filePath + " (404 already sent)");
+            // serveStaticFile já enviou 404, retornar true para indicar que a requisição foi processada
+            return true;
+        }
+    }
+    else
+    {
+        LOG_INFO("WebPortal::handleRequest - No file path extracted from request");
     }
 
-    // Verificar se é página web principal
+    // Verificar se é página específica (recordings.html) - APENAS se não for arquivo estático
+    if (request.find("GET /recordings.html") != std::string::npos ||
+        request.find("/recordings.html") != std::string::npos)
+    {
+        LOG_INFO("WebPortal::handleRequest - Serving recordings.html");
+        std::string webDir = getWebDirectory();
+        std::string recordingsPath = webDir + "/recordings.html";
+        std::string content = readFileContent(recordingsPath);
+        if (!content.empty())
+        {
+            std::string contentType = getContentType("recordings.html");
+            std::ostringstream response;
+            response << "HTTP/1.1 200 OK\r\n";
+            response << "Content-Type: " << contentType << "; charset=utf-8\r\n";
+            response << "Content-Length: " << content.length() << "\r\n";
+            response << "Connection: close\r\n";
+            response << "Cache-Control: no-cache, must-revalidate\r\n";
+            response << "Pragma: no-cache\r\n";
+            response << "\r\n";
+            response << content;
+            std::string responseStr = response.str();
+            sendData(clientFd, responseStr.c_str(), responseStr.length());
+            LOG_INFO("WebPortal::handleRequest - recordings.html served successfully");
+            return true;
+        }
+        else
+        {
+            LOG_ERROR("Failed to read recordings.html from: " + recordingsPath);
+            LOG_ERROR("Web directory: " + webDir);
+            send404(clientFd);
+            return true;
+        }
+    }
+
+    // Verificar se é página web principal (index.html)
+    // Aceita tanto "/" quanto "/?t=..." (com query string)
     if (request.find("GET / ") != std::string::npos ||
         request.find("GET / HTTP/") != std::string::npos ||
+        request.find("GET /?") != std::string::npos ||
         request.find("GET /index.html") != std::string::npos ||
         request.find("/index.html") != std::string::npos)
     {
+        LOG_INFO("WebPortal::handleRequest - Serving main web page (index.html)");
         return serveWebPage(clientFd, basePrefix);
     }
 
+    // Se chegou aqui e não foi um arquivo estático nem página principal, enviar 404
     size_t maxLen = request.length() < 100 ? request.length() : 100;
-    LOG_WARN("No file path extracted from request: " + request.substr(0, maxLen));
-
-    // Requisição não reconhecida
-    return false;
+    LOG_WARN("WebPortal::handleRequest - Request not recognized, sending 404: " + request.substr(0, maxLen));
+    send404(clientFd);
+    return true; // Retornar true para indicar que a requisição foi processada (mesmo que com 404)
 }
 
 bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
@@ -521,22 +603,61 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
 
 bool WebPortal::serveStaticFile(int clientFd, const std::string &filePath) const
 {
+    LOG_INFO("WebPortal::serveStaticFile - Called with filePath: '" + filePath + "'");
     std::string webDir = getWebDirectory();
+    LOG_INFO("WebPortal::serveStaticFile - Web directory: '" + webDir + "'");
     std::string fullPath = webDir + "/" + filePath;
+    LOG_INFO("WebPortal::serveStaticFile - Full path: '" + fullPath + "'");
 
-    LOG_INFO("Attempting to serve static file - filePath: " + filePath + ", fullPath: " + fullPath);
-
-    std::string content = readFileContent(fullPath);
-    if (content.empty())
+    // Verificar se o arquivo existe
+    if (!fs::exists(fullPath))
     {
-        LOG_ERROR("Failed to read static file: " + fullPath);
-        LOG_ERROR("Web directory: " + webDir);
-        LOG_ERROR("Requested file path: " + filePath);
+        LOG_ERROR("WebPortal::serveStaticFile - File does not exist: " + fullPath);
+        LOG_ERROR("WebPortal::serveStaticFile - Web directory exists: " + std::string(fs::exists(webDir) ? "yes" : "no"));
+        if (fs::exists(webDir))
+        {
+            LOG_INFO("WebPortal::serveStaticFile - Listing web directory contents:");
+            try
+            {
+                // Use manual loop for compatibility with custom filesystem implementation
+                fs::directory_iterator it(webDir);
+                fs::directory_iterator end;
+                for (; it != end; ++it)
+                {
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Custom implementation: path() is a method
+                    std::string filename = it.path().filename();
+#else
+                    // std::filesystem: need to dereference iterator
+                    std::string filename = it->path().filename().string();
+#endif
+                    LOG_INFO("WebPortal::serveStaticFile -   " + filename);
+                }
+            }
+            catch (const std::exception &e)
+            {
+                LOG_ERROR("WebPortal::serveStaticFile - Error listing directory: " + std::string(e.what()));
+            }
+        }
         send404(clientFd);
         return false;
     }
 
+    LOG_INFO("WebPortal::serveStaticFile - File exists, reading content");
+    std::string content = readFileContent(fullPath);
+    if (content.empty())
+    {
+        LOG_ERROR("WebPortal::serveStaticFile - Failed to read static file: " + fullPath);
+        LOG_ERROR("WebPortal::serveStaticFile - Web directory: " + webDir);
+        LOG_ERROR("WebPortal::serveStaticFile - Requested file path: " + filePath);
+        send404(clientFd);
+        return false;
+    }
+    
+    LOG_INFO("WebPortal::serveStaticFile - Successfully read file, size: " + std::to_string(content.length()));
+
     std::string contentType = getContentType(filePath);
+    LOG_INFO("WebPortal::serveStaticFile - Content-Type: " + contentType + " for file: " + filePath);
 
     std::ostringstream response;
     response << "HTTP/1.1 200 OK\r\n";
@@ -1053,15 +1174,28 @@ void WebPortal::replaceTextInHTML(std::string &html, const std::string &oldText,
 
 std::string WebPortal::getWebDirectory() const
 {
+    LOG_INFO("WebPortal::getWebDirectory - Starting search for web directory");
+    
     // 1. Variável de ambiente RETROCAPTURE_WEB_PATH (para AppImage) - PRIORIDADE MÁXIMA
     const char *webEnvPath = std::getenv("RETROCAPTURE_WEB_PATH");
     if (webEnvPath)
     {
+        LOG_INFO("WebPortal::getWebDirectory - Found RETROCAPTURE_WEB_PATH env var: " + std::string(webEnvPath));
         fs::path envWebPath(webEnvPath);
         if (fs::exists(envWebPath) && fs::is_directory(envWebPath))
         {
-            return fs::absolute(envWebPath).string();
+            std::string absPath = fs::absolute(envWebPath).string();
+            LOG_INFO("WebPortal::getWebDirectory - Using env path: " + absPath);
+            return absPath;
         }
+        else
+        {
+            LOG_WARN("WebPortal::getWebDirectory - Env path does not exist or is not a directory: " + std::string(webEnvPath));
+        }
+    }
+    else
+    {
+        LOG_INFO("WebPortal::getWebDirectory - RETROCAPTURE_WEB_PATH env var not set");
     }
 
     // 2. Tentar encontrar o diretório web em várias localizações possíveis
@@ -1074,16 +1208,53 @@ std::string WebPortal::getWebDirectory() const
         "../../src/web", // Dois níveis acima + src/web
     };
 
+    LOG_INFO("WebPortal::getWebDirectory - Searching in " + std::to_string(possiblePaths.size()) + " possible paths");
     for (const auto &path : possiblePaths)
     {
+        LOG_INFO("WebPortal::getWebDirectory - Checking path: " + path);
         fs::path webPath(path);
         if (fs::exists(webPath) && fs::is_directory(webPath))
         {
-            return fs::absolute(webPath).string();
+            std::string absPath = fs::absolute(webPath).string();
+            // Normalizar o caminho removendo componentes redundantes como ./
+            fs::path normalizedPath(absPath);
+            absPath = normalizedPath.lexically_normal().string();
+            LOG_INFO("WebPortal::getWebDirectory - Found web directory at: " + absPath);
+            
+            // Listar conteúdo do diretório para debug
+            try
+            {
+                LOG_INFO("WebPortal::getWebDirectory - Directory contents:");
+                // Use manual loop for compatibility with custom filesystem implementation
+                fs::directory_iterator it(webPath);
+                fs::directory_iterator end;
+                for (; it != end; ++it)
+                {
+#if defined(_WIN32) && defined(__GNUC__) && __GNUC__ < 8
+                    // Custom implementation: path() is a method
+                    std::string filename = it.path().filename();
+#else
+                    // std::filesystem: need to dereference iterator
+                    std::string filename = it->path().filename().string();
+#endif
+                    LOG_INFO("WebPortal::getWebDirectory -   " + filename);
+                }
+            }
+            catch (const std::exception &e)
+            {
+                LOG_WARN("WebPortal::getWebDirectory - Error listing directory: " + std::string(e.what()));
+            }
+            
+            return absPath;
+        }
+        else
+        {
+            LOG_INFO("WebPortal::getWebDirectory - Path does not exist or is not a directory: " + path);
         }
     }
 
     // Fallback: tentar usar caminho relativo ao executável
+    LOG_WARN("WebPortal::getWebDirectory - No web directory found, using fallback: ./web");
     return "./web";
 }
 
@@ -1159,11 +1330,14 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     // Exemplo: "GET /style.css HTTP/1.1" -> "style.css"
     // Exemplo: "GET /retrocapture/style.css HTTP/1.1" -> "style.css" (remove prefixo)
 
+    LOG_INFO("WebPortal::extractFilePath - Processing request");
     size_t getPos = request.find("GET /");
     if (getPos == std::string::npos)
     {
+        LOG_INFO("WebPortal::extractFilePath - No 'GET /' found in request");
         return "";
     }
+    LOG_INFO("WebPortal::extractFilePath - Found 'GET /' at position: " + std::to_string(getPos));
 
     size_t startPos = getPos + 5; // Após "GET /"
     size_t endPos = request.find(" ", startPos);
@@ -1181,21 +1355,46 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     }
 
     std::string path = request.substr(startPos, endPos - startPos);
+    LOG_INFO("WebPortal::extractFilePath - Extracted path: '" + path + "' (startPos=" + std::to_string(startPos) + ", endPos=" + std::to_string(endPos) + ")");
 
     // Remover query string se existir
     size_t queryPos = path.find('?');
     if (queryPos != std::string::npos)
     {
         path = path.substr(0, queryPos);
+        LOG_INFO("WebPortal::extractFilePath - Removed query string, path now: '" + path + "'");
+    }
+
+    // Se o path está vazio ou é apenas "/", não é um arquivo estático
+    if (path.empty() || path == "/")
+    {
+        LOG_INFO("WebPortal::extractFilePath - Path is empty or root, not a static file");
+        return "";
+    }
+
+    // Log específico para api.js e style.css
+    if (path.find("api.js") != std::string::npos || path.find("style.css") != std::string::npos)
+    {
+        LOG_INFO("WebPortal::extractFilePath - DETECTED api.js or style.css in path: '" + path + "'");
     }
 
     // Verificar se é um arquivo estático conhecido
+    // Excluir index.html que é tratado separadamente
+    bool isIndexHtml = (path == "index.html" || path == "/index.html" || 
+                        path.find("/index.html") != std::string::npos);
+    
     bool isStaticFile = (path.find("style.css") != std::string::npos ||
                          path.find(".css") != std::string::npos ||
-                         path.find(".js") != std::string::npos);
+                         path.find(".js") != std::string::npos ||
+                         (path.find(".html") != std::string::npos && !isIndexHtml));
+
+    LOG_INFO("WebPortal::extractFilePath - isIndexHtml: " + std::string(isIndexHtml ? "true" : "false") + 
+             ", isStaticFile: " + std::string(isStaticFile ? "true" : "false") + 
+             ", path: '" + path + "'");
 
     if (!isStaticFile)
     {
+        LOG_INFO("WebPortal::extractFilePath - Not a static file, returning empty string");
         return "";
     }
 
@@ -1203,6 +1402,7 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     if (!path.empty() && path[0] == '/')
     {
         path = path.substr(1);
+        LOG_INFO("WebPortal::extractFilePath - Removed leading slash, path now: '" + path + "'");
     }
 
     // Remover prefixo comum se existir (ex: "retrocapture/style.css" -> "style.css")
@@ -1212,12 +1412,14 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     {
         if (path.find(prefix) == 0)
         {
+            LOG_INFO("WebPortal::extractFilePath - Removing prefix: '" + prefix + "' from path: '" + path + "'");
             path = path.substr(prefix.length());
             // Remover barra inicial se ainda existir
             if (!path.empty() && path[0] == '/')
             {
                 path = path.substr(1);
             }
+            LOG_INFO("WebPortal::extractFilePath - Path after prefix removal: '" + path + "'");
             break;
         }
     }
@@ -1226,9 +1428,12 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     size_t lastSlash = path.find_last_of('/');
     if (lastSlash != std::string::npos && lastSlash < path.length() - 1)
     {
+        LOG_INFO("WebPortal::extractFilePath - Extracting filename from path: '" + path + "'");
         path = path.substr(lastSlash + 1);
+        LOG_INFO("WebPortal::extractFilePath - Filename extracted: '" + path + "'");
     }
 
+    LOG_INFO("WebPortal::extractFilePath - Returning final path: '" + path + "'");
     return path;
 }
 

@@ -8,7 +8,7 @@ cmake-build-*/
 
 # Executáveis
 bin/
-retrocapture
+./retrocapture
 
 # IDE
 .vscode/
@@ -42,8 +42,8 @@ appimagetool-x86_64.AppImage
 linuxdeploy-plugins/
 
 # Linux ARM
-build-linux-armv7/
-build-linux-arm64/
+build-linux-arm32v7/
+build-linux-arm64v8/
 
 # Linux x86_64
 build-linux-x86_64/

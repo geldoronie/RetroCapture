@@ -3310,30 +3310,6 @@ std::string ShaderEngine::convertSlangToGLSL(const std::string &slangSource, boo
     // Limpar linhas vazias múltiplas
     result = std::regex_replace(result, std::regex("\n\\s*\n\\s*\n"), "\n\n");
 
-    // DEBUG: Salvar shader convertido para análise (apenas pass2 fragment)
-    if (basePath.find("crt-guest-advanced-hd-pass2") != std::string::npos && !isVertex)
-    {
-        std::ofstream out("debug_pass10_fragment.glsl");
-        if (out)
-        {
-            out << result;
-            out.close();
-            LOG_INFO("Shader pass 10 fragment salvo em: debug_pass10_fragment.glsl");
-            // Mostrar linhas ao redor da 295
-            std::istringstream stream(result);
-            std::string line;
-            int lineNum = 1;
-            while (std::getline(stream, line) && lineNum < 300)
-            {
-                if (lineNum >= 290 && lineNum <= 300)
-                {
-                    LOG_INFO("Linha " + std::to_string(lineNum) + ": " + line);
-                }
-                lineNum++;
-            }
-        }
-    }
-
     return result;
 }
 

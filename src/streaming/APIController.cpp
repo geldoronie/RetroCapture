@@ -5,11 +5,21 @@
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
 #include "../utils/PresetManager.h"
+#include "../recording/RecordingSettings.h"
+#include "../recording/RecordingMetadata.h"
+#include "../audio/IAudioCapture.h"
+#ifdef __linux__
+#include "../audio/AudioCapturePulse.h"
+#endif
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <fstream>
+#include <cstdint>
+#include <climits>
+#include "../utils/FilesystemCompat.h"
 
 // Simple JSON helper functions
 namespace
@@ -65,6 +75,11 @@ namespace
         return std::to_string(value);
     }
 
+    std::string jsonNumber(uint64_t value)
+    {
+        return std::to_string(value);
+    }
+
     std::string jsonNumber(float value)
     {
         std::ostringstream oss;
@@ -105,7 +120,7 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
 
     if (method == "GET")
     {
-        return handleGET(clientFd, path);
+        return handleGET(clientFd, path, request);
     }
     else if (method == "POST" || method == "PUT")
     {
@@ -121,13 +136,21 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
     }
     else if (method == "DELETE")
     {
-        // Handle DELETE requests (e.g., /api/v1/presets/{name})
+        // Handle DELETE requests (e.g., /api/v1/presets/{name}, /api/v1/recordings/{id})
         if (path.find("/api/v1/presets/") == 0)
         {
             std::string presetName = path.substr(16); // Length of "/api/v1/presets/"
             if (!presetName.empty())
             {
                 return handleDeletePreset(clientFd, presetName);
+            }
+        }
+        else if (path.find("/api/v1/recordings/") == 0)
+        {
+            std::string recordingId = path.substr(19); // Length of "/api/v1/recordings/"
+            if (!recordingId.empty())
+            {
+                return handleDeleteRecording(clientFd, recordingId);
             }
         }
         send404(clientFd);
@@ -207,6 +230,62 @@ std::string APIController::extractBody(const std::string &request) const
     return request.substr(bodyStart);
 }
 
+std::pair<uint64_t, uint64_t> APIController::extractRange(const std::string &request, uint64_t fileSize) const
+{
+    // Procurar pelo header Range: bytes=start-end
+    size_t rangePos = request.find("Range: bytes=");
+    if (rangePos == std::string::npos)
+    {
+        rangePos = request.find("range: bytes=");
+    }
+    if (rangePos == std::string::npos)
+    {
+        // Return special value to indicate no range (use UINT64_MAX as marker)
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    rangePos += 13; // Skip "Range: bytes="
+    size_t rangeEnd = request.find("\r\n", rangePos);
+    if (rangeEnd == std::string::npos)
+    {
+        rangeEnd = request.find("\n", rangePos);
+    }
+    if (rangeEnd == std::string::npos)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    std::string rangeStr = request.substr(rangePos, rangeEnd - rangePos);
+    
+    // Parse "start-end" ou "start-"
+    size_t dashPos = rangeStr.find('-');
+    if (dashPos == std::string::npos)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    uint64_t start = 0;
+    uint64_t end = fileSize - 1;
+
+    if (dashPos > 0)
+    {
+        start = std::stoull(rangeStr.substr(0, dashPos));
+    }
+
+    if (dashPos < rangeStr.length() - 1)
+    {
+        end = std::stoull(rangeStr.substr(dashPos + 1));
+    }
+
+    // Validar range
+    if (start >= fileSize || end >= fileSize || start > end)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
+    }
+
+    return std::make_pair(start, end);
+}
+
 void APIController::sendJSONResponse(int clientFd, int statusCode, const std::string &json) const
 {
     std::ostringstream response;
@@ -241,7 +320,7 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     return m_httpServer->sendData(clientFd, data, size);
 }
 
-bool APIController::handleGET(int clientFd, const std::string &path)
+bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
     if (path == "/api/v1/source")
     {
@@ -274,6 +353,49 @@ bool APIController::handleGET(int clientFd, const std::string &path)
     else if (path == "/api/v1/streaming/settings")
     {
         return handleGETStreamingSettings(clientFd);
+    }
+    else if (path == "/api/v1/recording/settings")
+    {
+        return handleGETRecordingSettings(clientFd);
+    }
+    else if (path == "/api/v1/recording/status")
+    {
+        return handleGETRecordingStatus(clientFd);
+    }
+    else if (path == "/api/v1/recordings")
+    {
+        return handleGETRecordings(clientFd);
+    }
+    else if (path.find("/api/v1/recordings/") == 0)
+    {
+        std::string remaining = path.substr(19); // Length of "/api/v1/recordings/"
+        
+        // Check if it's /api/v1/recordings/{id}/file
+        size_t filePos = remaining.find("/file");
+        if (filePos != std::string::npos)
+        {
+            // Extract recording ID from path: /api/v1/recordings/{id}/file
+            std::string recordingId = remaining.substr(0, filePos);
+            if (!recordingId.empty())
+            {
+                return handleGETRecordingFile(clientFd, recordingId, request);
+            }
+        }
+        // Check if it's /api/v1/recordings/{id}/thumbnail
+        else if (remaining.find("/thumbnail") != std::string::npos)
+        {
+            size_t thumbPos = remaining.find("/thumbnail");
+            std::string recordingId = remaining.substr(0, thumbPos);
+            if (!recordingId.empty())
+            {
+                return handleGETRecordingThumbnail(clientFd, recordingId);
+            }
+        }
+        else if (!remaining.empty())
+        {
+            // Extract recording ID from path: /api/v1/recordings/{id}
+            return handleGETRecording(clientFd, remaining);
+        }
     }
     else if (path == "/api/v1/v4l2/devices")
     {
@@ -316,6 +438,14 @@ bool APIController::handleGET(int clientFd, const std::string &path)
             return handleGETPreset(clientFd, presetName);
         }
     }
+    else if (path == "/api/v1/audio/input-sources")
+    {
+        return handleGETAudioInputSources(clientFd);
+    }
+    else if (path == "/api/v1/audio/status")
+    {
+        return handleGETAudioStatus(clientFd);
+    }
 
     send404(clientFd);
     return true;
@@ -355,6 +485,14 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleSetStreamingControl(clientFd, body);
     }
+    else if (path == "/api/v1/recording/settings")
+    {
+        return handleSetRecordingSettings(clientFd, body);
+    }
+    else if (path == "/api/v1/recording/control")
+    {
+        return handleSetRecordingControl(clientFd, body);
+    }
     else if (path == "/api/v1/v4l2/control")
     {
         return handleSetV4L2Control(clientFd, body);
@@ -388,6 +526,14 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
             return handleApplyPreset(clientFd, requestBody);
         }
     }
+    else if (path == "/api/v1/audio/input-source")
+    {
+        return handleSetAudioInputSource(clientFd, body);
+    }
+    else if (path == "/api/v1/audio/disconnect-input")
+    {
+        return handleDisconnectAudioInput(clientFd);
+    }
 
     send404(clientFd);
     return true;
@@ -395,7 +541,17 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
 
 bool APIController::handlePUT(int clientFd, const std::string &path, const std::string &body)
 {
-    // PUT usa os mesmos handlers que POST
+    // Handle PUT /api/v1/recordings/{id} for renaming
+    if (path.find("/api/v1/recordings/") == 0)
+    {
+        std::string recordingId = path.substr(19); // Length of "/api/v1/recordings/"
+        if (!recordingId.empty() && recordingId.find("/") == std::string::npos)
+        {
+            return handlePUTRecording(clientFd, recordingId, body);
+        }
+    }
+    
+    // PUT usa os mesmos handlers que POST para outros endpoints
     return handlePOST(clientFd, path, body);
 }
 
@@ -767,7 +923,6 @@ bool APIController::handleSetSource(int clientFd, const std::string &body)
             int sourceTypeInt = json["type"].get<int>();
             UIManager::SourceType sourceType = static_cast<UIManager::SourceType>(sourceTypeInt);
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerSourceTypeChange(sourceType);
 
             std::ostringstream response;
@@ -890,7 +1045,6 @@ bool APIController::handleSetCaptureResolution(int clientFd, const std::string &
             uint32_t width = json["width"].get<uint32_t>();
             uint32_t height = json["height"].get<uint32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerResolutionChange(width, height);
 
             std::ostringstream response;
@@ -926,7 +1080,6 @@ bool APIController::handleSetCaptureFPS(int clientFd, const std::string &body)
         {
             uint32_t fps = json["fps"].get<uint32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerFramerateChange(fps);
 
             std::ostringstream response;
@@ -1216,7 +1369,6 @@ bool APIController::handleSetV4L2Control(int clientFd, const std::string &body)
             std::string name = json["name"].get<std::string>();
             int32_t value = json["value"].get<int32_t>();
 
-            // Disparar callback via método auxiliar do UIManager
             m_uiManager->triggerV4L2ControlChange(name, value);
 
             std::ostringstream response;
@@ -1540,3 +1692,701 @@ bool APIController::handleDeletePreset(int clientFd, const std::string& presetNa
         return true;
     }
 }
+
+// Recording handlers
+bool APIController::handleGETRecordingSettings(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    std::ostringstream json;
+    json << "{"
+         << "\"width\": " << jsonNumber(m_uiManager->getRecordingWidth()) << ", "
+         << "\"height\": " << jsonNumber(m_uiManager->getRecordingHeight()) << ", "
+         << "\"fps\": " << jsonNumber(m_uiManager->getRecordingFps()) << ", "
+         << "\"bitrate\": " << jsonNumber(m_uiManager->getRecordingBitrate()) << ", "
+         << "\"audioBitrate\": " << jsonNumber(m_uiManager->getRecordingAudioBitrate()) << ", "
+         << "\"codec\": " << jsonString(m_uiManager->getRecordingVideoCodec()) << ", "
+         << "\"audioCodec\": " << jsonString(m_uiManager->getRecordingAudioCodec()) << ", "
+         << "\"h264Preset\": " << jsonString(m_uiManager->getRecordingH264Preset()) << ", "
+         << "\"h265Preset\": " << jsonString(m_uiManager->getRecordingH265Preset()) << ", "
+         << "\"h265Profile\": " << jsonString(m_uiManager->getRecordingH265Profile()) << ", "
+         << "\"h265Level\": " << jsonString(m_uiManager->getRecordingH265Level()) << ", "
+         << "\"vp8Speed\": " << jsonNumber(m_uiManager->getRecordingVP8Speed()) << ", "
+         << "\"vp9Speed\": " << jsonNumber(m_uiManager->getRecordingVP9Speed()) << ", "
+         << "\"container\": " << jsonString(m_uiManager->getRecordingContainer()) << ", "
+         << "\"outputPath\": " << jsonString(m_uiManager->getRecordingOutputPath()) << ", "
+         << "\"filenameTemplate\": " << jsonString(m_uiManager->getRecordingFilenameTemplate()) << ", "
+         << "\"includeAudio\": " << (m_uiManager->getRecordingIncludeAudio() ? "true" : "false")
+         << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleGETRecordingStatus(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    bool isRecording = m_uiManager->getRecordingActive();
+    uint64_t durationUs = m_uiManager->getRecordingDurationUs();
+    uint64_t fileSize = m_uiManager->getRecordingFileSize();
+    std::string filename = m_uiManager->getRecordingFilename();
+
+    std::ostringstream json;
+    json << "{"
+         << "\"isRecording\": " << (isRecording ? "true" : "false") << ", "
+         << "\"duration\": " << jsonNumber(durationUs) << ", "
+         << "\"fileSize\": " << jsonNumber(fileSize) << ", "
+         << "\"currentFile\": " << jsonString(filename);
+    
+    if (isRecording)
+    {
+        json << ", \"settings\": {"
+             << "\"width\": " << jsonNumber(m_uiManager->getRecordingWidth()) << ", "
+             << "\"height\": " << jsonNumber(m_uiManager->getRecordingHeight()) << ", "
+             << "\"fps\": " << jsonNumber(m_uiManager->getRecordingFps()) << ", "
+             << "\"codec\": " << jsonString(m_uiManager->getRecordingVideoCodec())
+             << "}";
+    }
+    
+    json << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleGETRecordings(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        auto recordings = m_application->listRecordings();
+        
+        std::ostringstream json;
+        json << "{\"recordings\": [";
+        for (size_t i = 0; i < recordings.size(); ++i)
+        {
+            if (i > 0)
+                json << ", ";
+            json << recordings[i].toJSON();
+        }
+        json << "], \"total\": " << recordings.size() << "}";
+        
+        sendJSONResponse(clientFd, 200, json.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error listing recordings: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETRecording(int clientFd, const std::string& recordingId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        auto recordings = m_application->listRecordings();
+        auto it = std::find_if(recordings.begin(), recordings.end(),
+                              [&recordingId](const RecordingMetadata& m) { return m.id == recordingId; });
+        
+        if (it == recordings.end())
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+        
+        sendJSONResponse(clientFd, 200, it->toJSON().dump());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error getting recording: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleSetRecordingSettings(int clientFd, const std::string& body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+
+        if (json.contains("width"))
+            m_uiManager->triggerRecordingWidthChange(json["width"].get<uint32_t>());
+        if (json.contains("height"))
+            m_uiManager->triggerRecordingHeightChange(json["height"].get<uint32_t>());
+        if (json.contains("fps"))
+            m_uiManager->triggerRecordingFpsChange(json["fps"].get<uint32_t>());
+        if (json.contains("bitrate"))
+            m_uiManager->triggerRecordingBitrateChange(json["bitrate"].get<uint32_t>());
+        if (json.contains("audioBitrate"))
+            m_uiManager->triggerRecordingAudioBitrateChange(json["audioBitrate"].get<uint32_t>());
+        if (json.contains("codec"))
+            m_uiManager->triggerRecordingVideoCodecChange(json["codec"].get<std::string>());
+        if (json.contains("audioCodec"))
+            m_uiManager->triggerRecordingAudioCodecChange(json["audioCodec"].get<std::string>());
+        if (json.contains("h264Preset"))
+            m_uiManager->triggerRecordingH264PresetChange(json["h264Preset"].get<std::string>());
+        if (json.contains("h265Preset"))
+            m_uiManager->triggerRecordingH265PresetChange(json["h265Preset"].get<std::string>());
+        if (json.contains("h265Profile"))
+            m_uiManager->triggerRecordingH265ProfileChange(json["h265Profile"].get<std::string>());
+        if (json.contains("h265Level"))
+            m_uiManager->triggerRecordingH265LevelChange(json["h265Level"].get<std::string>());
+        if (json.contains("vp8Speed"))
+            m_uiManager->triggerRecordingVP8SpeedChange(json["vp8Speed"].get<int>());
+        if (json.contains("vp9Speed"))
+            m_uiManager->triggerRecordingVP9SpeedChange(json["vp9Speed"].get<int>());
+        if (json.contains("container"))
+            m_uiManager->triggerRecordingContainerChange(json["container"].get<std::string>());
+        if (json.contains("outputPath"))
+            m_uiManager->triggerRecordingOutputPathChange(json["outputPath"].get<std::string>());
+        if (json.contains("filenameTemplate"))
+            m_uiManager->triggerRecordingFilenameTemplateChange(json["filenameTemplate"].get<std::string>());
+        if (json.contains("includeAudio"))
+            m_uiManager->triggerRecordingIncludeAudioChange(json["includeAudio"].get<bool>());
+
+        sendJSONResponse(clientFd, 200, "{\"success\": true}");
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleSetRecordingControl(int clientFd, const std::string& body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        
+        if (!json.contains("action"))
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'action' field");
+            return true;
+        }
+
+        std::string action = json["action"].get<std::string>();
+        bool start = (action == "start");
+
+        m_uiManager->triggerRecordingStartStop(start);
+
+        std::ostringstream response;
+        response << "{\"success\": true, \"action\": " << jsonString(action) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleDeleteRecording(int clientFd, const std::string& recordingId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        if (!m_application->deleteRecording(recordingId))
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        std::ostringstream response;
+        response << "{\"success\": true, \"id\": " << jsonString(recordingId) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error deleting recording: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handlePUTRecording(int clientFd, const std::string& recordingId, const std::string& body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (!json.contains("name") || !json["name"].is_string())
+        {
+            sendErrorResponse(clientFd, 400, "Missing or invalid 'name' field");
+            return true;
+        }
+
+        std::string newName = json["name"].get<std::string>();
+        if (newName.empty())
+        {
+            sendErrorResponse(clientFd, 400, "Name cannot be empty");
+            return true;
+        }
+
+        if (!m_application->renameRecording(recordingId, newName))
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        std::ostringstream response;
+        response << "{\"success\": true, \"id\": " << jsonString(recordingId) 
+                 << ", \"name\": " << jsonString(newName) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error renaming recording: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETRecordingFile(int clientFd, const std::string& recordingId, const std::string& request)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        std::string filepath = m_application->getRecordingPath(recordingId);
+        if (filepath.empty())
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        // Check if file exists
+        if (!fs::exists(filepath))
+        {
+            sendErrorResponse(clientFd, 404, "Recording file not found");
+            return true;
+        }
+
+        // Get file size
+        uint64_t fileSize = fs::file_size(filepath);
+
+        // Determine content type based on extension
+        std::string contentType = "video/mp4"; // Default
+        fs::path filePath(filepath);
+        std::string ext = filePath.extension();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        
+        if (ext == ".mkv")
+            contentType = "video/x-matroska";
+        else if (ext == ".webm")
+            contentType = "video/webm";
+        else if (ext == ".mp4")
+            contentType = "video/mp4";
+
+        // Check for Range request
+        auto range = extractRange(request, fileSize);
+        // UINT64_MAX indicates no range header
+        bool isRangeRequest = (range.first != UINT64_MAX && range.second != UINT64_MAX);
+
+        // Open file
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            sendErrorResponse(clientFd, 500, "Failed to open recording file");
+            return true;
+        }
+
+        uint64_t startByte = 0;
+        uint64_t endByte = fileSize - 1;
+        uint64_t contentLength = fileSize;
+
+        if (isRangeRequest)
+        {
+            startByte = range.first;
+            endByte = range.second;
+            contentLength = endByte - startByte + 1;
+        }
+
+        // Seek to start position
+        file.seekg(startByte, std::ios::beg);
+
+        // Prepare response headers
+        std::ostringstream response;
+        if (isRangeRequest)
+        {
+            // 206 Partial Content
+            response << "HTTP/1.1 206 Partial Content\r\n";
+            response << "Content-Range: bytes " << startByte << "-" << endByte << "/" << fileSize << "\r\n";
+        }
+        else
+        {
+            // 200 OK
+            response << "HTTP/1.1 200 OK\r\n";
+        }
+
+        response << "Content-Type: " << contentType << "\r\n";
+        response << "Content-Length: " << contentLength << "\r\n";
+        response << "Accept-Ranges: bytes\r\n";
+        response << "Content-Disposition: inline; filename=\"" << fs_helper::get_filename_string(filePath) << "\"\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+
+        std::string headerStr = response.str();
+        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
+        if (sent < 0)
+        {
+            file.close();
+            return true;
+        }
+
+        // Stream file content in chunks (64KB at a time)
+        const size_t chunkSize = 64 * 1024; // 64KB chunks
+        std::vector<char> buffer(chunkSize);
+        uint64_t remaining = contentLength;
+
+        while (remaining > 0 && file.good())
+        {
+            size_t toRead = (remaining > chunkSize) ? chunkSize : static_cast<size_t>(remaining);
+            file.read(buffer.data(), toRead);
+            size_t bytesRead = file.gcount();
+
+            if (bytesRead == 0)
+                break;
+
+            sent = sendData(clientFd, buffer.data(), bytesRead);
+            if (sent < 0)
+            {
+                file.close();
+                return true;
+            }
+
+            remaining -= bytesRead;
+        }
+
+        file.close();
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error serving recording file: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETRecordingThumbnail(int clientFd, const std::string& recordingId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        auto recordings = m_application->listRecordings();
+        auto it = std::find_if(recordings.begin(), recordings.end(),
+                              [&recordingId](const RecordingMetadata& m) { return m.id == recordingId; });
+        
+        if (it == recordings.end())
+        {
+            sendErrorResponse(clientFd, 404, "Recording not found");
+            return true;
+        }
+
+        // Check if thumbnail exists
+        if (it->thumbnailPath.empty() || !fs::exists(it->thumbnailPath))
+        {
+            sendErrorResponse(clientFd, 404, "Thumbnail not found");
+            return true;
+        }
+
+        // Get file size
+        uint64_t fileSize = fs::file_size(it->thumbnailPath);
+
+        // Open file
+        std::ifstream file(it->thumbnailPath, std::ios::binary);
+        if (!file.is_open())
+        {
+            sendErrorResponse(clientFd, 500, "Failed to open thumbnail file");
+            return true;
+        }
+
+        // Read file content
+        std::vector<char> buffer(fileSize);
+        file.read(buffer.data(), fileSize);
+        file.close();
+
+        // Prepare response headers
+        std::ostringstream response;
+        response << "HTTP/1.1 200 OK\r\n";
+        response << "Content-Type: image/jpeg\r\n";
+        response << "Content-Length: " << fileSize << "\r\n";
+        response << "Cache-Control: public, max-age=3600\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+
+        std::string headerStr = response.str();
+        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
+        if (sent >= 0)
+        {
+            sent = sendData(clientFd, buffer.data(), fileSize);
+        }
+
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        sendErrorResponse(clientFd, 500, "Error serving thumbnail: " + std::string(e.what()));
+        return true;
+    }
+}
+
+// Audio API endpoints
+bool APIController::handleGETAudioInputSources(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        nlohmann::json response;
+        response["sources"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+    if (pulseCapture)
+    {
+        std::vector<AudioDeviceInfo> sources = pulseCapture->listInputSources();
+        nlohmann::json response;
+        response["sources"] = nlohmann::json::array();
+        
+        for (const auto &source : sources)
+        {
+            nlohmann::json sourceJson;
+            sourceJson["id"] = source.id;
+            sourceJson["name"] = source.name;
+            sourceJson["description"] = source.description;
+            sourceJson["available"] = source.available;
+            response["sources"].push_back(sourceJson);
+        }
+        
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+#endif
+
+    // Fallback: return empty list
+    nlohmann::json response;
+    response["sources"] = nlohmann::json::array();
+    sendJSONResponse(clientFd, 200, response.dump());
+    return true;
+}
+
+
+bool APIController::handleGETAudioStatus(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        nlohmann::json response;
+        response["available"] = false;
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+
+    nlohmann::json response;
+    response["available"] = true;
+    response["open"] = audioCapture->isOpen();
+    response["sampleRate"] = audioCapture->getSampleRate();
+    response["channels"] = audioCapture->getChannels();
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+    if (pulseCapture)
+    {
+        response["currentInputSource"] = pulseCapture->getCurrentInputSource();
+    }
+    else
+    {
+        response["currentInputSource"] = "";
+    }
+#else
+    response["currentInputSource"] = "";
+#endif
+
+    sendJSONResponse(clientFd, 200, response.dump());
+    return true;
+}
+
+bool APIController::handleSetAudioInputSource(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        sendErrorResponse(clientFd, 400, "Audio capture not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        std::string sourceId = json.value("sourceId", "");
+        
+        if (sourceId.empty())
+        {
+            sendErrorResponse(clientFd, 400, "sourceId is required");
+            return true;
+        }
+
+#ifdef __linux__
+        AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+        if (pulseCapture)
+        {
+            if (pulseCapture->connectInputSource(sourceId))
+            {
+                if (m_uiManager)
+                {
+                    m_uiManager->setAudioInputSourceId(sourceId);
+                    m_uiManager->saveConfig();
+                }
+                
+                nlohmann::json response;
+                response["success"] = true;
+                response["message"] = "Input source connected";
+                sendJSONResponse(clientFd, 200, response.dump());
+                return true;
+            }
+            else
+            {
+                sendErrorResponse(clientFd, 500, "Failed to connect input source");
+                return true;
+            }
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
+            return true;
+        }
+#else
+        sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
+        return true;
+#endif
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleDisconnectAudioInput(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        sendErrorResponse(clientFd, 400, "Audio capture not available");
+        return true;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+    if (pulseCapture)
+    {
+        pulseCapture->disconnectInputSource();
+        
+        if (m_uiManager)
+        {
+            m_uiManager->setAudioInputSourceId("");
+            m_uiManager->saveConfig();
+        }
+        
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Input source disconnected";
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    else
+    {
+        sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
+        return true;
+    }
+#else
+    sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
+    return true;
+#endif
+}
+

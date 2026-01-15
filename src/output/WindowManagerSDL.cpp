@@ -500,4 +500,37 @@ bool WindowManagerSDL::isKeyPressed(int keyCode) const
     return state[scancode] != 0;
 }
 
+void WindowManagerSDL::setCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    // Simple cache to avoid unnecessary calls
+    if (m_cursorStateInitialized && m_cursorVisible == visible)
+    {
+        return;
+    }
+    
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
+}
+
+void WindowManagerSDL::forceSetCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    // Force update ignoring cache (only used when visibility actually changes)
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
+}
+
 #endif // USE_SDL2

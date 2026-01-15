@@ -827,6 +827,8 @@ int main(int argc, char *argv[])
     LOG_INFO("Source type: " + sourceType);
     
     // Hide UI if requested (same as pressing F12)
+    // IMPORTANT: This must be done AFTER init() but BEFORE run()
+    // so cursor visibility is set correctly on startup
     if (hideUI && app.getUIManager())
     {
         app.getUIManager()->setVisible(false);

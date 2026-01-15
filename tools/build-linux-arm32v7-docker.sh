@@ -45,12 +45,12 @@ if [ "$BUILD_WITH_SDL2_ARG" = "SDL2" ] || [ "$BUILD_WITH_SDL2_ARG" = "sdl2" ] ||
     echo ""
 fi
 
-echo "🐳 RetroCapture - Build para Linux ARM64 usando Docker"
+echo "🐳 RetroCapture - Build para Linux ARM32v7 usando Docker"
 echo "======================================================"
 echo "📦 Build type: $BUILD_TYPE"
-echo "🏗️  Arquitetura: ARM64 (aarch64) - Raspberry Pi 4/5"
-echo "🔧 Base: arm64v8/debian:trixie (FFmpeg 6.1)"
-echo "✅ Compatível com: Debian Trixie ARM64, Raspberry Pi OS 64-bit"
+echo "🏗️  Arquitetura: ARM32v7 (armhf) - Raspberry Pi 3"
+echo "🔧 Base: arm32v7/debian:trixie (FFmpeg 6.1)"
+echo "✅ Compatível com: Debian Trixie, Raspberry Pi OS (Debian Trixie)"
 echo ""
 
 if ! command -v docker &> /dev/null; then
@@ -96,8 +96,15 @@ if ! $DOCKER_CMD buildx version &>/dev/null; then
     echo "     sudo apt-get update"
     echo "     sudo apt-get install -y docker-buildx"
     echo ""
+    echo "   Ou se você tem Docker Desktop/versão mais recente:"
+    echo "     O Buildx já deve estar incluído. Verifique com:"
+    echo "     docker buildx version"
+    echo ""
     echo "   Após instalar, reinicie o Docker:"
     echo "     sudo systemctl restart docker"
+    echo ""
+    echo "   💡 Alternativa: Se você tem acesso a uma Raspberry Pi 3,"
+    echo "      pode fazer o build diretamente nela (muito mais rápido!)"
     echo ""
     exit 1
 fi
@@ -107,8 +114,8 @@ BUILDX_VERSION=$($DOCKER_CMD buildx version 2>/dev/null | head -1)
 echo "   ✅ Docker Buildx encontrado: $BUILDX_VERSION"
 
 # Verificar se QEMU está disponível para emulação ARM
-if [ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
-    echo "⚠️  QEMU para ARM64 não está configurado no sistema"
+if [ ! -f /proc/sys/fs/binfmt_misc/qemu-arm ]; then
+    echo "⚠️  QEMU para ARM não está configurado no sistema"
     echo "   Tentando instalar qemu-user-static..."
     if command -v apt-get &>/dev/null; then
         echo "   Execute: sudo apt-get install -y qemu-user-static binfmt-support"
@@ -118,7 +125,7 @@ if [ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
 fi
 
 # Criar builder multiplataforma se não existir
-BUILDER_NAME="retrocapture-arm64-builder"
+BUILDER_NAME="retrocapture-arm32v7-builder"
 echo "   📦 Configurando builder multiplataforma..."
 
 # Verificar se o builder já existe
@@ -148,7 +155,7 @@ CURRENT_BUILDER=$($DOCKER_CMD buildx ls 2>/dev/null | grep '*' | awk '{print $1}
 echo "   ✅ Builder ativo: $CURRENT_BUILDER"
 
 echo ""
-echo "📦 Construindo imagem Docker para ARM64..."
+echo "📦 Construindo imagem Docker para ARM32v7..."
 if [ -n "$FORCE_REBUILD" ]; then
     echo "   🔄 Forçando rebuild completo (sem cache)..."
     echo "   Isso pode demorar vários minutos..."
@@ -156,26 +163,28 @@ if [ -n "$FORCE_REBUILD" ]; then
 else
     echo "   Isso pode demorar alguns minutos na primeira vez..."
 fi
-echo "   (Usando arm64v8/debian:trixie - FFmpeg 6.1)"
+echo "   (Usando arm32v7/debian:trixie - FFmpeg 6.1)"
 echo "   (Cross-compilation via QEMU em sistema x86_64)"
 echo ""
 
 # Usar docker buildx build diretamente com plataforma específica
-IMAGE_NAME="retrocapture-linux-arm64-builder"
+IMAGE_NAME="retrocapture-linux-arm32v7-builder"
 IMAGE_TAG="$IMAGE_NAME:latest"
+echo "   (Isso pode demorar bastante na primeira vez devido à emulação QEMU)"
+echo ""
 
 # Construir a imagem usando buildx com --load
 # Nota: --load requer QEMU configurado via binfmt_misc
-BUILD_ARGS="--platform linux/arm64 --file Dockerfile.linux-arm64 --tag $IMAGE_TAG --load"
+BUILD_ARGS="--platform linux/arm/v7 --file Dockerfile.linux-arm32v7 --tag $IMAGE_TAG --load"
 if [ -n "$FORCE_REBUILD" ]; then
     BUILD_ARGS="$BUILD_ARGS --no-cache"
 fi
 
-if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-arm64-image.log 2>&1; then
+if ! $DOCKER_CMD buildx build $BUILD_ARGS . > build-linux-arm32v7-image.log 2>&1; then
     echo "❌ Falha ao construir imagem Docker!"
-    echo "   Verifique build-linux-arm64-image.log para detalhes"
+    echo "   Verifique build-linux-arm32v7-image.log para detalhes"
     echo ""
-    echo "💡 Solução: Configure QEMU para emulação ARM64 executando:"
+    echo "💡 Solução: Configure QEMU para emulação ARM executando:"
     echo "   sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes"
     echo ""
     echo "   Ou instale manualmente:"
@@ -186,7 +195,7 @@ fi
 
 echo ""
 echo "✅ Imagem construída com sucesso!"
-echo "🔨 Compilando RetroCapture no container ARM64..."
+echo "🔨 Compilando RetroCapture no container ARM32v7..."
 echo ""
 
 # Executar o container usando a imagem construída
@@ -200,29 +209,29 @@ else
 fi
 
 $DOCKER_CMD run --rm \
-    --platform linux/arm64 \
+    --platform linux/arm/v7 \
     -e BUILD_TYPE="$BUILD_TYPE" \
     -e BUILD_WITH_SDL2="$BUILD_WITH_SDL2" \
     -v "$(pwd):/work:ro" \
-    -v "$(pwd)/build-linux-arm64:/work/build-linux-arm64:rw" \
+    -v "$(pwd)/build-linux-arm32v7:/work/build-linux-arm32v7:rw" \
     -w /work \
-    "$IMAGE_TAG" > build-linux-arm64.log 2>&1
+    "$IMAGE_TAG" > build-linux-arm32v7.log 2>&1
 
 if [ $? -ne 0 ]; then
     echo "❌ Falha na compilação!"
-    echo "   Verifique build-linux-arm64.log para detalhes"
+    echo "   Verifique build-linux-arm32v7.log para detalhes"
     exit 1
 fi
 
 echo ""
 echo "✅ Concluído!"
-echo "📁 Executável: ./build-linux-arm64/bin/retrocapture"
+echo "📁 Executável: ./build-linux-arm32v7/bin/retrocapture"
 echo ""
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
-    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm64/bin/retrocapture"
-    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-arm64/bin/retrocapture"
+    echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm32v7/bin/retrocapture"
+    echo "   Para usar framebuffer: export SDL_VIDEODRIVER=fbcon && ./build-linux-arm32v7/bin/retrocapture"
 else
-    echo "ℹ️  Nota: Este executável foi compilado para ARM64 (aarch64)"
-    echo "   Compatível com Raspberry Pi 4/5 e outros sistemas ARM64"
+    echo "ℹ️  Nota: Este executável foi compilado para ARM32v7 (Raspberry Pi 3)"
+    echo "   Para executar, transfira para sua Raspberry Pi 3"
 fi

@@ -157,6 +157,30 @@ if(PLATFORM_LINUX)
     pkg_check_modules(AVUTIL REQUIRED libavutil)
     pkg_check_modules(SWSCALE REQUIRED libswscale)
     pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    
+    # Detect FFmpeg version for compatibility
+    # Extract version from pkg-config
+    execute_process(
+        COMMAND pkg-config --modversion libavcodec
+        OUTPUT_VARIABLE AVCODEC_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    execute_process(
+        COMMAND pkg-config --modversion libavformat
+        OUTPUT_VARIABLE AVFORMAT_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    
+    # Parse major version (e.g., "60.3.100" -> 60)
+    if(AVCODEC_VERSION)
+        string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" AVCODEC_VERSION_MAJOR "${AVCODEC_VERSION}")
+        message(STATUS "Detected libavcodec version: ${AVCODEC_VERSION} (major: ${AVCODEC_VERSION_MAJOR})")
+    endif()
+    
+    if(AVFORMAT_VERSION)
+        string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" AVFORMAT_VERSION_MAJOR "${AVFORMAT_VERSION}")
+        message(STATUS "Detected libavformat version: ${AVFORMAT_VERSION} (major: ${AVFORMAT_VERSION_MAJOR})")
+    endif()
 else()
     # Windows: usar pkg-config (MXE) ou find_package (vcpkg)
     find_package(PkgConfig QUIET)

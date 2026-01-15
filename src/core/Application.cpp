@@ -17,11 +17,18 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../ui/UICapturePresets.h"
+#include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#ifdef __linux__
+#include "../audio/AudioCapturePulse.h"
+#endif
+#include "../recording/RecordingManager.h"
+#include "../recording/RecordingSettings.h"
+#include "../recording/RecordingMetadata.h"
 #include "../utils/PresetManager.h"
 #include "../utils/ThumbnailGenerator.h"
 #ifdef USE_SDL2
@@ -98,17 +105,43 @@ bool Application::init()
         m_ui->setShaderEngine(m_shaderEngine.get());
     }
 
+    // Initialize RecordingManager (independent of streaming/audio)
+    LOG_INFO("Initializing RecordingManager...");
+    m_recordingManager = std::make_unique<RecordingManager>();
+    if (!m_recordingManager->initialize())
+    {
+        LOG_ERROR("Failed to initialize RecordingManager");
+        m_recordingManager.reset();
+        // Don't return false, continue without recording
+    }
+    else
+    {
+        LOG_INFO("RecordingManager initialized");
+    }
+
     if (!initStreaming())
     {
         LOG_WARN("Failed to initialize streaming - continuing without streaming");
     }
 
-    // Initialize audio capture (always required for streaming)
-    if (m_streamingEnabled)
+    // Initialize audio capture (required for streaming and/or recording)
+    // Audio is needed for recording even if streaming is not enabled
+    if (m_streamingEnabled || m_recordingManager)
     {
         if (!initAudioCapture())
         {
             LOG_WARN("Failed to initialize audio capture - continuing without audio");
+        }
+        else
+        {
+            // Set audio format for RecordingManager if audio is available
+            if (m_recordingManager && m_audioCapture)
+            {
+                m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+            }
+            
+            // Restore saved audio device connections
+            restoreAudioDeviceConnections();
         }
     }
 
@@ -124,6 +157,15 @@ bool Application::init()
 
     LOG_INFO("Application initialized successfully");
     return true;
+}
+
+void Application::updateCursorVisibility()
+{
+    // Simple method to sync cursor visibility with UI visibility
+    if (m_ui && m_window)
+    {
+        m_window->setCursorVisible(m_ui->isVisible());
+    }
 }
 
 bool Application::initWindow()
@@ -504,7 +546,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
     // Set reconfiguration flag to prevent frame processing
     m_isReconfiguring = true;
-    
+
     // Small delay to ensure any ongoing frame processing completes
     // This prevents race conditions where processFrame is accessing the device
 #ifdef PLATFORM_LINUX
@@ -512,9 +554,10 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #else
     Sleep(50); // 50ms to let current frame processing finish
 #endif
-    
+
     // Delete texture BEFORE closing device to avoid accessing invalid resources
-    if (m_frameProcessor) {
+    if (m_frameProcessor)
+    {
         m_frameProcessor->deleteTexture();
     }
 
@@ -628,7 +671,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
     // Reset reconfiguration flag
     m_isReconfiguring = false;
-    
+
     return true;
 }
 
@@ -665,6 +708,15 @@ bool Application::initUI()
     }
 
     // Configure callbacks
+    m_ui->setOnVisibilityChanged([this](bool /* visible */)
+                                  {
+        updateCursorVisibility();
+    });
+
+    // Set initial cursor visibility based on UI visibility
+    // This ensures cursor is hidden if UI starts hidden (e.g., --hide-ui flag)
+    updateCursorVisibility();
+
     m_ui->setOnShaderChanged([this](const std::string &shaderPath)
                              {
         if (m_shaderEngine) {
@@ -720,12 +772,11 @@ bool Application::initUI()
         } });
 
     m_ui->setOnOutputResolutionChanged([this](uint32_t width, uint32_t height)
-                                      {
+                                       {
         LOG_INFO("Output resolution changed: " + std::to_string(width) + "x" + std::to_string(height) + 
                  (width == 0 && height == 0 ? " (automatic)" : ""));
         m_outputWidth = width;
-        m_outputHeight = height;
-    });
+        m_outputHeight = height; });
 
     m_ui->setOnV4L2ControlChanged([this](const std::string &name, int32_t value)
                                   {
@@ -745,8 +796,7 @@ bool Application::initUI()
                                  {
         // Schedule resolution change for main thread (thread-safe)
         // This is necessary because the callback may be called from API threads
-        scheduleResolutionChange(width, height);
-    });
+        scheduleResolutionChange(width, height); });
 
     m_ui->setOnFramerateChanged([this](uint32_t fps)
                                 {
@@ -772,12 +822,72 @@ bool Application::initUI()
             }
         } });
 
-    // Configure initial values
-    m_ui->setBrightness(m_brightness);
-    m_ui->setContrast(m_contrast);
-    m_ui->setMaintainAspect(m_maintainAspect);
-    m_ui->setFullscreen(m_fullscreen);
-    m_ui->setMonitorIndex(m_monitorIndex);
+    // IMPORTANT: UIManager has already loaded saved configurations in its constructor
+    // So we should read FROM UI first, then set callbacks
+    // This ensures saved values are not overwritten by default values
+
+    // Read saved values from UI (loaded from config file)
+    m_brightness = m_ui->getBrightness();
+    m_contrast = m_ui->getContrast();
+    m_maintainAspect = m_ui->getMaintainAspect();
+    m_fullscreen = m_ui->getFullscreen();
+    m_monitorIndex = m_ui->getMonitorIndex();
+
+    // Read saved capture resolution from UI (loaded from config file)
+    // The UIManager loads config in its constructor, so values are available here
+    uint32_t savedWidth = m_ui->getCaptureWidth();
+    uint32_t savedHeight = m_ui->getCaptureHeight();
+    uint32_t savedFps = m_ui->getCaptureFps();
+
+    // Use saved values if they exist (savedWidth/Height > 0 means config was loaded)
+    // Only override if we have valid saved values
+    bool useSavedResolution = (savedWidth > 0 && savedHeight > 0);
+
+    // Check if current values are the defaults (1920x1080) - if so, likely not set via command line
+    bool isDefaultResolution = (m_captureWidth == 1920 && m_captureHeight == 1080);
+
+    if (useSavedResolution && ((m_captureWidth == 0 && m_captureHeight == 0) || isDefaultResolution))
+    {
+        LOG_INFO("Using saved capture resolution: " +
+                 std::to_string(savedWidth) + "x" + std::to_string(savedHeight) +
+                 " @ " + std::to_string(savedFps) + "fps");
+        m_captureWidth = savedWidth;
+        m_captureHeight = savedHeight;
+        if (savedFps > 0)
+        {
+            m_captureFps = savedFps;
+        }
+
+        // If capture is already initialized, reconfigure it with saved resolution
+        if (m_capture && (m_capture->isOpen() || m_capture->isDummyMode()))
+        {
+            LOG_INFO("Reconfiguring capture with saved resolution...");
+            if (m_capture->isDummyMode() || !m_capture->isOpen())
+            {
+                // For dummy mode or closed device, just reconfigure
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture->setDummyMode(true);
+                if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                {
+                    m_capture->startCapture();
+                    if (m_ui)
+                    {
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                             m_captureFps, "None (Dummy)");
+                    }
+                }
+            }
+            else
+            {
+                // For real device, use reconfigureCapture
+                reconfigureCapture(m_captureWidth, m_captureHeight, m_captureFps);
+            }
+        }
+    }
+
+    // Now set callbacks so future changes are synchronized
+    // (Values are already set above, so this won't overwrite saved config)
 
     // Check initial source type and configure appropriately
     if (m_ui->getSourceType() == UIManager::SourceType::None)
@@ -838,6 +948,11 @@ bool Application::initUI()
         m_ui->getCapturePresetsWindow()->setApplication(this);
     }
 
+    if (m_ui->getRecordingsWindow())
+    {
+        m_ui->getRecordingsWindow()->setApplication(this);
+    }
+
     // IMPORTANT: After init(), UIManager has already loaded saved configurations
     // Synchronize Application values with values loaded from UI
     // This ensures saved configurations are applied
@@ -861,6 +976,29 @@ bool Application::initUI()
     m_streamingMaxAudioBufferSize = m_ui->getStreamingMaxAudioBufferSize();
     m_streamingMaxBufferTimeSeconds = m_ui->getStreamingMaxBufferTimeSeconds();
     m_streamingAVIOBufferSize = m_ui->getStreamingAVIOBufferSize();
+
+    // Load recording settings from UI
+    if (m_recordingManager)
+    {
+        RecordingSettings settings;
+        settings.width = m_ui->getRecordingWidth();
+        settings.height = m_ui->getRecordingHeight();
+        settings.fps = m_ui->getRecordingFps();
+        settings.bitrate = m_ui->getRecordingBitrate();
+        settings.codec = m_ui->getRecordingVideoCodec();
+        settings.preset = (settings.codec == "h264") ? m_ui->getRecordingH264Preset() : m_ui->getRecordingH265Preset();
+        settings.h265Profile = m_ui->getRecordingH265Profile();
+        settings.h265Level = m_ui->getRecordingH265Level();
+        settings.vp8Speed = m_ui->getRecordingVP8Speed();
+        settings.vp9Speed = m_ui->getRecordingVP9Speed();
+        settings.audioBitrate = m_ui->getRecordingAudioBitrate();
+        settings.audioCodec = m_ui->getRecordingAudioCodec();
+        settings.container = m_ui->getRecordingContainer();
+        settings.outputPath = m_ui->getRecordingOutputPath();
+        settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
+        settings.includeAudio = m_ui->getRecordingIncludeAudio();
+        m_recordingManager->setRecordingSettings(settings);
+    }
 
     // Load buffer settings (already loaded by UIManager from config file)
 
@@ -1264,6 +1402,186 @@ bool Application::initUI()
                 m_streamingMaxAudioBufferSize,
                 m_streamingMaxBufferTimeSeconds,
                 m_streamingAVIOBufferSize);
+        } });
+
+    // Recording callbacks
+    m_ui->setOnRecordingStartStop([this](bool start)
+                                  {
+        if (start) {
+            if (m_recordingManager) {
+                RecordingSettings settings;
+                // Use actual capture resolution and FPS, not UI settings
+                // This ensures the recording matches what's being captured
+                // CRITICAL: Use actual capture FPS to prevent video appearing sped up
+                settings.width = m_captureWidth;
+                settings.height = m_captureHeight;
+                settings.fps = m_captureFps; // Use actual capture FPS, not UI setting
+                settings.bitrate = m_ui->getRecordingBitrate();
+                settings.codec = m_ui->getRecordingVideoCodec();
+                settings.preset = (settings.codec == "h264") ? m_ui->getRecordingH264Preset() : m_ui->getRecordingH265Preset();
+                settings.h265Profile = m_ui->getRecordingH265Profile();
+                settings.h265Level = m_ui->getRecordingH265Level();
+                settings.vp8Speed = m_ui->getRecordingVP8Speed();
+                settings.vp9Speed = m_ui->getRecordingVP9Speed();
+                settings.audioBitrate = m_ui->getRecordingAudioBitrate();
+                settings.audioCodec = m_ui->getRecordingAudioCodec();
+                settings.container = m_ui->getRecordingContainer();
+                settings.outputPath = m_ui->getRecordingOutputPath();
+                settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
+                settings.includeAudio = m_ui->getRecordingIncludeAudio();
+                
+                if (!m_recordingManager) {
+                    LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
+                    m_ui->setRecordingActive(false);
+                } else if (m_recordingManager->startRecording(settings)) {
+                    LOG_INFO("Application: Recording started successfully");
+                    m_ui->setRecordingActive(true);
+                } else {
+                    LOG_ERROR("Application: Failed to start recording. Check logs for details.");
+                    m_ui->setRecordingActive(false);
+                }
+            }
+        } else {
+            if (m_recordingManager) {
+                m_recordingManager->stopRecording();
+                m_ui->setRecordingActive(false);
+            }
+        } });
+
+    m_ui->setOnRecordingWidthChanged([this](uint32_t width)
+                                     { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.width = width;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingHeightChanged([this](uint32_t height)
+                                      { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.height = height;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingFpsChanged([this](uint32_t fps)
+                                   { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.fps = fps;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingBitrateChanged([this](uint32_t bitrate)
+                                       { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.bitrate = bitrate;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingAudioBitrateChanged([this](uint32_t bitrate)
+                                            { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.audioBitrate = bitrate;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingVideoCodecChanged([this](const std::string &codec)
+                                          { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.codec = codec;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingAudioCodecChanged([this](const std::string &codec)
+                                          { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.audioCodec = codec;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingH264PresetChanged([this](const std::string &preset)
+                                          { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.preset = preset;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingH265PresetChanged([this](const std::string &preset)
+                                          { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.preset = preset;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingH265ProfileChanged([this](const std::string &profile)
+                                           { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.h265Profile = profile;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingH265LevelChanged([this](const std::string &level)
+                                         { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.h265Level = level;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingVP8SpeedChanged([this](int speed)
+                                        { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.vp8Speed = speed;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingVP9SpeedChanged([this](int speed)
+                                        { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.vp9Speed = speed;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingContainerChanged([this](const std::string &container)
+                                         { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.container = container;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingOutputPathChanged([this](const std::string &path)
+                                          { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.outputPath = path;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingFilenameTemplateChanged([this](const std::string &template_)
+                                                { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.filenameTemplate = template_;
+            m_recordingManager->setRecordingSettings(settings);
+        } });
+
+    m_ui->setOnRecordingIncludeAudioChanged([this](bool include)
+                                            { 
+        if (m_recordingManager) {
+            RecordingSettings settings = m_recordingManager->getRecordingSettings();
+            settings.includeAudio = include;
+            m_recordingManager->setRecordingSettings(settings);
         } });
 
     // Web Portal callbacks
@@ -1716,9 +2034,7 @@ bool Application::initUI()
             return;
         }
         
-        LOG_INFO("=== CALLBACK setOnDeviceChanged CALLED ===");
         LOG_INFO("Changing device to: " + devicePath);
-        std::cout << "[FORCE] setOnDeviceChanged called with devicePath: " << devicePath << std::endl;
         
         // Save current settings
         uint32_t oldWidth = m_captureWidth;
@@ -1849,7 +2165,7 @@ void Application::handleKeyInput()
         static bool f12Pressed = false;
         // SDLK_F12 está definido em SDL_keyboard.h (já incluído)
         bool f12CurrentlyPressed = sdlWindow->isKeyPressed(SDLK_F12);
-        
+
         if (f12CurrentlyPressed && !f12Pressed)
         {
             m_ui->toggle();
@@ -2181,9 +2497,11 @@ void Application::stopWebPortal()
 
 bool Application::initAudioCapture()
 {
-    if (!m_streamingEnabled)
+    // Audio is needed for streaming or recording
+    // If neither is enabled, we can skip audio initialization
+    if (!m_streamingEnabled && !m_recordingManager)
     {
-        return true; // Audio not enabled, not an error
+        return true; // Audio not needed, not an error
     }
 
     m_audioCapture = AudioCaptureFactory::create();
@@ -2191,6 +2509,13 @@ bool Application::initAudioCapture()
     {
         LOG_ERROR("Failed to create AudioCapture for this platform");
         return false;
+    }
+
+    // RecordingManager is now initialized in Application::init() before audio capture
+    // Just set audio format here if RecordingManager exists
+    if (!m_recordingManager)
+    {
+        LOG_WARN("RecordingManager not initialized - recording will not be available");
     }
 
     // Open default audio device (will create virtual sink)
@@ -2213,7 +2538,42 @@ bool Application::initAudioCapture()
     LOG_INFO("Audio capture started: " + std::to_string(m_audioCapture->getSampleRate()) +
              "Hz, " + std::to_string(m_audioCapture->getChannels()) + " channels");
 
+    // Connect audio capture to UI
+    if (m_ui && m_audioCapture)
+    {
+        m_ui->setAudioCapture(m_audioCapture.get());
+    }
+
+    // Audio format for RecordingManager is already set in init() after audio capture starts
+
     return true;
+}
+
+void Application::restoreAudioDeviceConnections()
+{
+    if (!m_audioCapture || !m_ui)
+    {
+        return;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture.get());
+    if (!pulseCapture)
+    {
+        return;
+    }
+
+    std::string savedInputSourceId = m_ui->getAudioInputSourceId();
+    if (!savedInputSourceId.empty())
+    {
+        usleep(500000);
+        if (!pulseCapture->connectInputSource(savedInputSourceId))
+        {
+            LOG_WARN("Failed to restore audio input source: " + savedInputSourceId);
+        }
+    }
+
+#endif
 }
 
 void Application::run()
@@ -2316,7 +2676,15 @@ void Application::run()
 
                     if (samplesRead > 0)
                     {
-                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                        // Share audio data between streaming and recording
+                        if (m_streamManager && m_streamManager->isActive())
+                        {
+                            m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                        }
+                        if (m_recordingManager && m_recordingManager->isRecording())
+                        {
+                            m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        }
 
                         // If we read less than expected, no more samples available
                         if (samplesRead < samplesPerVideoFrame)
@@ -2344,9 +2712,41 @@ void Application::run()
                     }
                 }
             }
+            else if (m_recordingManager && m_recordingManager->isRecording())
+            {
+                // Recording is active (but streaming is not), process audio for recording
+                uint32_t audioSampleRate = m_audioCapture->getSampleRate();
+                uint32_t videoFps = m_captureFps;
+                size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                                  ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                                  : 512;
+                samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+
+                std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+                const int maxIterations = 10;
+                int iteration = 0;
+
+                while (iteration < maxIterations)
+                {
+                    size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
+                    if (samplesRead > 0)
+                    {
+                        m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        if (samplesRead < samplesPerVideoFrame)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        break;
+                    }
+                    iteration++;
+                }
+            }
             else
             {
-                // Streaming is not active, but we still need to process mainloop
+                // Neither streaming nor recording active, but we still need to process mainloop
                 // to prevent PulseAudio from freezing system audio
                 // Read and discard samples to keep buffer clean
                 const size_t maxSamples = 4096; // Temporary buffer
@@ -2430,6 +2830,17 @@ void Application::run()
         // Skip rendering during reconfiguration to avoid accessing deleted textures
         if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
+            // Log resolução de captura original (antes de qualquer processamento)
+            static int originalCaptureLogCount = 0;
+            if (originalCaptureLogCount++ < 3)
+            {
+                LOG_INFO("=== ORIGINAL CAPTURE TEXTURE ===");
+                LOG_INFO("Original capture texture: " + std::to_string(m_frameProcessor->getTexture()) +
+                         ", Size: " + std::to_string(m_frameProcessor->getTextureWidth()) + "x" + 
+                         std::to_string(m_frameProcessor->getTextureHeight()));
+                LOG_INFO("================================");
+            }
+            
             // Apply shader if active
             GLuint textureToRender = m_frameProcessor->getTexture();
             bool isShaderTexture = false;
@@ -2453,6 +2864,17 @@ void Application::run()
                                                               m_frameProcessor->getTextureWidth(),
                                                               m_frameProcessor->getTextureHeight());
                 isShaderTexture = true;
+                
+                // Log saída do shader
+                static int shaderOutputLogCount = 0;
+                if (shaderOutputLogCount++ < 3)
+                {
+                    LOG_INFO("=== SHADER OUTPUT ===");
+                    LOG_INFO("Shader output texture: " + std::to_string(textureToRender) +
+                             ", Output size: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
+                             std::to_string(m_shaderEngine->getOutputHeight()));
+                    LOG_INFO("=====================");
+                }
 
                 // DEBUG: Check returned texture
                 if (textureToRender == 0)
@@ -2557,6 +2979,48 @@ void Application::run()
             uint32_t finalRenderWidth = renderWidth;
             uint32_t finalRenderHeight = renderHeight;
             
+            // Log detalhado das resoluções no início do pipeline
+            static int pipelineResLogCount = 0;
+            if (pipelineResLogCount++ < 3)
+            {
+                LOG_INFO("=== PIPELINE RESOLUTIONS ===");
+                LOG_INFO("Original capture: " + 
+                         std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
+                LOG_INFO("Shader output (renderWidth/Height): " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                if (isShaderTexture)
+                {
+                    LOG_INFO("Shader engine output: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
+                             std::to_string(m_shaderEngine->getOutputHeight()));
+                }
+                LOG_INFO("Output resolution (m_outputWidth/Height): " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                LOG_INFO("textureToRender: " + std::to_string(textureToRender) + ", isShaderTexture: " + std::string(isShaderTexture ? "yes" : "no"));
+                LOG_INFO("===========================");
+            }
+            
+            // Garantir que renderWidth e renderHeight são válidos (não 0)
+            if (finalRenderWidth == 0 || finalRenderHeight == 0)
+            {
+                static int renderDimensionWarningCount = 0;
+                if (renderDimensionWarningCount++ < 3)
+                {
+                    LOG_WARN("Frame render: Invalid render dimensions (" +
+                             std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight) +
+                             "), using capture dimensions");
+                }
+                // Fallback: usar dimensões de captura
+                if (m_frameProcessor)
+                {
+                    finalRenderWidth = m_frameProcessor->getTextureWidth();
+                    finalRenderHeight = m_frameProcessor->getTextureHeight();
+                }
+                // Se ainda for 0, usar dimensões padrão
+                if (finalRenderWidth == 0 || finalRenderHeight == 0)
+                {
+                    finalRenderWidth = 1920;
+                    finalRenderHeight = 1080;
+                }
+            }
+
             if (m_outputWidth > 0 && m_outputHeight > 0)
             {
                 // Resolução de saída configurada - fazer downscale/upscale da textura
@@ -2565,9 +3029,9 @@ void Application::run()
                 static GLuint outputTexture = 0;
                 static uint32_t lastOutputWidth = 0;
                 static uint32_t lastOutputHeight = 0;
-                
+
                 // Recriar framebuffer se necessário
-                if (outputFramebuffer == 0 || outputTexture == 0 || 
+                if (outputFramebuffer == 0 || outputTexture == 0 ||
                     lastOutputWidth != m_outputWidth || lastOutputHeight != m_outputHeight)
                 {
                     // Limpar recursos antigos
@@ -2581,7 +3045,7 @@ void Application::run()
                         glDeleteTextures(1, &outputTexture);
                         outputTexture = 0;
                     }
-                    
+
                     // Criar nova textura
                     glGenTextures(1, &outputTexture);
                     glBindTexture(GL_TEXTURE_2D, outputTexture);
@@ -2590,12 +3054,12 @@ void Application::run()
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    
+
                     // Criar framebuffer
                     glGenFramebuffers(1, &outputFramebuffer);
                     glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
                     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
-                    
+
                     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
                     {
                         LOG_ERROR("Failed to create output resolution framebuffer");
@@ -2608,14 +3072,14 @@ void Application::run()
                     {
                         lastOutputWidth = m_outputWidth;
                         lastOutputHeight = m_outputHeight;
-                        LOG_INFO("Output resolution framebuffer created: " + 
+                        LOG_INFO("Output resolution framebuffer created: " +
                                  std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
                     }
-                    
+
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
                     glBindTexture(GL_TEXTURE_2D, 0);
                 }
-                
+
                 // Renderizar textura original para o framebuffer de saída (redimensionando)
                 if (outputFramebuffer != 0 && outputTexture != 0)
                 {
@@ -2623,19 +3087,37 @@ void Application::run()
                     glViewport(0, 0, m_outputWidth, m_outputHeight);
                     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
                     glClear(GL_COLOR_BUFFER_BIT);
-                    
+
                     // Renderizar textura original redimensionada
                     m_renderer->renderTexture(textureToRender, m_outputWidth, m_outputHeight,
                                               false, isShaderTexture, 1.0f, 1.0f,
                                               false, renderWidth, renderHeight);
-                    
+
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                    
+
                     // Usar textura redimensionada
                     finalTexture = outputTexture;
                     finalRenderWidth = m_outputWidth;
                     finalRenderHeight = m_outputHeight;
+                    
+                    static int outputResizeLogCount = 0;
+                    if (outputResizeLogCount++ < 3)
+                    {
+                        LOG_INFO("Output resolution applied - Before: " + 
+                                 std::to_string(renderWidth) + "x" + std::to_string(renderHeight) +
+                                 ", After: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight) +
+                                 ", outputTexture: " + std::to_string(outputTexture));
+                    }
                 }
+            }
+            
+            // Log final das resoluções após processamento
+            static int finalResLogCount = 0;
+            if (finalResLogCount++ < 3)
+            {
+                LOG_INFO("Final texture resolutions - finalTexture: " + std::to_string(finalTexture) +
+                         ", finalRenderWidth: " + std::to_string(finalRenderWidth) +
+                         ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
 
             // IMPORTANT: Camera image comes inverted (Y inverted)
@@ -2673,19 +3155,38 @@ void Application::run()
 
             // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            
+
             // Renderizar textura final na janela (sempre preenche a janela completamente)
             m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, finalRenderWidth, finalRenderHeight);
-            
+
             // IMPORTANTE: Aguardar que a renderização seja concluída
             glFinish();
 
-            // IMPORTANTE: Para streaming, capturar diretamente da textura final ao invés do framebuffer
+            // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
-            if (m_streamManager && m_streamManager->isActive())
+            bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
+                                    (m_recordingManager && m_recordingManager->isRecording());
+
+            // Log para debug: verificar tamanho da textura final antes da captura
+            static int finalTextureSizeLogCount = 0;
+            if (needsFrameCapture && finalTextureSizeLogCount++ < 3)
             {
+                LOG_INFO("Frame capture: finalTexture=" + std::to_string(finalTexture) + 
+                         ", finalRenderWidth=" + std::to_string(finalRenderWidth) + 
+                         ", finalRenderHeight=" + std::to_string(finalRenderHeight) +
+                         ", renderWidth=" + std::to_string(renderWidth) +
+                         ", renderHeight=" + std::to_string(renderHeight) +
+                         ", outputWidth=" + std::to_string(m_outputWidth) +
+                         ", outputHeight=" + std::to_string(m_outputHeight) +
+                         ", textureToRender=" + std::to_string(textureToRender));
+            }
+
+            if (needsFrameCapture)
+            {
+
+                // Capturar do viewport (o que está sendo renderizado)
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
                 uint32_t captureHeight = static_cast<uint32_t>(viewportHeight);
                 size_t captureDataSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 3;
@@ -2693,10 +3194,8 @@ void Application::run()
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    // TEMPORÁRIO: Desabilitar PBO para debug - usar sempre método síncrono
-                    // TODO: Reabilitar PBO após confirmar que streaming funciona
-                    bool usePBO = false; // false = usar sempre método síncrono
-                    
+                    bool usePBO = false;
+
                     if (usePBO)
                     {
                         // Inicializar PBO se necessário
@@ -2707,28 +3206,36 @@ void Application::run()
                                 LOG_WARN("Failed to initialize PBO, falling back to synchronous glReadPixels");
                             }
                         }
-                        
+
                         // Tentar usar PBO se disponível
                         if (m_pboManager && m_pboManager->isInitialized())
                         {
                             // Primeiro, iniciar leitura assíncrona para ESTE frame
                             // (isso será lido no próximo frame)
-                            m_pboManager->startAsyncRead(viewportX, viewportY, 
-                                                        static_cast<GLsizei>(captureWidth), 
-                                                        static_cast<GLsizei>(captureHeight));
-                            
+                            m_pboManager->startAsyncRead(viewportX, viewportY,
+                                                         static_cast<GLsizei>(captureWidth),
+                                                         static_cast<GLsizei>(captureHeight));
+
                             // Tentar obter dados do PBO anterior (frame anterior)
                             // Isso não bloqueia se os dados ainda não estão prontos
                             std::vector<uint8_t> frameData;
                             frameData.resize(captureDataSize);
-                            
+
                             if (m_pboManager->getReadData(frameData.data(), captureWidth, captureHeight))
                             {
-                                // Dados disponíveis, enviar para streaming
-                                if (m_streamManager)
+                                // Dados disponíveis, enviar para streaming e recording
+                                if (m_streamManager && m_streamManager->isActive())
                                 {
                                     m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
                                 }
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    m_recordingManager->pushFrame(frameData.data(), captureWidth, captureHeight);
+                                }
+                            }
+                            else
+                            {
+                                // PBO data not ready yet - this is normal for first frame
                             }
                             // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
                             // não enviamos este frame - isso é normal e esperado
@@ -2739,57 +3246,391 @@ void Application::run()
                             usePBO = false; // Forçar método síncrono
                         }
                     }
-                    
+
                     // Usar método síncrono (fallback ou se PBO desabilitado)
                     if (!usePBO)
                     {
-                        // SIMPLIFICADO: Capturar diretamente do framebuffer padrão (janela) após renderização
-                        // Garantir que estamos lendo do framebuffer correto
-                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                        glViewport(0, 0, windowWidth, windowHeight);
-                        
-                        // Usar dimensões do viewport renderizado
-                        uint32_t actualCaptureWidth = static_cast<uint32_t>(viewportWidth);
-                        uint32_t actualCaptureHeight = static_cast<uint32_t>(viewportHeight);
-                        size_t rgbDataSize = static_cast<size_t>(actualCaptureWidth) * static_cast<size_t>(actualCaptureHeight) * 3;
-                        
-                        // Preparar buffer com padding para glReadPixels
-                        size_t readRowSizeUnpadded = static_cast<size_t>(actualCaptureWidth) * 3;
-                        size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
-                        size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
-                        
-                        std::vector<uint8_t> frameDataWithPadding;
-                        frameDataWithPadding.resize(totalSizeWithPadding);
-                        
-                        // glReadPixels usa coordenadas bottom-left, converter viewportY
-                        GLint readY = static_cast<GLint>(windowHeight) - viewportY - static_cast<GLint>(actualCaptureHeight);
-                        
-                        // Capturar do framebuffer padrão como RGB
-                        glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
-                                     GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
-                        
-                        // Converter dados com padding para dados sem padding e inverter verticalmente
-                        std::vector<uint8_t> frameData;
-                        frameData.resize(rgbDataSize);
-                        
-                        // glReadPixels retorna bottom-to-top, precisamos top-to-bottom
-                        for (uint32_t row = 0; row < actualCaptureHeight; row++)
+                        // SOLUÇÃO PARA DIRECTFB: Capturar diretamente da textura final usando FBO
+                        // Isso evita problemas com back/front buffer do framebuffer padrão
+                        // que não funciona corretamente com DirectFB
+
+                        // Salvar FBO atual
+                        GLint previousFBO = 0;
+                        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
+
+                        // Verificar se a textura é válida e as dimensões são válidas antes de tentar capturar
+                        if (finalTexture == 0)
                         {
-                            uint32_t srcRow = actualCaptureHeight - 1 - row; // Inverter verticalmente
-                            uint32_t dstRow = row;
+                            static int textureWarningCount = 0;
+                            if (textureWarningCount++ < 3)
+                            {
+                                LOG_WARN("Frame capture: finalTexture is 0, cannot capture");
+                            }
+                        }
+                        else if (finalRenderWidth == 0 || finalRenderHeight == 0)
+                        {
+                            static int dimensionWarningCount = 0;
+                            if (dimensionWarningCount++ < 3)
+                            {
+                                LOG_WARN("Frame capture: Invalid dimensions (" +
+                                         std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight) +
+                                         "), cannot capture");
+                            }
+                        }
+                        else
+                        {
+                            // Criar FBO temporário para ler da textura
+                        GLuint captureFBO = 0;
+                        glGenFramebuffers(1, &captureFBO);
+                        glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+                        
+                        // IMPORTANTE: Para gravação, capturar da textura APÓS o shader e APÓS o redimensionamento de saída (se configurado)
+                        // Isso garante que capturamos a imagem completa processada com o shader aplicado
+                        // O MediaEncoder fará o redimensionamento final para a resolução de gravação se necessário
+                        GLuint textureToCapture = finalTexture;
+                        uint32_t captureTextureWidth = finalRenderWidth;
+                        uint32_t captureTextureHeight = finalRenderHeight;
+                        
+                        // Se estamos gravando ou fazendo streaming, determinar qual textura e dimensões usar
+                        // IMPORTANTE: Se há resolução de saída configurada, usar finalTexture
+                        // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
+                        // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
+                        bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
+                                                (m_streamManager && m_streamManager->isActive());
+                        
+                        if (needsFrameCapture)
+                        {
+                            // IMPORTANTE: Se há uma resolução de saída configurada, usar finalTexture que já foi redimensionada
+                            // Se não há resolução de saída, mas há shader, usar textureToRender com as dimensões reais do shader
+                            // Isso garante que capturamos a textura completa processada
+                            if (m_outputWidth > 0 && m_outputHeight > 0)
+                            {
+                                // Resolução de saída configurada: usar finalTexture que já foi redimensionada
+                                textureToCapture = finalTexture;
+                                captureTextureWidth = finalRenderWidth;
+                                captureTextureHeight = finalRenderHeight;
+                            }
+                            else if (isShaderTexture)
+                            {
+                                // Sem resolução de saída, mas com shader: usar textureToRender com dimensões reais do shader
+                                textureToCapture = textureToRender;
+                                captureTextureWidth = m_shaderEngine->getOutputWidth();
+                                captureTextureHeight = m_shaderEngine->getOutputHeight();
+                                
+                                // Se dimensões do shader são inválidas, usar renderWidth/renderHeight
+                                if (captureTextureWidth == 0 || captureTextureHeight == 0)
+                                {
+                                    captureTextureWidth = renderWidth;
+                                    captureTextureHeight = renderHeight;
+                                }
+                            }
+                            else
+                            {
+                                // Sem shader e sem resolução de saída: usar finalTexture
+                                textureToCapture = finalTexture;
+                                captureTextureWidth = finalRenderWidth;
+                                captureTextureHeight = finalRenderHeight;
+                            }
                             
-                            const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
-                            uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
-                            memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                            static int captureSourceLogCount = 0;
+                            if (captureSourceLogCount++ < 3)
+                            {
+                                LOG_INFO("=== FRAME CAPTURE DEBUG ===");
+                                LOG_INFO("Original capture: " + 
+                                         std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
+                                if (isShaderTexture)
+                                {
+                                    LOG_INFO("Shader engine output: " + 
+                                             std::to_string(m_shaderEngine->getOutputWidth()) + "x" + std::to_string(m_shaderEngine->getOutputHeight()));
+                                }
+                                LOG_INFO("renderWidth/Height: " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                                LOG_INFO("finalRenderWidth/Height: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight));
+                                LOG_INFO("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                                
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                    LOG_INFO("Recording resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                }
+                                if (m_streamManager && m_streamManager->isActive() && m_ui)
+                                {
+                                    LOG_INFO("Streaming resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                }
+                                
+                                LOG_INFO("Selected - textureToCapture: " + std::to_string(textureToCapture) +
+                                         ", size: " + std::to_string(captureTextureWidth) + "x" + std::to_string(captureTextureHeight));
+                                LOG_INFO("Textures - textureToRender: " + std::to_string(textureToRender) +
+                                         ", finalTexture: " + std::to_string(finalTexture));
+                                LOG_INFO("===========================");
+                            }
                         }
                         
-                        if (m_streamManager)
-                        {
-                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                        }
-                    }
-                }
-            }
+                        // Anexar a textura escolhida ao FBO
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureToCapture, 0);
+
+                            // Verificar se o FBO está completo
+                            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                            if (status != GL_FRAMEBUFFER_COMPLETE)
+                            {
+                                LOG_WARN("Frame capture: FBO incomplete, falling back to default framebuffer");
+                                glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+                                glDeleteFramebuffers(1, &captureFBO);
+
+                                // Fallback: tentar capturar do framebuffer padrão
+                                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                                glViewport(0, 0, windowWidth, windowHeight);
+                                GLint readY = static_cast<GLint>(windowHeight) - viewportY - static_cast<GLint>(viewportHeight);
+
+                                uint32_t actualCaptureWidth = static_cast<uint32_t>(viewportWidth);
+                                uint32_t actualCaptureHeight = static_cast<uint32_t>(viewportHeight);
+                                size_t rgbDataSize = static_cast<size_t>(actualCaptureWidth) * static_cast<size_t>(actualCaptureHeight) * 3;
+                                size_t readRowSizeUnpadded = static_cast<size_t>(actualCaptureWidth) * 3;
+                                size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                                size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
+
+                                std::vector<uint8_t> frameDataWithPadding;
+                                frameDataWithPadding.resize(totalSizeWithPadding);
+
+                                glFlush();
+                                glFinish();
+                                glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
+                                             GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+
+                                // Converter dados (mesmo código abaixo)
+                                std::vector<uint8_t> frameData;
+                                frameData.resize(rgbDataSize);
+                                for (uint32_t row = 0; row < actualCaptureHeight; row++)
+                                {
+                                    uint32_t srcRow = actualCaptureHeight - 1 - row;
+                                    uint32_t dstRow = row;
+                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * readRowSizePadded);
+                                    uint8_t *dstPtr = frameData.data() + (dstRow * readRowSizeUnpadded);
+                                    memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
+                                }
+
+                                if (m_streamManager && m_streamManager->isActive())
+                                {
+                                    m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                }
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                }
+                            }
+                            else
+                            {
+                                // FBO está completo, continuar com captura da textura
+
+                                // IMPORTANTE: ShaderEngine cria texturas em GL_RGBA, não GL_RGB
+                                // Precisamos ler como RGBA e converter para RGB depois
+                                bool isShaderTexture = (m_shaderEngine && m_shaderEngine->isShaderActive());
+                                GLenum readFormat = isShaderTexture ? GL_RGBA : GL_RGB;
+                                uint32_t bytesPerPixel = isShaderTexture ? 4 : 3;
+
+                                static int formatLogCount = 0;
+                                if (formatLogCount++ < 3)
+                                {
+                                    LOG_INFO("Frame capture: Using format " + std::string(isShaderTexture ? "RGBA" : "RGB") +
+                                             " for texture " + std::to_string(finalTexture) +
+                                             " (shader active: " + std::string(isShaderTexture ? "yes" : "no") + ")");
+                                }
+
+                            // IMPORTANTE: Capturar a textura COMPLETA, não apenas uma parte
+                            // Usar as dimensões e textura determinadas acima (pode ser finalTexture ou textureToRender)
+                            uint32_t textureWidth = captureTextureWidth;
+                            uint32_t textureHeight = captureTextureHeight;
+                            
+                            // Log detalhado: verificar tamanho da textura vs resolução de gravação/streaming
+                            static int textureSizeLogCount = 0;
+                            bool shouldLog = (textureSizeLogCount++ < 3) && 
+                                            ((m_recordingManager && m_recordingManager->isRecording()) ||
+                                             (m_streamManager && m_streamManager->isActive()));
+                            if (shouldLog)
+                            {
+                                LOG_INFO("=== CAPTURE DETAILS ===");
+                                LOG_INFO("Capturing from texture: " + std::to_string(textureToCapture) +
+                                         ", Size: " + std::to_string(textureWidth) + "x" + std::to_string(textureHeight));
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                    LOG_INFO("Recording target: " + 
+                                             std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                    LOG_INFO("Will resize for recording: " + std::string(
+                                        (textureWidth != recSettings.width || textureHeight != recSettings.height) ? "YES" : "NO"));
+                                }
+                                if (m_streamManager && m_streamManager->isActive() && m_ui)
+                                {
+                                    LOG_INFO("Streaming target: " + 
+                                             std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                    LOG_INFO("Will resize for streaming: " + std::string(
+                                        (textureWidth != m_ui->getStreamingWidth() || textureHeight != m_ui->getStreamingHeight()) ? "YES" : "NO"));
+                                }
+                                LOG_INFO("======================");
+                            }
+                            
+                            size_t rgbDataSize = static_cast<size_t>(textureWidth) * static_cast<size_t>(textureHeight) * 3;
+                            
+                            // Preparar buffer com padding para glReadPixels
+                            size_t readRowSizeUnpadded = static_cast<size_t>(textureWidth) * bytesPerPixel;
+                            size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
+                            size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(textureHeight);
+                            
+                            std::vector<uint8_t> frameDataWithPadding;
+                            frameDataWithPadding.resize(totalSizeWithPadding);
+                            
+                            // IMPORTANTE: Quando lemos de um FBO anexado a uma textura, precisamos garantir
+                            // que o viewport está configurado para o tamanho COMPLETO da textura.
+                            // O viewport define a região de leitura do framebuffer.
+                            // IMPORTANTE: glReadPixels lê do framebuffer atual (FBO com a textura anexada),
+                            // e as coordenadas são relativas ao viewport do FBO, não ao viewport da janela.
+                            // Precisamos garantir que o viewport seja exatamente o tamanho da textura COMPLETA.
+                            glViewport(0, 0, textureWidth, textureHeight);
+                            
+                            // Verificar viewport após configurar (para debug)
+                            static int viewportCheckCount = 0;
+                            if (viewportCheckCount++ < 3)
+                            {
+                                GLint currentViewport[4];
+                                glGetIntegerv(GL_VIEWPORT, currentViewport);
+                                LOG_INFO("Frame capture: Viewport set to " +
+                                             std::to_string(textureWidth) + "x" + std::to_string(textureHeight) +
+                                             ", actual viewport: [" + std::to_string(currentViewport[0]) + "," +
+                                             std::to_string(currentViewport[1]) + "," +
+                                             std::to_string(currentViewport[2]) + "x" + std::to_string(currentViewport[3]) + "]");
+                            }
+
+                                // IMPORTANTE: Garantir que todos os comandos OpenGL foram executados
+                                glFlush();
+                                glFinish();
+
+                                // Capturar da textura via FBO (textura completa, começando em 0,0)
+                                // IMPORTANTE: glReadPixels lê do framebuffer atual (que é o FBO com a textura anexada)
+                                // As coordenadas (0, 0) são relativas ao viewport do FBO, que deve ser (0, 0, width, height)
+                                // Isso garante que lemos a textura completa, não apenas uma parte
+                                glReadPixels(0, 0, static_cast<GLsizei>(textureWidth), static_cast<GLsizei>(textureHeight),
+                                             readFormat, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+
+                                // Restaurar FBO anterior
+                                glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+                                glDeleteFramebuffers(1, &captureFBO);
+
+                                // Converter de padded para unpadded
+                                // IMPORTANTE: Quando lemos de um FBO anexado a uma textura, glReadPixels
+                                // retorna dados na mesma orientação da textura (top-to-bottom)
+                                // Não precisamos inverter verticalmente como quando lemos do framebuffer padrão
+                                std::vector<uint8_t> frameData;
+                                frameData.resize(rgbDataSize);
+
+                                for (uint32_t row = 0; row < textureHeight; row++)
+                                {
+                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (row * readRowSizePadded);
+                                    uint8_t *dstPtr = frameData.data() + (row * textureWidth * 3);
+
+                                    if (isShaderTexture)
+                                    {
+                                        // Converter RGBA para RGB (descartar alpha)
+                                        for (uint32_t col = 0; col < textureWidth; col++)
+                                        {
+                                            dstPtr[col * 3 + 0] = srcPtr[col * 4 + 0]; // R
+                                            dstPtr[col * 3 + 1] = srcPtr[col * 4 + 1]; // G
+                                            dstPtr[col * 3 + 2] = srcPtr[col * 4 + 2]; // B
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // RGB: copiar diretamente
+                                        memcpy(dstPtr, srcPtr, textureWidth * 3);
+                                    }
+                                }
+
+                            // Usar dimensões originais da textura
+                            // O MediaEncoder fará o redimensionamento para a resolução de gravação/streaming se necessário
+                            uint32_t actualCaptureWidth = textureWidth;
+                            uint32_t actualCaptureHeight = textureHeight;
+                            
+                            // Verificar se o frame capturado está vazio/preto
+                            // Isso ajuda a diagnosticar problemas com DirectFB
+                            static int frameCheckCount = 0;
+                                if (frameCheckCount++ < 10 || frameCheckCount % 60 == 0)
+                                {
+                                    // Verificar se todos os pixels são pretos (0,0,0) ou se há dados válidos
+                                    size_t blackPixelCount = 0;
+                                    size_t totalPixels = static_cast<size_t>(actualCaptureWidth) * static_cast<size_t>(actualCaptureHeight);
+                                    size_t sampleSize = std::min(totalPixels, static_cast<size_t>(1000)); // Amostrar até 1000 pixels
+
+                                    for (size_t i = 0; i < sampleSize; i++)
+                                    {
+                                        size_t pixelIdx = (i * totalPixels) / sampleSize; // Amostragem uniforme
+                                        size_t byteIdx = pixelIdx * 3;
+                                        if (byteIdx + 2 < frameData.size())
+                                        {
+                                            if (frameData[byteIdx] == 0 &&
+                                                frameData[byteIdx + 1] == 0 &&
+                                                frameData[byteIdx + 2] == 0)
+                                            {
+                                                blackPixelCount++;
+                                            }
+                                        }
+                                    }
+
+                                    double blackRatio = static_cast<double>(blackPixelCount) / static_cast<double>(sampleSize);
+                                    if (blackRatio > 0.95 && frameCheckCount <= 10)
+                                    {
+                                        LOG_WARN("Frame capture: " + std::to_string(static_cast<int>(blackRatio * 100)) +
+                                                 "% of sampled pixels are black (may indicate DirectFB/framebuffer issue)");
+                                        LOG_WARN("Capture params: texture=" + std::to_string(textureToCapture) +
+                                                 ", size=" + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight) +
+                                                 ", FBO=" + std::to_string(captureFBO));
+                                    }
+                                }
+
+                                // Share frame data between streaming and recording
+                                if (m_streamManager && m_streamManager->isActive())
+                                {
+                                    static int streamPushLogCount = 0;
+                                    if (streamPushLogCount++ < 3 && m_ui)
+                                    {
+                                        LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        LOG_INFO("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                        if (m_ui->getStreamingWidth() != actualCaptureWidth || m_ui->getStreamingHeight() != actualCaptureHeight)
+                                        {
+                                            LOG_INFO("MediaEncoder will resize for streaming: YES");
+                                        }
+                                        else
+                                        {
+                                            LOG_INFO("MediaEncoder will resize for streaming: NO");
+                                        }
+                                        LOG_INFO("----------------------------------");
+                                    }
+                                    m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                }
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    static int recordingPushLogCount = 0;
+                                    if (recordingPushLogCount++ < 3)
+                                    {
+                                        LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
+                                        LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
+                                        if (recSettings.width != actualCaptureWidth || recSettings.height != actualCaptureHeight)
+                                        {
+                                            LOG_INFO("MediaEncoder will resize: YES");
+                                        }
+                                        else
+                                        {
+                                            LOG_INFO("MediaEncoder will resize: NO");
+                                        }
+                                        LOG_INFO("===================================");
+                                    }
+                                    m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                }
+                            } // fim do else (textura válida)
+                        } // fim do else (FBO completo)
+                    } // fim do if (!usePBO)
+                } // fim do if (needsFrameCapture)
+            } // fim do if (captureDataSize > 0)
 
             auto streamManager = m_streamManager.get();
             if (m_ui && streamManager && streamManager->isActive())
@@ -2846,6 +3687,19 @@ void Application::run()
                     // If no StreamManager, can start
                     m_ui->setCanStartStreaming(true);
                     m_ui->setStreamingCooldownRemainingMs(0);
+                }
+            }
+
+            // Update recording status
+            if (m_ui && m_recordingManager)
+            {
+                bool isRecording = m_recordingManager->isRecording();
+                m_ui->setRecordingActive(isRecording);
+                if (isRecording)
+                {
+                    m_ui->setRecordingDurationUs(m_recordingManager->getCurrentDurationUs());
+                    m_ui->setRecordingFileSize(m_recordingManager->getCurrentFileSize());
+                    m_ui->setRecordingFilename(m_recordingManager->getCurrentFilename());
                 }
             }
 
@@ -2914,6 +3768,12 @@ void Application::shutdown()
         m_frameProcessor->deleteTexture();
     }
 
+    if (m_recordingManager)
+    {
+        m_recordingManager->shutdown();
+        m_recordingManager.reset();
+    }
+
     if (m_capture)
     {
         m_capture->stopCapture();
@@ -2968,7 +3828,7 @@ void Application::shutdown()
     m_initialized = false;
 }
 
-void Application::schedulePresetApplication(const std::string& presetName)
+void Application::schedulePresetApplication(const std::string &presetName)
 {
     // Thread-safe: add to queue for processing in main thread
     std::lock_guard<std::mutex> lock(m_presetQueueMutex);
@@ -2991,23 +3851,29 @@ void Application::applyResolutionChange(uint32_t width, uint32_t height)
 {
     LOG_INFO("Resolution changed via UI: " + std::to_string(width) + "x" + std::to_string(height));
     // If no device is open, activate dummy mode
-    if (!m_capture || !m_capture->isOpen()) {
-        if (!m_capture) {
+    if (!m_capture || !m_capture->isOpen())
+    {
+        if (!m_capture)
+        {
             LOG_WARN("VideoCapture not initialized. Select a device first.");
             return;
         }
-        
+
         // If not in dummy mode, try to activate
-        if (!m_capture->isDummyMode()) {
+        if (!m_capture->isDummyMode())
+        {
             LOG_INFO("No device open. Activating dummy mode...");
             m_capture->setDummyMode(true);
         }
-        
+
         // Configure dummy format
-        if (m_capture->setFormat(width, height, 0)) {
-            if (m_capture->startCapture()) {
+        if (m_capture->setFormat(width, height, 0))
+        {
+            if (m_capture->startCapture())
+            {
                 LOG_INFO("Dummy resolution updated: " + std::to_string(width) + "x" + std::to_string(height));
-                if (m_ui) {
+                if (m_ui)
+                {
                     m_ui->setCaptureInfo(width, height, m_captureFps, "None (Dummy)");
                     m_ui->setCurrentDevice(""); // Empty string = None
                 }
@@ -3017,32 +3883,37 @@ void Application::applyResolutionChange(uint32_t width, uint32_t height)
         LOG_WARN("Failed to configure dummy resolution. Select a device first.");
         return;
     }
-    if (reconfigureCapture(width, height, m_captureFps)) {
+    if (reconfigureCapture(width, height, m_captureFps))
+    {
         // Update texture if needed (use actual device values)
         uint32_t actualWidth = m_capture->getWidth();
         uint32_t actualHeight = m_capture->getHeight();
-        
+
         // Texture was already deleted in reconfigureCapture before closing device
         // It will be recreated automatically on next frame processing
-        
+
         // Update UI information with actual values
-        if (m_ui && m_capture) {
-            m_ui->setCaptureInfo(actualWidth, actualHeight, 
-                                m_captureFps, m_devicePath);
+        if (m_ui && m_capture)
+        {
+            m_ui->setCaptureInfo(actualWidth, actualHeight,
+                                 m_captureFps, m_devicePath);
         }
-        
-        LOG_INFO("Texture will be recreated on next frame: " + 
+
+        LOG_INFO("Texture will be recreated on next frame: " +
                  std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
-    } else {
+    }
+    else
+    {
         // If failed, update UI with current values
-        if (m_ui && m_capture) {
-            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                m_captureFps, m_devicePath);
+        if (m_ui && m_capture)
+        {
+            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                 m_captureFps, m_devicePath);
         }
     }
 }
 
-void Application::applyPreset(const std::string& presetName)
+void Application::applyPreset(const std::string &presetName)
 {
     if (!m_initialized)
     {
@@ -3079,15 +3950,15 @@ void Application::applyPreset(const std::string& presetName)
                 shaderPath = data.shaderPath;
             }
         }
-        
+
         if (m_shaderEngine->loadPreset(shaderPath))
         {
             // Apply shader parameters
-            for (const auto& param : data.shaderParameters)
+            for (const auto &param : data.shaderParameters)
             {
                 m_shaderEngine->setShaderParameter(param.first, param.second);
             }
-            
+
             // Update UI with shader path (use the relative path from preset)
             // This is important because setCurrentShader triggers a callback that
             // will try to reload the shader, so we need to pass the correct relative path
@@ -3124,14 +3995,14 @@ void Application::applyPreset(const std::string& presetName)
     if (data.captureWidth > 0 && data.captureHeight > 0 && m_capture)
     {
         // devicePath is NOT used - varies between systems
-        
+
         // Check if we need to reconfigure
         bool needsReconfig = false;
         if (m_capture->isOpen())
         {
             // Check if resolution or FPS changed
-            if (m_captureWidth != data.captureWidth || 
-                m_captureHeight != data.captureHeight || 
+            if (m_captureWidth != data.captureWidth ||
+                m_captureHeight != data.captureHeight ||
                 m_captureFps != data.captureFps)
             {
                 needsReconfig = true;
@@ -3141,7 +4012,7 @@ void Application::applyPreset(const std::string& presetName)
         {
             needsReconfig = true;
         }
-        
+
         if (needsReconfig)
         {
             if (m_capture->isOpen())
@@ -3152,7 +4023,7 @@ void Application::applyPreset(const std::string& presetName)
                     m_captureWidth = data.captureWidth;
                     m_captureHeight = data.captureHeight;
                     m_captureFps = data.captureFps;
-                    
+
                     // Delete and recreate texture with new dimensions
                     if (m_frameProcessor)
                     {
@@ -3176,7 +4047,7 @@ void Application::applyPreset(const std::string& presetName)
                         m_captureWidth = data.captureWidth;
                         m_captureHeight = data.captureHeight;
                         m_captureFps = data.captureFps;
-                        
+
                         // Delete and recreate texture with new dimensions
                         if (m_frameProcessor)
                         {
@@ -3213,7 +4084,7 @@ void Application::applyPreset(const std::string& presetName)
                 m_captureFps = data.captureFps;
             }
         }
-        
+
         // Update internal state to match preset (even if reconfig had issues)
         // This keeps UI in sync with what the preset expects
         m_captureWidth = data.captureWidth;
@@ -3232,7 +4103,7 @@ void Application::applyPreset(const std::string& presetName)
     // 5. Apply V4L2 controls
     if (m_capture && !data.v4l2Controls.empty())
     {
-        for (const auto& control : data.v4l2Controls)
+        for (const auto &control : data.v4l2Controls)
         {
             m_capture->setControl(control.first, control.second);
         }
@@ -3247,13 +4118,13 @@ void Application::applyPreset(const std::string& presetName)
             std::string currentDevice = m_capture && m_capture->isOpen() ? m_devicePath : "";
             m_ui->setCaptureInfo(data.captureWidth, data.captureHeight, data.captureFps, currentDevice);
         }
-        
+
         // Update image settings
         m_ui->setBrightness(m_brightness);
         m_ui->setContrast(m_contrast);
         m_ui->setMaintainAspect(m_maintainAspect);
         // fullscreen and monitorIndex are NOT updated - they vary per user/system
-        
+
         // Save all configuration changes
         m_ui->saveConfig();
     }
@@ -3261,7 +4132,7 @@ void Application::applyPreset(const std::string& presetName)
     LOG_INFO("Preset applied successfully: " + presetName);
 }
 
-void Application::createPresetFromCurrentState(const std::string& name, const std::string& description, bool captureThumbnail)
+void Application::createPresetFromCurrentState(const std::string &name, const std::string &description, bool captureThumbnail)
 {
     if (!m_initialized)
     {
@@ -3270,7 +4141,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     }
 
     PresetManager presetManager;
-    
+
     // Capture thumbnail if requested (must be done before creating preset)
     std::string thumbnailPath;
     if (captureThumbnail)
@@ -3278,7 +4149,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
         ThumbnailGenerator thumbnailGenerator;
         std::string sanitizedName = PresetManager::sanitizeName(name);
         fs::path thumbPath = fs::path(presetManager.getThumbnailsDirectory()) / (sanitizedName + ".png");
-        
+
         if (thumbnailGenerator.captureAndSaveThumbnail(thumbPath.string(), 320, 240))
         {
             // Store thumbnail path as relative to thumbnails directory
@@ -3301,7 +4172,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
                 // If relative conversion fails, use just the filename
                 thumbnailPath = (sanitizedName + ".png");
             }
-            
+
             LOG_INFO("Thumbnail captured for preset: " + name);
         }
         else
@@ -3309,7 +4180,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
             LOG_WARN("Failed to capture thumbnail for preset: " + name);
         }
     }
-    
+
     PresetManager::PresetData data;
     data.name = name;
     data.description = description;
@@ -3319,11 +4190,11 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     if (m_shaderEngine && m_shaderEngine->isShaderActive())
     {
         std::string shaderPath = m_shaderEngine->getPresetPath();
-        
+
         // Convert shader path to relative path (relative to shaders/shaders_glsl)
         fs::path shaderBasePath = getShaderBasePath();
         fs::path shaderPathObj(shaderPath);
-        
+
         if (shaderPathObj.is_absolute())
         {
             try
@@ -3376,10 +4247,10 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
         {
             data.shaderPath = shaderPath; // Already relative
         }
-        
+
         // Get shader parameters
         auto params = m_shaderEngine->getShaderParameters();
-        for (const auto& param : params)
+        for (const auto &param : params)
         {
             data.shaderParameters[param.name] = param.value;
         }
@@ -3392,7 +4263,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
         UIManager::SourceType sourceType = m_ui->getSourceType();
         data.sourceType = static_cast<int>(sourceType);
     }
-    
+
     // Note: devicePath is NOT saved - it can vary between systems
     if (m_capture && m_capture->isOpen())
     {
@@ -3441,7 +4312,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
     {
         // Get common V4L2 controls
         std::vector<std::string> controlNames = {"Brightness", "Contrast", "Saturation", "Hue"};
-        for (const auto& controlName : controlNames)
+        for (const auto &controlName : controlNames)
         {
             int32_t value = 0;
             if (m_capture->getControl(controlName, value))
@@ -3464,7 +4335,7 @@ void Application::createPresetFromCurrentState(const std::string& name, const st
 
 fs::path Application::getShaderBasePath() const
 {
-    const char* envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
+    const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     if (envShaderPath && fs::exists(envShaderPath))
     {
         return fs::path(envShaderPath);
@@ -3475,15 +4346,123 @@ fs::path Application::getShaderBasePath() const
     }
 }
 
-std::string Application::resolveShaderPath(const std::string& shaderPath) const
+std::string Application::resolveShaderPath(const std::string &shaderPath) const
 {
     if (shaderPath.empty())
     {
         return "";
     }
-    
+
     fs::path shaderBasePath = getShaderBasePath();
     fs::path fullPath = shaderBasePath / shaderPath;
-    
+
     return fullPath.string();
+}
+
+// Recording methods
+void Application::setRecordingSettings(const RecordingSettings &settings)
+{
+    if (m_recordingManager)
+    {
+        m_recordingManager->setRecordingSettings(settings);
+    }
+}
+
+RecordingSettings Application::getRecordingSettings() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getRecordingSettings();
+    }
+    return RecordingSettings();
+}
+
+bool Application::startRecording()
+{
+    if (m_recordingManager)
+    {
+        RecordingSettings settings = m_recordingManager->getRecordingSettings();
+        return m_recordingManager->startRecording(settings);
+    }
+    return false;
+}
+
+void Application::stopRecording()
+{
+    if (m_recordingManager)
+    {
+        m_recordingManager->stopRecording();
+    }
+}
+
+bool Application::isRecording() const
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->isRecording();
+    }
+    return false;
+}
+
+uint64_t Application::getRecordingDurationUs()
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentDurationUs();
+    }
+    return 0;
+}
+
+uint64_t Application::getRecordingFileSize()
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentFileSize();
+    }
+    return 0;
+}
+
+std::string Application::getRecordingFilename()
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getCurrentFilename();
+    }
+    return "";
+}
+
+std::vector<RecordingMetadata> Application::listRecordings()
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->listRecordings();
+    }
+    return std::vector<RecordingMetadata>();
+}
+
+bool Application::deleteRecording(const std::string &recordingId)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->deleteRecording(recordingId);
+    }
+    return false;
+}
+
+bool Application::renameRecording(const std::string &recordingId, const std::string &newName)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->renameRecording(recordingId, newName);
+    }
+    return false;
+}
+
+std::string Application::getRecordingPath(const std::string &recordingId)
+{
+    if (m_recordingManager)
+    {
+        return m_recordingManager->getRecordingPath(recordingId);
+    }
+    return "";
 }

@@ -61,6 +61,15 @@ namespace fs
             return fname.substr(pos);
         }
 
+        std::string stem() const
+        {
+            std::string fname = filename();
+            size_t pos = fname.find_last_of('.');
+            if (pos == std::string::npos)
+                return fname;
+            return fname.substr(0, pos);
+        }
+
         std::string string() const { return m_path; }
         const char *c_str() const { return m_path.c_str(); }
 
@@ -259,6 +268,136 @@ namespace fs
         }
         throw filesystem_error("Cannot get file size: " + p.string());
     }
+
+    inline void rename(const fs::path &old_path, const fs::path &new_path)
+    {
+        if (!MoveFileA(old_path.c_str(), new_path.c_str()))
+        {
+            throw filesystem_error("Cannot rename file: " + old_path.string() + " to " + new_path.string());
+        }
+    }
+
+    class directory_iterator
+    {
+    private:
+        HANDLE m_handle;
+        WIN32_FIND_DATAA m_findData;
+        bool m_valid;
+        fs::path m_path;
+
+    public:
+        directory_iterator() : m_handle(INVALID_HANDLE_VALUE), m_valid(false) {}
+        
+        directory_iterator(const fs::path &p) : m_handle(INVALID_HANDLE_VALUE), m_valid(false), m_path(p)
+        {
+            std::string searchPath = p.string();
+            if (!searchPath.empty() && searchPath.back() != '\\' && searchPath.back() != '/')
+            {
+                searchPath += "\\*";
+            }
+            else
+            {
+                searchPath += "*";
+            }
+            
+            m_handle = FindFirstFileA(searchPath.c_str(), &m_findData);
+            if (m_handle != INVALID_HANDLE_VALUE)
+            {
+                // Skip . and ..
+                while (m_findData.cFileName[0] == '.' && 
+                       (m_findData.cFileName[1] == '\0' || 
+                        (m_findData.cFileName[1] == '.' && m_findData.cFileName[2] == '\0')))
+                {
+                    if (!FindNextFileA(m_handle, &m_findData))
+                    {
+                        FindClose(m_handle);
+                        m_handle = INVALID_HANDLE_VALUE;
+                        m_valid = false;
+                        return;
+                    }
+                }
+                m_valid = true;
+            }
+        }
+
+        ~directory_iterator()
+        {
+            if (m_handle != INVALID_HANDLE_VALUE)
+            {
+                FindClose(m_handle);
+            }
+        }
+
+        bool operator==(const directory_iterator &other) const
+        {
+            return m_handle == other.m_handle && m_valid == other.m_valid;
+        }
+
+        bool operator!=(const directory_iterator &other) const
+        {
+            return !(*this == other);
+        }
+
+        directory_iterator &operator++()
+        {
+            if (m_handle != INVALID_HANDLE_VALUE)
+            {
+                if (FindNextFileA(m_handle, &m_findData))
+                {
+                    // Skip . and ..
+                    while (m_findData.cFileName[0] == '.' && 
+                           (m_findData.cFileName[1] == '\0' || 
+                            (m_findData.cFileName[1] == '.' && m_findData.cFileName[2] == '\0')))
+                    {
+                        if (!FindNextFileA(m_handle, &m_findData))
+                        {
+                            FindClose(m_handle);
+                            m_handle = INVALID_HANDLE_VALUE;
+                            m_valid = false;
+                            return *this;
+                        }
+                    }
+                }
+                else
+                {
+                    FindClose(m_handle);
+                    m_handle = INVALID_HANDLE_VALUE;
+                    m_valid = false;
+                }
+            }
+            return *this;
+        }
+
+        fs::path path() const
+        {
+            if (m_valid && m_handle != INVALID_HANDLE_VALUE)
+            {
+                std::string fullPath = m_path.string();
+                if (!fullPath.empty() && fullPath.back() != '\\' && fullPath.back() != '/')
+                {
+                    fullPath += "\\";
+                }
+                fullPath += m_findData.cFileName;
+                return fs::path(fullPath);
+            }
+            return fs::path();
+        }
+
+        bool is_regular_file() const
+        {
+            return m_valid && m_handle != INVALID_HANDLE_VALUE && 
+                   !(m_findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        }
+
+        bool is_directory() const
+        {
+            return m_valid && m_handle != INVALID_HANDLE_VALUE && 
+                   (m_findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        }
+    };
+
+    inline directory_iterator begin(directory_iterator iter) { return iter; }
+    inline directory_iterator end(directory_iterator) { return directory_iterator(); }
 
     // Estrutura para rastrear diretórios na pilha recursiva
     struct DirectoryState

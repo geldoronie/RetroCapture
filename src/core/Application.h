@@ -13,6 +13,10 @@
 #include "../renderer/glad_loader.h"
 #include "../utils/FilesystemCompat.h"
 
+// Forward declarations for recording
+struct RecordingSettings;
+struct RecordingMetadata;
+
 class IVideoCapture;
 class IAudioCapture;
 class WindowManager;
@@ -26,6 +30,7 @@ class FrameProcessor;
 class StreamManager;
 class HTTPTSStreamer;
 class PBOManager;
+class RecordingManager;
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -106,9 +111,25 @@ public:
     void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
     void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
 
+    // Recording configuration
+    void setRecordingSettings(const struct RecordingSettings& settings);
+    struct RecordingSettings getRecordingSettings() const;
+    bool startRecording();
+    void stopRecording();
+    bool isRecording() const;
+    uint64_t getRecordingDurationUs();
+    uint64_t getRecordingFileSize();
+    std::string getRecordingFilename();
+    std::vector<struct RecordingMetadata> listRecordings();
+    bool deleteRecording(const std::string& recordingId);
+    bool renameRecording(const std::string& recordingId, const std::string& newName);
+    std::string getRecordingPath(const std::string& recordingId);
+
     // API access methods
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
     UIManager *getUIManager() { return m_ui.get(); }
+    RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
+    IAudioCapture* getAudioCapture() const { return m_audioCapture.get(); }
 
     // Preset management
     void applyPreset(const std::string& presetName);
@@ -124,6 +145,9 @@ public:
     void applyResolutionChange(uint32_t width, uint32_t height); // Apply resolution change (called from main thread)
 
 private:
+    // Centralized cursor visibility management
+    // Always syncs cursor visibility with UI visibility state
+    void updateCursorVisibility();
     bool m_initialized = false;
 
     std::unique_ptr<IVideoCapture> m_capture;
@@ -139,6 +163,7 @@ private:
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
+    std::unique_ptr<RecordingManager> m_recordingManager;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 
@@ -302,5 +327,6 @@ private:
     bool initWebPortal();
     void stopWebPortal();
     bool initAudioCapture();
+    void restoreAudioDeviceConnections();
     void handleKeyInput();
 };

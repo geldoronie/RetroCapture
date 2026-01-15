@@ -10,6 +10,7 @@ let appState = {
     capture: { width: 0, height: 0, fps: 0 },
     image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
+    recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
     ds: { devices: [], currentDevice: '' }, // DirectShow (Windows)
     platform: { platform: 'linux', availableSourceTypes: [] },
@@ -93,6 +94,19 @@ async function loadPlatform() {
  * Atualiza a UI baseado na plataforma detectada
  */
 function updatePlatformUI() {
+    // Ocultar aba de áudio no Windows
+    const audioTab = document.getElementById('audio-tab');
+    const audioTabPane = document.getElementById('audio');
+    if (audioTab && audioTabPane) {
+        if (appState.platform.platform === 'windows') {
+            audioTab.style.display = 'none';
+            audioTabPane.style.display = 'none';
+        } else {
+            audioTab.style.display = '';
+            audioTabPane.style.display = '';
+        }
+    }
+    
     const sourceTypeSelect = document.getElementById('sourceType');
     if (!sourceTypeSelect) {
         console.warn('sourceType select não encontrado');
@@ -146,6 +160,9 @@ async function loadAllData() {
         
         // Carregar streaming settings
         await loadStreamingSettings();
+        
+        // Carregar recording settings
+        await loadRecordingSettings();
     } catch (error) {
         console.error('Erro ao carregar dados:', error);
         showAlert('Erro ao carregar dados: ' + error.message, 'danger');
@@ -181,6 +198,21 @@ async function loadStatus() {
         const canStart = status.streamingCanStart !== undefined ? status.streamingCanStart : true;
         const cooldownMs = status.streamingCooldownRemainingMs !== undefined ? status.streamingCooldownRemainingMs : 0;
         updateStreamingButton(isActive, canStart, cooldownMs);
+        
+        // Sincronizar configurações de imagem se disponíveis no status
+        if (status.image) {
+            const maintainAspectEl = document.getElementById('maintainAspect');
+            if (maintainAspectEl && status.image.maintainAspect !== undefined) {
+                // Só atualizar se o valor mudou para evitar flicker
+                if (maintainAspectEl.checked !== status.image.maintainAspect) {
+                    maintainAspectEl.checked = status.image.maintainAspect;
+                    // Atualizar appState
+                    if (appState.image) {
+                        appState.image.maintainAspect = status.image.maintainAspect;
+                    }
+                }
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar status:', error);
     }
@@ -362,7 +394,6 @@ function updateSourceUI(sourceType) {
     const dsContainer = document.getElementById('dsControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
 
-    // Esconder todos os containers primeiro
     if (v4l2Container) v4l2Container.style.display = 'none';
     if (dsContainer) dsContainer.style.display = 'none';
     if (noneMessage) noneMessage.style.display = 'none';
@@ -1089,6 +1120,15 @@ async function updateImageSettings() {
         };
         
         await api.setImageSettings(settings);
+        
+        // Atualizar appState para manter sincronizado
+        appState.image = {
+            brightness: settings.brightness,
+            contrast: settings.contrast,
+            maintainAspect: settings.maintainAspect,
+            fullscreen: settings.fullscreen
+        };
+        
         // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
         console.error('Erro ao atualizar configurações de imagem:', error);
@@ -1100,7 +1140,6 @@ async function updateImageSettings() {
  * Atualiza controles específicos do codec
  */
 function updateCodecSpecificControls(codec) {
-    // Esconder todos os containers
     const h264PresetContainer = document.getElementById('h264PresetContainer');
     const h265PresetContainer = document.getElementById('h265PresetContainer');
     const h265ProfileContainer = document.getElementById('h265ProfileContainer');
@@ -1334,11 +1373,15 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
     
     // Atualizar status a cada 2 segundos
-    statusUpdateInterval = setInterval(loadStatus, 2000);
+    statusUpdateInterval = setInterval(() => {
+        loadStatus();
+        updateRecordingStatus();
+    }, 2000);
     
     // Inicializar botão de streaming com estado atual
     setTimeout(() => {
         loadStatus();
+        updateRecordingStatus();
     }, 500);
     
     // Event listeners para sliders
@@ -1398,8 +1441,6 @@ document.addEventListener('DOMContentLoaded', function() {
             updateShaderParameter(name, value);
         }, 500);
     };
-    
-    // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
     
     // Resolução/FPS de captura (V4L2 e MF) - atualização em tempo real com debounce
     let captureSettingsTimeout = null;
@@ -1771,3 +1812,375 @@ async function deletePreset(presetName) {
         showAlert(`Erro ao deletar preset: ${error.message}`, 'danger');
     }
 }
+
+/**
+ * Carrega configurações de recording
+ */
+async function loadRecordingSettings() {
+    try {
+        const settings = await api.getRecordingSettings();
+        appState.recording = settings;
+        
+        const widthEl = document.getElementById('recordingWidth');
+        if (widthEl && settings.width) widthEl.value = settings.width;
+        
+        const heightEl = document.getElementById('recordingHeight');
+        if (heightEl && settings.height) heightEl.value = settings.height;
+        
+        const fpsEl = document.getElementById('recordingFPS');
+        if (fpsEl && settings.fps) fpsEl.value = settings.fps;
+        
+        const bitrateEl = document.getElementById('recordingBitrate');
+        if (bitrateEl && settings.bitrate) bitrateEl.value = settings.bitrate;
+        
+        const audioBitrateEl = document.getElementById('recordingAudioBitrate');
+        if (audioBitrateEl && settings.audioBitrate) audioBitrateEl.value = settings.audioBitrate;
+        
+        const videoCodecEl = document.getElementById('recordingVideoCodec');
+        if (videoCodecEl && settings.codec) videoCodecEl.value = settings.codec;
+        
+        const audioCodecEl = document.getElementById('recordingAudioCodec');
+        if (audioCodecEl && settings.audioCodec) audioCodecEl.value = settings.audioCodec;
+        
+        const containerEl = document.getElementById('recordingContainer');
+        if (containerEl && settings.container) containerEl.value = settings.container;
+        
+        const outputPathEl = document.getElementById('recordingOutputPath');
+        if (outputPathEl && settings.outputPath) outputPathEl.value = settings.outputPath;
+        
+        const filenameTemplateEl = document.getElementById('recordingFilenameTemplate');
+        if (filenameTemplateEl && settings.filenameTemplate) filenameTemplateEl.value = settings.filenameTemplate;
+        
+        const includeAudioEl = document.getElementById('recordingIncludeAudio');
+        if (includeAudioEl) includeAudioEl.checked = settings.includeAudio !== false;
+        
+        // Update status
+        await updateRecordingStatus();
+    } catch (error) {
+        console.error('Erro ao carregar configurações de recording:', error);
+    }
+}
+
+/**
+ * Atualiza status de recording
+ */
+async function updateRecordingStatus() {
+    try {
+        const status = await api.getRecordingStatus();
+        
+        const statusAlert = document.getElementById('recordingStatusAlert');
+        const statusIcon = document.getElementById('recordingStatusIcon');
+        const statusText = document.getElementById('recordingStatusText');
+        const statusInfo = document.getElementById('recordingStatusInfo');
+        const btn = document.getElementById('recordingStartStopBtn');
+        const btnText = document.getElementById('recordingStartStopText');
+        
+        if (status.isRecording) {
+            if (statusAlert) {
+                statusAlert.className = 'alert alert-danger';
+            }
+            if (statusIcon) {
+                statusIcon.className = 'bi bi-circle-fill me-2 text-danger';
+            }
+            if (statusText) {
+                statusText.textContent = 'Recording';
+            }
+            if (statusInfo) {
+                const duration = status.duration || 0;
+                const seconds = Math.floor(duration / 1000000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                const fileSize = status.fileSize || 0;
+                const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+                statusInfo.textContent = `${String(hours).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} - ${sizeMB} MB`;
+            }
+            if (btn) {
+                btn.className = 'btn btn-danger btn-lg w-100';
+            }
+            if (btnText) {
+                btnText.innerHTML = '<i class="bi bi-stop-circle me-2"></i>Stop Recording';
+            }
+        } else {
+            if (statusAlert) {
+                statusAlert.className = 'alert alert-secondary';
+            }
+            if (statusIcon) {
+                statusIcon.className = 'bi bi-circle-fill me-2 text-secondary';
+            }
+            if (statusText) {
+                statusText.textContent = 'Stopped';
+            }
+            if (statusInfo) {
+                statusInfo.textContent = '';
+            }
+            if (btn) {
+                btn.className = 'btn btn-primary btn-lg w-100';
+            }
+            if (btnText) {
+                btnText.innerHTML = '<i class="bi bi-record-circle me-2"></i>Start Recording';
+            }
+        }
+    } catch (error) {
+        console.error('Erro ao atualizar status de recording:', error);
+    }
+}
+
+/**
+ * Toggle recording (start/stop)
+ */
+async function toggleRecording() {
+    try {
+        const status = await api.getRecordingStatus();
+        const action = status.isRecording ? 'stop' : 'start';
+        
+        const btn = document.getElementById('recordingStartStopBtn');
+        const text = document.getElementById('recordingStartStopText');
+        if (btn) {
+            btn.disabled = true;
+            if (text) {
+                text.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+            }
+        }
+        
+        await api.setRecordingControl(action);
+        showAlert(`Recording ${action === 'start' ? 'started' : 'stopped'} successfully!`, 'success');
+        
+        // Recarregar status após um pequeno delay
+        setTimeout(async () => {
+            await updateRecordingStatus();
+            if (btn) btn.disabled = false;
+        }, 500);
+    } catch (error) {
+        console.error('Erro ao toggle recording:', error);
+        showAlert(`Erro ao ${status.isRecording ? 'parar' : 'iniciar'} gravação: ${error.message}`, 'danger');
+        
+        const btn = document.getElementById('recordingStartStopBtn');
+        if (btn) btn.disabled = false;
+        await updateRecordingStatus();
+    }
+}
+
+/**
+ * Define resolução rápida para gravação
+ */
+async function setRecordingResolution(width, height) {
+    try {
+        const widthInput = document.getElementById('recordingWidth');
+        const heightInput = document.getElementById('recordingHeight');
+        
+        if (widthInput) widthInput.value = width;
+        if (heightInput) heightInput.value = height;
+        
+        // Atualizar as configurações de gravação
+        await updateRecordingSettings();
+        showAlert(`Resolução de gravação definida para ${width}x${height}!`, 'success');
+    } catch (error) {
+        showAlert('Erro ao definir resolução de gravação: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza configurações de recording
+ */
+async function updateRecordingSettings() {
+    try {
+        const widthEl = document.getElementById('recordingWidth');
+        const heightEl = document.getElementById('recordingHeight');
+        const fpsEl = document.getElementById('recordingFPS');
+        const bitrateEl = document.getElementById('recordingBitrate');
+        const audioBitrateEl = document.getElementById('recordingAudioBitrate');
+        const videoCodecEl = document.getElementById('recordingVideoCodec');
+        const audioCodecEl = document.getElementById('recordingAudioCodec');
+        const containerEl = document.getElementById('recordingContainer');
+        const outputPathEl = document.getElementById('recordingOutputPath');
+        const filenameTemplateEl = document.getElementById('recordingFilenameTemplate');
+        const includeAudioEl = document.getElementById('recordingIncludeAudio');
+        
+        if (!widthEl || !heightEl || !fpsEl || !bitrateEl || !audioBitrateEl || !videoCodecEl || !audioCodecEl) {
+            showAlert('Error: Form elements not found', 'danger');
+            return;
+        }
+        
+        const settings = {
+            width: parseInt(widthEl.value) || 1920,
+            height: parseInt(heightEl.value) || 1080,
+            fps: parseInt(fpsEl.value) || 60,
+            bitrate: parseInt(bitrateEl.value) || 8000000,
+            audioBitrate: parseInt(audioBitrateEl.value) || 256000,
+            codec: videoCodecEl.value || 'h264',
+            audioCodec: audioCodecEl.value || 'aac',
+            container: containerEl ? containerEl.value : 'mp4',
+            outputPath: outputPathEl ? outputPathEl.value : 'recordings/',
+            filenameTemplate: filenameTemplateEl ? filenameTemplateEl.value : 'recording_%Y%m%d_%H%M%S',
+            includeAudio: includeAudioEl ? includeAudioEl.checked : true
+        };
+        
+        await api.setRecordingSettings(settings);
+        showAlert('Recording settings updated!', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar configurações de recording:', error);
+        showAlert(`Erro ao atualizar configurações: ${error.message}`, 'danger');
+    }
+}
+
+// Audio functions
+let audioState = {
+    inputSources: [],
+    status: { available: false, open: false, currentInputSource: '' }
+};
+
+/**
+ * Load audio status
+ */
+async function loadAudioStatus() {
+    try {
+        const status = await api.getAudioStatus();
+        audioState.status = status;
+        updateAudioUI();
+    } catch (error) {
+        console.error('Erro ao carregar status de áudio:', error);
+        audioState.status = { available: false, open: false, currentInputSource: '' };
+        updateAudioUI();
+    }
+}
+
+/**
+ * Load audio input sources
+ */
+async function loadAudioInputSources() {
+    try {
+        const response = await api.getAudioInputSources();
+        audioState.inputSources = response.sources || [];
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao carregar fontes de entrada de áudio:', error);
+        showAlert('Erro ao carregar fontes de entrada de áudio', 'danger');
+    }
+}
+
+/**
+ * Refresh audio input sources
+ */
+async function refreshAudioInputSources() {
+    await loadAudioInputSources();
+    showAlert('Input sources refreshed', 'success');
+}
+
+/**
+ * Update audio input source select dropdown
+ */
+function updateAudioInputSourceSelect() {
+    const select = document.getElementById('audioInputSource');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Select input source...</option>';
+    
+    audioState.inputSources.forEach(source => {
+        const option = document.createElement('option');
+        option.value = source.id;
+        option.textContent = source.description || source.name;
+        if (source.id === audioState.status.currentInputSource) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+
+/**
+ * Update audio UI based on current state
+ */
+function updateAudioUI() {
+    const statusInfo = document.getElementById('audioStatusInfo');
+    const currentInputSource = document.getElementById('currentInputSource');
+    const connectBtn = document.getElementById('connectInputBtn');
+    const disconnectBtn = document.getElementById('disconnectInputBtn');
+
+    if (statusInfo) {
+        if (!audioState.status.available) {
+            statusInfo.textContent = 'Audio capture not available';
+        } else if (!audioState.status.open) {
+            statusInfo.textContent = 'Audio capture not open';
+        } else {
+            statusInfo.textContent = `Sample Rate: ${audioState.status.sampleRate} Hz, Channels: ${audioState.status.channels}`;
+        }
+    }
+
+    if (currentInputSource) {
+        if (audioState.status.currentInputSource) {
+            const source = audioState.inputSources.find(s => s.id === audioState.status.currentInputSource);
+            currentInputSource.textContent = `Connected: ${source ? (source.description || source.name) : audioState.status.currentInputSource}`;
+        } else {
+            currentInputSource.textContent = 'No source connected';
+        }
+    }
+
+    // Update button states
+    const hasInput = !!audioState.status.currentInputSource;
+    if (connectBtn) connectBtn.disabled = hasInput;
+    if (disconnectBtn) disconnectBtn.disabled = !hasInput;
+}
+
+/**
+ * Connect audio input source
+ */
+async function connectAudioInput() {
+    const select = document.getElementById('audioInputSource');
+    if (!select || !select.value) {
+        showAlert('Please select an input source', 'warning');
+        return;
+    }
+
+    try {
+        await api.setAudioInputSource(select.value);
+        showAlert('Input source connected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao conectar fonte de entrada:', error);
+        showAlert(`Erro ao conectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Disconnect audio input source
+ */
+async function disconnectAudioInput() {
+    try {
+        await api.disconnectAudioInput();
+        showAlert('Input source disconnected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao desconectar fonte de entrada:', error);
+        showAlert(`Erro ao desconectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+
+/**
+ * Load all audio data
+ */
+async function loadAudioData() {
+    await loadAudioStatus();
+    await loadAudioInputSources();
+}
+
+// Load audio data when audio tab is shown (only on Linux)
+document.addEventListener('DOMContentLoaded', () => {
+    const audioTab = document.getElementById('audio-tab');
+    if (audioTab) {
+        audioTab.addEventListener('shown.bs.tab', () => {
+            // Only load if not Windows
+            if (appState.platform && appState.platform.platform !== 'windows') {
+                loadAudioData();
+            }
+        });
+        
+        // Also load on initial page load if audio tab is active (only on Linux)
+        const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
+        if (activeTab && appState.platform && appState.platform.platform !== 'windows') {
+            loadAudioData();
+        }
+    }
+});
