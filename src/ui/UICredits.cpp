@@ -33,7 +33,7 @@ void UICredits::render()
     ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Credits", &m_visible))
     {
-        ImGui::TextWrapped("RetroCapture v0.4.0");
+        ImGui::TextWrapped("RetroCapture v0.5.0");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();

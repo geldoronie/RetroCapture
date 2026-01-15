@@ -4,7 +4,7 @@
 set -e
 
 BUILD_TYPE="${BUILD_TYPE:-Release}"
-VERSION="${VERSION:-0.4.0-alpha}"
+VERSION="${VERSION:-0.5.0-alpha}"
 APP_NAME="RetroCapture"
 
 # Usar diretório temporário para gerar AppImage (já que /work é read-only)
