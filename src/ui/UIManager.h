@@ -220,8 +220,9 @@ public:
 
     // Visibilidade da UI
     bool isVisible() const { return m_uiVisible; }
-    void setVisible(bool visible) { m_uiVisible = visible; }
-    void toggle() { m_uiVisible = !m_uiVisible; }
+    void setVisible(bool visible);
+    void toggle() { setVisible(!m_uiVisible); }
+    void setOnVisibilityChanged(std::function<void(bool)> callback) { m_onVisibilityChanged = callback; }
 
     // Streaming info setters (public)
     void setStreamingActive(bool active) { m_streamingActive = active; }
@@ -616,6 +617,7 @@ private:
     std::string m_currentShader;
     int m_selectedShaderIndex = 0;
     std::function<void(const std::string &)> m_onShaderChanged;
+    std::function<void(bool)> m_onVisibilityChanged;
     ShaderEngine *m_shaderEngine = nullptr;
 
     // Brightness/Contrast

@@ -159,6 +159,16 @@ bool Application::init()
     return true;
 }
 
+void Application::updateCursorVisibility()
+{
+    // Centralized method to sync cursor visibility with UI visibility
+    // This ensures consistency across all code paths
+    if (m_ui && m_window)
+    {
+        m_window->setCursorVisible(m_ui->isVisible());
+    }
+}
+
 bool Application::initWindow()
 {
 #ifdef USE_SDL2
@@ -699,6 +709,16 @@ bool Application::initUI()
     }
 
     // Configure callbacks
+    m_ui->setOnVisibilityChanged([this](bool /* visible */)
+                                  {
+        // Cursor visibility will be updated by the callback
+        updateCursorVisibility();
+    });
+
+    // Set initial cursor visibility based on UI visibility
+    // This ensures cursor is hidden if UI starts hidden (e.g., --hide-ui flag)
+    updateCursorVisibility();
+
     m_ui->setOnShaderChanged([this](const std::string &shaderPath)
                              {
         if (m_shaderEngine) {
@@ -2745,6 +2765,10 @@ void Application::run()
         {
             m_ui->beginFrame();
         }
+        
+        // Update cursor visibility after ImGui processes events
+        // This ensures cursor state is applied even if ImGui tries to control it
+        updateCursorVisibility();
 
         // Try to capture and process the latest frame (discarding old frames)
         // IMPORTANT: Capture always continues, even when window is not focused
@@ -3695,6 +3719,10 @@ void Application::run()
             }
 
             m_window->swapBuffers();
+            
+            // Update cursor visibility after swapBuffers
+            // This ensures cursor state is applied after all rendering is complete
+            updateCursorVisibility();
         }
         else
         {
@@ -3723,6 +3751,10 @@ void Application::run()
 
             // IMPORTANT: Always do swapBuffers so window is updated and visible
             m_window->swapBuffers();
+            
+            // Update cursor visibility after swapBuffers
+            // This ensures cursor state is applied after all rendering is complete
+            updateCursorVisibility();
 
 // Do a small sleep to not consume 100% CPU
 #ifdef PLATFORM_LINUX

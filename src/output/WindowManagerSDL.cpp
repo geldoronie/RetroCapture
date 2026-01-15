@@ -427,6 +427,12 @@ void WindowManagerSDL::pollEvents()
                     m_resizeCallback(w, h);
                 }
             }
+            else if (event.window.event == SDL_WINDOWEVENT_ENTER || 
+                     event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+            {
+                // When mouse enters window or window gains focus, cursor visibility
+                // should be updated based on UI visibility (handled in main loop)
+            }
             break;
         case SDL_KEYDOWN:
             // F12 para toggle UI (similar ao GLFW)
@@ -498,6 +504,24 @@ bool WindowManagerSDL::isKeyPressed(int keyCode) const
     const Uint8* state = SDL_GetKeyboardState(nullptr);
     SDL_Scancode scancode = SDL_GetScancodeFromKey(static_cast<SDL_Keycode>(keyCode));
     return state[scancode] != 0;
+}
+
+void WindowManagerSDL::setCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    // SDL_ShowCursor returns the previous state
+    // Force the cursor state by calling it twice if needed
+    int currentState = SDL_ShowCursor(SDL_QUERY);
+    int desiredState = visible ? SDL_ENABLE : SDL_DISABLE;
+    
+    if (currentState != desiredState)
+    {
+        SDL_ShowCursor(desiredState);
+    }
 }
 
 #endif // USE_SDL2

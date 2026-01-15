@@ -44,6 +44,9 @@ public:
     void setUserData(void* userData) { m_userData = userData; }
     void* getUserData() const { return m_userData; }
     
+    // Controlar visibilidade do cursor
+    void setCursorVisible(bool visible);
+    
 private:
     void* m_window = nullptr; // GLFWwindow* (opaque pointer)
     uint32_t m_width = 0;

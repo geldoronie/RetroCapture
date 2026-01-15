@@ -206,6 +206,26 @@ void WindowManager::setResizeCallback(std::function<void(int, int)> callback)
     m_resizeCallback = callback;
 }
 
+void WindowManager::setCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+    
+    // Check current cursor mode
+    int currentMode = glfwGetInputMode(window, GLFW_CURSOR);
+    int desiredMode = visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN;
+    
+    // Only change if different to avoid unnecessary calls
+    if (currentMode != desiredMode)
+    {
+        glfwSetInputMode(window, GLFW_CURSOR, desiredMode);
+    }
+}
+
 void WindowManager::setFullscreen(bool fullscreen, int monitorIndex)
 {
     if (!m_window || !m_initialized)

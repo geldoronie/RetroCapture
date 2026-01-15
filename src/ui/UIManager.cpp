@@ -186,6 +186,18 @@ void UIManager::beginFrame()
     ImGui_ImplGlfw_NewFrame();
 #endif
     ImGui::NewFrame();
+    
+    // Disable ImGui cursor control when UI is hidden
+    // This prevents ImGui from overriding our cursor visibility settings
+    ImGuiIO& io = ImGui::GetIO();
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    }
+    else
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
 }
 
 void UIManager::endFrame()
@@ -204,6 +216,26 @@ void UIManager::endFrame()
     {
         // Quando oculta, ainda precisamos finalizar o frame para manter o estado correto
         ImGui::EndFrame();
+    }
+    
+    // Re-enable mouse input after rendering (if UI is visible)
+    // This ensures ImGui doesn't interfere with cursor visibility
+    ImGuiIO& io = ImGui::GetIO();
+    if (m_uiVisible)
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
+}
+
+void UIManager::setVisible(bool visible)
+{
+    if (m_uiVisible != visible)
+    {
+        m_uiVisible = visible;
+        if (m_onVisibilityChanged)
+        {
+            m_onVisibilityChanged(visible);
+        }
     }
 }
 
@@ -241,7 +273,7 @@ void UIManager::render()
         {
             if (ImGui::MenuItem("Toggle UI", "F12"))
             {
-                m_uiVisible = !m_uiVisible;
+                setVisible(!m_uiVisible);
             }
             ImGui::Separator();
             if (m_configWindow)

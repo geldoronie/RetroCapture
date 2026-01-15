@@ -52,6 +52,9 @@ public:
     // Verificar se tecla específica está pressionada (para compatibilidade com GLFW)
     bool isKeyPressed(int keyCode) const; // keyCode: SDLK_F12, etc.
     
+    // Controlar visibilidade do cursor
+    void setCursorVisible(bool visible);
+    
 private:
 #ifdef USE_SDL2
     SDL_Window* m_window = nullptr;

@@ -145,6 +145,9 @@ public:
     void applyResolutionChange(uint32_t width, uint32_t height); // Apply resolution change (called from main thread)
 
 private:
+    // Centralized cursor visibility management
+    // Always syncs cursor visibility with UI visibility state
+    void updateCursorVisibility();
     bool m_initialized = false;
 
     std::unique_ptr<IVideoCapture> m_capture;
