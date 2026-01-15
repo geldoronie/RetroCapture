@@ -94,6 +94,19 @@ async function loadPlatform() {
  * Atualiza a UI baseado na plataforma detectada
  */
 function updatePlatformUI() {
+    // Ocultar aba de áudio no Windows
+    const audioTab = document.getElementById('audio-tab');
+    const audioTabPane = document.getElementById('audio');
+    if (audioTab && audioTabPane) {
+        if (appState.platform.platform === 'windows') {
+            audioTab.style.display = 'none';
+            audioTabPane.style.display = 'none';
+        } else {
+            audioTab.style.display = '';
+            audioTabPane.style.display = '';
+        }
+    }
+    
     const sourceTypeSelect = document.getElementById('sourceType');
     if (!sourceTypeSelect) {
         console.warn('sourceType select não encontrado');
@@ -2153,18 +2166,21 @@ async function loadAudioData() {
     await loadAudioInputSources();
 }
 
-// Load audio data when audio tab is shown
+// Load audio data when audio tab is shown (only on Linux)
 document.addEventListener('DOMContentLoaded', () => {
     const audioTab = document.getElementById('audio-tab');
     if (audioTab) {
         audioTab.addEventListener('shown.bs.tab', () => {
-            loadAudioData();
+            // Only load if not Windows
+            if (appState.platform && appState.platform.platform !== 'windows') {
+                loadAudioData();
+            }
         });
-    }
-    
-    // Also load on initial page load if audio tab is active
-    const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
-    if (activeTab) {
-        loadAudioData();
+        
+        // Also load on initial page load if audio tab is active (only on Linux)
+        const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
+        if (activeTab && appState.platform && appState.platform.platform !== 'windows') {
+            loadAudioData();
+        }
     }
 });

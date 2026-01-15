@@ -119,11 +119,13 @@ void UIConfiguration::render()
             ImGui::EndTabItem();
         }
 
+#ifdef __linux__
         if (ImGui::BeginTabItem("Audio"))
         {
             audioTab.render();
             ImGui::EndTabItem();
         }
+#endif
 
         ImGui::EndTabBar();
     }
