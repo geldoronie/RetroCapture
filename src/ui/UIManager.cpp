@@ -2209,6 +2209,10 @@ void UIManager::loadConfig()
                 m_fullscreen = image["fullscreen"];
             if (image.contains("monitorIndex"))
                 m_monitorIndex = image["monitorIndex"];
+            if (image.contains("outputWidth"))
+                m_outputWidth = image["outputWidth"].get<uint32_t>();
+            if (image.contains("outputHeight"))
+                m_outputHeight = image["outputHeight"].get<uint32_t>();
         }
 
         // Carregar configurações do Web Portal
@@ -2432,6 +2436,46 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar configurações de gravação
+        if (config.contains("recording"))
+        {
+            auto &recording = config["recording"];
+            if (recording.contains("width"))
+                m_recordingWidth = recording["width"].get<uint32_t>();
+            if (recording.contains("height"))
+                m_recordingHeight = recording["height"].get<uint32_t>();
+            if (recording.contains("fps"))
+                m_recordingFps = recording["fps"].get<uint32_t>();
+            if (recording.contains("bitrate"))
+                m_recordingBitrate = recording["bitrate"].get<uint32_t>();
+            if (recording.contains("audioBitrate"))
+                m_recordingAudioBitrate = recording["audioBitrate"].get<uint32_t>();
+            if (recording.contains("videoCodec"))
+                m_recordingVideoCodec = recording["videoCodec"].get<std::string>();
+            if (recording.contains("audioCodec"))
+                m_recordingAudioCodec = recording["audioCodec"].get<std::string>();
+            if (recording.contains("h264Preset"))
+                m_recordingH264Preset = recording["h264Preset"].get<std::string>();
+            if (recording.contains("h265Preset"))
+                m_recordingH265Preset = recording["h265Preset"].get<std::string>();
+            if (recording.contains("h265Profile"))
+                m_recordingH265Profile = recording["h265Profile"].get<std::string>();
+            if (recording.contains("h265Level"))
+                m_recordingH265Level = recording["h265Level"].get<std::string>();
+            if (recording.contains("vp8Speed"))
+                m_recordingVP8Speed = recording["vp8Speed"].get<int>();
+            if (recording.contains("vp9Speed"))
+                m_recordingVP9Speed = recording["vp9Speed"].get<int>();
+            if (recording.contains("container"))
+                m_recordingContainer = recording["container"].get<std::string>();
+            if (recording.contains("outputPath"))
+                m_recordingOutputPath = recording["outputPath"].get<std::string>();
+            if (recording.contains("filenameTemplate"))
+                m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
+            if (recording.contains("includeAudio"))
+                m_recordingIncludeAudio = recording["includeAudio"];
+        }
+
         LOG_INFO("Configuration loaded from: " + configPath);
     }
     catch (const std::exception &e)
@@ -2472,7 +2516,9 @@ void UIManager::saveConfig()
             {"contrast", m_contrast},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
-            {"monitorIndex", m_monitorIndex}};
+            {"monitorIndex", m_monitorIndex},
+            {"outputWidth", m_outputWidth},
+            {"outputHeight", m_outputHeight}};
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
@@ -2512,6 +2558,26 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+
+        // Salvar configurações de gravação
+        config["recording"] = {
+            {"width", m_recordingWidth},
+            {"height", m_recordingHeight},
+            {"fps", m_recordingFps},
+            {"bitrate", m_recordingBitrate},
+            {"audioBitrate", m_recordingAudioBitrate},
+            {"videoCodec", m_recordingVideoCodec},
+            {"audioCodec", m_recordingAudioCodec},
+            {"h264Preset", m_recordingH264Preset},
+            {"h265Preset", m_recordingH265Preset},
+            {"h265Profile", m_recordingH265Profile},
+            {"h265Level", m_recordingH265Level},
+            {"vp8Speed", m_recordingVP8Speed},
+            {"vp9Speed", m_recordingVP9Speed},
+            {"container", m_recordingContainer},
+            {"outputPath", m_recordingOutputPath},
+            {"filenameTemplate", m_recordingFilenameTemplate},
+            {"includeAudio", m_recordingIncludeAudio}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
