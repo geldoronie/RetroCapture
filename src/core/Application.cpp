@@ -2545,26 +2545,14 @@ void Application::restoreAudioDeviceConnections()
         return;
     }
 
-    // Restore input source connection
     std::string savedInputSourceId = m_ui->getAudioInputSourceId();
-    LOG_INFO("Checking saved audio input source ID: '" + savedInputSourceId + "'");
     if (!savedInputSourceId.empty())
     {
-        LOG_INFO("Restoring audio input source: " + savedInputSourceId);
-        // Give PulseAudio a moment to be ready
-        usleep(500000); // 500ms
-        if (pulseCapture->connectInputSource(savedInputSourceId))
-        {
-            LOG_INFO("Audio input source restored successfully");
-        }
-        else
+        usleep(500000);
+        if (!pulseCapture->connectInputSource(savedInputSourceId))
         {
             LOG_WARN("Failed to restore audio input source: " + savedInputSourceId);
         }
-    }
-    else
-    {
-        LOG_INFO("No saved audio input source to restore");
     }
 
 #endif

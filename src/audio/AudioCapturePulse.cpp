@@ -675,7 +675,6 @@ std::vector<AudioDeviceInfo> AudioCapturePulse::listInputSources()
         devices = g_availableSources;
     }
 
-    LOG_INFO("Found " + std::to_string(devices.size()) + " audio input sources");
     return devices;
 }
 
@@ -948,7 +947,6 @@ void AudioCapturePulse::removeVirtualSink()
             if (foundModuleIndex != PA_INVALID_INDEX)
             {
                 moduleIndexToRemove = foundModuleIndex;
-                LOG_INFO("Found module that created 'RetroCapture' sink: " + std::to_string(moduleIndexToRemove));
             }
             else
             {
@@ -1027,8 +1025,6 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
 
     g_sinkOperationSuccess = false;
 
-    LOG_INFO("Connecting input source '" + sourceName + "' to RetroCapture sink...");
-    LOG_INFO("Loopback args: " + args);
     pa_operation *op = pa_context_load_module(m_context, "module-loopback", args.c_str(), operationCallback, this);
 
     if (!op)
@@ -1049,9 +1045,8 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
         }
         if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX)
         {
-            m_inputLoopbackModuleIndex = g_moduleIndex; // Store module index
+            m_inputLoopbackModuleIndex = g_moduleIndex;
             m_currentInputSourceName = sourceName;
-            LOG_INFO("Input source '" + sourceName + "' connected to RetroCapture sink (module index: " + std::to_string(g_moduleIndex) + ")");
             break;
         }
         usleep(10000);
@@ -1073,8 +1068,6 @@ void AudioCapturePulse::disconnectInputSource()
 {
     if (m_inputLoopbackModuleIndex == PA_INVALID_INDEX)
     {
-        LOG_INFO("No input source to disconnect (module index is invalid)");
-        // Try to find and remove any loopback connected to RetroCapture sink
         cleanupOrphanedLoopbacks();
         m_currentInputSourceName.clear();
         return;
@@ -1088,7 +1081,6 @@ void AudioCapturePulse::disconnectInputSource()
         return;
     }
 
-    LOG_INFO("Disconnecting input source from RetroCapture sink (module index: " + std::to_string(m_inputLoopbackModuleIndex) + ")...");
     g_sinkOperationSuccess = false;
     pa_operation *op = pa_context_unload_module(m_context, m_inputLoopbackModuleIndex, unloadModuleCallback, this);
 
@@ -1113,29 +1105,14 @@ void AudioCapturePulse::disconnectInputSource()
             pa_mainloop_iterate(m_mainloop, 0, &ret);
         }
         
-        // Check operation state
         pa_operation_state_t opState = pa_operation_get_state(op);
-        if (opState == PA_OPERATION_DONE)
+        if (opState == PA_OPERATION_DONE || opState == PA_OPERATION_CANCELLED)
         {
-            if (g_sinkOperationSuccess)
-            {
-                LOG_INFO("Module unloaded successfully");
-            }
-            else
-            {
-                LOG_WARN("Module unload operation completed but callback indicates failure");
-            }
-            break;
-        }
-        else if (opState == PA_OPERATION_CANCELLED)
-        {
-            LOG_WARN("Module unload operation was cancelled");
             break;
         }
         
         if (g_sinkOperationSuccess)
         {
-            LOG_INFO("Module unloaded successfully (callback success)");
             break;
         }
         
@@ -1154,7 +1131,6 @@ void AudioCapturePulse::disconnectInputSource()
 
     m_inputLoopbackModuleIndex = PA_INVALID_INDEX;
     m_currentInputSourceName.clear();
-    LOG_INFO("Input source disconnected from RetroCapture sink");
 }
 
 
@@ -1248,7 +1224,6 @@ void AudioCapturePulse::cleanupOrphanedLoopbacks()
     {
         if (moduleIndex != m_inputLoopbackModuleIndex)
         {
-            LOG_INFO("Removing orphaned loopback module: " + std::to_string(moduleIndex));
             g_sinkOperationSuccess = false;
             pa_operation *unloadOp = pa_context_unload_module(m_context, moduleIndex, unloadModuleCallback, this);
 
@@ -1425,7 +1400,6 @@ void AudioCapturePulse::cleanupOrphanedSinkInputs()
     // Remove orphaned sink inputs
     for (uint32_t sinkInputIndex : orphanedSinkInputs)
     {
-        LOG_INFO("Removing orphaned sink input connected to RetroCapture: " + std::to_string(sinkInputIndex));
         pa_operation *killOp = pa_context_kill_sink_input(m_context, sinkInputIndex, nullptr, nullptr);
         if (killOp)
         {

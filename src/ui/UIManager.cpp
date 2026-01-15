@@ -2376,12 +2376,7 @@ void UIManager::loadConfig()
             if (audio.contains("inputSourceId") && !audio["inputSourceId"].is_null())
             {
                 m_audioInputSourceId = audio["inputSourceId"].get<std::string>();
-                LOG_INFO("Loaded audio input source ID from config: '" + m_audioInputSourceId + "'");
             }
-        }
-        else
-        {
-            LOG_INFO("No audio configuration found in config file");
         }
 
         LOG_INFO("Configuration loaded from: " + configPath);
@@ -2464,7 +2459,6 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
-        LOG_INFO("Saving audio configuration - inputSourceId: '" + m_audioInputSourceId + "'");
 
         // Escrever arquivo
         std::ofstream file(configPath);

@@ -2311,10 +2311,8 @@ bool APIController::handleSetAudioInputSource(int clientFd, const std::string &b
         {
             if (pulseCapture->connectInputSource(sourceId))
             {
-                // Save configuration
                 if (m_uiManager)
                 {
-                    LOG_INFO("Saving audio input source ID via API: '" + sourceId + "'");
                     m_uiManager->setAudioInputSourceId(sourceId);
                     m_uiManager->saveConfig();
                 }
@@ -2369,10 +2367,8 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
     {
         pulseCapture->disconnectInputSource();
         
-        // Save configuration (clear saved source)
         if (m_uiManager)
         {
-            LOG_INFO("Clearing audio input source ID via API");
             m_uiManager->setAudioInputSourceId("");
             m_uiManager->saveConfig();
         }
