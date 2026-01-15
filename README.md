@@ -16,7 +16,7 @@ RetroCapture was born from the desire to experience retro gaming with the authen
 
 ## ⚠️ Development Status
 
-**RetroCapture is currently in active development (v0.4.0-alpha).**
+**RetroCapture is currently in active development (v0.5.0-alpha).**
 
 ### Shader Support
 
@@ -57,6 +57,18 @@ We're continuously working to improve compatibility and add support for more sha
 - ✅ **Real-time A/V Synchronization**: Timestamp-based synchronization system
 - ✅ **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
 - ✅ **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
+
+### Video Recording (NEW in 0.5.0-alpha)
+
+- ✅ **Local File Recording**: Record processed video to local files (MP4, MKV, AVI)
+- ✅ **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9 video codecs
+- ✅ **Audio Recording**: AAC, MP3, and Opus audio codecs with optional audio inclusion
+- ✅ **Configurable Quality**: Adjustable resolution, FPS, bitrates, and codec-specific options
+- ✅ **Recording Management**: List, view, delete, and rename recordings
+- ✅ **Thumbnail Generation**: Automatic thumbnail generation from first frame
+- ✅ **Metadata Tracking**: Complete recording metadata with JSON persistence
+- ✅ **Configuration Persistence**: All recording settings saved and restored automatically
+- ✅ **Web Interface**: Full recording control and management through web portal
 
 ### Web Portal
 
@@ -182,6 +194,32 @@ docker-compose run --rm build-windows
 
 O executável estará em `./build-windows-x86_64/bin/retrocapture.exe`
 
+### Raspberry Pi (ARM)
+
+**Opção 1: Build Nativo no Raspberry Pi (Recomendado para Raspberry Pi 4+)**
+
+```bash
+# Instalar dependências
+./tools/install-deps-raspberry-pi.sh
+
+# Build nativo
+./tools/build-on-raspberry-pi.sh
+```
+
+O executável estará em `./build-linux-arm64v8/bin/retrocapture` (ou `build-linux-arm32v7` para ARM32).
+
+**Opção 2: Cross-Compile do Linux x86_64**
+
+```bash
+# Build ARM64v8 (Raspberry Pi 4+)
+./tools/build-linux-arm64v8-docker.sh
+
+# Build ARM32v7 (Raspberry Pi 2, 3, Zero)
+./tools/build-linux-arm32v7-docker.sh
+```
+
+**Nota**: Para Raspberry Pi sem display (headless), o RetroCapture usa SDL2 com DirectFB. Use `--hide-ui` para iniciar sem interface gráfica.
+
 ## 📖 Usage
 
 ### Basic Usage
@@ -258,6 +296,30 @@ The web portal provides a complete remote control interface accessible from any 
 3. Install as PWA (if HTTPS is enabled) for native app experience
 
 **Note**: For PWA installation on local network IPs, HTTPS is required. See `ssl/README.md` for certificate generation instructions.
+
+### Recording
+
+Recording can be configured and started via the GUI (Recording tab), web portal, or API. Once recording is active:
+
+1. **Configure Recording**: Set resolution, FPS, codec, bitrate, container format, and output path
+2. **Start Recording**: Click "Start Recording" button in UI or use API
+3. **Monitor Status**: View recording duration, file size, and filename in real-time
+4. **Stop Recording**: Click "Stop Recording" button when done
+5. **Manage Recordings**: View, download, delete, or rename recordings from the Recordings window
+
+**Recording Features**:
+- Multiple video codecs (H.264, H.265, VP8, VP9)
+- Multiple audio codecs (AAC, MP3, Opus)
+- Multiple container formats (MP4, MKV, AVI)
+- Configurable resolution and frame rate
+- Optional audio recording
+- Automatic thumbnail generation
+- Recording metadata persistence
+
+**Access Recordings**:
+- Local UI: Open "Recordings" window from menu
+- Web Portal: Navigate to Recordings section
+- File System: Recordings saved to configured output directory (default: `recordings/`)
 
 ### Command-Line Parameters
 
@@ -387,6 +449,19 @@ Press **F12** to toggle the graphical interface. The GUI provides:
   - Adjust video and audio bitrates
   - View stream URL and active client count
   - Start/stop streaming with cooldown protection
+- **Recording Tab**: Configure video recording
+  - Real-time recording status (active/inactive, duration, file size, filename)
+  - Resolution and FPS selection (with presets or match capture)
+  - Codec selection and codec-specific options
+  - Bitrate controls with visual sliders
+  - Container format selection (MP4, MKV, AVI)
+  - Output path and filename template configuration
+  - Start/Stop recording button with visual feedback
+- **Recordings Window**: Manage recordings
+  - View recording list with thumbnails
+  - Download recordings
+  - Delete and rename recordings
+  - View recording metadata
 - **Web Portal Tab**: Configure web portal
   - Enable/disable web portal
   - Configure HTTPS settings
@@ -395,7 +470,7 @@ Press **F12** to toggle the graphical interface. The GUI provides:
   - Start/stop portal independently from streaming
 - **Info Tab**: View capture device information, resolution, framerate, and application details
 
-**Note**: All settings are automatically saved to `config.json` and restored on application startup.
+**Note**: All settings (including recording settings) are automatically saved to `config.json` and restored on application startup.
 
 ## 📚 Documentation
 
@@ -480,6 +555,7 @@ RetroCapture provides a comprehensive set of features for real-time video captur
 - **Real-Time Parameter Editing**: Edit shader parameters and see changes instantly
 - **Shader Management**: Browse, select, and save shader presets
 - **Stream Management**: Configure and monitor streaming from the UI
+- **Recording Management**: Configure and manage video recordings from the UI
 - **Device Selection**: Easy selection and configuration of capture devices
 
 ### Advanced Features

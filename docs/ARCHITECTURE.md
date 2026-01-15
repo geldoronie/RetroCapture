@@ -2,7 +2,7 @@
 
 ## Overview
 
-RetroCapture is a real-time video capture application for Linux and Windows that applies RetroArch shaders (GLSL) to video feeds from capture cards and streams the processed output over HTTP. The architecture was designed to be modular, efficient, and low-latency, with support for multiple video codecs (H.264, H.265, VP8, VP9) and real-time audio/video synchronization. The application uses a cross-platform architecture with platform-specific implementations for video and audio capture.
+RetroCapture is a real-time video capture application for Linux and Windows that applies RetroArch shaders (GLSL) to video feeds from capture cards, streams the processed output over HTTP, and records video to local files. The architecture was designed to be modular, efficient, and low-latency, with support for multiple video codecs (H.264, H.265, VP8, VP9) and real-time audio/video synchronization. The application uses a cross-platform architecture with platform-specific implementations for video and audio capture.
 
 ## Architecture Diagram
 
@@ -57,6 +57,23 @@ RetroCapture is a real-time video capture application for Linux and Windows that
             HTTP MPEG-TS Stream
             (H.264/H.265/VP8/VP9 + AAC)
 
+        ┌─────────────────────┐
+        │  RecordingManager   │
+        │   (Orchestrator)    │
+        └─────────────────────┘
+                    │
+        ┌───────────┼───────────┐
+        │           │           │
+        ▼           ▼           ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│FileRecorder  │ │MediaEncoder  │ │MediaSync     │
+│  (File I/O)  │ │  (FFmpeg)    │ │ (A/V Sync)   │
+└──────────────┘ └──────────────┘ └──────────────┘
+        │
+        ▼
+    Local Files
+    (MP4/MKV/AVI)
+
 Utility Classes:
 ├── ShaderPreprocessor (shader preprocessing)
 ├── V4L2ControlMapper (control name→ID mapping)
@@ -84,8 +101,9 @@ Utility Classes:
 - `OpenGLRenderer`: OpenGL rendering
 - `FrameProcessor`: Frame processing and texture management
 - `ShaderEngine`: Shader processing
-- `AudioCapture`: Audio capture from PulseAudio
+- `AudioCapture`: Audio capture from PulseAudio (Linux) or WASAPI (Windows)
 - `StreamManager`: Streaming orchestration
+- `RecordingManager`: Video recording orchestration
 - `UIManager`: Graphical interface
 
 **Memory Management**:
@@ -99,7 +117,11 @@ Utility Classes:
 VideoCapture (V4L2/DS) → FrameProcessor (YUYV→RGB, Texture) → ShaderEngine → OpenGLRenderer → Window
                                                                               ↓
                                                                     StreamManager → HTTPTSStreamer → HTTP Stream
+                                                                              ↓
+                                                                    RecordingManager → FileRecorder → Local Files
 AudioCapture (Pulse/WASAPI) → StreamManager → HTTPTSStreamer → HTTP Stream
+                                                              ↓
+                                                          RecordingManager → FileRecorder → Local Files
 ```
 
 ### 2. VideoCapture (`src/capture/IVideoCapture.h` and implementations)
@@ -554,7 +576,123 @@ void setVP9Speed(int speed);
 - `stop()` sets flags, closes sockets, waits for threads, then cleans up FFmpeg resources
 - Idempotent cleanup prevents double-free errors
 
-### 13. IStreamer (`src/streaming/IStreamer.h`)
+### 13. RecordingManager (`src/recording/RecordingManager.h/cpp`)
+
+**Responsibility**: Orchestrates video recording to local files.
+
+**Main Features**:
+
+- Recording lifecycle management (start/stop)
+- Coordinates MediaEncoder and FileRecorder
+- Manages recording metadata
+- Handles frame and audio input
+- Dedicated encoding thread for non-blocking recording
+- Recording list management (list, delete, rename)
+- Automatic thumbnail generation
+
+**Main API**:
+
+```cpp
+bool startRecording(const RecordingSettings& settings);
+void stopRecording();
+bool isRecording() const;
+void pushFrame(const uint8_t* data, uint32_t width, uint32_t height);
+void pushAudio(const int16_t* samples, size_t sampleCount);
+std::vector<RecordingMetadata> listRecordings();
+bool deleteRecording(const std::string& recordingId);
+bool renameRecording(const std::string& recordingId, const std::string& newName);
+```
+
+**Threading Architecture**:
+
+- **Main Thread**: Receives frames and audio via `pushFrame()` and `pushAudio()`
+- **Encoding Thread** (`encodingThread`): Encodes video/audio and writes to file
+
+**Synchronization**:
+
+- Uses `MediaSynchronizer` (shared with streaming) for audio/video synchronization
+- Timestamp-based synchronization using `CLOCK_MONOTONIC`
+- Same synchronization system as streaming for consistency
+
+**File Management**:
+
+- Generates filenames from templates (strftime format)
+- Creates output directories automatically
+- Tracks file size and duration
+- Generates thumbnails from first frame
+- Stores metadata in JSON format
+
+### 14. FileRecorder (`src/recording/FileRecorder.h/cpp`)
+
+**Responsibility**: Writes encoded video/audio data to local files.
+
+**Main Features**:
+
+- File I/O for recording files
+- Supports MP4, MKV, and AVI containers
+- Automatic directory creation
+- File size and duration tracking
+- Proper file finalization (moov atom for MP4)
+
+**Main API**:
+
+```cpp
+bool initialize(const MediaEncoder::VideoConfig& videoConfig,
+                const MediaEncoder::AudioConfig& audioConfig,
+                void* videoCodecContext, void* audioCodecContext,
+                const std::string& outputPath);
+bool startRecording();
+void stopRecording();
+bool muxPacket(const MediaEncoder::EncodedPacket& packet);
+void flush();
+```
+
+**Container Support**:
+
+- **MP4**: Full support with proper moov atom placement
+- **MKV**: Matroska container support
+- **AVI**: Legacy AVI format support
+
+### 15. RecordingSettings (`src/recording/RecordingSettings.h`)
+
+**Responsibility**: Configuration structure for recording parameters.
+
+**Main Features**:
+
+- Video settings (resolution, FPS, codec, bitrate, presets)
+- Audio settings (codec, bitrate, include audio flag)
+- Container format selection
+- Output path and filename template
+- Optional limits (max duration, max file size)
+
+**Configuration Structure**:
+
+```cpp
+struct RecordingSettings {
+    uint32_t width, height, fps;
+    uint32_t bitrate;
+    std::string codec; // h264, h265, vp8, vp9
+    std::string preset;
+    std::string container; // mp4, mkv, avi
+    std::string outputPath;
+    std::string filenameTemplate; // strftime format
+    bool includeAudio;
+    // ... codec-specific settings
+};
+```
+
+### 16. RecordingMetadata (`src/recording/RecordingMetadata.h/cpp`)
+
+**Responsibility**: Manages recording metadata and thumbnails.
+
+**Main Features**:
+
+- Recording information storage (name, path, duration, size, timestamp)
+- Thumbnail generation from video files
+- JSON-based metadata persistence
+- Recording list management
+
+### 17. IStreamer (`src/streaming/IStreamer.h`)
 
 **Responsibility**: Abstract interface for streaming implementations.
 
@@ -739,7 +877,9 @@ src/
 │   └── APIController.h/cpp  # REST API controller
 ├── ui/
 │   ├── UIManager.h/cpp     # Graphical interface (ImGui)
-│   └── UIConfiguration*.h/cpp # Modular UI components
+│   ├── UIConfiguration*.h/cpp # Modular UI components
+│   ├── UIConfigurationRecording.h/cpp # Recording configuration UI
+│   └── UIRecordings.h/cpp  # Recording management UI
 ├── utils/
 │   ├── Logger.h/cpp        # Logging system
 │   ├── ShaderScanner.h/cpp # Shader discovery
