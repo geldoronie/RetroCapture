@@ -178,6 +178,24 @@ void UIManager::beginFrame()
         return;
     }
 
+    // Disable ImGui mouse input BEFORE processing events when UI is hidden
+    // This prevents ImGui from processing mouse events and controlling cursor
+    ImGuiIO& io = ImGui::GetIO();
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        // Also disable mouse buttons to prevent any mouse interaction
+        io.MouseDown[0] = false;
+        io.MouseDown[1] = false;
+        io.MouseDown[2] = false;
+        io.MouseDown[3] = false;
+        io.MouseDown[4] = false;
+    }
+    else
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
+    
     // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
 #ifdef USE_SDL2
@@ -187,16 +205,15 @@ void UIManager::beginFrame()
 #endif
     ImGui::NewFrame();
     
-    // Disable ImGui cursor control when UI is hidden
-    // This prevents ImGui from overriding our cursor visibility settings
-    ImGuiIO& io = ImGui::GetIO();
+    // CRITICAL: Ensure mouse is disabled after NewFrame
+    // ImGui backends (ImGui_ImplGlfw_NewFrame/ImGui_ImplSDL2_NewFrame) may re-enable mouse input
+    // and restore cursor visibility, so we must disable it again
     if (!m_uiVisible)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-    }
-    else
-    {
-        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+        // Also clear mouse position to prevent any mouse interaction
+        io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
 }
 
@@ -218,10 +235,14 @@ void UIManager::endFrame()
         ImGui::EndFrame();
     }
     
-    // Re-enable mouse input after rendering (if UI is visible)
-    // This ensures ImGui doesn't interfere with cursor visibility
+    // Keep ImGui mouse disabled when UI is hidden
+    // This prevents ImGui from interfering with cursor visibility
     ImGuiIO& io = ImGui::GetIO();
-    if (m_uiVisible)
+    if (!m_uiVisible)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    }
+    else
     {
         io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }

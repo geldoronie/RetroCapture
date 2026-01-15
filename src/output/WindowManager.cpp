@@ -213,17 +213,32 @@ void WindowManager::setCursorVisible(bool visible)
         return;
     }
     
-    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
-    
-    // Check current cursor mode
-    int currentMode = glfwGetInputMode(window, GLFW_CURSOR);
-    int desiredMode = visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN;
-    
-    // Only change if different to avoid unnecessary calls
-    if (currentMode != desiredMode)
+    // Simple cache to avoid unnecessary calls
+    if (m_cursorStateInitialized && m_cursorVisible == visible)
     {
-        glfwSetInputMode(window, GLFW_CURSOR, desiredMode);
+        return;
     }
+    
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+    glfwSetInputMode(window, GLFW_CURSOR, visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN);
+}
+
+void WindowManager::forceSetCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    // Force update ignoring cache (only used when visibility actually changes)
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+    glfwSetInputMode(window, GLFW_CURSOR, visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN);
 }
 
 void WindowManager::setFullscreen(bool fullscreen, int monitorIndex)

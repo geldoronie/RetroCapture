@@ -54,6 +54,7 @@ public:
     
     // Controlar visibilidade do cursor
     void setCursorVisible(bool visible);
+    void forceSetCursorVisible(bool visible); // Force update ignoring cache
     
 private:
 #ifdef USE_SDL2
@@ -71,6 +72,10 @@ private:
     
     std::function<void(int, int)> m_resizeCallback = nullptr;
     void* m_userData = nullptr;
+    
+    // Cache cursor visibility state to avoid unnecessary SDL_ShowCursor calls
+    mutable bool m_cursorVisible = true;
+    mutable bool m_cursorStateInitialized = false;
     
     // Configuração SDL2
     void configureSDL2ForDirectFB();

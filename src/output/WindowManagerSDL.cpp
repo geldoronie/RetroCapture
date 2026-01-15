@@ -427,12 +427,6 @@ void WindowManagerSDL::pollEvents()
                     m_resizeCallback(w, h);
                 }
             }
-            else if (event.window.event == SDL_WINDOWEVENT_ENTER || 
-                     event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
-            {
-                // When mouse enters window or window gains focus, cursor visibility
-                // should be updated based on UI visibility (handled in main loop)
-            }
             break;
         case SDL_KEYDOWN:
             // F12 para toggle UI (similar ao GLFW)
@@ -513,15 +507,30 @@ void WindowManagerSDL::setCursorVisible(bool visible)
         return;
     }
     
-    // SDL_ShowCursor returns the previous state
-    // Force the cursor state by calling it twice if needed
-    int currentState = SDL_ShowCursor(SDL_QUERY);
-    int desiredState = visible ? SDL_ENABLE : SDL_DISABLE;
-    
-    if (currentState != desiredState)
+    // Simple cache to avoid unnecessary calls
+    if (m_cursorStateInitialized && m_cursorVisible == visible)
     {
-        SDL_ShowCursor(desiredState);
+        return;
     }
+    
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
+}
+
+void WindowManagerSDL::forceSetCursorVisible(bool visible)
+{
+    if (!m_window)
+    {
+        return;
+    }
+    
+    // Force update ignoring cache (only used when visibility actually changes)
+    m_cursorVisible = visible;
+    m_cursorStateInitialized = true;
+    
+    SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
 }
 
 #endif // USE_SDL2
