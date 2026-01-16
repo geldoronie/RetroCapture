@@ -24,12 +24,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "RetroCapture"
             VALUE "FileDescription",  "Video capture with RetroArch shader support"
-            VALUE "FileVersion",      "0.4.0"
+            VALUE "FileVersion",      "0.5.0"
             VALUE "InternalName",    "retrocapture"
             VALUE "LegalCopyright",   "Copyright (C) 2025"
             VALUE "OriginalFilename", "retrocapture.exe"
             VALUE "ProductName",     "RetroCapture"
-            VALUE "ProductVersion",   "0.4.0"
+            VALUE "ProductVersion",   "0.5.0"
         END
     END
     BLOCK "VarFileInfo"

@@ -69,11 +69,13 @@ void printUsage(const char *programName)
     std::cout << "\nOpções de Web Portal:\n";
     std::cout << "  --web-portal-enable              Habilitar web portal (padrão: habilitado)\n";
     std::cout << "  --web-portal-disable             Desabilitar web portal\n";
+    std::cout << "  --web-portal-start               Iniciar web portal automaticamente na inicialização\n";
     std::cout << "  --web-portal-port <porta>       Porta do web portal (padrão: 8080, mesma do streaming)\n";
     std::cout << "  --web-portal-https               Habilitar HTTPS no web portal\n";
     std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
     std::cout << "  --web-portal-ssl-key <caminho>    Caminho da chave SSL (padrão: ssl/server.key)\n";
     std::cout << "\nOutras:\n";
+    std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
     std::cout << "  --help, -h             Mostrar esta ajuda\n";
     std::cout << "\nExemplos:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
@@ -90,7 +92,7 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
-    LOG_INFO("RetroCapture v0.4.0");
+    LOG_INFO("RetroCapture v0.5.0");
 
     std::string shaderPath;
     std::string presetPath;
@@ -121,6 +123,7 @@ int main(int argc, char *argv[])
     float brightness = 1.0f;
     float contrast = 1.0f;
 
+#ifdef __linux__
     // Controles V4L2 (-1 significa não configurar)
     int v4l2Brightness = -1;
     int v4l2Contrast = -1;
@@ -131,7 +134,9 @@ int main(int argc, char *argv[])
     int v4l2Sharpness = -1;
     int v4l2Gamma = -1;
     int v4l2WhiteBalance = -1;
+#endif
 
+#ifdef _WIN32
     // Controles DirectShow (-1 significa não configurar)
     int dsBrightness = -1;
     int dsContrast = -1;
@@ -142,6 +147,7 @@ int main(int argc, char *argv[])
     int dsSharpness = -1;
     int dsGamma = -1;
     int dsWhiteBalance = -1;
+#endif
 
     // Streaming options
     bool streamingEnabled = false;
@@ -156,10 +162,14 @@ int main(int argc, char *argv[])
 
     // Web Portal options
     bool webPortalEnabled = true; // Habilitado por padrão
+    bool webPortalStart = false;   // Iniciar web portal automaticamente
     int webPortalPort = 8080;     // Porta do web portal (mesma do streaming por padrão)
     bool webPortalHTTPSEnabled = false;
     std::string webPortalSSLCertPath = "ssl/server.crt";
     std::string webPortalSSLKeyPath = "ssl/server.key";
+    
+    // UI visibility
+    bool hideUI = false; // Hide ImGui UI on startup
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -580,6 +590,11 @@ int main(int argc, char *argv[])
         {
             webPortalEnabled = false;
         }
+        else if (arg == "--web-portal-start")
+        {
+            webPortalEnabled = true; // Garante que está habilitado
+            webPortalStart = true;    // Marca para iniciar automaticamente
+        }
         else if (arg == "--web-portal-port" && i + 1 < argc)
         {
             webPortalPort = std::stoi(argv[++i]);
@@ -600,6 +615,10 @@ int main(int argc, char *argv[])
         else if (arg == "--web-portal-ssl-key" && i + 1 < argc)
         {
             webPortalSSLKeyPath = argv[++i];
+        }
+        else if (arg == "--hide-ui")
+        {
+            hideUI = true;
         }
         else
         {
@@ -806,6 +825,22 @@ int main(int argc, char *argv[])
 #endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
+    
+    // Hide UI if requested (same as pressing F12)
+    // IMPORTANT: This must be done AFTER init() but BEFORE run()
+    // so cursor visibility is set correctly on startup
+    if (hideUI && app.getUIManager())
+    {
+        app.getUIManager()->setVisible(false);
+        LOG_INFO("UI hidden on startup (press F12 to toggle)");
+    }
+    
+    // Start web portal automatically if requested
+    if (webPortalStart && app.getUIManager())
+    {
+        app.getUIManager()->triggerWebPortalStartStop(true);
+        LOG_INFO("Web portal started automatically");
+    }
 
     app.run();
     app.shutdown();

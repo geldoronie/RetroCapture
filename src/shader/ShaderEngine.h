@@ -62,6 +62,11 @@ public:
     uint32_t getOutputWidth() const { return m_outputWidth; }
     uint32_t getOutputHeight() const { return m_outputHeight; }
     
+    // Configuração de performance para ARM
+    void setMaxShaderResolution(uint32_t maxWidth, uint32_t maxHeight);
+    uint32_t getMaxShaderWidth() const { return m_maxShaderWidth; }
+    uint32_t getMaxShaderHeight() const { return m_maxShaderHeight; }
+    
     // Uniforms do RetroArch
     void setUniform(const std::string& name, float value);
     void setUniform(const std::string& name, float x, float y);
@@ -107,6 +112,10 @@ private:
     uint32_t m_viewportWidth = 0;
     uint32_t m_viewportHeight = 0;
     
+    // Limites de resolução para otimização de performance (especialmente ARM)
+    uint32_t m_maxShaderWidth = 0;  // 0 = sem limite
+    uint32_t m_maxShaderHeight = 0; // 0 = sem limite
+    
     // VAO para renderização
     GLuint m_VAO = 0;
     GLuint m_VBO = 0;
@@ -126,9 +135,14 @@ private:
     std::vector<uint32_t> m_frameHistoryHeights;
     static constexpr size_t MAX_FRAME_HISTORY = 7;
     
+    // Framebuffer temporário reutilizável para copiar frames ao histórico
+    // Criado uma vez e reutilizado entre frames (evita criar/deletar a cada frame)
+    GLuint m_copyFramebuffer = 0;
+    
     bool compileShader(const std::string& source, GLenum type, GLuint& shader);
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader);
     GLint getUniformLocation(GLuint program, const std::string& name);
+    void preCacheCommonUniforms(GLuint program); // Pré-cachear uniforms comuns após linkagem
     void createFramebuffer(uint32_t width, uint32_t height, bool floatBuffer, GLuint& fb, GLuint& tex, bool srgbBuffer = false);
     void cleanupFramebuffer(GLuint& fb, GLuint& tex);
     void createQuad();

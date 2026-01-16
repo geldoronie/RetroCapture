@@ -9,17 +9,28 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <queue>
 #include "../renderer/glad_loader.h"
+#include "../utils/FilesystemCompat.h"
+
+// Forward declarations for recording
+struct RecordingSettings;
+struct RecordingMetadata;
 
 class IVideoCapture;
 class IAudioCapture;
 class WindowManager;
+#ifdef USE_SDL2
+class WindowManagerSDL;
+#endif
 class OpenGLRenderer;
 class ShaderEngine;
 class UIManager;
 class FrameProcessor;
 class StreamManager;
 class HTTPTSStreamer;
+class PBOManager;
+class RecordingManager;
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -54,6 +65,17 @@ public:
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
+    void setTextureFilterLinear(bool linear) { m_textureFilterLinear = linear; }
+    bool getTextureFilterLinear() const { return m_textureFilterLinear; }
+    
+    // Configurar resolução de saída (0 = automático, usar resolução do source)
+    void setOutputResolution(uint32_t width, uint32_t height)
+    {
+        m_outputWidth = width;
+        m_outputHeight = height;
+    }
+    uint32_t getOutputWidth() const { return m_outputWidth; }
+    uint32_t getOutputHeight() const { return m_outputHeight; }
 
     // Controles V4L2 (valores opcionais, -1 significa não configurar)
     void setV4L2Brightness(int32_t value) { m_v4l2Brightness = value; }
@@ -89,26 +111,61 @@ public:
     void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
     void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
 
+    // Recording configuration
+    void setRecordingSettings(const struct RecordingSettings& settings);
+    struct RecordingSettings getRecordingSettings() const;
+    bool startRecording();
+    void stopRecording();
+    bool isRecording() const;
+    uint64_t getRecordingDurationUs();
+    uint64_t getRecordingFileSize();
+    std::string getRecordingFilename();
+    std::vector<struct RecordingMetadata> listRecordings();
+    bool deleteRecording(const std::string& recordingId);
+    bool renameRecording(const std::string& recordingId, const std::string& newName);
+    std::string getRecordingPath(const std::string& recordingId);
+
     // API access methods
     ShaderEngine *getShaderEngine() { return m_shaderEngine.get(); }
     UIManager *getUIManager() { return m_ui.get(); }
+    RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
+    IAudioCapture* getAudioCapture() const { return m_audioCapture.get(); }
+
+    // Preset management
+    void applyPreset(const std::string& presetName);
+    void schedulePresetApplication(const std::string& presetName); // Thread-safe: schedules for main thread
+    void createPresetFromCurrentState(const std::string& name, const std::string& description, bool captureThumbnail = false);
+    
+    // Shader path resolution (centralized)
+    std::string resolveShaderPath(const std::string& shaderPath) const;
+    fs::path getShaderBasePath() const;
+    
+    // Thread-safe resolution change scheduling
+    void scheduleResolutionChange(uint32_t width, uint32_t height); // Thread-safe: schedules for main thread
+    void applyResolutionChange(uint32_t width, uint32_t height); // Apply resolution change (called from main thread)
 
 private:
+    // Centralized cursor visibility management
+    // Always syncs cursor visibility with UI visibility state
+    void updateCursorVisibility();
     bool m_initialized = false;
 
     std::unique_ptr<IVideoCapture> m_capture;
+#ifdef USE_SDL2
+    std::unique_ptr<WindowManagerSDL> m_window;
+#else
     std::unique_ptr<WindowManager> m_window;
+#endif
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<IAudioCapture> m_audioCapture;
+    std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
+    std::unique_ptr<RecordingManager> m_recordingManager;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
-
-    // Streaming thread
-    // OPÇÃO A: Thread de streaming removida - processamento movido para thread principal
 
     // Configuração
     std::string m_shaderPath;
@@ -123,12 +180,27 @@ private:
     uint32_t m_captureFps = 60;
     uint32_t m_windowWidth = 1920;
     uint32_t m_windowHeight = 1080;
+    
+    // Resolução máxima de processamento (configurável pelo usuário)
+    // 0 = sem limite (usar resolução original)
+    uint32_t m_maxProcessingWidth = 0;
+    uint32_t m_maxProcessingHeight = 0;
+    
+    // Resolução de saída configurável (aplicada após shader, antes de esticar para janela)
+    // 0 = usar resolução do source (captura/shader output) - modo automático
+    uint32_t m_outputWidth = 0;   // 0 = automático (usar source)
+    uint32_t m_outputHeight = 0;  // 0 = automático (usar source)
+    
     bool m_fullscreen = false;
     bool m_pendingFullscreenChange = false; // Flag para mudança de fullscreen pendente
     int m_monitorIndex = -1;                // -1 = usar monitor primário
     bool m_maintainAspect = false;
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
+    
+    // Texture filtering configurável (true = GL_LINEAR, false = GL_NEAREST)
+    // GL_NEAREST é mais rápido e adequado para imagens pixel-perfect (retro)
+    bool m_textureFilterLinear = false; // Padrão: GL_NEAREST para melhor performance
 
     // Controles V4L2 (-1 significa não configurar)
     int32_t m_v4l2Brightness = -1;
@@ -232,9 +304,19 @@ private:
     // Thread safety for resize operations
     mutable std::mutex m_resizeMutex;
     std::atomic<bool> m_isResizing{false};
-
-    // Fila de frames para streaming thread (captura de vídeo)
-    // OPÇÃO A: Fila removida - frames processados diretamente na thread principal
+    std::atomic<bool> m_isReconfiguring{false}; // Flag to prevent frame processing during reconfiguration
+    
+    // Thread-safe queue for preset application from API threads
+    std::mutex m_presetQueueMutex;
+    std::queue<std::string> m_pendingPresets;
+    
+    // Thread-safe queue for resolution changes from API threads
+    struct ResolutionChange {
+        uint32_t width;
+        uint32_t height;
+    };
+    std::mutex m_resolutionQueueMutex;
+    std::queue<ResolutionChange> m_pendingResolutionChanges;
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
@@ -245,5 +327,6 @@ private:
     bool initWebPortal();
     void stopWebPortal();
     bool initAudioCapture();
+    void restoreAudioDeviceConnections();
     void handleKeyInput();
 };

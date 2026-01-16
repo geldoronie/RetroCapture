@@ -116,6 +116,30 @@ class RetroCaptureAPI {
         return await this.request('GET', '/platform');
     }
 
+    async getPresets() {
+        return await this.request('GET', '/presets');
+    }
+
+    async getPreset(name) {
+        return await this.request('GET', `/presets/${encodeURIComponent(name)}`);
+    }
+
+    async getRecordingSettings() {
+        return await this.request('GET', '/recording/settings');
+    }
+
+    async getRecordingStatus() {
+        return await this.request('GET', '/recording/status');
+    }
+
+    async getRecordings() {
+        return await this.request('GET', '/recordings');
+    }
+
+    async getRecording(id) {
+        return await this.request('GET', `/recordings/${encodeURIComponent(id)}`);
+    }
+
     // ========== SET Methods ==========
 
     async setSource(sourceType) {
@@ -161,6 +185,52 @@ class RetroCaptureAPI {
     async setStreamingControl(action) {
         // action deve ser 'start' ou 'stop'
         return await this.request('POST', '/streaming/control', { action });
+    }
+
+    async createPreset(name, description, captureThumbnail = true) {
+        return await this.request('POST', '/presets', { name, description, captureThumbnail });
+    }
+
+    async applyPreset(name) {
+        return await this.request('POST', `/presets/${encodeURIComponent(name)}/apply`, { name });
+    }
+
+    async deletePreset(name) {
+        return await this.request('DELETE', `/presets/${encodeURIComponent(name)}`);
+    }
+
+    async setRecordingSettings(settings) {
+        return await this.request('POST', '/recording/settings', settings);
+    }
+
+    async setRecordingControl(action) {
+        // action deve ser 'start' ou 'stop'
+        return await this.request('POST', '/recording/control', { action });
+    }
+
+    async deleteRecording(id) {
+        return await this.request('DELETE', `/recordings/${encodeURIComponent(id)}`);
+    }
+
+    async renameRecording(id, newName) {
+        return await this.request('PUT', `/recordings/${encodeURIComponent(id)}`, { name: newName });
+    }
+
+    // Audio API methods
+    async getAudioInputSources() {
+        return await this.request('GET', '/audio/input-sources');
+    }
+
+    async getAudioStatus() {
+        return await this.request('GET', '/audio/status');
+    }
+
+    async setAudioInputSource(sourceId) {
+        return await this.request('POST', '/audio/input-source', { sourceId });
+    }
+
+    async disconnectAudioInput() {
+        return await this.request('POST', '/audio/disconnect-input');
     }
 }
 

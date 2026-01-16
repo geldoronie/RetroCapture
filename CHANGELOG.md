@@ -16,6 +16,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0-alpha] - 2026-01-15
+
+### Added
+
+- **Video Recording System**: Complete video recording feature with extensive configuration options
+
+  - **Recording Manager**: Full-featured recording system (`RecordingManager`)
+    - Real-time video and audio recording to local files
+    - Support for multiple video codecs (H.264, H.265, VP8, VP9)
+    - Support for multiple audio codecs (AAC, MP3, Opus)
+    - Multiple container formats (MP4, MKV, AVI)
+    - Configurable resolution, frame rate, and bitrates
+    - Optional audio recording with synchronization
+    - Dedicated encoding thread for non-blocking recording
+    - Media synchronization using `MediaSynchronizer`
+  
+  - **Recording UI**: Complete recording interface in both local and web UIs
+    - **Local UI (ImGui)**: Dedicated recording tab with full configuration
+      - Real-time recording status (active/inactive, duration, file size, filename)
+      - Resolution and FPS selection (with presets or match capture)
+      - Codec selection and codec-specific options
+      - Bitrate controls with visual sliders
+      - Container format selection
+      - Output path and filename template configuration
+      - Start/Stop recording button with visual feedback
+    - **Web Portal**: Full recording control through web interface
+      - Recording configuration and management
+      - Recording list with thumbnails
+      - Download recordings directly from web interface
+      - Delete and rename recordings
+  
+  - **Recording Management**: Complete recording lifecycle management
+    - Recording list with metadata (name, duration, size, timestamp)
+    - Automatic thumbnail generation (extracted from first frame)
+    - Recording metadata persistence (JSON-based)
+    - Delete and rename recordings
+    - Download recordings via web interface
+  
+  - **Configuration Persistence**: All recording settings are automatically saved
+    - Video settings (resolution, FPS, codec, bitrate, presets)
+    - Audio settings (codec, bitrate, include audio flag)
+    - Output settings (container, output path, filename template)
+    - Settings restored on application startup
+  
+  - **FileRecorder**: Specialized file recording implementation
+    - Writes encoded data to local files
+    - Supports MP4, MKV, and AVI containers
+    - Automatic directory creation
+    - File size and duration tracking
+  
+  - **RecordingMetadata**: Metadata management for recordings
+    - JSON-based metadata storage
+    - Thumbnail generation and storage
+    - Recording information tracking
+
+- **Raspberry Pi Support**: Native ARM builds for Raspberry Pi
+
+  - **ARM32v7 (ARMv7)**: Support for Raspberry Pi 2, 3, and Zero
+  - **ARM64v8 (ARM64)**: Support for Raspberry Pi 4 and newer
+  - **Docker-based Builds**: Automated Docker builds for ARM architectures
+  - **DirectFB Support**: SDL2 with DirectFB for headless operation on ARM
+  - **Build Scripts**: Automated build scripts for Raspberry Pi deployment
+    - `build-on-raspberry-pi.sh`: Build directly on Raspberry Pi
+    - `build-linux-arm32v7-docker.sh`: Cross-compile ARM32v7 from x86_64
+    - `build-linux-arm64v8-docker.sh`: Cross-compile ARM64v8 from x86_64
+    - `install-deps-raspberry-pi.sh`: Install dependencies on Raspberry Pi
+    - `sync-source-raspiberry.sh`: Sync source code to Raspberry Pi for building
+
+- **Capture Presets**: Save and load capture configurations
+
+  - **Preset System**: Save complete capture configurations
+    - Device selection
+    - Resolution and framerate
+    - Hardware controls (V4L2/DirectShow)
+    - Shader selection
+    - All capture-related settings
+  - **Preset Management**: Load, save, and manage presets
+    - Save presets with custom names
+    - Load presets to restore complete configuration
+    - Preset persistence across application restarts
+
+- **Audio Configuration Improvements**:
+
+  - **PulseAudio Integration**: Enhanced PulseAudio support on Linux
+    - Automatic cleanup of orphaned sinks and loopbacks
+    - Proper sink naming and identification
+    - Thread-safe mainloop access
+    - Connection persistence across restarts
+  - **Audio Device Selection**: Improved audio device management
+    - Input source selection and persistence
+    - Configuration saved and restored automatically
+    - Web and local UI support for audio device selection
+
+- **Standalone Script**: Automated audio routing script for PipeWire
+
+  - **retrocapture-standalone.sh**: Complete standalone deployment script
+    - Automatic PipeWire link creation
+    - Dynamic loopback ID discovery
+    - Watchdog for application monitoring
+    - Automatic reconnection on restart
+    - Output sink detection and fallback
+
+### Changed
+
+- **Architecture Refactoring**:
+  - Renamed `StreamSynchronizer` to `MediaSynchronizer` for clarity
+  - Shared synchronization system between streaming and recording
+  - Improved code reuse between streaming and recording features
+  - Better separation of concerns in encoding pipeline
+
+- **Build System**:
+  - Updated Docker base to Ubuntu 24.04 for better compatibility
+  - Enhanced cross-compilation support for ARM architectures
+  - Improved Docker build scripts for multiple platforms
+  - Better dependency management for ARM builds
+
+- **Configuration System**:
+  - Extended configuration persistence to include recording settings
+  - Added output resolution (outputWidth, outputHeight) to image settings
+  - Improved configuration loading and saving reliability
+
+- **UI Improvements**:
+  - Modular recording UI components
+  - Better organization of recording settings
+  - Improved visual feedback for recording status
+  - Enhanced web portal recording interface
+
+### Fixed
+
+- **Recording System**:
+  - Fixed frame capture for recording with shaders applied
+  - Fixed MP4 recording file truncation and moov atom issues
+  - Fixed MKV recording H.264 extradata extraction and memory corruption
+  - Fixed recording deletion dialog and file handling
+  - Fixed thumbnail generation and deletion
+  - Fixed filesystem compatibility issues with recording paths
+  - Fixed frame capture logic to match streaming behavior
+
+- **Audio System**:
+  - Fixed PulseAudio mainloop thread-safety issues
+  - Fixed audio sink cleanup on application close
+  - Fixed audio connection persistence
+  - Fixed orphaned sink and loopback cleanup
+
+- **Web Portal**:
+  - Fixed web portal navigation and cache issues
+  - Fixed text visibility in recording cards
+  - Fixed recording management UI responsiveness
+
+- **Build System**:
+  - Fixed Docker build compatibility issues
+  - Fixed ARM build dependencies
+  - Fixed filesystem compatibility in build scripts
+
+### Technical Details
+
+- **New Dependencies**: 
+  - No new external dependencies (reuses existing FFmpeg libraries)
+- **New Files**:
+  - `src/recording/RecordingManager.h/cpp`: Recording orchestration
+  - `src/recording/FileRecorder.h/cpp`: File recording implementation
+  - `src/recording/RecordingSettings.h`: Recording configuration structure
+  - `src/recording/RecordingMetadata.h/cpp`: Recording metadata management
+  - `src/ui/UIConfigurationRecording.h/cpp`: Recording configuration UI
+  - `src/ui/UIRecordings.h/cpp`: Recording management UI
+  - `tools/retrocapture-standalone.sh`: Standalone deployment script
+  - `tools/build-linux-arm32v7-docker.sh`: ARM32v7 build script
+  - `tools/build-linux-arm64v8-docker.sh`: ARM64v8 build script
+  - `tools/build-on-raspberry-pi.sh`: Native Raspberry Pi build script
+  - `tools/install-deps-raspberry-pi.sh`: Raspberry Pi dependency installer
+  - `tools/sync-source-raspiberry.sh`: Source sync script for Raspberry Pi
+  - `tools/check-directfb.sh`: DirectFB compatibility checker
+- **Modified Files**:
+  - `src/core/Application.cpp`: Recording integration
+  - `src/ui/UIManager.h/cpp`: Recording UI integration
+  - `src/streaming/APIController.cpp`: Recording API endpoints
+  - `src/web/control.js`: Recording web interface
+  - `src/web/style.css`: Recording UI styles
+  - `CMakeLists.txt`: Recording build configuration
+  - `tools/build-windows-installer.sh`: Updated for new features
+
+---
+
 ## [0.4.0-alpha] - 2025-12-15
 
 ### Added

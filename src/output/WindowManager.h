@@ -44,6 +44,10 @@ public:
     void setUserData(void* userData) { m_userData = userData; }
     void* getUserData() const { return m_userData; }
     
+    // Controlar visibilidade do cursor
+    void setCursorVisible(bool visible);
+    void forceSetCursorVisible(bool visible); // Force update ignoring cache
+    
 private:
     void* m_window = nullptr; // GLFWwindow* (opaque pointer)
     uint32_t m_width = 0;
@@ -52,5 +56,9 @@ private:
     
     std::function<void(int, int)> m_resizeCallback = nullptr;
     void* m_userData = nullptr; // User data para callbacks
+    
+    // Cache cursor visibility state to avoid unnecessary glfwSetInputMode calls
+    mutable bool m_cursorVisible = true;
+    mutable bool m_cursorStateInitialized = false;
 };
 

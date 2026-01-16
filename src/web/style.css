@@ -728,6 +728,65 @@ body {
     padding: 1.5rem;
 }
 
+.card-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.card-text {
+    color: var(--text-secondary);
+}
+
+/* Preset Cards - Rectangular with square thumbnail */
+.preset-card {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.preset-thumbnail {
+    width: 100%;
+    aspect-ratio: 1;
+    flex-shrink: 0;
+}
+
+.preset-card .card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0.75rem 1rem;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.preset-card .card-title {
+    font-size: 0.875rem;
+    margin-bottom: 0.25rem;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.preset-card .card-text {
+    font-size: 0.75rem;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-align: center;
+    margin-bottom: 0;
+}
+
+.preset-card .card-footer {
+    flex-shrink: 0;
+    padding: 0.5rem;
+    border-top: 1px solid var(--border);
+}
+
 /* Nav Tabs */
 .nav-tabs {
     border-bottom: 1px solid var(--border);

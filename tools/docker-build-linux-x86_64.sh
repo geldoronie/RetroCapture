@@ -11,8 +11,9 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     exit 1
 fi
 
-echo "🚀 Compilando RetroCapture para Linux..."
+echo "🚀 Compilando RetroCapture para Linux x86_64..."
 echo "📦 Build type: $BUILD_TYPE"
+echo "🏗️  Arquitetura: x86_64 (amd64)"
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -21,8 +22,13 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Configurar Git ANTES de qualquer operação (resolve "dubious ownership" no Docker)
+# Isso deve ser feito antes de entrar no diretório de build
+echo "⚙️  Configurando Git..."
+git config --global --add safe.directory '*' || true
+
 # Criar diretório de build (limpar cache CMake se existir)
-BUILD_DIR="build-linux"
+BUILD_DIR="build-linux-x86_64"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
@@ -31,6 +37,13 @@ if [ -f "CMakeCache.txt" ]; then
     echo "🧹 Limpando cache do CMake..."
     rm -f CMakeCache.txt
     rm -rf CMakeFiles
+fi
+
+# Limpar diretório _deps se existir (pode ter sido criado com permissões incorretas)
+# Isso garante que o FetchContent baixe tudo do zero com as permissões corretas
+if [ -d "_deps" ]; then
+    echo "🧹 Limpando dependências anteriores..."
+    rm -rf _deps
 fi
 
 echo "⚙️  Configurando CMake..."

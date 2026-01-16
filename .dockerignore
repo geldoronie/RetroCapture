@@ -1,6 +1,7 @@
 # Build directories
 build/
-build-windows/
+build-windows-x86_64/
+build-linux-x86_64/
 AppDir/
 
 # MXE (será compilado dentro do container)

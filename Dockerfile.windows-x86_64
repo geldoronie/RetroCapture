@@ -43,9 +43,9 @@ RUN echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-
     echo "✅ NSIS instalado para geração de instaladores"
 
 # Script de build
-COPY docker-build-windows.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-build-windows.sh
+COPY tools/docker-build-windows-x86_64.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-build-windows-x86_64.sh
 
 WORKDIR /work
 
-ENTRYPOINT ["/usr/local/bin/docker-build-windows.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-build-windows-x86_64.sh"]

@@ -7,12 +7,12 @@
 #include <mutex>
 
 /**
- * StreamSynchronizer - Classe responsável por sincronização de áudio e vídeo
+ * MediaSynchronizer - Classe responsável por sincronização de áudio e vídeo
  *
  * Gerencia buffers temporais de vídeo e áudio, calcula zonas de sincronização
- * e fornece dados sincronizados para encoding.
+ * e fornece dados sincronizados para encoding (streaming e gravação).
  */
-class StreamSynchronizer
+class MediaSynchronizer
 {
 public:
     // Frame de vídeo com timestamp
@@ -61,8 +61,8 @@ public:
         }
     };
 
-    StreamSynchronizer();
-    ~StreamSynchronizer();
+    MediaSynchronizer();
+    ~MediaSynchronizer();
 
     // Configurar parâmetros de sincronização
     void setSyncTolerance(int64_t toleranceUs) { m_syncToleranceUs = toleranceUs; }
@@ -89,6 +89,11 @@ public:
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
     void markAudioProcessed(size_t startIdx, size_t endIdx);
+    
+    // Marcar frame/chunk específico como processado por timestamp
+    // Used when frames are sorted and indices don't match
+    void markVideoFrameProcessedByTimestamp(int64_t timestampUs);
+    void markAudioChunkProcessedByTimestamp(int64_t timestampUs);
 
     // Limpar dados antigos (baseado em tempo)
     void cleanupOldData();
@@ -107,11 +112,11 @@ private:
     int64_t getTimestampUs() const;
 
     // Parâmetros de sincronização
-    int64_t m_syncToleranceUs = 50 * 1000LL;   // 50ms de tolerância
-    int64_t m_maxBufferTimeUs = 5 * 1000000LL; // 5 segundos máximo (padrão, configurável)
-    int64_t m_minBufferTimeUs = 0;             // 0ms - processar imediatamente
-    size_t m_maxVideoBufferSize = 10;          // Máximo de frames no buffer (padrão, configurável)
-    size_t m_maxAudioBufferSize = 20;          // Máximo de chunks no buffer (padrão, configurável)
+    int64_t m_syncToleranceUs = 200 * 1000LL;   // 200ms de tolerância (aumentado para melhor sincronização)
+    int64_t m_maxBufferTimeUs = 5 * 1000000LL;  // 5 segundos máximo (reduzido para evitar atraso)
+    int64_t m_minBufferTimeUs = 100 * 1000LL;   // 100ms - pequeno buffer para melhor sincronização
+    size_t m_maxVideoBufferSize = 15;           // Máximo de frames no buffer (reduzido para evitar atraso)
+    size_t m_maxAudioBufferSize = 30;           // Máximo de chunks no buffer (reduzido para evitar atraso)
 
     // Buffers temporais ordenados por timestamp
     mutable std::mutex m_videoBufferMutex;

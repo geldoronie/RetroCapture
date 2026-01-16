@@ -21,4 +21,5 @@ private:
     void renderAspectRatio();
     void renderFullscreen();
     void renderMonitorSelection();
+    void renderOutputResolution();
 };

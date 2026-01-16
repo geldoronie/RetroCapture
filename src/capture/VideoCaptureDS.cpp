@@ -156,9 +156,7 @@ void VideoCaptureDS::shutdownCOM()
 
 bool VideoCaptureDS::open(const std::string &device)
 {
-    LOG_INFO("=== VideoCaptureDS::open() CHAMADO ===");
     LOG_INFO("VideoCaptureDS::open() chamado com device: " + device);
-    std::cout << "[FORCE] VideoCaptureDS::open() chamado com device: " << device << std::endl;
     
     if (m_isOpen)
     {
@@ -1113,10 +1111,6 @@ bool VideoCaptureDS::captureFrame(Frame &frame)
 
 bool VideoCaptureDS::captureLatestFrame(Frame &frame)
 {
-    // Log DIRETO para debug - FORÇAR COMPILAÇÃO
-    // Usar std::cout diretamente para garantir que apareça
-    // Logs removidos para reduzir ruído - apenas logs de erro/aviso importantes
-    
     if (m_dummyMode)
     {
         if (!m_streaming)
@@ -1137,26 +1131,7 @@ bool VideoCaptureDS::captureLatestFrame(Frame &frame)
 
     if (!m_streaming)
     {
-        static int streamingLogCount = 0;
-        streamingLogCount++;
-        if (streamingLogCount <= 10) // Log as primeiras 10 vezes
-        {
-            LOG_WARN("captureLatestFrame: m_streaming está false - startCapture() não foi chamado ou falhou (call #" + 
-                     std::to_string(streamingLogCount) + ")");
-            std::cout << "[FORCE] captureLatestFrame: m_streaming está false (call #" << streamingLogCount << ")" << std::endl;
-        }
         return false;
-    }
-    
-    // Log de diagnóstico: verificar estado quando m_streaming está true mas não captura
-    static int diagnosticLogCount = 0;
-    if (diagnosticLogCount++ < 5)
-    {
-        LOG_INFO("captureLatestFrame: m_streaming está true - verificando Sample Grabber e filtro customizado (call #" + 
-                 std::to_string(diagnosticLogCount) + ")");
-        LOG_INFO("  - m_sampleGrabber: " + std::string(m_sampleGrabber ? "não-null" : "null"));
-        LOG_INFO("  - m_useAlternativeCapture: " + std::string(m_useAlternativeCapture ? "true" : "false"));
-        LOG_INFO("  - m_customGrabberFilter: " + std::string(m_customGrabberFilter ? "não-null" : "null"));
     }
     
     // Se Sample Grabber estiver disponível, usar método normal
@@ -1165,16 +1140,6 @@ bool VideoCaptureDS::captureLatestFrame(Frame &frame)
         // Para DirectShow, apenas ler o frame mais recente
         // ISampleGrabber já mantém o buffer mais recente quando SetBufferSamples(TRUE)
         return readSample(frame);
-    }
-    
-    // Sem Sample Grabber e sem filtro customizado funcional, não há como capturar frames
-    static int logCount = 0;
-    if (logCount++ < 10) // Log as primeiras 10 vezes
-    {
-        LOG_WARN("captureLatestFrame: Sem Sample Grabber - tentando filtro customizado (call #" + std::to_string(logCount) + ")");
-        LOG_WARN("  - m_useAlternativeCapture: " + std::string(m_useAlternativeCapture ? "true" : "false"));
-        LOG_WARN("  - m_customGrabberFilter: " + std::string(m_customGrabberFilter ? "não-null" : "null"));
-        LOG_WARN("  - m_streaming: " + std::string(m_streaming ? "true" : "false"));
     }
     
     // Tentar captura alternativa sem Sample Grabber usando filtro customizado
@@ -1186,11 +1151,6 @@ bool VideoCaptureDS::captureLatestFrame(Frame &frame)
             uint32_t width = 0, height = 0;
             if (pGrabber->GetLatestFrame(nullptr, 0, width, height))
             {
-                if (logCount <= 10)
-                {
-                    LOG_INFO("captureLatestFrame: Filtro customizado tem frame disponível: " + 
-                             std::to_string(width) + "x" + std::to_string(height));
-                }
                 
                 // Alocar buffer se necessário
                 size_t frameSize = width * height * 3; // RGB24
@@ -1213,27 +1173,9 @@ bool VideoCaptureDS::captureLatestFrame(Frame &frame)
                     
                     m_hasFrame = true;
                     m_latestFrame = frame;
-                    
-                    if (logCount <= 10)
-                    {
-                        LOG_INFO("captureLatestFrame: Frame capturado com sucesso do filtro customizado!");
-                    }
-                    
                     return true;
                 }
-                else if (logCount <= 10)
-                {
-                    LOG_WARN("captureLatestFrame: GetLatestFrame retornou false ao copiar dados");
-                }
             }
-            else if (logCount <= 10)
-            {
-                LOG_WARN("captureLatestFrame: Filtro customizado não tem frame disponível ainda");
-            }
-        }
-        else if (logCount <= 10)
-        {
-            LOG_WARN("captureLatestFrame: Falha ao fazer cast do filtro customizado");
         }
         return false;
     }

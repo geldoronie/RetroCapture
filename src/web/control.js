@@ -10,6 +10,7 @@ let appState = {
     capture: { width: 0, height: 0, fps: 0 },
     image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
+    recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
     ds: { devices: [], currentDevice: '' }, // DirectShow (Windows)
     platform: { platform: 'linux', availableSourceTypes: [] },
@@ -93,6 +94,19 @@ async function loadPlatform() {
  * Atualiza a UI baseado na plataforma detectada
  */
 function updatePlatformUI() {
+    // Ocultar aba de áudio no Windows
+    const audioTab = document.getElementById('audio-tab');
+    const audioTabPane = document.getElementById('audio');
+    if (audioTab && audioTabPane) {
+        if (appState.platform.platform === 'windows') {
+            audioTab.style.display = 'none';
+            audioTabPane.style.display = 'none';
+        } else {
+            audioTab.style.display = '';
+            audioTabPane.style.display = '';
+        }
+    }
+    
     const sourceTypeSelect = document.getElementById('sourceType');
     if (!sourceTypeSelect) {
         console.warn('sourceType select não encontrado');
@@ -146,6 +160,9 @@ async function loadAllData() {
         
         // Carregar streaming settings
         await loadStreamingSettings();
+        
+        // Carregar recording settings
+        await loadRecordingSettings();
     } catch (error) {
         console.error('Erro ao carregar dados:', error);
         showAlert('Erro ao carregar dados: ' + error.message, 'danger');
@@ -181,6 +198,21 @@ async function loadStatus() {
         const canStart = status.streamingCanStart !== undefined ? status.streamingCanStart : true;
         const cooldownMs = status.streamingCooldownRemainingMs !== undefined ? status.streamingCooldownRemainingMs : 0;
         updateStreamingButton(isActive, canStart, cooldownMs);
+        
+        // Sincronizar configurações de imagem se disponíveis no status
+        if (status.image) {
+            const maintainAspectEl = document.getElementById('maintainAspect');
+            if (maintainAspectEl && status.image.maintainAspect !== undefined) {
+                // Só atualizar se o valor mudou para evitar flicker
+                if (maintainAspectEl.checked !== status.image.maintainAspect) {
+                    maintainAspectEl.checked = status.image.maintainAspect;
+                    // Atualizar appState
+                    if (appState.image) {
+                        appState.image.maintainAspect = status.image.maintainAspect;
+                    }
+                }
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar status:', error);
     }
@@ -362,7 +394,6 @@ function updateSourceUI(sourceType) {
     const dsContainer = document.getElementById('dsControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
 
-    // Esconder todos os containers primeiro
     if (v4l2Container) v4l2Container.style.display = 'none';
     if (dsContainer) dsContainer.style.display = 'none';
     if (noneMessage) noneMessage.style.display = 'none';
@@ -993,6 +1024,8 @@ async function loadImageSettings() {
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
+        const outputWidthEl = document.getElementById('outputWidth');
+        const outputHeightEl = document.getElementById('outputHeight');
         
         if (brightnessEl) {
             brightnessEl.value = settings.brightness || 0;
@@ -1021,9 +1054,46 @@ async function loadImageSettings() {
         if (monitorIndexEl) {
             monitorIndexEl.value = settings.monitorIndex !== undefined ? settings.monitorIndex : -1;
         }
+        
+        if (outputWidthEl) {
+            outputWidthEl.value = settings.outputWidth !== undefined ? settings.outputWidth : 0;
+            const outputWidthValueEl = document.getElementById('outputWidthValue');
+            if (outputWidthValueEl) {
+                outputWidthValueEl.textContent = (settings.outputWidth || 0) + (settings.outputWidth === 0 ? ' (auto)' : '');
+            }
+        }
+        
+        if (outputHeightEl) {
+            outputHeightEl.value = settings.outputHeight !== undefined ? settings.outputHeight : 0;
+            const outputHeightValueEl = document.getElementById('outputHeightValue');
+            if (outputHeightValueEl) {
+                outputHeightValueEl.textContent = (settings.outputHeight || 0) + (settings.outputHeight === 0 ? ' (auto)' : '');
+            }
+        }
     } catch (error) {
         console.error('Erro ao carregar configurações de imagem:', error);
     }
+}
+
+/**
+ * Define resolução de saída (helper function)
+ */
+function setOutputResolution(width, height) {
+    const outputWidthEl = document.getElementById('outputWidth');
+    const outputHeightEl = document.getElementById('outputHeight');
+    if (outputWidthEl) outputWidthEl.value = width;
+    if (outputHeightEl) outputHeightEl.value = height;
+    
+    const outputWidthValueEl = document.getElementById('outputWidthValue');
+    const outputHeightValueEl = document.getElementById('outputHeightValue');
+    if (outputWidthValueEl) {
+        outputWidthValueEl.textContent = width + (width === 0 ? ' (auto)' : '');
+    }
+    if (outputHeightValueEl) {
+        outputHeightValueEl.textContent = height + (height === 0 ? ' (auto)' : '');
+    }
+    
+    updateImageSettings();
 }
 
 /**
@@ -1036,16 +1106,29 @@ async function updateImageSettings() {
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
+        const outputWidthEl = document.getElementById('outputWidth');
+        const outputHeightEl = document.getElementById('outputHeight');
         
         const settings = {
             brightness: brightnessEl ? parseFloat(brightnessEl.value) : 0,
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
-            monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1
+            monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1,
+            outputWidth: outputWidthEl ? parseInt(outputWidthEl.value) : 0,
+            outputHeight: outputHeightEl ? parseInt(outputHeightEl.value) : 0
         };
         
         await api.setImageSettings(settings);
+        
+        // Atualizar appState para manter sincronizado
+        appState.image = {
+            brightness: settings.brightness,
+            contrast: settings.contrast,
+            maintainAspect: settings.maintainAspect,
+            fullscreen: settings.fullscreen
+        };
+        
         // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
         console.error('Erro ao atualizar configurações de imagem:', error);
@@ -1057,7 +1140,6 @@ async function updateImageSettings() {
  * Atualiza controles específicos do codec
  */
 function updateCodecSpecificControls(codec) {
-    // Esconder todos os containers
     const h264PresetContainer = document.getElementById('h264PresetContainer');
     const h265PresetContainer = document.getElementById('h265PresetContainer');
     const h265ProfileContainer = document.getElementById('h265ProfileContainer');
@@ -1291,11 +1373,15 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
     
     // Atualizar status a cada 2 segundos
-    statusUpdateInterval = setInterval(loadStatus, 2000);
+    statusUpdateInterval = setInterval(() => {
+        loadStatus();
+        updateRecordingStatus();
+    }, 2000);
     
     // Inicializar botão de streaming com estado atual
     setTimeout(() => {
         loadStatus();
+        updateRecordingStatus();
     }, 500);
     
     // Event listeners para sliders
@@ -1355,8 +1441,6 @@ document.addEventListener('DOMContentLoaded', function() {
             updateShaderParameter(name, value);
         }, 500);
     };
-    
-    // ===== ATUALIZAÇÃO EM TEMPO REAL PARA TODOS OS CONTROLES =====
     
     // Resolução/FPS de captura (V4L2 e MF) - atualização em tempo real com debounce
     let captureSettingsTimeout = null;
@@ -1443,6 +1527,27 @@ document.addEventListener('DOMContentLoaded', function() {
         monitorIndex.addEventListener('change', updateImageSettingsDebounced);
     }
     
+    const outputWidth = document.getElementById('outputWidth');
+    const outputHeight = document.getElementById('outputHeight');
+    if (outputWidth) {
+        outputWidth.addEventListener('input', function() {
+            const outputWidthValueEl = document.getElementById('outputWidthValue');
+            if (outputWidthValueEl) {
+                outputWidthValueEl.textContent = outputWidth.value + (outputWidth.value == 0 ? ' (auto)' : '');
+            }
+            updateImageSettingsDebounced();
+        });
+    }
+    if (outputHeight) {
+        outputHeight.addEventListener('input', function() {
+            const outputHeightValueEl = document.getElementById('outputHeightValue');
+            if (outputHeightValueEl) {
+                outputHeightValueEl.textContent = outputHeight.value + (outputHeight.value == 0 ? ' (auto)' : '');
+            }
+            updateImageSettingsDebounced();
+        });
+    }
+    
     // Streaming settings - atualização em tempo real com debounce
     let streamingSettingsTimeout = null;
     function updateStreamingSettingsDebounced() {
@@ -1523,4 +1628,559 @@ document.addEventListener('DOMContentLoaded', function() {
         vp9Speed.addEventListener('change', updateStreamingSettingsDebounced);
     }
     
+    // Load presets when presets tab is shown
+    const presetsTab = document.getElementById('presets-tab');
+    if (presetsTab) {
+        presetsTab.addEventListener('shown.bs.tab', function() {
+            loadPresets();
+        });
+    }
+    
+});
+
+// ========== Preset Functions ==========
+
+/**
+ * Load and display all presets
+ */
+async function loadPresets() {
+    const grid = document.getElementById('presetsGrid');
+    if (!grid) return;
+    
+    try {
+        grid.innerHTML = '<div class="col-12 text-muted">Carregando presets...</div>';
+        const response = await api.getPresets();
+        
+        if (!response.presets || response.presets.length === 0) {
+            grid.innerHTML = '<div class="col-12 text-muted">Nenhum preset encontrado. Crie um novo preset usando o botão "Create Preset".</div>';
+            return;
+        }
+        
+        grid.innerHTML = '';
+        response.presets.forEach(preset => {
+            const presetCard = createPresetCard(preset);
+            grid.appendChild(presetCard);
+        });
+    } catch (error) {
+        console.error('Erro ao carregar presets:', error);
+        grid.innerHTML = `<div class="col-12 text-danger">Erro ao carregar presets: ${error.message}</div>`;
+    }
+}
+
+/**
+ * Create a preset card element
+ */
+function createPresetCard(preset) {
+    const col = document.createElement('div');
+    col.className = 'col-md-4 col-lg-3';
+    
+    const card = document.createElement('div');
+    card.className = 'card preset-card';
+    card.style.cursor = 'pointer';
+    card.onclick = function(e) {
+        // Don't apply if clicking on buttons
+        if (e.target.closest('button')) {
+            return;
+        }
+        applyPreset(preset.name);
+    };
+    
+    // Extract just the filename from thumbnail path
+    let thumbnailFilename = '';
+    if (preset.thumbnail) {
+        // If thumbnail path contains directory separators, extract just the filename
+        const parts = preset.thumbnail.split(/[/\\]/);
+        thumbnailFilename = parts[parts.length - 1];
+    }
+    
+    // Thumbnail - square aspect ratio
+    let thumbnailHtml = '<div class="card-img-top preset-thumbnail bg-dark d-flex align-items-center justify-content-center"><i class="bi bi-image text-muted fs-1"></i></div>';
+    if (thumbnailFilename) {
+        // Thumbnail path is relative, need to construct full URL
+        const thumbnailUrl = `/assets/thumbnails/${thumbnailFilename}`;
+        thumbnailHtml = `<img src="${thumbnailUrl}" class="card-img-top preset-thumbnail" style="object-fit: cover;" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'card-img-top preset-thumbnail bg-dark d-flex align-items-center justify-content-center\\'><i class=\\'bi bi-image text-muted fs-1\\'></i></div>'">`;
+    }
+    
+    card.innerHTML = `
+        ${thumbnailHtml}
+        <div class="card-body">
+            <h6 class="card-title">${escapeHtml(preset.displayName || preset.name)}</h6>
+            ${preset.description ? `<p class="card-text text-muted small">${escapeHtml(preset.description)}</p>` : ''}
+        </div>
+        <div class="card-footer bg-transparent">
+            <div class="btn-group w-100" role="group">
+                <button type="button" class="btn btn-sm btn-primary" onclick="event.stopPropagation(); applyPreset('${escapeHtml(preset.name)}')">
+                    <i class="bi bi-play-circle me-1"></i>Apply
+                </button>
+                <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deletePreset('${escapeHtml(preset.name)}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    
+    col.appendChild(card);
+    return col;
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Refresh presets list
+ */
+async function refreshPresets() {
+    await loadPresets();
+    showAlert('Presets atualizados', 'success');
+}
+
+/**
+ * Show create preset dialog
+ */
+function showCreatePresetDialog() {
+    const modal = new bootstrap.Modal(document.getElementById('createPresetModal'));
+    document.getElementById('newPresetName').value = '';
+    document.getElementById('newPresetDescription').value = '';
+    document.getElementById('captureThumbnail').checked = true;
+    modal.show();
+}
+
+/**
+ * Create a new preset from current state
+ */
+async function createPreset() {
+    const name = document.getElementById('newPresetName').value.trim();
+    if (!name) {
+        showAlert('Por favor, insira um nome para o preset', 'warning');
+        return;
+    }
+    
+    const description = document.getElementById('newPresetDescription').value.trim();
+    const captureThumbnail = document.getElementById('captureThumbnail').checked;
+    
+    try {
+        // Note: thumbnail capture is handled server-side, so we just pass the flag
+        await api.createPreset(name, description, captureThumbnail);
+        
+        const modal = bootstrap.Modal.getInstance(document.getElementById('createPresetModal'));
+        modal.hide();
+        
+        showAlert(`Preset "${name}" criado com sucesso!`, 'success');
+        await loadPresets();
+    } catch (error) {
+        console.error('Erro ao criar preset:', error);
+        showAlert(`Erro ao criar preset: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Apply a preset
+ */
+async function applyPreset(presetName) {
+    try {
+        await api.applyPreset(presetName);
+        showAlert(`Preset "${presetName}" aplicado com sucesso!`, 'success');
+        
+        // Reload all data to reflect changes
+        await loadAllData();
+    } catch (error) {
+        console.error('Erro ao aplicar preset:', error);
+        showAlert(`Erro ao aplicar preset: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Delete a preset
+ */
+async function deletePreset(presetName) {
+    if (!confirm(`Tem certeza que deseja deletar o preset "${presetName}"?`)) {
+        return;
+    }
+    
+    try {
+        await api.deletePreset(presetName);
+        showAlert(`Preset "${presetName}" deletado com sucesso!`, 'success');
+        await loadPresets();
+    } catch (error) {
+        console.error('Erro ao deletar preset:', error);
+        showAlert(`Erro ao deletar preset: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Carrega configurações de recording
+ */
+async function loadRecordingSettings() {
+    try {
+        const settings = await api.getRecordingSettings();
+        appState.recording = settings;
+        
+        const widthEl = document.getElementById('recordingWidth');
+        if (widthEl && settings.width) widthEl.value = settings.width;
+        
+        const heightEl = document.getElementById('recordingHeight');
+        if (heightEl && settings.height) heightEl.value = settings.height;
+        
+        const fpsEl = document.getElementById('recordingFPS');
+        if (fpsEl && settings.fps) fpsEl.value = settings.fps;
+        
+        const bitrateEl = document.getElementById('recordingBitrate');
+        if (bitrateEl && settings.bitrate) bitrateEl.value = settings.bitrate;
+        
+        const audioBitrateEl = document.getElementById('recordingAudioBitrate');
+        if (audioBitrateEl && settings.audioBitrate) audioBitrateEl.value = settings.audioBitrate;
+        
+        const videoCodecEl = document.getElementById('recordingVideoCodec');
+        if (videoCodecEl && settings.codec) videoCodecEl.value = settings.codec;
+        
+        const audioCodecEl = document.getElementById('recordingAudioCodec');
+        if (audioCodecEl && settings.audioCodec) audioCodecEl.value = settings.audioCodec;
+        
+        const containerEl = document.getElementById('recordingContainer');
+        if (containerEl && settings.container) containerEl.value = settings.container;
+        
+        const outputPathEl = document.getElementById('recordingOutputPath');
+        if (outputPathEl && settings.outputPath) outputPathEl.value = settings.outputPath;
+        
+        const filenameTemplateEl = document.getElementById('recordingFilenameTemplate');
+        if (filenameTemplateEl && settings.filenameTemplate) filenameTemplateEl.value = settings.filenameTemplate;
+        
+        const includeAudioEl = document.getElementById('recordingIncludeAudio');
+        if (includeAudioEl) includeAudioEl.checked = settings.includeAudio !== false;
+        
+        // Update status
+        await updateRecordingStatus();
+    } catch (error) {
+        console.error('Erro ao carregar configurações de recording:', error);
+    }
+}
+
+/**
+ * Atualiza status de recording
+ */
+async function updateRecordingStatus() {
+    try {
+        const status = await api.getRecordingStatus();
+        
+        const statusAlert = document.getElementById('recordingStatusAlert');
+        const statusIcon = document.getElementById('recordingStatusIcon');
+        const statusText = document.getElementById('recordingStatusText');
+        const statusInfo = document.getElementById('recordingStatusInfo');
+        const btn = document.getElementById('recordingStartStopBtn');
+        const btnText = document.getElementById('recordingStartStopText');
+        
+        if (status.isRecording) {
+            if (statusAlert) {
+                statusAlert.className = 'alert alert-danger';
+            }
+            if (statusIcon) {
+                statusIcon.className = 'bi bi-circle-fill me-2 text-danger';
+            }
+            if (statusText) {
+                statusText.textContent = 'Recording';
+            }
+            if (statusInfo) {
+                const duration = status.duration || 0;
+                const seconds = Math.floor(duration / 1000000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                const fileSize = status.fileSize || 0;
+                const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+                statusInfo.textContent = `${String(hours).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} - ${sizeMB} MB`;
+            }
+            if (btn) {
+                btn.className = 'btn btn-danger btn-lg w-100';
+            }
+            if (btnText) {
+                btnText.innerHTML = '<i class="bi bi-stop-circle me-2"></i>Stop Recording';
+            }
+        } else {
+            if (statusAlert) {
+                statusAlert.className = 'alert alert-secondary';
+            }
+            if (statusIcon) {
+                statusIcon.className = 'bi bi-circle-fill me-2 text-secondary';
+            }
+            if (statusText) {
+                statusText.textContent = 'Stopped';
+            }
+            if (statusInfo) {
+                statusInfo.textContent = '';
+            }
+            if (btn) {
+                btn.className = 'btn btn-primary btn-lg w-100';
+            }
+            if (btnText) {
+                btnText.innerHTML = '<i class="bi bi-record-circle me-2"></i>Start Recording';
+            }
+        }
+    } catch (error) {
+        console.error('Erro ao atualizar status de recording:', error);
+    }
+}
+
+/**
+ * Toggle recording (start/stop)
+ */
+async function toggleRecording() {
+    try {
+        const status = await api.getRecordingStatus();
+        const action = status.isRecording ? 'stop' : 'start';
+        
+        const btn = document.getElementById('recordingStartStopBtn');
+        const text = document.getElementById('recordingStartStopText');
+        if (btn) {
+            btn.disabled = true;
+            if (text) {
+                text.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+            }
+        }
+        
+        await api.setRecordingControl(action);
+        showAlert(`Recording ${action === 'start' ? 'started' : 'stopped'} successfully!`, 'success');
+        
+        // Recarregar status após um pequeno delay
+        setTimeout(async () => {
+            await updateRecordingStatus();
+            if (btn) btn.disabled = false;
+        }, 500);
+    } catch (error) {
+        console.error('Erro ao toggle recording:', error);
+        showAlert(`Erro ao ${status.isRecording ? 'parar' : 'iniciar'} gravação: ${error.message}`, 'danger');
+        
+        const btn = document.getElementById('recordingStartStopBtn');
+        if (btn) btn.disabled = false;
+        await updateRecordingStatus();
+    }
+}
+
+/**
+ * Define resolução rápida para gravação
+ */
+async function setRecordingResolution(width, height) {
+    try {
+        const widthInput = document.getElementById('recordingWidth');
+        const heightInput = document.getElementById('recordingHeight');
+        
+        if (widthInput) widthInput.value = width;
+        if (heightInput) heightInput.value = height;
+        
+        // Atualizar as configurações de gravação
+        await updateRecordingSettings();
+        showAlert(`Resolução de gravação definida para ${width}x${height}!`, 'success');
+    } catch (error) {
+        showAlert('Erro ao definir resolução de gravação: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza configurações de recording
+ */
+async function updateRecordingSettings() {
+    try {
+        const widthEl = document.getElementById('recordingWidth');
+        const heightEl = document.getElementById('recordingHeight');
+        const fpsEl = document.getElementById('recordingFPS');
+        const bitrateEl = document.getElementById('recordingBitrate');
+        const audioBitrateEl = document.getElementById('recordingAudioBitrate');
+        const videoCodecEl = document.getElementById('recordingVideoCodec');
+        const audioCodecEl = document.getElementById('recordingAudioCodec');
+        const containerEl = document.getElementById('recordingContainer');
+        const outputPathEl = document.getElementById('recordingOutputPath');
+        const filenameTemplateEl = document.getElementById('recordingFilenameTemplate');
+        const includeAudioEl = document.getElementById('recordingIncludeAudio');
+        
+        if (!widthEl || !heightEl || !fpsEl || !bitrateEl || !audioBitrateEl || !videoCodecEl || !audioCodecEl) {
+            showAlert('Error: Form elements not found', 'danger');
+            return;
+        }
+        
+        const settings = {
+            width: parseInt(widthEl.value) || 1920,
+            height: parseInt(heightEl.value) || 1080,
+            fps: parseInt(fpsEl.value) || 60,
+            bitrate: parseInt(bitrateEl.value) || 8000000,
+            audioBitrate: parseInt(audioBitrateEl.value) || 256000,
+            codec: videoCodecEl.value || 'h264',
+            audioCodec: audioCodecEl.value || 'aac',
+            container: containerEl ? containerEl.value : 'mp4',
+            outputPath: outputPathEl ? outputPathEl.value : 'recordings/',
+            filenameTemplate: filenameTemplateEl ? filenameTemplateEl.value : 'recording_%Y%m%d_%H%M%S',
+            includeAudio: includeAudioEl ? includeAudioEl.checked : true
+        };
+        
+        await api.setRecordingSettings(settings);
+        showAlert('Recording settings updated!', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar configurações de recording:', error);
+        showAlert(`Erro ao atualizar configurações: ${error.message}`, 'danger');
+    }
+}
+
+// Audio functions
+let audioState = {
+    inputSources: [],
+    status: { available: false, open: false, currentInputSource: '' }
+};
+
+/**
+ * Load audio status
+ */
+async function loadAudioStatus() {
+    try {
+        const status = await api.getAudioStatus();
+        audioState.status = status;
+        updateAudioUI();
+    } catch (error) {
+        console.error('Erro ao carregar status de áudio:', error);
+        audioState.status = { available: false, open: false, currentInputSource: '' };
+        updateAudioUI();
+    }
+}
+
+/**
+ * Load audio input sources
+ */
+async function loadAudioInputSources() {
+    try {
+        const response = await api.getAudioInputSources();
+        audioState.inputSources = response.sources || [];
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao carregar fontes de entrada de áudio:', error);
+        showAlert('Erro ao carregar fontes de entrada de áudio', 'danger');
+    }
+}
+
+/**
+ * Refresh audio input sources
+ */
+async function refreshAudioInputSources() {
+    await loadAudioInputSources();
+    showAlert('Input sources refreshed', 'success');
+}
+
+/**
+ * Update audio input source select dropdown
+ */
+function updateAudioInputSourceSelect() {
+    const select = document.getElementById('audioInputSource');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Select input source...</option>';
+    
+    audioState.inputSources.forEach(source => {
+        const option = document.createElement('option');
+        option.value = source.id;
+        option.textContent = source.description || source.name;
+        if (source.id === audioState.status.currentInputSource) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+
+/**
+ * Update audio UI based on current state
+ */
+function updateAudioUI() {
+    const statusInfo = document.getElementById('audioStatusInfo');
+    const currentInputSource = document.getElementById('currentInputSource');
+    const connectBtn = document.getElementById('connectInputBtn');
+    const disconnectBtn = document.getElementById('disconnectInputBtn');
+
+    if (statusInfo) {
+        if (!audioState.status.available) {
+            statusInfo.textContent = 'Audio capture not available';
+        } else if (!audioState.status.open) {
+            statusInfo.textContent = 'Audio capture not open';
+        } else {
+            statusInfo.textContent = `Sample Rate: ${audioState.status.sampleRate} Hz, Channels: ${audioState.status.channels}`;
+        }
+    }
+
+    if (currentInputSource) {
+        if (audioState.status.currentInputSource) {
+            const source = audioState.inputSources.find(s => s.id === audioState.status.currentInputSource);
+            currentInputSource.textContent = `Connected: ${source ? (source.description || source.name) : audioState.status.currentInputSource}`;
+        } else {
+            currentInputSource.textContent = 'No source connected';
+        }
+    }
+
+    // Update button states
+    const hasInput = !!audioState.status.currentInputSource;
+    if (connectBtn) connectBtn.disabled = hasInput;
+    if (disconnectBtn) disconnectBtn.disabled = !hasInput;
+}
+
+/**
+ * Connect audio input source
+ */
+async function connectAudioInput() {
+    const select = document.getElementById('audioInputSource');
+    if (!select || !select.value) {
+        showAlert('Please select an input source', 'warning');
+        return;
+    }
+
+    try {
+        await api.setAudioInputSource(select.value);
+        showAlert('Input source connected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao conectar fonte de entrada:', error);
+        showAlert(`Erro ao conectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Disconnect audio input source
+ */
+async function disconnectAudioInput() {
+    try {
+        await api.disconnectAudioInput();
+        showAlert('Input source disconnected', 'success');
+        await loadAudioStatus();
+        updateAudioInputSourceSelect();
+    } catch (error) {
+        console.error('Erro ao desconectar fonte de entrada:', error);
+        showAlert(`Erro ao desconectar fonte: ${error.message}`, 'danger');
+    }
+}
+
+
+/**
+ * Load all audio data
+ */
+async function loadAudioData() {
+    await loadAudioStatus();
+    await loadAudioInputSources();
+}
+
+// Load audio data when audio tab is shown (only on Linux)
+document.addEventListener('DOMContentLoaded', () => {
+    const audioTab = document.getElementById('audio-tab');
+    if (audioTab) {
+        audioTab.addEventListener('shown.bs.tab', () => {
+            // Only load if not Windows
+            if (appState.platform && appState.platform.platform !== 'windows') {
+                loadAudioData();
+            }
+        });
+        
+        // Also load on initial page load if audio tab is active (only on Linux)
+        const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
+        if (activeTab && appState.platform && appState.platform.platform !== 'windows') {
+            loadAudioData();
+        }
+    }
 });

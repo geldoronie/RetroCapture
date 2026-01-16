@@ -6,7 +6,7 @@
 #include "APIController.h"
 #include "../encoding/MediaEncoder.h"
 #include "../encoding/MediaMuxer.h"
-#include "../encoding/StreamSynchronizer.h"
+#include "../encoding/MediaSynchronizer.h"
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -225,7 +225,7 @@ private:
     // Novas classes de encoding/muxing
     MediaEncoder m_mediaEncoder;
     MediaMuxer m_mediaMuxer;
-    StreamSynchronizer m_streamSynchronizer;
+    MediaSynchronizer m_streamSynchronizer;
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_running{false};
