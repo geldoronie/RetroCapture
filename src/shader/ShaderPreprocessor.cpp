@@ -126,22 +126,51 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     // Verificar se estamos usando OpenGL ES
     bool isES = isOpenGLES();
     
+    // Helper function para verificar se uma extensão está disponível
+    auto checkExtension = [](const char* extensionName) -> bool {
+        const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+        if (!extensions) return false;
+        
+        std::string extStr(extensions);
+        std::string searchExt(extensionName);
+        
+        // Procurar a extensão na string (precisamos verificar limites de palavra)
+        size_t pos = extStr.find(searchExt);
+        if (pos == std::string::npos) return false;
+        
+        // Verificar se está no início, após espaço, ou no final
+        if (pos == 0 || extStr[pos - 1] == ' ') {
+            // Verificar se termina com espaço ou no final da string
+            size_t endPos = pos + searchExt.length();
+            if (endPos >= extStr.length() || extStr[endPos] == ' ') {
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    // Verificar se GL_ARB_shading_language_420pack está disponível
+    bool has420Pack = checkExtension("GL_ARB_shading_language_420pack");
+    
     // Adicionar extensão para inicialização estilo C (GL_ARB_shading_language_420pack)
     // Isso permite inicialização de arrays e estruturas estilo C
-    // IMPORTANTE: Esta extensão NÃO é suportada em OpenGL ES, então só adicionar em Desktop
+    // IMPORTANTE: Só adicionar se estiver disponível E não for OpenGL ES
     std::string extensionLine = "";
-    if (!isES) {
+    if (!isES && has420Pack) {
         extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
     }
     
-    // Remover extensões não suportadas do código fonte se for OpenGL ES
+    // Remover extensões não suportadas do código fonte
     std::string processedCodeAfterVersion = codeAfterVersion;
-    if (isES) {
-        // Remover todas as extensões GL_ARB_shading_language_420pack do código fonte
+    
+    // Remover GL_ARB_shading_language_420pack se não estiver disponível
+    if (!has420Pack) {
         std::regex extensionRegex(R"(#extension\s+GL_ARB_shading_language_420pack\s*:?\s*\w*\s*\n?)");
         processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, extensionRegex, "");
-        
-        // Remover outras extensões problemáticas comuns em ES
+    }
+    
+    // Remover outras extensões ARB problemáticas se for OpenGL ES
+    if (isES) {
         std::regex arbExtensionRegex(R"(#extension\s+GL_ARB_[^\n]*\n?)");
         processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, arbExtensionRegex, "");
     }
