@@ -69,6 +69,18 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         return false;
     }
 
+    // IMPORTANT: Log frame dimensions for debugging (especially for macOS AVFoundation)
+    static int frameDimensionLogCount = 0;
+    if (frameDimensionLogCount++ < 5)
+    {
+        LOG_INFO("=== FRAME DIMENSIONS ===");
+        LOG_INFO("Frame: " + std::to_string(frame.width) + "x" + std::to_string(frame.height));
+        LOG_INFO("Current texture: " + std::to_string(m_textureWidth) + "x" + std::to_string(m_textureHeight));
+        LOG_INFO("Format: 0x" + std::to_string(frame.format));
+        LOG_INFO("Size: " + std::to_string(frame.size) + " bytes");
+        LOG_INFO("=======================");
+    }
+
     // Se a textura ainda não foi criada ou o tamanho mudou
     bool textureCreated = false;
     if (m_texture == 0 || m_textureWidth != frame.width || m_textureHeight != frame.height)
@@ -118,8 +130,9 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         isYUYV = true;
     }
 #else
-    // No Windows, verificar pelo tamanho (DirectShow geralmente usa RGB24)
-    if (frame.size == frame.width * frame.height * 2)
+    // No Windows/macOS, verificar pelo tamanho ou formato
+    // macOS AVFoundation retorna formato 0x56595559 (YUYV)
+    if (frame.format == 0x56595559 || frame.size == frame.width * frame.height * 2)
     {
         isYUYV = true;
     }
