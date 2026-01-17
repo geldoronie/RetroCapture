@@ -30,6 +30,10 @@ private:
     void renderDSControls();
     void renderDSDeviceSelection();
 #endif
+#ifdef __APPLE__
+    void renderAVFoundationControls();
+    void renderAVFoundationDeviceSelection();
+#endif
     void renderCaptureSettings();
     void renderQuickResolutions();
     void renderQuickFPS();

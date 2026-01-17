@@ -1724,6 +1724,21 @@ void UIManager::refreshDSDevices()
     m_dsDevices = m_capture->listDevices();
 }
 
+void UIManager::refreshAVFoundationDevices()
+{
+    if (!m_capture)
+    {
+        // Não limpar a lista - pode ter sido populada anteriormente
+        // Apenas não atualizar se m_capture não estiver disponível
+        LOG_WARN("refreshAVFoundationDevices: m_capture não disponível");
+        return;
+    }
+
+    LOG_INFO("Atualizando lista de dispositivos AVFoundation...");
+    m_avfoundationDevices = m_capture->listDevices();
+    LOG_INFO("Lista atualizada: " + std::to_string(m_avfoundationDevices.size()) + " dispositivo(s) encontrado(s)");
+}
+
 void UIManager::setSourceType(SourceType sourceType)
 {
     m_sourceType = sourceType;

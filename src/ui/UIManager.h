@@ -141,7 +141,8 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2 // DirectShow (Windows)
+        DS = 2, // DirectShow (Windows)
+        AVFoundation = 3 // AVFoundation (macOS)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -333,6 +334,10 @@ public:
     // DirectShow getters
     const std::vector<DeviceInfo> &getDSDevices() const { return m_dsDevices; }
     void refreshDSDevices();
+
+    // AVFoundation getters (macOS)
+    const std::vector<DeviceInfo> &getAVFoundationDevices() const { return m_avfoundationDevices; }
+    void refreshAVFoundationDevices();
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -653,6 +658,8 @@ private:
     // Source selection
 #ifdef _WIN32
     SourceType m_sourceType = SourceType::DS; // Padrão: DirectShow no Windows
+#elif defined(__APPLE__)
+    SourceType m_sourceType = SourceType::AVFoundation; // Padrão: AVFoundation no macOS
 #else
     SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
 #endif
@@ -660,6 +667,7 @@ private:
     // Device selection (V4L2)
     std::vector<std::string> m_v4l2Devices;
     std::vector<DeviceInfo> m_dsDevices;
+    std::vector<DeviceInfo> m_avfoundationDevices; // macOS AVFoundation devices
     std::string m_currentDevice;
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;

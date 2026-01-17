@@ -58,6 +58,15 @@ void UIConfigurationSource::render()
     {
         ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
+#elif defined(__APPLE__)
+    if (sourceType == UIManager::SourceType::AVFoundation)
+    {
+        renderAVFoundationControls();
+    }
+    else if (sourceType == UIManager::SourceType::None)
+    {
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+    }
 #else
     if (sourceType == UIManager::SourceType::None)
     {
@@ -79,8 +88,12 @@ void UIConfigurationSource::renderSourceTypeSelection()
     UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
 #elif defined(_WIN32)
     const char *sourceTypeNames[] = {"None", "DirectShow"};
-    // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
+    // Mapeamento: índice 0 = None (0), índice 1 = DS (2)
     UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::DS};
+#elif defined(__APPLE__)
+    const char *sourceTypeNames[] = {"None", "AVFoundation"};
+    // Mapeamento: índice 0 = None (0), índice 1 = AVFoundation (3)
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::AVFoundation};
 #else
     const char *sourceTypeNames[] = {"None"};
     UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
@@ -625,3 +638,195 @@ void UIConfigurationSource::renderQuickResolutions()
         m_uiManager->triggerResolutionChange(3840, 2160);
     }
 }
+
+#ifdef __APPLE__
+void UIConfigurationSource::renderAVFoundationControls()
+{
+    // Atualizar referência ao capture ANTES de verificar
+    m_capture = m_uiManager->getCapture();
+    
+    // Sempre mostrar controles, mesmo sem dispositivo
+    // Se não houver dispositivo, mostrar mensagem informativa
+    if (!m_capture || !m_capture->isOpen())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo AVFoundation conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::Separator();
+    }
+
+    renderAVFoundationDeviceSelection();
+    ImGui::Separator();
+    renderCaptureSettings();
+    ImGui::Separator();
+    renderQuickResolutions();
+    ImGui::Separator();
+    renderQuickFPS();
+    ImGui::Separator();
+
+    // AVFoundation Hardware Controls
+    // Nota: AVFoundation tem suporte limitado a controles de hardware via AVCaptureDevice
+    // A maioria dos controles precisa ser feita via AVCaptureDevice properties
+    ImGui::Text("AVFoundation Hardware Controls");
+    ImGui::Separator();
+    ImGui::TextWrapped("Controles de hardware podem ter suporte limitado via AVFoundation.");
+    ImGui::TextWrapped("Alguns dispositivos podem não expor todos os controles disponíveis.");
+
+    // Helper function para renderizar controle com range do dispositivo ou padrão
+    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
+    {
+        if (!m_capture || !m_capture->isOpen())
+            return;
+
+        int32_t value, min, max;
+
+        // Tentar obter valores do dispositivo usando interface genérica
+        if (m_capture->getControl(name, value) &&
+            m_capture->getControlMin(name, min) &&
+            m_capture->getControlMax(name, max))
+        {
+            // Valores obtidos com sucesso
+        }
+        else
+        {
+            // Se não disponível, usar valores padrão
+            min = defaultMin;
+            max = defaultMax;
+            value = defaultValue;
+        }
+
+        // Clamp valor
+        value = std::max(min, std::min(max, value));
+
+        // Use unique ID with suffix to avoid conflicts with dynamic controls
+        std::string label = std::string(name) + "##avfmanual";
+        if (ImGui::SliderInt(label.c_str(), &value, min, max))
+        {
+            value = std::max(min, std::min(max, value));
+            m_uiManager->triggerV4L2ControlChange(name, value);
+        }
+    };
+
+    // Brightness
+    renderControl("Brightness", -100, 100, 0);
+
+    // Contrast
+    renderControl("Contrast", -100, 100, 0);
+
+    // Saturation
+    renderControl("Saturation", -100, 100, 0);
+
+    // Hue
+    renderControl("Hue", -100, 100, 0);
+
+    // Gain
+    renderControl("Gain", 0, 100, 0);
+
+    // Exposure
+    renderControl("Exposure", -13, 1, 0);
+
+    // Sharpness
+    renderControl("Sharpness", 0, 6, 0);
+
+    // Gamma
+    renderControl("Gamma", 100, 300, 100);
+
+    // White Balance
+    renderControl("White Balance", 2800, 6500, 4000);
+}
+
+void UIConfigurationSource::renderAVFoundationDeviceSelection()
+{
+    // Device selection
+    ImGui::Text("AVFoundation Device:");
+    ImGui::Separator();
+
+    // Obter o ponteiro do capture do UIManager (sempre atualizar)
+    m_capture = m_uiManager->getCapture();
+
+    // Usar cache de dispositivos do UIManager (similar ao DS)
+    // Obter lista atual (cópia para evitar problemas de referência)
+    auto currentDevices = m_uiManager->getAVFoundationDevices();
+    
+    // Apenas atualizar a lista se estiver vazia E m_capture estiver disponível
+    // Isso evita chamar refreshAVFoundationDevices() a cada frame
+    if (currentDevices.empty() && m_capture)
+    {
+        m_uiManager->refreshAVFoundationDevices();
+        // Obter lista novamente após atualização
+        currentDevices = m_uiManager->getAVFoundationDevices();
+    }
+    
+    // NÃO retornar se m_capture for nullptr - ainda podemos mostrar a lista se ela já foi enumerada
+    // A lista pode ter sido populada anteriormente mesmo que m_capture não esteja disponível agora
+
+    // Combo box for device selection
+    // Adicionar "None" como primeira opção
+    std::string currentDevice = m_uiManager->getCurrentDevice();
+    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
+    
+    // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
+    if (currentDevices.empty())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo AVFoundation encontrado. Clique em Refresh para atualizar.");
+        ImGui::Spacing();
+    }
+    int selectedIndex = -1;
+
+    // Verificar se "None" está selecionado
+    if (currentDevice.empty())
+    {
+        selectedIndex = 0; // "None" é o índice 0
+    }
+    else
+    {
+        // Procurar dispositivo na lista (índice +1 porque "None" é 0)
+        for (size_t i = 0; i < currentDevices.size(); ++i)
+        {
+            if (currentDevices[i].id == currentDevice || currentDevices[i].name == currentDevice)
+            {
+                selectedIndex = static_cast<int>(i) + 1; // +1 porque "None" é 0
+                displayText = currentDevices[i].name + " (" + currentDevices[i].id + ")";
+                break;
+            }
+        }
+    }
+
+    if (ImGui::BeginCombo("##avfdevice", displayText.c_str()))
+    {
+        // Opção "None" sempre como primeira opção
+        bool isNoneSelected = currentDevice.empty();
+        if (ImGui::Selectable("None (No device)", isNoneSelected))
+        {
+            m_uiManager->triggerDeviceChange("");
+            m_uiManager->saveConfig();
+        }
+        if (isNoneSelected)
+        {
+            ImGui::SetItemDefaultFocus();
+        }
+
+        // Listar dispositivos disponíveis
+        for (size_t i = 0; i < currentDevices.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i) + 1);
+            std::string deviceLabel = currentDevices[i].name + " (" + currentDevices[i].id + ")";
+            if (ImGui::Selectable(deviceLabel.c_str(), isSelected))
+            {
+                // Usar o ID do dispositivo (uniqueID do AVFoundation)
+                m_uiManager->triggerDeviceChange(currentDevices[i].id);
+                m_uiManager->saveConfig();
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfdevices"))
+    {
+        m_uiManager->refreshAVFoundationDevices();
+    }
+}
+#endif
