@@ -16,6 +16,8 @@ void printUsage(const char *programName)
     std::cout << "  --source <type>        Source type: none, v4l2 (default: v4l2)\n";
 #elif defined(_WIN32)
     std::cout << "  --source <type>        Source type: none, ds (default: ds)\n";
+#elif defined(__APPLE__)
+    std::cout << "  --source <type>        Source type: none, avfoundation (default: avfoundation)\n";
 #else
     std::cout << "  --source <type>        Source type: none (default: none)\n";
 #endif
@@ -102,6 +104,8 @@ int main(int argc, char *argv[])
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
     sourceType = "ds"; // Windows usa DirectShow
+#elif defined(__APPLE__)
+    sourceType = "avfoundation"; // macOS usa AVFoundation
 #else
     sourceType = "none"; // Outras plataformas sem suporte
 #endif
@@ -109,6 +113,8 @@ int main(int argc, char *argv[])
     std::string devicePath = "/dev/video0";
 #elif defined(_WIN32)
     std::string devicePath = ""; // Windows: dispositivo será selecionado via DirectShow
+#elif defined(__APPLE__)
+    std::string devicePath = ""; // macOS: dispositivo será selecionado via AVFoundation
 #else
     std::string devicePath = "";
 #endif
@@ -198,6 +204,8 @@ int main(int argc, char *argv[])
             if (sourceType != "none" && sourceType != "v4l2")
 #elif defined(_WIN32)
             if (sourceType != "none" && sourceType != "ds")
+#elif defined(__APPLE__)
+            if (sourceType != "none" && sourceType != "avfoundation")
 #else
             if (sourceType != "none")
 #endif
@@ -206,6 +214,8 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid source type. Use 'none' or 'v4l2'");
 #elif defined(_WIN32)
                 LOG_ERROR("Invalid source type. Use 'none' or 'ds'");
+#elif defined(__APPLE__)
+                LOG_ERROR("Invalid source type. Use 'none' or 'avfoundation'");
 #else
                 LOG_ERROR("Invalid source type. Use 'none'");
 #endif
@@ -633,6 +643,8 @@ int main(int argc, char *argv[])
     bool isV4L2Source = (sourceType == "v4l2");
 #elif defined(_WIN32)
     bool isDSSource = (sourceType == "ds");
+#elif defined(__APPLE__)
+    bool isAVFoundationSource = (sourceType == "avfoundation");
 #endif
 
     LOG_INFO("Initializing application...");
@@ -822,6 +834,9 @@ int main(int argc, char *argv[])
 #elif defined(_WIN32)
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
+#elif defined(__APPLE__)
+    if (sourceType == "avfoundation")
+        sourceTypeEnum = UIManager::SourceType::AVFoundation;
 #endif
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
