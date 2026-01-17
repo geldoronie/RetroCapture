@@ -99,6 +99,39 @@ Gera AppImage para Linux x86_64.
 ./tools/build-linux-appimage-x86_64.sh
 ```
 
+#### `build-macos.sh`
+
+Compila RetroCapture para macOS (nativo, sem Docker).
+
+```bash
+./tools/build-macos.sh [Release|Debug]
+```
+
+**Exemplos:**
+
+```bash
+# Build Release (padrão)
+./tools/build-macos.sh Release
+
+# Build Debug
+./tools/build-macos.sh Debug
+```
+
+**Pré-requisitos:**
+
+Execute primeiro o script de instalação de dependências:
+
+```bash
+./tools/install-deps-macos.sh
+```
+
+Este script instala via Homebrew:
+- CMake
+- GLFW
+- FFmpeg
+- libpng
+- pkg-config
+
 ## 🔧 Scripts de Instalação e Utilitários
 
 #### `install-deps-raspberry-pi.sh`
@@ -108,6 +141,21 @@ Instala todas as dependências necessárias na Raspberry Pi.
 ```bash
 ./tools/install-deps-raspberry-pi.sh
 ```
+
+#### `install-deps-macos.sh`
+
+Instala todas as dependências necessárias no macOS via Homebrew.
+
+```bash
+./tools/install-deps-macos.sh
+```
+
+**Dependências instaladas:**
+- CMake
+- GLFW
+- FFmpeg (libavcodec, libavformat, libavutil, libswscale, libswresample)
+- libpng
+- pkg-config
 
 #### `check-directfb.sh`
 
@@ -208,4 +256,14 @@ Estes scripts são usados dentro dos containers Docker durante o build:
 
 ```bash
 ./tools/build-windows-x86_64-docker.sh Release
+```
+
+### Para macOS:
+
+```bash
+# Primeiro, instalar dependências (se necessário)
+./tools/install-deps-macos.sh
+
+# Depois, fazer o build
+./tools/build-macos.sh Release
 ```
