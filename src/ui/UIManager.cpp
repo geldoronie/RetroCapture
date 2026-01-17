@@ -1780,15 +1780,34 @@ void UIManager::setAVFoundationFormat(int formatIndex, const std::string &device
     auto formats = getAVFoundationFormats(targetDeviceId);
     if (formatIndex >= 0 && formatIndex < static_cast<int>(formats.size()))
     {
-        if (m_capture->setFormatById(formats[formatIndex].id, targetDeviceId))
+        const auto& format = formats[formatIndex];
+        if (m_capture->setFormatById(format.id, targetDeviceId))
         {
-            m_currentFormatId = formats[formatIndex].id;
+            m_currentFormatId = format.id;
             LOG_INFO("Format set by index: " + std::to_string(formatIndex));
             
-            // Trigger format change callback if needed
+            // Update resolution from format
             if (m_onResolutionChanged)
             {
-                m_onResolutionChanged(formats[formatIndex].width, formats[formatIndex].height);
+                m_onResolutionChanged(format.width, format.height);
+            }
+            
+            // Update FPS to maximum supported by format (or 30 if max is too high)
+            uint32_t targetFps = static_cast<uint32_t>(format.maxFps);
+            if (targetFps > 60)
+            {
+                targetFps = 60; // Cap at 60 for most use cases
+            }
+            else if (targetFps < 30)
+            {
+                targetFps = static_cast<uint32_t>(format.maxFps); // Use max if less than 30
+            }
+            
+            // Update FPS in capture and trigger callback
+            m_capture->setFramerate(targetFps);
+            if (m_onFramerateChanged)
+            {
+                m_onFramerateChanged(targetFps);
             }
         }
     }
@@ -1805,17 +1824,36 @@ void UIManager::setAVFoundationFormatById(const std::string &formatId, const std
         m_currentFormatId = formatId;
         LOG_INFO("Format set by ID: " + formatId);
         
-        // Trigger format change callback if needed
-        if (m_onResolutionChanged)
+        // Find format info and update resolution/FPS
+        auto formats = getAVFoundationFormats(targetDeviceId);
+        for (const auto& format : formats)
         {
-            auto formats = getAVFoundationFormats(targetDeviceId);
-            for (const auto& format : formats)
+            if (format.id == formatId)
             {
-                if (format.id == formatId)
+                // Update resolution from format
+                if (m_onResolutionChanged)
                 {
                     m_onResolutionChanged(format.width, format.height);
-                    break;
                 }
+                
+                // Update FPS to maximum supported by format (or 30 if max is too high)
+                uint32_t targetFps = static_cast<uint32_t>(format.maxFps);
+                if (targetFps > 60)
+                {
+                    targetFps = 60; // Cap at 60 for most use cases
+                }
+                else if (targetFps < 30)
+                {
+                    targetFps = static_cast<uint32_t>(format.maxFps); // Use max if less than 30
+                }
+                
+                // Update FPS in capture and trigger callback
+                m_capture->setFramerate(targetFps);
+                if (m_onFramerateChanged)
+                {
+                    m_onFramerateChanged(targetFps);
+                }
+                break;
             }
         }
     }

@@ -657,12 +657,6 @@ void UIConfigurationSource::renderAVFoundationControls()
     ImGui::Separator();
     renderAVFoundationFormatSelection();
     ImGui::Separator();
-    renderCaptureSettings();
-    ImGui::Separator();
-    renderQuickResolutions();
-    ImGui::Separator();
-    renderQuickFPS();
-    ImGui::Separator();
 
     // AVFoundation Hardware Controls
     // Nota: AVFoundation tem suporte limitado a controles de hardware via AVCaptureDevice
