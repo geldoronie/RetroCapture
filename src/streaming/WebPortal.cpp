@@ -1,9 +1,15 @@
 #include "WebPortal.h"
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
 #endif
 #include <cstring>
 #include <cstdlib>
@@ -758,6 +764,15 @@ std::string WebPortal::findAssetFile(const std::string &relativePath) const
     char exePath[1024];
     #ifdef PLATFORM_LINUX
     ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len != -1)
+    #elif defined(__APPLE__)
+    // macOS: usar _NSGetExecutablePath
+    uint32_t size = sizeof(exePath);
+    ssize_t len = -1;
+    if (_NSGetExecutablePath(exePath, &size) == 0)
+    {
+        len = strlen(exePath);
+    }
     if (len != -1)
     #else
     // Windows: usar GetModuleFileName

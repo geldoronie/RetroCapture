@@ -1,6 +1,6 @@
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -204,7 +204,7 @@ bool HTTPServer::createServer(int port)
 #endif
 
     // Criar socket
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (m_serverSocket < 0)
     {
@@ -223,7 +223,7 @@ bool HTTPServer::createServer(int port)
 
     // Configurar opções do socket
     int opt = 1;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #else
     setsockopt(m_serverSocket, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
@@ -261,13 +261,13 @@ bool HTTPServer::createServer(int port)
 int HTTPServer::acceptClient()
 {
     struct sockaddr_in clientAddr;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     socklen_t clientLen = sizeof(clientAddr);
 #else
     int clientLen = sizeof(clientAddr);
 #endif
 
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     int clientFd = accept(m_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
     if (clientFd < 0)
     {
@@ -452,7 +452,7 @@ ssize_t HTTPServer::sendData(int clientFd, const void *data, size_t size)
         }
     }
 #endif
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     return send(clientFd, data, size, MSG_NOSIGNAL);
 #else
     // Windows: send retorna SOCKET_ERROR (-1) em caso de erro
@@ -487,7 +487,7 @@ ssize_t HTTPServer::receiveData(int clientFd, void *buffer, size_t size)
         }
     }
 #endif
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(__APPLE__)
     return recv(clientFd, buffer, size, 0);
 #else
     return recv(clientFd, (char *)buffer, (int)size, 0);

@@ -417,6 +417,14 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleRefreshDSDevices(clientFd);
     }
+    else if (path == "/api/v1/avfoundation/devices")
+    {
+        return handleGETAVFoundationDevices(clientFd);
+    }
+    else if (path == "/api/v1/avfoundation/devices/refresh")
+    {
+        return handleRefreshAVFoundationDevices(clientFd);
+    }
     else if (path == "/api/v1/status")
     {
         return handleGETStatus(clientFd);
@@ -845,6 +853,8 @@ bool APIController::handleGETPlatform(int clientFd)
          << "\"platform\": " << jsonString(
 #ifdef _WIN32
                                     "windows"
+#elif defined(__APPLE__)
+                                    "macos"
 #else
                                     "linux"
 #endif
@@ -856,6 +866,9 @@ bool APIController::handleGETPlatform(int clientFd)
 #ifdef _WIN32
     json << "{\"value\": 0, \"name\": \"None\"}, "
          << "{\"value\": 2, \"name\": \"DirectShow\"}";
+#elif defined(__APPLE__)
+    json << "{\"value\": 0, \"name\": \"None\"}, "
+         << "{\"value\": 3, \"name\": \"AVFoundation\"}";
 #else
     json << "{\"value\": 0, \"name\": \"None\"}, "
          << "{\"value\": 1, \"name\": \"V4L2\"}";
@@ -904,6 +917,51 @@ bool APIController::handleRefreshDSDevices(int clientFd)
 
     m_uiManager->refreshDSDevices();
     return handleGETDSDevices(clientFd);
+}
+
+bool APIController::handleGETAVFoundationDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    // Garantir que os dispositivos sejam escaneados se a lista estiver vazia
+    if (m_uiManager->getAVFoundationDevices().empty())
+    {
+        m_uiManager->refreshAVFoundationDevices();
+    }
+
+    const auto &devices = m_uiManager->getAVFoundationDevices();
+    std::ostringstream json;
+    json << "{\"devices\": [";
+    for (size_t i = 0; i < devices.size(); ++i)
+    {
+        if (i > 0)
+            json << ", ";
+        const auto &device = devices[i];
+        json << "{"
+             << "\"id\": " << jsonString(device.id) << ", "
+             << "\"name\": " << jsonString(device.name) << ", "
+             << "\"available\": " << jsonBool(device.available)
+             << "}";
+    }
+    json << "]}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleRefreshAVFoundationDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    m_uiManager->refreshAVFoundationDevices();
+    return handleGETAVFoundationDevices(clientFd);
 }
 
 // Implementações dos handlers POST/PUT

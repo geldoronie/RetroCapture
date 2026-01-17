@@ -117,6 +117,8 @@ private:
     bool handleGETPlatform(int clientFd);
     bool handleGETDSDevices(int clientFd);
     bool handleRefreshDSDevices(int clientFd);
+    bool handleGETAVFoundationDevices(int clientFd);
+    bool handleRefreshAVFoundationDevices(int clientFd);
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETAudioInputSources(int clientFd);
