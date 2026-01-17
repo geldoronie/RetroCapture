@@ -41,6 +41,9 @@ linuxdeploy-x86_64.AppImage
 appimagetool-x86_64.AppImage
 linuxdeploy-plugins/
 
+# macOS
+build-macos-x86_64/
+
 # Linux ARM
 build-linux-arm32v7/
 build-linux-arm64v8/

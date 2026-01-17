@@ -139,6 +139,15 @@ endif()
 if(PLATFORM_LINUX)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PNG REQUIRED libpng)
+elseif(PLATFORM_MACOS)
+    # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PNG REQUIRED libpng)
+    else()
+        find_package(PNG REQUIRED)
+    endif()
 else()
     # Windows: tentar pkg-config primeiro (MXE), depois find_package
     find_package(PkgConfig QUIET)
@@ -157,6 +166,35 @@ if(PLATFORM_LINUX)
     pkg_check_modules(AVUTIL REQUIRED libavutil)
     pkg_check_modules(SWSCALE REQUIRED libswscale)
     pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+elseif(PLATFORM_MACOS)
+    # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
+    find_package(PkgConfig QUIET)
+    
+    if(PkgConfig_FOUND)
+        pkg_check_modules(AVCODEC REQUIRED libavcodec)
+        pkg_check_modules(AVFORMAT REQUIRED libavformat)
+        pkg_check_modules(AVUTIL REQUIRED libavutil)
+        pkg_check_modules(SWSCALE REQUIRED libswscale)
+        pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    else()
+        # Fallback: tentar encontrar via find_package (vcpkg ou outros)
+        find_package(FFmpeg QUIET COMPONENTS avcodec avformat avutil swscale swresample)
+        
+        if(FFmpeg_FOUND)
+            set(AVCODEC_LIBRARIES avcodec)
+            set(AVFORMAT_LIBRARIES avformat)
+            set(AVUTIL_LIBRARIES avutil)
+            set(SWSCALE_LIBRARIES swscale)
+            set(SWRESAMPLE_LIBRARIES swresample)
+            set(AVCODEC_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(AVFORMAT_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(AVUTIL_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(SWSCALE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(SWRESAMPLE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        else()
+            message(FATAL_ERROR "FFmpeg não encontrado. Instale via Homebrew: brew install ffmpeg")
+        endif()
+    endif()
     
     # Detect FFmpeg version for compatibility
     # Extract version from pkg-config
@@ -389,16 +427,19 @@ endif()
 # Fontes
 file(GLOB_RECURSE SOURCES
     "src/*.cpp"
+    "src/*.mm"
     "src/*.h"
 )
 
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
-    # No Linux, excluir implementações Windows (quando existirem)
+    # No Linux, excluir implementações Windows e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio\\.(cpp|h)$")
 
     # Excluir WindowManager baseado na opção BUILD_WITH_SDL2
     if(BUILD_WITH_SDL2)
@@ -409,10 +450,12 @@ if(PLATFORM_LINUX)
         list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
     endif()
 elseif(PLATFORM_WINDOWS)
-    # No Windows, excluir implementações Linux
+    # No Windows, excluir implementações Linux e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio\\.(cpp|h)$")
 
     # Excluir arquivos Linux genéricos que não têm versão Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
@@ -425,6 +468,24 @@ elseif(PLATFORM_WINDOWS)
     # list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp agora suporta Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
+elseif(PLATFORM_MACOS)
+    # No macOS, excluir implementações Linux e Windows
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+    
+    # Excluir arquivos Linux genéricos
+    list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/AudioCapture\\.cpp$") # AudioCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$")
+    
+    # macOS usa GLFW (não SDL2 por padrão)
+    list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
 endif()
 
 # Executável principal
@@ -530,6 +591,31 @@ if(PLATFORM_LINUX)
     endif()
 
     list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
+elseif(PLATFORM_MACOS)
+    # macOS frameworks necessários
+    find_library(COCOA_LIB Cocoa)
+    find_library(IOKIT_LIB IOKit)
+    find_library(COREVIDEO_LIB CoreVideo)
+    find_library(VIDEOTOOLBOX_LIB VideoToolbox)
+    
+    # AVFoundation e CoreAudio são frameworks do sistema
+    # Não precisam de find_library, serão linkados via -framework
+    
+    if(COCOA_LIB)
+        list(APPEND LINK_LIBS ${COCOA_LIB})
+    endif()
+    if(IOKIT_LIB)
+        list(APPEND LINK_LIBS ${IOKIT_LIB})
+    endif()
+    if(COREVIDEO_LIB)
+        list(APPEND LINK_LIBS ${COREVIDEO_LIB})
+    endif()
+    if(VIDEOTOOLBOX_LIB)
+        list(APPEND LINK_LIBS ${VIDEOTOOLBOX_LIB})
+    endif()
+    
+    # Frameworks serão linkados após a criação do target via target_link_libraries
+    message(STATUS "macOS frameworks: AVFoundation, CoreAudio, CoreVideo, VideoToolbox, Foundation, AudioToolbox")
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
     list(APPEND LINK_LIBS
@@ -547,6 +633,19 @@ elseif(PLATFORM_WINDOWS)
 endif()
 
 target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
+
+# Link macOS frameworks (após target ser criado)
+if(PLATFORM_MACOS)
+    target_link_libraries(retrocapture PRIVATE
+        "-framework AVFoundation"
+        "-framework CoreAudio"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework Foundation"
+        "-framework AudioToolbox"
+    )
+endif()
 
 # MinGW-w64 precisa linkar com stdc++fs para filesystem (GCC 8+)
 # Para GCC < 8, nossa implementação manual usa shlwapi
