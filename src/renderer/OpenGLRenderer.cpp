@@ -440,7 +440,8 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
         glUniform1f(contrastLoc, contrast);
     }
     
-    // Calcular viewport mantendo proporção se solicitado
+    // IMPORTANT: Always set viewport to full window first (for clearing)
+    // Then calculate aspect ratio viewport if needed
     GLint viewportX = 0;
     GLint viewportY = 0;
     GLsizei viewportWidth = windowWidth;
@@ -451,17 +452,43 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
         float textureAspect = static_cast<float>(textureWidth) / static_cast<float>(textureHeight);
         float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
         
+        // Debug log (mais detalhado para diagnóstico)
+        static int aspectLogCount = 0;
+        if (aspectLogCount++ < 5) {
+            LOG_INFO("=== ASPECT RATIO CALCULATION (renderTexture) ===");
+            LOG_INFO("Texture: " + std::to_string(textureWidth) + "x" + std::to_string(textureHeight) + 
+                     " (aspect: " + std::to_string(textureAspect) + ")");
+            LOG_INFO("Window: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight) + 
+                     " (aspect: " + std::to_string(windowAspect) + ")");
+        }
+        
         if (textureAspect > windowAspect) {
             // Textura é mais larga: ajustar altura (letterboxing)
-            viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
+            viewportHeight = static_cast<GLsizei>(static_cast<float>(windowWidth) / textureAspect);
             viewportY = (windowHeight - viewportHeight) / 2;
+            if (aspectLogCount <= 5) {
+                LOG_INFO("Letterboxing: viewport=" + std::to_string(viewportX) + "," + std::to_string(viewportY) + 
+                         " " + std::to_string(viewportWidth) + "x" + std::to_string(viewportHeight));
+            }
         } else {
             // Textura é mais alta: ajustar largura (pillarboxing)
-            viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
+            viewportWidth = static_cast<GLsizei>(static_cast<float>(windowHeight) * textureAspect);
             viewportX = (windowWidth - viewportWidth) / 2;
+            if (aspectLogCount <= 5) {
+                LOG_INFO("Pillarboxing: viewport=" + std::to_string(viewportX) + "," + std::to_string(viewportY) + 
+                         " " + std::to_string(viewportWidth) + "x" + std::to_string(viewportHeight));
+            }
+        }
+    } else if (maintainAspect) {
+        // maintainAspect está ativo mas dimensões inválidas
+        static int invalidDimensionLogCount = 0;
+        if (invalidDimensionLogCount++ < 3) {
+            LOG_WARN("maintainAspect ativo mas dimensões inválidas: " + 
+                     std::to_string(textureWidth) + "x" + std::to_string(textureHeight));
         }
     }
     
+    // IMPORTANT: Set viewport - this is the final viewport for rendering
     glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     
