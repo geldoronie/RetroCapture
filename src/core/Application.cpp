@@ -48,6 +48,8 @@
 #include <iostream>
 #ifdef PLATFORM_LINUX
 #include <unistd.h>
+#elif defined(__APPLE__)
+#include <unistd.h> // Para usleep no macOS
 #endif
 #include "../utils/FilesystemCompat.h"
 #include <time.h>
@@ -296,7 +298,11 @@ bool Application::initRenderer()
 #ifdef PLATFORM_LINUX
                     usleep(10000); // 10ms
 #else
+#ifdef _WIN32
                     Sleep(10); // 10ms
+#else
+                    usleep(10000); // 10ms
+#endif
 #endif
                     appPtr->m_isResizing = false;
                 } });
@@ -344,6 +350,7 @@ bool Application::initCapture()
     // Try to open specified device
     // On Windows, m_devicePath can be empty or be a MF device index
     // On Linux, m_devicePath is the V4L2 device path (e.g., /dev/video0)
+    // On macOS, m_devicePath is the AVFoundation device uniqueID (or empty for default)
     // If it fails, activate dummy mode (generates black frames)
     if (m_devicePath.empty())
     {
@@ -364,11 +371,52 @@ bool Application::initCapture()
         LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
         return true;
+#elif defined(__APPLE__)
+        LOG_INFO("No device specified - activating dummy mode directly");
+        // macOS: go directly to dummy mode (device selection via UI)
+        m_capture->setDummyMode(true);
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+        {
+            LOG_ERROR("Failed to configure dummy format");
+            return false;
+        }
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Failed to start dummy capture");
+            return false;
+        }
+        LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
 #else
         LOG_INFO("No device specified - using default /dev/video0");
         m_devicePath = "/dev/video0";
 #endif
     }
+
+    // No macOS, se devicePath for um caminho Linux (/dev/video*), não tentar abrir
+#ifdef __APPLE__
+    if (!m_devicePath.empty() && m_devicePath.find("/dev/video") == 0)
+    {
+        LOG_INFO("Ignoring Linux device path on macOS: " + m_devicePath);
+        LOG_INFO("Activating dummy mode: generating black frames at specified resolution.");
+        LOG_INFO("Select a device in the AVFoundation tab to use real capture.");
+        m_capture->setDummyMode(true);
+        if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+        {
+            LOG_ERROR("Failed to configure dummy format");
+            return false;
+        }
+        if (!m_capture->startCapture())
+        {
+            LOG_ERROR("Failed to start dummy capture");
+            return false;
+        }
+        LOG_INFO("Dummy mode activated: " + std::to_string(m_capture->getWidth()) + "x" +
+                 std::to_string(m_capture->getHeight()));
+        return true;
+    }
+#endif
 
     if (!m_capture->open(m_devicePath))
     {
@@ -378,6 +426,8 @@ bool Application::initCapture()
         LOG_INFO("Select a device in the V4L2 tab to use real capture.");
 #elif defined(_WIN32)
         LOG_INFO("Select a device in the DirectShow tab to use real capture.");
+#elif defined(__APPLE__)
+        LOG_INFO("Select a device in the AVFoundation tab to use real capture.");
 #endif
 
         // Activate dummy mode
@@ -552,7 +602,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #ifdef PLATFORM_LINUX
     usleep(50000); // 50ms to let current frame processing finish
 #else
+#ifdef _WIN32
     Sleep(50); // 50ms to let current frame processing finish
+#else
+    usleep(50000); // 50ms
+#endif
 #endif
 
     // Delete texture BEFORE closing device to avoid accessing invalid resources
@@ -578,7 +632,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #ifdef PLATFORM_LINUX
     usleep(100000); // 100ms
 #else
+#ifdef _WIN32
     Sleep(100); // 100ms
+#else
+    usleep(100000); // 100ms
+#endif
 #endif
 
     // Reopen device
@@ -599,7 +657,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #ifdef PLATFORM_LINUX
         usleep(100000); // 100ms
 #else
-        Sleep(100); // 100ms
+    #ifdef _WIN32
+    Sleep(100); // 100ms
+#else
+    usleep(100000); // 100ms
+#endif
 #endif
         if (m_capture->open(devicePath))
         {
@@ -633,7 +695,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #ifdef PLATFORM_LINUX
         usleep(100000); // 100ms
 #else
-        Sleep(100); // 100ms
+    #ifdef _WIN32
+    Sleep(100); // 100ms
+#else
+    usleep(100000); // 100ms
+#endif
 #endif
         if (m_capture->open(devicePath))
         {
@@ -661,7 +727,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 #ifdef PLATFORM_LINUX
         usleep(10000); // 10ms entre tentativas
 #else
+#ifdef _WIN32
         Sleep(10); // 10ms entre tentativas
+#else
+        usleep(10000); // 10ms
+#endif
 #endif
     }
 
@@ -2818,7 +2888,11 @@ void Application::run()
 #ifdef PLATFORM_LINUX
                         usleep(5000); // 5ms between attempts
 #else
+#ifdef _WIN32
                         Sleep(5); // 5ms between attempts
+#else
+                        usleep(5000); // 5ms
+#endif
 #endif
                     }
                 }
@@ -2922,10 +2996,6 @@ void Application::run()
                 lastViewportHeight = currentHeight;
             }
 
-            // Usar resolução da janela (sem limitações hardcoded)
-            // O usuário pode controlar a resolução de saída via setOutputResolution()
-            glViewport(0, 0, currentWidth, currentHeight);
-
             // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
             // Clear with transparent black so blending works correctly
             if (isShaderTexture)
@@ -2936,22 +3006,55 @@ void Application::run()
             {
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
             }
+            
+            // IMPORTANT: Clear with full window viewport, but renderTexture will set correct viewport
+            // Don't set viewport here - let renderTexture handle it to avoid conflicts
+            glViewport(0, 0, currentWidth, currentHeight);
             glClear(GL_COLOR_BUFFER_BIT);
 
             // For shader textures (framebuffer), invert Y (shader renders inverted)
             // For original texture (camera), don't invert Y (already correct)
             // IMPORTANT: If shader texture, may need blending for alpha
             // Get texture dimensions to calculate aspect ratio
-            // IMPORTANT: For maintainAspect, always use ORIGINAL CAPTURE dimensions
-            // because shader processes image but maintains same aspect ratio
-            // Shader output texture may have window (viewport) dimensions, not image dimensions
+            // IMPORTANT: For maintainAspect, use REQUESTED dimensions (not actual pixelBuffer dimensions)
+            // On macOS/AVFoundation, the device may return different dimensions than requested,
+            // but we want to maintain the aspect ratio of what was REQUESTED, not what was received
+            // This matches behavior on other platforms (V4L2, DirectShow) where requested dimensions are used
+            uint32_t originalCaptureWidth = m_frameProcessor->getTextureWidth();
+            uint32_t originalCaptureHeight = m_frameProcessor->getTextureHeight();
+            
+            // For macOS/AVFoundation: Use requested dimensions for aspect ratio if available
+            // The actual frame dimensions may differ, but we want to maintain requested aspect ratio
+#ifdef __APPLE__
+            if (m_capture)
+            {
+                uint32_t requestedWidth = m_capture->getWidth();
+                uint32_t requestedHeight = m_capture->getHeight();
+                // Use requested dimensions if they are valid and different from actual
+                // This ensures aspect ratio matches what user requested, not what device returned
+                if (requestedWidth > 0 && requestedHeight > 0)
+                {
+                    // Only use requested dimensions if they differ significantly from actual
+                    // This handles cases where device returns slightly different dimensions
+                    float requestedAspect = static_cast<float>(requestedWidth) / static_cast<float>(requestedHeight);
+                    float actualAspect = static_cast<float>(originalCaptureWidth) / static_cast<float>(originalCaptureHeight);
+                    if (std::abs(requestedAspect - actualAspect) > 0.01f)
+                    {
+                        // Aspect ratios differ - use requested dimensions for aspect ratio calculation
+                        originalCaptureWidth = requestedWidth;
+                        originalCaptureHeight = requestedHeight;
+                    }
+                }
+            }
+#endif
+            
             uint32_t renderWidth, renderHeight;
             if (isShaderTexture && m_maintainAspect)
             {
                 // For maintainAspect with shader, use original capture dimensions
                 // Shader processes but maintains original image aspect ratio
-                renderWidth = m_frameProcessor->getTextureWidth();
-                renderHeight = m_frameProcessor->getTextureHeight();
+                renderWidth = originalCaptureWidth;
+                renderHeight = originalCaptureHeight;
             }
             else if (isShaderTexture)
             {
@@ -2961,15 +3064,15 @@ void Application::run()
                 if (renderWidth == 0 || renderHeight == 0)
                 {
                     LOG_WARN("Shader output dimensions invalid (0x0), using capture dimensions");
-                    renderWidth = m_frameProcessor->getTextureWidth();
-                    renderHeight = m_frameProcessor->getTextureHeight();
+                    renderWidth = originalCaptureWidth;
+                    renderHeight = originalCaptureHeight;
                 }
             }
             else
             {
                 // Without shader, use capture dimensions
-                renderWidth = m_frameProcessor->getTextureWidth();
-                renderHeight = m_frameProcessor->getTextureHeight();
+                renderWidth = originalCaptureWidth;
+                renderHeight = originalCaptureHeight;
             }
 
             // NOVO: Aplicar resolução de saída configurável (se definida)
@@ -3125,41 +3228,55 @@ void Application::run()
             // flipY: true for both (camera and shader need to invert)
             bool shouldFlipY = true;
 
-            // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
-            uint32_t windowWidth = m_window->getWidth();
-            uint32_t windowHeight = m_window->getHeight();
-            GLint viewportX = 0;
-            GLint viewportY = 0;
-            GLsizei viewportWidth = windowWidth;
-            GLsizei viewportHeight = windowHeight;
-
-            if (m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
-            {
-                // Calculate texture and window aspect ratio (same as renderTexture)
-                float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
-                float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
-
-                if (textureAspect > windowAspect)
-                {
-                    // Texture is wider: adjust height (letterboxing)
-                    viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
-                    viewportY = (windowHeight - viewportHeight) / 2;
-                }
-                else
-                {
-                    // Texture is taller: adjust width (pillarboxing)
-                    viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
-                    viewportX = (windowWidth - viewportWidth) / 2;
-                }
-            }
-
             // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-            // Renderizar textura final na janela (sempre preenche a janela completamente)
-            m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
+            // Renderizar textura final na janela
+            // renderTexture calculará e aplicará o viewport correto se maintainAspect estiver ativo
+            // IMPORTANT: For maintainAspect, ALWAYS use ORIGINAL CAPTURE dimensions from FrameProcessor
+            // The FrameProcessor stores the actual frame dimensions, which may differ from requested
+            uint32_t aspectWidth = finalRenderWidth;
+            uint32_t aspectHeight = finalRenderHeight;
+            
+            if (m_maintainAspect)
+            {
+                // Always use original capture dimensions from FrameProcessor for aspect ratio calculation
+                // FrameProcessor stores the actual frame dimensions (from pixelBuffer in AVFoundation)
+                // This ensures the aspect ratio is correct even if device returns different dimensions
+                aspectWidth = originalCaptureWidth;
+                aspectHeight = originalCaptureHeight;
+                
+                // Validate dimensions
+                if (aspectWidth == 0 || aspectHeight == 0)
+                {
+                    LOG_WARN("Invalid aspect dimensions (0x0), using finalRender dimensions");
+                    aspectWidth = finalRenderWidth;
+                    aspectHeight = finalRenderHeight;
+                }
+            }
+            
+            // Log para debug do aspect ratio (mais detalhado para macOS)
+            static int aspectDebugLogCount = 0;
+            if (aspectDebugLogCount++ < 5)
+            {
+                LOG_INFO("=== MAINTAIN ASPECT DEBUG ===");
+                LOG_INFO("maintainAspect: " + std::string(m_maintainAspect ? "true" : "false"));
+                LOG_INFO("originalCapture (FrameProcessor): " + std::to_string(originalCaptureWidth) + "x" + std::to_string(originalCaptureHeight));
+                LOG_INFO("finalRender: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight));
+                LOG_INFO("aspectRatio (used): " + std::to_string(aspectWidth) + "x" + std::to_string(aspectHeight));
+                LOG_INFO("window: " + std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+                if (aspectWidth > 0 && aspectHeight > 0)
+                {
+                    float aspect = static_cast<float>(aspectWidth) / static_cast<float>(aspectHeight);
+                    float windowAspect = static_cast<float>(currentWidth) / static_cast<float>(currentHeight);
+                    LOG_INFO("Aspect ratios - texture: " + std::to_string(aspect) + ", window: " + std::to_string(windowAspect));
+                }
+                LOG_INFO("=============================");
+            }
+            
+            m_renderer->renderTexture(finalTexture, currentWidth, currentHeight,
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
-                                      m_maintainAspect, finalRenderWidth, finalRenderHeight);
+                                      m_maintainAspect, aspectWidth, aspectHeight);
 
             // IMPORTANTE: Aguardar que a renderização seja concluída
             glFinish();
@@ -3185,6 +3302,30 @@ void Application::run()
 
             if (needsFrameCapture)
             {
+                // Recalcular viewport para captura (mesmo cálculo usado em renderTexture)
+                uint32_t windowWidth = currentWidth;
+                uint32_t windowHeight = currentHeight;
+                GLint viewportX = 0;
+                GLint viewportY = 0;
+                GLsizei viewportWidth = windowWidth;
+                GLsizei viewportHeight = windowHeight;
+
+                if (m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
+                {
+                    float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
+                    float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+
+                    if (textureAspect > windowAspect)
+                    {
+                        viewportHeight = static_cast<GLsizei>(static_cast<float>(windowWidth) / textureAspect);
+                        viewportY = (windowHeight - viewportHeight) / 2;
+                    }
+                    else
+                    {
+                        viewportWidth = static_cast<GLsizei>(static_cast<float>(windowHeight) * textureAspect);
+                        viewportX = (windowWidth - viewportWidth) / 2;
+                    }
+                }
 
                 // Capturar do viewport (o que está sendo renderizado)
                 uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -3746,7 +3887,11 @@ void Application::run()
 #ifdef PLATFORM_LINUX
             usleep(1000); // 1ms
 #else
+#ifdef _WIN32
             Sleep(1); // 1ms sleep
+#else
+            usleep(1000); // 1ms
+#endif
 #endif
         }
     }
