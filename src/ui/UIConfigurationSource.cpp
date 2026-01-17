@@ -655,6 +655,8 @@ void UIConfigurationSource::renderAVFoundationControls()
 
     renderAVFoundationDeviceSelection();
     ImGui::Separator();
+    renderAVFoundationFormatSelection();
+    ImGui::Separator();
     renderCaptureSettings();
     ImGui::Separator();
     renderQuickResolutions();
@@ -827,6 +829,90 @@ void UIConfigurationSource::renderAVFoundationDeviceSelection()
     if (ImGui::Button("Refresh##avfdevices"))
     {
         m_uiManager->refreshAVFoundationDevices();
+    }
+}
+
+void UIConfigurationSource::renderAVFoundationFormatSelection()
+{
+    // Format selection (similar to OBS Studio)
+    ImGui::Text("Input Format:");
+    ImGui::Separator();
+    
+    std::string currentDevice = m_uiManager->getCurrentDevice();
+    if (currentDevice.empty())
+    {
+        ImGui::TextWrapped("Selecione um dispositivo primeiro para ver os formatos disponíveis.");
+        return;
+    }
+    
+    // Get formats for current device
+    auto formats = m_uiManager->getAVFoundationFormats(currentDevice);
+    if (formats.empty())
+    {
+        ImGui::TextWrapped("Nenhum formato disponível para este dispositivo.");
+        if (ImGui::Button("Refresh Formats##avf"))
+        {
+            m_uiManager->refreshAVFoundationFormats(currentDevice);
+        }
+        return;
+    }
+    
+    // Find current format index
+    std::string currentFormatId = m_uiManager->getCurrentFormatId();
+    int selectedIndex = -1;
+    if (!currentFormatId.empty())
+    {
+        for (size_t i = 0; i < formats.size(); ++i)
+        {
+            if (formats[i].id == currentFormatId)
+            {
+                selectedIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    
+    // Display current format
+    std::string displayText = (selectedIndex >= 0) ? formats[selectedIndex].displayName : "Select format...";
+    
+    if (ImGui::BeginCombo("##avfformat", displayText.c_str()))
+    {
+        for (size_t i = 0; i < formats.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i));
+            
+            // Add checkmark for selected format
+            std::string itemLabel = isSelected ? "✓ " : "  ";
+            itemLabel += formats[i].displayName;
+            
+            if (ImGui::Selectable(itemLabel.c_str(), isSelected))
+            {
+                m_uiManager->setAVFoundationFormat(static_cast<int>(i), currentDevice);
+                m_uiManager->saveConfig();
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfformats"))
+    {
+        m_uiManager->refreshAVFoundationFormats(currentDevice);
+    }
+    
+    // Show format details if selected
+    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(formats.size()))
+    {
+        ImGui::Spacing();
+        ImGui::Text("Format Details:");
+        ImGui::Text("  Resolution: %ux%u", formats[selectedIndex].width, formats[selectedIndex].height);
+        ImGui::Text("  FPS Range: %.1f - %.1f", formats[selectedIndex].minFps, formats[selectedIndex].maxFps);
+        ImGui::Text("  Pixel Format: %s", formats[selectedIndex].pixelFormat.c_str());
+        ImGui::Text("  Color Space: %s", formats[selectedIndex].colorSpace.c_str());
     }
 }
 #endif

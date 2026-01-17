@@ -33,6 +33,7 @@ private:
 #ifdef __APPLE__
     void renderAVFoundationControls();
     void renderAVFoundationDeviceSelection();
+    void renderAVFoundationFormatSelection();
 #endif
     void renderCaptureSettings();
     void renderQuickResolutions();

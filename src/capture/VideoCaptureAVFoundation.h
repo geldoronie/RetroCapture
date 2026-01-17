@@ -44,6 +44,15 @@ public:
 
     // Método público para delegate Objective-C acessar
     void onFrameCaptured(CVPixelBufferRef pixelBuffer);
+    
+    // Métodos para delegate acessar informações de framerate
+    AVCaptureDevice* getCaptureDevice() const;
+    AVCaptureVideoDataOutput* getVideoOutput() const;
+    
+    // Format enumeration and selection (for UI)
+    std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "");
+    bool setFormatByIndex(int formatIndex, const std::string &deviceId = "");
+    bool setFormatById(const std::string &formatId, const std::string &deviceId = "");
 
 private:
 #ifdef __APPLE__
@@ -61,11 +70,19 @@ private:
     uint32_t m_width;
     uint32_t m_height;
     uint32_t m_pixelFormat;
+    uint32_t m_fps; // Store requested framerate
     bool m_isOpen;
     bool m_isCapturing;
     bool m_dummyMode;
     std::vector<uint8_t> m_dummyFrameBuffer;
     
+    // Track if a specific format was selected via UI (to avoid being overwritten)
+    bool m_formatSelectedViaUI;
+    std::string m_selectedFormatId;
+    
     void generateDummyFrame(Frame &frame);
     bool convertPixelBufferToFrame(CVPixelBufferRef pixelBuffer, Frame &frame);
+    
+    // Centralized method to apply format and framerate atomically
+    bool applyFormatAndFramerate(AVCaptureDeviceFormat* format, uint32_t fps, bool stopSessionIfRunning = false);
 };

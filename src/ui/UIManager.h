@@ -338,6 +338,11 @@ public:
     // AVFoundation getters (macOS)
     const std::vector<DeviceInfo> &getAVFoundationDevices() const { return m_avfoundationDevices; }
     void refreshAVFoundationDevices();
+    std::vector<AVFoundationFormatInfo> getAVFoundationFormats(const std::string &deviceId = "");
+    void setAVFoundationFormat(int formatIndex, const std::string &deviceId = "");
+    void setAVFoundationFormatById(const std::string &formatId, const std::string &deviceId = "");
+    void refreshAVFoundationFormats(const std::string &deviceId);
+    std::string getCurrentFormatId() const { return m_currentFormatId; }
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -668,7 +673,9 @@ private:
     std::vector<std::string> m_v4l2Devices;
     std::vector<DeviceInfo> m_dsDevices;
     std::vector<DeviceInfo> m_avfoundationDevices; // macOS AVFoundation devices
+    std::vector<AVFoundationFormatInfo> m_avfoundationFormats; // Available formats for current device
     std::string m_currentDevice;
+    std::string m_currentFormatId; // Currently selected format ID
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;
 

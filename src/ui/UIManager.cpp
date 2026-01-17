@@ -10,6 +10,10 @@
 #endif
 #include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
+#ifdef __APPLE__
+// Forward declaration - implementation in separate .mm file or conditional compilation
+class VideoCaptureAVFoundation;
+#endif
 #include "../renderer/glad_loader.h"
 #include <string>
 #ifdef USE_SDL2
@@ -1737,6 +1741,84 @@ void UIManager::refreshAVFoundationDevices()
     LOG_INFO("Atualizando lista de dispositivos AVFoundation...");
     m_avfoundationDevices = m_capture->listDevices();
     LOG_INFO("Lista atualizada: " + std::to_string(m_avfoundationDevices.size()) + " dispositivo(s) encontrado(s)");
+    
+    // Refresh formats for current device
+    if (!m_currentDevice.empty())
+    {
+        refreshAVFoundationFormats(m_currentDevice);
+    }
+}
+
+void UIManager::refreshAVFoundationFormats(const std::string &deviceId)
+{
+    m_avfoundationFormats.clear();
+    
+    if (m_capture)
+    {
+        std::string targetDeviceId = deviceId.empty() ? m_currentDevice : deviceId;
+        m_avfoundationFormats = m_capture->listFormats(targetDeviceId);
+        LOG_INFO("Formatos atualizados: " + std::to_string(m_avfoundationFormats.size()) + " formato(s) encontrado(s)");
+    }
+}
+
+std::vector<AVFoundationFormatInfo> UIManager::getAVFoundationFormats(const std::string &deviceId)
+{
+    // Refresh formats if empty or device changed
+    if (m_avfoundationFormats.empty() || (!deviceId.empty() && deviceId != m_currentDevice))
+    {
+        refreshAVFoundationFormats(deviceId.empty() ? m_currentDevice : deviceId);
+    }
+    return m_avfoundationFormats;
+}
+
+void UIManager::setAVFoundationFormat(int formatIndex, const std::string &deviceId)
+{
+    if (!m_capture)
+        return;
+        
+    std::string targetDeviceId = deviceId.empty() ? m_currentDevice : deviceId;
+    auto formats = getAVFoundationFormats(targetDeviceId);
+    if (formatIndex >= 0 && formatIndex < static_cast<int>(formats.size()))
+    {
+        if (m_capture->setFormatById(formats[formatIndex].id, targetDeviceId))
+        {
+            m_currentFormatId = formats[formatIndex].id;
+            LOG_INFO("Format set by index: " + std::to_string(formatIndex));
+            
+            // Trigger format change callback if needed
+            if (m_onResolutionChanged)
+            {
+                m_onResolutionChanged(formats[formatIndex].width, formats[formatIndex].height);
+            }
+        }
+    }
+}
+
+void UIManager::setAVFoundationFormatById(const std::string &formatId, const std::string &deviceId)
+{
+    if (!m_capture)
+        return;
+        
+    std::string targetDeviceId = deviceId.empty() ? m_currentDevice : deviceId;
+    if (m_capture->setFormatById(formatId, targetDeviceId))
+    {
+        m_currentFormatId = formatId;
+        LOG_INFO("Format set by ID: " + formatId);
+        
+        // Trigger format change callback if needed
+        if (m_onResolutionChanged)
+        {
+            auto formats = getAVFoundationFormats(targetDeviceId);
+            for (const auto& format : formats)
+            {
+                if (format.id == formatId)
+                {
+                    m_onResolutionChanged(format.width, format.height);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void UIManager::setSourceType(SourceType sourceType)

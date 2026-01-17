@@ -21,6 +21,19 @@ struct DeviceInfo
     bool available = true; // Whether device is available
 };
 
+// Format information for AVFoundation devices (macOS)
+struct AVFoundationFormatInfo
+{
+    std::string id;              // Unique identifier for this format (e.g., internal representation)
+    uint32_t width = 0;          // Resolution width
+    uint32_t height = 0;         // Resolution height
+    float minFps = 0.0f;         // Minimum supported framerate
+    float maxFps = 0.0f;         // Maximum supported framerate
+    std::string pixelFormat;     // Pixel format name (e.g., "NV12 (420v)", "YUY2 (yuvs)", "BGRA")
+    std::string colorSpace;      // Color space (e.g., "CS 709", "CS 601")
+    std::string displayName;     // Human-readable format string (e.g., "1280x720 (16:9) - 10-60 FPS - CS 709 - NV12 (420v)")
+};
+
 /**
  * @brief Abstract interface for video capture across different platforms
  */
@@ -51,5 +64,9 @@ public:
     virtual uint32_t getWidth() const = 0;
     virtual uint32_t getHeight() const = 0;
     virtual uint32_t getPixelFormat() const = 0;
+    
+    // Format enumeration (optional - only AVFoundation implements this)
+    virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "") { (void)deviceId; return {}; }
+    virtual bool setFormatById(const std::string &formatId, const std::string &deviceId = "") { (void)formatId; (void)deviceId; return false; }
 };
 
