@@ -1764,9 +1764,10 @@ void UIManager::refreshAVFoundationFormats(const std::string &deviceId)
 std::vector<AVFoundationFormatInfo> UIManager::getAVFoundationFormats(const std::string &deviceId)
 {
     // Refresh formats if empty or device changed
-    if (m_avfoundationFormats.empty() || (!deviceId.empty() && deviceId != m_currentDevice))
+    std::string targetDeviceId = deviceId.empty() ? m_currentDevice : deviceId;
+    if (m_avfoundationFormats.empty() || (!targetDeviceId.empty() && targetDeviceId != m_currentDevice))
     {
-        refreshAVFoundationFormats(deviceId.empty() ? m_currentDevice : deviceId);
+        refreshAVFoundationFormats(targetDeviceId);
     }
     return m_avfoundationFormats;
 }
@@ -1819,10 +1820,15 @@ void UIManager::setAVFoundationFormatById(const std::string &formatId, const std
         return;
         
     std::string targetDeviceId = deviceId.empty() ? m_currentDevice : deviceId;
+    
+    // Refresh formats list before applying format to ensure we have the latest list
+    refreshAVFoundationFormats(targetDeviceId);
+    
     if (m_capture->setFormatById(formatId, targetDeviceId))
     {
         m_currentFormatId = formatId;
         LOG_INFO("Format set by ID: " + formatId);
+        LOG_INFO("Current format ID stored: " + m_currentFormatId);
         
         // Find format info and update resolution/FPS
         auto formats = getAVFoundationFormats(targetDeviceId);
@@ -2024,6 +2030,11 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 
 void UIManager::triggerDeviceChange(const std::string &device)
 {
+    // If device changed, clear formats list to force refresh
+    if (m_currentDevice != device)
+    {
+        m_avfoundationFormats.clear();
+    }
     m_currentDevice = device;
     if (m_onDeviceChanged)
     {
@@ -2561,6 +2572,22 @@ void UIManager::loadConfig()
             }
         }
 
+        // Carregar dispositivo AVFoundation
+        if (config.contains("avfoundation"))
+        {
+            auto &avf = config["avfoundation"];
+            if (avf.contains("device") && !avf["device"].is_null())
+            {
+                m_currentDevice = avf["device"].get<std::string>();
+                LOG_INFO("Loaded AVFoundation device from config: " + m_currentDevice);
+            }
+            if (avf.contains("formatId") && !avf["formatId"].is_null())
+            {
+                m_currentFormatId = avf["formatId"].get<std::string>();
+                LOG_INFO("Loaded AVFoundation format from config: " + m_currentFormatId);
+            }
+        }
+
         // Carregar configurações de áudio
         if (config.contains("audio"))
         {
@@ -2689,6 +2716,11 @@ void UIManager::saveConfig()
         // Salvar dispositivo DirectShow
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // Salvar dispositivo AVFoundation e formato
+        config["avfoundation"] = {
+            {"device", m_currentDevice.empty() ? "" : m_currentDevice},
+            {"formatId", m_currentFormatId.empty() ? "" : m_currentFormatId}};
 
         // Salvar configurações de áudio
         config["audio"] = {

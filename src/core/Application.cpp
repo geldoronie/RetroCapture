@@ -999,17 +999,39 @@ bool Application::initUI()
     }
 
     // Configure capture information
-    if (m_capture && m_capture->isOpen())
+    // For AVFoundation on macOS, use the device from UI config instead of m_devicePath
+#ifdef __APPLE__
+    if (m_ui && m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
     {
-        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
-                             m_captureFps, m_devicePath);
-        m_ui->setCurrentDevice(m_devicePath);
+        std::string currentDevice = m_ui->getCurrentDevice();
+        if (m_capture && m_capture->isOpen())
+        {
+            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                 m_captureFps, currentDevice.empty() ? "None" : currentDevice);
+            m_ui->setCurrentDevice(currentDevice);
+        }
+        else
+        {
+            // No device - show "None"
+            m_ui->setCaptureInfo(0, 0, 0, "None");
+            m_ui->setCurrentDevice(""); // Empty string = None
+        }
     }
     else
+#endif
     {
-        // No device - show "None"
-        m_ui->setCaptureInfo(0, 0, 0, "None");
-        m_ui->setCurrentDevice(""); // Empty string = None
+        if (m_capture && m_capture->isOpen())
+        {
+            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                 m_captureFps, m_devicePath);
+            m_ui->setCurrentDevice(m_devicePath);
+        }
+        else
+        {
+            // No device - show "None"
+            m_ui->setCaptureInfo(0, 0, 0, "None");
+            m_ui->setCurrentDevice(""); // Empty string = None
+        }
     }
 
     // Connect Application to UICapturePresets
@@ -2130,7 +2152,52 @@ bool Application::initUI()
         // Reopen with new device
         if (m_capture && m_capture->open(devicePath)) {
             LOG_INFO("Device opened successfully, configuring format...");
-            // Reconfigure format and framerate
+            
+            // For AVFoundation, check if there's a saved format ID to apply
+#ifdef __APPLE__
+            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
+            {
+                // IMPORTANT: Load formats list BEFORE applying format to ensure UI can find it
+                LOG_INFO("Loading formats list for device: " + devicePath);
+                m_ui->refreshAVFoundationFormats(devicePath);
+                
+                std::string savedFormatId = m_ui->getCurrentFormatId();
+                LOG_INFO("Checking for saved format ID: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
+                if (!savedFormatId.empty())
+                {
+                    LOG_INFO("Applying saved AVFoundation format: " + savedFormatId);
+                    m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                    // Verify format was applied
+                    std::string currentFormatId = m_ui->getCurrentFormatId();
+                    LOG_INFO("Format ID after application: " + (currentFormatId.empty() ? "(empty)" : currentFormatId));
+                    LOG_INFO("Saved format applied, starting capture...");
+                    // Format application already handles resolution and FPS
+                    // Continue to start capture
+                    if (m_capture->startCapture()) {
+                        LOG_INFO("startCapture() returned true - device should be active (light on)");
+                    } else {
+                        LOG_ERROR("startCapture() returned false - device was NOT activated!");
+                    }
+                    
+                    // Update device path and UI information
+                    m_devicePath = devicePath; // Update Application's device path
+                    if (m_ui) {
+                        // Refresh formats list for the new device to ensure UI shows correct format
+                        m_ui->refreshAVFoundationFormats(devicePath);
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                            m_captureFps, devicePath);
+                        m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
+                        m_ui->setCaptureControls(m_capture.get());
+                    }
+                    
+                    LOG_INFO("Device changed successfully with saved format");
+                    processingDeviceChange = false;
+                    return;
+                }
+            }
+#endif
+            
+            // Default behavior: Reconfigure format and framerate
             if (m_capture->setFormat(oldWidth, oldHeight, 0)) {
                 LOG_INFO("Format configured, configuring framerate...");
                 m_capture->setFramerate(oldFps);
@@ -2141,10 +2208,19 @@ bool Application::initUI()
                     LOG_ERROR("startCapture() returned false - device was NOT activated!");
                 }
                 
-                // Update UI information
+                // Update device path and UI information
+                m_devicePath = devicePath; // Update Application's device path
                 if (m_ui) {
+#ifdef __APPLE__
+                    // For AVFoundation, refresh formats list when device is opened
+                    if (m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
+                    {
+                        m_ui->refreshAVFoundationFormats(devicePath);
+                    }
+#endif
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                         m_captureFps, devicePath);
+                    m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
                     
                     // Reload V4L2 controls
                     m_ui->setCaptureControls(m_capture.get());
@@ -2168,6 +2244,38 @@ bool Application::initUI()
                 m_ui->setCaptureInfo(0, 0, 0, "Error");
             }
         } });
+
+    // Apply saved device and format for AVFoundation after callbacks are set up
+#ifdef __APPLE__
+    if (m_ui)
+    {
+        UIManager::SourceType sourceType = m_ui->getSourceType();
+        LOG_INFO("Source type loaded: " + std::to_string(static_cast<int>(sourceType)));
+        
+        if (sourceType == UIManager::SourceType::AVFoundation)
+        {
+            std::string savedDevice = m_ui->getCurrentDevice();
+            std::string savedFormatId = m_ui->getCurrentFormatId();
+            
+            LOG_INFO("Saved AVFoundation device: " + (savedDevice.empty() ? "(empty)" : savedDevice));
+            LOG_INFO("Saved AVFoundation format: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
+            
+            if (!savedDevice.empty() && m_capture)
+            {
+                LOG_INFO("Applying saved AVFoundation device: " + savedDevice);
+                // Update UI to show selected device immediately
+                m_ui->setCurrentDevice(savedDevice);
+                // Trigger device change to apply saved device
+                // The format will be applied automatically in the callback above
+                m_ui->triggerDeviceChange(savedDevice);
+            }
+            else if (!savedDevice.empty())
+            {
+                LOG_WARN("Cannot apply saved device: capture not initialized");
+            }
+        }
+    }
+#endif
 
     // Configure current shader
     if (!m_presetPath.empty())

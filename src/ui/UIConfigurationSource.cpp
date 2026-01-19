@@ -1,6 +1,7 @@
 #include "UIConfigurationSource.h"
 #include "UIManager.h"
 #include "../capture/IVideoCapture.h"
+#include "../utils/Logger.h"
 #include <imgui.h>
 #include <algorithm>
 #ifdef __linux__
@@ -839,8 +840,16 @@ void UIConfigurationSource::renderAVFoundationFormatSelection()
         return;
     }
     
-    // Get formats for current device
+    // Get formats for current device - ensure list is loaded
+    // Force refresh if device is set but formats list is empty
     auto formats = m_uiManager->getAVFoundationFormats(currentDevice);
+    if (formats.empty() && !currentDevice.empty())
+    {
+        // Try to refresh formats if list is empty but device is set
+        m_uiManager->refreshAVFoundationFormats(currentDevice);
+        formats = m_uiManager->getAVFoundationFormats(currentDevice);
+    }
+    
     if (formats.empty())
     {
         ImGui::TextWrapped("Nenhum formato disponível para este dispositivo.");
@@ -863,6 +872,12 @@ void UIConfigurationSource::renderAVFoundationFormatSelection()
                 selectedIndex = static_cast<int>(i);
                 break;
             }
+        }
+        
+        // Log if format ID not found in list
+        if (selectedIndex < 0)
+        {
+            LOG_WARN("Format ID not found in formats list: " + currentFormatId + " (list has " + std::to_string(formats.size()) + " formats)");
         }
     }
     

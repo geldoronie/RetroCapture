@@ -173,7 +173,11 @@ private:
 #ifdef _WIN32
     std::string m_devicePath = ""; // Windows: vazio por padrão (DirectShow usa índices)
 #else
+#ifdef __linux__
     std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
+#else
+    std::string m_devicePath = ""; // Windows/macOS: dispositivo será selecionado via UI
+#endif
 #endif
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;

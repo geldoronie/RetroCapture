@@ -1830,13 +1830,14 @@ std::vector<AVFoundationFormatInfo> VideoCaptureAVFoundation::listFormats(const 
             info.pixelFormat = getPixelFormatName(pixelFormat);
             info.colorSpace = getColorSpaceName(formatDesc);
             
-            // Create unique ID (similar to OBS Studio's internal representation)
-            // Use format description properties to create a unique identifier
-            NSString* formatDescStr = [NSString stringWithFormat:@"%dx%d-%@-%@-%@",
+            // Create unique ID based on format properties (NOT object pointer)
+            // This ensures the ID is stable across reloads
+            // Format: widthxheight-pixelFormat-colorSpace-minFps-maxFps
+            NSString* formatDescStr = [NSString stringWithFormat:@"%dx%d-%@-%@-%.2f-%.2f",
                 dims.width, dims.height,
                 info.pixelFormat.c_str() ? [NSString stringWithUTF8String:info.pixelFormat.c_str()] : @"Unknown",
                 info.colorSpace.c_str() ? [NSString stringWithUTF8String:info.colorSpace.c_str()] : @"Unknown",
-                [format description]];
+                info.minFps, info.maxFps];
             info.id = std::string([formatDescStr UTF8String]);
             
             // Create display name (similar to OBS Studio format)
@@ -1936,20 +1937,39 @@ bool VideoCaptureAVFoundation::setFormatById(const std::string &formatId, const 
             CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(formatDesc);
             FourCharCode pixelFormat = CMFormatDescriptionGetMediaSubType(formatDesc);
             
-            std::string formatDescStr = std::to_string(dims.width) + "x" + std::to_string(dims.height) + "-" +
-                                       getPixelFormatName(pixelFormat) + "-" +
-                                       getColorSpaceName(formatDesc);
-            
-            // Check if this format matches the requested ID
-            if (formatId.find(std::to_string(dims.width)) != std::string::npos &&
-                formatId.find(std::to_string(dims.height)) != std::string::npos)
+            // Get FPS ranges (same logic as listFormats)
+            NSArray* frameRateRanges = [format videoSupportedFrameRateRanges];
+            float minFps = 0.0f;
+            float maxFps = 0.0f;
+            if (frameRateRanges && [frameRateRanges count] > 0)
             {
-                // Additional matching by pixel format and color space if present in ID
-                if (formatId.find(getPixelFormatName(pixelFormat)) != std::string::npos)
+                AVFrameRateRange* firstRange = frameRateRanges[0];
+                minFps = firstRange.minFrameRate;
+                maxFps = firstRange.maxFrameRate;
+                
+                // Check if there are multiple ranges
+                for (AVFrameRateRange* range in frameRateRanges)
                 {
-                    matchingFormat = format;
-                    break;
+                    if (range.minFrameRate < minFps)
+                        minFps = range.minFrameRate;
+                    if (range.maxFrameRate > maxFps)
+                        maxFps = range.maxFrameRate;
                 }
+            }
+            
+            // Generate format ID using same format as listFormats
+            NSString* formatDescStr = [NSString stringWithFormat:@"%dx%d-%@-%@-%.2f-%.2f",
+                dims.width, dims.height,
+                [NSString stringWithUTF8String:getPixelFormatName(pixelFormat).c_str()],
+                [NSString stringWithUTF8String:getColorSpaceName(formatDesc).c_str()],
+                minFps, maxFps];
+            std::string currentFormatId = std::string([formatDescStr UTF8String]);
+            
+            // Exact match on format ID
+            if (currentFormatId == formatId)
+            {
+                matchingFormat = format;
+                break;
             }
         }
         
