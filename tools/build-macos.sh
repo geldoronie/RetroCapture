@@ -51,6 +51,12 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     exit 1
 fi
 
+# Configurar PKG_CONFIG_PATH para incluir caminhos do Homebrew
+BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/usr/local")
+if [ -d "$BREW_PREFIX/lib/pkgconfig" ]; then
+    export PKG_CONFIG_PATH="$BREW_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
+
 # Verificar bibliotecas via pkg-config
 echo "   Verificando bibliotecas..."
 MISSING_LIBS=()

@@ -974,33 +974,64 @@ bool VideoCaptureAVFoundation::setControl(const std::string &controlName, int32_
         {
             bool success = false;
             
-            if (controlName == "brightness")
+            if (controlName == "Brightness" || controlName == "brightness")
             {
-                if ([m_captureDevice isExposureModeSupported:AVCaptureExposureModeAutoExpose])
-                {
-                    // Brightness não é diretamente controlável, usar exposure
-                    success = true;
-                }
-            }
-            else if (controlName == "contrast")
-            {
-                // Contrast não é diretamente controlável via AVFoundation
+                // Brightness não é diretamente controlável via AVFoundation no macOS
+                // Alguns dispositivos podem ter extensões customizadas, mas não há API padrão
                 success = false;
             }
-            else if (controlName == "saturation")
+            else if (controlName == "Contrast" || controlName == "contrast")
             {
-                // Saturation não é diretamente controlável via AVFoundation
+                // Contrast não é diretamente controlável via AVFoundation no macOS
                 success = false;
             }
-            else             if (controlName == "exposure")
+            else if (controlName == "Saturation" || controlName == "saturation")
+            {
+                // Saturation não é diretamente controlável via AVFoundation no macOS
+                success = false;
+            }
+            else if (controlName == "Hue" || controlName == "hue")
+            {
+                // Hue não é diretamente controlável via AVFoundation no macOS
+                success = false;
+            }
+            else if (controlName == "Gain" || controlName == "gain")
+            {
+                // Gain pode estar disponível através de ISO em alguns dispositivos
+                // Mas não há API direta para gain no AVFoundation
+                success = false;
+            }
+            else if (controlName == "Exposure" || controlName == "exposure")
             {
                 // Exposure controls não estão disponíveis no macOS via AVFoundation
                 // Apenas iOS/iPadOS suportam controle manual de exposição
                 success = false;
             }
+            else if (controlName == "Sharpness" || controlName == "sharpness")
+            {
+                // Sharpness não é diretamente controlável via AVFoundation no macOS
+                success = false;
+            }
+            else if (controlName == "Gamma" || controlName == "gamma")
+            {
+                // Gamma não é diretamente controlável via AVFoundation no macOS
+                success = false;
+            }
+            else if (controlName == "White Balance" || controlName == "white balance" || controlName == "WhiteBalance")
+            {
+                // White Balance controls are NOT available on macOS via AVFoundation
+                // These APIs are only available on iOS/iPadOS
+                // macOS AVFoundation does not expose white balance controls
+                LOG_WARN("White Balance control is not available on macOS via AVFoundation");
+                success = false;
+            }
             
             [m_captureDevice unlockForConfiguration];
             return success;
+        }
+        else if (error)
+        {
+            LOG_ERROR("Failed to lock device for configuration: " + std::string([[error localizedDescription] UTF8String]));
         }
     }
 #endif
@@ -1010,30 +1041,173 @@ bool VideoCaptureAVFoundation::setControl(const std::string &controlName, int32_
 
 bool VideoCaptureAVFoundation::getControl(const std::string &controlName, int32_t &value)
 {
-    (void)controlName;
-    (void)value;
-    // TODO: Implementar leitura de controles
+#ifdef __APPLE__
+    if (!m_captureDevice)
+    {
+        return false;
+    }
+    
+    @autoreleasepool {
+        if (controlName == "White Balance" || controlName == "white balance" || controlName == "WhiteBalance")
+        {
+            // White Balance controls are NOT available on macOS via AVFoundation
+            // Return default value for UI consistency
+            value = 4000; // Default temperature
+            return false; // Indicate control is not available
+        }
+        // Outros controles não estão disponíveis no AVFoundation
+    }
+#endif
+    
     return false;
 }
 
 bool VideoCaptureAVFoundation::getControlMin(const std::string &controlName, int32_t &minValue)
 {
-    (void)controlName;
-    (void)minValue;
+#ifdef __APPLE__
+    if (!m_captureDevice)
+    {
+        return false;
+    }
+    
+    @autoreleasepool {
+        if (controlName == "White Balance" || controlName == "white balance" || controlName == "WhiteBalance")
+        {
+            // Range típico de temperatura de white balance
+            minValue = 2800;
+            return true;
+        }
+        // Para outros controles, retornar valores padrão da UI
+        else if (controlName == "Brightness" || controlName == "brightness" ||
+                 controlName == "Contrast" || controlName == "contrast" ||
+                 controlName == "Saturation" || controlName == "saturation" ||
+                 controlName == "Hue" || controlName == "hue")
+        {
+            minValue = -100;
+            return true;
+        }
+        else if (controlName == "Gain" || controlName == "gain")
+        {
+            minValue = 0;
+            return true;
+        }
+        else if (controlName == "Exposure" || controlName == "exposure")
+        {
+            minValue = -13;
+            return true;
+        }
+        else if (controlName == "Sharpness" || controlName == "sharpness")
+        {
+            minValue = 0;
+            return true;
+        }
+        else if (controlName == "Gamma" || controlName == "gamma")
+        {
+            minValue = 100;
+            return true;
+        }
+    }
+#endif
+    
     return false;
 }
 
 bool VideoCaptureAVFoundation::getControlMax(const std::string &controlName, int32_t &maxValue)
 {
-    (void)controlName;
-    (void)maxValue;
+#ifdef __APPLE__
+    if (!m_captureDevice)
+    {
+        return false;
+    }
+    
+    @autoreleasepool {
+        if (controlName == "White Balance" || controlName == "white balance" || controlName == "WhiteBalance")
+        {
+            // Range típico de temperatura de white balance
+            maxValue = 6500;
+            return true;
+        }
+        // Para outros controles, retornar valores padrão da UI
+        else if (controlName == "Brightness" || controlName == "brightness" ||
+                 controlName == "Contrast" || controlName == "contrast" ||
+                 controlName == "Saturation" || controlName == "saturation" ||
+                 controlName == "Hue" || controlName == "hue")
+        {
+            maxValue = 100;
+            return true;
+        }
+        else if (controlName == "Gain" || controlName == "gain")
+        {
+            maxValue = 100;
+            return true;
+        }
+        else if (controlName == "Exposure" || controlName == "exposure")
+        {
+            maxValue = 1;
+            return true;
+        }
+        else if (controlName == "Sharpness" || controlName == "sharpness")
+        {
+            maxValue = 6;
+            return true;
+        }
+        else if (controlName == "Gamma" || controlName == "gamma")
+        {
+            maxValue = 300;
+            return true;
+        }
+    }
+#endif
+    
     return false;
 }
 
 bool VideoCaptureAVFoundation::getControlDefault(const std::string &controlName, int32_t &defaultValue)
 {
-    (void)controlName;
-    (void)defaultValue;
+#ifdef __APPLE__
+    if (!m_captureDevice)
+    {
+        return false;
+    }
+    
+    @autoreleasepool {
+        if (controlName == "White Balance" || controlName == "white balance" || controlName == "WhiteBalance")
+        {
+            defaultValue = 4000; // Temperatura padrão
+            return true;
+        }
+        // Para outros controles, retornar valores padrão da UI
+        else if (controlName == "Brightness" || controlName == "brightness" ||
+                 controlName == "Contrast" || controlName == "contrast" ||
+                 controlName == "Saturation" || controlName == "saturation" ||
+                 controlName == "Hue" || controlName == "hue")
+        {
+            defaultValue = 0;
+            return true;
+        }
+        else if (controlName == "Gain" || controlName == "gain")
+        {
+            defaultValue = 0;
+            return true;
+        }
+        else if (controlName == "Exposure" || controlName == "exposure")
+        {
+            defaultValue = 0;
+            return true;
+        }
+        else if (controlName == "Sharpness" || controlName == "sharpness")
+        {
+            defaultValue = 0;
+            return true;
+        }
+        else if (controlName == "Gamma" || controlName == "gamma")
+        {
+            defaultValue = 100;
+            return true;
+        }
+    }
+#endif
+    
     return false;
 }
 
