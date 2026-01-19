@@ -144,6 +144,9 @@ private:
     bool handleSetV4L2Control(int clientFd, const std::string &body);
     bool handleSetV4L2Device(int clientFd, const std::string &body);
     bool handleSetDSDevice(int clientFd, const std::string &body);
+    bool handleGETAVFoundationFormats(int clientFd);
+    bool handleSetAVFoundationDevice(int clientFd, const std::string &body);
+    bool handleSetAVFoundationFormat(int clientFd, const std::string &body);
     bool handleCreatePreset(int clientFd, const std::string &body);
     bool handleApplyPreset(int clientFd, const std::string &body);
     bool handleDeletePreset(int clientFd, const std::string &presetName);

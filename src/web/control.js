@@ -13,6 +13,7 @@ let appState = {
     recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
     ds: { devices: [], currentDevice: '' }, // DirectShow (Windows)
+    avfoundation: { devices: [], formats: [], currentDevice: '', currentFormatId: '' }, // AVFoundation (macOS)
     platform: { platform: 'linux', availableSourceTypes: [] },
     status: { streamingActive: false, active: false, streamUrl: '', url: '', clientCount: 0 }
 };
@@ -329,6 +330,12 @@ async function loadSource() {
         appState.source = source;
         appState.v4l2.currentDevice = source.device || '';
         appState.ds.currentDevice = source.device || '';
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentDevice = source.device || '';
+        // Update format ID from source if available (for AVFoundation)
+        if (source.formatId) {
+            appState.avfoundation.currentFormatId = source.formatId;
+        }
         
         const sourceType = source.type || 0;
         const sourceTypeSelect = document.getElementById('sourceType');
@@ -380,6 +387,39 @@ async function loadSource() {
                 // Carregar valores de captura
                 await loadCapture();
             }
+        } else if (sourceType === 3) {
+            // AVFoundation (macOS)
+            await loadAVFoundationDevicesForSource();
+            
+            // Se houver dispositivo, carregar formatos
+            if (source.device) {
+                const captureInfo = document.getElementById('avfoundationCaptureInfo');
+                if (captureInfo) {
+                    captureInfo.style.display = 'block';
+                }
+                // Carregar formatos disponíveis (aguardar para garantir que o formato seja selecionado)
+                await loadAVFoundationFormatsForSource();
+                
+                // Após carregar formatos, garantir que o formato correto está selecionado
+                // A função loadAVFoundationFormatsForSource já deve ter selecionado o formato,
+                // mas vamos garantir novamente após um pequeno delay
+                // Usar múltiplas tentativas para garantir que funcione mesmo com problemas de timing
+                const formatIdToSelect = source.formatId || appState.avfoundation?.currentFormatId;
+                if (formatIdToSelect) {
+                    // Tentar imediatamente
+                    if (!selectFormatInDropdown(formatIdToSelect)) {
+                        // Se não funcionou, tentar após delay
+                        setTimeout(() => {
+                            if (!selectFormatInDropdown(formatIdToSelect)) {
+                                // Última tentativa após delay maior
+                                setTimeout(() => {
+                                    selectFormatInDropdown(formatIdToSelect);
+                                }, 300);
+                            }
+                        }, 150);
+                    }
+                }
+            }
         }
     } catch (error) {
         console.error('Erro ao carregar source:', error);
@@ -392,10 +432,12 @@ async function loadSource() {
 function updateSourceUI(sourceType) {
     const v4l2Container = document.getElementById('v4l2ControlsContainer');
     const dsContainer = document.getElementById('dsControlsContainer');
+    const avfoundationContainer = document.getElementById('avfoundationControlsContainer');
     const noneMessage = document.getElementById('noneSourceMessage');
 
     if (v4l2Container) v4l2Container.style.display = 'none';
     if (dsContainer) dsContainer.style.display = 'none';
+    if (avfoundationContainer) avfoundationContainer.style.display = 'none';
     if (noneMessage) noneMessage.style.display = 'none';
 
     if (sourceType === 1) {
@@ -406,8 +448,15 @@ function updateSourceUI(sourceType) {
         if (dsContainer) dsContainer.style.display = 'block';
         // Carregar dispositivos DirectShow
         loadDSDevicesForSource();
+    } else if (sourceType === 3) {
+        // AVFoundation selecionado (macOS)
+        if (avfoundationContainer) avfoundationContainer.style.display = 'block';
+        // Carregar dispositivos AVFoundation (async, mas não bloqueia)
+        loadAVFoundationDevicesForSource().catch(err => {
+            console.error('Erro ao carregar dispositivos AVFoundation:', err);
+        });
     } else {
-        // None selecionado
+        // None selecionado (sourceType === 0)
         if (noneMessage) noneMessage.style.display = 'block';
     }
 }
@@ -636,6 +685,277 @@ async function refreshDSDevices() {
 }
 
 /**
+ * Carrega dispositivos AVFoundation para a aba Source
+ */
+async function loadAVFoundationDevicesForSource() {
+    try {
+        console.log('Loading AVFoundation devices...');
+        const response = await api.getAVFoundationDevices();
+        console.log('AVFoundation devices response:', response);
+        const devices = response.devices || [];
+        console.log('AVFoundation devices found:', devices.length);
+        
+        const select = document.getElementById('avfoundationDevice');
+        if (!select) {
+            console.warn('avfoundationDevice select not found');
+            return;
+        }
+        
+        select.innerHTML = '';
+        
+        // Adicionar "None (No device)" como primeira opção
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = 'None (No device)';
+        select.appendChild(noneOption);
+        
+        // Adicionar dispositivos
+        devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.id || device.name;
+            option.textContent = device.name || device.id;
+            if (!device.available) {
+                option.disabled = true;
+                option.textContent += ' (Não disponível)';
+            }
+            select.appendChild(option);
+        });
+        
+        // Marcar dispositivo atual se disponível
+        const currentDevice = appState.source.device || '';
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentDevice = currentDevice;
+        if (currentDevice) {
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === currentDevice) {
+                    select.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        // Mostrar informações de captura se dispositivo estiver selecionado
+        const captureInfo = document.getElementById('avfoundationCaptureInfo');
+        if (captureInfo && currentDevice) {
+            captureInfo.style.display = 'block';
+            // Carregar formatos quando dispositivo é selecionado
+            await loadAVFoundationFormatsForSource();
+            
+            // Após carregar formatos, garantir que o formato correto está selecionado
+            const currentFormatId = appState.avfoundation?.currentFormatId || appState.source?.formatId;
+            if (currentFormatId) {
+                // Usar setTimeout para garantir que o DOM foi atualizado
+                setTimeout(() => {
+                    selectFormatInDropdown(currentFormatId);
+                }, 150);
+            }
+        }
+    } catch (error) {
+        console.error('Erro ao carregar dispositivos AVFoundation:', error);
+        showAlert('Erro ao carregar dispositivos AVFoundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Helper function para selecionar formato no dropdown
+ */
+function selectFormatInDropdown(formatId) {
+    if (!formatId) {
+        console.log('No format ID provided for selection');
+        return false;
+    }
+    
+    const formatSelect = document.getElementById('avfoundationFormat');
+    if (!formatSelect) {
+        console.warn('avfoundationFormat select not found');
+        return false;
+    }
+    
+    for (let i = 0; i < formatSelect.options.length; i++) {
+        if (formatSelect.options[i].value === formatId) {
+            formatSelect.selectedIndex = i;
+            console.log('Format selected in dropdown at index', i, ':', formatId);
+            return true;
+        }
+    }
+    
+    console.warn('Format ID not found in dropdown:', formatId);
+    console.warn('Available format IDs:', Array.from(formatSelect.options).map(opt => opt.value));
+    return false;
+}
+
+/**
+ * Carrega formatos AVFoundation para a aba Source
+ */
+async function loadAVFoundationFormatsForSource() {
+    try {
+        const response = await api.getAVFoundationFormats();
+        const formats = response.formats || [];
+        
+        const select = document.getElementById('avfoundationFormat');
+        if (!select) return;
+        
+        select.innerHTML = '';
+        
+        if (formats.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Nenhum formato disponível';
+            select.appendChild(option);
+            return;
+        }
+        
+        // Adicionar formatos
+        formats.forEach(format => {
+            const option = document.createElement('option');
+            option.value = format.id;
+            option.textContent = format.displayName || `${format.width}x${format.height} @ ${format.minFps}-${format.maxFps} fps (${format.pixelFormat})`;
+            select.appendChild(option);
+        });
+        
+        // Tentar selecionar formato atual se houver
+        // O formato atual vem da resposta da API ou do estado
+        const currentFormatId = response.currentFormatId || appState.avfoundation?.currentFormatId || appState.source?.formatId;
+        console.log('Loading formats - Current format ID:', currentFormatId);
+        console.log('Response currentFormatId:', response.currentFormatId);
+        console.log('AppState currentFormatId:', appState.avfoundation?.currentFormatId);
+        console.log('Source formatId:', appState.source?.formatId);
+        console.log('Available format IDs:', Array.from(select.options).map(opt => opt.value));
+        
+        if (currentFormatId) {
+            // Atualizar estado
+            appState.avfoundation = appState.avfoundation || {};
+            appState.avfoundation.currentFormatId = currentFormatId;
+            
+            // Procurar e selecionar o formato na lista
+            // Usar múltiplas tentativas para garantir que funcione mesmo com problemas de timing
+            if (!selectFormatInDropdown(currentFormatId)) {
+                // Tentar novamente após um pequeno delay
+                setTimeout(() => {
+                    if (!selectFormatInDropdown(currentFormatId)) {
+                        // Última tentativa após delay maior
+                        setTimeout(() => {
+                            selectFormatInDropdown(currentFormatId);
+                        }, 400);
+                    }
+                }, 200);
+            }
+        } else {
+            console.log('No current format ID available - formats loaded but none selected');
+        }
+    } catch (error) {
+        console.error('Erro ao carregar formatos AVFoundation:', error);
+        showAlert('Erro ao carregar formatos AVFoundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza o dispositivo AVFoundation na aba Source
+ */
+async function updateAVFoundationDeviceSource() {
+    try {
+        const select = document.getElementById('avfoundationDevice');
+        if (!select) return;
+        
+        const device = select.value;
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentDevice = device;
+        
+        await api.setAVFoundationDevice(device);
+        
+        // Atualizar visibilidade da seção de formatos
+        const captureInfo = document.getElementById('avfoundationCaptureInfo');
+        if (captureInfo) {
+            captureInfo.style.display = device ? 'block' : 'none';
+        }
+        
+        // Se houver dispositivo, carregar formatos
+        if (device) {
+            await loadAVFoundationFormatsForSource();
+        }
+        
+        showAlert('Dispositivo AVFoundation atualizado', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar dispositivo AVFoundation:', error);
+        showAlert('Erro ao atualizar dispositivo AVFoundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza o formato AVFoundation na aba Source
+ */
+async function updateAVFoundationFormatSource() {
+    try {
+        const select = document.getElementById('avfoundationFormat');
+        if (!select) {
+            console.warn('avfoundationFormat select not found');
+            return;
+        }
+        
+        const formatId = select.value;
+        if (!formatId) {
+            console.log('No format selected');
+            return;
+        }
+        
+        console.log('Updating AVFoundation format to:', formatId);
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentFormatId = formatId;
+        
+        try {
+            const response = await api.setAVFoundationFormat(formatId);
+            console.log('AVFoundation format updated successfully:', response);
+            showAlert('Formato AVFoundation atualizado', 'success');
+            
+            // Recarregar source para atualizar o estado
+            await loadSource();
+        } catch (apiError) {
+            console.error('API Error updating format:', apiError);
+            // Verificar se é erro de conexão
+            if (apiError.message && (apiError.message.includes('Failed to fetch') || apiError.message.includes('ERR_CONNECTION_REFUSED'))) {
+                showAlert('Erro: Servidor não está respondendo. Certifique-se de que o servidor foi recompilado e está rodando.', 'danger');
+            } else {
+                showAlert('Erro ao atualizar formato AVFoundation: ' + apiError.message, 'danger');
+            }
+            throw apiError; // Re-throw para o catch externo
+        }
+    } catch (error) {
+        console.error('Erro ao atualizar formato AVFoundation:', error);
+        // Não mostrar alerta duplicado se já foi mostrado acima
+        if (!error.message || (!error.message.includes('Failed to fetch') && !error.message.includes('ERR_CONNECTION_REFUSED'))) {
+            showAlert('Erro ao atualizar formato AVFoundation: ' + error.message, 'danger');
+        }
+    }
+}
+
+/**
+ * Atualiza a lista de dispositivos AVFoundation
+ */
+async function refreshAVFoundationDevices() {
+    try {
+        await api.refreshAVFoundationDevices();
+        await loadAVFoundationDevicesForSource();
+        showAlert('Lista de dispositivos AVFoundation atualizada', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar lista de dispositivos AVFoundation:', error);
+        showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza a lista de formatos AVFoundation
+ */
+async function refreshAVFoundationFormats() {
+    try {
+        await loadAVFoundationFormatsForSource();
+        showAlert('Lista de formatos AVFoundation atualizada', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar lista de formatos AVFoundation:', error);
+        showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
+    }
+}
+
+/**
  * Atualiza o dispositivo V4L2 na aba Source
  */
 async function updateV4L2DeviceSource() {
@@ -811,6 +1131,9 @@ async function updateSource() {
         } else if (sourceType === 2) {
             // DirectShow (Windows)
             await loadDSDevicesForSource();
+        } else if (sourceType === 3) {
+            // AVFoundation (macOS)
+            await loadAVFoundationDevicesForSource();
         }
         
         // Recarregar dados completos

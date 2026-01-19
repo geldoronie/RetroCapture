@@ -331,6 +331,38 @@
                                             </div>
                                         </div>
                                         
+                                        <!-- AVFoundation Controls - Aparece apenas quando AVFoundation está selecionado (macOS) -->
+                                        <div id="avfoundationControlsContainer" style="display: none;">
+                                            <div class="col-12">
+                                                <hr>
+                                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                                    <h6 class="mb-0">AVFoundation Device</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationDevices()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="avfoundationDevice" onchange="updateAVFoundationDeviceSource()">
+                                                    <option value="">Carregando...</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">Selecione um dispositivo AVFoundation ou "None (No device)" para desabilitar</small>
+                                            </div>
+                                            
+                                            <div class="col-12" id="avfoundationCaptureInfo" style="display: none;">
+                                                <hr>
+                                                <h6>Format Selection</h6>
+                                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                                    <small class="form-text text-muted">Selecione um formato compatível com o dispositivo</small>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationFormats()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="avfoundationFormat" onchange="updateAVFoundationFormatSource()">
+                                                    <option value="">Nenhum formato disponível</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">O formato selecionado define a resolução e FPS da captura</small>
+                                            </div>
+                                        </div>
+                                        
                                         <!-- None Source Message -->
                                         <div id="noneSourceMessage" class="col-12">
                                             <div class="alert alert-info">

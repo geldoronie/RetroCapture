@@ -425,6 +425,10 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleRefreshAVFoundationDevices(clientFd);
     }
+    else if (path == "/api/v1/avfoundation/formats")
+    {
+        return handleGETAVFoundationFormats(clientFd);
+    }
     else if (path == "/api/v1/status")
     {
         return handleGETStatus(clientFd);
@@ -513,6 +517,14 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleSetDSDevice(clientFd, body);
     }
+    else if (path == "/api/v1/avfoundation/device")
+    {
+        return handleSetAVFoundationDevice(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/format")
+    {
+        return handleSetAVFoundationFormat(clientFd, body);
+    }
     else if (path == "/api/v1/presets")
     {
         return handleCreatePreset(clientFd, body);
@@ -574,7 +586,17 @@ bool APIController::handleGETSource(int clientFd)
 
     std::ostringstream json;
     json << "{\"type\": " << static_cast<int>(m_uiManager->getSourceType())
-         << ", \"device\": " << jsonString(m_uiManager->getCurrentDevice()) << "}";
+         << ", \"device\": " << jsonString(m_uiManager->getCurrentDevice());
+    
+    // Include format ID for AVFoundation
+    if (m_uiManager->getSourceType() == UIManager::SourceType::AVFoundation)
+    {
+        std::string formatId = m_uiManager->getCurrentFormatId();
+        LOG_INFO("handleGETSource: AVFoundation formatId=" + formatId);
+        json << ", \"formatId\": " << jsonString(formatId);
+    }
+    
+    json << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
@@ -1516,6 +1538,138 @@ bool APIController::handleSetDSDevice(int clientFd, const std::string &body)
     catch (const std::exception &e)
     {
         sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETAVFoundationFormats(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    std::string deviceId = m_uiManager->getCurrentDevice();
+    const auto &formats = m_uiManager->getAVFoundationFormats(deviceId);
+    std::string currentFormatId = m_uiManager->getCurrentFormatId();
+    
+    LOG_INFO("handleGETAVFoundationFormats: deviceId=" + deviceId + ", formatId=" + currentFormatId + ", formats count=" + std::to_string(formats.size()));
+    
+    std::ostringstream json;
+    json << "{\"formats\": [";
+    for (size_t i = 0; i < formats.size(); ++i)
+    {
+        if (i > 0)
+            json << ", ";
+        const auto &format = formats[i];
+        json << "{"
+             << "\"id\": " << jsonString(format.id) << ", "
+             << "\"width\": " << format.width << ", "
+             << "\"height\": " << format.height << ", "
+             << "\"minFps\": " << format.minFps << ", "
+             << "\"maxFps\": " << format.maxFps << ", "
+             << "\"pixelFormat\": " << jsonString(format.pixelFormat) << ", "
+             << "\"colorSpace\": " << jsonString(format.colorSpace) << ", "
+             << "\"displayName\": " << jsonString(format.displayName)
+             << "}";
+    }
+    json << "], \"currentFormatId\": " << jsonString(currentFormatId) << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleSetAVFoundationDevice(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (json.contains("device"))
+        {
+            std::string device = json["device"].get<std::string>();
+            m_uiManager->setCurrentDevice(device);
+
+            std::ostringstream response;
+            response << "{\"success\": true, \"device\": " << jsonString(device) << "}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'device' field");
+            return true;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleSetAVFoundationFormat(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        std::string deviceId = m_uiManager->getCurrentDevice();
+        
+        if (json.contains("formatId"))
+        {
+            std::string formatId = json["formatId"].get<std::string>();
+            LOG_INFO("handleSetAVFoundationFormat: Setting formatId=" + formatId + " for deviceId=" + deviceId);
+            m_uiManager->setAVFoundationFormatById(formatId, deviceId);
+            
+            // Verify format was set
+            std::string currentFormatId = m_uiManager->getCurrentFormatId();
+            LOG_INFO("handleSetAVFoundationFormat: Current formatId after setting=" + currentFormatId);
+            
+            // Save config to persist the format selection
+            m_uiManager->saveConfig();
+            
+            std::ostringstream response;
+            response << "{\"success\": true, \"formatId\": " << jsonString(formatId) << "}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else if (json.contains("formatIndex"))
+        {
+            int formatIndex = json["formatIndex"].get<int>();
+            m_uiManager->setAVFoundationFormat(formatIndex, deviceId);
+            
+            std::ostringstream response;
+            response << "{\"success\": true, \"formatIndex\": " << formatIndex << "}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'formatId' or 'formatIndex' field");
+            return true;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Error in handleSetAVFoundationFormat: " + std::string(e.what()));
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+    catch (...)
+    {
+        LOG_ERROR("Unknown error in handleSetAVFoundationFormat");
+        sendErrorResponse(clientFd, 500, "Internal server error");
         return true;
     }
 }

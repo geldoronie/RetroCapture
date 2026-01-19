@@ -108,6 +108,26 @@ class RetroCaptureAPI {
         return await this.request('GET', '/ds/devices/refresh');
     }
 
+    async getAVFoundationDevices() {
+        return await this.request('GET', '/avfoundation/devices');
+    }
+
+    async refreshAVFoundationDevices() {
+        return await this.request('GET', '/avfoundation/devices/refresh');
+    }
+
+    async getAVFoundationFormats() {
+        return await this.request('GET', '/avfoundation/formats');
+    }
+
+    async setAVFoundationDevice(device) {
+        return await this.request('POST', '/avfoundation/device', { device });
+    }
+
+    async setAVFoundationFormat(formatId) {
+        return await this.request('POST', '/avfoundation/format', { formatId });
+    }
+
     async getStatus() {
         return await this.request('GET', '/status');
     }

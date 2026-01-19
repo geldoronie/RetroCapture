@@ -2067,6 +2067,89 @@ bool Application::initUI()
                                          }
                                      }
 #endif
+#ifdef __APPLE__
+                                     if (sourceType == UIManager::SourceType::AVFoundation)
+                                     {
+                                         LOG_INFO("AVFoundation source selected");
+                                         
+                                         // Ensure capture is configured for AVFoundation
+                                         if (m_capture)
+                                         {
+                                             // Set capture controls to allow device enumeration
+                                             if (m_ui)
+                                             {
+                                                 m_ui->setCaptureControls(m_capture.get());
+                                                 // Refresh devices list
+                                                 m_ui->refreshAVFoundationDevices();
+                                             }
+                                         }
+                                         
+                                         // If device is already selected, try to reopen
+                                         std::string devicePath = m_devicePath;
+                                         if (devicePath.empty() && m_ui)
+                                         {
+                                             devicePath = m_ui->getCurrentDevice();
+                                         }
+                                         
+                                         if (!devicePath.empty() && m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                             m_capture->setDummyMode(false);
+                                             
+                                             if (m_capture->open(devicePath))
+                                             {
+                                                 // For AVFoundation, format is set via setAVFoundationFormatById
+                                                 // Check if there's a saved format
+                                                 if (m_ui)
+                                                 {
+                                                     std::string savedFormatId = m_ui->getCurrentFormatId();
+                                                     if (!savedFormatId.empty())
+                                                     {
+                                                         m_ui->refreshAVFoundationFormats(devicePath);
+                                                         m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                                                     }
+                                                 }
+                                                 
+                                                 if (m_capture->startCapture())
+                                                 {
+                                                     if (m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, devicePath);
+                                                         m_ui->setCurrentDevice(devicePath);
+                                                         m_ui->setCaptureControls(m_capture.get());
+                                                     }
+                                                 }
+                                             }
+                                             else
+                                             {
+                                                 // If failed to open device, return to dummy mode
+                                                 LOG_WARN("Failed to open AVFoundation device - activating dummy mode");
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                 {
+                                                     if (m_capture->startCapture() && m_ui)
+                                                     {
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, "None (Dummy)");
+                                                         m_ui->setCaptureControls(nullptr);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         else if (m_capture)
+                                         {
+                                             // If no device selected but AVFoundation was chosen, keep in dummy mode
+                                             LOG_INFO("No AVFoundation device selected - keeping dummy mode");
+                                             if (m_ui)
+                                             {
+                                                 m_ui->setCaptureControls(m_capture.get()); // Allow device enumeration
+                                                 m_ui->refreshAVFoundationDevices(); // Refresh device list
+                                             }
+                                         }
+                                     }
+#endif
                                  });
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
