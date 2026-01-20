@@ -34,7 +34,6 @@ private:
     void renderAVFoundationControls();
     void renderAVFoundationDeviceSelection();
     void renderAVFoundationFormatSelection();
-    void renderAVFoundationAudioDeviceSelection();
 #endif
     void renderCaptureSettings();
     void renderQuickResolutions();

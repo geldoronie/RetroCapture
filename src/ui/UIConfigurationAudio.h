@@ -6,6 +6,7 @@
 // Forward declarations
 class UIManager;
 class IAudioCapture;
+class IVideoCapture;
 
 /**
  * Audio configuration tab in the configuration window
@@ -21,8 +22,9 @@ public:
 private:
     UIManager *m_uiManager = nullptr;
     IAudioCapture *m_audioCapture = nullptr;
+    IVideoCapture *m_capture = nullptr;
     
-    // Input sources
+    // Input sources (Linux PulseAudio)
     std::vector<std::string> m_inputSourceNames;
     std::vector<std::string> m_inputSourceIds;
     int m_selectedInputSourceIndex = -1;
@@ -30,4 +32,8 @@ private:
     
     void renderInputSourceSelection();
     void refreshInputSources();
+    
+#ifdef __APPLE__
+    void renderAVFoundationAudioDeviceSelection();
+#endif
 };

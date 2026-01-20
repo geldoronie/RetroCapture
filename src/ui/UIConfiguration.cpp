@@ -119,13 +119,12 @@ void UIConfiguration::render()
             ImGui::EndTabItem();
         }
 
-#ifdef __linux__
+        // Audio tab is available on both Linux (PulseAudio) and macOS (AVFoundation)
         if (ImGui::BeginTabItem("Audio"))
         {
             audioTab.render();
             ImGui::EndTabItem();
         }
-#endif
 
         ImGui::EndTabBar();
     }

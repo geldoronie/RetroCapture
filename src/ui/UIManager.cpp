@@ -1788,18 +1788,20 @@ void UIManager::setAVFoundationAudioDevice(const std::string &audioDeviceId)
     // Use virtual method from IVideoCapture interface
     m_capture->setAudioDevice(audioDeviceId);
     
-    // CRITICAL: Only trigger device change if device is open AND we're not already in a device change
-    // This prevents infinite loops when called during initialization or from within device change callback
-    // The audio device will be applied when the device is opened/reopened
-    if (m_capture->isOpen())
+    // If device is open and not in dummy mode, reopen it to apply the new audio device
+    // The triggerDeviceChange callback has protection against infinite loops
+    if (m_capture->isOpen() && !m_capture->isDummyMode() && !m_currentDevice.empty())
     {
-        // Check if we're already in a device change to avoid recursion
-        // We'll set a flag to indicate audio device needs to be reapplied after device opens
-        LOG_INFO("Audio device changed to: " + audioDeviceId);
+        LOG_INFO("Audio device changed to: " + (audioDeviceId.empty() ? "auto-detect" : audioDeviceId));
+        LOG_INFO("Reopening device to apply new audio device selection...");
+        // Trigger device change with current device to reopen and apply new audio device
+        // The callback has protection against recursion, so this is safe
+        triggerDeviceChange(m_currentDevice);
+    }
+    else
+    {
+        LOG_INFO("Audio device changed to: " + (audioDeviceId.empty() ? "auto-detect" : audioDeviceId));
         LOG_INFO("Audio device will be applied when device is next opened/reopened.");
-        // DON'T call triggerDeviceChange here - it will cause a deadlock/loop
-        // The audio device is already set via setAudioDevice() above
-        // It will be used when the device is opened next time
     }
 }
 

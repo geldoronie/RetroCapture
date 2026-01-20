@@ -1,8 +1,14 @@
 #include "UIConfigurationAudio.h"
 #include "UIManager.h"
 #include "../audio/IAudioCapture.h"
+#include "../capture/IVideoCapture.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
+#endif
+#ifdef __APPLE__
+// Forward declaration - VideoCaptureAVFoundation is Objective-C++ and cannot be included in C++ file
+// Use virtual methods from IVideoCapture interface instead
+class VideoCaptureAVFoundation;
 #endif
 #include <imgui.h>
 #include <algorithm>
@@ -29,14 +35,39 @@ void UIConfigurationAudio::render()
 
     // Update reference to audio capture if needed
     m_audioCapture = m_uiManager->getAudioCapture();
+    m_capture = m_uiManager->getCapture();
 
+#ifdef __APPLE__
+    // On macOS, show AVFoundation audio device selection if using AVFoundation
+    // Check if capture has audio capability (AVFoundation-specific)
+    // We can check by seeing if listAudioDevices() returns non-empty (AVFoundation-specific method)
+    if (m_capture && m_capture->isOpen())
+    {
+        // Try to get audio devices - if this works, it's AVFoundation
+        auto audioDevices = m_capture->listAudioDevices();
+        if (!audioDevices.empty() || m_uiManager->getAVFoundationAudioDevices().size() > 0)
+        {
+            renderAVFoundationAudioDeviceSelection();
+            ImGui::Separator();
+        }
+    }
+#endif
+
+#ifdef __linux__
+    // On Linux, show PulseAudio input source selection
     if (!m_audioCapture)
     {
         ImGui::TextWrapped("Audio capture not available. Audio is required for streaming and recording.");
         return;
     }
-
     renderInputSourceSelection();
+#else
+    // On macOS without AVFoundation audio, show message
+    if (!m_capture || !m_capture->isOpen())
+    {
+        ImGui::TextWrapped("No video capture device open. Open a device in the Source tab to configure audio monitoring.");
+    }
+#endif
 }
 
 void UIConfigurationAudio::refreshInputSources()
@@ -211,3 +242,96 @@ void UIConfigurationAudio::renderInputSourceSelection()
 #endif
 }
 
+#ifdef __APPLE__
+void UIConfigurationAudio::renderAVFoundationAudioDeviceSelection()
+{
+    // Audio device selection for AVFoundation monitoring
+    ImGui::Text("AVFoundation Audio Device (for monitoring):");
+    ImGui::Separator();
+    
+    // Obter o ponteiro do capture do UIManager (sempre atualizar)
+    m_capture = m_uiManager->getCapture();
+    
+    // Usar cache de dispositivos de áudio do UIManager
+    auto currentAudioDevices = m_uiManager->getAVFoundationAudioDevices();
+    
+    // Apenas atualizar a lista se estiver vazia E m_capture estiver disponível
+    if (currentAudioDevices.empty() && m_capture)
+    {
+        m_uiManager->refreshAVFoundationAudioDevices();
+        currentAudioDevices = m_uiManager->getAVFoundationAudioDevices();
+    }
+    
+    // Combo box for audio device selection
+    std::string currentAudioDevice = m_uiManager->getAVFoundationAudioDevice();
+    std::string displayText = currentAudioDevice.empty() ? "Auto-detect (None)" : currentAudioDevice;
+    
+    // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
+    if (currentAudioDevices.empty())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo de áudio AVFoundation encontrado. Clique em Refresh para atualizar.");
+        ImGui::Spacing();
+    }
+    int selectedIndex = -1;
+    
+    // Verificar se "Auto-detect" está selecionado
+    if (currentAudioDevice.empty())
+    {
+        selectedIndex = 0;
+    }
+    else
+    {
+        // Procurar dispositivo na lista (índice +1 porque "Auto-detect" é 0)
+        for (size_t i = 0; i < currentAudioDevices.size(); ++i)
+        {
+            if (currentAudioDevices[i].id == currentAudioDevice || currentAudioDevices[i].name == currentAudioDevice)
+            {
+                selectedIndex = static_cast<int>(i) + 1; // +1 porque "Auto-detect" é 0
+                displayText = currentAudioDevices[i].name + " (" + currentAudioDevices[i].id + ")";
+                break;
+            }
+        }
+    }
+    
+    if (ImGui::BeginCombo("##avfaudiodevice", displayText.c_str()))
+    {
+        // Opção "Auto-detect" sempre como primeira opção
+        bool isAutoSelected = currentAudioDevice.empty();
+        if (ImGui::Selectable("Auto-detect (None)", isAutoSelected))
+        {
+            m_uiManager->setAVFoundationAudioDevice("");
+            m_uiManager->saveConfig();
+        }
+        if (isAutoSelected)
+        {
+            ImGui::SetItemDefaultFocus();
+        }
+        
+        // Listar dispositivos de áudio disponíveis
+        for (size_t i = 0; i < currentAudioDevices.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i) + 1);
+            std::string deviceLabel = currentAudioDevices[i].name + " (" + currentAudioDevices[i].id + ")";
+            if (ImGui::Selectable(deviceLabel.c_str(), isSelected))
+            {
+                // Usar o ID do dispositivo (uniqueID do AVFoundation)
+                m_uiManager->setAVFoundationAudioDevice(currentAudioDevices[i].id);
+                m_uiManager->saveConfig();
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfaudiodevices"))
+    {
+        m_uiManager->refreshAVFoundationAudioDevices();
+    }
+    
+    ImGui::TextWrapped("Select an audio device to monitor. If 'Auto-detect' is selected, the system will try to find a matching audio device for the selected video device.");
+}
+#endif
