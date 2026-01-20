@@ -19,6 +19,7 @@ struct RecordingMetadata;
 
 class IVideoCapture;
 class IAudioCapture;
+class IAudioOutput;
 class WindowManager;
 #ifdef USE_SDL2
 class WindowManagerSDL;
@@ -162,6 +163,7 @@ private:
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<IAudioCapture> m_audioCapture;
+    std::unique_ptr<IAudioOutput> m_audioOutput; // Audio monitoring/output
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
 
@@ -321,6 +323,9 @@ private:
     };
     std::mutex m_resolutionQueueMutex;
     std::queue<ResolutionChange> m_pendingResolutionChanges;
+    
+    // Thread-safe mutex for device changes (protects against race conditions from web API)
+    std::mutex m_deviceChangeMutex;
 
     bool initCapture();
     bool reconfigureCapture(uint32_t width, uint32_t height, uint32_t fps);
@@ -331,6 +336,7 @@ private:
     bool initWebPortal();
     void stopWebPortal();
     bool initAudioCapture();
+    bool initAudioOutput();
     void restoreAudioDeviceConnections();
     void handleKeyInput();
 };

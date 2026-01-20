@@ -23,6 +23,10 @@
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../audio/IAudioOutput.h"
+#ifdef __APPLE__
+#include "../audio/AudioOutputCoreAudio.h"
+#endif
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
@@ -658,7 +662,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         usleep(100000); // 100ms
 #else
     #ifdef _WIN32
-    Sleep(100); // 100ms
+        Sleep(100); // 100ms
 #else
     usleep(100000); // 100ms
 #endif
@@ -696,7 +700,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         usleep(100000); // 100ms
 #else
     #ifdef _WIN32
-    Sleep(100); // 100ms
+        Sleep(100); // 100ms
 #else
     usleep(100000); // 100ms
 #endif
@@ -1020,17 +1024,17 @@ bool Application::initUI()
     else
 #endif
     {
-        if (m_capture && m_capture->isOpen())
-        {
-            m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
-                                 m_captureFps, m_devicePath);
-            m_ui->setCurrentDevice(m_devicePath);
-        }
-        else
-        {
-            // No device - show "None"
-            m_ui->setCaptureInfo(0, 0, 0, "None");
-            m_ui->setCurrentDevice(""); // Empty string = None
+    if (m_capture && m_capture->isOpen())
+    {
+        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                             m_captureFps, m_devicePath);
+        m_ui->setCurrentDevice(m_devicePath);
+    }
+    else
+    {
+        // No device - show "None"
+        m_ui->setCaptureInfo(0, 0, 0, "None");
+        m_ui->setCurrentDevice(""); // Empty string = None
         }
     }
 
@@ -2109,6 +2113,14 @@ bool Application::initUI()
                                                          m_ui->refreshAVFoundationFormats(devicePath);
                                                          m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
                                                      }
+                                                     
+                                                     // Apply saved audio device if available
+                                                     std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
+                                                     if (!savedAudioDeviceId.empty())
+                                                     {
+                                                         LOG_INFO("Applying saved AVFoundation audio device: " + savedAudioDeviceId);
+                                                         m_ui->setAVFoundationAudioDevice(savedAudioDeviceId);
+                                                     }
                                                  }
                                                  
                                                  if (m_capture->startCapture())
@@ -2154,7 +2166,7 @@ bool Application::initUI()
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
                              {
-        // Avoid infinite loop: if already processing "None", do nothing
+        // Avoid infinite loop: if already processing device change, do nothing
         static bool processingDeviceChange = false;
         if (processingDeviceChange) {
             return;
@@ -2175,6 +2187,14 @@ bool Application::initUI()
             // Close current device
             if (m_capture) {
                 m_capture->stopCapture();
+                
+                // IMPORTANT: Stop and close audio output BEFORE closing capture device
+                if (m_audioOutput) {
+                    LOG_INFO("Stopping audio output before disconnecting device...");
+                    m_audioOutput->stop();
+                    m_audioOutput->close();
+                }
+                
                 m_capture->close();
                 // Ativar modo dummy
                 m_capture->setDummyMode(true);
@@ -2216,75 +2236,86 @@ bool Application::initUI()
         uint32_t oldHeight = m_captureHeight;
         uint32_t oldFps = m_captureFps;
         
-        // Close current device (or dummy mode)
-        if (m_capture) {
-            m_capture->stopCapture();
-            m_capture->close();
-            // Disable dummy mode when trying to open real device
-            m_capture->setDummyMode(false);
-        }
+        // CRITICAL: Use mutex ONLY for closing/opening device to prevent race conditions
+        // Release mutex BEFORE long operations like startCapture() to avoid blocking main loop
+        {
+            std::lock_guard<std::mutex> lock(m_deviceChangeMutex);
         
-        // Update device path
-        m_devicePath = devicePath;
-        
-        // Clear FrameProcessor texture when changing device
-        if (m_frameProcessor) {
-            m_frameProcessor->deleteTexture();
-        }
-        
-        // Reopen with new device
-        if (m_capture && m_capture->open(devicePath)) {
-            LOG_INFO("Device opened successfully, configuring format...");
-            
-            // For AVFoundation, check if there's a saved format ID to apply
-#ifdef __APPLE__
-            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
-            {
-                // IMPORTANT: Load formats list BEFORE applying format to ensure UI can find it
-                LOG_INFO("Loading formats list for device: " + devicePath);
-                m_ui->refreshAVFoundationFormats(devicePath);
+            // Close current device (or dummy mode)
+            if (m_capture) {
+                // CRITICAL: Stop capture first to prevent new frames/audio from being queued
+                m_capture->stopCapture();
                 
-                std::string savedFormatId = m_ui->getCurrentFormatId();
-                LOG_INFO("Checking for saved format ID: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
-                if (!savedFormatId.empty())
-                {
-                    LOG_INFO("Applying saved AVFoundation format: " + savedFormatId);
-                    m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
-                    // Verify format was applied
-                    std::string currentFormatId = m_ui->getCurrentFormatId();
-                    LOG_INFO("Format ID after application: " + (currentFormatId.empty() ? "(empty)" : currentFormatId));
-                    LOG_INFO("Saved format applied, starting capture...");
-                    // Format application already handles resolution and FPS
-                    // Continue to start capture
-                    if (m_capture->startCapture()) {
-                        LOG_INFO("startCapture() returned true - device should be active (light on)");
-                    } else {
-                        LOG_ERROR("startCapture() returned false - device was NOT activated!");
-                    }
-                    
-                    // Update device path and UI information
-                    m_devicePath = devicePath; // Update Application's device path
-                    if (m_ui) {
-                        // Refresh formats list for the new device to ensure UI shows correct format
-                        m_ui->refreshAVFoundationFormats(devicePath);
-                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                            m_captureFps, devicePath);
-                        m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
-                        m_ui->setCaptureControls(m_capture.get());
-                    }
-                    
-                    LOG_INFO("Device changed successfully with saved format");
-                    processingDeviceChange = false;
-                    return;
+                // IMPORTANT: Stop and close audio output BEFORE closing capture device
+                // This prevents the audio output from trying to read from a cleared audio buffer
+                if (m_audioOutput && m_audioOutput->isOpen()) {
+                    LOG_INFO("Stopping audio output before device change...");
+                    m_audioOutput->stop();
+                    m_audioOutput->close();
                 }
+                
+                // CRITICAL: Wait a brief moment to ensure main loop stops reading audio
+                // This gives the main loop time to check m_capture->isOpen() and stop reading
+                // Without this, there's a race condition where the main loop might try to read
+                // audio while close() is executing
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                m_capture->close();
+                
+                // Disable dummy mode when trying to open real device
+                m_capture->setDummyMode(false);
             }
-#endif
             
-            // Default behavior: Reconfigure format and framerate
-            if (m_capture->setFormat(oldWidth, oldHeight, 0)) {
-                LOG_INFO("Format configured, configuring framerate...");
-                m_capture->setFramerate(oldFps);
-                LOG_INFO("Framerate configured, starting capture (startCapture)...");
+            // Update device path
+            m_devicePath = devicePath;
+            
+            // Clear FrameProcessor texture when changing device
+            if (m_frameProcessor) {
+                m_frameProcessor->deleteTexture();
+            }
+            
+            // Reopen with new device (still within mutex lock)
+            if (!m_capture || !m_capture->open(devicePath)) {
+                // Failed to open device
+                processingDeviceChange = false;
+                return;
+            }
+        } // CRITICAL: Release mutex HERE, before long operations like startCapture()
+        
+        // From here on, mutex is released - long operations can proceed without blocking main loop
+        // Device was successfully opened (we returned above if it failed)
+        LOG_INFO("Device opened successfully, configuring format...");
+        
+        // For AVFoundation, check if there's a saved format ID to apply
+#ifdef __APPLE__
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
+        {
+            // CRITICAL: Don't refresh formats immediately after opening device
+            // This can cause deadlock if the device is still being configured
+            // Formats list should already be populated from previous refresh or will be loaded when needed
+            // m_ui->refreshAVFoundationFormats(devicePath); // REMOVED to prevent deadlock
+            
+            std::string savedFormatId = m_ui->getCurrentFormatId();
+            LOG_INFO("Checking for saved format ID: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
+            if (!savedFormatId.empty())
+            {
+                LOG_INFO("Applying saved AVFoundation format: " + savedFormatId);
+                m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                // Verify format was applied
+                std::string currentFormatId = m_ui->getCurrentFormatId();
+                LOG_INFO("Format ID after application: " + (currentFormatId.empty() ? "(empty)" : currentFormatId));
+                LOG_INFO("Saved format applied, starting capture...");
+                
+                // Apply saved audio device if available
+                std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
+                if (!savedAudioDeviceId.empty())
+                {
+                    LOG_INFO("Applying saved AVFoundation audio device: " + savedAudioDeviceId);
+                    m_ui->setAVFoundationAudioDevice(savedAudioDeviceId);
+                }
+                
+                // Format application already handles resolution and FPS
+                // Continue to start capture
                 if (m_capture->startCapture()) {
                     LOG_INFO("startCapture() returned true - device should be active (light on)");
                 } else {
@@ -2294,39 +2325,83 @@ bool Application::initUI()
                 // Update device path and UI information
                 m_devicePath = devicePath; // Update Application's device path
                 if (m_ui) {
-#ifdef __APPLE__
-                    // For AVFoundation, refresh formats list when device is opened
-                    if (m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
-                    {
-                        m_ui->refreshAVFoundationFormats(devicePath);
-                    }
-#endif
+                    // CRITICAL: Don't refresh formats immediately after startCapture()
+                    // This can cause deadlock if the device is still being configured
+                    // Formats will be refreshed when needed by the UI
+                    m_ui->refreshAVFoundationFormats(devicePath); // REMOVED to prevent deadlock
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
                                         m_captureFps, devicePath);
                     m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
-                    
-                    // Reload V4L2 controls
-                    m_ui->setCaptureControls(m_capture.get());
+                    // CRITICAL: Don't set capture controls immediately after startCapture()
+                    // This can cause deadlock if the device is still being configured
+                    // Controls will be set when needed by the UI
+                    m_ui->setCaptureControls(m_capture.get()); // REMOVED to prevent deadlock
                 }
                 
-                LOG_INFO("Device changed successfully");
+                LOG_INFO("Device changed successfully with saved format");
                 processingDeviceChange = false;
-            } else {
-                LOG_ERROR("Failed to configure format on new device");
-                // Close device if failed
-                m_capture->close();
-                if (m_ui) {
-                    m_ui->setCaptureInfo(0, 0, 0, "Error");
-                }
-                processingDeviceChange = false;
+                return;
             }
-        } else {
-            LOG_ERROR("Failed to open new device: " + devicePath);
+        }
+#endif
+        
+        // Default behavior: Reconfigure format and framerate
+        if (m_capture && m_capture->setFormat(oldWidth, oldHeight, 0)) {
+            LOG_INFO("Format configured, configuring framerate...");
+            m_capture->setFramerate(oldFps);
+            LOG_INFO("Framerate configured, starting capture (startCapture)...");
+            if (m_capture->startCapture()) {
+                LOG_INFO("startCapture() returned true - device should be active (light on)");
+            } else {
+                LOG_ERROR("startCapture() returned false - device was NOT activated!");
+            }
+            
+            // Update device path and UI information
+            m_devicePath = devicePath; // Update Application's device path
+            if (m_ui) {
+#ifdef __APPLE__
+                // For AVFoundation, apply saved audio device AFTER device is opened
+                if (m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
+                {
+                    // CRITICAL: Don't refresh formats immediately after startCapture()
+                    // This can cause deadlock if the device is still being configured
+                    // Formats will be refreshed when needed by the UI
+                    m_ui->refreshAVFoundationFormats(devicePath); // REMOVED to prevent deadlock
+                    
+                    // Apply saved audio device AFTER device is opened
+                    std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
+                    if (!savedAudioDeviceId.empty())
+                    {
+                        LOG_INFO("Applying saved AVFoundation audio device: " + savedAudioDeviceId);
+                        m_ui->setAVFoundationAudioDevice(savedAudioDeviceId);
+                    }
+                }
+#endif
+                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                    m_captureFps, devicePath);
+                m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
+                
+                // CRITICAL: Don't set capture controls immediately after startCapture()
+                // This can cause deadlock if the device is still being configured
+                // Controls will be set when needed by the UI
+                m_ui->setCaptureControls(m_capture.get()); // REMOVED to prevent deadlock
+            }
+            
+            LOG_INFO("Device changed successfully");
             processingDeviceChange = false;
+        } else {
+            LOG_ERROR("Failed to configure format on new device");
+            // Close device if failed
+            if (m_capture) {
+                m_capture->close();
+            }
             if (m_ui) {
                 m_ui->setCaptureInfo(0, 0, 0, "Error");
             }
-        } });
+            processingDeviceChange = false;
+        }
+        // Note: If device open failed, we already returned above, so no else needed here
+    });
 
     // Apply saved device and format for AVFoundation after callbacks are set up
 #ifdef __APPLE__
@@ -2339,17 +2414,20 @@ bool Application::initUI()
         {
             std::string savedDevice = m_ui->getCurrentDevice();
             std::string savedFormatId = m_ui->getCurrentFormatId();
+            std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
             
             LOG_INFO("Saved AVFoundation device: " + (savedDevice.empty() ? "(empty)" : savedDevice));
             LOG_INFO("Saved AVFoundation format: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
+            LOG_INFO("Saved AVFoundation audio device: " + (savedAudioDeviceId.empty() ? "(empty)" : savedAudioDeviceId));
             
             if (!savedDevice.empty() && m_capture)
             {
                 LOG_INFO("Applying saved AVFoundation device: " + savedDevice);
                 // Update UI to show selected device immediately
                 m_ui->setCurrentDevice(savedDevice);
+                // DON'T apply audio device here - it will be applied after device opens
                 // Trigger device change to apply saved device
-                // The format will be applied automatically in the callback above
+                // The format and audio device will be applied automatically in the callback
                 m_ui->triggerDeviceChange(savedDevice);
             }
             else if (!savedDevice.empty())
@@ -2765,6 +2843,29 @@ bool Application::initAudioCapture()
         return true; // Audio not needed, not an error
     }
 
+    // Check if video capture device has audio available (e.g., AVFoundation on macOS)
+    // If it does, we'll use that instead of a separate audio capture
+    if (m_capture && m_capture->hasAudio())
+    {
+        LOG_INFO("Using audio from video capture device");
+        // We'll handle audio from video capture in the update loop
+        // No need to create a separate AudioCapture
+        // Set audio format for RecordingManager if available
+        if (m_recordingManager)
+        {
+            m_recordingManager->setAudioFormat(m_capture->getAudioSampleRate(), m_capture->getAudioChannels());
+        }
+        
+        // Initialize audio monitoring/output immediately for AVFoundation audio
+        // This allows the user to hear the audio from the capture device
+        if (!initAudioOutput())
+        {
+            LOG_WARN("Failed to initialize audio monitoring for AVFoundation - continuing without monitoring");
+        }
+        
+        return true;
+    }
+
     m_audioCapture = AudioCaptureFactory::create();
     if (!m_audioCapture)
     {
@@ -2807,7 +2908,60 @@ bool Application::initAudioCapture()
 
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
+    // Initialize audio monitoring/output (only if not already initialized by AVFoundation)
+    if (!m_audioOutput && !initAudioOutput())
+    {
+        LOG_WARN("Failed to initialize audio monitoring - continuing without monitoring");
+    }
+
     return true;
+}
+
+bool Application::initAudioOutput()
+{
+#ifdef __APPLE__
+    m_audioOutput = std::make_unique<AudioOutputCoreAudio>();
+    if (!m_audioOutput)
+    {
+        LOG_ERROR("Failed to create AudioOutput for this platform");
+        return false;
+    }
+
+    // Get audio format from capture device if available, otherwise use defaults
+    uint32_t sampleRate = 44100;
+    uint32_t channels = 2;
+    if (m_capture && m_capture->hasAudio())
+    {
+        sampleRate = m_capture->getAudioSampleRate();
+        channels = m_capture->getAudioChannels();
+        LOG_INFO("Configuring audio output to match capture: " + std::to_string(sampleRate) +
+                 "Hz, " + std::to_string(channels) + " channels");
+    }
+
+    // Open default audio output device with the correct sample rate and channels
+    if (!m_audioOutput->open("", sampleRate, channels))
+    {
+        LOG_ERROR("Failed to open audio output device");
+        m_audioOutput.reset();
+        return false;
+    }
+
+    // Start audio output
+    if (!m_audioOutput->start())
+    {
+        LOG_ERROR("Failed to start audio output");
+        m_audioOutput->close();
+        m_audioOutput.reset();
+        return false;
+    }
+
+    LOG_INFO("Audio monitoring started: " + std::to_string(m_audioOutput->getSampleRate()) +
+             "Hz, " + std::to_string(m_audioOutput->getChannels()) + " channels");
+    return true;
+#else
+    // Audio monitoring not yet implemented for other platforms
+    return false;
+#endif
 }
 
 void Application::restoreAudioDeviceConnections()
@@ -2856,8 +3010,15 @@ void Application::run()
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
 
+    static int mainLoopIteration = 0;
     while (!m_window->shouldClose())
     {
+        mainLoopIteration++;
+        if (mainLoopIteration <= 5)
+        {
+            LOG_INFO("Main loop iteration: " + std::to_string(mainLoopIteration));
+        }
+        
         m_window->pollEvents();
 
         // Process pending preset applications (from API threads)
@@ -2900,12 +3061,169 @@ void Application::run()
         // OPTION A: Process audio continuously in main thread (independent of video frames)
         // Process ALL available samples in loop until exhausted
         // This ensures audio is processed continuously even if main loop doesn't run at 60 FPS
-        // IMPORTANT: Process PulseAudio mainloop whenever audio is open
-        // This is critical to prevent PulseAudio from freezing system audio
-        // The mainloop needs to be processed regularly, even without active streaming
-        if (m_audioCapture && m_audioCapture->isOpen())
+        // IMPORTANT: Process audio capture
+        // Check if video capture device has audio (e.g., AVFoundation on macOS)
+        // Otherwise, use separate audio capture
+        // IMPORTANT: Process audio capture
+        // Check if video capture device has audio (e.g., AVFoundation on macOS)
+        // Use isOpen() check to prevent processing during device change
+        if (m_capture && m_capture->hasAudio() && m_capture->isOpen())
         {
-            // Process PulseAudio mainloop to avoid blocking system audio
+            // Use audio from video capture device
+            // ALWAYS process audio for monitoring when AVFoundation has audio
+            // This allows the user to hear the audio from the capture device at all times
+            // regardless of streaming/recording state
+            
+            // Initialize audio output if not already initialized and audio format is available
+            uint32_t audioSampleRate = m_capture->getAudioSampleRate();
+            uint32_t audioChannels = m_capture->getAudioChannels();
+            
+            if (!m_audioOutput && audioSampleRate > 0)
+            {
+                if (!initAudioOutput())
+                {
+                    LOG_WARN("Failed to initialize audio monitoring - continuing without monitoring");
+                }
+            }
+            // Reconfigure audio output if sample rate or channels changed
+            else if (m_audioOutput && m_audioOutput->isOpen() && audioSampleRate > 0)
+            {
+                uint32_t outputSampleRate = m_audioOutput->getSampleRate();
+                uint32_t outputChannels = m_audioOutput->getChannels();
+                if (audioSampleRate != outputSampleRate || audioChannels != outputChannels)
+                {
+                    LOG_INFO("Audio format mismatch detected: capture=" + std::to_string(audioSampleRate) + 
+                             "Hz/" + std::to_string(audioChannels) + "ch, output=" + 
+                             std::to_string(outputSampleRate) + "Hz/" + std::to_string(outputChannels) + 
+                             "ch. Reconfiguring audio output...");
+                    m_audioOutput->stop();
+                    m_audioOutput->close();
+                    if (!initAudioOutput())
+                    {
+                        LOG_WARN("Failed to reconfigure audio monitoring - continuing without monitoring");
+                    }
+                }
+            }
+            
+            // Calculate buffer size based on time for synchronization
+            uint32_t videoFps = (m_streamManager && m_streamManager->isActive()) 
+                                   ? (m_streamingFps > 0 ? m_streamingFps : m_captureFps)
+                                   : m_captureFps;
+
+            // Calculate samples corresponding to 1 video frame
+            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
+                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
+                                              : 512;
+            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
+
+            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
+            const int maxIterations = 10;
+            int iteration = 0;
+
+            while (iteration < maxIterations)
+            {
+                // CRITICAL: Double-check device is still open before reading audio
+                // This prevents crash if device is closed during audio processing
+                if (!m_capture || !m_capture->isOpen())
+                {
+                    static int deviceClosedLogCount = 0;
+                    if (deviceClosedLogCount++ < 3)
+                    {
+                        LOG_INFO("Device closed during audio processing, breaking");
+                    }
+                    break;
+                }
+                
+                static int getAudioSamplesLogCount = 0;
+                if (getAudioSamplesLogCount++ < 5)
+                {
+                    LOG_INFO("Calling getAudioSamples(), iteration " + std::to_string(iteration));
+                }
+                
+                size_t samplesRead = m_capture->getAudioSamples(audioBuffer.data(), samplesPerVideoFrame);
+                
+                if (getAudioSamplesLogCount <= 5)
+                {
+                    LOG_INFO("getAudioSamples() returned: " + std::to_string(samplesRead) + " samples");
+                }
+                if (samplesRead > 0)
+                {
+                    // ALWAYS send to monitoring/output when AVFoundation has audio
+                    // This is the only way to hear the audio from the capture device
+                    // Process monitoring FIRST to ensure low latency
+                    if (m_audioOutput && m_audioOutput->isOpen() && m_audioOutput->isEnabled())
+                    {
+                        size_t written = m_audioOutput->write(audioBuffer.data(), samplesRead);
+                        if (written != samplesRead)
+                        {
+                            static int logCount = 0;
+                            if (logCount < 3)
+                            {
+                                LOG_WARN("Audio output write mismatch: wrote " + std::to_string(written) + 
+                                         " of " + std::to_string(samplesRead) + " samples");
+                                logCount++;
+                            }
+                        }
+                    }
+                    else if (m_audioOutput && !m_audioOutput->isOpen() && audioSampleRate > 0)
+                    {
+                        // Try to initialize audio output if it's not open
+                        static int logCount = 0;
+                        if (logCount < 3)
+                        {
+                            LOG_INFO("Audio output not open, attempting to initialize...");
+                            if (initAudioOutput())
+                            {
+                                LOG_INFO("Audio output initialized successfully");
+                            }
+                            logCount++;
+                        }
+                    }
+                    
+                    // Send to streaming if active
+                    if (m_streamManager && m_streamManager->isActive())
+                    {
+                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
+                    }
+                    
+                    // Send to recording if active
+                    if (m_recordingManager && m_recordingManager->isRecording())
+                    {
+                        m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                    }
+                    
+                    if (samplesRead < samplesPerVideoFrame)
+                    {
+                        static int samplesReadLessLogCount = 0;
+                        if (samplesReadLessLogCount++ < 3)
+                        {
+                            LOG_INFO("samplesRead < samplesPerVideoFrame, breaking audio loop");
+                        }
+                        break;
+                    }
+                }
+                else
+                {
+                    static int samplesReadZeroLogCount = 0;
+                    if (samplesReadZeroLogCount++ < 3)
+                    {
+                        LOG_INFO("samplesRead == 0, breaking audio loop");
+                    }
+                    break;
+                }
+                iteration++;
+            }
+            
+            static int audioBlockExitLogCount = 0;
+            if (audioBlockExitLogCount++ < 5)
+            {
+                LOG_INFO("Exiting audio processing block, processed " + std::to_string(iteration) + " iterations");
+            }
+        }
+        else if (m_audioCapture && m_audioCapture->isOpen())
+        {
+            // Use separate audio capture (PulseAudio on Linux, CoreAudio on macOS if no AVFoundation audio)
+            // Process PulseAudio mainloop to avoid blocking system audio (Linux only)
             // This should be done always, not only when streaming is active
             if (m_streamManager && m_streamManager->isActive())
             {
@@ -2937,7 +3255,7 @@ void Application::run()
 
                     if (samplesRead > 0)
                     {
-                        // Share audio data between streaming and recording
+                        // Share audio data between streaming, recording, and monitoring
                         if (m_streamManager && m_streamManager->isActive())
                         {
                             m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
@@ -2945,6 +3263,11 @@ void Application::run()
                         if (m_recordingManager && m_recordingManager->isRecording())
                         {
                             m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        }
+                        // Send to monitoring/output
+                        if (m_audioOutput && m_audioOutput->isOpen() && m_audioOutput->isEnabled())
+                        {
+                            m_audioOutput->write(audioBuffer.data(), samplesRead);
                         }
 
                         // If we read less than expected, no more samples available
@@ -2992,7 +3315,13 @@ void Application::run()
                     size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
                     if (samplesRead > 0)
                     {
+                        // Send to recording
                         m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
+                        // Send to monitoring/output
+                        if (m_audioOutput && m_audioOutput->isOpen() && m_audioOutput->isEnabled())
+                        {
+                            m_audioOutput->write(audioBuffer.data(), samplesRead);
+                        }
                         if (samplesRead < samplesPerVideoFrame)
                         {
                             break;
@@ -3008,21 +3337,67 @@ void Application::run()
             else
             {
                 // Neither streaming nor recording active, but we still need to process mainloop
-                // to prevent PulseAudio from freezing system audio
+                // to prevent PulseAudio from freezing system audio (Linux only)
                 // Read and discard samples to keep buffer clean
                 const size_t maxSamples = 4096; // Temporary buffer
                 std::vector<int16_t> tempBuffer(maxSamples);
                 m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
         }
+        else
+        {
+            static int noAudioCaptureLogCount = 0;
+            if (noAudioCaptureLogCount++ < 5)
+            {
+                LOG_INFO("No separate audio capture available");
+            }
+        }
 
         // Process keyboard input (F12 to toggle UI)
+        static int beforeHandleKeyInputLogCount = 0;
+        if (beforeHandleKeyInputLogCount++ < 5)
+        {
+            LOG_INFO("Before handleKeyInput()");
+        }
         handleKeyInput();
+        
+        static int afterHandleKeyInputLogCount = 0;
+        if (afterHandleKeyInputLogCount++ < 5)
+        {
+            LOG_INFO("After handleKeyInput()");
+        }
+
+        // CRITICAL: Track loop iteration for debugging
+        static int loopIteration = 0;
+        loopIteration++;
+        
+        static int afterAudioLogCount = 0;
+        if (afterAudioLogCount++ < 5)
+        {
+            LOG_INFO("After audio processing, before beginFrame(), iteration " + std::to_string(loopIteration));
+        }
 
         // Start ImGui frame
+        static int beginFrameLogCount = 0;
+        if (beginFrameLogCount++ < 10)
+        {
+            LOG_INFO("Before beginFrame(), iteration " + std::to_string(loopIteration));
+        }
+        
         if (m_ui)
         {
             m_ui->beginFrame();
+            if (beginFrameLogCount <= 10)
+            {
+                LOG_INFO("beginFrame() called successfully");
+            }
+        }
+        else
+        {
+            if (beginFrameLogCount <= 10)
+            {
+                LOG_WARN("m_ui is null, cannot call beginFrame()!");
+            }
         }
 
         // Try to capture and process the latest frame (discarding old frames)
@@ -3093,7 +3468,17 @@ void Application::run()
         // Always render if we have a valid frame
         // This ensures we're always showing the latest frame
         // Skip rendering during reconfiguration to avoid accessing deleted textures
-        if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
+        // CRITICAL: Always render ImGui, even without valid frame, so UI is visible
+        static int renderPathLogCount = 0;
+        bool hasValidFrame = m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0;
+        if (renderPathLogCount++ < 10)
+        {
+            LOG_INFO("Render path check (iteration " + std::to_string(loopIteration) + "): isReconfiguring=" + std::string(m_isReconfiguring ? "true" : "false") +
+                     ", hasValidFrame=" + std::string(hasValidFrame ? "true" : "false") +
+                     ", frameProcessor=" + std::string(m_frameProcessor ? "exists" : "null") +
+                     ", texture=" + (m_frameProcessor ? std::to_string(m_frameProcessor->getTexture()) : "N/A"));
+        }
+        if (!m_isReconfiguring && hasValidFrame)
         {
             // Log resolução de captura original (antes de qualquer processamento)
             static int originalCaptureLogCount = 0;
@@ -3920,7 +4305,7 @@ void Application::run()
                                 if (m_streamManager && m_streamManager->isActive())
                                 {
                                     static int streamPushLogCount = 0;
-                                    if (streamPushLogCount++ < 3 && m_ui)
+                                    if (streamPushLogCount++ < 3 && m_ui)           
                                     {
                                         LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
                                         LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
@@ -4050,6 +4435,11 @@ void Application::run()
         {
             // If no valid frame yet, we still need to render UI and update window
             // so window is visible even without video frame
+            static int elsePathLogCount = 0;
+            if (elsePathLogCount++ < 10)
+            {
+                LOG_INFO("Rendering UI without valid frame (else path, iteration " + std::to_string(loopIteration) + ")");
+            }
 
             // Clear framebuffer
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -4062,6 +4452,14 @@ void Application::run()
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
             }
+            else
+            {
+                static int invalidDimensionsLogCount = 0;
+                if (invalidDimensionsLogCount++ < 5)
+                {
+                    LOG_WARN("Invalid window dimensions: " + std::to_string(currentWidth) + "x" + std::to_string(currentHeight));
+                }
+            }
 
             // IMPORTANT: Always finalize ImGui frame, even if we don't render anything
             // This avoids the error "Forgot to call Render() or EndFrame()"
@@ -4070,9 +4468,28 @@ void Application::run()
                 m_ui->render();
                 m_ui->endFrame();
             }
+            else
+            {
+                static int noUILogCount = 0;
+                if (noUILogCount++ < 5)
+                {
+                    LOG_WARN("m_ui is null, cannot render ImGui!");
+                }
+            }
 
             // IMPORTANT: Always do swapBuffers so window is updated and visible
-            m_window->swapBuffers();
+            if (m_window)
+            {
+                m_window->swapBuffers();
+            }
+            else
+            {
+                static int noWindowLogCount = 0;
+                if (noWindowLogCount++ < 5)
+                {
+                    LOG_WARN("m_window is null, cannot swap buffers!");
+                }
+            }
 
 // Do a small sleep to not consume 100% CPU
 #ifdef PLATFORM_LINUX

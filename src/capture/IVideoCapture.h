@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <cstddef> // for size_t
 
 struct Frame
 {
@@ -68,5 +69,16 @@ public:
     // Format enumeration (optional - only AVFoundation implements this)
     virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "") { (void)deviceId; return {}; }
     virtual bool setFormatById(const std::string &formatId, const std::string &deviceId = "") { (void)formatId; (void)deviceId; return false; }
+    
+    // Audio capture methods (optional - only AVFoundation implements this)
+    virtual bool hasAudio() const { return false; }
+    virtual size_t getAudioSamples(int16_t* buffer, size_t maxSamples) { (void)buffer; (void)maxSamples; return 0; }
+    virtual uint32_t getAudioSampleRate() const { return 0; }
+    virtual uint32_t getAudioChannels() const { return 0; }
+    
+    // Audio device enumeration and selection (optional - only AVFoundation implements this)
+    virtual std::vector<DeviceInfo> listAudioDevices() { return {}; }
+    virtual bool setAudioDevice(const std::string &audioDeviceId) { (void)audioDeviceId; return false; }
+    virtual std::string getCurrentAudioDevice() const { return ""; }
 };
 

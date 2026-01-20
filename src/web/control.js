@@ -13,7 +13,7 @@ let appState = {
     recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
     ds: { devices: [], currentDevice: '' }, // DirectShow (Windows)
-    avfoundation: { devices: [], formats: [], currentDevice: '', currentFormatId: '' }, // AVFoundation (macOS)
+    avfoundation: { devices: [], formats: [], currentDevice: '', currentFormatId: '', audioDevices: [], currentAudioDeviceId: '' }, // AVFoundation (macOS)
     platform: { platform: 'linux', availableSourceTypes: [] },
     status: { streamingActive: false, active: false, streamUrl: '', url: '', clientCount: 0 }
 };
@@ -95,7 +95,7 @@ async function loadPlatform() {
  * Atualiza a UI baseado na plataforma detectada
  */
 function updatePlatformUI() {
-    // Ocultar aba de áudio no Windows
+    // Mostrar aba de áudio no Linux e macOS (ocultar apenas no Windows)
     const audioTab = document.getElementById('audio-tab');
     const audioTabPane = document.getElementById('audio');
     if (audioTab && audioTabPane) {
@@ -103,9 +103,22 @@ function updatePlatformUI() {
             audioTab.style.display = 'none';
             audioTabPane.style.display = 'none';
         } else {
+            // Linux e macOS
             audioTab.style.display = '';
             audioTabPane.style.display = '';
         }
+    }
+    
+    // Mostrar/ocultar containers de áudio baseado na plataforma
+    const linuxAudioContainer = document.getElementById('linuxAudioInputContainer');
+    const avfoundationAudioContainer = document.getElementById('avfoundationAudioDeviceContainer');
+    
+    if (linuxAudioContainer) {
+        linuxAudioContainer.style.display = (appState.platform.platform === 'linux') ? 'block' : 'none';
+    }
+    
+    if (avfoundationAudioContainer) {
+        avfoundationAudioContainer.style.display = (appState.platform.platform === 'macos' && appState.source.type === 3) ? 'block' : 'none';
     }
     
     const sourceTypeSelect = document.getElementById('sourceType');
@@ -336,6 +349,10 @@ async function loadSource() {
         if (source.formatId) {
             appState.avfoundation.currentFormatId = source.formatId;
         }
+        // Update audio device ID from source if available (for AVFoundation)
+        if (source.audioDeviceId) {
+            appState.avfoundation.currentAudioDeviceId = source.audioDeviceId;
+        }
         
         const sourceType = source.type || 0;
         const sourceTypeSelect = document.getElementById('sourceType');
@@ -391,7 +408,7 @@ async function loadSource() {
             // AVFoundation (macOS)
             await loadAVFoundationDevicesForSource();
             
-            // Se houver dispositivo, carregar formatos
+            // Se houver dispositivo, carregar formatos e dispositivos de áudio
             if (source.device) {
                 const captureInfo = document.getElementById('avfoundationCaptureInfo');
                 if (captureInfo) {
@@ -399,6 +416,7 @@ async function loadSource() {
                 }
                 // Carregar formatos disponíveis (aguardar para garantir que o formato seja selecionado)
                 await loadAVFoundationFormatsForSource();
+                // Dispositivos de áudio agora são carregados na aba Audio, não na aba Source
                 
                 // Após carregar formatos, garantir que o formato correto está selecionado
                 // A função loadAVFoundationFormatsForSource já deve ter selecionado o formato,
@@ -451,6 +469,16 @@ function updateSourceUI(sourceType) {
     } else if (sourceType === 3) {
         // AVFoundation selecionado (macOS)
         if (avfoundationContainer) avfoundationContainer.style.display = 'block';
+        
+        // Mostrar container de áudio AVFoundation na aba Audio se estiver visível
+        const avfoundationAudioContainer = document.getElementById('avfoundationAudioDeviceContainer');
+        if (avfoundationAudioContainer && appState.platform.platform === 'macos') {
+            // Só mostrar se a aba Audio estiver visível
+            const audioTabPane = document.getElementById('audio');
+            if (audioTabPane && audioTabPane.style.display !== 'none') {
+                avfoundationAudioContainer.style.display = 'block';
+            }
+        }
         // Carregar dispositivos AVFoundation (async, mas não bloqueia)
         loadAVFoundationDevicesForSource().catch(err => {
             console.error('Erro ao carregar dispositivos AVFoundation:', err);
@@ -872,6 +900,7 @@ async function updateAVFoundationDeviceSource() {
         // Se houver dispositivo, carregar formatos
         if (device) {
             await loadAVFoundationFormatsForSource();
+            // Dispositivos de áudio agora são carregados na aba Audio, não na aba Source
         }
         
         showAlert('Dispositivo AVFoundation atualizado', 'success');
@@ -952,6 +981,100 @@ async function refreshAVFoundationFormats() {
     } catch (error) {
         console.error('Erro ao atualizar lista de formatos AVFoundation:', error);
         showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Carrega dispositivos de áudio AVFoundation para a aba Source
+ */
+async function loadAVFoundationAudioDevicesForSource() {
+    try {
+        console.log('Loading AVFoundation audio devices...');
+        const response = await api.getAVFoundationAudioDevices();
+        console.log('AVFoundation audio devices response:', response);
+        const devices = response.devices || [];
+        console.log('AVFoundation audio devices found:', devices.length);
+        
+        const select = document.getElementById('avfoundationAudioDevice');
+        if (!select) {
+            console.warn('avfoundationAudioDevice select not found');
+            return;
+        }
+        
+        select.innerHTML = '';
+        
+        // Adicionar "Auto-detect (None)" como primeira opção
+        const autoOption = document.createElement('option');
+        autoOption.value = '';
+        autoOption.textContent = 'Auto-detect (None)';
+        select.appendChild(autoOption);
+        
+        // Adicionar dispositivos de áudio
+        devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.id || device.name;
+            option.textContent = device.name || device.id;
+            if (!device.available) {
+                option.disabled = true;
+                option.textContent += ' (Não disponível)';
+            }
+            select.appendChild(option);
+        });
+        
+        // Marcar dispositivo de áudio atual se disponível
+        const currentAudioDevice = response.currentAudioDeviceId || appState.avfoundation?.currentAudioDeviceId || appState.source?.audioDeviceId || '';
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentAudioDeviceId = currentAudioDevice;
+        if (currentAudioDevice) {
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === currentAudioDevice) {
+                    select.selectedIndex = i;
+                    break;
+                }
+            }
+        } else {
+            // Selecionar "Auto-detect" se não houver dispositivo selecionado
+            select.selectedIndex = 0;
+        }
+        
+        console.log('AVFoundation audio devices loaded:', devices.length);
+    } catch (error) {
+        console.error('Erro ao carregar dispositivos de áudio AVFoundation:', error);
+    }
+}
+
+/**
+ * Atualiza o dispositivo de áudio AVFoundation na aba Source
+ */
+async function updateAVFoundationAudioDeviceSource() {
+    try {
+        const select = document.getElementById('avfoundationAudioDevice');
+        if (!select) return;
+        
+        const audioDeviceId = select.value;
+        appState.avfoundation = appState.avfoundation || {};
+        appState.avfoundation.currentAudioDeviceId = audioDeviceId;
+        
+        await api.setAVFoundationAudioDevice(audioDeviceId);
+        
+        showAlert('Dispositivo de áudio AVFoundation atualizado', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar dispositivo de áudio AVFoundation:', error);
+        showAlert('Erro ao atualizar dispositivo de áudio AVFoundation: ' + error.message, 'danger');
+    }
+}
+
+/**
+ * Atualiza a lista de dispositivos de áudio AVFoundation
+ */
+async function refreshAVFoundationAudioDevices() {
+    try {
+        await api.refreshAVFoundationAudioDevices();
+        await loadAVFoundationAudioDevicesForSource();
+        showAlert('Lista de dispositivos de áudio atualizada', 'success');
+    } catch (error) {
+        console.error('Erro ao atualizar lista de dispositivos de áudio AVFoundation:', error);
+        showAlert('Erro ao atualizar lista de dispositivos de áudio: ' + error.message, 'danger');
     }
 }
 
@@ -2489,21 +2612,47 @@ async function loadAudioData() {
     await loadAudioInputSources();
 }
 
-// Load audio data when audio tab is shown (only on Linux)
+// Load audio data when audio tab is shown (Linux and macOS)
 document.addEventListener('DOMContentLoaded', () => {
     const audioTab = document.getElementById('audio-tab');
     if (audioTab) {
         audioTab.addEventListener('shown.bs.tab', () => {
             // Only load if not Windows
             if (appState.platform && appState.platform.platform !== 'windows') {
-                loadAudioData();
+                loadAudioStatus();
+                
+                // Load Linux audio input sources
+                if (appState.platform.platform === 'linux') {
+                    loadAudioInputSources();
+                }
+                
+                // Load AVFoundation audio devices for macOS
+                if (appState.platform.platform === 'macos' && appState.source.type === 3) {
+                    loadAVFoundationAudioDevicesForSource();
+                    const audioDeviceContainer = document.getElementById('avfoundationAudioDeviceContainer');
+                    if (audioDeviceContainer) {
+                        audioDeviceContainer.style.display = 'block';
+                    }
+                }
             }
         });
         
-        // Also load on initial page load if audio tab is active (only on Linux)
+        // Also load on initial page load if audio tab is active
         const activeTab = document.querySelector('#audio-tab.active, #audio-tab[aria-selected="true"]');
         if (activeTab && appState.platform && appState.platform.platform !== 'windows') {
-            loadAudioData();
+            loadAudioStatus();
+            
+            if (appState.platform.platform === 'linux') {
+                loadAudioInputSources();
+            }
+            
+            if (appState.platform.platform === 'macos' && appState.source.type === 3) {
+                loadAVFoundationAudioDevicesForSource();
+                const audioDeviceContainer = document.getElementById('avfoundationAudioDeviceContainer');
+                if (audioDeviceContainer) {
+                    audioDeviceContainer.style.display = 'block';
+                }
+            }
         }
     }
 });

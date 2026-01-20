@@ -19,6 +19,13 @@
     --border: rgba(10, 122, 131, 0.3);
     --shadow: rgba(0, 0, 0, 0.3);
     --shadow-lg: rgba(0, 0, 0, 0.5);
+    
+    /* Bootstrap overrides - use styleguide colors */
+    --bs-heading-color: var(--text-primary);
+    --bs-body-color: var(--text-primary);
+    --bs-secondary-color: var(--text-secondary);
+    --bs-body-bg: var(--background);
+    --bs-emphasis-color: var(--text-primary);
 }
 
 * {
@@ -779,6 +786,23 @@ body {
     -webkit-box-orient: vertical;
     text-align: center;
     margin-bottom: 0;
+}
+
+/* Use styleguide colors consistently - ALL text elements must use styleguide */
+.text-muted,
+.form-text.text-muted,
+.small,
+.small.text-muted,
+div.small,
+span.small,
+p.small {
+    color: var(--text-secondary) !important;
+    font-size: 0.875rem;
+}
+
+h1, h2, h3, h4, h5, h6,
+.h1, .h2, .h3, .h4, .h5, .h6 {
+    color: var(--text-primary);
 }
 
 .preset-card .card-footer {

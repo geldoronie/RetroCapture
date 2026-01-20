@@ -128,6 +128,18 @@ class RetroCaptureAPI {
         return await this.request('POST', '/avfoundation/format', { formatId });
     }
 
+    async getAVFoundationAudioDevices() {
+        return await this.request('GET', '/avfoundation/audio-devices');
+    }
+
+    async refreshAVFoundationAudioDevices() {
+        return await this.request('GET', '/avfoundation/audio-devices/refresh');
+    }
+
+    async setAVFoundationAudioDevice(audioDeviceId) {
+        return await this.request('POST', '/avfoundation/audio-device', { audioDeviceId });
+    }
+
     async getStatus() {
         return await this.request('GET', '/status');
     }

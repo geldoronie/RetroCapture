@@ -9,6 +9,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
+#import <AudioToolbox/AudioToolbox.h>
 
 // Helper class para callback do AVFoundation
 @interface VideoCaptureDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
@@ -56,6 +57,46 @@
 }
 
 @end
+
+// Helper class para callback do AVFoundation (audio)
+@interface AudioCaptureDelegate : NSObject <AVCaptureAudioDataOutputSampleBufferDelegate>
+{
+    VideoCaptureAVFoundation* m_capture;
+}
+
+- (id)initWithCapture:(VideoCaptureAVFoundation*)capture;
+- (void)captureOutput:(AVCaptureOutput*)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection*)connection;
+
+@end
+
+@implementation AudioCaptureDelegate
+
+- (id)initWithCapture:(VideoCaptureAVFoundation*)capture
+{
+    self = [super init];
+    if (self)
+    {
+        m_capture = capture;
+    }
+    return self;
+}
+
+- (void)captureOutput:(AVCaptureOutput*)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection*)connection
+{
+    (void)output;
+    (void)connection;
+    
+    // CRITICAL: Minimize work in delegate - any delay here will cause audio drops
+    // OBS Studio approach: delegate should do MINIMAL work, just pass the buffer
+    if (sampleBuffer)
+    {
+        // IMPORTANT: Call onAudioSampleBuffer IMMEDIATELY, no logging or checks
+        // The sampleBuffer keeps the audio data alive during the callback
+        m_capture->onAudioSampleBuffer(sampleBuffer);
+    }
+}
+
+@end
 #endif
 
 VideoCaptureAVFoundation::VideoCaptureAVFoundation()
@@ -63,18 +104,28 @@ VideoCaptureAVFoundation::VideoCaptureAVFoundation()
     : m_captureSession(nil)
     , m_captureDevice(nil)
     , m_videoOutput(nil)
+    , m_audioOutput(nil)
     , m_captureQueue(nil)
+    , m_audioQueue(nil)
     , m_latestPixelBuffer(nullptr)
     , m_delegate(nil)
+    , m_audioDelegate(nil)
     , m_frameBuffer(nullptr)
     , m_frameBufferSize(0)
     , m_bufferMutex()
+    , m_audioBuffer()
+    , m_audioBufferMutex()
+    , m_audioSampleRate(44100)
+    , m_audioChannels(2)
+    , m_hasAudio(false)
+    , m_selectedAudioDeviceId("")
     , m_width(0)
     , m_height(0)
     , m_pixelFormat(0)
     , m_fps(30) // Default to 30 fps
     , m_isOpen(false)
     , m_isCapturing(false)
+    , m_isClosing(false) // Atomic bool initialized in header
     , m_dummyMode(false)
     , m_formatSelectedViaUI(false)
     , m_selectedFormatId("")
@@ -98,7 +149,9 @@ VideoCaptureAVFoundation::~VideoCaptureAVFoundation()
 #ifdef __APPLE__
 void VideoCaptureAVFoundation::onFrameCaptured(CVPixelBufferRef pixelBuffer)
 {
-    if (!pixelBuffer)
+    // CRITICAL: Check if device is closing - if so, ignore this callback
+    // This prevents accessing freed resources during device change
+    if (m_isClosing || !pixelBuffer)
     {
         return;
     }
@@ -109,6 +162,11 @@ void VideoCaptureAVFoundation::onFrameCaptured(CVPixelBufferRef pixelBuffer)
     CVPixelBufferRef oldBuffer = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_bufferMutex);
+        // Double-check after acquiring lock (device might have started closing)
+        if (m_isClosing)
+        {
+            return;
+        }
         oldBuffer = m_latestPixelBuffer;
         // IMPORTANT: Retain BEFORE assigning to ensure buffer stays alive
         // The delegate's sampleBuffer will release its reference when callback returns
@@ -132,6 +190,9 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
         LOG_WARN("Dispositivo já aberto, fechando primeiro");
         close();
     }
+
+    // Reset closing flag when opening new device
+    m_isClosing = false;
 
     if (m_dummyMode)
     {
@@ -378,6 +439,141 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
         // IMPORTANT: Add output within beginConfiguration/commitConfiguration (OBS Studio approach)
         [m_captureSession addOutput:m_videoOutput];
         
+        // Try to add audio capture if device supports audio
+        // Use user-selected audio device if available, otherwise try to auto-detect
+        AVCaptureDevice* audioDevice = nil;
+        
+        // Get all audio devices (using modern API)
+        AVCaptureDeviceDiscoverySession* audioDiscoverySession = [AVCaptureDeviceDiscoverySession 
+            discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInMicrophone, AVCaptureDeviceTypeExternalUnknown]
+            mediaType:AVMediaTypeAudio
+            position:AVCaptureDevicePositionUnspecified];
+        NSArray* audioDevices = audioDiscoverySession.devices;
+        
+        // If user has selected an audio device, use it
+        if (!m_selectedAudioDeviceId.empty())
+        {
+            NSString* selectedAudioDeviceId = [NSString stringWithUTF8String:m_selectedAudioDeviceId.c_str()];
+            for (AVCaptureDevice* dev in audioDevices)
+            {
+                NSString* audioDeviceUniqueID = [dev uniqueID];
+                if ([audioDeviceUniqueID isEqualToString:selectedAudioDeviceId])
+                {
+                    audioDevice = dev;
+                    LOG_INFO("Using user-selected audio device: " + std::string([[dev localizedName] UTF8String]));
+                    break;
+                }
+            }
+            
+            if (!audioDevice)
+            {
+                LOG_WARN("Selected audio device not found: " + m_selectedAudioDeviceId);
+            }
+        }
+        
+        // If no user-selected device, try to auto-detect matching audio device
+        if (!audioDevice)
+        {
+            // Try to find audio device matching the video device
+            // Strategy: match by device name or uniqueID prefix
+            NSString* videoDeviceName = [deviceObj localizedName];
+            NSString* videoDeviceUniqueID = [deviceObj uniqueID];
+            
+            for (AVCaptureDevice* dev in audioDevices)
+            {
+                NSString* audioDeviceName = [dev localizedName];
+                NSString* audioDeviceUniqueID = [dev uniqueID];
+                
+                // Try to match by name (many devices have audio with similar names)
+                // For example: "USB Video" might have "USB Video Audio" or similar
+                if ([audioDeviceName rangeOfString:videoDeviceName options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                    [videoDeviceName rangeOfString:audioDeviceName options:NSCaseInsensitiveSearch].location != NSNotFound)
+                {
+                    audioDevice = dev;
+                    LOG_INFO("Found matching audio device: " + std::string([audioDeviceName UTF8String]));
+                    break;
+                }
+                
+                // Try to match by uniqueID prefix (some devices share a common prefix)
+                // For example: "0x12345678" and "0x12345678-audio"
+                if ([audioDeviceUniqueID hasPrefix:videoDeviceUniqueID] || 
+                    [videoDeviceUniqueID hasPrefix:audioDeviceUniqueID])
+                {
+                    audioDevice = dev;
+                    LOG_INFO("Found matching audio device by ID: " + std::string([audioDeviceName UTF8String]));
+                    break;
+                }
+            }
+            
+            // If no matching audio device found, don't use audio
+            // User can manually select an audio device via UI
+            if (!audioDevice)
+            {
+                LOG_INFO("No audio device found matching video device: " + std::string([videoDeviceName UTF8String]));
+                LOG_INFO("Use the Audio Device selector in the UI to choose an audio input");
+            }
+        }
+        
+        if (audioDevice)
+        {
+            // Create audio input
+            NSError* audioError = nil;
+            AVCaptureDeviceInput* audioInput = [[AVCaptureDeviceInput alloc] initWithDevice:audioDevice error:&audioError];
+            if (audioInput && [m_captureSession canAddInput:audioInput])
+            {
+                [m_captureSession addInput:audioInput];
+                [audioInput release];
+                
+                // Create audio output
+                m_audioOutput = [[AVCaptureAudioDataOutput alloc] init];
+                if (m_audioOutput)
+                {
+                    // Create audio queue
+                    m_audioQueue = dispatch_queue_create("com.retrocapture.audio", DISPATCH_QUEUE_SERIAL);
+                    
+                    // Create audio delegate
+                    m_audioDelegate = [[AudioCaptureDelegate alloc] initWithCapture:this];
+                    [m_audioOutput setSampleBufferDelegate:m_audioDelegate queue:m_audioQueue];
+                    
+                    if ([m_captureSession canAddOutput:m_audioOutput])
+                    {
+                        [m_captureSession addOutput:m_audioOutput];
+                        m_hasAudio = true;
+                        LOG_INFO("Audio capture enabled for device: " + std::string([[audioDevice localizedName] UTF8String]));
+                    }
+                    else
+                    {
+                        LOG_WARN("Cannot add audio output to session");
+                        [m_audioOutput release];
+                        [m_audioDelegate release];
+                        dispatch_release(m_audioQueue);
+                        m_audioOutput = nil;
+                        m_audioDelegate = nil;
+                        m_audioQueue = nil;
+                    }
+                }
+            }
+            else
+            {
+                if (audioError)
+                {
+                    LOG_WARN("Cannot create audio input: " + std::string([[audioError localizedDescription] UTF8String]));
+                }
+                else
+                {
+                    LOG_WARN("Cannot add audio input to session");
+                }
+                if (audioInput)
+                {
+                    [audioInput release];
+                }
+            }
+        }
+        else
+        {
+            LOG_INFO("No audio device found for video device");
+        }
+        
         // IMPORTANT: Commit configuration changes atomically (OBS Studio approach)
         [m_captureSession commitConfiguration];
         
@@ -393,6 +589,9 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
 
 void VideoCaptureAVFoundation::close()
 {
+    // CRITICAL: Set closing flag FIRST to prevent callbacks from accessing resources
+    m_isClosing = true;
+    
     if (m_isCapturing)
     {
         stopCapture();
@@ -400,42 +599,113 @@ void VideoCaptureAVFoundation::close()
 
 #ifdef __APPLE__
     @autoreleasepool {
-    if (m_captureSession)
-    {
+        // CRITICAL: Order matters for thread safety
+        // 1. Stop session first to prevent new callbacks
+        if (m_captureSession)
+        {
             if ([m_captureSession isRunning])
             {
                 [m_captureSession stopRunning];
             }
-            [m_captureSession release];
-            m_captureSession = nil;
         }
         
-    if (m_videoOutput)
-    {
+        // 2. Remove delegates IMMEDIATELY to prevent callbacks from accessing freed resources
+        // This must be done BEFORE releasing queues or delegates
+        if (m_videoOutput)
+        {
             [m_videoOutput setSampleBufferDelegate:nil queue:nil];
-            [m_videoOutput release];
-            m_videoOutput = nil;
         }
         
+        if (m_audioOutput)
+        {
+            [m_audioOutput setSampleBufferDelegate:nil queue:nil];
+        }
+        
+        // 3. Remove outputs from session (must be done within configuration block)
+        if (m_captureSession)
+        {
+            [m_captureSession beginConfiguration];
+            
+            if (m_videoOutput && [[m_captureSession outputs] containsObject:m_videoOutput])
+            {
+                [m_captureSession removeOutput:m_videoOutput];
+            }
+            
+            if (m_audioOutput && [[m_captureSession outputs] containsObject:m_audioOutput])
+            {
+                [m_captureSession removeOutput:m_audioOutput];
+            }
+            
+            [m_captureSession commitConfiguration];
+        }
+        
+        // 4. Wait for any pending callbacks to complete
+        // Use a small delay to allow callbacks to finish (dispatch_sync can deadlock if called from same queue)
+        // The m_isClosing flag will prevent callbacks from accessing resources
+        usleep(100000); // 100ms - enough for callbacks to complete and check m_isClosing flag
+        
+        // 5. Now safe to release queues (no more callbacks will use them)
+        if (m_audioQueue)
+        {
+            dispatch_release(m_audioQueue);
+            m_audioQueue = nil;
+        }
+        
+        if (m_captureQueue)
+        {
+            dispatch_release(m_captureQueue);
+            m_captureQueue = nil;
+        }
+        
+        // 6. Release delegates (no longer needed)
         if (m_delegate)
         {
             [m_delegate release];
             m_delegate = nil;
         }
         
-    if (m_captureQueue)
-    {
-            dispatch_release(m_captureQueue);
-            m_captureQueue = nil;
-    }
+        if (m_audioDelegate)
+        {
+            [m_audioDelegate release];
+            m_audioDelegate = nil;
+        }
+        
+        // 7. Release outputs
+        if (m_videoOutput)
+        {
+            [m_videoOutput release];
+            m_videoOutput = nil;
+        }
+        
+        if (m_audioOutput)
+        {
+            [m_audioOutput release];
+            m_audioOutput = nil;
+        }
+        
+        // 8. Release session
+        if (m_captureSession)
+        {
+            [m_captureSession release];
+            m_captureSession = nil;
+        }
         
         m_captureDevice = nil;
         
-        std::lock_guard<std::mutex> lock(m_bufferMutex);
+        // 9. Clear buffers (safe now, no callbacks can access them)
+        {
+            std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+            m_audioBuffer.clear();
+        }
+        m_hasAudio = false;
+        
+        {
+            std::lock_guard<std::mutex> lock(m_bufferMutex);
     if (m_latestPixelBuffer)
     {
         CVPixelBufferRelease(m_latestPixelBuffer);
         m_latestPixelBuffer = nullptr;
+            }
         }
         
         if (m_frameBuffer)
@@ -448,6 +718,7 @@ void VideoCaptureAVFoundation::close()
 #endif
 
     m_isOpen = false;
+    m_isClosing = false; // Reset flag after cleanup is complete
     m_dummyFrameBuffer.clear();
     LOG_INFO("Dispositivo fechado");
 }
@@ -2315,4 +2586,344 @@ bool VideoCaptureAVFoundation::applyFormatAndFramerate(AVCaptureDeviceFormat* fo
     return false;
 #endif
 }
+
+#ifdef __APPLE__
+void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffer)
+{
+    // CRITICAL: Check if device is closing - if so, ignore this callback
+    // This prevents accessing freed resources during device change
+    if (m_isClosing || !sampleBuffer || !m_hasAudio)
+    {
+        return;
+    }
+    
+    // Get audio format from sample buffer
+    CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
+    if (!formatDescription)
+    {
+        return;
+    }
+    
+    // Get audio stream basic description
+    const AudioStreamBasicDescription* asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription);
+    if (!asbd)
+    {
+        return;
+    }
+    
+    // Update audio format info (first time only)
+    if (m_audioSampleRate == 44100 && m_audioChannels == 2) // Default values
+    {
+        m_audioSampleRate = static_cast<uint32_t>(asbd->mSampleRate);
+        m_audioChannels = static_cast<uint32_t>(asbd->mChannelsPerFrame);
+        LOG_INFO("Audio format detected: " + std::to_string(m_audioSampleRate) + "Hz, " + 
+                 std::to_string(m_audioChannels) + " channels, format: 0x" + 
+                 std::to_string(asbd->mFormatID) + ", flags: 0x" + std::to_string(asbd->mFormatFlags));
+    }
+    
+    // Get CMBlockBuffer from sample buffer
+    CMBlockBufferRef blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
+    if (!blockBuffer)
+    {
+        return;
+    }
+    
+    // Get data length
+    size_t dataLength = CMBlockBufferGetDataLength(blockBuffer);
+    if (dataLength == 0)
+    {
+        return;
+    }
+    
+    // Get number of frames in the sample buffer
+    CMItemCount numSamples = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (numSamples == 0)
+    {
+        return;
+    }
+    
+    // Calculate number of audio samples (frames * channels)
+    size_t numAudioSamples = numSamples * m_audioChannels;
+    
+    // Allocate temporary buffer for audio data
+    std::vector<int16_t> tempBuffer(numAudioSamples);
+    
+    // Check audio format and convert accordingly
+    if (asbd->mFormatID == kAudioFormatLinearPCM)
+    {
+        // Check if it's already int16_t
+        if (asbd->mBitsPerChannel == 16 && 
+            (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger))
+        {
+            // Direct copy if format matches
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, dataLength, tempBuffer.data());
+            if (status != noErr)
+            {
+                return;
+            }
+        }
+        else if (asbd->mBitsPerChannel == 24)
+        {
+            // Convert from 24-bit signed integer to int16_t
+            // 24-bit audio is typically stored as 3 bytes per sample
+            size_t bytesPerSample = 3;
+            size_t totalBytes = numAudioSamples * bytesPerSample;
+            
+            // Allocate buffer for raw 24-bit data
+            std::vector<uint8_t> raw24Buffer(totalBytes);
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, totalBytes, raw24Buffer.data());
+            if (status != noErr)
+            {
+                LOG_WARN("Failed to copy 24-bit audio data: " + std::to_string(status));
+                return;
+            }
+            
+            // Convert 24-bit samples to 16-bit
+            // 24-bit samples are stored as little-endian signed integers
+            for (size_t i = 0; i < numAudioSamples; ++i)
+            {
+                size_t byteOffset = i * bytesPerSample;
+                // Read 24-bit signed integer (little-endian)
+                int32_t sample24 = 0;
+                sample24 |= static_cast<int32_t>(raw24Buffer[byteOffset + 0]) << 0;
+                sample24 |= static_cast<int32_t>(raw24Buffer[byteOffset + 1]) << 8;
+                sample24 |= static_cast<int32_t>(raw24Buffer[byteOffset + 2]) << 16;
+                
+                // Sign extend from 24-bit to 32-bit
+                if (sample24 & 0x800000)
+                {
+                    sample24 |= 0xFF000000; // Sign extend
+                }
+                
+                // Scale down to 16-bit (divide by 256)
+                tempBuffer[i] = static_cast<int16_t>(sample24 >> 8);
+            }
+        }
+        else if (asbd->mBitsPerChannel == 32 && 
+                 (asbd->mFormatFlags & kAudioFormatFlagIsFloat))
+        {
+            // Convert from float32 to int16_t
+            size_t floatBufferSize = numAudioSamples * sizeof(float);
+            if (dataLength < floatBufferSize)
+            {
+                LOG_WARN("Audio data length mismatch: expected " + std::to_string(floatBufferSize) + 
+                         ", got " + std::to_string(dataLength));
+                return;
+            }
+            
+            std::vector<float> floatBuffer(numAudioSamples);
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, floatBufferSize, floatBuffer.data());
+            if (status != noErr)
+            {
+                LOG_WARN("Failed to copy float32 audio data: " + std::to_string(status));
+                return;
+            }
+            
+            // Convert float to int16_t
+            for (size_t i = 0; i < numAudioSamples; ++i)
+            {
+                float sample = floatBuffer[i];
+                // Clamp to [-1.0, 1.0] range
+                sample = std::max(-1.0f, std::min(1.0f, sample));
+                tempBuffer[i] = static_cast<int16_t>(sample * 32767.0f);
+            }
+        }
+        else if (asbd->mBitsPerChannel == 32 && 
+                 (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger))
+        {
+            // Convert from int32_t to int16_t
+            size_t int32BufferSize = numAudioSamples * sizeof(int32_t);
+            if (dataLength < int32BufferSize)
+            {
+                LOG_WARN("Audio data length mismatch: expected " + std::to_string(int32BufferSize) + 
+                         ", got " + std::to_string(dataLength));
+                return;
+            }
+            
+            std::vector<int32_t> int32Buffer(numAudioSamples);
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, int32BufferSize, int32Buffer.data());
+            if (status != noErr)
+            {
+                LOG_WARN("Failed to copy int32 audio data: " + std::to_string(status));
+                return;
+            }
+            
+            // Convert int32_t to int16_t (scale down)
+            for (size_t i = 0; i < numAudioSamples; ++i)
+            {
+                tempBuffer[i] = static_cast<int16_t>(int32Buffer[i] >> 16);
+            }
+        }
+        else
+        {
+            // Unsupported format - log and skip
+            LOG_WARN("Unsupported audio format: bits=" + std::to_string(asbd->mBitsPerChannel) + 
+                     ", flags=0x" + std::to_string(asbd->mFormatFlags) + 
+                     ", formatID=0x" + std::to_string(asbd->mFormatID));
+            return; // Don't try to copy unsupported formats
+        }
+    }
+    else
+    {
+        // Non-PCM format - log and skip
+        LOG_WARN("Non-PCM audio format: 0x" + std::to_string(asbd->mFormatID) + 
+                 ", cannot convert to int16_t");
+        return; // Don't try to copy non-PCM formats
+    }
+    
+    // Add audio data to buffer (thread-safe)
+    {
+        std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+        // Double-check after acquiring lock (device might have started closing)
+        if (m_isClosing)
+        {
+            return;
+        }
+        m_audioBuffer.insert(m_audioBuffer.end(), tempBuffer.begin(), tempBuffer.end());
+        
+        // Limit buffer size to prevent excessive memory usage (keep last 1 second of audio)
+        size_t maxSamples = m_audioSampleRate * m_audioChannels;
+        if (m_audioBuffer.size() > maxSamples)
+        {
+            m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + (m_audioBuffer.size() - maxSamples));
+        }
+        
+        // Debug: log occasionally to verify audio is being captured
+        static size_t totalSamplesCaptured = 0;
+        totalSamplesCaptured += numAudioSamples;
+        if (totalSamplesCaptured % (m_audioSampleRate * m_audioChannels) < numAudioSamples) // Log once per second
+        {
+            LOG_INFO("Audio captured: " + std::to_string(m_audioBuffer.size()) + " samples in buffer, " +
+                     std::to_string(totalSamplesCaptured) + " total samples captured");
+        }
+    }
+}
+
+bool VideoCaptureAVFoundation::hasAudio() const
+{
+#ifdef __APPLE__
+    return m_hasAudio;
+#else
+    return false;
+#endif
+}
+
+size_t VideoCaptureAVFoundation::getAudioSamples(int16_t* buffer, size_t maxSamples)
+{
+#ifdef __APPLE__
+    // CRITICAL: Check if device is closing or closed before accessing audio buffer
+    // This prevents crash if called during device change
+    if (!buffer || maxSamples == 0 || !m_hasAudio || m_isClosing || !m_isOpen)
+    {
+        return 0;
+    }
+    
+    std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+    
+    // Double-check after acquiring lock (device might have started closing)
+    if (m_isClosing || m_audioBuffer.empty())
+    {
+        return 0;
+    }
+    
+    size_t samplesToCopy = std::min(maxSamples, m_audioBuffer.size());
+    std::copy(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesToCopy, buffer);
+    m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesToCopy);
+    
+    return samplesToCopy;
+#else
+    (void)buffer;
+    (void)maxSamples;
+    return 0;
+#endif
+}
+
+uint32_t VideoCaptureAVFoundation::getAudioSampleRate() const
+{
+#ifdef __APPLE__
+    return m_audioSampleRate;
+#else
+    return 0;
+#endif
+}
+
+uint32_t VideoCaptureAVFoundation::getAudioChannels() const
+{
+#ifdef __APPLE__
+    return m_audioChannels;
+#else
+    return 0;
+#endif
+}
+
+std::vector<DeviceInfo> VideoCaptureAVFoundation::listAudioDevices()
+{
+    std::vector<DeviceInfo> devices;
+
+#ifdef __APPLE__
+    @autoreleasepool {
+        // Get all audio devices (using modern API)
+        AVCaptureDeviceDiscoverySession* audioDiscoverySession = [AVCaptureDeviceDiscoverySession 
+            discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInMicrophone, AVCaptureDeviceTypeExternalUnknown]
+            mediaType:AVMediaTypeAudio
+            position:AVCaptureDevicePositionUnspecified];
+        NSArray* audioDevices = audioDiscoverySession.devices;
+        
+        LOG_INFO("Encontrados " + std::to_string([audioDevices count]) + " dispositivos de áudio AVFoundation");
+        
+        for (AVCaptureDevice* device in audioDevices)
+        {
+            DeviceInfo info;
+            NSString* uniqueID = [device uniqueID];
+            NSString* localizedName = [device localizedName];
+            
+            info.id = std::string([uniqueID UTF8String]);
+            info.name = std::string([localizedName UTF8String]);
+            info.available = [device isConnected];
+            info.driver = "AVFoundation";
+            devices.push_back(info);
+            
+            LOG_INFO("Dispositivo de áudio encontrado: " + info.name + " (ID: " + info.id + ", Connected: " + (info.available ? "sim" : "não") + ")");
+        }
+        
+        // Se não encontrou dispositivos, pode ser problema de permissões
+        if ([audioDevices count] == 0)
+        {
+            LOG_WARN("Nenhum dispositivo de áudio encontrado. Verifique as permissões do microfone nas Preferências do Sistema.");
+        }
+    }
+#endif
+
+    return devices;
+}
+
+bool VideoCaptureAVFoundation::setAudioDevice(const std::string &audioDeviceId)
+{
+#ifdef __APPLE__
+    m_selectedAudioDeviceId = audioDeviceId;
+    
+    // If device is already open, we need to reopen it to apply the new audio device
+    // This will be handled by the caller (Application) if needed
+    if (m_isOpen)
+    {
+        LOG_INFO("Audio device changed to: " + (audioDeviceId.empty() ? "auto-detect" : audioDeviceId));
+        LOG_INFO("Device will be reopened to apply new audio device selection");
+    }
+    
+    return true;
+#else
+    (void)audioDeviceId;
+    return false;
+#endif
+}
+
+std::string VideoCaptureAVFoundation::getCurrentAudioDevice() const
+{
+#ifdef __APPLE__
+    return m_selectedAudioDeviceId;
+#else
+    return "";
+#endif
+}
+#endif
 #endif

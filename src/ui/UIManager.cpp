@@ -11,7 +11,8 @@
 #include "../capture/IVideoCapture.h"
 #include "../shader/ShaderEngine.h"
 #ifdef __APPLE__
-// Forward declaration - implementation in separate .mm file or conditional compilation
+// Forward declaration - VideoCaptureAVFoundation is Objective-C++ and cannot be included in C++ file
+// Use virtual methods from IVideoCapture interface instead
 class VideoCaptureAVFoundation;
 #endif
 #include "../renderer/glad_loader.h"
@@ -1761,6 +1762,47 @@ void UIManager::refreshAVFoundationFormats(const std::string &deviceId)
     }
 }
 
+void UIManager::refreshAVFoundationAudioDevices()
+{
+    m_avfoundationAudioDevices.clear();
+    
+    if (!m_capture)
+    {
+        return;
+    }
+    
+    // Use virtual method from IVideoCapture interface
+    m_avfoundationAudioDevices = m_capture->listAudioDevices();
+    LOG_INFO("Dispositivos de áudio atualizados: " + std::to_string(m_avfoundationAudioDevices.size()) + " dispositivo(s) encontrado(s)");
+}
+
+void UIManager::setAVFoundationAudioDevice(const std::string &audioDeviceId)
+{
+    m_avfoundationAudioDeviceId = audioDeviceId;
+    
+    if (!m_capture)
+    {
+        return;
+    }
+    
+    // Use virtual method from IVideoCapture interface
+    m_capture->setAudioDevice(audioDeviceId);
+    
+    // CRITICAL: Only trigger device change if device is open AND we're not already in a device change
+    // This prevents infinite loops when called during initialization or from within device change callback
+    // The audio device will be applied when the device is opened/reopened
+    if (m_capture->isOpen())
+    {
+        // Check if we're already in a device change to avoid recursion
+        // We'll set a flag to indicate audio device needs to be reapplied after device opens
+        LOG_INFO("Audio device changed to: " + audioDeviceId);
+        LOG_INFO("Audio device will be applied when device is next opened/reopened.");
+        // DON'T call triggerDeviceChange here - it will cause a deadlock/loop
+        // The audio device is already set via setAudioDevice() above
+        // It will be used when the device is opened next time
+    }
+}
+
 std::vector<AVFoundationFormatInfo> UIManager::getAVFoundationFormats(const std::string &deviceId)
 {
     // Refresh formats if empty or device changed
@@ -2593,6 +2635,11 @@ void UIManager::loadConfig()
                 m_currentFormatId = avf["formatId"].get<std::string>();
                 LOG_INFO("Loaded AVFoundation format from config: " + m_currentFormatId);
             }
+            if (avf.contains("audioDeviceId") && !avf["audioDeviceId"].is_null())
+            {
+                m_avfoundationAudioDeviceId = avf["audioDeviceId"].get<std::string>();
+                LOG_INFO("Loaded AVFoundation audio device from config: " + m_avfoundationAudioDeviceId);
+            }
         }
 
         // Carregar configurações de áudio
@@ -2724,10 +2771,11 @@ void UIManager::saveConfig()
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
 
-        // Salvar dispositivo AVFoundation e formato
+        // Salvar dispositivo AVFoundation, formato e dispositivo de áudio
         config["avfoundation"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice},
-            {"formatId", m_currentFormatId.empty() ? "" : m_currentFormatId}};
+            {"formatId", m_currentFormatId.empty() ? "" : m_currentFormatId},
+            {"audioDeviceId", m_avfoundationAudioDeviceId.empty() ? "" : m_avfoundationAudioDeviceId}};
 
         // Salvar configurações de áudio
         config["audio"] = {

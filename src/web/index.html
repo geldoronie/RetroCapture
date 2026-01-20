@@ -168,11 +168,11 @@
                                 <div class="tab-pane fade show active" id="source" role="tabpanel">
                                     <div class="row g-3">
                                         <div class="col-12">
-                                            <h6>Source Type</h6>
+                                            <label class="form-label">Source Type</label>
                                             <select class="form-select" id="sourceType">
                                                 <option value="0">Carregando...</option>
                                             </select>
-                                            <small class="form-text text-muted mt-1">A mudança é aplicada automaticamente ao selecionar</small>
+                                            <label class="form-label text-muted" style="font-size: 0.875rem; font-weight: 400;">A mudança é aplicada automaticamente ao selecionar</label>
                                         </div>
                                         
                                         <!-- V4L2 Controls - Aparece apenas quando V4L2 está selecionado -->
@@ -180,7 +180,7 @@
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">V4L2 Device</h6>
+                                                    <label class="form-label mb-0">V4L2 Device</label>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshV4L2Devices()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                     </button>
@@ -188,12 +188,12 @@
                                                 <select class="form-select" id="v4l2Device">
                                                     <option value="">Carregando...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo V4L2 ou "None (No device)" para desabilitar</small>
+                                                <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Selecione um dispositivo V4L2 ou "None (No device)" para desabilitar</label>
                                             </div>
                                             
                                             <div class="col-12" id="v4l2CaptureInfo" style="display: none;">
                                                 <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
+                                                <label class="form-label">Capture Resolution & Framerate</label>
                                                 
                                                 <!-- Resolução Manual -->
                                                 <div class="row g-3 mb-3">
@@ -250,7 +250,7 @@
                                             
                                             <div class="col-12">
                                                 <hr>
-                                                <h6>V4L2 Controls</h6>
+                                                    <label class="form-label">V4L2 Controls</label>
                                                 <div id="v4l2ControlsInSource" class="row g-3">
                                                     <div class="col-12 text-muted">Nenhum dispositivo conectado. Selecione um dispositivo acima para ver os controles.</div>
                                                 </div>
@@ -262,7 +262,7 @@
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">DirectShow Device</h6>
+                                                    <label class="form-label mb-0">DirectShow Device</label>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshDSDevices()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                     </button>
@@ -270,12 +270,12 @@
                                                 <select class="form-select" id="dsDevice">
                                                     <option value="">Carregando...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</small>
+                                                <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</label>
                                             </div>
                                             
                                             <div class="col-12" id="dsCaptureInfo" style="display: none;">
                                                 <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
+                                                <label class="form-label">Capture Resolution & Framerate</label>
                                                 
                                                 <!-- Resolução Manual -->
                                                 <div class="row g-3 mb-3">
@@ -336,7 +336,7 @@
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">AVFoundation Device</h6>
+                                                    <label class="form-label mb-0">AVFoundation Device</label>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationDevices()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                     </button>
@@ -344,23 +344,24 @@
                                                 <select class="form-select" id="avfoundationDevice" onchange="updateAVFoundationDeviceSource()">
                                                     <option value="">Carregando...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo AVFoundation ou "None (No device)" para desabilitar</small>
+                                                <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Selecione um dispositivo AVFoundation ou "None (No device)" para desabilitar</label>
                                             </div>
                                             
                                             <div class="col-12" id="avfoundationCaptureInfo" style="display: none;">
                                                 <hr>
-                                                <h6>Format Selection</h6>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <small class="form-text text-muted">Selecione um formato compatível com o dispositivo</small>
+                                                    <label class="form-label mb-0">Format Selection</label>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationFormats()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                     </button>
                                                 </div>
+                                                <label class="form-label text-muted mb-2" style="font-size: 0.875rem; font-weight: 400;">Selecione um formato compatível com o dispositivo</label>
                                                 <select class="form-select" id="avfoundationFormat" onchange="updateAVFoundationFormatSource()">
                                                     <option value="">Nenhum formato disponível</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">O formato selecionado define a resolução e FPS da captura</small>
+                                                <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">O formato selecionado define a resolução e FPS da captura</label>
                                             </div>
+                                            
                                         </div>
                                         
                                         <!-- None Source Message -->
@@ -393,7 +394,7 @@
                                         </div>
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Parâmetros do Shader</h6>
+                                            <label class="form-label">Parâmetros do Shader</label>
                                             <div id="shaderParameters" class="row g-3">
                                                 <div class="col-12 text-muted">Nenhum shader ativo ou sem parâmetros</div>
                                             </div>
@@ -432,8 +433,8 @@
                                         </div>
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Resolução de Saída</h6>
-                                            <p class="text-muted small">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</p>
+                                            <label class="form-label">Resolução de Saída</label>
+                                            <label class="form-label text-muted" style="font-size: 0.875rem; font-weight: 400;">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</label>
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
@@ -459,7 +460,7 @@
                                         <div class="col-md-6">
                                             <label class="form-label">Índice do Monitor</label>
                                             <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">
-                                            <small class="form-text text-muted">-1 = Monitor primário, 0+ = Monitor específico</small>
+                                            <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">-1 = Monitor primário, 0+ = Monitor específico</label>
                                         </div>
                                     </div>
                                 </div>
@@ -528,7 +529,7 @@
                                                     <i class="bi bi-circle-fill me-2" id="recordingStatusIcon"></i>
                                                     <div class="flex-grow-1">
                                                         <strong id="recordingStatusText">Stopped</strong>
-                                                        <div id="recordingStatusInfo" class="small text-muted"></div>
+                                                        <div id="recordingStatusInfo" class="form-label text-muted" style="font-size: 0.875rem; font-weight: 400; color: var(--text-secondary);"></div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -550,7 +551,7 @@
                                         <!-- Quick Resolution Presets -->
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Quick Resolution Presets</h6>
+                                            <label class="form-label">Quick Resolution Presets</label>
                                             
                                             <div class="mb-3">
                                                 <label class="form-label">4:3 Resolutions:</label>
@@ -617,7 +618,7 @@
                                         <div class="col-md-12">
                                             <label class="form-label">Filename Template</label>
                                             <input type="text" class="form-control" id="recordingFilenameTemplate" placeholder="recording_%Y%m%d_%H%M%S">
-                                            <small class="form-text text-muted">strftime format (e.g., recording_%Y%m%d_%H%M%S)</small>
+                                            <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">strftime format (e.g., recording_%Y%m%d_%H%M%S)</label>
                                         </div>
                                         <div class="col-md-12">
                                             <div class="form-check">
@@ -648,19 +649,19 @@
                                                     <i class="bi bi-info-circle me-2"></i>
                                                     <div class="flex-grow-1">
                                                         <strong>Audio Status</strong>
-                                                        <div id="audioStatusInfo" class="small">Loading...</div>
+                                                        <div id="audioStatusInfo" class="form-label text-muted" style="font-size: 0.875rem; font-weight: 400; color: var(--text-secondary);">Loading...</div>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <!-- Input Source Selection -->
-                                        <div class="col-12">
+                                        <!-- Linux Audio Input Source Selection -->
+                                        <div class="col-12" id="linuxAudioInputContainer">
                                             <div class="card">
                                                 <div class="card-header">
-                                                    <h6 class="mb-0">
-                                                        <i class="bi bi-mic me-2"></i>Audio Input Source
-                                                    </h6>
+                                                    <label class="form-label mb-0">
+                                                        <i class="bi bi-mic me-2"></i>Audio Input Source (Linux)
+                                                    </label>
                                                 </div>
                                                 <div class="card-body">
                                                     <div class="mb-3">
@@ -673,7 +674,7 @@
                                                                 <i class="bi bi-arrow-clockwise"></i>
                                                             </button>
                                                         </div>
-                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
+                                                        <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Select the audio source to capture for streaming and recording</label>
                                                     </div>
                                                     <div class="d-flex gap-2">
                                                         <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
@@ -684,8 +685,32 @@
                                                         </button>
                                                     </div>
                                                     <div class="mt-2">
-                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
+                                                        <label class="form-label text-muted" id="currentInputSource" style="font-size: 0.875rem; font-weight: 400;">No source connected</label>
                                                     </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- AVFoundation Audio Device Selection (macOS) -->
+                                        <div class="col-12" id="avfoundationAudioDeviceContainer" style="display: none;">
+                                            <hr>
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    <div class="d-flex justify-content-between align-items-center">
+                                                        <label class="form-label mb-0">
+                                                            <i class="bi bi-headphones me-2"></i>Audio Device for Monitoring (AVFoundation)
+                                                        </label>
+                                                        <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationAudioDevices()">
+                                                            <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="card-body">
+                                                    <label class="form-label text-muted mb-2" style="font-size: 0.875rem; font-weight: 400;">Selecione um dispositivo de áudio para monitoramento</label>
+                                                    <select class="form-select" id="avfoundationAudioDevice" onchange="updateAVFoundationAudioDeviceSource()">
+                                                        <option value="">Carregando...</option>
+                                                    </select>
+                                                    <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Selecione um dispositivo de áudio para monitorar. Se "Auto-detect" estiver selecionado, o sistema tentará encontrar um dispositivo de áudio correspondente ao dispositivo de vídeo.</label>
                                                 </div>
                                             </div>
                                         </div>
@@ -698,7 +723,7 @@
                                     <div class="row g-3">
                                         <div class="col-12">
                                             <div class="d-flex justify-content-between align-items-center mb-3">
-                                                <h6 class="mb-0">Capture Presets</h6>
+                                                <label class="form-label mb-0">Capture Presets</label>
                                                 <div>
                                                     <button class="btn btn-sm btn-secondary me-2" onclick="refreshPresets()">
                                                         <i class="bi bi-arrow-clockwise me-1"></i>Refresh

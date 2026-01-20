@@ -657,6 +657,8 @@ void UIConfigurationSource::renderAVFoundationControls()
     renderAVFoundationDeviceSelection();
     ImGui::Separator();
     renderAVFoundationFormatSelection();
+    ImGui::Separator();
+    renderAVFoundationAudioDeviceSelection();
     
     // Note: AVFoundation on macOS does not expose hardware controls (brightness, contrast, etc.)
     // These controls are only available on iOS/iPadOS, not on macOS
@@ -855,5 +857,97 @@ void UIConfigurationSource::renderAVFoundationFormatSelection()
         ImGui::Text("  Pixel Format: %s", formats[selectedIndex].pixelFormat.c_str());
         ImGui::Text("  Color Space: %s", formats[selectedIndex].colorSpace.c_str());
     }
+}
+
+void UIConfigurationSource::renderAVFoundationAudioDeviceSelection()
+{
+    // Audio device selection
+    ImGui::Text("Audio Device (for monitoring):");
+    ImGui::Separator();
+    
+    // Obter o ponteiro do capture do UIManager (sempre atualizar)
+    m_capture = m_uiManager->getCapture();
+    
+    // Usar cache de dispositivos de áudio do UIManager
+    auto currentAudioDevices = m_uiManager->getAVFoundationAudioDevices();
+    
+    // Apenas atualizar a lista se estiver vazia E m_capture estiver disponível
+    if (currentAudioDevices.empty() && m_capture)
+    {
+        m_uiManager->refreshAVFoundationAudioDevices();
+        currentAudioDevices = m_uiManager->getAVFoundationAudioDevices();
+    }
+    
+    // Combo box for audio device selection
+    std::string currentAudioDevice = m_uiManager->getAVFoundationAudioDevice();
+    std::string displayText = currentAudioDevice.empty() ? "Auto-detect (None)" : currentAudioDevice;
+    
+    // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
+    if (currentAudioDevices.empty())
+    {
+        ImGui::TextWrapped("Nenhum dispositivo de áudio AVFoundation encontrado. Clique em Refresh para atualizar.");
+        ImGui::Spacing();
+    }
+    int selectedIndex = -1;
+    
+    // Verificar se "Auto-detect" está selecionado
+    if (currentAudioDevice.empty())
+    {
+        selectedIndex = 0;
+    }
+    else
+    {
+        // Procurar dispositivo na lista (índice +1 porque "Auto-detect" é 0)
+        for (size_t i = 0; i < currentAudioDevices.size(); ++i)
+        {
+            if (currentAudioDevices[i].id == currentAudioDevice || currentAudioDevices[i].name == currentAudioDevice)
+            {
+                selectedIndex = static_cast<int>(i) + 1; // +1 porque "Auto-detect" é 0
+                displayText = currentAudioDevices[i].name + " (" + currentAudioDevices[i].id + ")";
+                break;
+            }
+        }
+    }
+    
+    if (ImGui::BeginCombo("##avfaudiodevice", displayText.c_str()))
+    {
+        // Opção "Auto-detect" sempre como primeira opção
+        bool isAutoSelected = currentAudioDevice.empty();
+        if (ImGui::Selectable("Auto-detect (None)", isAutoSelected))
+        {
+            m_uiManager->setAVFoundationAudioDevice("");
+            m_uiManager->saveConfig();
+        }
+        if (isAutoSelected)
+        {
+            ImGui::SetItemDefaultFocus();
+        }
+        
+        // Listar dispositivos de áudio disponíveis
+        for (size_t i = 0; i < currentAudioDevices.size(); ++i)
+        {
+            bool isSelected = (selectedIndex == static_cast<int>(i) + 1);
+            std::string deviceLabel = currentAudioDevices[i].name + " (" + currentAudioDevices[i].id + ")";
+            if (ImGui::Selectable(deviceLabel.c_str(), isSelected))
+            {
+                // Usar o ID do dispositivo (uniqueID do AVFoundation)
+                m_uiManager->setAVFoundationAudioDevice(currentAudioDevices[i].id);
+                m_uiManager->saveConfig();
+            }
+            if (isSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfaudiodevices"))
+    {
+        m_uiManager->refreshAVFoundationAudioDevices();
+    }
+    
+    ImGui::TextWrapped("Select an audio device to monitor. If 'Auto-detect' is selected, the system will try to find a matching audio device for the selected video device.");
 }
 #endif

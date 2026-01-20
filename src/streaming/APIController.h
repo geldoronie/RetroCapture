@@ -119,6 +119,8 @@ private:
     bool handleRefreshDSDevices(int clientFd);
     bool handleGETAVFoundationDevices(int clientFd);
     bool handleRefreshAVFoundationDevices(int clientFd);
+    bool handleGETAVFoundationAudioDevices(int clientFd);
+    bool handleRefreshAVFoundationAudioDevices(int clientFd);
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETAudioInputSources(int clientFd);
@@ -147,6 +149,7 @@ private:
     bool handleGETAVFoundationFormats(int clientFd);
     bool handleSetAVFoundationDevice(int clientFd, const std::string &body);
     bool handleSetAVFoundationFormat(int clientFd, const std::string &body);
+    bool handleSetAVFoundationAudioDevice(int clientFd, const std::string &body);
     bool handleCreatePreset(int clientFd, const std::string &body);
     bool handleApplyPreset(int clientFd, const std::string &body);
     bool handleDeletePreset(int clientFd, const std::string &presetName);

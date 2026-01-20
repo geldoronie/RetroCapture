@@ -342,6 +342,12 @@ public:
     void setAVFoundationFormat(int formatIndex, const std::string &deviceId = "");
     void setAVFoundationFormatById(const std::string &formatId, const std::string &deviceId = "");
     void refreshAVFoundationFormats(const std::string &deviceId);
+    
+    // AVFoundation audio device management
+    const std::vector<DeviceInfo> &getAVFoundationAudioDevices() const { return m_avfoundationAudioDevices; }
+    void refreshAVFoundationAudioDevices();
+    void setAVFoundationAudioDevice(const std::string &audioDeviceId);
+    std::string getAVFoundationAudioDevice() const { return m_avfoundationAudioDeviceId; }
     std::string getCurrentFormatId() const { return m_currentFormatId; }
 
     // Streaming callbacks
@@ -674,6 +680,8 @@ private:
     std::vector<DeviceInfo> m_dsDevices;
     std::vector<DeviceInfo> m_avfoundationDevices; // macOS AVFoundation devices
     std::vector<AVFoundationFormatInfo> m_avfoundationFormats; // Available formats for current device
+    std::vector<DeviceInfo> m_avfoundationAudioDevices; // macOS AVFoundation audio devices
+    std::string m_avfoundationAudioDeviceId; // Selected audio device ID
     std::string m_currentDevice;
     std::string m_currentFormatId; // Currently selected format ID
     std::function<void(const std::string &)> m_onDeviceChanged;

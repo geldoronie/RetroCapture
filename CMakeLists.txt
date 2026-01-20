@@ -440,6 +440,7 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio\\.(mm|h)$")
 
     # Excluir WindowManager baseado na opção BUILD_WITH_SDL2
     if(BUILD_WITH_SDL2)
@@ -456,6 +457,7 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio\\.(mm|h)$")
 
     # Excluir arquivos Linux genéricos que não têm versão Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux

@@ -429,6 +429,14 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETAVFoundationFormats(clientFd);
     }
+    else if (path == "/api/v1/avfoundation/audio-devices")
+    {
+        return handleGETAVFoundationAudioDevices(clientFd);
+    }
+    else if (path == "/api/v1/avfoundation/audio-devices/refresh")
+    {
+        return handleRefreshAVFoundationAudioDevices(clientFd);
+    }
     else if (path == "/api/v1/status")
     {
         return handleGETStatus(clientFd);
@@ -524,6 +532,10 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     else if (path == "/api/v1/avfoundation/format")
     {
         return handleSetAVFoundationFormat(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/audio-device")
+    {
+        return handleSetAVFoundationAudioDevice(clientFd, body);
     }
     else if (path == "/api/v1/presets")
     {
@@ -1670,6 +1682,84 @@ bool APIController::handleSetAVFoundationFormat(int clientFd, const std::string 
     {
         LOG_ERROR("Unknown error in handleSetAVFoundationFormat");
         sendErrorResponse(clientFd, 500, "Internal server error");
+        return true;
+    }
+}
+
+bool APIController::handleGETAVFoundationAudioDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    const auto &devices = m_uiManager->getAVFoundationAudioDevices();
+    std::string currentAudioDeviceId = m_uiManager->getAVFoundationAudioDevice();
+    
+    std::ostringstream json;
+    json << "{\"devices\": [";
+    for (size_t i = 0; i < devices.size(); ++i)
+    {
+        if (i > 0)
+            json << ", ";
+        const auto &device = devices[i];
+        json << "{"
+             << "\"id\": " << jsonString(device.id) << ", "
+             << "\"name\": " << jsonString(device.name) << ", "
+             << "\"available\": " << (device.available ? "true" : "false")
+             << "}";
+    }
+    json << "], \"currentAudioDeviceId\": " << jsonString(currentAudioDeviceId) << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleRefreshAVFoundationAudioDevices(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    m_uiManager->refreshAVFoundationAudioDevices();
+    return handleGETAVFoundationAudioDevices(clientFd);
+}
+
+bool APIController::handleSetAVFoundationAudioDevice(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (json.contains("audioDeviceId"))
+        {
+            std::string audioDeviceId = json["audioDeviceId"].get<std::string>();
+            m_uiManager->setAVFoundationAudioDevice(audioDeviceId);
+            
+            // Save config to persist the audio device selection
+            m_uiManager->saveConfig();
+            
+            std::ostringstream response;
+            response << "{\"success\": true, \"audioDeviceId\": " << jsonString(audioDeviceId) << "}";
+            sendJSONResponse(clientFd, 200, response.str());
+            return true;
+        }
+        else
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'audioDeviceId' field");
+            return true;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
         return true;
     }
 }

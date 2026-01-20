@@ -1,22 +1,49 @@
 #!/bin/bash
 set -e
 
-# Build type: Release (default) or Debug
-BUILD_TYPE="${1:-Release}"
+# Parse arguments
+CLEAN_BUILD=false
+BUILD_TYPE="Release"
+
+for arg in "$@"; do
+    case $arg in
+        --clean|-c)
+            CLEAN_BUILD=true
+            shift
+            ;;
+        Release|Debug)
+            BUILD_TYPE="$arg"
+            shift
+            ;;
+        *)
+            echo "❌ Argumento inválido: $arg"
+            echo ""
+            echo "Uso: $0 [--clean|-c] [Release|Debug]"
+            echo "  --clean, -c  - Limpa o diretório de build antes de compilar"
+            echo "  Release      - Build otimizado para produção (padrão)"
+            echo "  Debug        - Build com símbolos de debug"
+            exit 1
+            ;;
+    esac
+done
 
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "❌ Build type inválido: $BUILD_TYPE"
     echo ""
-    echo "Uso: $0 [Release|Debug]"
-    echo "  Release - Build otimizado para produção (padrão)"
-    echo "  Debug   - Build com símbolos de debug"
+    echo "Uso: $0 [--clean|-c] [Release|Debug]"
+    echo "  --clean, -c  - Limpa o diretório de build antes de compilar"
+    echo "  Release      - Build otimizado para produção (padrão)"
+    echo "  Debug        - Build com símbolos de debug"
     exit 1
 fi
 
 echo "🍎 RetroCapture - Build para macOS"
 echo "=================================="
 echo "📦 Build type: $BUILD_TYPE"
+if [ "$CLEAN_BUILD" = true ]; then
+    echo "🧹 Build limpa: Sim (diretório será limpo)"
+fi
 echo "🏗️  Arquitetura: $(uname -m)"
 echo "🖥️  Sistema: $(sw_vers -productName) $(sw_vers -productVersion)"
 echo ""
@@ -90,6 +117,16 @@ echo ""
 BUILD_DIR="build-macos-$(uname -m)"
 echo "📁 Diretório de build: $BUILD_DIR"
 echo ""
+
+# Limpar diretório de build se solicitado
+if [ "$CLEAN_BUILD" = true ]; then
+    if [ -d "$BUILD_DIR" ]; then
+        echo "🧹 Limpando diretório de build..."
+        rm -rf "$BUILD_DIR"
+        echo "✅ Diretório limpo"
+        echo ""
+    fi
+fi
 
 # Criar diretório de build
 mkdir -p "$BUILD_DIR"
