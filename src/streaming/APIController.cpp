@@ -1497,8 +1497,9 @@ bool APIController::handleSetV4L2Device(int clientFd, const std::string &body)
         {
             std::string device = json["device"].get<std::string>();
 
-            // setCurrentDevice agora dispara o callback automaticamente
-            m_uiManager->setCurrentDevice(device);
+            // Use triggerDeviceChange instead of setCurrentDevice for thread safety
+            // triggerDeviceChange properly handles the callback and thread synchronization
+            m_uiManager->triggerDeviceChange(device);
 
             std::ostringstream response;
             response << "{\"success\": true, \"device\": " << jsonString(device) << "}";
@@ -1533,8 +1534,9 @@ bool APIController::handleSetDSDevice(int clientFd, const std::string &body)
         {
             std::string device = json["device"].get<std::string>();
 
-            // setCurrentDevice agora dispara o callback automaticamente
-            m_uiManager->setCurrentDevice(device);
+            // Use triggerDeviceChange instead of setCurrentDevice for thread safety
+            // triggerDeviceChange properly handles the callback and thread synchronization
+            m_uiManager->triggerDeviceChange(device);
 
             std::ostringstream response;
             response << "{\"success\": true, \"device\": " << jsonString(device) << "}";
@@ -1605,7 +1607,25 @@ bool APIController::handleSetAVFoundationDevice(int clientFd, const std::string 
         if (json.contains("device"))
         {
             std::string device = json["device"].get<std::string>();
-            m_uiManager->setCurrentDevice(device);
+            // Use triggerDeviceChange instead of setCurrentDevice for thread safety
+            // triggerDeviceChange properly handles the callback and thread synchronization
+            // Wrap in try-catch to handle any exceptions from device change callback
+            try
+            {
+                m_uiManager->triggerDeviceChange(device);
+            }
+            catch (const std::exception &e)
+            {
+                LOG_ERROR("Exception in triggerDeviceChange: " + std::string(e.what()));
+                sendErrorResponse(clientFd, 500, "Failed to change device: " + std::string(e.what()));
+                return true;
+            }
+            catch (...)
+            {
+                LOG_ERROR("Unknown exception in triggerDeviceChange");
+                sendErrorResponse(clientFd, 500, "Failed to change device: unknown error");
+                return true;
+            }
 
             std::ostringstream response;
             response << "{\"success\": true, \"device\": " << jsonString(device) << "}";

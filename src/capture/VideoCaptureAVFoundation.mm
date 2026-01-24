@@ -2563,7 +2563,62 @@ bool VideoCaptureAVFoundation::applyFormatAndFramerate(AVCaptureDeviceFormat* fo
         // Restart session if it was running
         if (wasRunning)
         {
+            // Small delay before restarting to ensure configuration is committed
+            usleep(50000); // 50ms delay
             [m_captureSession startRunning];
+            
+            // CRITICAL: Wait for session to start and verify format was applied
+            usleep(100000); // 100ms delay for session to stabilize
+            
+            // Verify format was actually applied after restart
+            CMVideoDimensions actualDimsAfter = CMVideoFormatDescriptionGetDimensions([m_captureDevice.activeFormat formatDescription]);
+            CMVideoDimensions requestedDims = CMVideoFormatDescriptionGetDimensions([format formatDescription]);
+            
+            if (actualDimsAfter.width != requestedDims.width || actualDimsAfter.height != requestedDims.height)
+            {
+                LOG_WARN("Format changed after restarting session in applyFormatAndFramerate!");
+                LOG_WARN("Requested: " + std::to_string(requestedDims.width) + "x" + std::to_string(requestedDims.height));
+                LOG_WARN("Actual: " + std::to_string(actualDimsAfter.width) + "x" + std::to_string(actualDimsAfter.height));
+                LOG_WARN("Attempting to reapply format...");
+                
+                // Try to reapply format one more time
+                [m_captureSession stopRunning];
+                usleep(50000); // 50ms delay
+                
+                [m_captureSession beginConfiguration];
+                NSError* retryError = nil;
+                if ([m_captureDevice lockForConfiguration:&retryError])
+                {
+                    m_captureDevice.activeFormat = format;
+                    [m_captureDevice unlockForConfiguration];
+                }
+                [m_captureSession commitConfiguration];
+                
+                usleep(50000); // 50ms delay
+                [m_captureSession startRunning];
+                usleep(100000); // 100ms delay
+                
+                // Verify again
+                CMVideoDimensions finalDims = CMVideoFormatDescriptionGetDimensions([m_captureDevice.activeFormat formatDescription]);
+                if (finalDims.width != requestedDims.width || finalDims.height != requestedDims.height)
+                {
+                    LOG_ERROR("Format STILL does not match after retry!");
+                    LOG_ERROR("Requested: " + std::to_string(requestedDims.width) + "x" + std::to_string(requestedDims.height));
+                    LOG_ERROR("Actual: " + std::to_string(finalDims.width) + "x" + std::to_string(finalDims.height));
+                    LOG_ERROR("Device may need to be reopened to apply format change");
+                    // Return false to indicate format was not applied correctly
+                    // This will trigger device reopening if needed
+                    return false;
+                }
+                else
+                {
+                    LOG_INFO("Format successfully applied after retry: " + std::to_string(finalDims.width) + "x" + std::to_string(finalDims.height));
+                }
+            }
+            else
+            {
+                LOG_INFO("Format correctly applied after restart: " + std::to_string(actualDimsAfter.width) + "x" + std::to_string(actualDimsAfter.height));
+            }
         }
         
         // Update internal state

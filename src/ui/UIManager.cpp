@@ -1868,51 +1868,90 @@ void UIManager::setAVFoundationFormatById(const std::string &formatId, const std
     // Refresh formats list before applying format to ensure we have the latest list
     refreshAVFoundationFormats(targetDeviceId);
     
-    if (m_capture->setFormatById(formatId, targetDeviceId))
+    // Find format info before applying to get dimensions
+    auto formats = getAVFoundationFormats(targetDeviceId);
+    AVFoundationFormatInfo targetFormat;
+    bool formatFound = false;
+    for (const auto& format : formats)
+    {
+        if (format.id == formatId)
+        {
+            targetFormat = format;
+            formatFound = true;
+            break;
+        }
+    }
+    
+    if (!formatFound)
+    {
+        LOG_ERROR("Format not found in formats list: " + formatId);
+        return;
+    }
+    
+    // Try to apply format
+    bool formatApplied = m_capture->setFormatById(formatId, targetDeviceId);
+    
+    // If format was not applied correctly and device is open, reopen device to apply format
+    if (!formatApplied && m_capture && m_capture->isOpen() && !m_capture->isDummyMode() && !targetDeviceId.empty())
+    {
+        LOG_WARN("Format was not applied correctly, reopening device to apply format change...");
+        // Reopen device to apply format - this will use the saved formatId when reopening
+        triggerDeviceChange(targetDeviceId);
+        return;
+    }
+    
+    if (formatApplied)
     {
         m_currentFormatId = formatId;
         LOG_INFO("Format set by ID: " + formatId);
         LOG_INFO("Current format ID stored: " + m_currentFormatId);
         
-        // Find format info and update internal state
-        // NOTE: Do NOT trigger callbacks here - setFormatById already handles
-        // format and framerate application internally. Triggering callbacks
-        // would cause duplicate reconfiguration and potential crashes.
-        auto formats = getAVFoundationFormats(targetDeviceId);
-        for (const auto& format : formats)
+        // Update internal state without triggering callbacks
+        // The format has already been applied by setFormatById
+        m_captureWidth = targetFormat.width;
+        m_captureHeight = targetFormat.height;
+        
+        // Calculate target FPS (capped at 60 or use max if less than 30)
+        uint32_t targetFps = static_cast<uint32_t>(targetFormat.maxFps);
+        if (targetFps > 60)
         {
-            if (format.id == formatId)
-            {
-                // Update internal state without triggering callbacks
-                // The format has already been applied by setFormatById
-                m_captureWidth = format.width;
-                m_captureHeight = format.height;
-                
-                // Calculate target FPS (capped at 60 or use max if less than 30)
-                uint32_t targetFps = static_cast<uint32_t>(format.maxFps);
-                if (targetFps > 60)
-                {
-                    targetFps = 60; // Cap at 60 for most use cases
-                }
-                else if (targetFps < 30)
-                {
-                    targetFps = static_cast<uint32_t>(format.maxFps); // Use max if less than 30
-                }
-                
-                m_captureFps = targetFps;
-                
-                // Update UI info directly without triggering reconfiguration callbacks
-                if (m_capture && m_capture->isOpen())
-                {
-                    setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                  m_captureFps, targetDeviceId);
-                }
-                
-                LOG_INFO("Format applied: " + std::to_string(format.width) + "x" + 
-                         std::to_string(format.height) + " @ " + std::to_string(targetFps) + "fps");
-                break;
-            }
+            targetFps = 60; // Cap at 60 for most use cases
         }
+        else if (targetFps < 30)
+        {
+            targetFps = static_cast<uint32_t>(targetFormat.maxFps); // Use max if less than 30
+        }
+        
+        m_captureFps = targetFps;
+        
+        // Verify actual format matches requested format
+        if (m_capture && m_capture->isOpen())
+        {
+            uint32_t actualWidth = m_capture->getWidth();
+            uint32_t actualHeight = m_capture->getHeight();
+            
+            if (actualWidth != targetFormat.width || actualHeight != targetFormat.height)
+            {
+                LOG_WARN("Format mismatch detected after application!");
+                LOG_WARN("Requested: " + std::to_string(targetFormat.width) + "x" + std::to_string(targetFormat.height));
+                LOG_WARN("Actual: " + std::to_string(actualWidth) + "x" + std::to_string(actualHeight));
+                LOG_WARN("Reopening device to apply format change...");
+                
+                // Reopen device to apply format
+                triggerDeviceChange(targetDeviceId);
+                return;
+            }
+            
+            // Update UI info directly without triggering reconfiguration callbacks
+            setCaptureInfo(actualWidth, actualHeight, m_captureFps, targetDeviceId);
+        }
+        
+        LOG_INFO("Format applied: " + std::to_string(targetFormat.width) + "x" + 
+                 std::to_string(targetFormat.height) + " @ " + std::to_string(targetFps) + "fps");
+    }
+    else
+    {
+        LOG_ERROR("Failed to apply format: " + formatId);
     }
 }
 
