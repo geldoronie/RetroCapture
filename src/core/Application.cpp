@@ -1680,6 +1680,31 @@ bool Application::initUI()
             m_recordingManager->setRecordingSettings(settings);
         } });
 
+    // Audio monitoring sample rate callback - reconfigure audio output when sample rate changes
+    m_ui->setOnAudioMonitoringSampleRateChanged([this](uint32_t sampleRate)
+                                                 {
+        LOG_INFO("Audio monitoring sample rate changed to: " + 
+                 (sampleRate > 0 ? std::to_string(sampleRate) + " Hz" : "Auto (from device)"));
+        // Reconfigure audio output if it's open
+        if (m_audioOutput && m_audioOutput->isOpen())
+        {
+            LOG_INFO("Reconfiguring audio output with new sample rate...");
+            m_audioOutput->stop();
+            m_audioOutput->close();
+            if (!initAudioOutput())
+            {
+                LOG_WARN("Failed to reconfigure audio monitoring with new sample rate - continuing without monitoring");
+            }
+        }
+        else if (m_capture && m_capture->hasAudio() && m_capture->isOpen())
+        {
+            // Audio output not open yet, initialize it
+            if (!initAudioOutput())
+            {
+                LOG_WARN("Failed to initialize audio monitoring with new sample rate - continuing without monitoring");
+            }
+        } });
+
     // Web Portal callbacks
     m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
                                        {
@@ -2930,12 +2955,33 @@ bool Application::initAudioOutput()
     // Get audio format from capture device if available, otherwise use defaults
     uint32_t sampleRate = 44100;
     uint32_t channels = 2;
-    if (m_capture && m_capture->hasAudio())
+    
+    // Check if manual sample rate is configured
+    if (m_ui && m_ui->getAudioMonitoringSampleRate() > 0)
+    {
+        sampleRate = m_ui->getAudioMonitoringSampleRate();
+        LOG_INFO("Using manual audio monitoring sample rate: " + std::to_string(sampleRate) + " Hz");
+    }
+    else if (m_capture && m_capture->hasAudio())
     {
         sampleRate = m_capture->getAudioSampleRate();
-        channels = m_capture->getAudioChannels();
+        if (sampleRate == 0)
+        {
+            LOG_WARN("Audio capture sample rate is 0, using default 44100 Hz");
+            sampleRate = 44100;
+        }
         LOG_INFO("Configuring audio output to match capture: " + std::to_string(sampleRate) +
                  "Hz, " + std::to_string(channels) + " channels");
+    }
+    
+    if (m_capture && m_capture->hasAudio())
+    {
+        channels = m_capture->getAudioChannels();
+        if (channels == 0)
+        {
+            LOG_WARN("Audio capture channels is 0, using default 2 channels");
+            channels = 2;
+        }
     }
 
     // Open default audio output device with the correct sample rate and channels
@@ -3088,11 +3134,18 @@ void Application::run()
             // Reconfigure audio output if sample rate or channels changed
             else if (m_audioOutput && m_audioOutput->isOpen() && audioSampleRate > 0)
             {
+                // Get target sample rate (manual if set, otherwise from capture)
+                uint32_t targetSampleRate = audioSampleRate;
+                if (m_ui && m_ui->getAudioMonitoringSampleRate() > 0)
+                {
+                    targetSampleRate = m_ui->getAudioMonitoringSampleRate();
+                }
+                
                 uint32_t outputSampleRate = m_audioOutput->getSampleRate();
                 uint32_t outputChannels = m_audioOutput->getChannels();
-                if (audioSampleRate != outputSampleRate || audioChannels != outputChannels)
+                if (targetSampleRate != outputSampleRate || audioChannels != outputChannels)
                 {
-                    LOG_INFO("Audio format mismatch detected: capture=" + std::to_string(audioSampleRate) + 
+                    LOG_INFO("Audio format mismatch detected: target=" + std::to_string(targetSampleRate) + 
                              "Hz/" + std::to_string(audioChannels) + "ch, output=" + 
                              std::to_string(outputSampleRate) + "Hz/" + std::to_string(outputChannels) + 
                              "ch. Reconfiguring audio output...");

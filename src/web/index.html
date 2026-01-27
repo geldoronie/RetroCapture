@@ -691,6 +691,36 @@
                                             </div>
                                         </div>
 
+                                        <!-- Audio Monitoring Sample Rate Configuration -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <label class="form-label">
+                                                <i class="bi bi-sliders me-2"></i>Audio Monitoring Configuration
+                                            </label>
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Audio Monitoring Sample Rate</label>
+                                                    <select class="form-select" id="audioMonitoringSampleRate">
+                                                        <option value="0">Auto (from device)</option>
+                                                        <option value="8000">8000 Hz</option>
+                                                        <option value="11025">11025 Hz</option>
+                                                        <option value="16000">16000 Hz</option>
+                                                        <option value="22050">22050 Hz</option>
+                                                        <option value="44100" selected>44100 Hz</option>
+                                                        <option value="48000">48000 Hz</option>
+                                                        <option value="96000">96000 Hz</option>
+                                                    </select>
+                                                    <label class="form-label text-muted mt-1" style="font-size: 0.875rem; font-weight: 400;">Sample rate for audio monitoring/playback. If 'Auto' is selected, the sample rate will be detected from the capture device. If detection fails, select a manual sample rate.</label>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Detected Sample Rate</label>
+                                                    <div id="detectedSampleRate" class="form-control-plaintext" style="color: var(--text-secondary);">
+                                                        Not detected
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
                                         <!-- AVFoundation Audio Device Selection (macOS) -->
                                         <div class="col-12" id="avfoundationAudioDeviceContainer" style="display: none;">
                                             <hr>

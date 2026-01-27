@@ -349,6 +349,11 @@ public:
     void setAVFoundationAudioDevice(const std::string &audioDeviceId);
     std::string getAVFoundationAudioDevice() const { return m_avfoundationAudioDeviceId; }
     std::string getCurrentFormatId() const { return m_currentFormatId; }
+    
+    // Audio monitoring sample rate management
+    void setAudioMonitoringSampleRate(uint32_t sampleRate);
+    uint32_t getAudioMonitoringSampleRate() const { return m_audioMonitoringSampleRate; }
+    void setOnAudioMonitoringSampleRateChanged(std::function<void(uint32_t)> callback) { m_onAudioMonitoringSampleRateChanged = callback; }
 
     // Streaming callbacks
     void setOnStreamingStartStop(std::function<void(bool)> callback) { m_onStreamingStartStop = callback; }
@@ -682,6 +687,7 @@ private:
     std::vector<AVFoundationFormatInfo> m_avfoundationFormats; // Available formats for current device
     std::vector<DeviceInfo> m_avfoundationAudioDevices; // macOS AVFoundation audio devices
     std::string m_avfoundationAudioDeviceId; // Selected audio device ID
+    uint32_t m_audioMonitoringSampleRate = 0; // Manual sample rate for audio monitoring (0 = auto-detect)
     std::string m_currentDevice;
     std::string m_currentFormatId; // Currently selected format ID
     std::function<void(const std::string &)> m_onDeviceChanged;
@@ -814,6 +820,9 @@ private:
     std::function<void(const std::string&)> m_onRecordingOutputPathChanged;
     std::function<void(const std::string&)> m_onRecordingFilenameTemplateChanged;
     std::function<void(bool)> m_onRecordingIncludeAudioChanged;
+    
+    // Audio monitoring sample rate callback
+    std::function<void(uint32_t)> m_onAudioMonitoringSampleRateChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão

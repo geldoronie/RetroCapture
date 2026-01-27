@@ -2,6 +2,7 @@
 #include "UIManager.h"
 #include "../audio/IAudioCapture.h"
 #include "../capture/IVideoCapture.h"
+#include "../utils/Logger.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
@@ -36,6 +37,75 @@ void UIConfigurationAudio::render()
     // Update reference to audio capture if needed
     m_audioCapture = m_uiManager->getAudioCapture();
     m_capture = m_uiManager->getCapture();
+
+    // Audio monitoring sample rate configuration
+    ImGui::Text("Audio Monitoring Configuration");
+    ImGui::Separator();
+    
+    // Get current audio monitoring sample rate from capture device
+    uint32_t detectedSampleRate = 0;
+    if (m_capture && m_capture->hasAudio() && m_capture->isOpen())
+    {
+        detectedSampleRate = m_capture->getAudioSampleRate();
+    }
+    
+    // Get manual sample rate setting from UIManager
+    uint32_t manualSampleRate = m_uiManager->getAudioMonitoringSampleRate();
+    uint32_t currentSampleRate = (manualSampleRate > 0) ? manualSampleRate : detectedSampleRate;
+    
+    // Sample rate selection dropdown
+    const char* sampleRateOptions[] = {
+        "Auto (from device)", "8000 Hz", "11025 Hz", "16000 Hz", 
+        "22050 Hz", "44100 Hz", "48000 Hz", "96000 Hz"
+    };
+    uint32_t sampleRateValues[] = {0, 8000, 11025, 16000, 22050, 44100, 48000, 96000};
+    int selectedIndex = 0; // Default to Auto
+    
+    // Find current selection
+    if (currentSampleRate > 0)
+    {
+        for (int i = 1; i < 8; ++i)
+        {
+            if (sampleRateValues[i] == currentSampleRate)
+            {
+                selectedIndex = i;
+                break;
+            }
+        }
+        // If not found in list, show "Auto" but keep manual setting
+    }
+    
+    if (ImGui::Combo("Audio Monitoring Sample Rate", &selectedIndex, sampleRateOptions, 8))
+    {
+        uint32_t newSampleRate = sampleRateValues[selectedIndex];
+        m_uiManager->setAudioMonitoringSampleRate(newSampleRate);
+        m_uiManager->saveConfig();
+        
+        // If device is open, trigger reconfiguration
+        if (m_capture && m_capture->isOpen() && m_capture->hasAudio())
+        {
+            // The Application will detect the change and reconfigure audio output
+            LOG_INFO("Audio monitoring sample rate changed to: " + 
+                     (newSampleRate > 0 ? std::to_string(newSampleRate) + " Hz" : "Auto (from device)"));
+        }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Sample rate for audio monitoring/playback. If 'Auto' is selected, the sample rate will be detected from the capture device. If detection fails, select a manual sample rate.");
+    }
+    
+    // Show detected sample rate
+    if (detectedSampleRate > 0)
+    {
+        ImGui::Text("Detected sample rate: %u Hz", detectedSampleRate);
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "No sample rate detected from device");
+    }
+    
+    ImGui::Separator();
+    ImGui::Spacing();
 
 #ifdef __APPLE__
     // On macOS, show AVFoundation audio device selection if using AVFoundation

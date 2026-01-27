@@ -1805,6 +1805,18 @@ void UIManager::setAVFoundationAudioDevice(const std::string &audioDeviceId)
     }
 }
 
+void UIManager::setAudioMonitoringSampleRate(uint32_t sampleRate)
+{
+    if (m_audioMonitoringSampleRate != sampleRate)
+    {
+        m_audioMonitoringSampleRate = sampleRate;
+        if (m_onAudioMonitoringSampleRateChanged)
+        {
+            m_onAudioMonitoringSampleRateChanged(sampleRate);
+        }
+    }
+}
+
 std::vector<AVFoundationFormatInfo> UIManager::getAVFoundationFormats(const std::string &deviceId)
 {
     // Refresh formats if empty or device changed
@@ -2681,6 +2693,12 @@ void UIManager::loadConfig()
                 m_avfoundationAudioDeviceId = avf["audioDeviceId"].get<std::string>();
                 LOG_INFO("Loaded AVFoundation audio device from config: " + m_avfoundationAudioDeviceId);
             }
+            if (avf.contains("audioMonitoringSampleRate"))
+            {
+                m_audioMonitoringSampleRate = avf["audioMonitoringSampleRate"].get<uint32_t>();
+                LOG_INFO("Loaded audio monitoring sample rate from config: " + 
+                         (m_audioMonitoringSampleRate > 0 ? std::to_string(m_audioMonitoringSampleRate) + " Hz" : "Auto"));
+            }
         }
 
         // Carregar configurações de áudio
@@ -2816,7 +2834,8 @@ void UIManager::saveConfig()
         config["avfoundation"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice},
             {"formatId", m_currentFormatId.empty() ? "" : m_currentFormatId},
-            {"audioDeviceId", m_avfoundationAudioDeviceId.empty() ? "" : m_avfoundationAudioDeviceId}};
+            {"audioDeviceId", m_avfoundationAudioDeviceId.empty() ? "" : m_avfoundationAudioDeviceId},
+            {"audioMonitoringSampleRate", m_audioMonitoringSampleRate}};
 
         // Salvar configurações de áudio
         config["audio"] = {

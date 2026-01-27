@@ -1631,6 +1631,7 @@ async function loadStreamingSettings() {
         const audioBitrateEl = document.getElementById('streamingAudioBitrate');
         if (audioBitrateEl && settings.audioBitrate) audioBitrateEl.value = settings.audioBitrate;
         
+        
         const widthEl = document.getElementById('streamingWidth');
         if (widthEl && settings.width) widthEl.value = settings.width;
         
@@ -1710,10 +1711,14 @@ async function updateStreamingSettings() {
         }
         
         const videoCodec = videoCodecEl.value;
+        
+        // Get audio bitrate from number input
+        const audioBitrateValue = (audioBitrateEl && audioBitrateEl.value) ? parseInt(audioBitrateEl.value) : 256;
+        
         const settings = {
             port: parseInt(portEl.value),
             bitrate: parseInt(bitrateEl.value),
-            audioBitrate: parseInt(audioBitrateEl.value),
+            audioBitrate: audioBitrateValue,
             width: parseInt(widthEl.value),
             height: parseInt(heightEl.value),
             fps: parseInt(fpsEl.value),
@@ -2023,6 +2028,21 @@ document.addEventListener('DOMContentLoaded', function() {
         streamingAudioBitrate.addEventListener('input', updateStreamingSettingsDebounced);
         streamingAudioBitrate.addEventListener('change', updateStreamingSettingsDebounced);
     }
+    
+    // Audio monitoring sample rate select
+    const audioMonitoringSampleRate = document.getElementById('audioMonitoringSampleRate');
+    if (audioMonitoringSampleRate) {
+        audioMonitoringSampleRate.addEventListener('change', async function() {
+            const sampleRate = parseInt(this.value);
+            try {
+                await api.setAudioMonitoringSampleRate(sampleRate);
+                showAlert('Audio monitoring sample rate updated!', 'success');
+            } catch (error) {
+                console.error('Error updating audio monitoring sample rate:', error);
+                showAlert('Error updating audio monitoring sample rate: ' + error.message, 'danger');
+            }
+        });
+    }
     if (streamingWidth) {
         streamingWidth.addEventListener('input', updateStreamingSettingsDebounced);
         streamingWidth.addEventListener('change', updateStreamingSettingsDebounced);
@@ -2282,6 +2302,13 @@ async function loadRecordingSettings() {
         const audioBitrateEl = document.getElementById('recordingAudioBitrate');
         if (audioBitrateEl && settings.audioBitrate) audioBitrateEl.value = settings.audioBitrate;
         
+        // Update Audio tab dropdown if it exists
+        const recordingAudioBitrateSelect = document.getElementById('recordingAudioBitrateSelect');
+        if (recordingAudioBitrateSelect && settings.audioBitrate) {
+            const bitrateKbps = Math.round(settings.audioBitrate / 1000);
+            recordingAudioBitrateSelect.value = bitrateKbps.toString();
+        }
+        
         const videoCodecEl = document.getElementById('recordingVideoCodec');
         if (videoCodecEl && settings.codec) videoCodecEl.value = settings.codec;
         
@@ -2447,12 +2474,15 @@ async function updateRecordingSettings() {
             return;
         }
         
+        // Get audio bitrate from number input
+        const audioBitrateValue = (audioBitrateEl && audioBitrateEl.value) ? parseInt(audioBitrateEl.value) : 256000;
+        
         const settings = {
             width: parseInt(widthEl.value) || 1920,
             height: parseInt(heightEl.value) || 1080,
             fps: parseInt(fpsEl.value) || 60,
             bitrate: parseInt(bitrateEl.value) || 8000000,
-            audioBitrate: parseInt(audioBitrateEl.value) || 256000,
+            audioBitrate: audioBitrateValue,
             codec: videoCodecEl.value || 'h264',
             audioCodec: audioCodecEl.value || 'aac',
             container: containerEl ? containerEl.value : 'mp4',

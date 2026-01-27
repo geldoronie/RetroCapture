@@ -2759,15 +2759,30 @@ void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffe
         {
             // Convert from float32 to int16_t
             size_t floatBufferSize = numAudioSamples * sizeof(float);
-            if (dataLength < floatBufferSize)
+            // Process available data even if less than expected (partial buffer)
+            size_t actualSamples = std::min(numAudioSamples, dataLength / sizeof(float));
+            if (actualSamples == 0)
             {
-                LOG_WARN("Audio data length mismatch: expected " + std::to_string(floatBufferSize) + 
-                         ", got " + std::to_string(dataLength));
+                LOG_WARN("Audio data length too small: expected at least " + std::to_string(sizeof(float)) + 
+                         " bytes, got " + std::to_string(dataLength));
                 return;
             }
             
-            std::vector<float> floatBuffer(numAudioSamples);
-            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, floatBufferSize, floatBuffer.data());
+            if (dataLength < floatBufferSize)
+            {
+                static int logCount = 0;
+                if (logCount < 5)
+                {
+                    LOG_WARN("Audio data length mismatch: expected " + std::to_string(floatBufferSize) + 
+                             " bytes (" + std::to_string(numAudioSamples) + " samples), got " + 
+                             std::to_string(dataLength) + " bytes (" + std::to_string(actualSamples) + " samples). Processing available data.");
+                    logCount++;
+                }
+            }
+            
+            std::vector<float> floatBuffer(actualSamples);
+            size_t actualBytes = actualSamples * sizeof(float);
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, actualBytes, floatBuffer.data());
             if (status != noErr)
             {
                 LOG_WARN("Failed to copy float32 audio data: " + std::to_string(status));
@@ -2775,28 +2790,46 @@ void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffe
             }
             
             // Convert float to int16_t
-            for (size_t i = 0; i < numAudioSamples; ++i)
+            for (size_t i = 0; i < actualSamples; ++i)
             {
                 float sample = floatBuffer[i];
                 // Clamp to [-1.0, 1.0] range
                 sample = std::max(-1.0f, std::min(1.0f, sample));
                 tempBuffer[i] = static_cast<int16_t>(sample * 32767.0f);
             }
+            
+            // Adjust numAudioSamples to actual processed samples
+            numAudioSamples = actualSamples;
         }
         else if (asbd->mBitsPerChannel == 32 && 
                  (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger))
         {
             // Convert from int32_t to int16_t
             size_t int32BufferSize = numAudioSamples * sizeof(int32_t);
-            if (dataLength < int32BufferSize)
+            // Process available data even if less than expected (partial buffer)
+            size_t actualSamples = std::min(numAudioSamples, dataLength / sizeof(int32_t));
+            if (actualSamples == 0)
             {
-                LOG_WARN("Audio data length mismatch: expected " + std::to_string(int32BufferSize) + 
-                         ", got " + std::to_string(dataLength));
+                LOG_WARN("Audio data length too small: expected at least " + std::to_string(sizeof(int32_t)) + 
+                         " bytes, got " + std::to_string(dataLength));
                 return;
             }
             
-            std::vector<int32_t> int32Buffer(numAudioSamples);
-            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, int32BufferSize, int32Buffer.data());
+            if (dataLength < int32BufferSize)
+            {
+                static int logCount = 0;
+                if (logCount < 5)
+                {
+                    LOG_WARN("Audio data length mismatch: expected " + std::to_string(int32BufferSize) + 
+                             " bytes (" + std::to_string(numAudioSamples) + " samples), got " + 
+                             std::to_string(dataLength) + " bytes (" + std::to_string(actualSamples) + " samples). Processing available data.");
+                    logCount++;
+                }
+            }
+            
+            std::vector<int32_t> int32Buffer(actualSamples);
+            size_t actualBytes = actualSamples * sizeof(int32_t);
+            OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, actualBytes, int32Buffer.data());
             if (status != noErr)
             {
                 LOG_WARN("Failed to copy int32 audio data: " + std::to_string(status));
@@ -2804,10 +2837,13 @@ void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffe
             }
             
             // Convert int32_t to int16_t (scale down)
-            for (size_t i = 0; i < numAudioSamples; ++i)
+            for (size_t i = 0; i < actualSamples; ++i)
             {
                 tempBuffer[i] = static_cast<int16_t>(int32Buffer[i] >> 16);
             }
+            
+            // Adjust numAudioSamples to actual processed samples
+            numAudioSamples = actualSamples;
         }
         else
         {
@@ -2827,6 +2863,8 @@ void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffe
     }
     
     // Add audio data to buffer (thread-safe)
+    // Only add if we have samples to add
+    if (numAudioSamples > 0)
     {
         std::lock_guard<std::mutex> lock(m_audioBufferMutex);
         // Double-check after acquiring lock (device might have started closing)
@@ -2834,7 +2872,7 @@ void VideoCaptureAVFoundation::onAudioSampleBuffer(CMSampleBufferRef sampleBuffe
         {
             return;
         }
-        m_audioBuffer.insert(m_audioBuffer.end(), tempBuffer.begin(), tempBuffer.end());
+        m_audioBuffer.insert(m_audioBuffer.end(), tempBuffer.begin(), tempBuffer.begin() + numAudioSamples);
         
         // Limit buffer size to prevent excessive memory usage (keep last 1 second of audio)
         size_t maxSamples = m_audioSampleRate * m_audioChannels;

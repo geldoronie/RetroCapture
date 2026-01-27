@@ -264,6 +264,10 @@ class RetroCaptureAPI {
     async disconnectAudioInput() {
         return await this.request('POST', '/audio/disconnect-input');
     }
+
+    async setAudioMonitoringSampleRate(sampleRate) {
+        return await this.request('POST', '/audio/monitoring-sample-rate', { sampleRate });
+    }
 }
 
 // Instância global da API

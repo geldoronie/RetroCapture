@@ -566,6 +566,10 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleDisconnectAudioInput(clientFd);
     }
+    else if (path == "/api/v1/audio/monitoring-sample-rate")
+    {
+        return handleSetAudioMonitoringSampleRate(clientFd, body);
+    }
 
     send404(clientFd);
     return true;
@@ -2712,3 +2716,32 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
 #endif
 }
 
+bool APIController::handleSetAudioMonitoringSampleRate(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        uint32_t sampleRate = json.value("sampleRate", 0u);
+        
+        m_uiManager->setAudioMonitoringSampleRate(sampleRate);
+        m_uiManager->saveConfig();
+        
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Audio monitoring sample rate updated";
+        response["sampleRate"] = sampleRate;
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid request: " + std::string(e.what()));
+        return true;
+    }
+}

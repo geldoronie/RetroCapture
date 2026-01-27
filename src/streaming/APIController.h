@@ -155,6 +155,7 @@ private:
     bool handleDeletePreset(int clientFd, const std::string &presetName);
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
+    bool handleSetAudioMonitoringSampleRate(int clientFd, const std::string &body);
 
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
