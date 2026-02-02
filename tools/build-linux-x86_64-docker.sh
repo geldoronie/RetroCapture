@@ -3,16 +3,56 @@ set -e
 
 # Build type: Release (default) or Debug
 BUILD_TYPE="${1:-Release}"
-FORCE_REBUILD="${2:-}"
+FORCE_REBUILD=""
+BUILD_COMPATIBLE="OFF"
+
+# Processar argumentos
+for arg in "$@"; do
+    case "$arg" in
+        Release|Debug)
+            BUILD_TYPE="$arg"
+            ;;
+        --rebuild)
+            FORCE_REBUILD="--rebuild"
+            ;;
+        ON|OFF)
+            BUILD_COMPATIBLE="$arg"
+            ;;
+        *)
+            if [ "$arg" != "$BUILD_TYPE" ]; then
+                echo "⚠️  Argumento desconhecido ignorado: $arg"
+            fi
+            ;;
+    esac
+done
+
+# Se BUILD_COMPATIBLE_X86_64 estiver definido como variável de ambiente, usar ela
+if [ -n "$BUILD_COMPATIBLE_X86_64" ]; then
+    BUILD_COMPATIBLE="$BUILD_COMPATIBLE_X86_64"
+fi
 
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "❌ Build type inválido: $BUILD_TYPE"
     echo ""
-    echo "Uso: $0 [Release|Debug] [--rebuild]"
+    echo "Uso: $0 [Release|Debug] [--rebuild] [ON|OFF]"
     echo "  Release - Build otimizado para produção (padrão)"
     echo "  Debug   - Build com símbolos de debug"
     echo "  --rebuild - Força rebuild completo da imagem Docker (mais lento)"
+    echo "  ON|OFF  - Modo compatível (ON = sem AVX2, funciona em CPUs antigas)"
+    echo ""
+    echo "Exemplos:"
+    echo "  $0 Release              # Build Release padrão"
+    echo "  $0 Release --rebuild   # Build Release com rebuild completo"
+    echo "  $0 Release ON          # Build Release compatível (sem AVX2)"
+    echo "  $0 Release --rebuild ON # Build Release compatível com rebuild"
+    exit 1
+fi
+
+# Validar opção de compatibilidade
+if [ "$BUILD_COMPATIBLE" != "ON" ] && [ "$BUILD_COMPATIBLE" != "OFF" ]; then
+    echo "❌ Opção de compatibilidade inválida: $BUILD_COMPATIBLE"
+    echo "   Use: ON ou OFF"
     exit 1
 fi
 
@@ -20,6 +60,11 @@ echo "🐳 RetroCapture - Build para Linux usando Docker"
 echo "================================================="
 echo "📦 Build type: $BUILD_TYPE"
 echo "🏗️  Arquitetura: x86_64 (amd64)"
+if [ "$BUILD_COMPATIBLE" = "ON" ]; then
+    echo "🔧 Modo compatível: ON (sem AVX2, funciona em CPUs antigas)"
+else
+    echo "⚡ Modo compatível: OFF (otimização máxima com -march=native)"
+fi
 echo "🔧 Base: Ubuntu 24.04 LTS (Noble Numbat) - FFmpeg 6.x (versão 60)"
 echo "✅ Compatível com: Elementary OS 8.1 (Circe), Ubuntu 24.04+, etc."
 echo ""
@@ -75,7 +120,10 @@ echo ""
 echo "🔨 Compilando RetroCapture..."
 echo ""
 
-$DOCKER_COMPOSE_CMD run --rm -e BUILD_TYPE="$BUILD_TYPE" build-linux-x86_64 > build-linux-x86_64.log 2>&1
+$DOCKER_COMPOSE_CMD run --rm \
+    -e BUILD_TYPE="$BUILD_TYPE" \
+    -e BUILD_COMPATIBLE_X86_64="$BUILD_COMPATIBLE" \
+    build-linux-x86_64 > build-linux-x86_64.log 2>&1
 
 echo ""
 echo "✅ Concluído!"

@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
+option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -615,13 +616,40 @@ target_compile_options(retrocapture PRIVATE
 
 # Flags específicas por build type e arquitetura
 if(ARCH_X86_64)
-    # x86_64: usar -march=native para otimização máxima
-    target_compile_options(retrocapture PRIVATE
-        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
-        $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
-        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
-        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
-    )
+    # x86_64: usar -march=native para otimização máxima (padrão)
+    # Se BUILD_COMPATIBLE_X86_64 estiver ativado, usar flags compatíveis com CPUs mais antigas
+    if(BUILD_COMPATIBLE_X86_64)
+        # Flags compatíveis: suporta CPUs desde Core 2 (2006) até CPUs modernas
+        # Não usa AVX2, apenas SSE4.2 (suportado desde Core 2)
+        # IMPORTANTE: Desabilitar explicitamente AVX e AVX2 para garantir compatibilidade
+        message(STATUS "Usando flags compatíveis para x86-64 (sem AVX2)")
+        target_compile_options(retrocapture PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+            $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+        )
+        
+        # Aplicar mesmas flags ao ImGui para garantir compatibilidade
+        # O ImGui é uma biblioteca estática, então precisa das mesmas flags
+        if(TARGET imgui)
+            target_compile_options(imgui PRIVATE
+                $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+                $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+                $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+                $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+            )
+        endif()
+    else()
+        # Otimização máxima: usa todas as instruções da CPU atual
+        message(STATUS "Usando otimização máxima para x86-64 (-march=native)")
+        target_compile_options(retrocapture PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+            $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+        )
+    endif()
 elseif(ARCH_ARM32)
     # ARM32 (armv7/armhf): usar flags específicas para ARM
     # -march=armv7-a: suporta ARMv7-A (Raspberry Pi 3)
