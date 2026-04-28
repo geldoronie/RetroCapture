@@ -10,6 +10,7 @@ option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
 option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
+option(BUILD_COMPATIBLE_ARM64 "Build with portable ARMv8-A flags (no SVE/crypto, works on Pi 3/4/5)" OFF)
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -681,25 +682,45 @@ elseif(ARCH_ARM32)
         $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard>
     )
 elseif(ARCH_ARM64)
-    # ARM64 (aarch64): usar flags específicas para ARM64
-    # Reduzir otimização de -O3 para -O2 para evitar segmentation fault do GCC
-    # Aplicar também ao ImGui para evitar segmentation fault durante compilação
-    target_compile_options(retrocapture PRIVATE
-        $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
-        $<$<CONFIG:Release>:-O2 -DNDEBUG -march=native>
-        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
-        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
-    )
-
-    # Aplicar mesmas flags ao ImGui para evitar segmentation fault no GCC 14+
-    # Usar -O1 ou -O0 para evitar bugs do compilador durante compilação
-    if(TARGET imgui)
-        target_compile_options(imgui PRIVATE
-            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls>
-            $<$<CONFIG:Release>:-O1 -DNDEBUG -fno-optimize-sibling-calls>
-            $<$<CONFIG:RelWithDebInfo>:-O1 -g -DNDEBUG -fno-optimize-sibling-calls>
-            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -fno-optimize-sibling-calls>
+    # ARM64 (aarch64): -O2 (não -O3) e ImGui em -O1 + -fno-optimize-sibling-calls
+    # como workaround pra segfault do GCC 14+ ao compilar ImGui (independente de portabilidade).
+    # Se BUILD_COMPATIBLE_ARM64 estiver ativado, usar baseline portátil ARMv8-A;
+    # caso contrário, manter -march=native (uso local).
+    if(BUILD_COMPATIBLE_ARM64)
+        # Baseline ARMv8-A sem extensões opcionais — roda em qualquer CPU desde
+        # Cortex-A53 (Pi 3) até CPUs novas. Importante para builds Docker arm64v8 sob
+        # qemu, cujo modelo "max" pode habilitar SVE/SVE2 que crasha em Pi 4/5 reais.
+        message(STATUS "Usando baseline portátil ARMv8-A (sem SVE/crypto)")
+        target_compile_options(retrocapture PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+            $<$<CONFIG:Release>:-O2 -DNDEBUG -march=armv8-a>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=armv8-a>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=armv8-a>
         )
+        if(TARGET imgui)
+            target_compile_options(imgui PRIVATE
+                $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls>
+                $<$<CONFIG:Release>:-O1 -DNDEBUG -march=armv8-a -fno-optimize-sibling-calls>
+                $<$<CONFIG:RelWithDebInfo>:-O1 -g -DNDEBUG -march=armv8-a -fno-optimize-sibling-calls>
+                $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=armv8-a -fno-optimize-sibling-calls>
+            )
+        endif()
+    else()
+        message(STATUS "Usando otimização nativa para ARM64 (-march=native)")
+        target_compile_options(retrocapture PRIVATE
+            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+            $<$<CONFIG:Release>:-O2 -DNDEBUG -march=native>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>
+        )
+        if(TARGET imgui)
+            target_compile_options(imgui PRIVATE
+                $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls>
+                $<$<CONFIG:Release>:-O1 -DNDEBUG -fno-optimize-sibling-calls>
+                $<$<CONFIG:RelWithDebInfo>:-O1 -g -DNDEBUG -fno-optimize-sibling-calls>
+                $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -fno-optimize-sibling-calls>
+            )
+        endif()
     endif()
 else()
     # Arquitetura genérica: sem flags específicas de arquitetura
