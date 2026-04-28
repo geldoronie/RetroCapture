@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CPU compatibility mode for distributed binaries** (issue #19)
+  - `BUILD_COMPATIBLE_X86_64` CMake option — applies `-march=x86-64-v2`
+    baseline (or the equivalent `-march=x86-64 -msse4.2 -mno-avx -mno-avx2`
+    on toolchains older than GCC 11 / Clang 12). Removes AVX/AVX2 so the
+    binary runs on CPUs like the AMD A8 PRO-7600B (Kaveri) that motivated
+    the issue, while still covering every Intel CPU since Nehalem (2008).
+  - `BUILD_COMPATIBLE_ARM64` CMake option — applies `-march=armv8-a`
+    baseline (no SVE / crypto / dotprod), so binaries built inside the
+    `arm64v8` Docker image under qemu run on real Pi 4/5 hardware.
+  - The same flags are applied to the bundled ImGui static library to
+    keep the final binary single-baseline.
+- **CPU diagnostic and dependency tooling**
+  - `tools/diagnose-cpu-compatibility.sh` — inspects the instruction set
+    extensions a binary actually uses (AVX, AVX2, AVX-512, SSE4.2),
+    compares them with the current CPU and prints a verdict.
+  - `tools/check-dependencies.sh` — verifies the shared libraries an
+    executable links against.
+  - `tools/install-deps-manjaro.sh` — automated dependency installation
+    for Manjaro / Arch Linux.
+  - `tools/clean-build.sh` — cleans all per-architecture build
+    directories.
+- **Reference documentation**
+  - `docs/CPU_COMPATIBILITY.md` — describes the portable baseline for
+    each architecture, the compile options, the per-script defaults and
+    the diagnostic workflow.
+
+### Changed
+
+- **Docker build scripts now default to compatible mode** so the
+  binaries they produce are portable. Native (`-march=native`) builds
+  are still available, but as an explicit opt-in:
+  - `tools/build-linux-x86_64-docker.sh Release OFF`
+  - `tools/build-windows-x86_64-docker.sh Release OFF`
+  - `tools/build-linux-arm64v8-docker.sh Release --native`
+- The Windows cross-compile honours the same `BUILD_COMPATIBLE_X86_64`
+  flag, since the MXE / MinGW toolchain inherits `-march=native` from
+  the build host CPU and would otherwise bake AVX/AVX2 into
+  `retrocapture.exe`.
+- Linux x86_64 Docker base image set to Ubuntu 22.04 for broader binary
+  compatibility against systems with older glibc.
+
+### Fixed
+
+- **V4L2 capture survives USB device disconnection.** Detect EBADF /
+  ENODEV / EIO returned from any V4L2 ioctl, close the file descriptor,
+  release mmap'd buffers and fall back to the internal dummy frame
+  generator instead of crashing or spamming the log on every frame.
+  Validates `buf.index` against `m_buffers.size()` before dereferencing
+  to avoid an out-of-bounds read after a stale dequeue.
+- **Main loop survives window invalidation.** Re-checks the window
+  pointer and `shouldClose()` flag around `pollEvents` and
+  `swapBuffers` so KVM switching, monitor hot-plug or an X server hiccup
+  no longer segfaults the application. The SDL backend now handles
+  `SDL_WINDOWEVENT_CLOSE` / `HIDDEN` / `EXPOSED` / `FOCUS_LOST` and
+  detects an invalid window via `SDL_GetWindowFlags == 0`. The GLFW
+  backend installs a SIGSEGV handler around `glfwDestroyWindow` during
+  shutdown using `sigsetjmp` / `siglongjmp` to survive faulty driver
+  teardown.
+- **Audio capture shutdown is exception-safe.** `AudioCapture::stop
+  Capture()` and `close()` are wrapped in try blocks during
+  `Application::shutdown()` so an exception from PulseAudio / WASAPI
+  during teardown no longer aborts the rest of the cleanup sequence.
+
 ### Planned
 
 - WebRTC streaming support

@@ -152,6 +152,14 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
 
 ## 🔨 Building
 
+> **CPU portability for distributed binaries.** All Docker build scripts
+> default to a portable instruction-set baseline (no AVX/AVX2 on x86_64,
+> no SVE/crypto on ARM64), so the artifacts they produce run on a wide
+> range of hardware. Native CMake invocations still default to
+> `-march=native` for local performance. See
+> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for the
+> per-architecture details and how to opt out.
+
 ### Linux (nativo)
 
 ```bash
