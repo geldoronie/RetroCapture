@@ -3848,8 +3848,24 @@ void Application::shutdown()
 
     if (m_audioCapture)
     {
-        m_audioCapture->stopCapture();
-        m_audioCapture->close();
+        try
+        {
+            m_audioCapture->stopCapture();
+        }
+        catch (...)
+        {
+            LOG_WARN("Exception during audio capture stop - continuing");
+        }
+        
+        try
+        {
+            m_audioCapture->close();
+        }
+        catch (...)
+        {
+            LOG_WARN("Exception during audio capture close - continuing");
+        }
+        
         m_audioCapture.reset();
     }
 
