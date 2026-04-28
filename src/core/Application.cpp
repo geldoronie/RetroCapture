@@ -2597,7 +2597,21 @@ void Application::run()
 
     while (!m_window->shouldClose())
     {
+        // Check if window is still valid before polling events
+        // This prevents crashes when window is invalidated (e.g., KVM switch)
+        if (!m_window)
+        {
+            LOG_WARN("Window is invalid - exiting main loop");
+            break;
+        }
+        
         m_window->pollEvents();
+        
+        // Check again after polling events (window may have been invalidated)
+        if (m_window->shouldClose())
+        {
+            break;
+        }
 
         // Process pending preset applications (from API threads)
         {
@@ -3712,12 +3726,22 @@ void Application::run()
                 m_ui->endFrame();
             }
 
-            m_window->swapBuffers();
+            // Check if window is still valid before swapping
+            if (m_window && !m_window->shouldClose())
+            {
+                m_window->swapBuffers();
+            }
         }
         else
         {
             // If no valid frame yet, we still need to render UI and update window
             // so window is visible even without video frame
+
+            // Check if window is still valid before operations
+            if (!m_window || m_window->shouldClose())
+            {
+                continue;
+            }
 
             // Clear framebuffer
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -3740,7 +3764,11 @@ void Application::run()
             }
 
             // IMPORTANT: Always do swapBuffers so window is updated and visible
-            m_window->swapBuffers();
+            // But check if window is still valid first
+            if (m_window && !m_window->shouldClose())
+            {
+                m_window->swapBuffers();
+            }
 
 // Do a small sleep to not consume 100% CPU
 #ifdef PLATFORM_LINUX
@@ -3820,8 +3848,24 @@ void Application::shutdown()
 
     if (m_audioCapture)
     {
-        m_audioCapture->stopCapture();
-        m_audioCapture->close();
+        try
+        {
+            m_audioCapture->stopCapture();
+        }
+        catch (...)
+        {
+            LOG_WARN("Exception during audio capture stop - continuing");
+        }
+        
+        try
+        {
+            m_audioCapture->close();
+        }
+        catch (...)
+        {
+            LOG_WARN("Exception during audio capture close - continuing");
+        }
+        
         m_audioCapture.reset();
     }
 

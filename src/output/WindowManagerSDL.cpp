@@ -398,14 +398,40 @@ bool WindowManagerSDL::shouldClose() const
 
 void WindowManagerSDL::swapBuffers()
 {
-    if (m_window)
+    if (!m_window || !m_glContext)
+    {
+        return;
+    }
+    
+    // Check if window is still valid before swapping
+    // This prevents crashes when window is invalidated (e.g., KVM switch)
+    Uint32 windowFlags = SDL_GetWindowFlags(m_window);
+    if (windowFlags == 0)
+    {
+        // Window is invalid - set shouldClose to exit gracefully
+        m_shouldClose = true;
+        return;
+    }
+    
+    try
     {
         SDL_GL_SwapWindow(m_window);
+    }
+    catch (...)
+    {
+        // If swap fails, window is likely invalid - exit gracefully
+        LOG_WARN("Failed to swap buffers - window may be invalid");
+        m_shouldClose = true;
     }
 }
 
 void WindowManagerSDL::pollEvents()
 {
+    if (!m_window)
+    {
+        return;
+    }
+    
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
@@ -415,7 +441,29 @@ void WindowManagerSDL::pollEvents()
             m_shouldClose = true;
             break;
         case SDL_WINDOWEVENT:
-            if (event.window.event == SDL_WINDOWEVENT_RESIZED)
+            // Handle window close event (when window is closed by window manager)
+            if (event.window.event == SDL_WINDOWEVENT_CLOSE)
+            {
+                m_shouldClose = true;
+            }
+            // Handle window hidden event (when window is minimized or hidden)
+            else if (event.window.event == SDL_WINDOWEVENT_HIDDEN)
+            {
+                // Window is hidden but still valid - continue running
+                // This prevents crashes when KVM switches away
+            }
+            // Handle window exposed event (when window becomes visible again)
+            else if (event.window.event == SDL_WINDOWEVENT_EXPOSED)
+            {
+                // Window is visible again - continue normally
+            }
+            // Handle window focus lost event (when window loses focus)
+            else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+            {
+                // Window lost focus but is still valid - continue running
+                // This prevents crashes when input devices are disconnected
+            }
+            else if (event.window.event == SDL_WINDOWEVENT_RESIZED)
             {
                 int w = event.window.data1;
                 int h = event.window.data2;
