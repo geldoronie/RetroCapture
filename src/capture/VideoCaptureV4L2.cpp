@@ -79,6 +79,39 @@ bool VideoCaptureV4L2::isOpen() const
     return m_fd >= 0 || m_dummyMode;
 }
 
+bool VideoCaptureV4L2::handleDeviceDisconnection(int err, const std::string &operation)
+{
+    // Check for critical errors that indicate device disconnection
+    if (err == EBADF || err == ENODEV || err == EIO)
+    {
+        LOG_ERROR("Dispositivo USB desconectado durante " + operation + 
+                 " (errno: " + std::to_string(err) + " - " + strerror(err) + 
+                 ") - ativando modo dummy");
+        
+        // Close device gracefully
+        stopCapture();
+        cleanupBuffers();
+        if (m_fd >= 0)
+        {
+            ::close(m_fd);
+            m_fd = -1;
+        }
+        
+        // Activate dummy mode to continue working
+        m_dummyMode = true;
+        if (m_width > 0 && m_height > 0)
+        {
+            size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+            m_dummyFrameBuffer.resize(frameSize, 0);
+            m_streaming = true;
+            LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+        }
+        
+        return true; // Device was disconnected
+    }
+    return false; // Not a disconnection error
+}
+
 bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixelFormat)
 {
     // Em modo dummy, apenas definir dimensões sem abrir dispositivo
@@ -108,7 +141,12 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
 
     if (ioctl(m_fd, VIDIOC_G_FMT, &fmt) < 0)
     {
-        LOG_ERROR("Falha ao obter formato atual");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_G_FMT"))
+        {
+            return false;
+        }
+        LOG_ERROR("Falha ao obter formato atual (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -132,6 +170,16 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
                 mjpegSupported = true;
             }
             fmtDesc.index++;
+        }
+        
+        // Check if enumeration failed due to device disconnection
+        if (errno != 0 && errno != EINVAL) // EINVAL is normal when enumeration ends
+        {
+            int err = errno;
+            if (handleDeviceDisconnection(err, "VIDIOC_ENUM_FMT"))
+            {
+                return false;
+            }
         }
 
         if (yuyvSupported)
@@ -171,7 +219,12 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
 
     if (ioctl(m_fd, VIDIOC_S_FMT, &fmt) < 0)
     {
-        LOG_ERROR("Falha ao definir formato");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_S_FMT"))
+        {
+            return false;
+        }
+        LOG_ERROR("Falha ao definir formato (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -238,7 +291,13 @@ bool VideoCaptureV4L2::setFramerate(uint32_t fps)
 
     if (ioctl(m_fd, VIDIOC_G_PARM, &parm) == -1)
     {
-        LOG_WARN("Não foi possível obter parâmetros de streaming");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_G_PARM"))
+        {
+            return false;
+        }
+        LOG_WARN("Não foi possível obter parâmetros de streaming (errno: " + 
+                 std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -253,7 +312,13 @@ bool VideoCaptureV4L2::setFramerate(uint32_t fps)
 
     if (ioctl(m_fd, VIDIOC_S_PARM, &parm) == -1)
     {
-        LOG_WARN("Falha ao configurar framerate");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_S_PARM"))
+        {
+            return false;
+        }
+        LOG_WARN("Falha ao configurar framerate (errno: " + 
+                 std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -296,19 +361,57 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
 
     if (ioctl(m_fd, VIDIOC_DQBUF, &buf) < 0)
     {
-        if (errno != EAGAIN)
+        int err = errno;
+        // EAGAIN é normal quando não há frame disponível (non-blocking)
+        if (err == EAGAIN)
         {
-            LOG_ERROR("Erro ao capturar frame");
+            return false;
         }
+        
+        // Erros críticos que indicam que o dispositivo foi desconectado
+        if (err == EBADF || err == ENODEV || err == EIO)
+        {
+            LOG_ERROR("Dispositivo USB desconectado detectado (errno: " + std::to_string(err) + 
+                     " - " + strerror(err) + ") - ativando modo dummy");
+            
+            // Fechar dispositivo graciosamente
+            stopCapture();
+            cleanupBuffers();
+            if (m_fd >= 0)
+            {
+                ::close(m_fd);
+                m_fd = -1;
+            }
+            
+            // Ativar modo dummy para continuar funcionando
+            m_dummyMode = true;
+            if (m_width > 0 && m_height > 0)
+            {
+                size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_streaming = true;
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+            }
+            
+            return false;
+        }
+        
+        // Outros erros
+        LOG_ERROR("Erro ao capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
     // Validar buffer antes de usar
-    if (!m_buffers[buf.index].start || m_buffers[buf.index].start == MAP_FAILED)
+    if (buf.index >= m_buffers.size() || 
+        !m_buffers[buf.index].start || 
+        m_buffers[buf.index].start == MAP_FAILED)
     {
         LOG_ERROR("Buffer inválido no índice " + std::to_string(buf.index));
-        // Ainda assim, tentar reenfileirar para não perder sincronização
-        ioctl(m_fd, VIDIOC_QBUF, &buf);
+        // Tentar reenfileirar para não perder sincronização (mas pode falhar se dispositivo foi desconectado)
+        if (m_fd >= 0)
+        {
+            ioctl(m_fd, VIDIOC_QBUF, &buf);
+        }
         return false;
     }
 
@@ -328,7 +431,36 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
 
     if (ioctl(m_fd, VIDIOC_QBUF, &buf) < 0)
     {
-        LOG_ERROR("Falha ao reenfileirar buffer");
+        int err = errno;
+        // Erros críticos que indicam que o dispositivo foi desconectado
+        if (err == EBADF || err == ENODEV || err == EIO)
+        {
+            LOG_ERROR("Dispositivo USB desconectado durante reenfileiramento (errno: " + 
+                     std::to_string(err) + " - " + strerror(err) + ") - ativando modo dummy");
+            
+            // Fechar dispositivo graciosamente
+            stopCapture();
+            cleanupBuffers();
+            if (m_fd >= 0)
+            {
+                ::close(m_fd);
+                m_fd = -1;
+            }
+            
+            // Ativar modo dummy para continuar funcionando
+            m_dummyMode = true;
+            if (m_width > 0 && m_height > 0)
+            {
+                size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_streaming = true;
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+            }
+        }
+        else
+        {
+            LOG_ERROR("Falha ao reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        }
         return false;
     }
 
@@ -395,8 +527,18 @@ bool VideoCaptureV4L2::getControlDefault(const std::string &controlName, int32_t
     struct v4l2_queryctrl queryctrl = {};
     queryctrl.id = controlId;
 
-    if (m_fd < 0 || ioctl(m_fd, VIDIOC_QUERYCTRL, &queryctrl) < 0)
+    if (m_fd < 0)
     {
+        return false;
+    }
+    
+    if (ioctl(m_fd, VIDIOC_QUERYCTRL, &queryctrl) < 0)
+    {
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_QUERYCTRL"))
+        {
+            return false;
+        }
         return false;
     }
 
@@ -464,8 +606,14 @@ bool VideoCaptureV4L2::setControl(uint32_t controlId, int32_t value)
 
     if (ioctl(m_fd, VIDIOC_S_CTRL, &ctrl) < 0)
     {
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_S_CTRL"))
+        {
+            return false;
+        }
         LOG_WARN("Falha ao definir controle V4L2 (ID: " + std::to_string(controlId) +
-                 ", valor: " + std::to_string(value) + "): " + strerror(errno));
+                 ", valor: " + std::to_string(value) + ") (errno: " + std::to_string(err) + 
+                 " - " + strerror(err) + ")");
         return false;
     }
 
@@ -507,6 +655,11 @@ bool VideoCaptureV4L2::getControl(uint32_t controlId, int32_t &value, int32_t &m
 
     if (ioctl(m_fd, VIDIOC_QUERYCTRL, &queryctrl) < 0)
     {
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_QUERYCTRL (getControl)"))
+        {
+            return false;
+        }
         return false;
     }
 
@@ -524,6 +677,11 @@ bool VideoCaptureV4L2::getControl(uint32_t controlId, int32_t &value, int32_t &m
 
     if (ioctl(m_fd, VIDIOC_G_CTRL, &ctrl) < 0)
     {
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_G_CTRL"))
+        {
+            return false;
+        }
         return false;
     }
 
@@ -624,7 +782,12 @@ bool VideoCaptureV4L2::startCapture()
 
         if (ioctl(m_fd, VIDIOC_QBUF, &buf) < 0)
         {
-            LOG_ERROR("Falha ao enfileirar buffer");
+            int err = errno;
+            if (handleDeviceDisconnection(err, "VIDIOC_QBUF (startCapture)"))
+            {
+                return false;
+            }
+            LOG_ERROR("Falha ao enfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
             stopCapture();
             return false;
         }
@@ -633,7 +796,12 @@ bool VideoCaptureV4L2::startCapture()
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(m_fd, VIDIOC_STREAMON, &type) < 0)
     {
-        LOG_ERROR("Falha ao iniciar streaming");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_STREAMON"))
+        {
+            return false;
+        }
+        LOG_ERROR("Falha ao iniciar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -659,7 +827,15 @@ void VideoCaptureV4L2::stopCapture()
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (m_fd >= 0)
     {
-        ioctl(m_fd, VIDIOC_STREAMOFF, &type);
+        if (ioctl(m_fd, VIDIOC_STREAMOFF, &type) < 0)
+        {
+            int err = errno;
+            // Don't activate dummy mode here - device is being stopped intentionally
+            if (err != EBADF && err != ENODEV && err != EIO)
+            {
+                LOG_WARN("Falha ao parar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+            }
+        }
     }
 
     m_streaming = false;
@@ -742,7 +918,12 @@ bool VideoCaptureV4L2::initMemoryMapping()
 
     if (ioctl(m_fd, VIDIOC_REQBUFS, &req) < 0)
     {
-        LOG_ERROR("Falha ao solicitar buffers");
+        int err = errno;
+        if (handleDeviceDisconnection(err, "VIDIOC_REQBUFS"))
+        {
+            return false;
+        }
+        LOG_ERROR("Falha ao solicitar buffers (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -763,7 +944,12 @@ bool VideoCaptureV4L2::initMemoryMapping()
 
         if (ioctl(m_fd, VIDIOC_QUERYBUF, &buf) < 0)
         {
-            LOG_ERROR("Falha ao consultar buffer");
+            int err = errno;
+            if (handleDeviceDisconnection(err, "VIDIOC_QUERYBUF"))
+            {
+                return false;
+            }
+            LOG_ERROR("Falha ao consultar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
             cleanupBuffers();
             return false;
         }

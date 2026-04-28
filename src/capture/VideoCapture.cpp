@@ -391,9 +391,56 @@ bool VideoCapture::captureFrame(Frame &frame)
     // Tentar obter um frame (non-blocking)
     if (ioctl(m_fd, VIDIOC_DQBUF, &buf) < 0)
     {
-        if (errno != EAGAIN)
+        int err = errno;
+        // EAGAIN é normal quando não há frame disponível (non-blocking)
+        if (err == EAGAIN)
         {
-            LOG_ERROR("Erro ao capturar frame");
+            return false;
+        }
+        
+        // Erros críticos que indicam que o dispositivo foi desconectado
+        if (err == EBADF || err == ENODEV || err == EIO)
+        {
+            LOG_ERROR("Dispositivo USB desconectado detectado (errno: " + std::to_string(err) + 
+                     " - " + strerror(err) + ") - ativando modo dummy");
+            
+            // Fechar dispositivo graciosamente
+            stopCapture();
+            cleanupBuffers();
+            if (m_fd >= 0)
+            {
+                ::close(m_fd);
+                m_fd = -1;
+            }
+            
+            // Ativar modo dummy para continuar funcionando
+            m_dummyMode = true;
+            if (m_width > 0 && m_height > 0)
+            {
+                size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_streaming = true;
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+            }
+            
+            return false;
+        }
+        
+        // Outros erros
+        LOG_ERROR("Erro ao capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        return false;
+    }
+
+    // Validar buffer antes de usar
+    if (buf.index >= m_buffers.size() || 
+        !m_buffers[buf.index].start || 
+        m_buffers[buf.index].start == MAP_FAILED)
+    {
+        LOG_ERROR("Buffer inválido no índice " + std::to_string(buf.index));
+        // Tentar reenfileirar para não perder sincronização (mas pode falhar se dispositivo foi desconectado)
+        if (m_fd >= 0)
+        {
+            ioctl(m_fd, VIDIOC_QBUF, &buf);
         }
         return false;
     }
@@ -408,7 +455,36 @@ bool VideoCapture::captureFrame(Frame &frame)
     // Reenfileirar o buffer
     if (ioctl(m_fd, VIDIOC_QBUF, &buf) < 0)
     {
-        LOG_ERROR("Falha ao reenfileirar buffer");
+        int err = errno;
+        // Erros críticos que indicam que o dispositivo foi desconectado
+        if (err == EBADF || err == ENODEV || err == EIO)
+        {
+            LOG_ERROR("Dispositivo USB desconectado durante reenfileiramento (errno: " + 
+                     std::to_string(err) + " - " + strerror(err) + ") - ativando modo dummy");
+            
+            // Fechar dispositivo graciosamente
+            stopCapture();
+            cleanupBuffers();
+            if (m_fd >= 0)
+            {
+                ::close(m_fd);
+                m_fd = -1;
+            }
+            
+            // Ativar modo dummy para continuar funcionando
+            m_dummyMode = true;
+            if (m_width > 0 && m_height > 0)
+            {
+                size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
+                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_streaming = true;
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+            }
+        }
+        else
+        {
+            LOG_ERROR("Falha ao reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        }
         return false;
     }
 
