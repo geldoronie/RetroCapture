@@ -4,7 +4,9 @@ set -e
 # Build type: Release (default) or Debug
 BUILD_TYPE="${1:-Release}"
 FORCE_REBUILD=""
-BUILD_COMPATIBLE="OFF"
+# Default ON: builds Docker são para distribuição, então o binário precisa rodar
+# em CPUs sem AVX/AVX2. Quem quiser -march=native passa OFF explicitamente.
+BUILD_COMPATIBLE="ON"
 
 # Processar argumentos
 for arg in "$@"; do
@@ -39,12 +41,13 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "  Release - Build otimizado para produção (padrão)"
     echo "  Debug   - Build com símbolos de debug"
     echo "  --rebuild - Força rebuild completo da imagem Docker (mais lento)"
-    echo "  ON|OFF  - Modo compatível (ON = sem AVX2, funciona em CPUs antigas)"
+    echo "  ON|OFF  - Modo compatível (ON = padrão, sem AVX/AVX2 — roda em CPUs antigas;"
+    echo "                              OFF = -march=native, só roda em CPUs como a do build host)"
     echo ""
     echo "Exemplos:"
-    echo "  $0 Release              # Build Release padrão"
-    echo "  $0 Release --rebuild   # Build Release com rebuild completo"
-    echo "  $0 Release ON          # Build Release compatível (sem AVX2)"
+    echo "  $0 Release              # Build Release padrão (compat ON, portátil)"
+    echo "  $0 Release --rebuild    # Build Release com rebuild completo"
+    echo "  $0 Release OFF          # Build Release nativo (-march=native, só pra uso local)"
     echo "  $0 Release --rebuild ON # Build Release compatível com rebuild"
     exit 1
 fi
@@ -61,9 +64,9 @@ echo "================================================="
 echo "📦 Build type: $BUILD_TYPE"
 echo "🏗️  Arquitetura: x86_64 (amd64)"
 if [ "$BUILD_COMPATIBLE" = "ON" ]; then
-    echo "🔧 Modo compatível: ON (sem AVX2, funciona em CPUs antigas)"
+    echo "🔧 Modo compatível: ON (baseline x86-64-v2, sem AVX/AVX2 — recomendado para distribuição)"
 else
-    echo "⚡ Modo compatível: OFF (otimização máxima com -march=native)"
+    echo "⚡ Modo compatível: OFF (-march=native — só roda em CPUs equivalentes à do build host)"
 fi
 echo "🔧 Base: Ubuntu 24.04 LTS (Noble Numbat) - FFmpeg 6.x (versão 60)"
 echo "✅ Compatível com: Elementary OS 8.1 (Circe), Ubuntu 24.04+, etc."

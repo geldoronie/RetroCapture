@@ -4,8 +4,9 @@ set -e
 # Build type: Release (default) or Debug
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 
-# Compatibilidade: se BUILD_COMPATIBLE_X86_64 estiver definido, usar flags compatíveis
-BUILD_COMPATIBLE="${BUILD_COMPATIBLE_X86_64:-OFF}"
+# Compatibilidade: builds dentro do Docker são pra distribuição, então default ON
+# (baseline x86-64-v2, sem AVX/AVX2). Para -march=native passe BUILD_COMPATIBLE_X86_64=OFF.
+BUILD_COMPATIBLE="${BUILD_COMPATIBLE_X86_64:-ON}"
 
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
@@ -25,9 +26,9 @@ echo "🚀 Compilando RetroCapture para Linux x86_64..."
 echo "📦 Build type: $BUILD_TYPE"
 echo "🏗️  Arquitetura: x86_64 (amd64)"
 if [ "$BUILD_COMPATIBLE" = "ON" ]; then
-    echo "🔧 Modo compatível: ON (sem AVX2, funciona em CPUs antigas)"
+    echo "🔧 Modo compatível: ON (baseline x86-64-v2, sem AVX/AVX2 — recomendado para distribuição)"
 else
-    echo "⚡ Modo compatível: OFF (otimização máxima com -march=native)"
+    echo "⚡ Modo compatível: OFF (-march=native — só roda em CPUs equivalentes à do build host)"
 fi
 echo ""
 

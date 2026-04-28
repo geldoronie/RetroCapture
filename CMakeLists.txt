@@ -617,28 +617,47 @@ target_compile_options(retrocapture PRIVATE
 # Flags específicas por build type e arquitetura
 if(ARCH_X86_64)
     # x86_64: usar -march=native para otimização máxima (padrão)
-    # Se BUILD_COMPATIBLE_X86_64 estiver ativado, usar flags compatíveis com CPUs mais antigas
+    # Se BUILD_COMPATIBLE_X86_64 estiver ativado, usar baseline portátil (sem AVX/AVX2)
     if(BUILD_COMPATIBLE_X86_64)
-        # Flags compatíveis: suporta CPUs desde Core 2 (2006) até CPUs modernas
-        # Não usa AVX2, apenas SSE4.2 (suportado desde Core 2)
-        # IMPORTANTE: Desabilitar explicitamente AVX e AVX2 para garantir compatibilidade
-        message(STATUS "Usando flags compatíveis para x86-64 (sem AVX2)")
-        target_compile_options(retrocapture PRIVATE
-            $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
-            $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
-            $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
-            $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
-        )
-        
-        # Aplicar mesmas flags ao ImGui para garantir compatibilidade
-        # O ImGui é uma biblioteca estática, então precisa das mesmas flags
-        if(TARGET imgui)
-            target_compile_options(imgui PRIVATE
+        # Preferir -march=x86-64-v2 (GCC 11+ / Clang 12+): baseline padronizado SSE4.2 + popcnt.
+        # Em compiladores antigos, cair em flags equivalentes explícitas.
+        # Importante: as flags ficam inline em cada genex (não via ${VAR}) porque CMake
+        # trata variáveis dentro de genex como tokens únicos e quota com aspas, fazendo
+        # o compilador receber tudo como um único valor de -march=.
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-march=x86-64-v2" COMPILER_SUPPORTS_X86_64_V2)
+        if(COMPILER_SUPPORTS_X86_64_V2)
+            message(STATUS "Usando baseline portátil x86-64-v2 (SSE4.2, sem AVX/AVX2)")
+            target_compile_options(retrocapture PRIVATE
+                $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+                $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64-v2 -mtune=generic>
+                $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64-v2 -mtune=generic>
+                $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64-v2 -mtune=generic>
+            )
+            if(TARGET imgui)
+                target_compile_options(imgui PRIVATE
+                    $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+                    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64-v2 -mtune=generic>
+                    $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64-v2 -mtune=generic>
+                    $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64-v2 -mtune=generic>
+                )
+            endif()
+        else()
+            message(STATUS "Compilador sem suporte a x86-64-v2: usando flags equivalentes explícitas")
+            target_compile_options(retrocapture PRIVATE
                 $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
                 $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
                 $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
                 $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
             )
+            if(TARGET imgui)
+                target_compile_options(imgui PRIVATE
+                    $<$<CONFIG:Debug>:-g -O0 -DDEBUG -fno-omit-frame-pointer>
+                    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+                    $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+                    $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -march=x86-64 -mtune=generic -msse4.2 -mno-avx -mno-avx2>
+                )
+            endif()
         endif()
     else()
         # Otimização máxima: usa todas as instruções da CPU atual
