@@ -10,16 +10,10 @@
 #endif
 #endif
 
-// NEON support for ARM
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#include <arm_neon.h>
-#define HAVE_NEON 1
-#elif defined(__aarch64__)
-#include <arm_neon.h>
-#define HAVE_NEON 1
-#else
-#define HAVE_NEON 0
-#endif
+extern "C" {
+#include <libswscale/swscale.h>
+#include <libavutil/pixfmt.h>
+}
 
 FrameProcessor::FrameProcessor()
 {
@@ -28,6 +22,11 @@ FrameProcessor::FrameProcessor()
 FrameProcessor::~FrameProcessor()
 {
     deleteTexture();
+    if (m_swsContext)
+    {
+        sws_freeContext(m_swsContext);
+        m_swsContext = nullptr;
+    }
 }
 
 void FrameProcessor::init(OpenGLRenderer *renderer)
@@ -212,193 +211,38 @@ void FrameProcessor::setTextureFilterLinear(bool linear)
 
 void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
 {
-    // Validar ponteiros
     if (!yuyv || !rgb)
     {
         LOG_ERROR("Ponteiros inválidos na conversão YUYV para RGB");
         return;
     }
 
-#if HAVE_NEON
-    // Versão otimizada com NEON (processa 4 pares de pixels por iteração)
-    // Desabilitar temporariamente se houver problemas de cores - usar versão escalar
-    // Para desabilitar NEON, defina USE_NEON_YUYV_CONVERSION como 0
-    #define USE_NEON_YUYV_CONVERSION 1  // Mudar para 0 para desabilitar NEON (debug)
-    
-    #if USE_NEON_YUYV_CONVERSION
-        convertYUYVtoRGB_NEON(yuyv, rgb, width, height);
-    #else
-        convertYUYVtoRGB_Scalar(yuyv, rgb, width, height); // Fallback para debug
-    #endif
-#else
-    // Versão fallback sem NEON (processa pixel por pixel)
-    convertYUYVtoRGB_Scalar(yuyv, rgb, width, height);
-#endif
-}
-
-#if HAVE_NEON
-void FrameProcessor::convertYUYVtoRGB_NEON(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
-{
-    // Processar 1 par (2 pixels) por vez - mais simples e garante correção
-    // Usar valores escalares diretamente (mesma lógica da versão escalar)
-    for (uint32_t y = 0; y < height; ++y)
+    if (!m_swsContext || m_swsWidth != static_cast<int>(width) || m_swsHeight != static_cast<int>(height))
     {
-        const uint8_t *yuyv_row = yuyv + (y * width * 2);
-        uint8_t *rgb_row = rgb + (y * width * 3);
-        
-        uint32_t x = 0;
-        
-        // Processar pares alinhados (múltiplos de 2)
-        uint32_t aligned_width = (width / 2) * 2;
-        
-        for (; x < aligned_width; x += 2)
+        if (m_swsContext)
         {
-            // Carregar 4 bytes de YUYV (1 par = 2 pixels)
-            // Layout: Y0 U Y1 V
-            uint32_t idx = x * 2;
-            uint8x8_t yuyv_vec = vld1_u8(yuyv_row + idx);
-            
-            // Extrair componentes: Y0 U Y1 V
-            uint8_t y0 = vget_lane_u8(yuyv_vec, 0);
-            uint8_t u = vget_lane_u8(yuyv_vec, 1);
-            uint8_t y1 = vget_lane_u8(yuyv_vec, 2);
-            uint8_t v = vget_lane_u8(yuyv_vec, 3);
-            
-            // Converter para int16 e aplicar offsets (igual versão escalar)
-            int c0 = y0 - 16;
-            int d = u - 128;
-            int e = v - 128;
-            int c1 = y1 - 16;
-            
-            // Calcular R, G, B usando exatamente as mesmas fórmulas da versão escalar
-            // Pixel 0
-            int r0 = (298 * c0 + 409 * e + 128) >> 8;
-            int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
-            int b0 = (298 * c0 + 516 * d + 128) >> 8;
-            
-            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255 : r0;
-            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255 : g0;
-            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255 : b0;
-            
-            // Pixel 1
-            int r1 = (298 * c1 + 409 * e + 128) >> 8;
-            int g1 = (298 * c1 - 100 * d - 208 * e + 128) >> 8;
-            int b1 = (298 * c1 + 516 * d + 128) >> 8;
-            
-            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255 : r1;
-            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255 : g1;
-            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255 : b1;
-            
-            // Armazenar diretamente (sem usar NEON para armazenamento, apenas para carregar)
-            uint32_t rgbIdx0 = x * 3;
-            rgb_row[rgbIdx0] = r0;
-            rgb_row[rgbIdx0 + 1] = g0;
-            rgb_row[rgbIdx0 + 2] = b0;
-            
-            uint32_t rgbIdx1 = (x + 1) * 3;
-            rgb_row[rgbIdx1] = r1;
-            rgb_row[rgbIdx1 + 1] = g1;
-            rgb_row[rgbIdx1 + 2] = b1;
+            sws_freeContext(m_swsContext);
+            m_swsContext = nullptr;
         }
-        
-        // Processar pixel restante (se width for ímpar) com versão escalar
-        if (width % 2 == 1 && x < width)
+        m_swsContext = sws_getContext(
+            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_YUYV422,
+            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_RGB24,
+            SWS_POINT, nullptr, nullptr, nullptr);
+        if (!m_swsContext)
         {
-            uint32_t idx = (y * width + x) * 2;
-            if (idx + 1 < width * height * 2)
-            {
-                int y0 = yuyv_row[idx];
-                int u = yuyv_row[idx + 1];
-                // Segundo pixel não existe neste caso (última coluna ímpar)
-                int v = 128; // Valor padrão
-                
-                int c0 = y0 - 16;
-                int d = u - 128;
-                int e = v - 128;
-                
-                int r0 = (298 * c0 + 409 * e + 128) >> 8;
-                int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
-                int b0 = (298 * c0 + 516 * d + 128) >> 8;
-                
-                r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255 : r0;
-                g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255 : g0;
-                b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255 : b0;
-                
-                uint32_t rgbIdx = (y * width + x) * 3;
-                rgb_row[rgbIdx] = r0;
-                rgb_row[rgbIdx + 1] = g0;
-                rgb_row[rgbIdx + 2] = b0;
-            }
+            LOG_ERROR("sws_getContext falhou para YUYV→RGB " +
+                      std::to_string(width) + "x" + std::to_string(height));
+            return;
         }
+        m_swsWidth = static_cast<int>(width);
+        m_swsHeight = static_cast<int>(height);
     }
+
+    const uint8_t *srcSlice[1] = { yuyv };
+    int srcStride[1] = { static_cast<int>(width) * 2 };
+    uint8_t *dstSlice[1] = { rgb };
+    int dstStride[1] = { static_cast<int>(width) * 3 };
+
+    sws_scale(m_swsContext, srcSlice, srcStride, 0, static_cast<int>(height), dstSlice, dstStride);
 }
-#endif
 
-void FrameProcessor::convertYUYVtoRGB_Scalar(const uint8_t *yuyv, uint8_t *rgb, uint32_t width, uint32_t height)
-{
-    // Conversão YUYV para RGB
-    // YUYV: Y0 U0 Y1 V0 Y2 U1 Y3 V1 ...
-    // Layout: para cada par de pixels, temos Y0 U Y1 V
-    for (uint32_t y = 0; y < height; ++y)
-    {
-        for (uint32_t x = 0; x < width; x += 2)
-        {
-            // Índice no buffer YUYV (2 bytes por pixel, mas U e V são compartilhados)
-            // YUYV layout: Y0 U Y1 V Y2 U Y3 V ...
-            // Para cada par de pixels (x, x+1), temos 4 bytes: Y0 U Y1 V
-            uint32_t idx = (y * width + x) * 2;
-
-            // Verificar limites do buffer - garantir que temos pelo menos 4 bytes
-            if (x + 1 >= width || idx + 3 >= width * height * 2)
-            {
-                // Se não temos um par completo de pixels, pular este
-                continue;
-            }
-
-            int y0 = yuyv[idx];
-            int u = yuyv[idx + 1];
-            int y1 = yuyv[idx + 2];
-            int v = yuyv[idx + 3];
-
-            // Converter primeiro pixel
-            int c = y0 - 16;
-            int d = u - 128;
-            int e = v - 128;
-
-            int r0 = (298 * c + 409 * e + 128) >> 8;
-            int g0 = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            int b0 = (298 * c + 516 * d + 128) >> 8;
-
-            r0 = (r0 < 0) ? 0 : (r0 > 255) ? 255
-                                           : r0;
-            g0 = (g0 < 0) ? 0 : (g0 > 255) ? 255
-                                           : g0;
-            b0 = (b0 < 0) ? 0 : (b0 > 255) ? 255
-                                           : b0;
-
-            // Converter segundo pixel
-            c = y1 - 16;
-            int r1 = (298 * c + 409 * e + 128) >> 8;
-            int g1 = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            int b1 = (298 * c + 516 * d + 128) >> 8;
-
-            r1 = (r1 < 0) ? 0 : (r1 > 255) ? 255
-                                           : r1;
-            g1 = (g1 < 0) ? 0 : (g1 > 255) ? 255
-                                           : g1;
-            b1 = (b1 < 0) ? 0 : (b1 > 255) ? 255
-                                           : b1;
-
-            // Escrever pixels RGB
-            uint32_t rgbIdx0 = (y * width + x) * 3;
-            rgb[rgbIdx0] = r0;
-            rgb[rgbIdx0 + 1] = g0;
-            rgb[rgbIdx0 + 2] = b0;
-
-            uint32_t rgbIdx1 = (y * width + x + 1) * 3;
-            rgb[rgbIdx1] = r1;
-            rgb[rgbIdx1 + 1] = g1;
-            rgb[rgbIdx1 + 2] = b1;
-        }
-    }
-}
