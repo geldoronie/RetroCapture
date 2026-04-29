@@ -6,9 +6,12 @@ PBOManager::PBOManager()
     : m_initialized(false)
     , m_width(0)
     , m_height(0)
+    , m_format(GL_RGB)
+    , m_bytesPerPixel(3)
     , m_bufferSize(0)
     , m_currentPBO(0)
     , m_nextPBO(1)
+    , m_readsStarted(0)
 {
     m_pbo[0] = 0;
     m_pbo[1] = 0;
@@ -19,31 +22,49 @@ PBOManager::~PBOManager()
     cleanup();
 }
 
-bool PBOManager::init(uint32_t width, uint32_t height)
+bool PBOManager::init(uint32_t width, uint32_t height, GLenum format)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    
+
+    uint32_t bpp = (format == GL_RGBA) ? 4 : 3;
+
     if (m_initialized)
     {
-        // Já inicializado, apenas redimensionar se necessário
+        if (m_format != format || m_bytesPerPixel != bpp)
+        {
+            deletePBOs();
+            m_format = format;
+            m_bytesPerPixel = bpp;
+            m_width = width;
+            m_height = height;
+            m_bufferSize = calculateBufferSize(width, height);
+            m_readsStarted = 0;
+            if (!createPBOs())
+            {
+                m_initialized = false;
+                return false;
+            }
+            return true;
+        }
         resizeIfNeeded(width, height);
         return true;
     }
-    
+
+    m_format = format;
+    m_bytesPerPixel = bpp;
     m_width = width;
     m_height = height;
     m_bufferSize = calculateBufferSize(width, height);
-    
-    // Verificar se PBOs são suportados (OpenGL 2.1+ ou OpenGL ES 3.0+)
-    // Se não suportados, createPBOs() falhará e retornaremos false
+
     if (!createPBOs())
     {
         LOG_WARN("PBOs not supported or failed to create - will use synchronous glReadPixels");
         return false;
     }
-    
+
     m_initialized = true;
-    LOG_INFO("PBOs initialized: " + std::to_string(width) + "x" + std::to_string(height));
+    LOG_INFO("PBOs initialized: " + std::to_string(width) + "x" + std::to_string(height) +
+             " (" + (format == GL_RGBA ? "RGBA" : "RGB") + ")");
     return true;
 }
 
@@ -58,6 +79,7 @@ void PBOManager::cleanup()
         m_width = 0;
         m_height = 0;
         m_bufferSize = 0;
+        m_readsStarted = 0;
     }
 }
 
@@ -78,77 +100,73 @@ bool PBOManager::startAsyncRead(GLint x, GLint y, GLsizei width, GLsizei height)
     
     // Alternar PBOs: usar o próximo PBO para leitura
     std::swap(m_currentPBO, m_nextPBO);
-    
+
     // Bind o PBO atual para glReadPixels escrever nele
     glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbo[m_currentPBO]);
-    
-    // Iniciar leitura assíncrona (não bloqueia)
-    // glReadPixels escreve no PBO, mas não espera a transferência completar
-    glReadPixels(x, y, width, height, GL_RGB, GL_UNSIGNED_BYTE, 0);
-    
-    // Unbind PBO
+
+    // Iniciar leitura assíncrona (não bloqueia): glReadPixels escreve no PBO
+    // mas não espera a transferência completar.
+    glReadPixels(x, y, width, height, m_format, GL_UNSIGNED_BYTE, 0);
+
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    
+
+    if (m_readsStarted < 2)
+    {
+        m_readsStarted++;
+    }
+
     return true;
 }
 
-bool PBOManager::getReadData(uint8_t* data, uint32_t width, uint32_t height)
+bool PBOManager::getReadData(uint8_t* data, uint32_t width, uint32_t height, bool flipY)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    
+
     if (!m_initialized || !data)
     {
         return false;
     }
-    
-    // Verificar se dimensões correspondem
+
     if (width != m_width || height != m_height)
     {
         return false;
     }
-    
-    // Bind o PBO que foi lido anteriormente (o próximo, não o atual)
-    // IMPORTANTE: m_nextPBO é o PBO que foi iniciado no frame anterior
-    // porque startAsyncRead() faz swap antes de iniciar a leitura
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbo[m_nextPBO]);
-    
-    // Mapear o PBO para leitura
-    // NOTA: glMapBuffer pode bloquear se a transferência ainda não completou,
-    // mas isso é aceitável pois estamos lendo o PBO do frame anterior
-    // que já teve tempo para transferir
-    void* mappedData = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-    
-    if (mappedData)
+
+    // Precisamos de pelo menos 2 startAsyncRead antes de ler m_nextPBO,
+    // senão o "PBO anterior" tem conteúdo indefinido (recém-alocado).
+    if (m_readsStarted < 2)
     {
-        // Copiar dados (com padding se necessário)
-        size_t readRowSizeUnpadded = static_cast<size_t>(width) * 3;
-        size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
-        
-        const uint8_t* src = static_cast<const uint8_t*>(mappedData);
-        
-        // glReadPixels retorna de baixo para cima, precisamos inverter
-        for (uint32_t row = 0; row < height; row++)
-        {
-            uint32_t srcRow = height - 1 - row; // Ler de baixo para cima
-            uint32_t dstRow = row; // Escrever de cima para baixo
-            
-            const uint8_t* srcPtr = src + (srcRow * readRowSizePadded);
-            uint8_t* dstPtr = data + (dstRow * readRowSizeUnpadded);
-            memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
-        }
-        
-        // Desmapear PBO
-        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        
-        return true;
-    }
-    else
-    {
-        // Transferência ainda não completou, dados não disponíveis
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         return false;
     }
+
+    // Bind o PBO que foi iniciado no frame anterior (m_nextPBO, devido ao swap em startAsyncRead).
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbo[m_nextPBO]);
+
+    void* mappedData = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+
+    if (mappedData)
+    {
+        size_t rowSizeUnpadded = static_cast<size_t>(width) * m_bytesPerPixel;
+        size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4;
+
+        const uint8_t* src = static_cast<const uint8_t*>(mappedData);
+
+        for (uint32_t row = 0; row < height; row++)
+        {
+            uint32_t srcRow = flipY ? (height - 1 - row) : row;
+            const uint8_t* srcPtr = src + (srcRow * rowSizePadded);
+            uint8_t* dstPtr = data + (row * rowSizeUnpadded);
+            memcpy(dstPtr, srcPtr, rowSizeUnpadded);
+        }
+
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+        return true;
+    }
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    return false;
 }
 
 bool PBOManager::hasDataReady() const
@@ -187,15 +205,13 @@ void PBOManager::resizeIfNeeded(uint32_t width, uint32_t height)
         return; // Não precisa redimensionar
     }
     
-    // Deletar PBOs antigos
     deletePBOs();
-    
-    // Atualizar dimensões
+
     m_width = width;
     m_height = height;
     m_bufferSize = calculateBufferSize(width, height);
-    
-    // Recriar PBOs
+    m_readsStarted = 0;
+
     if (!createPBOs())
     {
         LOG_ERROR("Failed to resize PBOs");
@@ -205,8 +221,8 @@ void PBOManager::resizeIfNeeded(uint32_t width, uint32_t height)
 
 size_t PBOManager::calculateBufferSize(uint32_t width, uint32_t height) const
 {
-    // Calcular tamanho com padding (alinhamento de 4 bytes)
-    size_t rowSizeUnpadded = static_cast<size_t>(width) * 3;
+    // Padding de 4 bytes por linha (default GL_PACK_ALIGNMENT).
+    size_t rowSizeUnpadded = static_cast<size_t>(width) * m_bytesPerPixel;
     size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4;
     return rowSizePadded * static_cast<size_t>(height);
 }
