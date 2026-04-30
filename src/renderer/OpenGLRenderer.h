@@ -23,11 +23,14 @@ public:
     void updateTexture(GLuint texture, const uint8_t* data, uint32_t width, uint32_t height, uint32_t format);
     
     // Renderizar textura na tela
-    // Se maintainAspect=true, calcula viewport mantendo proporção da textura
-    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, 
-                       bool flipY = true, bool enableBlend = false, 
+    // Se maintainAspect=true, calcula viewport mantendo proporção da textura.
+    // Se preserveViewport=true, NÃO sobrescreve o viewport (o caller já configurou,
+    // ex: downscale com overscan via offset negativo).
+    void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight,
+                       bool flipY = true, bool enableBlend = false,
                        float brightness = 1.0f, float contrast = 1.0f,
-                       bool maintainAspect = false, uint32_t textureWidth = 0, uint32_t textureHeight = 0);
+                       bool maintainAspect = false, uint32_t textureWidth = 0, uint32_t textureHeight = 0,
+                       bool preserveViewport = false);
     
     // Limpar tela
     void clear(float r = 0.0f, float g = 0.0f, float b = 0.0f, float a = 1.0f);

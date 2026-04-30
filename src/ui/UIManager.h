@@ -309,6 +309,21 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getActualCaptureWidth() const { return m_actualCaptureWidth; }
     uint32_t getActualCaptureHeight() const { return m_actualCaptureHeight; }
+    float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
+    float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
+    bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
+    void setSourceOverscanPercentX(float pct) {
+        m_sourceOverscanPercentX = pct;
+        if (m_sourceOverscanLocked) m_sourceOverscanPercentY = pct;
+    }
+    void setSourceOverscanPercentY(float pct) {
+        m_sourceOverscanPercentY = pct;
+        if (m_sourceOverscanLocked) m_sourceOverscanPercentX = pct;
+    }
+    void setSourceOverscanLocked(bool locked) {
+        m_sourceOverscanLocked = locked;
+        if (locked) m_sourceOverscanPercentY = m_sourceOverscanPercentX;
+    }
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
     IVideoCapture *getCapture() const { return m_capture; }
@@ -674,6 +689,11 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
+    // Overscan: crop % das bordas do source antes do downscale.
+    // X horizontal, Y vertical. Locked espelha um no outro.
+    float m_sourceOverscanPercentX = 0.0f;
+    float m_sourceOverscanPercentY = 0.0f;
+    bool m_sourceOverscanLocked = true;
     std::string m_captureDevice;
     std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
     std::function<void(uint32_t)> m_onFramerateChanged;

@@ -386,7 +386,7 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
     }
 }
 
-void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast, bool maintainAspect, uint32_t textureWidth, uint32_t textureHeight) {
+void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast, bool maintainAspect, uint32_t textureWidth, uint32_t textureHeight, bool preserveViewport) {
     // Verificar se a textura é válida
     if (texture == 0) {
         LOG_ERROR("Tentativa de renderizar textura inválida (0)");
@@ -462,7 +462,9 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
         }
     }
     
-    glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+    if (!preserveViewport) {
+        glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+    }
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     
     glBindVertexArray(0);

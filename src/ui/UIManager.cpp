@@ -2206,6 +2206,12 @@ void UIManager::loadConfig()
                 m_captureHeight = capture["height"].get<uint32_t>();
             if (capture.contains("fps"))
                 m_captureFps = capture["fps"].get<uint32_t>();
+            if (capture.contains("sourceOverscanX"))
+                m_sourceOverscanPercentX = capture["sourceOverscanX"].get<float>();
+            if (capture.contains("sourceOverscanY"))
+                m_sourceOverscanPercentY = capture["sourceOverscanY"].get<float>();
+            if (capture.contains("sourceOverscanLocked"))
+                m_sourceOverscanLocked = capture["sourceOverscanLocked"].get<bool>();
         }
 
         // Carregar configurações de imagem
@@ -2550,7 +2556,10 @@ void UIManager::saveConfig()
         config["capture"] = {
             {"width", m_captureWidth},
             {"height", m_captureHeight},
-            {"fps", m_captureFps}};
+            {"fps", m_captureFps},
+            {"sourceOverscanX", m_sourceOverscanPercentX},
+            {"sourceOverscanY", m_sourceOverscanPercentY},
+            {"sourceOverscanLocked", m_sourceOverscanLocked}};
 
         // Salvar shader atual
         config["shader"] = {

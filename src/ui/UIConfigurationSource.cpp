@@ -536,6 +536,37 @@ void UIConfigurationSource::renderCaptureSettings()
                             actualW, actualH, requestedW, requestedH);
     }
 
+    // Overscan: corta uma % das bordas do source antes do downscale. Útil pra
+    // remover letterbox do dispositivo de captura ou aproximar o crop de TV CRT.
+    // Eixos X/Y independentes; lock espelha um no outro.
+    ImGui::Text("Source Overscan:");
+    bool overscanLocked = m_uiManager->getSourceOverscanLocked();
+    if (ImGui::Checkbox("Lock X/Y##overscan_lock", &overscanLocked))
+    {
+        m_uiManager->setSourceOverscanLocked(overscanLocked);
+        m_uiManager->saveConfig();
+    }
+    float overscanX = m_uiManager->getSourceOverscanPercentX();
+    float overscanY = m_uiManager->getSourceOverscanPercentY();
+    ImGui::PushItemWidth(180);
+    if (ImGui::SliderFloat("Horizontal##source_overscan_x", &overscanX, 0.0f, 30.0f, "%.1f%%"))
+    {
+        m_uiManager->setSourceOverscanPercentX(overscanX);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::SliderFloat("Vertical##source_overscan_y", &overscanY, 0.0f, 30.0f, "%.1f%%"))
+    {
+        m_uiManager->setSourceOverscanPercentY(overscanY);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        m_uiManager->saveConfig();
+    }
+    ImGui::PopItemWidth();
+
     // Controle de FPS
     ImGui::Text("Framerate:");
     int fps = static_cast<int>(m_uiManager->getCaptureFps());
@@ -576,13 +607,77 @@ void UIConfigurationSource::renderQuickFPS()
 
 void UIConfigurationSource::renderQuickResolutions()
 {
-    // Resoluções 4:3
-    ImGui::Text("4:3 Resolutions:");
-    if (ImGui::Button("320x240"))
+    // Resoluções nativas de consoles retrô. Quando o dispositivo de captura
+    // não suporta a resolução escolhida, o V4L2 ajusta pra mais próxima e o
+    // pipeline faz downscale antes do shader chain — o efeito CRT/scanline
+    // fica autêntico (cada scanline vira N pixels altos no viewport final).
+    ImGui::Text("Retro Consoles:");
+    if (ImGui::Button("160x144 GB"))
+    {
+        m_uiManager->triggerResolutionChange(160, 144);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("240x160 GBA"))
+    {
+        m_uiManager->triggerResolutionChange(240, 160);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("256x192 SMS"))
+    {
+        m_uiManager->triggerResolutionChange(256, 192);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("256x224 NES/SNES"))
+    {
+        m_uiManager->triggerResolutionChange(256, 224);
+    }
+    if (ImGui::Button("256x240 NES alt"))
+    {
+        m_uiManager->triggerResolutionChange(256, 240);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("224x288 Vertical Arcade"))
+    {
+        m_uiManager->triggerResolutionChange(224, 288);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("320x200 DOS/CGA"))
+    {
+        m_uiManager->triggerResolutionChange(320, 200);
+    }
+    if (ImGui::Button("320x224 Mega Drive"))
+    {
+        m_uiManager->triggerResolutionChange(320, 224);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("320x240 Saturn/PSX"))
     {
         m_uiManager->triggerResolutionChange(320, 240);
     }
     ImGui::SameLine();
+    if (ImGui::Button("304x224 Mega CD"))
+    {
+        m_uiManager->triggerResolutionChange(304, 224);
+    }
+    if (ImGui::Button("384x224 CPS-1"))
+    {
+        m_uiManager->triggerResolutionChange(384, 224);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("384x288 CPS-2 PAL"))
+    {
+        m_uiManager->triggerResolutionChange(384, 288);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("640x448 PSX Hi-Res"))
+    {
+        m_uiManager->triggerResolutionChange(640, 448);
+    }
+
+    ImGui::Separator();
+
+    // Resoluções 4:3
+    ImGui::Text("4:3 Resolutions:");
     if (ImGui::Button("640x480"))
     {
         m_uiManager->triggerResolutionChange(640, 480);

@@ -2943,9 +2943,23 @@ void Application::run()
                     }
 
                     glBindFramebuffer(GL_FRAMEBUFFER, m_shaderSourceFBO);
-                    glViewport(0, 0,
-                               static_cast<GLsizei>(m_logicalCaptureWidth),
-                               static_cast<GLsizei>(m_logicalCaptureHeight));
+
+                    // Overscan: amplia o viewport de modo que apenas a região
+                    // central (1 - 2*overscan) do source caia dentro do FBO.
+                    // X e Y independentes; 0 = sem corte, 0.45 = corta 45% de cada lado.
+                    const float overscanXPct = m_ui ? m_ui->getSourceOverscanPercentX() : 0.0f;
+                    const float overscanYPct = m_ui ? m_ui->getSourceOverscanPercentY() : 0.0f;
+                    const float overscanX = std::clamp(overscanXPct / 100.0f, 0.0f, 0.45f);
+                    const float overscanY = std::clamp(overscanYPct / 100.0f, 0.0f, 0.45f);
+                    const float visibleFracX = 1.0f - 2.0f * overscanX;
+                    const float visibleFracY = 1.0f - 2.0f * overscanY;
+                    const float vpW = static_cast<float>(m_logicalCaptureWidth) / visibleFracX;
+                    const float vpH = static_cast<float>(m_logicalCaptureHeight) / visibleFracY;
+                    const GLint vpX = static_cast<GLint>((static_cast<float>(m_logicalCaptureWidth) - vpW) / 2.0f);
+                    const GLint vpY = static_cast<GLint>((static_cast<float>(m_logicalCaptureHeight) - vpH) / 2.0f);
+                    glViewport(vpX, vpY,
+                               static_cast<GLsizei>(vpW),
+                               static_cast<GLsizei>(vpH));
 
                     // Forçar NEAREST na textura source pra preservar look pixelado
                     // no downscale, e restaurar pra config do FrameProcessor depois.
@@ -2960,7 +2974,8 @@ void Application::run()
                     m_renderer->renderTexture(shaderSrcTex,
                                               m_logicalCaptureWidth, m_logicalCaptureHeight,
                                               false, false, 1.0f, 1.0f, false,
-                                              shaderSrcW, shaderSrcH);
+                                              shaderSrcW, shaderSrcH,
+                                              /*preserveViewport=*/true);
 
                     glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
