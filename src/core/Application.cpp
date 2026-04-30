@@ -3175,9 +3175,6 @@ void Application::run()
                                       shouldFlipY, isShaderTexture, m_brightness, m_contrast,
                                       m_maintainAspect, finalRenderWidth, finalRenderHeight);
 
-            // IMPORTANTE: Aguardar que a renderização seja concluída
-            glFinish();
-
             // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
@@ -3208,68 +3205,12 @@ void Application::run()
                 if (captureDataSize > 0 && captureDataSize <= (7680 * 4320 * 3) &&
                     captureWidth > 0 && captureHeight > 0 && captureWidth <= 7680 && captureHeight <= 4320)
                 {
-                    bool usePBO = false;
+                    // SOLUÇÃO PARA DIRECTFB: Capturar diretamente da textura final usando FBO
+                    // Isso evita problemas com back/front buffer do framebuffer padrão
+                    // que não funciona corretamente com DirectFB
 
-                    if (usePBO)
-                    {
-                        // Inicializar PBO se necessário
-                        if (m_pboManager && !m_pboManager->isInitialized())
-                        {
-                            if (!m_pboManager->init(captureWidth, captureHeight))
-                            {
-                                LOG_WARN("Failed to initialize PBO, falling back to synchronous glReadPixels");
-                            }
-                        }
-
-                        // Tentar usar PBO se disponível
-                        if (m_pboManager && m_pboManager->isInitialized())
-                        {
-                            // Primeiro, iniciar leitura assíncrona para ESTE frame
-                            // (isso será lido no próximo frame)
-                            m_pboManager->startAsyncRead(viewportX, viewportY,
-                                                         static_cast<GLsizei>(captureWidth),
-                                                         static_cast<GLsizei>(captureHeight));
-
-                            // Tentar obter dados do PBO anterior (frame anterior)
-                            // Isso não bloqueia se os dados ainda não estão prontos
-                            std::vector<uint8_t> frameData;
-                            frameData.resize(captureDataSize);
-
-                            if (m_pboManager->getReadData(frameData.data(), captureWidth, captureHeight))
-                            {
-                                // Dados disponíveis, enviar para streaming e recording
-                                if (m_streamManager && m_streamManager->isActive())
-                                {
-                                    m_streamManager->pushFrame(frameData.data(), captureWidth, captureHeight);
-                                }
-                                if (m_recordingManager && m_recordingManager->isRecording())
-                                {
-                                    m_recordingManager->pushFrame(frameData.data(), captureWidth, captureHeight);
-                                }
-                            }
-                            else
-                            {
-                                // PBO data not ready yet - this is normal for first frame
-                            }
-                            // Se dados não estão prontos (primeiro frame ou GPU ainda transferindo),
-                            // não enviamos este frame - isso é normal e esperado
-                        }
-                        else
-                        {
-                            // Fallback: usar glReadPixels síncrono se PBO não está disponível
-                            usePBO = false; // Forçar método síncrono
-                        }
-                    }
-
-                    // Usar método síncrono (fallback ou se PBO desabilitado)
-                    if (!usePBO)
-                    {
-                        // SOLUÇÃO PARA DIRECTFB: Capturar diretamente da textura final usando FBO
-                        // Isso evita problemas com back/front buffer do framebuffer padrão
-                        // que não funciona corretamente com DirectFB
-
-                        // Salvar FBO atual
-                        GLint previousFBO = 0;
+                    // Salvar FBO atual
+                    GLint previousFBO = 0;
                         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
 
                         // Verificar se a textura é válida e as dimensões são válidas antes de tentar capturar
@@ -3402,16 +3343,14 @@ void Application::run()
                                 size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
                                 size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
 
-                                std::vector<uint8_t> frameDataWithPadding;
+                                auto &frameDataWithPadding = m_captureSyncPadded;
                                 frameDataWithPadding.resize(totalSizeWithPadding);
 
-                                glFlush();
-                                glFinish();
                                 glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
                                              GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
                                 // Converter dados (mesmo código abaixo)
-                                std::vector<uint8_t> frameData;
+                                auto &frameData = m_captureFrameData;
                                 frameData.resize(rgbDataSize);
                                 for (uint32_t row = 0; row < actualCaptureHeight; row++)
                                 {
@@ -3483,24 +3422,11 @@ void Application::run()
                             }
                             
                             size_t rgbDataSize = static_cast<size_t>(textureWidth) * static_cast<size_t>(textureHeight) * 3;
-                            
-                            // Preparar buffer com padding para glReadPixels
-                            size_t readRowSizeUnpadded = static_cast<size_t>(textureWidth) * bytesPerPixel;
-                            size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
-                            size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(textureHeight);
-                            
-                            std::vector<uint8_t> frameDataWithPadding;
-                            frameDataWithPadding.resize(totalSizeWithPadding);
-                            
-                            // IMPORTANTE: Quando lemos de um FBO anexado a uma textura, precisamos garantir
-                            // que o viewport está configurado para o tamanho COMPLETO da textura.
-                            // O viewport define a região de leitura do framebuffer.
-                            // IMPORTANTE: glReadPixels lê do framebuffer atual (FBO com a textura anexada),
-                            // e as coordenadas são relativas ao viewport do FBO, não ao viewport da janela.
-                            // Precisamos garantir que o viewport seja exatamente o tamanho da textura COMPLETA.
+
+                            // glReadPixels lê do FBO atual (com textura anexada). O viewport
+                            // do FBO precisa ser exatamente o tamanho da textura.
                             glViewport(0, 0, textureWidth, textureHeight);
-                            
-                            // Verificar viewport após configurar (para debug)
+
                             static int viewportCheckCount = 0;
                             if (viewportCheckCount++ < 3)
                             {
@@ -3513,49 +3439,99 @@ void Application::run()
                                              std::to_string(currentViewport[2]) + "x" + std::to_string(currentViewport[3]) + "]");
                             }
 
-                                // IMPORTANTE: Garantir que todos os comandos OpenGL foram executados
-                                glFlush();
-                                glFinish();
+                            auto &frameData = m_captureFrameData;
+                            bool frameDataReady = false;
 
-                                // Capturar da textura via FBO (textura completa, começando em 0,0)
-                                // IMPORTANTE: glReadPixels lê do framebuffer atual (que é o FBO com a textura anexada)
-                                // As coordenadas (0, 0) são relativas ao viewport do FBO, que deve ser (0, 0, width, height)
-                                // Isso garante que lemos a textura completa, não apenas uma parte
-                                glReadPixels(0, 0, static_cast<GLsizei>(textureWidth), static_cast<GLsizei>(textureHeight),
-                                             readFormat, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
+                            // Decidir entre PBO async e leitura síncrona ANTES de tocar no FBO.
+                            // O PBO precisa do FBO bound durante startAsyncRead; o sync precisa
+                            // do FBO bound durante glReadPixels. Os dois caminhos divergem aqui.
+                            bool useAsyncPBO = (m_pboManager &&
+                                                m_pboManager->init(textureWidth, textureHeight, readFormat) &&
+                                                m_pboManager->isInitialized());
 
-                                // Restaurar FBO anterior
+                            if (useAsyncPBO)
+                            {
+                                // Agenda glReadPixels no PBO (não bloqueia).
+                                m_pboManager->startAsyncRead(0, 0,
+                                                             static_cast<GLsizei>(textureWidth),
+                                                             static_cast<GLsizei>(textureHeight));
+
+                                // FBO já não é mais necessário — glReadPixels foi agendado.
                                 glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
                                 glDeleteFramebuffers(1, &captureFBO);
 
-                                // Converter de padded para unpadded
-                                // IMPORTANTE: Quando lemos de um FBO anexado a uma textura, glReadPixels
-                                // retorna dados na mesma orientação da textura (top-to-bottom)
-                                // Não precisamos inverter verticalmente como quando lemos do framebuffer padrão
-                                std::vector<uint8_t> frameData;
-                                frameData.resize(rgbDataSize);
+                                // Tenta obter os dados do frame ANTERIOR (já transferidos da GPU).
+                                // Os primeiros 1-2 frames pós-init não têm dados ainda — drop.
+                                if (bytesPerPixel == 3)
+                                {
+                                    frameData.resize(rgbDataSize);
+                                    frameDataReady = m_pboManager->getReadData(
+                                        frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                }
+                                else
+                                {
+                                    auto &rgbaData = m_captureRgbaScratch;
+                                    rgbaData.resize(static_cast<size_t>(textureWidth) *
+                                                    static_cast<size_t>(textureHeight) * 4);
+                                    if (m_pboManager->getReadData(rgbaData.data(),
+                                                                  textureWidth, textureHeight,
+                                                                  /*flipY=*/false))
+                                    {
+                                        frameData.resize(rgbDataSize);
+                                        for (uint32_t row = 0; row < textureHeight; row++)
+                                        {
+                                            const uint8_t *src = rgbaData.data() + (row * textureWidth * 4);
+                                            uint8_t *dst = frameData.data() + (row * textureWidth * 3);
+                                            for (uint32_t col = 0; col < textureWidth; col++)
+                                            {
+                                                dst[col * 3 + 0] = src[col * 4 + 0];
+                                                dst[col * 3 + 1] = src[col * 4 + 1];
+                                                dst[col * 3 + 2] = src[col * 4 + 2];
+                                            }
+                                        }
+                                        frameDataReady = true;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Caminho síncrono (fallback quando PBO não está disponível).
+                                size_t syncRowUnpadded = static_cast<size_t>(textureWidth) * bytesPerPixel;
+                                size_t syncRowPadded = ((syncRowUnpadded + 3) / 4) * 4;
+                                auto &frameDataWithPadding = m_captureSyncPadded;
+                                frameDataWithPadding.resize(syncRowPadded * static_cast<size_t>(textureHeight));
 
+                                glReadPixels(0, 0,
+                                             static_cast<GLsizei>(textureWidth),
+                                             static_cast<GLsizei>(textureHeight),
+                                             readFormat, GL_UNSIGNED_BYTE,
+                                             frameDataWithPadding.data());
+
+                                glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+                                glDeleteFramebuffers(1, &captureFBO);
+
+                                frameData.resize(rgbDataSize);
                                 for (uint32_t row = 0; row < textureHeight; row++)
                                 {
-                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (row * readRowSizePadded);
+                                    const uint8_t *srcPtr = frameDataWithPadding.data() + (row * syncRowPadded);
                                     uint8_t *dstPtr = frameData.data() + (row * textureWidth * 3);
 
                                     if (isShaderTexture)
                                     {
-                                        // Converter RGBA para RGB (descartar alpha)
                                         for (uint32_t col = 0; col < textureWidth; col++)
                                         {
-                                            dstPtr[col * 3 + 0] = srcPtr[col * 4 + 0]; // R
-                                            dstPtr[col * 3 + 1] = srcPtr[col * 4 + 1]; // G
-                                            dstPtr[col * 3 + 2] = srcPtr[col * 4 + 2]; // B
+                                            dstPtr[col * 3 + 0] = srcPtr[col * 4 + 0];
+                                            dstPtr[col * 3 + 1] = srcPtr[col * 4 + 1];
+                                            dstPtr[col * 3 + 2] = srcPtr[col * 4 + 2];
                                         }
                                     }
                                     else
                                     {
-                                        // RGB: copiar diretamente
                                         memcpy(dstPtr, srcPtr, textureWidth * 3);
                                     }
                                 }
+                                frameDataReady = true;
+                            }
 
                             // Usar dimensões originais da textura
                             // O MediaEncoder fará o redimensionamento para a resolução de gravação/streaming se necessário
@@ -3593,13 +3569,13 @@ void Application::run()
                                         LOG_WARN("Frame capture: " + std::to_string(static_cast<int>(blackRatio * 100)) +
                                                  "% of sampled pixels are black (may indicate DirectFB/framebuffer issue)");
                                         LOG_WARN("Capture params: texture=" + std::to_string(textureToCapture) +
-                                                 ", size=" + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight) +
-                                                 ", FBO=" + std::to_string(captureFBO));
+                                                 ", size=" + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
                                     }
                                 }
 
-                                // Share frame data between streaming and recording
-                                if (m_streamManager && m_streamManager->isActive())
+                                // Share frame data between streaming and recording.
+                                // Pula push se o PBO async ainda não tem dados do frame anterior.
+                                if (frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
@@ -3619,7 +3595,7 @@ void Application::run()
                                     }
                                     m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                                 }
-                                if (m_recordingManager && m_recordingManager->isRecording())
+                                if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())
                                 {
                                     static int recordingPushLogCount = 0;
                                     if (recordingPushLogCount++ < 3)
@@ -3640,9 +3616,8 @@ void Application::run()
                                     }
                                     m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                                 }
-                            } // fim do else (textura válida)
-                        } // fim do else (FBO completo)
-                    } // fim do if (!usePBO)
+                        } // fim do else (textura válida)
+                    } // fim do else (FBO completo)
                 } // fim do if (needsFrameCapture)
             } // fim do if (captureDataSize > 0)
 

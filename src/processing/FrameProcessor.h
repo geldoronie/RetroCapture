@@ -4,19 +4,11 @@
 #include <cstdint>
 #include <vector>
 
-// NEON support detection
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#define HAVE_NEON 1
-#elif defined(__aarch64__)
-#define HAVE_NEON 1
-#else
-#define HAVE_NEON 0
-#endif
-
 // Forward declarations
 struct Frame;
 class IVideoCapture;
 class OpenGLRenderer;
+struct SwsContext;
 
 /**
  * Processes video frames from V4L2 capture and converts them to OpenGL textures.
@@ -94,32 +86,19 @@ private:
     // Buffer RGB reutilizável para conversão YUYV→RGB
     // Redimensionado apenas quando necessário (quando dimensões mudam)
     std::vector<uint8_t> m_rgbBuffer;
-    
+
+    // Contexto libswscale para YUYV→RGB. Recriado se as dimensões mudarem.
+    SwsContext* m_swsContext = nullptr;
+    int m_swsWidth = 0;
+    int m_swsHeight = 0;
+
     // Texture filtering configurável
     bool m_textureFilterLinear = false; // Padrão: GL_NEAREST (mais rápido)
 
     /**
-     * Convert YUYV format to RGB.
-     * 
-     * @param yuyv Input YUYV data
-     * @param rgb Output RGB buffer (must be width * height * 3 bytes)
-     * @param width Frame width
-     * @param height Frame height
+     * Convert YUYV (V4L2_PIX_FMT_YUYV) to RGB24 using libswscale.
+     * libswscale dispatches to SIMD paths internally (SSE2/AVX/NEON).
      */
     void convertYUYVtoRGB(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
-
-#if HAVE_NEON
-    /**
-     * NEON-optimized version of YUYV to RGB conversion.
-     * Processes 8 pixels (4 pairs) per iteration.
-     */
-    void convertYUYVtoRGB_NEON(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
-#endif
-
-    /**
-     * Scalar (non-NEON) version of YUYV to RGB conversion.
-     * Fallback for systems without NEON support.
-     */
-    void convertYUYVtoRGB_Scalar(const uint8_t* yuyv, uint8_t* rgb, uint32_t width, uint32_t height);
 };
 
