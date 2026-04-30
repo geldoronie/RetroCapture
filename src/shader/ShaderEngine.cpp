@@ -1222,17 +1222,11 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             }
 
             // Se nenhum uniform foi encontrado, logar aviso (primeiro pass, pass 3 e pass 4 que estão falhando)
-            if (!textureBound && (i == 0 || i == 3 || i == 4))
-            {
-                LOG_WARN("Nenhum uniform de textura encontrado no pass " + std::to_string(i) + " (Texture/Source/Input/s_p/etc)");
-                LOG_WARN("Isso pode causar tela preta - o shader precisa de um uniform de textura de entrada");
-                LOG_WARN("Pass " + std::to_string(i) + ": Programa de shader: " + std::to_string(pass.program));
-
-                // Tentar listar todos os uniforms do programa (debug)
-                // GLint numUniforms = 0;
-                // glGetProgramiv(pass.program, GL_ACTIVE_UNIFORMS, &numUniforms);
-                // LOG_INFO("Pass 0: Número de uniforms ativos: " + std::to_string(numUniforms));
-            }
+            // Nota: o warning sobre "nenhum uniform de textura encontrado" foi
+            // movido pra depois das demais ligações (PrevTexture, PassPrev,
+            // PassFeedback, alias, OrigTexture, LUT). Shaders como avg-lum0.glsl
+            // declaram `Texture` mas só usam `PrevN`, fazendo o compilador
+            // otimizar `Texture` fora do programa — não é tela preta de verdade.
 
             // Bind texturas de passes anteriores (PassPrev#Texture)
             // RetroArch shaders podem referenciar saídas de passes anteriores
@@ -1506,6 +1500,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                     // LOG_WARN("Pass " + std::to_string(i) + ": Uniform de textura de referência '" + texRef.first + "' não encontrado");
                 }
                 texUnit++;
+            }
+
+            // Após TODOS os bindings (Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT),
+            // só avisamos "tela preta provável" se NADA tiver sido bindado neste pass.
+            // texUnit começa em 1 (slot 0 reservado pra Texture). Se ainda for 1 e
+            // textureBound=false, o pass vai amostrar de unidades de textura
+            // não inicializadas — isso sim seria preto de verdade.
+            if (!textureBound && texUnit == 1)
+            {
+                static int warnedPasses = 0;
+                if (warnedPasses < 5)
+                {
+                    warnedPasses++;
+                    LOG_WARN("Pass " + std::to_string(i) + " sem nenhum sampler bindado " +
+                             "(Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT). " +
+                             "Provável tela preta. Programa: " + std::to_string(pass.program));
+                }
             }
 
             // Renderizar
