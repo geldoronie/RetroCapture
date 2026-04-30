@@ -1161,8 +1161,21 @@ void UIManager::renderInfoPanel()
 
 void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device)
 {
-    m_captureWidth = width;
-    m_captureHeight = height;
+    // width/height são o que o V4L2 entregou (depois do ajuste). Vão pra
+    // m_actualCaptureWidth/Height. Não sobrescrevemos m_captureWidth/Height
+    // (a preferência LÓGICA do usuário) — assim o campo de Resolution na UI
+    // continua mostrando a escolha do usuário, mesmo quando o dispositivo
+    // adjusta pra mais próxima suportada (e o pipeline faz downscale).
+    m_actualCaptureWidth = width;
+    m_actualCaptureHeight = height;
+    if (m_captureWidth == 0)
+    {
+        m_captureWidth = width;
+    }
+    if (m_captureHeight == 0)
+    {
+        m_captureHeight = height;
+    }
     m_captureFps = fps;
     m_captureDevice = device;
     if (m_currentDevice.empty())
@@ -2193,6 +2206,12 @@ void UIManager::loadConfig()
                 m_captureHeight = capture["height"].get<uint32_t>();
             if (capture.contains("fps"))
                 m_captureFps = capture["fps"].get<uint32_t>();
+            if (capture.contains("sourceOverscanX"))
+                m_sourceOverscanPercentX = capture["sourceOverscanX"].get<float>();
+            if (capture.contains("sourceOverscanY"))
+                m_sourceOverscanPercentY = capture["sourceOverscanY"].get<float>();
+            if (capture.contains("sourceOverscanLocked"))
+                m_sourceOverscanLocked = capture["sourceOverscanLocked"].get<bool>();
         }
 
         // Carregar configurações de imagem
@@ -2537,7 +2556,10 @@ void UIManager::saveConfig()
         config["capture"] = {
             {"width", m_captureWidth},
             {"height", m_captureHeight},
-            {"fps", m_captureFps}};
+            {"fps", m_captureFps},
+            {"sourceOverscanX", m_sourceOverscanPercentX},
+            {"sourceOverscanY", m_sourceOverscanPercentY},
+            {"sourceOverscanLocked", m_sourceOverscanLocked}};
 
         // Salvar shader atual
         config["shader"] = {

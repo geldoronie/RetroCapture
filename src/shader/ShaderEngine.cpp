@@ -372,6 +372,8 @@ bool ShaderEngine::loadPresetPasses()
                 pass.fragmentShader = 0;
             }
             cleanupFramebuffer(pass.framebuffer, pass.texture);
+            cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+            pass.feedbackEnabled = false;
         }
     }
 
@@ -1077,6 +1079,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 cleanupFramebuffer(pass.framebuffer, pass.texture);
                 createFramebuffer(outputWidth, outputHeight, pass.passInfo.floatFramebuffer,
                                   pass.framebuffer, pass.texture, pass.passInfo.srgbFramebuffer);
+                // Dimensões mudaram: invalidar feedback FBO; será re-alocada lazy.
+                cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+                pass.feedbackEnabled = false;
                 pass.width = outputWidth;
                 pass.height = outputHeight;
 
@@ -1088,6 +1093,22 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
             // Bind framebuffer
             glBindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
+
+            // Para passes com srgb_framebuffer=true, o FBO usa GL_SRGB8_ALPHA8.
+            // Sem GL_FRAMEBUFFER_SRGB habilitado, o valor escrito pelo shader cai
+            // direto na textura sem encoding sRGB; depois, o pass seguinte ao ler
+            // a textura aplica decoding sRGB→linear automaticamente, gerando
+            // gama dupla a cada pass e progressivamente escurecendo até preto.
+            // GL_FRAMEBUFFER_SRGB = 0x8DB9 (não exposto pelo nosso loader glad)
+            constexpr GLenum FRAMEBUFFER_SRGB_ENUM = 0x8DB9;
+            if (pass.passInfo.srgbFramebuffer)
+            {
+                glEnable(FRAMEBUFFER_SRGB_ENUM);
+            }
+            else
+            {
+                glDisable(FRAMEBUFFER_SRGB_ENUM);
+            }
 
             glViewport(0, 0, outputWidth, outputHeight);
 
@@ -1217,17 +1238,11 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             }
 
             // Se nenhum uniform foi encontrado, logar aviso (primeiro pass, pass 3 e pass 4 que estão falhando)
-            if (!textureBound && (i == 0 || i == 3 || i == 4))
-            {
-                LOG_WARN("Nenhum uniform de textura encontrado no pass " + std::to_string(i) + " (Texture/Source/Input/s_p/etc)");
-                LOG_WARN("Isso pode causar tela preta - o shader precisa de um uniform de textura de entrada");
-                LOG_WARN("Pass " + std::to_string(i) + ": Programa de shader: " + std::to_string(pass.program));
-
-                // Tentar listar todos os uniforms do programa (debug)
-                // GLint numUniforms = 0;
-                // glGetProgramiv(pass.program, GL_ACTIVE_UNIFORMS, &numUniforms);
-                // LOG_INFO("Pass 0: Número de uniforms ativos: " + std::to_string(numUniforms));
-            }
+            // Nota: o warning sobre "nenhum uniform de textura encontrado" foi
+            // movido pra depois das demais ligações (PrevTexture, PassPrev,
+            // PassFeedback, alias, OrigTexture, LUT). Shaders como avg-lum0.glsl
+            // declaram `Texture` mas só usam `PrevN`, fazendo o compilador
+            // otimizar `Texture` fora do programa — não é tela preta de verdade.
 
             // Bind texturas de passes anteriores (PassPrev#Texture)
             // RetroArch shaders podem referenciar saídas de passes anteriores
@@ -1331,6 +1346,162 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                             break;
                         }
                     }
+
+                    // PassPrev<N>TextureSize / PassPrev<N>InputSize / PassPrev<N>OutputSize:
+                    // dimensões do pass alvo. Sem isso, shaders como crt-royale-bloom-approx
+                    // (que faz tex_uv = video_uv * PassPrev2InputSize / PassPrev2TextureSize)
+                    // dividem 0/0 e produzem NaN → tela preta.
+                    const std::string nStr = std::to_string(i - prevPass);
+                    const ShaderPassData &target = m_passes[prevPass];
+                    const float tw = static_cast<float>(target.width);
+                    const float th = static_cast<float>(target.height);
+
+                    GLint sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "TextureSize");
+                    if (sizeLoc >= 0)
+                    {
+                        glUniform2f(sizeLoc, tw, th);
+                    }
+                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "InputSize");
+                    if (sizeLoc >= 0)
+                    {
+                        // InputSize de pass P é o tamanho que ele recebeu como entrada.
+                        // Se P>0, é o output do pass anterior; se P==0, é o source original.
+                        if (prevPass == 0)
+                        {
+                            glUniform2f(sizeLoc,
+                                        static_cast<float>(m_sourceWidth),
+                                        static_cast<float>(m_sourceHeight));
+                        }
+                        else
+                        {
+                            glUniform2f(sizeLoc,
+                                        static_cast<float>(m_passes[prevPass - 1].width),
+                                        static_cast<float>(m_passes[prevPass - 1].height));
+                        }
+                    }
+                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "OutputSize");
+                    if (sizeLoc >= 0)
+                    {
+                        glUniform2f(sizeLoc, tw, th);
+                    }
+                }
+
+                // PassPrev<N>Texture com N > pass atual aponta pra "antes do pass 0",
+                // que na prática é o input original (kawase_glow's screen_combine usa
+                // PassPrev8Texture no pass 7 pra recuperar a imagem pré-blur).
+                // Tentamos uma faixa razoável acima do pass atual.
+                for (uint32_t N = i + 1; N <= i + 12; ++N)
+                {
+                    GLint loc = getUniformLocation(pass.program,
+                                                   "PassPrev" + std::to_string(N) + "Texture");
+                    if (loc >= 0 && originalTexture != 0)
+                    {
+                        glActiveTexture(GL_TEXTURE0 + texUnit);
+                        glBindTexture(GL_TEXTURE_2D, originalTexture);
+                        glUniform1i(loc, texUnit);
+                        texUnit++;
+                    }
+                }
+
+                // Vincular passes anteriores referenciados por alias (aliasN = SomeName).
+                // RetroArch GLSL spec: presets podem nomear um pass via `aliasN = MyPass`,
+                // e passes posteriores referenciam o sampler como `uniform sampler2D MyPass`
+                // (e o tamanho via `uniform vec4 MyPassSize`).
+                for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+                {
+                    const std::string &alias = m_passes[prevPass].passInfo.alias;
+                    if (alias.empty())
+                    {
+                        continue;
+                    }
+
+                    GLint aliasTexLoc = getUniformLocation(pass.program, alias);
+                    if (aliasTexLoc >= 0)
+                    {
+                        glActiveTexture(GL_TEXTURE0 + texUnit);
+                        glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
+                        glUniform1i(aliasTexLoc, texUnit);
+                        texUnit++;
+                    }
+
+                    GLint aliasSizeLoc = getUniformLocation(pass.program, alias + "Size");
+                    if (aliasSizeLoc >= 0)
+                    {
+                        float w = static_cast<float>(m_passes[prevPass].width);
+                        float h = static_cast<float>(m_passes[prevPass].height);
+                        glUniform4f(aliasSizeLoc, w, h,
+                                    w > 0.0f ? 1.0f / w : 0.0f,
+                                    h > 0.0f ? 1.0f / h : 0.0f);
+                    }
+                }
+            }
+
+            // PassFeedback<N> / PassFeedback<N>Texture: o pass corrente pode samplear o
+            // output do frame ANTERIOR de qualquer pass (incluindo si mesmo). Alocação
+            // lazy: se algum uniform PassFeedback<N>* aparecer aqui, marcamos pass[N]
+            // pra ter ping-pong e alocamos sua segunda textura na primeira vez.
+            // O swap entre texture/feedbackTexture acontece no fim do frame, abaixo.
+            for (uint32_t fbPass = 0; fbPass <= i && fbPass < m_passes.size(); ++fbPass)
+            {
+                const std::string idxStr = std::to_string(fbPass);
+                std::vector<std::string> samplerNames = {
+                    "PassFeedback" + idxStr,
+                    "PassFeedback" + idxStr + "Texture"
+                };
+
+                GLint fbTexLoc = -1;
+                for (const auto &name : samplerNames)
+                {
+                    fbTexLoc = getUniformLocation(pass.program, name);
+                    if (fbTexLoc >= 0) break;
+                }
+
+                bool hasFeedbackUniform = (fbTexLoc >= 0);
+
+                GLint fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "Size");
+                if (fbSizeLoc < 0)
+                {
+                    fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "TextureSize");
+                }
+                if (fbSizeLoc >= 0)
+                {
+                    hasFeedbackUniform = true;
+                }
+
+                if (!hasFeedbackUniform)
+                {
+                    continue;
+                }
+
+                ShaderPassData &fbTarget = m_passes[fbPass];
+                fbTarget.feedbackEnabled = true;
+
+                // Lazy alloc da textura/FBO de feedback com as MESMAS dimensões do
+                // pass alvo. Se as dimensões ainda não foram definidas (pass que não
+                // rodou neste frame ainda), pular — nada útil pra bindar.
+                if (fbTarget.feedbackTexture == 0 && fbTarget.width > 0 && fbTarget.height > 0)
+                {
+                    createFramebuffer(fbTarget.width, fbTarget.height,
+                                      fbTarget.passInfo.floatFramebuffer,
+                                      fbTarget.feedbackFramebuffer, fbTarget.feedbackTexture,
+                                      fbTarget.passInfo.srgbFramebuffer);
+                }
+
+                if (fbTexLoc >= 0 && fbTarget.feedbackTexture != 0)
+                {
+                    glActiveTexture(GL_TEXTURE0 + texUnit);
+                    glBindTexture(GL_TEXTURE_2D, fbTarget.feedbackTexture);
+                    glUniform1i(fbTexLoc, texUnit);
+                    texUnit++;
+                }
+
+                if (fbSizeLoc >= 0)
+                {
+                    float w = static_cast<float>(fbTarget.width);
+                    float h = static_cast<float>(fbTarget.height);
+                    glUniform4f(fbSizeLoc, w, h,
+                                w > 0.0f ? 1.0f / w : 0.0f,
+                                h > 0.0f ? 1.0f / h : 0.0f);
                 }
             }
 
@@ -1402,6 +1573,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 texUnit++;
             }
 
+            // Após TODOS os bindings (Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT),
+            // só avisamos "tela preta provável" se NADA tiver sido bindado neste pass.
+            // texUnit começa em 1 (slot 0 reservado pra Texture). Se ainda for 1 e
+            // textureBound=false, o pass vai amostrar de unidades de textura
+            // não inicializadas — isso sim seria preto de verdade.
+            if (!textureBound && texUnit == 1)
+            {
+                static int warnedPasses = 0;
+                if (warnedPasses < 5)
+                {
+                    warnedPasses++;
+                    LOG_WARN("Pass " + std::to_string(i) + " sem nenhum sampler bindado " +
+                             "(Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT). " +
+                             "Provável tela preta. Programa: " + std::to_string(pass.program));
+                }
+            }
+
             // Renderizar
             // IMPORTANTE: Garantir que os atributos estão habilitados
             // (alguns drivers podem desabilitar após mudar de programa)
@@ -1448,8 +1636,25 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // Desvincular framebuffer após todos os passes
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+        // Desabilita GL_FRAMEBUFFER_SRGB pra não vazar pro draw final.
+        glDisable(0x8DB9);
+
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
+
+        // Swap PassFeedback ping-pong: o que foi escrito neste frame vira a
+        // textura "anterior" pro próximo frame; a antiga textura "anterior"
+        // vira o destino do próximo frame. Aplicado apenas nos passes onde
+        // algum sampler PassFeedback<N>* foi detectado durante o bind.
+        for (auto &fbPass : m_passes)
+        {
+            if (!fbPass.feedbackEnabled || fbPass.feedbackTexture == 0)
+            {
+                continue;
+            }
+            std::swap(fbPass.texture, fbPass.feedbackTexture);
+            std::swap(fbPass.framebuffer, fbPass.feedbackFramebuffer);
+        }
 
         // IMPORTANTE: Atualizar dimensões de saída para uso em maintainAspect
         // Essas são as dimensões FINAIS do último pass do shader
@@ -1940,19 +2145,47 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform1i(loc, 1); // Sempre 1 (forward)
     }
 
-    // Texturas de histórico (history buffers) - valores dummy
-    // OriginalHistorySize0-7 (frames anteriores)
-    // Nota: não implementado ainda, mas precisamos declarar para evitar erros
+    // OriginalHistorySize0-7: dimensões dos frames anteriores.
+    // Convenção slang: OriginalHistory0 = source atual, OriginalHistory1..N = N frames atrás.
+    // m_frameHistoryWidths/Heights armazena o histórico real (mais recente primeiro).
     for (int i = 0; i <= 7; ++i)
     {
         std::string historyName = "OriginalHistorySize" + std::to_string(i);
         loc = getUniformLocation(program, historyName);
-        if (loc >= 0)
+        if (loc < 0)
         {
-            // Usar mesmas dimensões do input atual (já que não temos histórico real)
-            glUniform4f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight),
-                        1.0f / static_cast<float>(inputWidth), 1.0f / static_cast<float>(inputHeight));
+            continue;
         }
+
+        float w;
+        float h;
+        if (i == 0)
+        {
+            // OriginalHistory0 = source atual
+            w = static_cast<float>(inputWidth);
+            h = static_cast<float>(inputHeight);
+        }
+        else
+        {
+            size_t historyIdx = static_cast<size_t>(i - 1);
+            if (historyIdx < m_frameHistoryWidths.size() &&
+                historyIdx < m_frameHistoryHeights.size())
+            {
+                w = static_cast<float>(m_frameHistoryWidths[historyIdx]);
+                h = static_cast<float>(m_frameHistoryHeights[historyIdx]);
+            }
+            else
+            {
+                // Sem histórico ainda neste slot: usar input atual como fallback seguro
+                // (evita div-by-zero em shaders que fazem 1.0 / OriginalHistorySize.xy).
+                w = static_cast<float>(inputWidth);
+                h = static_cast<float>(inputHeight);
+            }
+        }
+
+        glUniform4f(loc, w, h,
+                    w > 0.0f ? 1.0f / w : 0.0f,
+                    h > 0.0f ? 1.0f / h : 0.0f);
     }
 
     // Parâmetros extraídos de #pragma parameter (injetados pelo RetroArch)
@@ -2451,6 +2684,8 @@ void ShaderEngine::cleanupPresetPasses()
             glDeleteShader(pass.fragmentShader);
         }
         cleanupFramebuffer(pass.framebuffer, pass.texture);
+        cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+        pass.feedbackEnabled = false;
     }
     // IMPORTANTE: Limpar apenas recursos OpenGL, mas preservar parameterInfo
     // para que os parâmetros estejam disponíveis na UI mesmo se a compilação falhar
@@ -2753,564 +2988,6 @@ void ShaderEngine::setUniform(const std::string &name, float x, float y, float z
             glUniform4f(loc, x, y, z, w);
         }
     }
-}
-
-std::string ShaderEngine::convertSlangToGLSL(const std::string &slangSource, bool isVertex, const std::string &basePath)
-{
-    std::string result = slangSource;
-
-    // Processar #include primeiro (antes de outras conversões)
-    result = ShaderPreprocessor::processIncludes(result, basePath);
-
-    // EXTRAIR parâmetros de #pragma parameter ANTES de qualquer outra conversão
-    std::set<std::string> pragmaParams;
-    std::regex pragmaParamRegex(R"(#pragma\s+parameter\s+(\w+))");
-    auto pragmaBegin = std::sregex_iterator(result.begin(), result.end(), pragmaParamRegex);
-    auto pragmaEnd = std::sregex_iterator();
-    for (std::sregex_iterator i = pragmaBegin; i != pragmaEnd; ++i)
-    {
-        std::string paramName = (*i)[1].str();
-        // Ignorar parâmetros que são apenas labels/títulos (começam com bogus_)
-        if (paramName.find("bogus_") == std::string::npos)
-        {
-            pragmaParams.insert(paramName);
-        }
-    }
-
-    // Remover TODAS as linhas #pragma parameter
-    result = std::regex_replace(result, std::regex(R"(#pragma\s+parameter[^\n]*\n)"), "");
-
-    // Substituir #version 450 por #version 330
-    result = std::regex_replace(result, std::regex("#version\\s+450"), "#version 330");
-
-    // Converter swizzles numéricos para construção vec explícita
-    // GLSL 3.30 pode não suportar 0.0.xxx, então convertemos para vec3(0.0)
-    // IMPORTANTE: NÃO converter em expressões aritméticas como pow(x, 0.70.xxx-0.325*sat)
-    // porque isso criaria pow(x, vec3(0.70)-0.325*sat) que é inválido
-
-    // Estratégia: Converter apenas swizzles que estão isolados ou em contextos seguros
-
-    // Padrão 1: Atribuição direta com ponto e vírgula (vec3 x = 0.0.xxx;)
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.xxx\s*;)"), "= vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.xxxx\s*;)"), "= vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.yyy\s*;)"), "= vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.yyyy\s*;)"), "= vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.zzz\s*;)"), "= vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.zzzz\s*;)"), "= vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.www\s*;)"), "= vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(=\s*(\d+\.\d+)\.wwww\s*;)"), "= vec4($1);");
-
-    // Padrão 2: Em mix() quando está isolado (mix(1.0.xxx + scans, 1.0.xxx, c))
-    // Converter quando está após operador + ou , e antes de operador ou )
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.xxx\s*([+\-*/\),]))"), "$1 vec3($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.xxxx\s*([+\-*/\),]))"), "$1 vec4($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.yyy\s*([+\-*/\),]))"), "$1 vec3($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.yyyy\s*([+\-*/\),]))"), "$1 vec4($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.zzz\s*([+\-*/\),]))"), "$1 vec3($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.zzzz\s*([+\-*/\),]))"), "$1 vec4($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.www\s*([+\-*/\),]))"), "$1 vec3($2) $3");
-    result = std::regex_replace(result, std::regex(R"(([+\s,\(])\s*(\d+\.\d+)\.wwww\s*([+\-*/\),]))"), "$1 vec4($2) $3");
-
-    // Padrão 3: Em operador ternário (clips > 0.0) ? w1 : 1.0.xxx;
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.xxx\s*;)"), ": vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.xxxx\s*;)"), ": vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.yyy\s*;)"), ": vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.yyyy\s*;)"), ": vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.zzz\s*;)"), ": vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.zzzz\s*;)"), ": vec4($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.www\s*;)"), ": vec3($1);");
-    result = std::regex_replace(result, std::regex(R"(:\s*(\d+\.\d+)\.wwww\s*;)"), ": vec4($1);");
-
-    // NOTA: NÃO converter swizzles em expressões aritméticas complexas
-    // (ex: pow(x, 0.70.xxx-0.325*sat)) porque isso criaria código inválido
-    // GLSL 3.30 pode suportar swizzles numéricos em alguns contextos
-    // Se não suportar, o compilador vai reportar o erro exato
-
-    // Converter push_constant uniform block para uniforms individuais
-    // layout(push_constant) uniform Push { vec4 SourceSize; vec4 OriginalSize; ... } params;
-    // vira: uniform vec4 SourceSize; uniform vec4 OriginalSize; ...
-    // E substituir params.SourceSize por SourceSize, etc.
-
-    // Primeiro, extrair campos do uniform block e criar uniforms individuais
-    std::regex pushConstantRegex(R"(layout\s*\(\s*push_constant\s*\)\s*uniform\s+Push\s*\{([^}]+)\}\s*params\s*;)");
-    std::smatch match;
-
-    if (std::regex_search(result, match, pushConstantRegex))
-    {
-        std::string blockContent = match[1].str();
-        std::ostringstream uniforms;
-
-        // Extrair cada campo do block
-        std::regex fieldRegex(R"(\s*(\w+)\s+(\w+)\s*;)");
-        std::sregex_iterator iter(blockContent.begin(), blockContent.end(), fieldRegex);
-        std::sregex_iterator end;
-
-        for (; iter != end; ++iter)
-        {
-            std::string type = (*iter)[1].str();
-            std::string name = (*iter)[2].str();
-            uniforms << "uniform " << type << " " << name << ";\n";
-        }
-
-        // Substituir todos os params.X por X (fazer isso globalmente após criar os uniforms)
-        // Isso garante que funcione também em arquivos incluídos
-        std::regex fieldRegex2(R"(\s*(\w+)\s+(\w+)\s*;)");
-        std::sregex_iterator iter2(blockContent.begin(), blockContent.end(), fieldRegex2);
-        std::sregex_iterator end2;
-
-        for (; iter2 != end2; ++iter2)
-        {
-            std::string name = (*iter2)[2].str();
-            // Substituir params.name por name (globalmente, incluindo em arquivos incluídos)
-            // Usar word boundary para evitar substituir partes de outras palavras
-            std::string replacePattern = "params\\." + name + "\\b";
-            result = std::regex_replace(result, std::regex(replacePattern), name);
-        }
-
-        // Remover o uniform block original e adicionar uniforms individuais
-        result = std::regex_replace(result, pushConstantRegex, uniforms.str());
-    }
-    else
-    {
-        // Fallback: apenas remover push_constant
-        result = std::regex_replace(result, std::regex("layout\\(push_constant\\)\\s+uniform"), "uniform");
-    }
-
-    // Remover set = X, binding = X dos layouts
-    result = std::regex_replace(result, std::regex("set\\s*=\\s*\\d+"), "");
-    result = std::regex_replace(result, std::regex("binding\\s*=\\s*\\d+"), "");
-    result = std::regex_replace(result, std::regex(",\\s*,"), ",");
-    result = std::regex_replace(result, std::regex("layout\\(\\s*,\\s*"), "layout(");
-    result = std::regex_replace(result, std::regex("layout\\(\\s*\\)"), "");
-
-    // Remover layout(std140, set = 0, binding = 0) deixando apenas std140 se existir
-    result = std::regex_replace(result, std::regex("layout\\(std140[^)]*\\)"), "layout(std140)");
-
-    // EXTRAIR parâmetros do bloco UBO antes de removê-lo
-    std::set<std::string> uboParams;
-    std::regex uboRegex(R"(layout\s*\([^)]*\)\s*uniform\s+UBO\s*\{([^}]*)\}\s*global\s*;)");
-    std::smatch uboMatch;
-    if (std::regex_search(result, uboMatch, uboRegex))
-    {
-        std::string uboContent = uboMatch[1].str();
-        // Extrair declarações de variáveis do UBO (exceto MVP e tamanhos específicos do RetroArch)
-        std::regex paramRegex(R"((float|uint|int)\s+(\w+)(?:\s*,\s*(\w+))*\s*;)");
-        std::sregex_iterator paramsBegin(uboContent.begin(), uboContent.end(), paramRegex);
-        std::sregex_iterator paramsEnd;
-
-        for (std::sregex_iterator i = paramsBegin; i != paramsEnd; ++i)
-        {
-            std::string type = (*i)[1].str();
-            std::string paramName = (*i)[2].str();
-
-            // Lista de nomes padrão do RetroArch que devemos ignorar
-            bool isBuiltin = (paramName == "MVP" || paramName == "SourceSize" ||
-                              paramName == "OutputSize" || paramName == "OriginalSize" ||
-                              paramName == "FrameCount" ||
-                              paramName.find("OriginalHistorySize") == 0 ||
-                              paramName.find("PassOutputSize") == 0 ||
-                              paramName.find("PassFeedbackSize") == 0);
-
-            if (!isBuiltin)
-            {
-                uboParams.insert(paramName);
-                // Se houver múltiplos parâmetros na mesma linha (ex: AS, asat)
-                if (i->size() > 3 && (*i)[3].length() > 0)
-                {
-                    uboParams.insert((*i)[3].str());
-                }
-            }
-        }
-    }
-
-    // Remover uniform block UBO (se existir)
-    result = std::regex_replace(result, uboRegex, "");
-
-    // Converter global.MVP para Position diretamente
-    // RetroArch usa global.MVP * Position, mas Position já está em clip space
-    result = std::regex_replace(result, std::regex(R"(global\.MVP\s*\*\s*Position)"), "Position");
-
-    // Remover outras referências a global.
-    result = std::regex_replace(result, std::regex(R"(global\.)"), "");
-
-    // IMPORTANTE: Substituir params.X por X DEPOIS de todas as conversões
-    // Isso garante que funcione mesmo em arquivos incluídos
-
-    // PRIMEIRO: Processar #define que usam params.X
-    // Exemplo: #define BLURSCALEX params.BLURSCALEX
-    // Coletar todos os parâmetros customizados que precisam ser uniforms
-    std::set<std::string> customParams;
-    std::regex defineRegex(R"(#define\s+(\w+)\s+params\.(\w+))");
-    std::smatch defineMatch;
-    std::string processedDefines = result;
-
-    // Encontrar todos os #define que usam params.X
-    while (std::regex_search(processedDefines, defineMatch, defineRegex))
-    {
-        std::string defineName = defineMatch[1].str();
-        std::string paramName = defineMatch[2].str();
-
-        // Adicionar à lista de parâmetros customizados
-        customParams.insert(paramName);
-
-        // Se o nome do define é igual ao parâmetro, remover o define
-        // (não é necessário, pois params.X será substituído por X diretamente)
-        if (defineName == paramName)
-        {
-            processedDefines = std::regex_replace(processedDefines, defineRegex, "", std::regex_constants::format_first_only);
-        }
-        else
-        {
-            // Se são diferentes, manter o define mas substituir params.X por X
-            std::string replacement = "#define " + defineName + " " + paramName;
-            processedDefines = std::regex_replace(processedDefines, defineRegex, replacement, std::regex_constants::format_first_only);
-        }
-    }
-    result = processedDefines;
-
-    // AGORA: Substituir TODOS os params.X por X (genérico, pega tudo)
-    // Isso deve ser feito DEPOIS de processar os #define
-    result = std::regex_replace(result, std::regex(R"(params\.(\w+))"), "$1");
-
-    // Agora verificar se os uniforms já foram definidos
-    // Verificar tanto vec4 quanto vec2 (alguns shaders usam vec2)
-    bool hasSourceSize = (result.find("uniform vec4 SourceSize") != std::string::npos ||
-                          result.find("uniform vec2 SourceSize") != std::string::npos ||
-                          result.find("uniform COMPAT_PRECISION vec4 SourceSize") != std::string::npos ||
-                          result.find("uniform COMPAT_PRECISION vec2 SourceSize") != std::string::npos);
-    bool hasOriginalSize = (result.find("uniform vec4 OriginalSize") != std::string::npos ||
-                            result.find("uniform vec2 OriginalSize") != std::string::npos ||
-                            result.find("uniform COMPAT_PRECISION vec4 OriginalSize") != std::string::npos ||
-                            result.find("uniform COMPAT_PRECISION vec2 OriginalSize") != std::string::npos);
-    bool hasOutputSize = (result.find("uniform vec4 OutputSize") != std::string::npos ||
-                          result.find("uniform vec2 OutputSize") != std::string::npos ||
-                          result.find("uniform COMPAT_PRECISION vec4 OutputSize") != std::string::npos ||
-                          result.find("uniform COMPAT_PRECISION vec2 OutputSize") != std::string::npos);
-    bool hasInputSize = (result.find("uniform vec4 InputSize") != std::string::npos ||
-                         result.find("uniform vec2 InputSize") != std::string::npos ||
-                         result.find("uniform COMPAT_PRECISION vec4 InputSize") != std::string::npos ||
-                         result.find("uniform COMPAT_PRECISION vec2 InputSize") != std::string::npos);
-    bool hasTextureSize = (result.find("uniform vec4 TextureSize") != std::string::npos ||
-                           result.find("uniform vec2 TextureSize") != std::string::npos ||
-                           result.find("uniform COMPAT_PRECISION vec4 TextureSize") != std::string::npos ||
-                           result.find("uniform COMPAT_PRECISION vec2 TextureSize") != std::string::npos);
-    bool hasFrameCount = (result.find("uniform float FrameCount") != std::string::npos ||
-                          result.find("uniform uint FrameCount") != std::string::npos ||
-                          result.find("uniform int FrameCount") != std::string::npos ||
-                          result.find("uniform COMPAT_PRECISION int FrameCount") != std::string::npos);
-
-    // Se não foram definidos mas são usados, adicionar as definições
-    // Preferir vec2 para OutputSize e InputSize (mais comum em shaders modernos)
-    std::ostringstream missingUniforms;
-    if (!hasSourceSize && result.find("SourceSize") != std::string::npos)
-    {
-        missingUniforms << "uniform vec4 SourceSize;\n";
-    }
-    if (!hasOriginalSize && result.find("OriginalSize") != std::string::npos)
-    {
-        missingUniforms << "uniform vec4 OriginalSize;\n";
-    }
-    if (!hasOutputSize && result.find("OutputSize") != std::string::npos)
-    {
-        // Preferir vec2 pois muitos shaders modernos usam vec2
-        missingUniforms << "uniform vec2 OutputSize;\n";
-    }
-    if (!hasInputSize && result.find("InputSize") != std::string::npos)
-    {
-        // Preferir vec2 pois muitos shaders modernos usam vec2
-        missingUniforms << "uniform vec2 InputSize;\n";
-    }
-    if (!hasTextureSize && result.find("TextureSize") != std::string::npos)
-    {
-        // Preferir vec2 pois muitos shaders modernos usam vec2
-        missingUniforms << "uniform vec2 TextureSize;\n";
-    }
-    // FrameCount é SEMPRE necessário, adicionar se não existe
-    if (!hasFrameCount)
-    {
-        missingUniforms << "uniform float FrameCount;\n";
-    }
-
-    // Combinar todos os parâmetros customizados (evitando duplicatas)
-    std::set<std::string> allCustomParams;
-    allCustomParams.insert(customParams.begin(), customParams.end());
-    allCustomParams.insert(uboParams.begin(), uboParams.end());
-    allCustomParams.insert(pragmaParams.begin(), pragmaParams.end());
-
-    // Remover palavras que são swizzles GLSL válidos para evitar conflitos
-    // (xxx, xxxx, rgb, rgba, xyzw, etc)
-    std::set<std::string> glslSwizzles = {
-        "x", "y", "z", "w",
-        "r", "g", "b", "a",
-        "s", "t", "p", "q",
-        "xx", "xy", "xz", "xw", "xxx", "xxxx",
-        "yy", "yx", "yz", "yw", "yyy", "yyyy",
-        "zz", "zx", "zy", "zw", "zzz", "zzzz",
-        "ww", "wx", "wy", "wz", "www", "wwww",
-        "rr", "rg", "rb", "ra", "rrr", "rrrr",
-        "gg", "gr", "gb", "ga", "ggg", "gggg",
-        "bb", "br", "bg", "ba", "bbb", "bbbb",
-        "aa", "ar", "ag", "ab", "aaa", "aaaa",
-        "rgb", "rgba", "bgr", "bgra",
-        "xyz", "xyzw", "zyx", "zyxw"};
-
-    for (const auto &swizzle : glslSwizzles)
-    {
-        allCustomParams.erase(swizzle);
-    }
-
-    // DEBUG: Listar todos os parâmetros encontrados
-    if (!allCustomParams.empty())
-    {
-        std::string paramsList;
-        for (const auto &p : allCustomParams)
-        {
-            paramsList += p + ", ";
-        }
-        LOG_INFO("Custom parameters found: " + paramsList);
-    }
-
-    // Adicionar uniforms customizados (sem duplicatas)
-    // Se o parâmetro é uma variável local, precisamos adicionar o uniform com prefixo
-    // para evitar conflito (ex: internal_res → uniform float u_internal_res)
-    std::set<std::string> localVarParams;
-
-    for (const auto &param : allCustomParams)
-    {
-        std::string uniformDecl = "uniform float " + param;
-
-        // Verificar se é declarado como variável local
-        // Procurar por padrões: "float X;" ou "float X," ou "float X ="
-        std::regex localVarRegex("\\bfloat\\s+" + param + "\\s*[,;=]");
-        bool isLocalVariable = std::regex_search(result, localVarRegex);
-
-        bool isUniformDeclared = (result.find(uniformDecl) != std::string::npos);
-        bool isUsed = (result.find(param) != std::string::npos);
-
-        if (!isUniformDeclared && isUsed)
-        {
-            if (isLocalVariable)
-            {
-                // Variável local: adicionar uniform com prefixo u_
-                // O shader usa params.X que foi substituído, e também declara float X
-                missingUniforms << "uniform float u_" << param << ";\n";
-                localVarParams.insert(param);
-            }
-            else
-            {
-                // Não é variável local: adicionar uniform normal
-                missingUniforms << uniformDecl << ";\n";
-            }
-        }
-    }
-
-    // Ajustar substituições para parâmetros que são variáveis locais
-    // Substituir X por u_X para evitar conflito com float X = ...
-    for (const auto &param : localVarParams)
-    {
-        LOG_INFO("Processing local variable with prefix: " + param);
-
-        // Substituir X por u_X em todo o shader (exceto na declaração float X e swizzles .xxx)
-        std::string pattern = "\\b" + param + "\\b";
-        std::regex paramRegex(pattern);
-
-        std::string temp;
-        auto words_begin = std::sregex_iterator(result.begin(), result.end(), paramRegex);
-        auto words_end = std::sregex_iterator();
-
-        size_t lastPos = 0;
-        for (std::sregex_iterator i = words_begin; i != words_end; ++i)
-        {
-            size_t matchPos = i->position();
-
-            // Verificar se não está precedido por '.' (swizzle como .xxx)
-            bool isSwizzle = false;
-            if (matchPos > 0 && result[matchPos - 1] == '.')
-            {
-                isSwizzle = true;
-            }
-
-            // Verificar se não está em "float X" (declaração)
-            bool isDeclaration = false;
-            if (matchPos >= 6)
-            {
-                std::string before = result.substr(matchPos - 6, 6);
-                if (before == "float ")
-                {
-                    isDeclaration = true;
-                }
-            }
-
-            if (isSwizzle || isDeclaration)
-            {
-                // Pular (não substituir)
-                temp += result.substr(lastPos, matchPos - lastPos + param.length());
-                lastPos = matchPos + param.length();
-                continue;
-            }
-
-            // Substituir
-            temp += result.substr(lastPos, matchPos - lastPos);
-            temp += "u_" + param;
-            lastPos = matchPos + param.length();
-        }
-        temp += result.substr(lastPos);
-        result = temp;
-    }
-
-    // Adicionar uniforms de texturas de histórico se forem usados
-    // OriginalHistory0-7, OriginalHistorySize0-7
-    for (int i = 0; i <= 7; ++i)
-    {
-        std::string historyName = "OriginalHistorySize" + std::to_string(i);
-        if (result.find(historyName) != std::string::npos)
-        {
-            std::string uniformDecl = "uniform vec4 " + historyName;
-            if (result.find(uniformDecl) == std::string::npos)
-            {
-                missingUniforms << uniformDecl << ";\n";
-            }
-        }
-    }
-
-    // Inserir uniforms faltantes após a versão
-    if (!missingUniforms.str().empty())
-    {
-        std::regex versionRegex(R"(#version\s+\d+)");
-        result = std::regex_replace(result, versionRegex, "$&\n" + missingUniforms.str(), std::regex_constants::format_first_only);
-    }
-
-    // DEBUG: Salvar shader ANTES da separação de stages (apenas pass2 fragment)
-    if (basePath.find("crt-guest-advanced-hd-pass2") != std::string::npos && !isVertex)
-    {
-        std::ofstream out("debug_pass10_before_stages.glsl");
-        if (out)
-        {
-            out << result;
-            out.close();
-            LOG_INFO("Shader pass 10 ANTES de separar stages salvo");
-        }
-    }
-
-    // Separar vertex e fragment shaders usando #pragma stage
-    if (!isVertex)
-    {
-        // Fragment shader: remover seções vertex, manter apenas fragment
-        std::istringstream stream(result);
-        std::string line;
-        std::ostringstream fragmentOutput;
-        bool inVertexStage = false;
-        bool inFragmentStage = false;
-        bool hasPragma = false;
-
-        while (std::getline(stream, line))
-        {
-            if (line.find("#pragma stage vertex") != std::string::npos)
-            {
-                inVertexStage = true;
-                inFragmentStage = false;
-                hasPragma = true;
-                continue;
-            }
-            if (line.find("#pragma stage fragment") != std::string::npos)
-            {
-                inVertexStage = false;
-                inFragmentStage = true;
-                hasPragma = true;
-                continue;
-            }
-            if (line.find("#pragma") != std::string::npos && line.find("stage") == std::string::npos)
-            {
-                // Outro pragma, manter
-                fragmentOutput << line << "\n";
-                continue;
-            }
-
-            if (hasPragma)
-            {
-                if (inFragmentStage || (!inVertexStage && !inFragmentStage))
-                {
-                    fragmentOutput << line << "\n";
-                }
-            }
-            else
-            {
-                // Sem pragma, assumir que é fragment shader
-                fragmentOutput << line << "\n";
-            }
-        }
-
-        if (hasPragma)
-        {
-            result = fragmentOutput.str();
-        }
-    }
-    else
-    {
-        // Vertex shader: remover seções fragment, manter apenas vertex
-        std::istringstream stream(result);
-        std::string line;
-        std::ostringstream vertexOutput;
-        bool inVertexStage = false;
-        bool inFragmentStage = false;
-        bool hasPragma = false;
-
-        while (std::getline(stream, line))
-        {
-            if (line.find("#pragma stage vertex") != std::string::npos)
-            {
-                inVertexStage = true;
-                inFragmentStage = false;
-                hasPragma = true;
-                continue;
-            }
-            if (line.find("#pragma stage fragment") != std::string::npos)
-            {
-                inVertexStage = false;
-                inFragmentStage = true;
-                hasPragma = true;
-                continue;
-            }
-            if (line.find("#pragma") != std::string::npos && line.find("stage") == std::string::npos)
-            {
-                vertexOutput << line << "\n";
-                continue;
-            }
-
-            if (hasPragma)
-            {
-                if (inVertexStage || (!inVertexStage && !inFragmentStage))
-                {
-                    vertexOutput << line << "\n";
-                }
-            }
-            else
-            {
-                // Sem pragma, assumir que é vertex shader
-                vertexOutput << line << "\n";
-            }
-        }
-
-        if (hasPragma)
-        {
-            result = vertexOutput.str();
-        }
-    }
-
-    // Remover pragmas de stage após processamento
-    result = std::regex_replace(result, std::regex("#pragma\\s+stage\\s+(vertex|fragment)\\s*"), "");
-
-    // Remover layout(location = X) - não suportado em GLSL 3.30 sem extensões
-    // layout(location = 0) in/out -> in/out
-    result = std::regex_replace(result, std::regex("layout\\(location\\s*=\\s*\\d+\\)\\s+"), "");
-
-    // Converter uint para float (OpenGL 3.3 não suporta uint uniforms de forma confiável)
-    result = std::regex_replace(result, std::regex("uniform\\s+uint\\s+"), "uniform float ");
-
-    // Limpar linhas vazias múltiplas
-    result = std::regex_replace(result, std::regex("\n\\s*\n\\s*\n"), "\n\n");
-
-    return result;
 }
 
 std::string ShaderEngine::processIncludes(const std::string &source, const std::string &basePath)

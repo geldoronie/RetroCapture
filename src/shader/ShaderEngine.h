@@ -30,6 +30,13 @@ struct ShaderPassData {
     std::map<std::string, float> extractedParameters;
     // Informações completas dos parâmetros (nome -> info)
     std::map<std::string, ShaderParameterInfo> parameterInfo;
+
+    // PassFeedback (RetroArch GLSL spec): texturas ping-pong para sampling
+    // do frame anterior deste pass via uniform PassFeedback<N>Texture.
+    // Alocadas lazy quando algum pass declara o uniform; vazio caso contrário.
+    GLuint feedbackTexture = 0;
+    GLuint feedbackFramebuffer = 0;
+    bool feedbackEnabled = false;
 };
 
 class ShaderEngine {
@@ -165,8 +172,6 @@ private:
     GLenum wrapModeToGLEnum(const std::string& wrapMode);
     void applyTextureSettings(GLuint texture, bool filterLinear, const std::string& wrapMode, bool generateMipmap = false);
     
-    // Conversão Slang para GLSL
-    std::string convertSlangToGLSL(const std::string& slangSource, bool isVertex, const std::string& basePath = "");
     std::string processIncludes(const std::string& source, const std::string& basePath);
 };
 

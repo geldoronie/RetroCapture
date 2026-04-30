@@ -30,7 +30,10 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     // EXTRAIR parâmetros de #pragma parameter ANTES de remover
     // Formato: #pragma parameter paramName "Description" default min max step
     std::map<std::string, float> paramDefaults; // Nome -> valor padrão
-    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)");
+    // Aceita default/min/max/step com sinal opcional. Sem o `-?` os pragmas com
+    // min negativo (ex: `x_tilt ... 0.0 -0.5 ...` em crt-geom) eram silenciosamente
+    // descartados, deixando o uniform em 0 e quebrando shaders que dividem por ele.
+    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)");
     auto pragmaBegin = std::sregex_iterator(processedSource.begin(), processedSource.end(), pragmaParamRegex);
     auto pragmaEnd = std::sregex_iterator();
     for (std::sregex_iterator i = pragmaBegin; i != pragmaEnd; ++i)
@@ -163,10 +166,17 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
         precisionLine = "precision mediump float;\nprecision mediump int;\n";
     }
     
+    // Só ativar PARAMETER_UNIFORM quando o shader DECLARA #pragma parameter.
+    // Shaders como os do crt-royale escondem dezenas de uniforms atrás desse
+    // ifdef e dependem do branch #else (com defaults _static) quando não há
+    // pragma. Definir incondicionalmente fazia esses uniforms ficarem em 0,
+    // colapsando a matemática (sigma=0 → Gaussian = 0 → tela preta).
+    const std::string paramDefine = paramDefaults.empty() ? "" : "#define PARAMETER_UNIFORM\n";
+
     // Construir fontes finais com defines
     // Ordem: version + precision (se ES) + extension (se Desktop) + defines + código
-    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
-    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
+    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n" + paramDefine + vertexCode;
+    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n" + paramDefine + fragmentCode;
 
     return result;
 }
@@ -174,7 +184,12 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
 std::string ShaderPreprocessor::processIncludes(const std::string& source, const std::string& basePath)
 {
     std::string result = source;
-    std::regex includeRegex(R"(#include\s+["<]([^">]+)[">])");
+    // Multiline + line-start âncora: exige que `#include` esteja no começo
+    // da linha (após whitespace opcional). Sem isso, qualquer `// #include "..."`
+    // dentro de comentário também era processado, gerando warnings em massa
+    // (ex: crt-royale tem dezenas de #include comentados na documentação).
+    std::regex includeRegex(R"(^[ \t]*#include\s+["<]([^">]+)[">])",
+                            std::regex_constants::ECMAScript | std::regex_constants::multiline);
     std::smatch match;
 
     // Processar todos os includes

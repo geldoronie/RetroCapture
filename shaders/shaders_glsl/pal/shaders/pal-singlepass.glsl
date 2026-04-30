@@ -166,7 +166,7 @@ uniform COMPAT_PRECISION float PHASE_NOISE;
                             
 #define fetch(ofs,center,invx) COMPAT_TEXTURE(Source, vec2((ofs) * (invx) + center.x, center.y))
 
-#define FIRTAPS 20.
+#define FIRTAPS 20
 #if __VERSION__ < 130
 float FIR1 = -0.008030271;
 float FIR2 = 0.003107906;

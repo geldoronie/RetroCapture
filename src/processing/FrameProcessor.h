@@ -71,10 +71,15 @@ public:
     
     /**
      * Set texture filtering mode.
-     * 
+     *
      * @param linear true for GL_LINEAR, false for GL_NEAREST
      */
     void setTextureFilterLinear(bool linear);
+
+    /**
+     * Get current texture filtering mode.
+     */
+    bool getTextureFilterLinear() const { return m_textureFilterLinear; }
 
 private:
     OpenGLRenderer* m_renderer = nullptr;
