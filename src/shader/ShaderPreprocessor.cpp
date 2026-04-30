@@ -30,7 +30,10 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     // EXTRAIR parâmetros de #pragma parameter ANTES de remover
     // Formato: #pragma parameter paramName "Description" default min max step
     std::map<std::string, float> paramDefaults; // Nome -> valor padrão
-    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)");
+    // Aceita default/min/max/step com sinal opcional. Sem o `-?` os pragmas com
+    // min negativo (ex: `x_tilt ... 0.0 -0.5 ...` em crt-geom) eram silenciosamente
+    // descartados, deixando o uniform em 0 e quebrando shaders que dividem por ele.
+    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)");
     auto pragmaBegin = std::sregex_iterator(processedSource.begin(), processedSource.end(), pragmaParamRegex);
     auto pragmaEnd = std::sregex_iterator();
     for (std::sregex_iterator i = pragmaBegin; i != pragmaEnd; ++i)
