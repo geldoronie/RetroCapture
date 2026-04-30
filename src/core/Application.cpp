@@ -843,6 +843,7 @@ bool Application::initUI()
     uint32_t savedWidth = m_ui->getCaptureWidth();
     uint32_t savedHeight = m_ui->getCaptureHeight();
     uint32_t savedFps = m_ui->getCaptureFps();
+    std::string savedDevice = m_ui->getCurrentDevice();
 
     // Use saved values if they exist (savedWidth/Height > 0 means config was loaded)
     // Only override if we have valid saved values
@@ -887,6 +888,45 @@ bool Application::initUI()
             {
                 // For real device, use reconfigureCapture
                 reconfigureCapture(m_captureWidth, m_captureHeight, m_captureFps);
+            }
+        }
+    }
+
+    // Trocar pro dispositivo salvo se diferente do atual. initCapture já abriu
+    // o default (/dev/video0 no Linux ou primeiro DirectShow no Windows). Só
+    // mexemos se o config tem um valor não-vazio diferente.
+    if (m_capture && !savedDevice.empty() && savedDevice != m_devicePath)
+    {
+        LOG_INFO("Switching to saved device: " + savedDevice);
+        m_capture->stopCapture();
+        m_capture->close();
+        if (m_capture->open(savedDevice))
+        {
+            m_devicePath = savedDevice;
+            if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+            {
+                m_capture->setFramerate(m_captureFps);
+                if (m_capture->startCapture())
+                {
+                    if (m_ui)
+                    {
+                        m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                             m_captureFps, m_devicePath);
+                        m_ui->setCurrentDevice(m_devicePath);
+                    }
+                    LOG_INFO("Saved device opened: " + savedDevice);
+                }
+            }
+        }
+        else
+        {
+            LOG_WARN("Failed to open saved device " + savedDevice + ", reverting to default.");
+            // Reabre o default que estava antes — best-effort.
+            if (m_capture->open(m_devicePath))
+            {
+                m_capture->setFormat(m_captureWidth, m_captureHeight, 0);
+                m_capture->setFramerate(m_captureFps);
+                m_capture->startCapture();
             }
         }
     }
@@ -2889,17 +2929,28 @@ void Application::run()
                 uint32_t shaderSrcW = m_frameProcessor->getTextureWidth();
                 uint32_t shaderSrcH = m_frameProcessor->getTextureHeight();
 
+                // Lê overscan antes de decidir o caminho — se há overscan, mesmo
+                // que não precise de downscale, ainda fazemos o pass do FBO pra
+                // aplicar o crop via viewport offset.
+                const float overscanXPctRead = m_ui ? m_ui->getSourceOverscanPercentX() : 0.0f;
+                const float overscanYPctRead = m_ui ? m_ui->getSourceOverscanPercentY() : 0.0f;
+                const bool needsOverscan = (overscanXPctRead > 0.001f || overscanYPctRead > 0.001f);
+
                 const bool needsDownscale = (m_logicalCaptureWidth > 0 &&
                                              m_logicalCaptureHeight > 0 &&
                                              m_logicalCaptureWidth < shaderSrcW &&
                                              m_logicalCaptureHeight < shaderSrcH &&
                                              shaderSrcTex != 0);
 
-                if (needsDownscale)
+                if ((needsDownscale || needsOverscan) && shaderSrcTex != 0)
                 {
+                    // FBO size: logical quando há downscale, source dims caso contrário.
+                    const uint32_t fboW = needsDownscale ? m_logicalCaptureWidth : shaderSrcW;
+                    const uint32_t fboH = needsDownscale ? m_logicalCaptureHeight : shaderSrcH;
+
                     if (m_shaderSourceFBO == 0 ||
-                        m_shaderSourceFBOWidth != m_logicalCaptureWidth ||
-                        m_shaderSourceFBOHeight != m_logicalCaptureHeight)
+                        m_shaderSourceFBOWidth != fboW ||
+                        m_shaderSourceFBOHeight != fboH)
                     {
                         if (m_shaderSourceTexture != 0)
                         {
@@ -2915,8 +2966,8 @@ void Application::run()
                         glGenTextures(1, &m_shaderSourceTexture);
                         glBindTexture(GL_TEXTURE_2D, m_shaderSourceTexture);
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-                                     static_cast<GLsizei>(m_logicalCaptureWidth),
-                                     static_cast<GLsizei>(m_logicalCaptureHeight),
+                                     static_cast<GLsizei>(fboW),
+                                     static_cast<GLsizei>(fboH),
                                      0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -2928,18 +2979,8 @@ void Application::run()
                         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                                GL_TEXTURE_2D, m_shaderSourceTexture, 0);
 
-                        m_shaderSourceFBOWidth = m_logicalCaptureWidth;
-                        m_shaderSourceFBOHeight = m_logicalCaptureHeight;
-
-                        static bool loggedDownscaleAlloc = false;
-                        if (!loggedDownscaleAlloc)
-                        {
-                            LOG_INFO("Shader source downscale enabled: " +
-                                     std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
-                                     " -> " + std::to_string(m_logicalCaptureWidth) + "x" +
-                                     std::to_string(m_logicalCaptureHeight) + " (NEAREST)");
-                            loggedDownscaleAlloc = true;
-                        }
+                        m_shaderSourceFBOWidth = fboW;
+                        m_shaderSourceFBOHeight = fboH;
                     }
 
                     glBindFramebuffer(GL_FRAMEBUFFER, m_shaderSourceFBO);
@@ -2947,16 +2988,14 @@ void Application::run()
                     // Overscan: amplia o viewport de modo que apenas a região
                     // central (1 - 2*overscan) do source caia dentro do FBO.
                     // X e Y independentes; 0 = sem corte, 0.45 = corta 45% de cada lado.
-                    const float overscanXPct = m_ui ? m_ui->getSourceOverscanPercentX() : 0.0f;
-                    const float overscanYPct = m_ui ? m_ui->getSourceOverscanPercentY() : 0.0f;
-                    const float overscanX = std::clamp(overscanXPct / 100.0f, 0.0f, 0.45f);
-                    const float overscanY = std::clamp(overscanYPct / 100.0f, 0.0f, 0.45f);
+                    const float overscanX = std::clamp(overscanXPctRead / 100.0f, 0.0f, 0.45f);
+                    const float overscanY = std::clamp(overscanYPctRead / 100.0f, 0.0f, 0.45f);
                     const float visibleFracX = 1.0f - 2.0f * overscanX;
                     const float visibleFracY = 1.0f - 2.0f * overscanY;
-                    const float vpW = static_cast<float>(m_logicalCaptureWidth) / visibleFracX;
-                    const float vpH = static_cast<float>(m_logicalCaptureHeight) / visibleFracY;
-                    const GLint vpX = static_cast<GLint>((static_cast<float>(m_logicalCaptureWidth) - vpW) / 2.0f);
-                    const GLint vpY = static_cast<GLint>((static_cast<float>(m_logicalCaptureHeight) - vpH) / 2.0f);
+                    const float vpW = static_cast<float>(fboW) / visibleFracX;
+                    const float vpH = static_cast<float>(fboH) / visibleFracY;
+                    const GLint vpX = static_cast<GLint>((static_cast<float>(fboW) - vpW) / 2.0f);
+                    const GLint vpY = static_cast<GLint>((static_cast<float>(fboH) - vpH) / 2.0f);
                     glViewport(vpX, vpY,
                                static_cast<GLsizei>(vpW),
                                static_cast<GLsizei>(vpH));
@@ -2972,7 +3011,7 @@ void Application::run()
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
                     m_renderer->renderTexture(shaderSrcTex,
-                                              m_logicalCaptureWidth, m_logicalCaptureHeight,
+                                              fboW, fboH,
                                               false, false, 1.0f, 1.0f, false,
                                               shaderSrcW, shaderSrcH,
                                               /*preserveViewport=*/true);
@@ -2984,8 +3023,8 @@ void Application::run()
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
                     shaderSrcTex = m_shaderSourceTexture;
-                    shaderSrcW = m_logicalCaptureWidth;
-                    shaderSrcH = m_logicalCaptureHeight;
+                    shaderSrcW = fboW;
+                    shaderSrcH = fboH;
                 }
 
                 textureToRender = m_shaderEngine->applyShader(shaderSrcTex, shaderSrcW, shaderSrcH);
