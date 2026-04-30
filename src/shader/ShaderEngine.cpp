@@ -372,6 +372,8 @@ bool ShaderEngine::loadPresetPasses()
                 pass.fragmentShader = 0;
             }
             cleanupFramebuffer(pass.framebuffer, pass.texture);
+            cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+            pass.feedbackEnabled = false;
         }
     }
 
@@ -1077,6 +1079,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 cleanupFramebuffer(pass.framebuffer, pass.texture);
                 createFramebuffer(outputWidth, outputHeight, pass.passInfo.floatFramebuffer,
                                   pass.framebuffer, pass.texture, pass.passInfo.srgbFramebuffer);
+                // Dimensões mudaram: invalidar feedback FBO; será re-alocada lazy.
+                cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+                pass.feedbackEnabled = false;
                 pass.width = outputWidth;
                 pass.height = outputHeight;
 
@@ -1366,6 +1371,75 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                 }
             }
 
+            // PassFeedback<N> / PassFeedback<N>Texture: o pass corrente pode samplear o
+            // output do frame ANTERIOR de qualquer pass (incluindo si mesmo). Alocação
+            // lazy: se algum uniform PassFeedback<N>* aparecer aqui, marcamos pass[N]
+            // pra ter ping-pong e alocamos sua segunda textura na primeira vez.
+            // O swap entre texture/feedbackTexture acontece no fim do frame, abaixo.
+            for (uint32_t fbPass = 0; fbPass <= i && fbPass < m_passes.size(); ++fbPass)
+            {
+                const std::string idxStr = std::to_string(fbPass);
+                std::vector<std::string> samplerNames = {
+                    "PassFeedback" + idxStr,
+                    "PassFeedback" + idxStr + "Texture"
+                };
+
+                GLint fbTexLoc = -1;
+                for (const auto &name : samplerNames)
+                {
+                    fbTexLoc = getUniformLocation(pass.program, name);
+                    if (fbTexLoc >= 0) break;
+                }
+
+                bool hasFeedbackUniform = (fbTexLoc >= 0);
+
+                GLint fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "Size");
+                if (fbSizeLoc < 0)
+                {
+                    fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "TextureSize");
+                }
+                if (fbSizeLoc >= 0)
+                {
+                    hasFeedbackUniform = true;
+                }
+
+                if (!hasFeedbackUniform)
+                {
+                    continue;
+                }
+
+                ShaderPassData &fbTarget = m_passes[fbPass];
+                fbTarget.feedbackEnabled = true;
+
+                // Lazy alloc da textura/FBO de feedback com as MESMAS dimensões do
+                // pass alvo. Se as dimensões ainda não foram definidas (pass que não
+                // rodou neste frame ainda), pular — nada útil pra bindar.
+                if (fbTarget.feedbackTexture == 0 && fbTarget.width > 0 && fbTarget.height > 0)
+                {
+                    createFramebuffer(fbTarget.width, fbTarget.height,
+                                      fbTarget.passInfo.floatFramebuffer,
+                                      fbTarget.feedbackFramebuffer, fbTarget.feedbackTexture,
+                                      fbTarget.passInfo.srgbFramebuffer);
+                }
+
+                if (fbTexLoc >= 0 && fbTarget.feedbackTexture != 0)
+                {
+                    glActiveTexture(GL_TEXTURE0 + texUnit);
+                    glBindTexture(GL_TEXTURE_2D, fbTarget.feedbackTexture);
+                    glUniform1i(fbTexLoc, texUnit);
+                    texUnit++;
+                }
+
+                if (fbSizeLoc >= 0)
+                {
+                    float w = static_cast<float>(fbTarget.width);
+                    float h = static_cast<float>(fbTarget.height);
+                    glUniform4f(fbSizeLoc, w, h,
+                                w > 0.0f ? 1.0f / w : 0.0f,
+                                h > 0.0f ? 1.0f / h : 0.0f);
+                }
+            }
+
             // IMPORTANTE: Vincular textura original (OrigTexture) se o shader precisar
             // Alguns shaders (como hqx-pass2) precisam da textura original além da saída do pass anterior
             GLint origTexLoc = getUniformLocation(pass.program, "OrigTexture");
@@ -1482,6 +1556,20 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
+
+        // Swap PassFeedback ping-pong: o que foi escrito neste frame vira a
+        // textura "anterior" pro próximo frame; a antiga textura "anterior"
+        // vira o destino do próximo frame. Aplicado apenas nos passes onde
+        // algum sampler PassFeedback<N>* foi detectado durante o bind.
+        for (auto &fbPass : m_passes)
+        {
+            if (!fbPass.feedbackEnabled || fbPass.feedbackTexture == 0)
+            {
+                continue;
+            }
+            std::swap(fbPass.texture, fbPass.feedbackTexture);
+            std::swap(fbPass.framebuffer, fbPass.feedbackFramebuffer);
+        }
 
         // IMPORTANTE: Atualizar dimensões de saída para uso em maintainAspect
         // Essas são as dimensões FINAIS do último pass do shader
@@ -2511,6 +2599,8 @@ void ShaderEngine::cleanupPresetPasses()
             glDeleteShader(pass.fragmentShader);
         }
         cleanupFramebuffer(pass.framebuffer, pass.texture);
+        cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+        pass.feedbackEnabled = false;
     }
     // IMPORTANTE: Limpar apenas recursos OpenGL, mas preservar parameterInfo
     // para que os parâmetros estejam disponíveis na UI mesmo se a compilação falhar

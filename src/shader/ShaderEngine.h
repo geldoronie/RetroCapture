@@ -30,6 +30,13 @@ struct ShaderPassData {
     std::map<std::string, float> extractedParameters;
     // Informações completas dos parâmetros (nome -> info)
     std::map<std::string, ShaderParameterInfo> parameterInfo;
+
+    // PassFeedback (RetroArch GLSL spec): texturas ping-pong para sampling
+    // do frame anterior deste pass via uniform PassFeedback<N>Texture.
+    // Alocadas lazy quando algum pass declara o uniform; vazio caso contrário.
+    GLuint feedbackTexture = 0;
+    GLuint feedbackFramebuffer = 0;
+    bool feedbackEnabled = false;
 };
 
 class ShaderEngine {
