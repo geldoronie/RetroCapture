@@ -3102,9 +3102,13 @@ void Application::run()
                     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
                     glClear(GL_COLOR_BUFFER_BIT);
 
-                    // Renderizar textura original redimensionada
+                    // Renderizar textura original redimensionada.
+                    // enableBlend=false: shaders RetroArch frequentemente escrevem
+                    // vec4(rgb, 0.0); com blending habilitado (SRC_ALPHA × 0) o destino
+                    // limpo a (0,0,0,0) gera preto. Reproduzimos o comportamento do
+                    // RetroArch que ignora o alpha e mostra o RGB direto.
                     m_renderer->renderTexture(textureToRender, m_outputWidth, m_outputHeight,
-                                              false, isShaderTexture, 1.0f, 1.0f,
+                                              false, false, 1.0f, 1.0f,
                                               false, renderWidth, renderHeight);
 
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -3170,9 +3174,10 @@ void Application::run()
             // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-            // Renderizar textura final na janela (sempre preenche a janela completamente)
+            // Renderizar textura final na janela (sempre preenche a janela completamente).
+            // enableBlend=false pelo mesmo motivo do resize acima.
             m_renderer->renderTexture(finalTexture, m_window->getWidth(), m_window->getHeight(),
-                                      shouldFlipY, isShaderTexture, m_brightness, m_contrast,
+                                      shouldFlipY, false, m_brightness, m_contrast,
                                       m_maintainAspect, finalRenderWidth, finalRenderHeight);
 
             // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
