@@ -91,6 +91,7 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_recording{false};
     std::atomic<bool> m_stopRequest{false};
+    std::atomic<bool> m_encodingThreadExited{false};
     
     std::mutex m_statusMutex;
     std::string m_currentFilename;
