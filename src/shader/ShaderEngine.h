@@ -165,8 +165,6 @@ private:
     GLenum wrapModeToGLEnum(const std::string& wrapMode);
     void applyTextureSettings(GLuint texture, bool filterLinear, const std::string& wrapMode, bool generateMipmap = false);
     
-    // Conversão Slang para GLSL
-    std::string convertSlangToGLSL(const std::string& slangSource, bool isVertex, const std::string& basePath = "");
     std::string processIncludes(const std::string& source, const std::string& basePath);
 };
 
