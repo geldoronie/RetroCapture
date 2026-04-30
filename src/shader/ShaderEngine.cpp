@@ -1094,6 +1094,22 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
             // Bind framebuffer
             glBindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
 
+            // Para passes com srgb_framebuffer=true, o FBO usa GL_SRGB8_ALPHA8.
+            // Sem GL_FRAMEBUFFER_SRGB habilitado, o valor escrito pelo shader cai
+            // direto na textura sem encoding sRGB; depois, o pass seguinte ao ler
+            // a textura aplica decoding sRGB→linear automaticamente, gerando
+            // gama dupla a cada pass e progressivamente escurecendo até preto.
+            // GL_FRAMEBUFFER_SRGB = 0x8DB9 (não exposto pelo nosso loader glad)
+            constexpr GLenum FRAMEBUFFER_SRGB_ENUM = 0x8DB9;
+            if (pass.passInfo.srgbFramebuffer)
+            {
+                glEnable(FRAMEBUFFER_SRGB_ENUM);
+            }
+            else
+            {
+                glDisable(FRAMEBUFFER_SRGB_ENUM);
+            }
+
             glViewport(0, 0, outputWidth, outputHeight);
 
             // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
@@ -1332,6 +1348,23 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                     }
                 }
 
+                // PassPrev<N>Texture com N > pass atual aponta pra "antes do pass 0",
+                // que na prática é o input original (kawase_glow's screen_combine usa
+                // PassPrev8Texture no pass 7 pra recuperar a imagem pré-blur).
+                // Tentamos uma faixa razoável acima do pass atual.
+                for (uint32_t N = i + 1; N <= i + 12; ++N)
+                {
+                    GLint loc = getUniformLocation(pass.program,
+                                                   "PassPrev" + std::to_string(N) + "Texture");
+                    if (loc >= 0 && originalTexture != 0)
+                    {
+                        glActiveTexture(GL_TEXTURE0 + texUnit);
+                        glBindTexture(GL_TEXTURE_2D, originalTexture);
+                        glUniform1i(loc, texUnit);
+                        texUnit++;
+                    }
+                }
+
                 // Vincular passes anteriores referenciados por alias (aliasN = SomeName).
                 // RetroArch GLSL spec: presets podem nomear um pass via `aliasN = MyPass`,
                 // e passes posteriores referenciam o sampler como `uniform sampler2D MyPass`
@@ -1564,6 +1597,9 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
 
         // Desvincular framebuffer após todos os passes
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        // Desabilita GL_FRAMEBUFFER_SRGB pra não vazar pro draw final.
+        glDisable(0x8DB9);
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
