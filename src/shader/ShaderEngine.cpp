@@ -1332,6 +1332,38 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                         }
                     }
                 }
+
+                // Vincular passes anteriores referenciados por alias (aliasN = SomeName).
+                // RetroArch GLSL spec: presets podem nomear um pass via `aliasN = MyPass`,
+                // e passes posteriores referenciam o sampler como `uniform sampler2D MyPass`
+                // (e o tamanho via `uniform vec4 MyPassSize`).
+                for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+                {
+                    const std::string &alias = m_passes[prevPass].passInfo.alias;
+                    if (alias.empty())
+                    {
+                        continue;
+                    }
+
+                    GLint aliasTexLoc = getUniformLocation(pass.program, alias);
+                    if (aliasTexLoc >= 0)
+                    {
+                        glActiveTexture(GL_TEXTURE0 + texUnit);
+                        glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
+                        glUniform1i(aliasTexLoc, texUnit);
+                        texUnit++;
+                    }
+
+                    GLint aliasSizeLoc = getUniformLocation(pass.program, alias + "Size");
+                    if (aliasSizeLoc >= 0)
+                    {
+                        float w = static_cast<float>(m_passes[prevPass].width);
+                        float h = static_cast<float>(m_passes[prevPass].height);
+                        glUniform4f(aliasSizeLoc, w, h,
+                                    w > 0.0f ? 1.0f / w : 0.0f,
+                                    h > 0.0f ? 1.0f / h : 0.0f);
+                    }
+                }
             }
 
             // IMPORTANTE: Vincular textura original (OrigTexture) se o shader precisar
@@ -1940,19 +1972,47 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform1i(loc, 1); // Sempre 1 (forward)
     }
 
-    // Texturas de histórico (history buffers) - valores dummy
-    // OriginalHistorySize0-7 (frames anteriores)
-    // Nota: não implementado ainda, mas precisamos declarar para evitar erros
+    // OriginalHistorySize0-7: dimensões dos frames anteriores.
+    // Convenção slang: OriginalHistory0 = source atual, OriginalHistory1..N = N frames atrás.
+    // m_frameHistoryWidths/Heights armazena o histórico real (mais recente primeiro).
     for (int i = 0; i <= 7; ++i)
     {
         std::string historyName = "OriginalHistorySize" + std::to_string(i);
         loc = getUniformLocation(program, historyName);
-        if (loc >= 0)
+        if (loc < 0)
         {
-            // Usar mesmas dimensões do input atual (já que não temos histórico real)
-            glUniform4f(loc, static_cast<float>(inputWidth), static_cast<float>(inputHeight),
-                        1.0f / static_cast<float>(inputWidth), 1.0f / static_cast<float>(inputHeight));
+            continue;
         }
+
+        float w;
+        float h;
+        if (i == 0)
+        {
+            // OriginalHistory0 = source atual
+            w = static_cast<float>(inputWidth);
+            h = static_cast<float>(inputHeight);
+        }
+        else
+        {
+            size_t historyIdx = static_cast<size_t>(i - 1);
+            if (historyIdx < m_frameHistoryWidths.size() &&
+                historyIdx < m_frameHistoryHeights.size())
+            {
+                w = static_cast<float>(m_frameHistoryWidths[historyIdx]);
+                h = static_cast<float>(m_frameHistoryHeights[historyIdx]);
+            }
+            else
+            {
+                // Sem histórico ainda neste slot: usar input atual como fallback seguro
+                // (evita div-by-zero em shaders que fazem 1.0 / OriginalHistorySize.xy).
+                w = static_cast<float>(inputWidth);
+                h = static_cast<float>(inputHeight);
+            }
+        }
+
+        glUniform4f(loc, w, h,
+                    w > 0.0f ? 1.0f / w : 0.0f,
+                    h > 0.0f ? 1.0f / h : 0.0f);
     }
 
     // Parâmetros extraídos de #pragma parameter (injetados pelo RetroArch)
