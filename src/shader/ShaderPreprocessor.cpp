@@ -166,10 +166,17 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
         precisionLine = "precision mediump float;\nprecision mediump int;\n";
     }
     
+    // Só ativar PARAMETER_UNIFORM quando o shader DECLARA #pragma parameter.
+    // Shaders como os do crt-royale escondem dezenas de uniforms atrás desse
+    // ifdef e dependem do branch #else (com defaults _static) quando não há
+    // pragma. Definir incondicionalmente fazia esses uniforms ficarem em 0,
+    // colapsando a matemática (sigma=0 → Gaussian = 0 → tela preta).
+    const std::string paramDefine = paramDefaults.empty() ? "" : "#define PARAMETER_UNIFORM\n";
+
     // Construir fontes finais com defines
     // Ordem: version + precision (se ES) + extension (se Desktop) + defines + código
-    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
-    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
+    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n" + paramDefine + vertexCode;
+    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n" + paramDefine + fragmentCode;
 
     return result;
 }
