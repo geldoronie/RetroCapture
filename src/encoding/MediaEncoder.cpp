@@ -845,6 +845,12 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
         if (m_lastAudioFramePTS >= 0 && calculatedPTS <= m_lastAudioFramePTS)
         {
             calculatedPTS = m_lastAudioFramePTS + 1;
+            uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (total == 1 || (total % 60) == 0)
+            {
+                LOG_WARN("MediaEncoder: PTS retrocession on audio frame (total: " +
+                         std::to_string(total) + ")");
+            }
         }
         m_lastAudioFramePTS = calculatedPTS;
     }
@@ -866,6 +872,12 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
             if (m_lastVideoPTS >= 0 && pts <= m_lastVideoPTS)
             {
                 pts = m_lastVideoPTS + 1;
+                uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (total == 1 || (total % 60) == 0)
+                {
+                    LOG_WARN("MediaEncoder: PTS retrocession on video frame (total: " +
+                             std::to_string(total) + ")");
+                }
             }
             m_lastVideoPTS = pts;
         }
@@ -890,6 +902,12 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
             if (m_lastAudioPTS >= 0 && pts <= m_lastAudioPTS)
             {
                 pts = m_lastAudioPTS + 1;
+                uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (total == 1 || (total % 60) == 0)
+                {
+                    LOG_WARN("MediaEncoder: PTS retrocession on audio frame (muxer-level, total: " +
+                             std::to_string(total) + ")");
+                }
             }
             m_lastAudioPTS = pts;
         }
@@ -1260,6 +1278,7 @@ void MediaEncoder::cleanup()
     m_totalAudioSamplesProcessed = 0;
     m_audioFrameCount = 0;
     m_videoFrameCountForPTS = 0;
+    m_desyncFrameCount.store(0, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(m_ptsMutex);

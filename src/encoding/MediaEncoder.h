@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -90,6 +91,10 @@ public:
     int64_t getVideoFrameCount() const { return m_videoFrameCount; }
     void resetVideoFrameCount() { m_videoFrameCount = 0; }
 
+    // Eventos de retrocesso de PTS (forçar pra frente para preservar monotonicidade).
+    // Não-zero indica instabilidade no timestamp source.
+    uint64_t getDesyncFrameCount() const { return m_desyncFrameCount.load(std::memory_order_relaxed); }
+
 private:
     // Inicialização de codecs
     bool initializeVideoCodec();
@@ -161,6 +166,10 @@ private:
     // Track total samples processed for correct PTS calculation when multiple frames are generated
     int64_t m_totalAudioSamplesProcessed = 0;
 
-    // Detecção de dessincronização
-    int m_desyncFrameCount = 0;
+    // Contador de eventos de retrocesso de PTS: cada incremento é uma vez que
+    // o calculatedPTS teria ficado <= ao último PTS já emitido e tivemos que
+    // forçá-lo pra frente (m_lastXxxPTS + 1). Indica instabilidade no
+    // timestamp source — o stream ainda fica monotônico, mas isso vira jitter
+    // de duração de frame no arquivo final.
+    std::atomic<uint64_t> m_desyncFrameCount{0};
 };
