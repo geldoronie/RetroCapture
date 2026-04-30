@@ -1161,8 +1161,21 @@ void UIManager::renderInfoPanel()
 
 void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device)
 {
-    m_captureWidth = width;
-    m_captureHeight = height;
+    // width/height são o que o V4L2 entregou (depois do ajuste). Vão pra
+    // m_actualCaptureWidth/Height. Não sobrescrevemos m_captureWidth/Height
+    // (a preferência LÓGICA do usuário) — assim o campo de Resolution na UI
+    // continua mostrando a escolha do usuário, mesmo quando o dispositivo
+    // adjusta pra mais próxima suportada (e o pipeline faz downscale).
+    m_actualCaptureWidth = width;
+    m_actualCaptureHeight = height;
+    if (m_captureWidth == 0)
+    {
+        m_captureWidth = width;
+    }
+    if (m_captureHeight == 0)
+    {
+        m_captureHeight = height;
+    }
     m_captureFps = fps;
     m_captureDevice = device;
     if (m_currentDevice.empty())

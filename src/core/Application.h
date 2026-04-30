@@ -184,6 +184,18 @@ private:
     uint32_t m_captureWidth = 1920;
     uint32_t m_captureHeight = 1080;
     uint32_t m_captureFps = 60;
+
+    // Resolução LÓGICA: o que o usuário escolheu na UI. O driver V4L2 ajusta
+    // m_captureWidth/Height pra mais próxima suportada. Quando lógica < capture,
+    // fazemos um downscale antes do shader chain pra que efeitos de CRT/scanline
+    // operem na escala que foram desenhados (típicamente 240p-480p), e não em
+    // 1080p onde os scanlines viram sub-pixel e somem visualmente.
+    uint32_t m_logicalCaptureWidth = 0;   // 0 = sem downscale (usa capture nativo)
+    uint32_t m_logicalCaptureHeight = 0;
+    GLuint m_shaderSourceFBO = 0;
+    GLuint m_shaderSourceTexture = 0;
+    uint32_t m_shaderSourceFBOWidth = 0;
+    uint32_t m_shaderSourceFBOHeight = 0;
     uint32_t m_windowWidth = 1920;
     uint32_t m_windowHeight = 1080;
     

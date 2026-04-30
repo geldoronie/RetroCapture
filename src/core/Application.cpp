@@ -544,6 +544,11 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     LOG_INFO("Reconfiguring capture: " + std::to_string(width) + "x" +
              std::to_string(height) + " @ " + std::to_string(fps) + "fps");
 
+    // Guardamos a resolução lógica (o que o usuário pediu) antes do V4L2
+    // possivelmente ajustar pra mais próxima suportada pelo dispositivo.
+    m_logicalCaptureWidth = width;
+    m_logicalCaptureHeight = height;
+
     // Set reconfiguration flag to prevent frame processing
     m_isReconfiguring = true;
 
@@ -2874,9 +2879,101 @@ void Application::run()
                     m_shaderEngine->setViewport(currentWidth, currentHeight);
                 }
 
-                textureToRender = m_shaderEngine->applyShader(m_frameProcessor->getTexture(),
-                                                              m_frameProcessor->getTextureWidth(),
-                                                              m_frameProcessor->getTextureHeight());
+                // Source para o shader chain. Por default, usamos a textura full-res
+                // do FrameProcessor. Se o usuário pediu uma resolução LÓGICA menor que
+                // a que o V4L2 entregou (driver ajustou pra mais próxima suportada),
+                // fazemos um downscale com filter=NEAREST aqui — assim shaders CRT
+                // recebem entrada "pixelada" baixa-res como foram desenhados, em vez
+                // de 1080p suave onde scanlines viram sub-pixel e somem.
+                GLuint shaderSrcTex = m_frameProcessor->getTexture();
+                uint32_t shaderSrcW = m_frameProcessor->getTextureWidth();
+                uint32_t shaderSrcH = m_frameProcessor->getTextureHeight();
+
+                const bool needsDownscale = (m_logicalCaptureWidth > 0 &&
+                                             m_logicalCaptureHeight > 0 &&
+                                             m_logicalCaptureWidth < shaderSrcW &&
+                                             m_logicalCaptureHeight < shaderSrcH &&
+                                             shaderSrcTex != 0);
+
+                if (needsDownscale)
+                {
+                    if (m_shaderSourceFBO == 0 ||
+                        m_shaderSourceFBOWidth != m_logicalCaptureWidth ||
+                        m_shaderSourceFBOHeight != m_logicalCaptureHeight)
+                    {
+                        if (m_shaderSourceTexture != 0)
+                        {
+                            glDeleteTextures(1, &m_shaderSourceTexture);
+                            m_shaderSourceTexture = 0;
+                        }
+                        if (m_shaderSourceFBO != 0)
+                        {
+                            glDeleteFramebuffers(1, &m_shaderSourceFBO);
+                            m_shaderSourceFBO = 0;
+                        }
+
+                        glGenTextures(1, &m_shaderSourceTexture);
+                        glBindTexture(GL_TEXTURE_2D, m_shaderSourceTexture);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+                                     static_cast<GLsizei>(m_logicalCaptureWidth),
+                                     static_cast<GLsizei>(m_logicalCaptureHeight),
+                                     0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+                        glGenFramebuffers(1, &m_shaderSourceFBO);
+                        glBindFramebuffer(GL_FRAMEBUFFER, m_shaderSourceFBO);
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                               GL_TEXTURE_2D, m_shaderSourceTexture, 0);
+
+                        m_shaderSourceFBOWidth = m_logicalCaptureWidth;
+                        m_shaderSourceFBOHeight = m_logicalCaptureHeight;
+
+                        static bool loggedDownscaleAlloc = false;
+                        if (!loggedDownscaleAlloc)
+                        {
+                            LOG_INFO("Shader source downscale enabled: " +
+                                     std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
+                                     " -> " + std::to_string(m_logicalCaptureWidth) + "x" +
+                                     std::to_string(m_logicalCaptureHeight) + " (NEAREST)");
+                            loggedDownscaleAlloc = true;
+                        }
+                    }
+
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_shaderSourceFBO);
+                    glViewport(0, 0,
+                               static_cast<GLsizei>(m_logicalCaptureWidth),
+                               static_cast<GLsizei>(m_logicalCaptureHeight));
+
+                    // Forçar NEAREST na textura source pra preservar look pixelado
+                    // no downscale, e restaurar pra config do FrameProcessor depois.
+                    const GLint restoreFilter = m_frameProcessor->getTextureFilterLinear()
+                                                    ? GL_LINEAR
+                                                    : GL_NEAREST;
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+                    m_renderer->renderTexture(shaderSrcTex,
+                                              m_logicalCaptureWidth, m_logicalCaptureHeight,
+                                              false, false, 1.0f, 1.0f, false,
+                                              shaderSrcW, shaderSrcH);
+
+                    glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, restoreFilter);
+
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+                    shaderSrcTex = m_shaderSourceTexture;
+                    shaderSrcW = m_logicalCaptureWidth;
+                    shaderSrcH = m_logicalCaptureHeight;
+                }
+
+                textureToRender = m_shaderEngine->applyShader(shaderSrcTex, shaderSrcW, shaderSrcH);
                 isShaderTexture = true;
                 
                 // Log saída do shader
@@ -3770,6 +3867,17 @@ void Application::shutdown()
     }
 
     LOG_INFO("Shutting down Application...");
+
+    if (m_shaderSourceTexture != 0)
+    {
+        glDeleteTextures(1, &m_shaderSourceTexture);
+        m_shaderSourceTexture = 0;
+    }
+    if (m_shaderSourceFBO != 0)
+    {
+        glDeleteFramebuffers(1, &m_shaderSourceFBO);
+        m_shaderSourceFBO = 0;
+    }
 
     if (m_frameProcessor)
     {

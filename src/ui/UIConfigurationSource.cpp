@@ -522,6 +522,20 @@ void UIConfigurationSource::renderCaptureSettings()
         }
     }
 
+    // Quando o V4L2 ajusta a resolução pra mais próxima suportada, mostramos
+    // a real do dispositivo abaixo do campo. O pipeline faz downscale antes
+    // do shader chain pra preservar o look retrô da resolução pedida.
+    const uint32_t actualW = m_uiManager->getActualCaptureWidth();
+    const uint32_t actualH = m_uiManager->getActualCaptureHeight();
+    const uint32_t requestedW = m_uiManager->getCaptureWidth();
+    const uint32_t requestedH = m_uiManager->getCaptureHeight();
+    if (actualW > 0 && actualH > 0 &&
+        (actualW != requestedW || actualH != requestedH))
+    {
+        ImGui::TextDisabled("Device delivers %ux%u (downscaled to %ux%u for shader)",
+                            actualW, actualH, requestedW, requestedH);
+    }
+
     // Controle de FPS
     ImGui::Text("Framerate:");
     int fps = static_cast<int>(m_uiManager->getCaptureFps());
