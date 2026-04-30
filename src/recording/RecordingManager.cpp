@@ -209,6 +209,7 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     m_stopRequest = false;
     m_running = true;
     m_recording = true;
+    m_encodingThreadExited.store(false, std::memory_order_relaxed);
     m_encodingThread = std::thread(&RecordingManager::encodingThread, this);
 
     {
@@ -231,10 +232,29 @@ void RecordingManager::stopRecording()
 
     m_stopRequest = true;
 
-    // Wait for encoding thread to finish
+    // Wait for encoding thread to finish, but bail after a deadline so the app
+    // can shut down even if the thread is stuck inside FFmpeg. MediaMuxer's
+    // cleanup is intentionally non-destructive (it sets m_initialized=false
+    // without freeing FFmpeg resources), so a detached thread that keeps
+    // calling muxPacket fails-fast on that flag instead of crashing.
     if (m_encodingThread.joinable())
     {
-        m_encodingThread.join();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline &&
+               !m_encodingThreadExited.load(std::memory_order_acquire))
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        if (m_encodingThreadExited.load(std::memory_order_acquire))
+        {
+            m_encodingThread.join();
+        }
+        else
+        {
+            LOG_ERROR("RecordingManager: encoding thread did not exit within 5s — detaching");
+            m_encodingThread.detach();
+        }
     }
 
     // Flush encoder and get remaining packets
@@ -659,6 +679,8 @@ void RecordingManager::encodingThread()
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
+
+    m_encodingThreadExited.store(true, std::memory_order_release);
 }
 
 uint64_t RecordingManager::getCurrentDurationUs()
