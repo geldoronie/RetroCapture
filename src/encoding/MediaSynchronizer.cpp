@@ -53,11 +53,17 @@ bool MediaSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint3
             m_firstVideoTimestampUs = captureTimestampUs;
         }
 
-        // Limitar tamanho do buffer para evitar vazamento de memória
+        // Limitar tamanho do buffer para evitar vazamento de memória.
+        // Drop em FIFO: encoder thread não está acompanhando o produtor.
         while (m_videoBuffer.size() >= m_maxVideoBufferSize)
         {
-            // Remover frame mais antigo (mesmo que não processado)
             m_videoBuffer.pop_front();
+            uint64_t dropped = m_videoDropCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (dropped == 1 || (dropped % 30) == 0)
+            {
+                LOG_WARN("MediaSynchronizer: video buffer overflow, dropped frame (total: " +
+                         std::to_string(dropped) + ")");
+            }
         }
 
         m_videoBuffer.push_back(std::move(frame));
@@ -99,11 +105,17 @@ bool MediaSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount
             m_firstAudioTimestampUs = captureTimestampUs;
         }
 
-        // Limitar tamanho do buffer para evitar vazamento de memória
+        // Limitar tamanho do buffer para evitar vazamento de memória.
+        // Drop em FIFO: encoder thread não está acompanhando o produtor.
         while (m_audioBuffer.size() >= m_maxAudioBufferSize)
         {
-            // Remover chunk mais antigo (mesmo que não processado)
             m_audioBuffer.pop_front();
+            uint64_t dropped = m_audioDropCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (dropped == 1 || (dropped % 30) == 0)
+            {
+                LOG_WARN("MediaSynchronizer: audio buffer overflow, dropped chunk (total: " +
+                         std::to_string(dropped) + ")");
+            }
         }
 
         m_audioBuffer.push_back(audio);
@@ -382,6 +394,9 @@ void MediaSynchronizer::clear()
         m_latestAudioTimestampUs = 0;
         m_firstAudioTimestampUs = 0;
     }
+
+    m_videoDropCount.store(0, std::memory_order_relaxed);
+    m_audioDropCount.store(0, std::memory_order_relaxed);
 }
 
 size_t MediaSynchronizer::getVideoBufferSize() const
