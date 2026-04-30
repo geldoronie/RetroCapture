@@ -1346,6 +1346,44 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
                             break;
                         }
                     }
+
+                    // PassPrev<N>TextureSize / PassPrev<N>InputSize / PassPrev<N>OutputSize:
+                    // dimensões do pass alvo. Sem isso, shaders como crt-royale-bloom-approx
+                    // (que faz tex_uv = video_uv * PassPrev2InputSize / PassPrev2TextureSize)
+                    // dividem 0/0 e produzem NaN → tela preta.
+                    const std::string nStr = std::to_string(i - prevPass);
+                    const ShaderPassData &target = m_passes[prevPass];
+                    const float tw = static_cast<float>(target.width);
+                    const float th = static_cast<float>(target.height);
+
+                    GLint sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "TextureSize");
+                    if (sizeLoc >= 0)
+                    {
+                        glUniform2f(sizeLoc, tw, th);
+                    }
+                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "InputSize");
+                    if (sizeLoc >= 0)
+                    {
+                        // InputSize de pass P é o tamanho que ele recebeu como entrada.
+                        // Se P>0, é o output do pass anterior; se P==0, é o source original.
+                        if (prevPass == 0)
+                        {
+                            glUniform2f(sizeLoc,
+                                        static_cast<float>(m_sourceWidth),
+                                        static_cast<float>(m_sourceHeight));
+                        }
+                        else
+                        {
+                            glUniform2f(sizeLoc,
+                                        static_cast<float>(m_passes[prevPass - 1].width),
+                                        static_cast<float>(m_passes[prevPass - 1].height));
+                        }
+                    }
+                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "OutputSize");
+                    if (sizeLoc >= 0)
+                    {
+                        glUniform2f(sizeLoc, tw, th);
+                    }
                 }
 
                 // PassPrev<N>Texture com N > pass atual aponta pra "antes do pass 0",
