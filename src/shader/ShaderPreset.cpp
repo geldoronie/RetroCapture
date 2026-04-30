@@ -168,7 +168,6 @@ bool ShaderPreset::parseLine(const std::string &line, int &passIndex)
     {
         // <texName> = <path> — atribui o path à textura já declarada.
         m_textures[key].path = resolvePath(value);
-        LOG_INFO("Textura definida: " + key + " -> " + m_textures[key].path);
         return true;
     }
 
@@ -268,11 +267,11 @@ bool ShaderPreset::parseLine(const std::string &line, int &passIndex)
              key.find("_mipmap") == std::string::npos) ||
             isTextureName)
         {
-            // É uma textura
+            // Caso o early-handling não tenha alcançado (ex: nome de textura
+            // novo nunca declarado em `textures = ...`), criar entrada aqui.
             ShaderTexture tex;
             tex.path = resolvePath(value);
             m_textures[key] = tex;
-            LOG_INFO("Textura definida: " + key + " -> " + tex.path);
         }
         else if (key.find("Sampler") == 0 && key.find("_wrap_mode") != std::string::npos)
         {

@@ -177,7 +177,12 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
 std::string ShaderPreprocessor::processIncludes(const std::string& source, const std::string& basePath)
 {
     std::string result = source;
-    std::regex includeRegex(R"(#include\s+["<]([^">]+)[">])");
+    // Multiline + line-start âncora: exige que `#include` esteja no começo
+    // da linha (após whitespace opcional). Sem isso, qualquer `// #include "..."`
+    // dentro de comentário também era processado, gerando warnings em massa
+    // (ex: crt-royale tem dezenas de #include comentados na documentação).
+    std::regex includeRegex(R"(^[ \t]*#include\s+["<]([^">]+)[">])",
+                            std::regex_constants::ECMAScript | std::regex_constants::multiline);
     std::smatch match;
 
     // Processar todos os includes
