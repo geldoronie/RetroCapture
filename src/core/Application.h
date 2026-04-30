@@ -165,6 +165,12 @@ private:
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
 
+    // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
+    // pushFrame() copia os dados, então é seguro reutilizar.
+    std::vector<uint8_t> m_captureFrameData;       // Saída RGB final (push-to-encoder).
+    std::vector<uint8_t> m_captureRgbaScratch;     // Temp RGBA→RGB (path PBO com shader).
+    std::vector<uint8_t> m_captureSyncPadded;      // Temp glReadPixels com row padding.
+
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 
     // Configuração

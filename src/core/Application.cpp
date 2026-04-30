@@ -3343,14 +3343,14 @@ void Application::run()
                                 size_t readRowSizePadded = ((readRowSizeUnpadded + 3) / 4) * 4;
                                 size_t totalSizeWithPadding = readRowSizePadded * static_cast<size_t>(actualCaptureHeight);
 
-                                std::vector<uint8_t> frameDataWithPadding;
+                                auto &frameDataWithPadding = m_captureSyncPadded;
                                 frameDataWithPadding.resize(totalSizeWithPadding);
 
                                 glReadPixels(viewportX, readY, static_cast<GLsizei>(actualCaptureWidth), static_cast<GLsizei>(actualCaptureHeight),
                                              GL_RGB, GL_UNSIGNED_BYTE, frameDataWithPadding.data());
 
                                 // Converter dados (mesmo código abaixo)
-                                std::vector<uint8_t> frameData;
+                                auto &frameData = m_captureFrameData;
                                 frameData.resize(rgbDataSize);
                                 for (uint32_t row = 0; row < actualCaptureHeight; row++)
                                 {
@@ -3439,7 +3439,7 @@ void Application::run()
                                              std::to_string(currentViewport[2]) + "x" + std::to_string(currentViewport[3]) + "]");
                             }
 
-                            std::vector<uint8_t> frameData;
+                            auto &frameData = m_captureFrameData;
                             bool frameDataReady = false;
 
                             // Decidir entre PBO async e leitura síncrona ANTES de tocar no FBO.
@@ -3470,8 +3470,9 @@ void Application::run()
                                 }
                                 else
                                 {
-                                    std::vector<uint8_t> rgbaData(static_cast<size_t>(textureWidth) *
-                                                                  static_cast<size_t>(textureHeight) * 4);
+                                    auto &rgbaData = m_captureRgbaScratch;
+                                    rgbaData.resize(static_cast<size_t>(textureWidth) *
+                                                    static_cast<size_t>(textureHeight) * 4);
                                     if (m_pboManager->getReadData(rgbaData.data(),
                                                                   textureWidth, textureHeight,
                                                                   /*flipY=*/false))
@@ -3497,8 +3498,8 @@ void Application::run()
                                 // Caminho síncrono (fallback quando PBO não está disponível).
                                 size_t syncRowUnpadded = static_cast<size_t>(textureWidth) * bytesPerPixel;
                                 size_t syncRowPadded = ((syncRowUnpadded + 3) / 4) * 4;
-                                std::vector<uint8_t> frameDataWithPadding(
-                                    syncRowPadded * static_cast<size_t>(textureHeight));
+                                auto &frameDataWithPadding = m_captureSyncPadded;
+                                frameDataWithPadding.resize(syncRowPadded * static_cast<size_t>(textureHeight));
 
                                 glReadPixels(0, 0,
                                              static_cast<GLsizei>(textureWidth),
