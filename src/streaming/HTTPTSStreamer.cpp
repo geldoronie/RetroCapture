@@ -1,5 +1,6 @@
 #include "HTTPTSStreamer.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 
 #ifdef PLATFORM_LINUX
 #include <sys/socket.h>
@@ -203,42 +204,32 @@ bool HTTPTSStreamer::start()
     // HTTPS só faz sentido se o Web Portal estiver ativo
     if (m_webPortalEnabled && m_enableHTTPS && !m_sslCertPath.empty() && !m_sslKeyPath.empty())
     {
-        // Função helper para obter diretório de configuração do usuário
-        auto getUserConfigDir = []() -> std::string
+        // Procura arquivos SSL: caminho absoluto > user-data/ssl > read-only assets > cwd.
+        auto findSSLFile = [](const std::string &relativePath) -> std::string
         {
-            const char *homeDir = std::getenv("HOME");
-            if (homeDir)
-            {
-                fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
-                return configDir.string();
-            }
-            return "";
-        };
-
-        // Função helper para encontrar arquivo SSL em vários locais possíveis
-        // Prioridade: 1) Caminho absoluto fornecido, 2) ~/.config/retrocapture/ssl/, 3) Diretório atual/ssl/
-        auto findSSLFile = [getUserConfigDir](const std::string &relativePath) -> std::string
-        {
-            // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
             fs::path testPath(relativePath);
             if (testPath.is_absolute() && fs::exists(testPath))
             {
                 return fs::absolute(testPath).string();
             }
 
-            // Extrair apenas o nome do arquivo
             fs::path inputPath(relativePath);
             std::string fileName = inputPath.filename();
 
-            // Lista de locais para buscar (em ordem de prioridade)
             std::vector<std::string> possiblePaths;
 
-            // 1. Pasta de configuração do usuário (~/.config/retrocapture/ssl/) - PRIORIDADE ALTA
-            std::string userConfigDir = getUserConfigDir();
-            if (!userConfigDir.empty())
+            // 1. User data: certs do usuário (per-user, não roamed via XDG_DATA_HOME).
+            std::string userDataDir = Paths::getUserDataDir();
+            if (!userDataDir.empty())
             {
-                fs::path userSSLDir = fs::path(userConfigDir) / "ssl";
-                possiblePaths.push_back((userSSLDir / fileName).string());
+                possiblePaths.push_back((fs::path(userDataDir) / "ssl" / fileName).string());
+            }
+
+            // 2. Read-only assets: SSL bundle shipado com a aplicação.
+            std::string roAssets = Paths::getReadOnlyAssetsDir();
+            if (!roAssets.empty())
+            {
+                possiblePaths.push_back((fs::path(roAssets) / "ssl" / fileName).string());
             }
 
             // 2. Caminho como fornecido (pode ser relativo)
@@ -304,30 +295,14 @@ bool HTTPTSStreamer::start()
         if (foundCertPath.empty())
         {
             LOG_ERROR("SSL Certificate file not found: " + m_sslCertPath);
-            std::string userConfigDir = getUserConfigDir();
-            if (!userConfigDir.empty())
-            {
-                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
-            }
-            else
-            {
-                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
-            }
+            LOG_ERROR("Searched in user-data/ssl, read-only assets/ssl, ./ssl/, ../ssl/, ../../ssl/");
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
             m_enableHTTPS = false;
         }
         else if (foundKeyPath.empty())
         {
             LOG_ERROR("SSL Private Key file not found: " + m_sslKeyPath);
-            std::string userConfigDir = getUserConfigDir();
-            if (!userConfigDir.empty())
-            {
-                LOG_ERROR("Searched in: ~/.config/retrocapture/ssl/, current directory, ./ssl/, ../ssl/, ../../ssl/");
-            }
-            else
-            {
-                LOG_ERROR("Searched in: current directory, ./ssl/, ../ssl/, ../../ssl/");
-            }
+            LOG_ERROR("Searched in user-data/ssl, read-only assets/ssl, ./ssl/, ../ssl/, ../../ssl/");
             LOG_ERROR("Please generate certificates or disable HTTPS. Continuing with HTTP only.");
             m_enableHTTPS = false;
         }

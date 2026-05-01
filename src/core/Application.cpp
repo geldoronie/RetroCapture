@@ -1,5 +1,6 @@
 #include "Application.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
 #ifdef PLATFORM_LINUX
@@ -70,6 +71,11 @@ Application::~Application()
 bool Application::init()
 {
     LOG_INFO("Initializing Application...");
+
+    // Migrar layouts antigos (~/.config/retrocapture/{assets,ssl} ou
+    // %APPDATA%\RetroCapture\{assets,ssl}) pra novo XDG/Known-Folders
+    // layout. Idempotente — vê marcador `MIGRATED.txt` no destino.
+    Paths::migrateLegacyDataIfNeeded();
 
     if (!initWindow())
     {
@@ -2148,7 +2154,7 @@ bool Application::initUI()
     if (!m_presetPath.empty())
     {
         fs::path presetPath(m_presetPath);
-        fs::path basePath("shaders/shaders_glsl");
+        fs::path basePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
         fs::path relativePath = fs::relative(presetPath, basePath);
         if (!relativePath.empty() && relativePath != presetPath)
         {
@@ -2988,8 +2994,9 @@ void Application::run()
                     // Overscan: amplia o viewport de modo que apenas a região
                     // central (1 - 2*overscan) do source caia dentro do FBO.
                     // X e Y independentes; 0 = sem corte, 0.45 = corta 45% de cada lado.
-                    const float overscanX = std::clamp(overscanXPctRead / 100.0f, 0.0f, 0.45f);
-                    const float overscanY = std::clamp(overscanYPctRead / 100.0f, 0.0f, 0.45f);
+                    // std::clamp é C++17; o MinGW antigo do build Windows não tem.
+                    const float overscanX = std::max(0.0f, std::min(0.45f, overscanXPctRead / 100.0f));
+                    const float overscanY = std::max(0.0f, std::min(0.45f, overscanYPctRead / 100.0f));
                     const float visibleFracX = 1.0f - 2.0f * overscanX;
                     const float visibleFracY = 1.0f - 2.0f * overscanY;
                     const float vpW = static_cast<float>(fboW) / visibleFracX;
@@ -4526,10 +4533,7 @@ fs::path Application::getShaderBasePath() const
     {
         return fs::path(envShaderPath);
     }
-    else
-    {
-        return fs::current_path() / "shaders" / "shaders_glsl";
-    }
+    return fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
 }
 
 std::string Application::resolveShaderPath(const std::string &shaderPath) const

@@ -2,6 +2,7 @@
 #include "UIManager.h"
 #include "../shader/ShaderEngine.h"
 #include "../utils/FilesystemCompat.h"
+#include "../utils/Paths.h"
 #include <imgui.h>
 #include <cstring>
 
@@ -127,7 +128,7 @@ void UIConfigurationShader::renderSavePreset()
             if (onSavePreset && strlen(m_savePresetPath) > 0)
             {
                 // Construir caminho completo
-                fs::path basePath("shaders/shaders_glsl");
+                fs::path basePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
                 fs::path newPath = basePath / m_savePresetPath;
                 // Garantir extensão .glslp
                 if (newPath.extension() != ".glslp")

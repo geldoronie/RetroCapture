@@ -1,5 +1,6 @@
 #include "RecordingManager.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include "../utils/FilesystemCompat.h"
 #include <fstream>
 #include <ctime>
@@ -57,8 +58,28 @@ std::string RecordingManager::generateFilename(const RecordingSettings &settings
         filename += ".mp4"; // Default
     }
 
-    // Build full path
+    // Build full path. Path relativo (ex: "recordings/" default) é resolvido
+    // contra o diretório Videos do usuário; absoluto é honrado como está.
     fs::path outputDir(settings.outputPath);
+    if (outputDir.is_relative())
+    {
+        std::string videos = Paths::getDefaultRecordingsDir();
+        if (!videos.empty())
+        {
+            // "recordings/" relativo vira <Videos>/RetroCapture/. Path com
+            // sub-diretório (ex: "retro/snes/") é tratado como sub do Videos.
+            if (settings.outputPath == "recordings/" ||
+                settings.outputPath == "recordings" ||
+                settings.outputPath.empty())
+            {
+                outputDir = videos;
+            }
+            else
+            {
+                outputDir = fs::path(videos) / settings.outputPath;
+            }
+        }
+    }
     fs::path fullPath = outputDir / filename;
 
     return fullPath.string();

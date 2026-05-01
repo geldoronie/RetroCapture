@@ -1,5 +1,6 @@
 #include "PresetManager.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -7,12 +8,6 @@
 #include <iomanip>
 #include <cctype>
 #include <chrono>
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#include <limits.h>
-#endif
 
 // Include JSON library (nlohmann/json)
 #include <nlohmann/json.hpp>
@@ -58,116 +53,33 @@ void PresetManager::ensureDirectoriesExist()
 
 std::string PresetManager::getAssetsDirectory() const
 {
-    // Try multiple locations (similar to WebPortal::findAssetFile)
-    
-    // 1. Environment variable (for AppImage)
-    const char* assetsEnvPath = std::getenv("RETROCAPTURE_ASSETS_PATH");
-    if (assetsEnvPath)
-    {
-        fs::path envAssetsDir(assetsEnvPath);
-        if (fs::exists(envAssetsDir) && fs::is_directory(envAssetsDir))
-        {
-            return fs::absolute(envAssetsDir).string();
-        }
-    }
-
-    // 2. User config directory (~/.config/retrocapture/assets/)
-    #ifdef _WIN32
-    const char* appDataDir = std::getenv("APPDATA");
-    if (!appDataDir)
-    {
-        appDataDir = std::getenv("LOCALAPPDATA");
-    }
-    if (appDataDir)
-    {
-        fs::path configDir = fs::path(appDataDir) / "RetroCapture" / "assets";
-        if (fs::exists(configDir) && fs::is_directory(configDir))
-        {
-            return fs::absolute(configDir).string();
-        }
-    }
-    #else
-    const char* homeDir = std::getenv("HOME");
-    if (homeDir)
-    {
-        fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture" / "assets";
-        if (fs::exists(configDir) && fs::is_directory(configDir))
-        {
-            return fs::absolute(configDir).string();
-        }
-    }
-    #endif
-
-    // 3. Executable directory/assets/
-    char exePath[1024];
-    #ifdef _WIN32
-    DWORD len = GetModuleFileNameA(NULL, exePath, sizeof(exePath) - 1);
-    if (len != 0)
-    {
-        exePath[len] = '\0';
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path assetsDir = exeDir / "assets";
-        if (fs::exists(assetsDir) && fs::is_directory(assetsDir))
-        {
-            return fs::absolute(assetsDir).string();
-        }
-    }
-    #else
-    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-    if (len != -1)
-    {
-        exePath[len] = '\0';
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path assetsDir = exeDir / "assets";
-        if (fs::exists(assetsDir) && fs::is_directory(assetsDir))
-        {
-            return fs::absolute(assetsDir).string();
-        }
-    }
-    #endif
-
-    // 4. Current directory/assets/
-    fs::path currentAssets = fs::current_path() / "assets";
-    if (fs::exists(currentAssets) && fs::is_directory(currentAssets))
-    {
-        return fs::absolute(currentAssets).string();
-    }
-
-    // 5. Fallback: create in user config directory
-    #ifdef _WIN32
-    const char* fallbackDir = std::getenv("APPDATA");
-    if (!fallbackDir)
-    {
-        fallbackDir = std::getenv("LOCALAPPDATA");
-    }
-    if (fallbackDir)
-    {
-        fs::path fallbackPath = fs::path(fallbackDir) / "RetroCapture" / "assets";
-        return fs::absolute(fallbackPath).string();
-    }
-    #else
-    const char* fallbackDir = std::getenv("HOME");
-    if (fallbackDir)
-    {
-        fs::path fallbackPath = fs::path(fallbackDir) / ".config" / "retrocapture" / "assets";
-        return fs::absolute(fallbackPath).string();
-    }
-    #endif
-
-    // Last resort: current directory
-    return (fs::current_path() / "assets").string();
+    // Mantida apenas como descoberta de assets read-only (defaults seed).
+    // Presets/thumbnails do usuário NÃO vivem mais aqui — vide
+    // getPresetsDirectory / getThumbnailsDirectory abaixo.
+    return Paths::getReadOnlyAssetsDir();
 }
 
 std::string PresetManager::getPresetsDirectory() const
 {
-    fs::path assetsDir = getAssetsDirectory();
-    return (assetsDir / "presets").string();
+    // Presets do usuário em $XDG_DATA_HOME/retrocapture/presets (Linux)
+    // ou %APPDATA%\RetroCapture\data\presets (Windows). Override:
+    // RETROCAPTURE_DATA_DIR ou RETROCAPTURE_PRESETS_DIR.
+    const char *over = std::getenv("RETROCAPTURE_PRESETS_DIR");
+    if (over && *over)
+    {
+        return over;
+    }
+    return (fs::path(Paths::getUserDataDir()) / "presets").string();
 }
 
 std::string PresetManager::getThumbnailsDirectory() const
 {
-    fs::path assetsDir = getAssetsDirectory();
-    return (assetsDir / "thumbnails").string();
+    const char *over = std::getenv("RETROCAPTURE_THUMBNAILS_DIR");
+    if (over && *over)
+    {
+        return over;
+    }
+    return (fs::path(Paths::getUserDataDir()) / "thumbnails").string();
 }
 
 std::string PresetManager::sanitizeName(const std::string& name)

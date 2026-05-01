@@ -184,17 +184,42 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
 std::string ShaderPreprocessor::processIncludes(const std::string& source, const std::string& basePath)
 {
     std::string result = source;
-    // Multiline + line-start âncora: exige que `#include` esteja no começo
-    // da linha (após whitespace opcional). Sem isso, qualquer `// #include "..."`
-    // dentro de comentário também era processado, gerando warnings em massa
-    // (ex: crt-royale tem dezenas de #include comentados na documentação).
-    std::regex includeRegex(R"(^[ \t]*#include\s+["<]([^">]+)[">])",
-                            std::regex_constants::ECMAScript | std::regex_constants::multiline);
+    // Pattern usado por linha — sem multiline flag (não existe no MinGW
+    // antigo do build Windows). Itera linha-a-linha; só processa includes
+    // que estão no começo da linha (após whitespace), ignorando os que
+    // estão dentro de comentário `// ...` (ex: crt-royale tem dezenas).
+    std::regex includeRegex(R"([ \t]*#include\s+["<]([^">]+)[">].*)");
     std::smatch match;
 
     // Processar todos os includes
-    while (std::regex_search(result, match, includeRegex))
+    while (true)
     {
+        // Localiza a próxima linha que case com `^[ \t]*#include ...`.
+        size_t includeLineStart = std::string::npos;
+        size_t includeLineEnd = 0;
+        size_t lineStart = 0;
+        while (lineStart < result.size())
+        {
+            size_t lineEnd = result.find('\n', lineStart);
+            std::string line = (lineEnd == std::string::npos)
+                ? result.substr(lineStart)
+                : result.substr(lineStart, lineEnd - lineStart);
+            if (std::regex_match(line, match, includeRegex))
+            {
+                includeLineStart = lineStart;
+                includeLineEnd = (lineEnd == std::string::npos) ? result.size() : lineEnd;
+                break;
+            }
+            if (lineEnd == std::string::npos) break;
+            lineStart = lineEnd + 1;
+        }
+        if (includeLineStart == std::string::npos)
+        {
+            break; // nenhum include real restante
+        }
+        // Daqui em diante, `match[1]` é o path do include — segue o fluxo
+        // de resolução abaixo, que termina substituindo a linha em
+        // `[includeLineStart, includeLineEnd)` pelo conteúdo carregado.
         std::string includePath = match[1].str();
         std::string fullPath;
 
@@ -275,22 +300,24 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
                 std::string includeDir = includeFilePath.parent_path().string();
                 includeContent = processIncludes(includeContent, includeDir);
 
-                // Substituir o #include pelo conteúdo
-                result = std::regex_replace(result, includeRegex, includeContent, std::regex_constants::format_first_only);
+                // Substituir a LINHA do #include pelo conteúdo (preserva
+                // a estrutura do arquivo e evita pegar `// #include` de
+                // comentários, que regex_replace pegaria).
+                result.replace(includeLineStart, includeLineEnd - includeLineStart, includeContent);
                 LOG_INFO("Arquivo incluído: " + fullPath);
             }
             else
             {
                 LOG_WARN("Falha ao abrir arquivo incluído: " + fullPath);
                 // Remover o #include que falhou
-                result = std::regex_replace(result, includeRegex, "", std::regex_constants::format_first_only);
+                result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
             }
         }
         else
         {
             LOG_WARN("Arquivo incluído não encontrado: " + includePath);
             // Remover o #include que falhou
-            result = std::regex_replace(result, includeRegex, "", std::regex_constants::format_first_only);
+            result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
         }
     }
 

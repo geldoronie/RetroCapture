@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #ifdef PLATFORM_LINUX
 #include <sys/socket.h>
 #include <unistd.h>
@@ -709,77 +710,38 @@ ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
 
 std::string WebPortal::findAssetFile(const std::string &relativePath) const
 {
-    // Função helper para obter diretório de configuração do usuário
-    auto getUserConfigDir = []() -> std::string
-    {
-        const char *homeDir = std::getenv("HOME");
-        if (homeDir)
-        {
-            fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
-            return configDir.string();
-        }
-        return "";
-    };
-
-    // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
+    // Caminho absoluto ganha sempre.
     fs::path testPath(relativePath);
     if (testPath.is_absolute() && fs::exists(testPath))
     {
         return fs::absolute(testPath).string();
     }
 
-    // Extrair apenas o nome do arquivo
     fs::path inputPath(relativePath);
     std::string fileName = inputPath.filename();
 
-    // Lista de locais para buscar (em ordem de prioridade)
     std::vector<std::string> possiblePaths;
 
-    // 1. Variável de ambiente RETROCAPTURE_ASSETS_PATH (para AppImage) - PRIORIDADE MÁXIMA
-    const char *assetsEnvPath = std::getenv("RETROCAPTURE_ASSETS_PATH");
-    if (assetsEnvPath)
+    // 1. User data: customizações do usuário (override do que vem na app).
+    std::string userDataDir = Paths::getUserDataDir();
+    if (!userDataDir.empty())
     {
-        fs::path envAssetsDir(assetsEnvPath);
-        possiblePaths.push_back((envAssetsDir / fileName).string());
-        possiblePaths.push_back((envAssetsDir / relativePath).string());
+        possiblePaths.push_back((fs::path(userDataDir) / relativePath).string());
+        possiblePaths.push_back((fs::path(userDataDir) / fileName).string());
     }
 
-    // 2. Pasta de configuração do usuário (~/.config/retrocapture/assets/) - PRIORIDADE ALTA
-    std::string userConfigDir = getUserConfigDir();
-    if (!userConfigDir.empty())
+    // 2. Read-only assets: shipados com a aplicação (system install ou portable).
+    std::string roAssets = Paths::getReadOnlyAssetsDir();
+    if (!roAssets.empty())
     {
-        fs::path userAssetsDir = fs::path(userConfigDir) / "assets";
-        possiblePaths.push_back((userAssetsDir / relativePath).string());
-        possiblePaths.push_back((userAssetsDir / fileName).string());
+        possiblePaths.push_back((fs::path(roAssets) / relativePath).string());
+        possiblePaths.push_back((fs::path(roAssets) / fileName).string());
     }
 
-    // 3. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
-    // No Linux, podemos usar readlink em /proc/self/exe para obter o caminho do executável
-    char exePath[1024];
-    #ifdef PLATFORM_LINUX
-    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-    if (len != -1)
-    #else
-    // Windows: usar GetModuleFileName
-    DWORD len = GetModuleFileNameA(NULL, exePath, sizeof(exePath) - 1);
-    if (len != 0)
-    #endif
-    {
-        exePath[len] = '\0';
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path assetsDir = exeDir / "assets";
-        possiblePaths.push_back((assetsDir / relativePath).string());
-        possiblePaths.push_back((assetsDir / fileName).string());
-    }
-
-    // 4. Caminho como fornecido (pode ser relativo)
+    // 3. Caminho como fornecido + cwd fallback (último recurso pra dev).
     possiblePaths.push_back(relativePath);
-
-    // 5. Diretório atual/assets/
     possiblePaths.push_back("./assets/" + fileName);
     possiblePaths.push_back("./assets/" + relativePath);
-
-    // 6. Diretório atual
     possiblePaths.push_back("./" + fileName);
     possiblePaths.push_back("./" + relativePath);
 
