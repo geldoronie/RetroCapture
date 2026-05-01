@@ -992,6 +992,39 @@ if(PLATFORM_WINDOWS)
         message(STATUS "  Output file: ${CPACK_PACKAGE_FILE_NAME}.exe")
     endif()
 else()
-    # Instalação padrão para outras plataformas
-    install(TARGETS retrocapture DESTINATION bin)
+    # Instalação Linux: respeita XDG. Por default cai em /usr/local/{bin,share}
+    # via CMAKE_INSTALL_PREFIX. Pacotagem (.deb/.rpm) overridea pra /usr.
+    install(TARGETS retrocapture
+        RUNTIME DESTINATION bin
+    )
+
+    # Read-only assets shipados — Paths::getReadOnlyAssetsDir() encontra via
+    # XDG_DATA_DIRS (/usr/share, /usr/local/share) → retrocapture/.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl"
+            DESTINATION share/retrocapture/shaders
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/"
+            DESTINATION share/retrocapture
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/web")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/web"
+            DESTINATION share/retrocapture
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    if(EXISTS "${CMAKE_SOURCE_DIR}/ssl")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/ssl"
+            DESTINATION share/retrocapture
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
 endif()

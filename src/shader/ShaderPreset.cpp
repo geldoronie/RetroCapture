@@ -1,5 +1,6 @@
 #include "ShaderPreset.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -346,7 +347,9 @@ std::string ShaderPreset::resolvePath(const std::string &path)
 
     fs::path currentPath = fs::current_path();
 
-    // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
+    // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage),
+    // senão delegar pro `Paths::getReadOnlyAssetsDir()` (que cobre dev tree
+    // / portable / install system-wide).
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     fs::path shaderBasePath;
     if (envShaderPath && fs::exists(envShaderPath))
@@ -355,7 +358,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
     }
     else
     {
-        shaderBasePath = currentPath / "shaders" / "shaders_glsl";
+        shaderBasePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
     }
 
     fs::path relPath(path);

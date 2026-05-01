@@ -4,6 +4,7 @@
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
@@ -124,11 +125,17 @@ bool UIManager::init(void *window)
     ImGui_ImplOpenGL3_Init(glslVersion.c_str());
 #endif
 
-    // Scan for shaders (check environment variable for AppImage support)
+    // Scan for shaders. Env override `RETROCAPTURE_SHADER_PATH` ainda é
+    // honrado (AppImage / dev). Caso contrário, usa o assets dir resolvido
+    // (CWD em dev tree, install system-wide ou portable).
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     if (envShaderPath && fs::exists(envShaderPath))
     {
         m_shaderBasePath = envShaderPath;
+    }
+    else
+    {
+        m_shaderBasePath = (fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl").string();
     }
     scanShaders(m_shaderBasePath);
 
@@ -453,7 +460,7 @@ void UIManager::renderShaderPanel()
                 if (m_onSavePreset && strlen(m_savePresetPath) > 0)
                 {
                     // Construir caminho completo
-                    fs::path basePath("shaders/shaders_glsl");
+                    fs::path basePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
                     fs::path newPath = basePath / m_savePresetPath;
                     if (newPath.extension() != ".glslp")
                     {
@@ -2090,38 +2097,12 @@ void UIManager::scanShaders(const std::string &basePath)
 
 std::string UIManager::getConfigPath() const
 {
-#ifdef _WIN32
-    // Windows: usar APPDATA (ou LOCALAPPDATA como fallback)
-    const char *appDataDir = std::getenv("APPDATA");
-    if (!appDataDir)
+    std::string dir = Paths::getUserConfigDir();
+    if (!dir.empty())
     {
-        appDataDir = std::getenv("LOCALAPPDATA");
+        return (fs::path(dir) / "config.json").string();
     }
-    if (appDataDir)
-    {
-        fs::path configDir = fs::path(appDataDir) / "RetroCapture";
-        // Criar diretório se não existir
-        if (!fs::exists(configDir))
-        {
-            fs::create_directories(configDir);
-        }
-        return (configDir / "config.json").string();
-    }
-#else
-    // Linux/Unix: usar diretório home do usuário
-    const char *homeDir = std::getenv("HOME");
-    if (homeDir)
-    {
-        fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
-        // Criar diretório se não existir
-        if (!fs::exists(configDir))
-        {
-            fs::create_directories(configDir);
-        }
-        return (configDir / "config.json").string();
-    }
-#endif
-    // Fallback: salvar no diretório atual
+    // Fallback: cwd. Não esperado em uso real (sem $HOME / sem %APPDATA%).
     return "retrocapture_config.json";
 }
 
