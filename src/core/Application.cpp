@@ -730,18 +730,30 @@ bool Application::initUI()
 
     m_ui->setOnShaderChanged([this](const std::string &shaderPath)
                              {
-        if (m_shaderEngine) {
-            if (shaderPath.empty()) {
-                m_shaderEngine->disableShader();
-                LOG_INFO("Shader disabled");
-            } else {
-                std::string fullPath = resolveShaderPath(shaderPath);
-                if (m_shaderEngine->loadPreset(fullPath)) {
-                    LOG_INFO("Shader loaded via UI: " + shaderPath);
-                } else {
-                    LOG_ERROR("Failed to load shader via UI: " + shaderPath);
-                }
-            }
+        if (!m_shaderEngine) return;
+
+        if (shaderPath.empty()) {
+            m_shaderEngine->disableShader();
+            LOG_INFO("Shader disabled");
+            return;
+        }
+
+        std::string fullPath = resolveShaderPath(shaderPath);
+
+        // Idempotência: se o shader pedido já é o ativo, não recarrega.
+        // `applyPreset` aplica params custom *antes* de sincronizar a UI;
+        // recarregar aqui zeraria m_customParameters do ShaderEngine
+        // (vide ShaderEngine::loadPreset) e os overrides do capture preset
+        // se perderiam silenciosamente.
+        if (m_shaderEngine->isShaderActive() &&
+            m_shaderEngine->getPresetPath() == fullPath) {
+            return;
+        }
+
+        if (m_shaderEngine->loadPreset(fullPath)) {
+            LOG_INFO("Shader loaded via UI: " + shaderPath);
+        } else {
+            LOG_ERROR("Failed to load shader via UI: " + shaderPath);
         } });
 
     m_ui->setOnBrightnessChanged([this](float brightness)
