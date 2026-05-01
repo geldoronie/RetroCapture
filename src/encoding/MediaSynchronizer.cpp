@@ -276,6 +276,25 @@ std::vector<MediaSynchronizer::TimestampedAudio> MediaSynchronizer::getAudioChun
     return chunks;
 }
 
+std::vector<MediaSynchronizer::TimestampedAudio> MediaSynchronizer::getAllUnprocessedAudio()
+{
+    std::lock_guard<std::mutex> lock(m_audioBufferMutex);
+    std::vector<TimestampedAudio> chunks;
+    chunks.reserve(m_audioBuffer.size());
+    for (const auto &c : m_audioBuffer)
+    {
+        if (!c.processed)
+        {
+            chunks.push_back(c);
+        }
+    }
+    std::sort(chunks.begin(), chunks.end(),
+              [](const TimestampedAudio &a, const TimestampedAudio &b) {
+                  return a.captureTimestampUs < b.captureTimestampUs;
+              });
+    return chunks;
+}
+
 void MediaSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);

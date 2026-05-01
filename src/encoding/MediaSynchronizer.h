@@ -87,6 +87,12 @@ public:
     // Obter chunks de áudio de uma zona de sincronização
     std::vector<TimestampedAudio> getAudioChunks(const SyncZone &zone);
 
+    // Obter todos os chunks de áudio ainda não processados, sem gating
+    // por sync zone. Áudio é barato pra encodar e não precisa esperar o
+    // vídeo — drenar continuamente evita o synchronizer dropar chunks
+    // (que causa o áudio terminar antes do vídeo no arquivo).
+    std::vector<TimestampedAudio> getAllUnprocessedAudio();
+
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
     void markAudioProcessed(size_t startIdx, size_t endIdx);
