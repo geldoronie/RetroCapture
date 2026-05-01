@@ -288,16 +288,15 @@ bool ThumbnailGenerator::savePNG(
     // Write header
     png_write_info(png_ptr, info_ptr);
 
-    // Prepare row pointers (libpng expects top-to-bottom, but we have bottom-to-top)
-    // So we need to write rows in reverse order
+    // Os callers já entregam o buffer top-to-bottom (eles invertem o
+    // resultado do glReadPixels antes de chamar). Aqui é só passar reto
+    // pra libpng — flip duplo gerava thumbnail de cabeça pra baixo.
     std::vector<png_bytep> row_pointers(height);
     size_t rowbytes = width * 3;
 
     for (uint32_t y = 0; y < height; y++)
     {
-        // Write from bottom to top (flip vertically)
-        uint32_t srcRow = height - 1 - y;
-        row_pointers[y] = const_cast<png_byte*>(data + (srcRow * rowbytes));
+        row_pointers[y] = const_cast<png_byte*>(data + (y * rowbytes));
     }
 
     // Write image data
