@@ -148,6 +148,12 @@ private:
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
 
+    // Recording profiles (saved snapshots of recording configuration)
+    bool handleGETRecordingProfiles(int clientFd);
+    bool handleSaveRecordingProfile(int clientFd, const std::string &body);
+    bool handleApplyRecordingProfile(int clientFd, const std::string &name);
+    bool handleDeleteRecordingProfile(int clientFd, const std::string &name);
+
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
     HTTPServer *m_httpServer = nullptr; // Ponteiro para HTTPServer

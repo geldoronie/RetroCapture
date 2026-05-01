@@ -23,6 +23,7 @@ class UIConfiguration;
 class UICredits;
 class UICapturePresets;
 class UIRecordings;
+class RecordingProfileManager;
 
 class UIManager
 {
@@ -438,6 +439,15 @@ public:
     void triggerRecordingIncludeAudioChange(bool include);
     void triggerRecordingStartStop(bool start);
 
+    // Recording profiles — save/load/list/delete the full recording
+    // configuration (codec, preset, bitrate, container, audio, etc.)
+    // as named profiles under $XDG_DATA_HOME/retrocapture/recording_profiles.
+    std::vector<std::string> listRecordingProfiles();
+    bool saveRecordingProfile(const std::string& name);
+    bool loadRecordingProfile(const std::string& name);
+    bool deleteRecordingProfile(const std::string& name);
+    bool recordingProfileExists(const std::string& name);
+
     // Recording callbacks
     void setOnRecordingStartStop(std::function<void(bool)> callback) { m_onRecordingStartStop = callback; }
     void setOnRecordingWidthChanged(std::function<void(uint32_t)> callback) { m_onRecordingWidthChanged = callback; }
@@ -627,6 +637,7 @@ private:
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
+    std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
 
     // Shader selection
