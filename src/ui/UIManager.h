@@ -761,8 +761,12 @@ private:
     bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
-    size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)
-    size_t m_streamingMaxAudioBufferSize = 20;     // Máximo de chunks no buffer de áudio (5-100)
+    // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)
+    // to give a bit more cushion against client/network jitter — small
+    // frame loss showed up under load even on capable hardware. Audio
+    // bumped to match. Still overridable from config.json.
+    size_t m_streamingMaxVideoBufferSize = 15;     // Máximo de frames no buffer de vídeo (1-50)
+    size_t m_streamingMaxAudioBufferSize = 30;     // Máximo de chunks no buffer de áudio (5-100)
     int64_t m_streamingMaxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (1-30)
     size_t m_streamingAVIOBufferSize = 256 * 1024; // 256KB para buffer AVIO do FFmpeg (64KB-1MB)
 

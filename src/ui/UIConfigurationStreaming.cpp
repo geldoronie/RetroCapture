@@ -27,8 +27,9 @@ void UIConfigurationStreaming::render()
     ImGui::Separator();
     renderBitrateSettings();
     ImGui::Separator();
-    renderAdvancedBufferSettings();
-    ImGui::Separator();
+    // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
+    // is not surfaced in the UI anymore — defaults work for the vast
+    // majority of cases. Power users can still override via config.json.
     renderStartStopButton();
 }
 

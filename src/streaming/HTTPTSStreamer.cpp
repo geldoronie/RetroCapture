@@ -966,18 +966,14 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
             }
             else if (sent == 0)
             {
-                // No Windows, sent == 0 pode significar WSAEWOULDBLOCK (socket temporariamente bloqueado)
-                // Não é um erro fatal, apenas continuar (dados serão enviados na próxima tentativa)
-                // No Linux, sent == 0 geralmente significa conexão fechada
-#ifdef PLATFORM_LINUX
-                m_httpServer.closeClient(clientFd);
-                it = m_clientSockets.erase(it);
-                m_clientCount = m_clientSockets.size();
-#else
-                // Windows: sent == 0 pode ser temporário (WSAEWOULDBLOCK), apenas continuar
-                // Não remover cliente, dados serão enviados na próxima tentativa
+                // sent == 0 now means "would block" on both platforms:
+                // Linux uses MSG_DONTWAIT and maps EAGAIN to 0; Windows
+                // maps WSAEWOULDBLOCK to 0. Treat as transient — the
+                // packet is dropped for this client this round, but the
+                // client stays connected and gets the next one. Keeps a
+                // slow client from blocking the encoder thread (which
+                // holds the broadcast mutex).
                 ++it;
-#endif
             }
             else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
             {
@@ -2666,12 +2662,37 @@ void HTTPTSStreamer::encodingThread()
             cleanupCounter = 0;
         }
 
-        // Verificar se há backlog (muitos frames pendentes)
+        // Drain audio independently of the sync zone. AAC is cheap and
+        // doesn't need to wait for video — same fix applied to recording
+        // in #34. Without this, slow video iterations let the audio buffer
+        // overflow and chunks get dropped at the synchronizer; since the
+        // audio PTS is sample-count based, the resulting stream's audio
+        // ends up shorter than its video.
+        {
+            auto pendingAudio = m_streamSynchronizer.getAllUnprocessedAudio();
+            for (const auto &chunk : pendingAudio)
+            {
+                if (m_stopRequest) break;
+                if (chunk.processed || !chunk.samples || chunk.sampleCount == 0) continue;
+
+                std::vector<MediaEncoder::EncodedPacket> aPackets;
+                if (m_mediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
+                                               chunk.captureTimestampUs, aPackets))
+                {
+                    for (const auto &p : aPackets)
+                    {
+                        m_mediaMuxer.muxPacket(p);
+                    }
+                    processedAny = true;
+                }
+                m_streamSynchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
+            }
+        }
+
         size_t videoBufferSize = m_streamSynchronizer.getVideoBufferSize();
         size_t audioBufferSize = m_streamSynchronizer.getAudioBufferSize();
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
-        // Calcular zona de sincronização
         MediaSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
 
         if (syncZone.isValid())
@@ -2715,48 +2736,11 @@ void HTTPTSStreamer::encodingThread()
                 }
             }
 
-            // Obter chunks de áudio da zona sincronizada
-            auto audioChunks = m_streamSynchronizer.getAudioChunks(syncZone);
+            // Audio was already drained at the top of the loop, no need
+            // to process it again here.
 
-            // Processar chunks de áudio (com limite para evitar aceleração)
-            // Aumentar limite quando há backlog para evitar perda de chunks
-            size_t chunksProcessed = 0;
-            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3; // Mais chunks quando há backlog
-
-            for (const auto &chunk : audioChunks)
-            {
-                if (m_stopRequest)
-                {
-                    break;
-                }
-
-                // Limitar número de chunks processados por iteração
-                if (chunksProcessed >= MAX_CHUNKS_PER_ITERATION)
-                {
-                    break;
-                }
-
-                if (!chunk.processed && chunk.samples && chunk.sampleCount > 0)
-                {
-                    // Encodar áudio usando MediaEncoder
-                    std::vector<MediaEncoder::EncodedPacket> packets;
-                    if (m_mediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
-                                                   chunk.captureTimestampUs, packets))
-                    {
-                        // Muxar pacotes usando MediaMuxer
-                        for (const auto &packet : packets)
-                        {
-                            m_mediaMuxer.muxPacket(packet);
-                        }
-                        processedAny = true;
-                        chunksProcessed++;
-                    }
-                }
-            }
-
-            // Marcar dados como processados
+            // Marcar frames de vídeo processados
             m_streamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
-            m_streamSynchronizer.markAudioProcessed(syncZone.audioStartIdx, syncZone.audioEndIdx);
 
             // Capturar header do formato se disponível
             {

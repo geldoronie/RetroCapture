@@ -453,7 +453,17 @@ ssize_t HTTPServer::sendData(int clientFd, const void *data, size_t size)
     }
 #endif
 #ifdef PLATFORM_LINUX
-    return send(clientFd, data, size, MSG_NOSIGNAL);
+    // MSG_DONTWAIT keeps us non-blocking on a per-call basis without
+    // having to flip the socket itself. On EAGAIN/EWOULDBLOCK we return
+    // 0 (matching the Windows WSAEWOULDBLOCK path) so the streamer
+    // treats a slow client as transient instead of blocking the encoder
+    // thread (which holds the broadcast mutex).
+    ssize_t result = send(clientFd, data, size, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    {
+        return 0;
+    }
+    return result;
 #else
     // Windows: send retorna SOCKET_ERROR (-1) em caso de erro
     // SOCKET_ERROR é definido como -1 em winsock2.h
