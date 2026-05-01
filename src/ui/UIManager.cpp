@@ -3,6 +3,8 @@
 #include "UICredits.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
+#include "../recording/RecordingProfileManager.h"
+#include "../recording/RecordingSettings.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 #include "../utils/ShaderScanner.h"
@@ -145,6 +147,7 @@ bool UIManager::init(void *window)
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
+    m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -3152,4 +3155,96 @@ void UIManager::triggerRecordingStartStop(bool start)
     {
         m_onRecordingStartStop(start);
     }
+}
+
+// ----------------------------------------------------------------------
+// Recording profiles
+// ----------------------------------------------------------------------
+
+namespace {
+
+RecordingSettings collectRecordingSettings(const UIManager &ui)
+{
+    RecordingSettings s;
+    s.width = ui.getRecordingWidth();
+    s.height = ui.getRecordingHeight();
+    s.fps = ui.getRecordingFps();
+    s.bitrate = ui.getRecordingBitrate();
+    s.codec = ui.getRecordingVideoCodec();
+    // The struct has a single `preset` field; map it from the active codec.
+    if (s.codec == "h265" || s.codec == "hevc") s.preset = ui.getRecordingH265Preset();
+    else s.preset = ui.getRecordingH264Preset();
+    s.h265Profile = ui.getRecordingH265Profile();
+    s.h265Level = ui.getRecordingH265Level();
+    s.vp8Speed = ui.getRecordingVP8Speed();
+    s.vp9Speed = ui.getRecordingVP9Speed();
+    s.audioBitrate = ui.getRecordingAudioBitrate();
+    s.audioCodec = ui.getRecordingAudioCodec();
+    s.container = ui.getRecordingContainer();
+    s.outputPath = ui.getRecordingOutputPath();
+    s.filenameTemplate = ui.getRecordingFilenameTemplate();
+    s.includeAudio = ui.getRecordingIncludeAudio();
+    return s;
+}
+
+} // namespace
+
+std::vector<std::string> UIManager::listRecordingProfiles()
+{
+    if (!m_recordingProfileManager) return {};
+    return m_recordingProfileManager->list();
+}
+
+bool UIManager::recordingProfileExists(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    return m_recordingProfileManager->exists(name);
+}
+
+bool UIManager::saveRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    RecordingSettings s = collectRecordingSettings(*this);
+    return m_recordingProfileManager->save(name, s);
+}
+
+bool UIManager::deleteRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    return m_recordingProfileManager->remove(name);
+}
+
+bool UIManager::loadRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    RecordingSettings s;
+    if (!m_recordingProfileManager->load(name, s)) return false;
+
+    // Apply via triggerXxxChange for each field — that way the
+    // existing callbacks fire and the RecordingManager / on-disk config
+    // see the update exactly as if the user had moved each control by hand.
+    triggerRecordingVideoCodecChange(s.codec);
+    if (s.codec == "h265" || s.codec == "hevc")
+    {
+        triggerRecordingH265PresetChange(s.preset);
+    }
+    else
+    {
+        triggerRecordingH264PresetChange(s.preset);
+    }
+    triggerRecordingH265ProfileChange(s.h265Profile);
+    triggerRecordingH265LevelChange(s.h265Level);
+    triggerRecordingVP8SpeedChange(s.vp8Speed);
+    triggerRecordingVP9SpeedChange(s.vp9Speed);
+    triggerRecordingWidthChange(s.width);
+    triggerRecordingHeightChange(s.height);
+    triggerRecordingFpsChange(s.fps);
+    triggerRecordingBitrateChange(s.bitrate);
+    triggerRecordingAudioCodecChange(s.audioCodec);
+    triggerRecordingAudioBitrateChange(s.audioBitrate);
+    triggerRecordingContainerChange(s.container);
+    triggerRecordingOutputPathChange(s.outputPath);
+    triggerRecordingFilenameTemplateChange(s.filenameTemplate);
+    triggerRecordingIncludeAudioChange(s.includeAudio);
+    return true;
 }
