@@ -162,9 +162,18 @@ private:
     // Audio accumulator para acumular samples até ter um frame completo
     std::mutex m_audioAccumulatorMutex;
     std::vector<int16_t> m_audioAccumulator;
-    
-    // Track total samples processed for correct PTS calculation when multiple frames are generated
+
+    // Track total samples processed (mantido pra estatísticas/debug; o PTS
+    // agora vem de capture timestamps, não desta contagem).
     int64_t m_totalAudioSamplesProcessed = 0;
+
+    // Capture wall-clock timestamp do *primeiro sample* atualmente no
+    // accumulator. Avança conforme samples são consumidos. Permite que
+    // o PTS do áudio acompanhe o wall clock — se chunks dropam no
+    // synchronizer, a próxima chamada detecta o gap e ressincroniza,
+    // evitando que o áudio termine antes do vídeo (sintoma do desync).
+    int64_t m_audioAccumulatorStartCaptureTsUs = 0;
+    bool m_audioAccumulatorTsValid = false;
 
     // Contador de eventos de retrocesso de PTS: cada incremento é uma vez que
     // o calculatedPTS teria ficado <= ao último PTS já emitido e tivemos que

@@ -129,7 +129,13 @@ bool MediaEncoder::initializeVideoCodec()
     codecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
     codecCtx->width = m_videoConfig.width;
     codecCtx->height = m_videoConfig.height;
-    codecCtx->time_base = {1, static_cast<int>(m_videoConfig.fps)};
+    // time_base granular (1/90000 — padrão MPEG) em vez de {1, fps}.
+    // Com {1, 60}, frames a 16.667ms davam PTS 0.99998→0 e 1.99998→1
+    // (truncamento), gerando frames com PTS duplicado, warnings de
+    // non-strictly-monotonic-PTS, e quando frames dropam o gap fica
+    // grosseiro o suficiente pra arquivo declarar fps menor que o
+    // capturado → vídeo toca em câmera lenta. 90000 dá precisão de ~11µs.
+    codecCtx->time_base = {1, 90000};
     codecCtx->framerate = {static_cast<int>(m_videoConfig.fps), 1};
     codecCtx->gop_size = static_cast<int>(m_videoConfig.fps * 2);
     codecCtx->max_b_frames = 0;
@@ -157,18 +163,29 @@ bool MediaEncoder::initializeVideoCodec()
     if (codec->id == AV_CODEC_ID_H264)
     {
         av_dict_set(&opts, "preset", m_videoConfig.preset.c_str(), 0);
+        // tune=zerolatency mantido em ambos os modos: ele desliga
+        // lookahead/B-frames internos do x264. Em arquivo o lookahead
+        // só cobraria CPU/frame extra (lookahead default 40 frames =
+        // ~10% mais work), o que derruba encoders abaixo de realtime
+        // em presets >= fast. zerolatency mantém custo previsível.
         av_dict_set(&opts, "tune", "zerolatency", 0);
         av_dict_set(&opts, "profile", m_videoConfig.profile.c_str(), 0);
         int keyint = static_cast<int>(m_videoConfig.fps * 2);
         av_dict_set_int(&opts, "keyint_min", keyint, 0);
         av_dict_set_int(&opts, "keyint", keyint, 0);
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
-        av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
         av_dict_set_int(&opts, "scenecut", 0, 0);
-        // repeat-headers apenas para streaming (necessário para streaming, mas não para arquivos)
+
         if (m_forStreaming)
         {
+            // Streaming HTTP-TS: vbv apertado limita variação de bitrate.
+            av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
             av_dict_set_int(&opts, "repeat-headers", 1, 0);
+        }
+        else
+        {
+            // Gravação em arquivo: vbv largo pra rate-control flexível.
+            av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate * 2, 0);
         }
     }
     else if (codec->id == AV_CODEC_ID_HEVC)
@@ -184,8 +201,16 @@ bool MediaEncoder::initializeVideoCodec()
         av_dict_set_int(&opts, "keyint_min", keyint, 0);
         av_dict_set_int(&opts, "keyint", keyint, 0);
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
-        av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
         av_dict_set_int(&opts, "scenecut", 0, 0);
+
+        if (m_forStreaming)
+        {
+            av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
+        }
+        else
+        {
+            av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate * 2, 0);
+        }
     }
     else if (codec->id == AV_CODEC_ID_VP8)
     {
@@ -652,9 +677,16 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         return false;
     }
 
-    // Acumular samples
+    // Acumular samples — sem reset/gap detection. PTS é sample-count
+    // based; contar tudo que entra mantém audio smooth e o drain no
+    // RecordingManager garante que nada drope antes de chegar aqui.
     {
         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
+        if (m_audioAccumulator.empty())
+        {
+            m_audioAccumulatorStartCaptureTsUs = captureTimestampUs;
+            m_audioAccumulatorTsValid = true;
+        }
         m_audioAccumulator.insert(m_audioAccumulator.end(), samples, samples + sampleCount);
     }
 
@@ -728,39 +760,40 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
                      ", input consumed: " + std::to_string(totalSamplesNeeded));
         }
 
+        // Frame timestamp = capture ts do primeiro sample que está saindo
+        // agora. Igual o vídeo, anda no wall clock real. Pegar antes de
+        // consumir os samples do accumulator.
+        int64_t frameTimestampUs = m_audioAccumulatorStartCaptureTsUs;
+
         // Conversion successful - now we can remove the samples from accumulator
         {
             std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-            // Remove samples that were sent to the resampler (totalSamplesNeeded)
-            // The resampler may buffer some internally, but we've consumed them from input
             size_t sizeBefore = m_audioAccumulator.size();
             m_audioAccumulator.erase(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
             size_t sizeAfter = m_audioAccumulator.size();
-            
-            // Log accumulator status after processing
+
+            // Avança o capture ts do accumulator pra refletir o que sobrou.
+            if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+            {
+                int64_t consumedSamplesPerCh = static_cast<int64_t>(totalSamplesNeeded) /
+                                               static_cast<int64_t>(m_audioConfig.channels);
+                m_audioAccumulatorStartCaptureTsUs += (consumedSamplesPerCh * 1000000LL) /
+                                                       static_cast<int64_t>(m_audioConfig.sampleRate);
+            }
+            if (m_audioAccumulator.empty())
+            {
+                m_audioAccumulatorTsValid = false;
+            }
+
             if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
             {
-                LOG_INFO("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) + 
-                         " -> " + std::to_string(sizeAfter) + 
+                LOG_INFO("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
+                         " -> " + std::to_string(sizeAfter) +
                          " (removed " + std::to_string(totalSamplesNeeded) + ")");
             }
         }
 
-        // Calcular timestamp real deste frame baseado em samples processados
-        // Cada frame de áudio deve ter timestamp progressivo baseado em samples processados
-        // timestamp = first_timestamp + (samples_processed_per_channel / sample_rate)
-        int64_t frameTimestampUs = captureTimestampUs; // Fallback to chunk timestamp
-        if (m_firstAudioTimestampSet && m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
-        {
-            // Calculate real timestamp: first_timestamp + (samples_processed_per_channel / sample_rate)
-            int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
-            int64_t durationUs = (samplesPerChannel * 1000000LL) / m_audioConfig.sampleRate;
-            frameTimestampUs = m_firstAudioTimestampUs + durationUs;
-        }
-        
-        // Calcular PTS baseado em samples processados (precise, no jitter)
-        // Use actual samples in frame (nb_samples), not totalSamplesNeeded
-        // This ensures PTS matches the actual audio data in the frame
+        // PTS agora é wall-clock-relative (igual vídeo).
         int64_t calculatedPTS = calculateAudioPTS(frameTimestampUs, actualFrameSamples * m_audioConfig.channels);
         audioFrame->pts = calculatedPTS;
         
@@ -800,7 +833,13 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
 
 int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sampleCount */)
 {
-    // Store first timestamp for reference, but calculate PTS based on samples processed
+    // Sample-count-based PTS: cada output frame avança PTS por
+    // exatamente samples_processados/sample_rate. Smooth, monotônico,
+    // sem jitter de capture timestamp (pulseaudio entrega chunks com
+    // variabilidade de chegada que não reflete tempo real de captura).
+    // O alinhamento com wall clock é garantido pelo drain de áudio no
+    // RecordingManager — chunks não dropam mais no synchronizer, então
+    // a contagem de samples casa com a duração real da gravação.
     if (!m_firstAudioTimestampSet)
     {
         m_firstAudioTimestampUs = captureTimestampUs;
@@ -815,29 +854,18 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
         return 0;
     }
 
-    // Calculate PTS based on samples processed and sample rate (precise, no jitter)
-    // PTS = (samples_processed_per_channel / sample_rate) in time_base units
-    // For time_base = {1, sampleRate}, PTS = samples_per_channel
     AVRational timeBase = codecCtx->time_base;
     int64_t calculatedPTS = 0;
-    
     if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
     {
-        // Calculate: (samples_processed / channels) * time_base.den / (sample_rate * time_base.num)
-        // samples_processed is total samples (all channels) processed so far (BEFORE this frame)
-        // This ensures each frame has a progressively increasing PTS
         int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
-        // PTS = samples_per_channel / sample_rate in time_base units
-        // Since time_base = {1, sampleRate}, this simplifies to: samples_per_channel
-        // But we calculate it properly to handle any time_base
         calculatedPTS = (samplesPerChannel * timeBase.den) / (m_audioConfig.sampleRate * timeBase.num);
     }
     else
     {
-        // Fallback: use timestamp-based calculation if sample rate unknown
         int64_t relativeTimeUs = captureTimestampUs - m_firstAudioTimestampUs;
-        double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
-        calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
+        if (relativeTimeUs < 0) relativeTimeUs = 0;
+        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
     }
 
     {
@@ -1161,92 +1189,95 @@ void MediaEncoder::flush(std::vector<EncodedPacket> &packets)
             while (true)
             {
                 std::vector<int16_t> samplesToProcess;
+                int64_t frameTsUs = 0;
                 {
                     std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
                     if (static_cast<int>(m_audioAccumulator.size()) < totalSamplesNeeded)
                     {
-                        break; // Not enough samples for a complete frame
+                        break;
                     }
                     samplesToProcess.assign(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
+                    frameTsUs = m_audioAccumulatorStartCaptureTsUs;
                 }
-                
-                // Convert and encode remaining samples
+
                 if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
                 {
                     int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
-                    
-                    // Calculate PTS for this frame
-                    int64_t calculatedPTS = calculateAudioPTS(0, actualFrameSamples * m_audioConfig.channels);
+
+                    int64_t calculatedPTS = calculateAudioPTS(frameTsUs, actualFrameSamples * m_audioConfig.channels);
                     audioFrame->pts = calculatedPTS;
                     m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
-                    
-                    // Send to codec
+
                     int ret = avcodec_send_frame(audioCtx, audioFrame);
                     if (ret < 0 && ret != AVERROR(EAGAIN))
                     {
                         break;
                     }
-                    
-                    // Receive packets
-                    receiveAudioPackets(packets, 0);
-                    
-                    // Remove processed samples
+
+                    receiveAudioPackets(packets, frameTsUs);
+
                     {
                         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
                         m_audioAccumulator.erase(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
+                        if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+                        {
+                            int64_t consumedSamplesPerCh = static_cast<int64_t>(totalSamplesNeeded) /
+                                                           static_cast<int64_t>(m_audioConfig.channels);
+                            m_audioAccumulatorStartCaptureTsUs += (consumedSamplesPerCh * 1000000LL) /
+                                                                   static_cast<int64_t>(m_audioConfig.sampleRate);
+                        }
+                        if (m_audioAccumulator.empty()) m_audioAccumulatorTsValid = false;
                     }
                 }
                 else
                 {
-                    break; // Conversion failed
+                    break;
                 }
             }
-            
+
             // Flush resampler: send null input to get remaining samples from internal buffer
-            // This ensures all audio is processed, not lost
             SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
             if (swrCtx && audioFrame)
             {
-                // Check if resampler has delayed samples
                 int64_t delay = swr_get_delay(swrCtx, m_audioConfig.sampleRate);
                 if (delay > 0)
                 {
-                    // Flush resampler by sending null input
                     const uint8_t *nullInput[1] = {nullptr};
                     int flushedSamples = swr_convert(swrCtx, audioFrame->data, samplesPerFrame,
                                                       nullInput, 0);
-                    
+
                     if (flushedSamples > 0)
                     {
                         audioFrame->nb_samples = flushedSamples;
-                        int64_t calculatedPTS = calculateAudioPTS(0, flushedSamples * m_audioConfig.channels);
+                        int64_t frameTsUs = m_audioAccumulatorStartCaptureTsUs;
+                        int64_t calculatedPTS = calculateAudioPTS(frameTsUs, flushedSamples * m_audioConfig.channels);
                         audioFrame->pts = calculatedPTS;
                         m_totalAudioSamplesProcessed += (flushedSamples * m_audioConfig.channels);
-                        
+
                         avcodec_send_frame(audioCtx, audioFrame);
-                        receiveAudioPackets(packets, 0);
+                        receiveAudioPackets(packets, frameTsUs);
                     }
                 }
             }
-            
-            // Process any remaining samples in accumulator (pad with zeros if needed)
+
+            // Padding final do accumulator com zero pra completar último frame
             {
                 std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
                 if (!m_audioAccumulator.empty() && m_audioAccumulator.size() < static_cast<size_t>(totalSamplesNeeded))
                 {
-                    // Pad with zeros to complete a frame
                     m_audioAccumulator.resize(totalSamplesNeeded, 0);
                     std::vector<int16_t> samplesToProcess = m_audioAccumulator;
-                    
+                    int64_t frameTsUs = m_audioAccumulatorStartCaptureTsUs;
+
                     if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
                     {
                         int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
-                        int64_t calculatedPTS = calculateAudioPTS(0, actualFrameSamples * m_audioConfig.channels);
+                        int64_t calculatedPTS = calculateAudioPTS(frameTsUs, actualFrameSamples * m_audioConfig.channels);
                         audioFrame->pts = calculatedPTS;
                         m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
-                        
+
                         avcodec_send_frame(audioCtx, audioFrame);
-                        receiveAudioPackets(packets, 0);
+                        receiveAudioPackets(packets, frameTsUs);
                     }
                 }
             }
@@ -1267,6 +1298,8 @@ void MediaEncoder::cleanup()
     {
         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
         m_audioAccumulator.clear();
+        m_audioAccumulatorStartCaptureTsUs = 0;
+        m_audioAccumulatorTsValid = false;
     }
 
     m_initialized = false;
