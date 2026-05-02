@@ -80,6 +80,14 @@ class RetroCaptureAPI {
         return await this.request('GET', '/capture/fps');
     }
 
+    async getSourceOverscan() {
+        return await this.request('GET', '/source/overscan');
+    }
+
+    async setSourceOverscan(x, y, locked) {
+        return await this.request('POST', '/source/overscan', { x, y, locked });
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }
@@ -150,6 +158,10 @@ class RetroCaptureAPI {
         return await this.request('POST', '/shader', { shader: shaderName });
     }
 
+    async setShaderPipelineEnabled(enabled) {
+        return await this.request('POST', '/shader', { pipelineEnabled: !!enabled });
+    }
+
     async setShaderParameter(name, value) {
         return await this.request('POST', '/shader/parameter', { name, value });
     }
@@ -197,6 +209,10 @@ class RetroCaptureAPI {
 
     async deletePreset(name) {
         return await this.request('DELETE', `/presets/${encodeURIComponent(name)}`);
+    }
+
+    async updatePresetParameters(name, parameters) {
+        return await this.request('PUT', `/presets/${encodeURIComponent(name)}/parameters`, { parameters });
     }
 
     async setRecordingSettings(settings) {

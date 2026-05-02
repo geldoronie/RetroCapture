@@ -832,10 +832,13 @@ async function loadShader() {
     try {
         const shader = await api.getShader();
         appState.shader = shader;
-        
+
         const currentShaderName = shader.name || '';
         document.getElementById('currentShader').value = currentShaderName || 'Nenhum';
-        
+
+        const pipelineToggle = document.getElementById('shaderPipelineEnabled');
+        if (pipelineToggle) pipelineToggle.checked = shader.pipelineEnabled !== false;
+
         // Atualizar seleção no dropdown
         const select = document.getElementById('shaderSelect');
         if (select) {
@@ -1214,7 +1217,10 @@ async function loadStreamingSettings() {
         
         const portEl = document.getElementById('streamingPort');
         if (portEl && settings.port) portEl.value = settings.port;
-        
+
+        const applyEl = document.getElementById('streamingApplyShader');
+        if (applyEl) applyEl.checked = settings.applyShader !== false;
+
         const bitrateEl = document.getElementById('streamingBitrate');
         if (bitrateEl && settings.bitrate) bitrateEl.value = settings.bitrate;
         
@@ -1748,6 +1754,9 @@ function createPresetCard(preset) {
                 <button type="button" class="btn btn-sm btn-primary" onclick="event.stopPropagation(); applyPreset('${escapeHtml(preset.name)}')">
                     <i class="bi bi-play-circle me-1"></i>Apply
                 </button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); openEditPresetParams('${escapeHtml(preset.name)}')" title="Edit shader parameters">
+                    <i class="bi bi-sliders"></i>
+                </button>
                 <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deletePreset('${escapeHtml(preset.name)}')">
                     <i class="bi bi-trash"></i>
                 </button>
@@ -1859,13 +1868,16 @@ async function loadRecordingSettings() {
         
         const widthEl = document.getElementById('recordingWidth');
         if (widthEl && settings.width) widthEl.value = settings.width;
-        
+
         const heightEl = document.getElementById('recordingHeight');
         if (heightEl && settings.height) heightEl.value = settings.height;
-        
+
         const fpsEl = document.getElementById('recordingFPS');
         if (fpsEl && settings.fps) fpsEl.value = settings.fps;
-        
+
+        const applyEl = document.getElementById('recordingApplyShader');
+        if (applyEl) applyEl.checked = settings.applyShader !== false;
+
         const bitrateEl = document.getElementById('recordingBitrate');
         if (bitrateEl && settings.bitrate) bitrateEl.value = settings.bitrate;
         
@@ -2554,4 +2566,223 @@ function applyPresetFilter() {
 document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('presetSearchInput');
     if (input) input.addEventListener('input', applyPresetFilter);
+});
+
+
+// ============================================================
+// Preset shader-parameter editing
+// ============================================================
+//
+// Lets the user tweak the shader parameter values stored inside a
+// capture preset without having to apply it, mess with the live shader
+// sliders, then re-create the preset by hand. Backed by the new
+// PUT /api/v1/presets/<name>/parameters endpoint.
+
+let _editPresetCurrentName = null;
+
+async function openEditPresetParams(presetName) {
+    _editPresetCurrentName = presetName;
+    document.getElementById('editPresetParamsName').textContent = presetName;
+    const body = document.getElementById('editPresetParamsBody');
+    body.innerHTML = '<div class="text-muted">Loading…</div>';
+
+    const modalEl = document.getElementById('editPresetParamsModal');
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+
+    try {
+        const preset = await api.getPreset(presetName);
+        const params = (preset && preset.shader && preset.shader.parameters) || {};
+        const names = Object.keys(params).sort();
+
+        if (names.length === 0) {
+            body.innerHTML = '<div class="text-muted">This preset has no stored shader parameters.</div>';
+            return;
+        }
+
+        body.innerHTML = '';
+        const table = document.createElement('div');
+        table.className = 'row g-3';
+        names.forEach(name => {
+            const value = Number(params[name]);
+            const col = document.createElement('div');
+            col.className = 'col-md-6';
+            const safeId = 'editParam_' + name.replace(/[^A-Za-z0-9_]/g, '_');
+            col.innerHTML = `
+                <label class="form-label" for="${safeId}">${escapeHtml(name)}</label>
+                <input type="number" step="any" class="form-control form-control-sm preset-param-input"
+                       id="${safeId}" data-param-name="${escapeHtml(name)}"
+                       value="${Number.isFinite(value) ? value : 0}">
+            `;
+            table.appendChild(col);
+        });
+        body.appendChild(table);
+    } catch (err) {
+        body.innerHTML = `<div class="text-danger">Failed to load preset: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+async function saveEditPresetParams() {
+    if (!_editPresetCurrentName) return;
+    const inputs = document.querySelectorAll('.preset-param-input');
+    if (inputs.length === 0) {
+        // Nothing to save (preset had no params); just close.
+        bootstrap.Modal.getInstance(document.getElementById('editPresetParamsModal')).hide();
+        return;
+    }
+    const params = {};
+    inputs.forEach(input => {
+        const name = input.dataset.paramName;
+        const v = parseFloat(input.value);
+        if (Number.isFinite(v)) params[name] = v;
+    });
+    try {
+        await api.updatePresetParameters(_editPresetCurrentName, params);
+        showAlert('Preset parameters saved.', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('editPresetParamsModal')).hide();
+    } catch (err) {
+        showAlert('Failed to save preset parameters: ' + err.message, 'danger');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const saveBtn = document.getElementById('editPresetParamsSaveBtn');
+    if (saveBtn) saveBtn.addEventListener('click', saveEditPresetParams);
+});
+
+
+// ============================================================
+// Source overscan — mirrors the native UI's Source Overscan
+// section. X/Y sliders share a "lock" toggle that copies one onto
+// the other; values are persisted server-side via the new
+// /api/v1/source/overscan endpoint.
+// ============================================================
+
+let _overscanLoaded = false;
+let _overscanLocked = false;
+
+function fmtOverscan(v) {
+    return Number(v).toFixed(1) + '%';
+}
+
+async function loadOverscan() {
+    try {
+        const data = await api.getSourceOverscan();
+        const xEl = document.getElementById('overscanX');
+        const yEl = document.getElementById('overscanY');
+        const lockEl = document.getElementById('overscanLocked');
+        if (!xEl || !yEl || !lockEl) return;
+        xEl.value = data.x ?? 0;
+        yEl.value = data.y ?? 0;
+        lockEl.checked = !!data.locked;
+        _overscanLocked = lockEl.checked;
+        document.getElementById('overscanXValue').textContent = fmtOverscan(xEl.value);
+        document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
+        _overscanLoaded = true;
+    } catch (err) {
+        console.warn('Failed to load overscan:', err);
+    }
+}
+
+const _overscanThrottle = { pending: null, timer: null };
+function commitOverscan() {
+    if (!_overscanLoaded) return;
+    const xEl = document.getElementById('overscanX');
+    const yEl = document.getElementById('overscanY');
+    const payload = {
+        x: parseFloat(xEl.value),
+        y: parseFloat(yEl.value),
+        locked: _overscanLocked,
+    };
+    _overscanThrottle.pending = payload;
+    if (_overscanThrottle.timer) return;
+    _overscanThrottle.timer = setTimeout(async () => {
+        const p = _overscanThrottle.pending;
+        _overscanThrottle.timer = null;
+        _overscanThrottle.pending = null;
+        try {
+            await api.setSourceOverscan(p.x, p.y, p.locked);
+        } catch (err) {
+            console.warn('Failed to set overscan:', err);
+        }
+    }, 80);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const xEl = document.getElementById('overscanX');
+    const yEl = document.getElementById('overscanY');
+    const lockEl = document.getElementById('overscanLocked');
+    if (!xEl || !yEl || !lockEl) return;
+
+    const onInput = (sourceAxis, value) => {
+        document.getElementById('overscan' + sourceAxis + 'Value').textContent = fmtOverscan(value);
+        if (_overscanLocked) {
+            const otherAxis = sourceAxis === 'X' ? 'Y' : 'X';
+            const otherEl = document.getElementById('overscan' + otherAxis);
+            if (otherEl) {
+                otherEl.value = value;
+                document.getElementById('overscan' + otherAxis + 'Value').textContent = fmtOverscan(value);
+            }
+        }
+        commitOverscan();
+    };
+
+    xEl.addEventListener('input', () => onInput('X', xEl.value));
+    yEl.addEventListener('input', () => onInput('Y', yEl.value));
+    lockEl.addEventListener('change', () => {
+        _overscanLocked = lockEl.checked;
+        if (_overscanLocked) {
+            // Lock just enabled — mirror X to Y so they start in sync.
+            yEl.value = xEl.value;
+            document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
+        }
+        commitOverscan();
+    });
+
+    loadOverscan();
+});
+
+
+// ============================================================
+// Master shader pipeline toggle (config.html shader tab)
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    const toggle = document.getElementById('shaderPipelineEnabled');
+    if (!toggle) return;
+    toggle.addEventListener('change', async () => {
+        try {
+            await api.setShaderPipelineEnabled(toggle.checked);
+        } catch (err) {
+            showAlert('Failed to toggle shader pipeline: ' + err.message, 'danger');
+            toggle.checked = !toggle.checked; // revert
+        }
+    });
+});
+
+
+// ============================================================
+// Per-pipeline shader override (streaming / recording tabs)
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    const stream = document.getElementById('streamingApplyShader');
+    if (stream) stream.addEventListener('change', async () => {
+        try {
+            await api.setStreamingSettings({ applyShader: stream.checked });
+        } catch (err) {
+            showAlert('Failed to update streaming shader override: ' + err.message, 'danger');
+            stream.checked = !stream.checked;
+        }
+    });
+
+    const rec = document.getElementById('recordingApplyShader');
+    if (rec) rec.addEventListener('change', async () => {
+        try {
+            await api.setRecordingSettings({ applyShader: rec.checked });
+        } catch (err) {
+            showAlert('Failed to update recording shader override: ' + err.message, 'danger');
+            rec.checked = !rec.checked;
+        }
+    });
 });

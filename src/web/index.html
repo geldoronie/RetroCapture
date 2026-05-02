@@ -3,24 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Controle remoto do RetroCapture - Capture e stream de vídeo retro">
+    <meta name="description" content="RetroCapture — live stream of your retro capture with shaders applied.">
     <meta name="theme-color" content="#0A7A83">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="RetroCapture">
-    
-    <title>RetroCapture Control Panel</title>
-    
+
+    <title>RetroCapture · Live</title>
+
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json">
-    
+
     <!-- Apple Touch Icons -->
     <link rel="apple-touch-icon" href="/icon-192x192.png">
-    
+
     <!-- Favicon -->
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512x512.png">
-    
+
     <!-- Bootstrap 5 CSS (vendored locally for offline-first PWA) -->
     <link href="/vendor/bootstrap.min.css" rel="stylesheet">
     <!-- Bootstrap Icons (vendored locally) -->
@@ -28,28 +29,25 @@
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-    <!-- Header -->
-    <header class="portal-header">
-        <div class="container-fluid px-4 py-3">
+<body class="home-page">
+    <!-- Top navigation (shared across pages) -->
+    <header class="portal-nav">
+        <div class="container-fluid px-3 px-md-4">
             <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center">
-                    <div class="logo-container me-3">
-                        <i class="bi bi-controller fs-2"></i>
-                    </div>
-                    <div>
-                        <h1 class="portal-title mb-0">RetroCapture Control Panel</h1>
-                        <p class="portal-subtitle mb-0">Controle remoto da aplicação</p>
-                    </div>
-                </div>
-                <div class="header-actions">
-                    <a href="/recordings.html" class="btn btn-icon" title="Gerenciar Gravações">
-                        <i class="bi bi-camera-video"></i>
-                    </a>
-                    <button class="btn btn-icon" onclick="copyStreamUrl()" title="Copiar URL do Stream">
+                <a href="/" class="portal-brand text-decoration-none d-flex align-items-center">
+                    <i class="bi bi-controller fs-3 me-2"></i>
+                    <span class="fw-semibold">RetroCapture</span>
+                </a>
+                <nav class="portal-nav-links d-flex">
+                    <a href="/" class="portal-nav-link active"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline">Live</span></a>
+                    <a href="/recordings.html" class="portal-nav-link"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline">Recordings</span></a>
+                    <a href="/config.html" class="portal-nav-link"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline">Configuration</span></a>
+                </nav>
+                <div class="d-flex align-items-center gap-1">
+                    <button class="btn btn-sm btn-outline-light" onclick="copyStreamUrl()" title="Copy stream URL">
                         <i class="bi bi-clipboard"></i>
                     </button>
-                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-icon" title="Abrir Stream em Nova Aba">
+                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-sm btn-outline-light" title="Open stream in new tab">
                         <i class="bi bi-box-arrow-up-right"></i>
                     </a>
                 </div>
@@ -60,744 +58,79 @@
     <!-- Alert Container -->
     <div class="alert-container" id="alertContainer"></div>
 
-    <!-- Main Content -->
-    <main class="portal-main">
-        <div class="container-fluid px-4 py-4">
-            <!-- Status Bar -->
-            <div class="row mb-4">
+    <!-- Hero: live player -->
+    <section class="home-hero">
+        <div class="container-fluid px-3 px-md-4 py-3">
+            <div class="home-player-wrapper">
+                <video id="livePlayer" controls autoplay muted playsinline class="home-player"></video>
+                <div class="home-player-overlay" id="livePlayerIdleOverlay">
+                    <div class="text-center">
+                        <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
+                        <h3 class="text-light">Stream is offline</h3>
+                        <p class="text-light opacity-75 mb-3">Start streaming from the Configuration page or click Play to try anyway.</p>
+                        <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i>Play</button>
+                    </div>
+                </div>
+                <div class="home-player-controls" id="livePlayerControls">
+                    <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i>Stop</button>
+                    <span class="text-light small ms-2" id="livePlayerStatus">Ready.</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Below player: status + quick actions -->
+    <main class="home-main">
+        <div class="container-fluid px-3 px-md-4">
+            <div class="row g-3">
+                <!-- Live status row -->
                 <div class="col-12">
                     <div class="card">
-                        <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-broadcast" id="streamStatusIcon"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">Streaming</div>
-                                            <div class="stat-value" id="streamStatus">Desconhecido</div>
-                                        </div>
+                        <div class="card-body py-2">
+                            <div class="row g-2 text-center">
+                                <div class="col-6 col-md-3">
+                                    <div class="home-stat">
+                                        <div class="home-stat-label">Streaming</div>
+                                        <div class="home-stat-value" id="homeStreamStatus">—</div>
                                     </div>
                                 </div>
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-record-circle" id="recordStatusIcon"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">Recording</div>
-                                            <div class="stat-value" id="recordStatus">-</div>
-                                        </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="home-stat">
+                                        <div class="home-stat-label">Viewers</div>
+                                        <div class="home-stat-value" id="homeClientCount">0</div>
                                     </div>
                                 </div>
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-people"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">Clientes</div>
-                                            <div class="stat-value" id="clientCount">0</div>
-                                        </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="home-stat">
+                                        <div class="home-stat-label">Resolution</div>
+                                        <div class="home-stat-value" id="homeResolution">—</div>
                                     </div>
                                 </div>
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-camera-video"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">Resolução</div>
-                                            <div class="stat-value" id="captureResolution">-</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-speedometer2"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">FPS</div>
-                                            <div class="stat-value" id="captureFPS">-</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-4 col-lg-2">
-                                    <div class="stat-card">
-                                        <div class="stat-icon">
-                                            <i class="bi bi-cpu"></i>
-                                        </div>
-                                        <div class="stat-content">
-                                            <div class="stat-label">Source</div>
-                                            <div class="stat-value" id="sourceStatus">-</div>
-                                        </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="home-stat">
+                                        <div class="home-stat-label">FPS</div>
+                                        <div class="home-stat-value" id="homeFps">—</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Control Tabs -->
-            <div class="row">
+                <!-- Now playing — read-only info about what's on the live stream. -->
                 <div class="col-12">
                     <div class="card">
-                        <div class="card-header">
-                            <ul class="nav nav-tabs card-header-tabs" id="controlTabs" role="tablist">
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link active" id="source-tab" data-bs-toggle="tab" data-bs-target="#source" type="button" role="tab">
-                                        <i class="bi bi-hdd me-2"></i>Source
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="shader-tab" data-bs-toggle="tab" data-bs-target="#shader" type="button" role="tab">
-                                        <i class="bi bi-palette me-2"></i>Shader
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="image-tab" data-bs-toggle="tab" data-bs-target="#image" type="button" role="tab">
-                                        <i class="bi bi-image me-2"></i>Image
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="streaming-tab" data-bs-toggle="tab" data-bs-target="#streaming" type="button" role="tab">
-                                        <i class="bi bi-broadcast me-2"></i>Streaming
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="recording-tab" data-bs-toggle="tab" data-bs-target="#recording" type="button" role="tab">
-                                        <i class="bi bi-record-circle me-2"></i>Recording
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio" type="button" role="tab">
-                                        <i class="bi bi-speaker me-2"></i>Audio
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="presets-tab" data-bs-toggle="tab" data-bs-target="#presets" type="button" role="tab">
-                                        <i class="bi bi-bookmark me-2"></i>Presets
-                                    </button>
-                                </li>
-                            </ul>
-                        </div>
                         <div class="card-body">
-                            <div class="tab-content" id="controlTabsContent">
-                                <!-- Source Tab -->
-                                <div class="tab-pane fade show active" id="source" role="tabpanel">
-                                    <div class="row g-3">
-                                        <div class="col-12">
-                                            <h6>Source Type</h6>
-                                            <select class="form-select" id="sourceType">
-                                                <option value="0">Carregando...</option>
-                                            </select>
-                                            <small class="form-text text-muted mt-1">A mudança é aplicada automaticamente ao selecionar</small>
-                                        </div>
-                                        
-                                        <!-- V4L2 Controls - Aparece apenas quando V4L2 está selecionado -->
-                                        <div id="v4l2ControlsContainer" style="display: none;">
-                                            <div class="col-12">
-                                                <hr>
-                                                <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">V4L2 Device</h6>
-                                                    <button class="btn btn-sm btn-secondary" onclick="refreshV4L2Devices()">
-                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                                                    </button>
-                                                </div>
-                                                <select class="form-select" id="v4l2Device">
-                                                    <option value="">Carregando...</option>
-                                                </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo V4L2 ou "None (No device)" para desabilitar</small>
-                                            </div>
-                                            
-                                            <div class="col-12" id="v4l2CaptureInfo" style="display: none;">
-                                                <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
-                                                
-                                                <!-- Resolução Manual -->
-                                                <div class="row g-3 mb-3">
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">Width</label>
-                                                        <input type="number" class="form-control" id="v4l2CaptureWidth" min="1" max="7680">
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">Height</label>
-                                                        <input type="number" class="form-control" id="v4l2CaptureHeight" min="1" max="4320">
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">FPS</label>
-                                                        <input type="number" class="form-control" id="v4l2CaptureFPS" min="1" max="240">
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Quick FPS -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">Quick FPS:</label>
-                                                    <div class="btn-group" role="group">
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(120)">120</button>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Resoluções 4:3 -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">4:3 Resolutions:</label>
-                                                    <div class="d-flex flex-wrap gap-2">
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(320, 240)">320x240</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1024, 768)">1024x768</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 960)">1280x960</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1600, 1200)">1600x1200</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2048, 1536)">2048x1536</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1920)">2560x1920</button>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Resoluções 16:9 -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">16:9 Resolutions:</label>
-                                                    <div class="d-flex flex-wrap gap-2">
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1440)">2560x1440</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(3840, 2160)">3840x2160</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            
-                                            <div class="col-12">
-                                                <hr>
-                                                <h6>V4L2 Controls</h6>
-                                                <div id="v4l2ControlsInSource" class="row g-3">
-                                                    <div class="col-12 text-muted">Nenhum dispositivo conectado. Selecione um dispositivo acima para ver os controles.</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- DirectShow Controls - Aparece apenas quando DirectShow está selecionado (Windows) -->
-                                        <div id="dsControlsContainer" style="display: none;">
-                                            <div class="col-12">
-                                                <hr>
-                                                <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">DirectShow Device</h6>
-                                                    <button class="btn btn-sm btn-secondary" onclick="refreshDSDevices()">
-                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                                                    </button>
-                                                </div>
-                                                <select class="form-select" id="dsDevice">
-                                                    <option value="">Carregando...</option>
-                                                </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</small>
-                                            </div>
-                                            
-                                            <div class="col-12" id="dsCaptureInfo" style="display: none;">
-                                                <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
-                                                
-                                                <!-- Resolução Manual -->
-                                                <div class="row g-3 mb-3">
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">Width</label>
-                                                        <input type="number" class="form-control" id="dsCaptureWidth" min="1" max="7680">
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">Height</label>
-                                                        <input type="number" class="form-control" id="dsCaptureHeight" min="1" max="4320">
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label">FPS</label>
-                                                        <input type="number" class="form-control" id="dsCaptureFPS" min="1" max="240">
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Quick FPS -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">Quick FPS:</label>
-                                                    <div class="btn-group" role="group">
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(120)">120</button>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Resoluções 4:3 -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">4:3 Resolutions:</label>
-                                                    <div class="d-flex flex-wrap gap-2">
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(320, 240)">320x240</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1024, 768)">1024x768</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 960)">1280x960</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1600, 1200)">1600x1200</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2048, 1536)">2048x1536</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1920)">2560x1920</button>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Resoluções 16:9 -->
-                                                <div class="mb-3">
-                                                    <label class="form-label">16:9 Resolutions:</label>
-                                                    <div class="d-flex flex-wrap gap-2">
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(2560, 1440)">2560x1440</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(3840, 2160)">3840x2160</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- None Source Message -->
-                                        <div id="noneSourceMessage" class="col-12">
-                                            <div class="alert alert-info">
-                                                <i class="bi bi-info-circle me-2"></i>
-                                                Nenhuma fonte selecionada. Selecione um tipo de fonte acima.
-                                            </div>
-                                        </div>
-                                    </div>
+                            <h6 class="card-title text-uppercase text-muted small mb-3"><i class="bi bi-palette me-1"></i>Now playing</h6>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <div class="text-muted small">Source</div>
+                                    <div id="homeSource" class="fw-semibold">—</div>
                                 </div>
-
-                                <!-- Shader Tab -->
-                                <div class="tab-pane fade" id="shader" role="tabpanel">
-                                    <div class="row g-3">
-                                        <div class="col-md-12">
-                                            <label class="form-label">Shader Atual</label>
-                                            <input type="text" class="form-control" id="currentShader" readonly>
-                                        </div>
-                                        <div class="col-md-12">
-                                            <label class="form-label">Selecionar Shader</label>
-                                            <select class="form-select" id="shaderSelect">
-                                                <option value="">Carregando shaders...</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-12">
-                                            <button class="btn btn-secondary btn-sm" onclick="loadShaderList()">
-                                                <i class="bi bi-arrow-clockwise me-2"></i>Atualizar Lista
-                                            </button>
-                                        </div>
-                                        <div class="col-12">
-                                            <hr>
-                                            <h6>Parâmetros do Shader</h6>
-                                            <div id="shaderParameters" class="row g-3">
-                                                <div class="col-12 text-muted">Nenhum shader ativo ou sem parâmetros</div>
-                                            </div>
-                                        </div>
-                                    </div>
+                                <div class="col-md-6">
+                                    <div class="text-muted small">Shader</div>
+                                    <div id="homeShader" class="fw-semibold">—</div>
                                 </div>
-
-                                <!-- Image Tab -->
-                                <div class="tab-pane fade" id="image" role="tabpanel">
-                                    <div class="row g-3">
-                                        <div class="col-md-6">
-                                            <label class="form-label">
-                                                Brilho
-                                                <span id="brightnessValue" class="badge bg-primary ms-2">0.0</span>
-                                            </label>
-                                            <input type="range" class="form-range" id="brightness" min="-1.0" max="1.0" step="0.01" value="0.0">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">
-                                                Contraste
-                                                <span id="contrastValue" class="badge bg-primary ms-2">1.0</span>
-                                            </label>
-                                            <input type="range" class="form-range" id="contrast" min="0.0" max="2.0" step="0.01" value="1.0">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <div class="form-check form-switch mt-4">
-                                                <input class="form-check-input" type="checkbox" id="maintainAspect">
-                                                <label class="form-check-label" for="maintainAspect">Manter Proporção</label>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <div class="form-check form-switch mt-4">
-                                                <input class="form-check-input" type="checkbox" id="fullscreen">
-                                                <label class="form-check-label" for="fullscreen">Tela Cheia</label>
-                                            </div>
-                                        </div>
-                                        <div class="col-12">
-                                            <hr>
-                                            <h6>Resolução de Saída</h6>
-                                            <p class="text-muted small">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</p>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">
-                                                Largura
-                                                <span id="outputWidthValue" class="badge bg-primary ms-2">0</span>
-                                            </label>
-                                            <input type="number" class="form-control" id="outputWidth" min="0" max="7680" step="32" value="0">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">
-                                                Altura
-                                                <span id="outputHeightValue" class="badge bg-primary ms-2">0</span>
-                                            </label>
-                                            <input type="number" class="form-control" id="outputHeight" min="0" max="4320" step="32" value="0">
-                                        </div>
-                                        <div class="col-12">
-                                            <div class="btn-group" role="group">
-                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1280, 720)">1280x720</button>
-                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1920, 1080)">1920x1080</button>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setOutputResolution(0, 0)">Automático</button>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Índice do Monitor</label>
-                                            <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">
-                                            <small class="form-text text-muted">-1 = Monitor primário, 0+ = Monitor específico</small>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Streaming Tab -->
-                                <div class="tab-pane fade" id="streaming" role="tabpanel">
-                                    <div class="row g-3">
-                                        <!-- Live Preview -->
-                                        <div class="col-12">
-                                            <div class="card">
-                                                <div class="card-body">
-                                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                                        <h6 class="card-title mb-0"><i class="bi bi-broadcast me-1"></i>Live preview</h6>
-                                                        <div class="d-flex gap-2">
-                                                            <button type="button" class="btn btn-sm btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill"></i> Play</button>
-                                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill"></i> Stop</button>
-                                                        </div>
-                                                    </div>
-                                                    <video id="livePlayer" controls muted playsinline style="width: 100%; max-height: 360px; background: #000; border-radius: 4px;"></video>
-                                                    <div class="form-text" id="livePlayerStatus">Click Play to start watching the live stream.</div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- Streaming Profiles -->
-                                        <div class="col-12">
-                                            <div class="card">
-                                                <div class="card-body">
-                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i>Profiles</h6>
-                                                    <div class="d-flex flex-wrap gap-2 align-items-center">
-                                                        <select class="form-select form-select-sm" id="streamingProfileSelect" style="max-width: 240px;">
-                                                            <option value="">(no profiles saved)</option>
-                                                        </select>
-                                                        <button type="button" class="btn btn-sm btn-primary" id="streamingProfileApplyBtn" disabled>Apply</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="streamingProfileDeleteBtn" disabled>Delete</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-success" id="streamingProfileSaveBtn">Save as…</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="streamingProfileRefreshBtn"><i class="bi bi-arrow-clockwise"></i></button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div class="col-md-6">
-                                            <label class="form-label">Porta</label>
-                                            <input type="number" class="form-control" id="streamingPort" min="1" max="65535">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Bitrate de Vídeo (bps)</label>
-                                            <input type="number" class="form-control" id="streamingBitrate" min="1000" step="1000">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Bitrate de Áudio (bps)</label>
-                                            <input type="number" class="form-control" id="streamingAudioBitrate" min="1000" step="1000">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">Largura</label>
-                                            <input type="number" class="form-control" id="streamingWidth" min="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">Altura</label>
-                                            <input type="number" class="form-control" id="streamingHeight" min="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">FPS</label>
-                                            <input type="number" class="form-control" id="streamingFPS" min="1" max="120">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Codec de Vídeo</label>
-                                            <select class="form-select" id="streamingVideoCodec">
-                                                <option value="h264">H.264</option>
-                                                <option value="h265">H.265</option>
-                                                <option value="vp8">VP8</option>
-                                                <option value="vp9">VP9</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Codec de Áudio</label>
-                                            <select class="form-select" id="streamingAudioCodec">
-                                                <option value="aac">AAC</option>
-                                                <option value="opus">Opus</option>
-                                            </select>
-                                        </div>
-                                        
-                                        <!-- Botão Start/Stop Streaming -->
-                                        <div class="col-12">
-                                            <hr>
-                                            <button type="button" class="btn btn-primary btn-lg w-100" id="streamingStartStopBtn" onclick="toggleStreaming()">
-                                                <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i>Iniciar Streaming</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Recording Tab -->
-                                <div class="tab-pane fade" id="recording" role="tabpanel">
-                                    <div class="row g-3">
-                                        <!-- Recording Status -->
-                                        <div class="col-12">
-                                            <div class="alert" id="recordingStatusAlert" role="alert">
-                                                <div class="d-flex align-items-center">
-                                                    <i class="bi bi-circle-fill me-2" id="recordingStatusIcon"></i>
-                                                    <div class="flex-grow-1">
-                                                        <strong id="recordingStatusText">Stopped</strong>
-                                                        <div id="recordingStatusInfo" class="small text-muted"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- Recording Profiles -->
-                                        <div class="col-12">
-                                            <div class="card">
-                                                <div class="card-body">
-                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i>Profiles</h6>
-                                                    <div class="d-flex flex-wrap gap-2 align-items-center">
-                                                        <select class="form-select form-select-sm" id="recordingProfileSelect" style="max-width: 240px;">
-                                                            <option value="">(no profiles saved)</option>
-                                                        </select>
-                                                        <button type="button" class="btn btn-sm btn-primary" id="recordingProfileApplyBtn" disabled>Apply</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="recordingProfileDeleteBtn" disabled>Delete</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-success" id="recordingProfileSaveBtn">Save as…</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="recordingProfileRefreshBtn"><i class="bi bi-arrow-clockwise"></i></button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label">Width</label>
-                                            <input type="number" class="form-control" id="recordingWidth" min="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">Height</label>
-                                            <input type="number" class="form-control" id="recordingHeight" min="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">FPS</label>
-                                            <input type="number" class="form-control" id="recordingFPS" min="1" max="120">
-                                        </div>
-                                        
-                                        <!-- Quick Resolution Presets -->
-                                        <div class="col-12">
-                                            <hr>
-                                            <h6>Quick Resolution Presets</h6>
-                                            
-                                            <div class="mb-3">
-                                                <label class="form-label">4:3 Resolutions:</label>
-                                                <div class="d-flex flex-wrap gap-2">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(320, 240)">320x240</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(640, 480)">640x480</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(800, 600)">800x600</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1024, 768)">1024x768</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 960)">1280x960</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1600, 1200)">1600x1200</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2048, 1536)">2048x1536</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1920)">2560x1920</button>
-                                                </div>
-                                            </div>
-                                            
-                                            <div class="mb-3">
-                                                <label class="form-label">16:9 Resolutions:</label>
-                                                <div class="d-flex flex-wrap gap-2">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 720)">1280x720</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1920, 1080)">1920x1080</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(2560, 1440)">2560x1440</button>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(3840, 2160)">3840x2160</button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        
-                                        <div class="col-md-6">
-                                            <label class="form-label">Video Bitrate (bps)</label>
-                                            <input type="number" class="form-control" id="recordingBitrate" min="1000000" step="1000000">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Audio Bitrate (bps)</label>
-                                            <input type="number" class="form-control" id="recordingAudioBitrate" min="64000" step="32000">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Video Codec</label>
-                                            <select class="form-select" id="recordingVideoCodec">
-                                                <option value="h264">H.264</option>
-                                                <option value="h265">H.265</option>
-                                                <option value="vp8">VP8</option>
-                                                <option value="vp9">VP9</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Audio Codec</label>
-                                            <select class="form-select" id="recordingAudioCodec">
-                                                <option value="aac">AAC</option>
-                                                <option value="mp3">MP3</option>
-                                                <option value="opus">Opus</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Container</label>
-                                            <select class="form-select" id="recordingContainer">
-                                                <option value="mp4">MP4</option>
-                                                <option value="mkv">MKV</option>
-                                                <option value="avi">AVI</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Output Path</label>
-                                            <input type="text" class="form-control" id="recordingOutputPath" placeholder="recordings/">
-                                        </div>
-                                        <div class="col-md-12">
-                                            <label class="form-label">Filename Template</label>
-                                            <input type="text" class="form-control" id="recordingFilenameTemplate" placeholder="recording_%Y%m%d_%H%M%S">
-                                            <small class="form-text text-muted">strftime format (e.g., recording_%Y%m%d_%H%M%S)</small>
-                                        </div>
-                                        <div class="col-md-12">
-                                            <div class="form-check">
-                                                <input class="form-check-input" type="checkbox" id="recordingIncludeAudio" checked>
-                                                <label class="form-check-label" for="recordingIncludeAudio">
-                                                    Include Audio
-                                                </label>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- Start/Stop Button -->
-                                        <div class="col-12">
-                                            <hr>
-                                            <button type="button" class="btn btn-danger btn-lg w-100" id="recordingStartStopBtn" onclick="toggleRecording()">
-                                                <span id="recordingStartStopText"><i class="bi bi-record-circle me-2"></i>Start Recording</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Audio Tab -->
-                                <div class="tab-pane fade" id="audio" role="tabpanel">
-                                    <div class="row g-3">
-                                        <!-- Audio Status -->
-                                        <div class="col-12">
-                                            <div class="alert alert-info" id="audioStatusAlert" role="alert">
-                                                <div class="d-flex align-items-center">
-                                                    <i class="bi bi-info-circle me-2"></i>
-                                                    <div class="flex-grow-1">
-                                                        <strong>Audio Status</strong>
-                                                        <div id="audioStatusInfo" class="small">Loading...</div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- Input Source Selection -->
-                                        <div class="col-12">
-                                            <div class="card">
-                                                <div class="card-header">
-                                                    <h6 class="mb-0">
-                                                        <i class="bi bi-mic me-2"></i>Audio Input Source
-                                                    </h6>
-                                                </div>
-                                                <div class="card-body">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Select Input Source</label>
-                                                        <div class="input-group">
-                                                            <select class="form-select" id="audioInputSource">
-                                                                <option value="">Loading sources...</option>
-                                                            </select>
-                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh sources">
-                                                                <i class="bi bi-arrow-clockwise"></i>
-                                                            </button>
-                                                        </div>
-                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
-                                                    </div>
-                                                    <div class="d-flex gap-2">
-                                                        <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
-                                                            <i class="bi bi-plug me-1"></i>Connect
-                                                        </button>
-                                                        <button type="button" class="btn btn-secondary" id="disconnectInputBtn" onclick="disconnectAudioInput()" disabled>
-                                                            <i class="bi bi-plug-fill me-1"></i>Disconnect
-                                                        </button>
-                                                    </div>
-                                                    <div class="mt-2">
-                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                    </div>
-                                </div>
-
-                                <!-- Presets Tab -->
-                                <div class="tab-pane fade" id="presets" role="tabpanel">
-                                    <div class="row g-3">
-                                        <div class="col-12">
-                                            <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
-                                                <h6 class="mb-0">Capture Presets</h6>
-                                                <div class="d-flex gap-2">
-                                                    <button class="btn btn-sm btn-secondary" onclick="refreshPresets()">
-                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                                                    </button>
-                                                    <button class="btn btn-sm btn-primary" onclick="showCreatePresetDialog()">
-                                                        <i class="bi bi-plus-circle me-1"></i>Create Preset
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div class="input-group input-group-sm mb-2">
-                                                <span class="input-group-text"><i class="bi bi-search"></i></span>
-                                                <input type="text" class="form-control" id="presetSearchInput" placeholder="Filter presets by name or description...">
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- Presets Grid -->
-                                        <div class="col-12">
-                                            <div id="presetsGrid" class="row g-3">
-                                                <div class="col-12 text-muted">Carregando presets...</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Create Preset Modal -->
-                                    <div class="modal fade" id="createPresetModal" tabindex="-1" aria-hidden="true">
-                                        <div class="modal-dialog">
-                                            <div class="modal-content">
-                                                <div class="modal-header">
-                                                    <h5 class="modal-title">Create New Preset</h5>
-                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                                </div>
-                                                <div class="modal-body">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Preset Name</label>
-                                                        <input type="text" class="form-control" id="newPresetName" placeholder="Enter preset name">
-                                                    </div>
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Description (optional)</label>
-                                                        <textarea class="form-control" id="newPresetDescription" rows="3" placeholder="Enter description"></textarea>
-                                                    </div>
-                                                    <div class="form-check">
-                                                        <input class="form-check-input" type="checkbox" id="captureThumbnail" checked>
-                                                        <label class="form-check-label" for="captureThumbnail">
-                                                            Capture thumbnail from current viewport
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                                <div class="modal-footer">
-                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                                    <button type="button" class="btn btn-primary" onclick="createPreset()">Create</button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
                             </div>
                         </div>
                     </div>
@@ -806,93 +139,18 @@
         </div>
     </main>
 
-    <!-- Bootstrap 5 JS Bundle -->
-    <script src="/vendor/bootstrap.bundle.min.js"></script>
-    <!-- mpegts.js for live HTTP-TS playback in Chrome/Firefox/Edge (Safari plays TS natively). -->
-    <script src="/vendor/mpegts.min.js"></script>
-    <!-- API Client -->
     <script src="/api.js"></script>
-    <!-- Main Script -->
-    <script src="/control.js"></script>
-    
-    <!-- PWA Service Worker Registration -->
+    <script src="/vendor/bootstrap.bundle.min.js"></script>
+    <script src="/vendor/mpegts.min.js"></script>
+    <script src="/home.js"></script>
+
+    <!-- Service Worker registration -->
     <script>
-        // Registrar Service Worker para PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js')
-                    .then((registration) => {
-                        console.log('Service Worker registrado com sucesso:', registration.scope);
-                        
-                        // Verificar atualizações periodicamente
-                        setInterval(() => {
-                            registration.update();
-                        }, 60000); // Verificar a cada minuto
-                    })
-                    .catch((error) => {
-                        console.log('Falha ao registrar Service Worker:', error);
-                    });
-                
-                // Listener para quando o Service Worker estiver pronto
-                navigator.serviceWorker.ready.then((registration) => {
-                    console.log('Service Worker pronto');
-                });
+                navigator.serviceWorker.register('/service-worker.js').catch(err => console.warn('SW registration failed:', err));
             });
         }
-        
-        // Detectar quando o app é instalado
-        let deferredPrompt;
-        window.addEventListener('beforeinstallprompt', (e) => {
-            // Prevenir o prompt automático
-            e.preventDefault();
-            deferredPrompt = e;
-            
-            // Mostrar botão de instalação customizado (opcional)
-            console.log('PWA pode ser instalado');
-            // Você pode adicionar um botão na UI aqui se quiser
-        });
-        
-        // Detectar quando o app foi instalado
-        window.addEventListener('appinstalled', () => {
-            console.log('PWA instalado com sucesso!');
-            deferredPrompt = null;
-        });
-
-        // Detectar quando a página é carregada do cache do histórico (back/forward cache)
-        // e forçar reload se necessário para evitar mostrar conteúdo antigo
-        window.addEventListener('pageshow', (event) => {
-            // Se a página foi carregada do cache do histórico (back/forward cache)
-            if (event.persisted) {
-                // Se estamos na raiz ou index.html, recarregar para garantir conteúdo correto
-                if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
-                    // Verificar se o título está correto (não deve ser "Recordings")
-                    if (document.title.includes('Recordings')) {
-                        window.location.reload();
-                    }
-                }
-            }
-        });
     </script>
-
-    <!-- Save Profile Modal (shared between Recording and Streaming tabs) -->
-    <div class="modal fade" id="saveProfileModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="saveProfileModalTitle">Save Profile</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <label for="saveProfileNameInput" class="form-label">Profile name</label>
-                    <input type="text" class="form-control" id="saveProfileNameInput" placeholder="e.g. HQ Archive">
-                    <div class="form-text text-warning d-none" id="saveProfileExistsWarning">A profile with this name already exists and will be overwritten.</div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="saveProfileConfirmBtn">Save</button>
-                </div>
-            </div>
-        </div>
-    </div>
 </body>
 </html>

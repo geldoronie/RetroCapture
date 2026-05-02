@@ -26,6 +26,22 @@ void UIConfigurationRecording::render()
     ImGui::Separator();
     renderProfiles();
     ImGui::Separator();
+    {
+        bool apply = m_uiManager->getRecordingApplyShader();
+        if (ImGui::Checkbox("Apply shader to recording", &apply))
+        {
+            m_uiManager->setRecordingApplyShader(apply);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("When off, the recording captures the raw pre-shader source\n"
+                              "even though the live preview shows the shader applied.\n"
+                              "Useful to archive a clean master while keeping the CRT\n"
+                              "look on screen / on stream.");
+        }
+        ImGui::Separator();
+    }
     renderBasicSettings();
     ImGui::Separator();
     renderCodecSettings();

@@ -3,17 +3,19 @@
  * Gerencia cache e funcionalidade offline
  */
 
-// Bumped to v2 with the portal overhaul — old cached HTML/JS otherwise
-// keeps showing the previous version to returning users.
-const CACHE_NAME = 'retrocapture-v2';
-const RUNTIME_CACHE = 'retrocapture-runtime-v2';
+// Bumped to v3 with the home/config split — landing page is now the
+// live player at "/" and the previous tabbed UI moved to /config.html.
+const CACHE_NAME = 'retrocapture-v3';
+const RUNTIME_CACHE = 'retrocapture-runtime-v3';
 
 // Resources to precache on install
 const PRECACHE_URLS = [
   '/',
   '/index.html',
+  '/config.html',
   '/recordings.html',
   '/style.css',
+  '/home.js',
   '/control.js',
   '/api.js',
   '/manifest.json',
@@ -116,11 +118,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Para recursos estáticos (HTML, CSS, JS), usar cache primeiro
-  if (url.pathname === '/' || 
-      url.pathname === '/index.html' ||
+  // Para recursos estáticos (HTML, CSS, JS, fontes), usar cache primeiro
+  if (url.pathname === '/' ||
+      url.pathname.endsWith('.html') ||
       url.pathname.endsWith('.css') ||
-      url.pathname.endsWith('.js')) {
+      url.pathname.endsWith('.js') ||
+      url.pathname.endsWith('.woff') ||
+      url.pathname.endsWith('.woff2')) {
     event.respondWith(
       caches.match(request)
         .then((cachedResponse) => {
