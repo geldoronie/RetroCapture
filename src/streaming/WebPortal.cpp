@@ -1360,10 +1360,27 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     bool isIndexHtml = (path == "index.html" || path == "/index.html" || 
                         path.find("/index.html") != std::string::npos);
     
-    bool isStaticFile = (path.find("style.css") != std::string::npos ||
-                         path.find(".css") != std::string::npos ||
-                         path.find(".js") != std::string::npos ||
-                         (path.find(".html") != std::string::npos && !isIndexHtml));
+    // Match the same set of static-file extensions that
+    // isWebPortalRequest accepts. Previously only .css/.js/.html were
+    // recognized here, which silently 404'd legitimate font/image
+    // requests like /vendor/fonts/bootstrap-icons.woff2.
+    auto endsWith = [](const std::string &s, const char *suffix) {
+        size_t n = std::strlen(suffix);
+        return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+    };
+    bool isStaticFile = (
+        endsWith(path, ".css") ||
+        endsWith(path, ".js")  ||
+        endsWith(path, ".json") ||
+        (endsWith(path, ".html") && !isIndexHtml) ||
+        endsWith(path, ".png") ||
+        endsWith(path, ".jpg") ||
+        endsWith(path, ".jpeg") ||
+        endsWith(path, ".svg") ||
+        endsWith(path, ".ico") ||
+        endsWith(path, ".woff2") ||
+        endsWith(path, ".woff") ||
+        endsWith(path, ".ttf"));
 
     LOG_INFO("WebPortal::extractFilePath - isIndexHtml: " + std::string(isIndexHtml ? "true" : "false") + 
              ", isStaticFile: " + std::string(isStaticFile ? "true" : "false") + 
@@ -1401,13 +1418,21 @@ std::string WebPortal::extractFilePath(const std::string &request) const
         }
     }
 
-    // Extrair apenas o nome do arquivo (sem diretórios extras)
-    size_t lastSlash = path.find_last_of('/');
-    if (lastSlash != std::string::npos && lastSlash < path.length() - 1)
+    // Reject path-traversal attempts. Previously this code collapsed
+    // every request to its basename to avoid escaping the web directory,
+    // but that also broke legitimate subdirectories (e.g. /vendor/* and
+    // /vendor/fonts/*). Now we keep the relative path intact and only
+    // refuse anything that includes a ".." segment or absolute markers.
+    if (path.find("..") != std::string::npos)
     {
-        LOG_INFO("WebPortal::extractFilePath - Extracting filename from path: '" + path + "'");
-        path = path.substr(lastSlash + 1);
-        LOG_INFO("WebPortal::extractFilePath - Filename extracted: '" + path + "'");
+        LOG_WARN("WebPortal::extractFilePath - Rejecting path with '..' segment: '" + path + "'");
+        return "";
+    }
+    // Also strip a leading slash defensively; the rest of the path is
+    // joined to the resolved web directory by serveStaticFile.
+    while (!path.empty() && path[0] == '/')
+    {
+        path = path.substr(1);
     }
 
     LOG_INFO("WebPortal::extractFilePath - Returning final path: '" + path + "'");
