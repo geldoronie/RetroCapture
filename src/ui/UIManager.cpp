@@ -5,6 +5,7 @@
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
 #include "../recording/RecordingSettings.h"
+#include "../streaming/StreamingProfileManager.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 #include "../utils/ShaderScanner.h"
@@ -148,6 +149,7 @@ bool UIManager::init(void *window)
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
+    m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -3246,5 +3248,92 @@ bool UIManager::loadRecordingProfile(const std::string &name)
     triggerRecordingOutputPathChange(s.outputPath);
     triggerRecordingFilenameTemplateChange(s.filenameTemplate);
     triggerRecordingIncludeAudioChange(s.includeAudio);
+    return true;
+}
+
+// ----------------------------------------------------------------------
+// Streaming profiles
+// ----------------------------------------------------------------------
+
+namespace {
+
+StreamingSettings collectStreamingSettings(const UIManager &ui)
+{
+    StreamingSettings s;
+    s.port = ui.getStreamingPort();
+    s.width = ui.getStreamingWidth();
+    s.height = ui.getStreamingHeight();
+    s.fps = ui.getStreamingFps();
+    s.bitrate = ui.getStreamingBitrate();
+    s.audioBitrate = ui.getStreamingAudioBitrate();
+    s.videoCodec = ui.getStreamingVideoCodec();
+    s.audioCodec = ui.getStreamingAudioCodec();
+    s.h264Preset = ui.getStreamingH264Preset();
+    s.h265Preset = ui.getStreamingH265Preset();
+    s.h265Profile = ui.getStreamingH265Profile();
+    s.h265Level = ui.getStreamingH265Level();
+    s.vp8Speed = ui.getStreamingVP8Speed();
+    s.vp9Speed = ui.getStreamingVP9Speed();
+    s.maxVideoBufferSize = ui.getStreamingMaxVideoBufferSize();
+    s.maxAudioBufferSize = ui.getStreamingMaxAudioBufferSize();
+    s.maxBufferTimeSeconds = ui.getStreamingMaxBufferTimeSeconds();
+    s.avioBufferSize = ui.getStreamingAVIOBufferSize();
+    return s;
+}
+
+} // namespace
+
+std::vector<std::string> UIManager::listStreamingProfiles()
+{
+    if (!m_streamingProfileManager) return {};
+    return m_streamingProfileManager->list();
+}
+
+bool UIManager::streamingProfileExists(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    return m_streamingProfileManager->exists(name);
+}
+
+bool UIManager::saveStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    StreamingSettings s = collectStreamingSettings(*this);
+    return m_streamingProfileManager->save(name, s);
+}
+
+bool UIManager::deleteStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    return m_streamingProfileManager->remove(name);
+}
+
+bool UIManager::loadStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    StreamingSettings s;
+    if (!m_streamingProfileManager->load(name, s)) return false;
+
+    // Apply via the existing triggerXxxChange setters so callbacks fire
+    // and the running streamer / persisted config see the update the
+    // same way they would if the user moved each control by hand.
+    triggerStreamingPortChange(s.port);
+    triggerStreamingVideoCodecChange(s.videoCodec);
+    triggerStreamingH264PresetChange(s.h264Preset);
+    triggerStreamingH265PresetChange(s.h265Preset);
+    triggerStreamingH265ProfileChange(s.h265Profile);
+    triggerStreamingH265LevelChange(s.h265Level);
+    triggerStreamingVP8SpeedChange(s.vp8Speed);
+    triggerStreamingVP9SpeedChange(s.vp9Speed);
+    triggerStreamingWidthChange(s.width);
+    triggerStreamingHeightChange(s.height);
+    triggerStreamingFpsChange(s.fps);
+    triggerStreamingBitrateChange(s.bitrate);
+    triggerStreamingAudioCodecChange(s.audioCodec);
+    triggerStreamingAudioBitrateChange(s.audioBitrate);
+    triggerStreamingMaxVideoBufferSizeChange(s.maxVideoBufferSize);
+    triggerStreamingMaxAudioBufferSizeChange(s.maxAudioBufferSize);
+    triggerStreamingMaxBufferTimeSecondsChange(s.maxBufferTimeSeconds);
+    triggerStreamingAVIOBufferSizeChange(s.avioBufferSize);
     return true;
 }

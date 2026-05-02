@@ -154,6 +154,12 @@ private:
     bool handleApplyRecordingProfile(int clientFd, const std::string &name);
     bool handleDeleteRecordingProfile(int clientFd, const std::string &name);
 
+    // Streaming profiles (saved snapshots of streaming configuration)
+    bool handleGETStreamingProfiles(int clientFd);
+    bool handleSaveStreamingProfile(int clientFd, const std::string &body);
+    bool handleApplyStreamingProfile(int clientFd, const std::string &name);
+    bool handleDeleteStreamingProfile(int clientFd, const std::string &name);
+
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
     HTTPServer *m_httpServer = nullptr; // Ponteiro para HTTPServer
