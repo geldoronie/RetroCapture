@@ -22,6 +22,7 @@ private:
     UIManager *m_uiManager = nullptr;
 
     void renderStreamingStatus();
+    void renderProfiles();
     void renderBasicSettings();
     void renderCodecSettings();
     void renderBitrateSettings();
@@ -33,4 +34,14 @@ private:
     void renderH265Settings();
     void renderVP8Settings();
     void renderVP9Settings();
+
+    // Profile UI state
+    int m_selectedProfileIndex = -1;
+    std::vector<std::string> m_profileNames;
+    bool m_profilesDirty = true;
+    char m_newProfileName[128] = "";
+    bool m_showSaveDialog = false;
+    bool m_showDeleteConfirm = false;
+
+    void refreshProfiles();
 };

@@ -153,6 +153,14 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
                 return handleDeleteRecordingProfile(clientFd, name);
             }
         }
+        else if (path.find("/api/v1/streaming/profiles/") == 0)
+        {
+            std::string name = path.substr(27); // length of "/api/v1/streaming/profiles/"
+            if (!name.empty())
+            {
+                return handleDeleteStreamingProfile(clientFd, name);
+            }
+        }
         else if (path.find("/api/v1/recordings/") == 0)
         {
             std::string recordingId = path.substr(19); // Length of "/api/v1/recordings/"
@@ -458,6 +466,10 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETRecordingProfiles(clientFd);
     }
+    else if (path == "/api/v1/streaming/profiles")
+    {
+        return handleGETStreamingProfiles(clientFd);
+    }
 
     send404(clientFd);
     return true;
@@ -559,6 +571,21 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
         {
             std::string name = path.substr(prefixLen, applyPos - prefixLen);
             if (!name.empty()) return handleApplyRecordingProfile(clientFd, name);
+        }
+    }
+    else if (path == "/api/v1/streaming/profiles")
+    {
+        return handleSaveStreamingProfile(clientFd, body);
+    }
+    else if (path.find("/api/v1/streaming/profiles/") == 0 && path.find("/apply") != std::string::npos)
+    {
+        // /api/v1/streaming/profiles/{name}/apply
+        constexpr size_t prefixLen = 27; // length of "/api/v1/streaming/profiles/"
+        size_t applyPos = path.find("/apply");
+        if (applyPos != std::string::npos && applyPos > prefixLen)
+        {
+            std::string name = path.substr(prefixLen, applyPos - prefixLen);
+            if (!name.empty()) return handleApplyStreamingProfile(clientFd, name);
         }
     }
 
@@ -1805,6 +1832,99 @@ bool APIController::handleDeleteRecordingProfile(int clientFd, const std::string
     if (!m_uiManager->deleteRecordingProfile(name))
     {
         sendErrorResponse(clientFd, 404, "Recording profile not found: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+// ----------------------------------------------------------------------
+// Streaming profiles
+// ----------------------------------------------------------------------
+
+bool APIController::handleGETStreamingProfiles(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    auto names = m_uiManager->listStreamingProfiles();
+    std::ostringstream out;
+    out << "{\"profiles\": [";
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (i) out << ",";
+        out << jsonString(names[i]);
+    }
+    out << "]}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSaveStreamingProfile(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json j = nlohmann::json::parse(body);
+        if (!j.contains("name") || !j["name"].is_string())
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'name' field");
+            return true;
+        }
+        std::string name = j["name"].get<std::string>();
+        if (!m_uiManager->saveStreamingProfile(name))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to save streaming profile");
+            return true;
+        }
+        std::ostringstream out;
+        out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+        sendJSONResponse(clientFd, 200, out.str());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleApplyStreamingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->loadStreamingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Streaming profile not found or failed to load: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleDeleteStreamingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->deleteStreamingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Streaming profile not found: " + name);
         return true;
     }
     std::ostringstream out;

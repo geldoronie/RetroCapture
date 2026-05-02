@@ -24,6 +24,7 @@ class UICredits;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
+class StreamingProfileManager;
 
 class UIManager
 {
@@ -448,6 +449,15 @@ public:
     bool deleteRecordingProfile(const std::string& name);
     bool recordingProfileExists(const std::string& name);
 
+    // Streaming profiles — analogous to recording profiles, persisting
+    // the streaming configuration (codec, preset, bitrate, port, audio,
+    // buffer tuning) under $XDG_DATA_HOME/retrocapture/streaming_profiles.
+    std::vector<std::string> listStreamingProfiles();
+    bool saveStreamingProfile(const std::string& name);
+    bool loadStreamingProfile(const std::string& name);
+    bool deleteStreamingProfile(const std::string& name);
+    bool streamingProfileExists(const std::string& name);
+
     // Recording callbacks
     void setOnRecordingStartStop(std::function<void(bool)> callback) { m_onRecordingStartStop = callback; }
     void setOnRecordingWidthChanged(std::function<void(uint32_t)> callback) { m_onRecordingWidthChanged = callback; }
@@ -638,6 +648,7 @@ private:
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
+    std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
 
     // Shader selection
