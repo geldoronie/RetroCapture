@@ -1245,6 +1245,14 @@ bool Application::initUI()
                     bool active = success && m_streamManager && m_streamManager->isActive();
                     m_ui->setStreamingActive(active);
                     m_ui->setStreamingProcessing(false); // Processing completed
+                    // initStreaming() calls stopWebPortal() before starting, which clears
+                    // setWebPortalActive(false). When the streaming server itself hosts the
+                    // portal (m_webPortalEnabled), it's effectively active again — reflect
+                    // that back in the native UI so it doesn't read "Portal Web Inativo"
+                    // while the portal is reachable through the stream port.
+                    if (active && m_webPortalEnabled) {
+                        m_ui->setWebPortalActive(true);
+                    }
                 }
             }).detach();
         } else {
@@ -1278,8 +1286,12 @@ bool Application::initUI()
                     m_ui->setStreamUrl("");
                     m_ui->setStreamClientCount(0);
                     m_ui->setStreamingProcessing(false); // Processing completed
+                    // Streaming was hosting the portal — once it stops, the portal
+                    // isn't actually reachable anymore. Mirror that in the UI so the
+                    // "Portal Web Ativo" badge doesn't lie.
+                    m_ui->setWebPortalActive(false);
                 }
-                
+
                 // DO NOT restart web portal automatically when streaming stops.
                 // Web portal can be enabled but doesn't necessarily need
                 // to be running independently. If user wants portal active,
@@ -2922,7 +2934,13 @@ void Application::run()
             GLuint textureToRender = m_frameProcessor->getTexture();
             bool isShaderTexture = false;
 
-            if (m_shaderEngine && m_shaderEngine->isShaderActive())
+            // Master toggle: when the user disables the shader pipeline
+            // from the Shader tab we keep the loaded preset / parameters
+            // intact but stop running the chain on the live render. The
+            // captured texture for stream/recording then reflects the
+            // raw source — same path the user sees on the window.
+            const bool shaderPipelineOn = (!m_ui || m_ui->getShaderPipelineEnabled());
+            if (shaderPipelineOn && m_shaderEngine && m_shaderEngine->isShaderActive())
             {
                 // IMPORTANT: Update viewport with window dimensions before applying shader
                 // This ensures the last pass renders to the correct window size
@@ -3551,7 +3569,10 @@ void Application::run()
 
                                 // IMPORTANTE: ShaderEngine cria texturas em GL_RGBA, não GL_RGB
                                 // Precisamos ler como RGBA e converter para RGB depois
-                                bool isShaderTexture = (m_shaderEngine && m_shaderEngine->isShaderActive());
+                                // Master pipeline toggle off → applyShader was skipped above and
+                                // textureToCapture is the source RGB texture, so treat as RGB.
+                                const bool pipelineEnabled = (!m_ui || m_ui->getShaderPipelineEnabled());
+                                bool isShaderTexture = (pipelineEnabled && m_shaderEngine && m_shaderEngine->isShaderActive());
                                 GLenum readFormat = isShaderTexture ? GL_RGBA : GL_RGB;
                                 uint32_t bytesPerPixel = isShaderTexture ? 4 : 3;
 
@@ -3748,48 +3769,105 @@ void Application::run()
                                     }
                                 }
 
+                                // Per-pipeline shader override: when the master is on AND
+                                // the shader is active, individual pipelines can request the
+                                // raw pre-shader source instead. We do a sync readback of
+                                // m_frameProcessor->getTexture() (raw V4L2 RGB upload) only
+                                // when at least one active pipeline asked for it — keeps the
+                                // common case (both pipelines follow the master) on the fast
+                                // single-readback path.
+                                const bool masterOn = (m_ui && m_ui->getShaderPipelineEnabled());
+                                const bool shaderActive = (m_shaderEngine && m_shaderEngine->isShaderActive());
+                                const bool streamWantsSource = m_ui && m_streamManager && m_streamManager->isActive() &&
+                                                               !m_ui->getStreamingApplyShader();
+                                const bool recordWantsSource = m_ui && m_recordingManager && m_recordingManager->isRecording() &&
+                                                               !m_ui->getRecordingApplyShader();
+                                const bool needSourceCapture = masterOn && shaderActive &&
+                                                               (streamWantsSource || recordWantsSource);
+
+                                bool sourceFrameReady = false;
+                                uint32_t sourceFrameW = 0, sourceFrameH = 0;
+                                if (needSourceCapture && m_frameProcessor)
+                                {
+                                    GLuint srcTex = m_frameProcessor->getTexture();
+                                    sourceFrameW = m_frameProcessor->getTextureWidth();
+                                    sourceFrameH = m_frameProcessor->getTextureHeight();
+                                    if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
+                                    {
+                                        GLuint tmpFBO = 0;
+                                        glGenFramebuffers(1, &tmpFBO);
+                                        GLint prevFBO = 0;
+                                        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+                                        glBindFramebuffer(GL_FRAMEBUFFER, tmpFBO);
+                                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+                                        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+                                        {
+                                            const size_t rowUnpadded = static_cast<size_t>(sourceFrameW) * 3;
+                                            const size_t rowPadded = ((rowUnpadded + 3) / 4) * 4;
+                                            m_captureSourcePadded.resize(rowPadded * sourceFrameH);
+                                            glReadPixels(0, 0, static_cast<GLsizei>(sourceFrameW),
+                                                         static_cast<GLsizei>(sourceFrameH),
+                                                         GL_RGB, GL_UNSIGNED_BYTE, m_captureSourcePadded.data());
+                                            // glReadPixels returns rows bottom-up; flip + strip row padding.
+                                            m_captureSourceFrameData.resize(rowUnpadded * sourceFrameH);
+                                            for (uint32_t row = 0; row < sourceFrameH; ++row)
+                                            {
+                                                const uint32_t srcRow = sourceFrameH - 1 - row;
+                                                const uint8_t *s = m_captureSourcePadded.data() + srcRow * rowPadded;
+                                                uint8_t *d = m_captureSourceFrameData.data() + row * rowUnpadded;
+                                                memcpy(d, s, rowUnpadded);
+                                            }
+                                            sourceFrameReady = true;
+                                        }
+                                        glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+                                        glDeleteFramebuffers(1, &tmpFBO);
+                                    }
+                                }
+
                                 // Share frame data between streaming and recording.
                                 // Pula push se o PBO async ainda não tem dados do frame anterior.
                                 if (frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
+                                    const bool useSource = streamWantsSource && sourceFrameReady;
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
                                     {
                                         LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                                 (useSource ? " (raw source — shader bypassed)" : ""));
                                         LOG_INFO("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
-                                        if (m_ui->getStreamingWidth() != actualCaptureWidth || m_ui->getStreamingHeight() != actualCaptureHeight)
-                                        {
-                                            LOG_INFO("MediaEncoder will resize for streaming: YES");
-                                        }
-                                        else
-                                        {
-                                            LOG_INFO("MediaEncoder will resize for streaming: NO");
-                                        }
                                         LOG_INFO("----------------------------------");
                                     }
-                                    m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    if (useSource)
+                                    {
+                                        m_streamManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                    }
+                                    else
+                                    {
+                                        m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())
                                 {
+                                    const bool useSource = recordWantsSource && sourceFrameReady;
                                     static int recordingPushLogCount = 0;
                                     if (recordingPushLogCount++ < 3)
                                     {
                                         LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
+                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                                 (useSource ? " (raw source — shader bypassed)" : ""));
                                         RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                         LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                        if (recSettings.width != actualCaptureWidth || recSettings.height != actualCaptureHeight)
-                                        {
-                                            LOG_INFO("MediaEncoder will resize: YES");
-                                        }
-                                        else
-                                        {
-                                            LOG_INFO("MediaEncoder will resize: NO");
-                                        }
                                         LOG_INFO("===================================");
                                     }
-                                    m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    if (useSource)
+                                    {
+                                        m_recordingManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                    }
+                                    else
+                                    {
+                                        m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    }
                                 }
                         } // fim do else (textura válida)
                     } // fim do else (FBO completo)

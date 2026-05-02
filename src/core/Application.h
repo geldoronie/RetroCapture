@@ -170,6 +170,11 @@ private:
     std::vector<uint8_t> m_captureFrameData;       // Saída RGB final (push-to-encoder).
     std::vector<uint8_t> m_captureRgbaScratch;     // Temp RGBA→RGB (path PBO com shader).
     std::vector<uint8_t> m_captureSyncPadded;      // Temp glReadPixels com row padding.
+    // Per-pipeline shader override: secondary readback of the raw source
+    // (pre-shader) so streaming/recording can opt out of the shader chain
+    // independently of what the live preview shows.
+    std::vector<uint8_t> m_captureSourceFrameData;
+    std::vector<uint8_t> m_captureSourcePadded;
 
     // OTIMIZAÇÃO: Cache de SwsContext para resize (evitar criar/destruir a cada frame)
 

@@ -80,6 +80,14 @@ class RetroCaptureAPI {
         return await this.request('GET', '/capture/fps');
     }
 
+    async getSourceOverscan() {
+        return await this.request('GET', '/source/overscan');
+    }
+
+    async setSourceOverscan(x, y, locked) {
+        return await this.request('POST', '/source/overscan', { x, y, locked });
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }
@@ -150,6 +158,10 @@ class RetroCaptureAPI {
         return await this.request('POST', '/shader', { shader: shaderName });
     }
 
+    async setShaderPipelineEnabled(enabled) {
+        return await this.request('POST', '/shader', { pipelineEnabled: !!enabled });
+    }
+
     async setShaderParameter(name, value) {
         return await this.request('POST', '/shader/parameter', { name, value });
     }
@@ -199,6 +211,10 @@ class RetroCaptureAPI {
         return await this.request('DELETE', `/presets/${encodeURIComponent(name)}`);
     }
 
+    async updatePresetParameters(name, parameters) {
+        return await this.request('PUT', `/presets/${encodeURIComponent(name)}/parameters`, { parameters });
+    }
+
     async setRecordingSettings(settings) {
         return await this.request('POST', '/recording/settings', settings);
     }
@@ -214,6 +230,40 @@ class RetroCaptureAPI {
 
     async renameRecording(id, newName) {
         return await this.request('PUT', `/recordings/${encodeURIComponent(id)}`, { name: newName });
+    }
+
+    // Recording profiles (saved snapshots of recording configuration)
+    async getRecordingProfiles() {
+        return await this.request('GET', '/recording/profiles');
+    }
+
+    async saveRecordingProfile(name) {
+        return await this.request('POST', '/recording/profiles', { name });
+    }
+
+    async applyRecordingProfile(name) {
+        return await this.request('POST', `/recording/profiles/${encodeURIComponent(name)}/apply`);
+    }
+
+    async deleteRecordingProfile(name) {
+        return await this.request('DELETE', `/recording/profiles/${encodeURIComponent(name)}`);
+    }
+
+    // Streaming profiles (saved snapshots of streaming configuration)
+    async getStreamingProfiles() {
+        return await this.request('GET', '/streaming/profiles');
+    }
+
+    async saveStreamingProfile(name) {
+        return await this.request('POST', '/streaming/profiles', { name });
+    }
+
+    async applyStreamingProfile(name) {
+        return await this.request('POST', `/streaming/profiles/${encodeURIComponent(name)}/apply`);
+    }
+
+    async deleteStreamingProfile(name) {
+        return await this.request('DELETE', `/streaming/profiles/${encodeURIComponent(name)}`);
     }
 
     // Audio API methods

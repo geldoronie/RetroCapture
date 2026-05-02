@@ -119,6 +119,8 @@ private:
     bool handleRefreshDSDevices(int clientFd);
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
+    bool handleGETSourceOverscan(int clientFd);
+    bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
 
@@ -145,6 +147,7 @@ private:
     bool handleCreatePreset(int clientFd, const std::string &body);
     bool handleApplyPreset(int clientFd, const std::string &body);
     bool handleDeletePreset(int clientFd, const std::string &presetName);
+    bool handleUpdatePresetParameters(int clientFd, const std::string &presetName, const std::string &body);
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
 

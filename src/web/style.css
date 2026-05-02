@@ -853,12 +853,29 @@ body {
     box-shadow: 0 4px 8px var(--shadow);
 }
 
+/* Tabs: keep them on a single row on mobile and scroll horizontally
+   instead of wrapping. The default Bootstrap behavior wraps, which makes
+   the page very tall on phones. */
+.nav-tabs.card-header-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+.nav-tabs.card-header-tabs::-webkit-scrollbar { height: 4px; }
+.nav-tabs.card-header-tabs .nav-item {
+    flex: 0 0 auto;
+}
+.nav-tabs.card-header-tabs .nav-link {
+    white-space: nowrap;
+}
+
 /* Responsive adjustments for controls */
 @media (max-width: 768px) {
     .card-body {
         padding: 1rem;
     }
-    
+
     .nav-tabs .nav-link {
         padding: 0.75rem 1rem;
         font-size: 0.875rem;
@@ -877,4 +894,123 @@ body {
         font-size: 0.75rem;
         padding: 0.25rem 0.5rem;
     }
+}
+
+
+/* ============================================================
+ * Shared portal navigation (used by index/recordings/config)
+ * ============================================================ */
+
+.portal-nav {
+    background: linear-gradient(135deg, #0f3a3f 0%, #0A7A83 100%);
+    color: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+}
+.portal-nav .portal-brand {
+    color: #fff;
+    padding: 0.75rem 0;
+}
+.portal-nav-links {
+    gap: 0;
+}
+.portal-nav-link {
+    color: rgba(255, 255, 255, 0.75);
+    text-decoration: none;
+    padding: 1rem 1rem;
+    font-weight: 500;
+    border-bottom: 3px solid transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.portal-nav-link:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+}
+.portal-nav-link.active {
+    color: #fff;
+    border-bottom-color: #fff;
+}
+
+/* ============================================================
+ * Home page (live)
+ * ============================================================ */
+
+body.home-page {
+    background: #0e1418;
+}
+body.home-page .home-main {
+    padding: 1rem 0 3rem;
+    color: #fff;
+}
+body.home-page .card {
+    background: #1c252b;
+    border: 1px solid #2a3640;
+    color: #e7eef2;
+}
+body.home-page .card .text-muted {
+    color: #8ea2ad !important;
+}
+
+.home-hero {
+    background: #000;
+    border-bottom: 1px solid #1c252b;
+}
+.home-player-wrapper {
+    position: relative;
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    max-height: 65vh;
+    margin: 0 auto;
+}
+.home-player {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #000;
+}
+.home-player-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(14, 20, 24, 0.85);
+    backdrop-filter: blur(4px);
+    z-index: 2;
+}
+.home-player-controls {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 0.5rem 0.75rem;
+    background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+    display: flex;
+    align-items: center;
+    z-index: 1;
+    pointer-events: none;
+}
+.home-player-controls > * { pointer-events: auto; }
+
+.home-stat {
+    padding: 0.25rem;
+}
+.home-stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8ea2ad;
+}
+.home-stat-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+@media (max-width: 768px) {
+    .home-player-wrapper { aspect-ratio: 16 / 9; max-height: 50vh; }
+    .home-stat-value { font-size: 1rem; }
 }

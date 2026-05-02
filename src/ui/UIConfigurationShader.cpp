@@ -29,6 +29,21 @@ void UIConfigurationShader::render()
     // Atualizar referência ao shader engine se necessário
     m_shaderEngine = m_uiManager->getShaderEngine();
 
+    {
+        bool enabled = m_uiManager->getShaderPipelineEnabled();
+        if (ImGui::Checkbox("Apply shader pipeline", &enabled))
+        {
+            m_uiManager->setShaderPipelineEnabled(enabled);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Bypass the shader chain without losing the selected preset / parameters.\n"
+                              "Lets you A/B compare the effect on/off in real time.");
+        }
+        ImGui::Separator();
+    }
+
     renderShaderSelection();
     ImGui::Separator();
     renderSavePreset();

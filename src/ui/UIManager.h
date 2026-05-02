@@ -306,6 +306,24 @@ public:
     std::string getCurrentShader() const { return m_currentShader; }
     const std::vector<std::string> &getShaderList() const { return m_scannedShaders; }
 
+    // Master shader bypass — when false the shader engine is skipped on
+    // the live render path, so the user can A/B the effect without
+    // losing the selected shader. The per-pipeline overrides below only
+    // apply when the master is on; if the master is off all pipelines
+    // see the raw source.
+    bool getShaderPipelineEnabled() const { return m_shaderPipelineEnabled; }
+    void setShaderPipelineEnabled(bool enabled) { m_shaderPipelineEnabled = enabled; }
+
+    // Per-pipeline shader override. Only consulted when the master
+    // pipeline toggle is on. False means "this pipeline pushes the raw
+    // (pre-shader) source frame even though the live preview shows the
+    // shader". Lets the user record clean video while streaming with
+    // the CRT effect, or vice versa.
+    bool getStreamingApplyShader() const { return m_streamingApplyShader; }
+    void setStreamingApplyShader(bool apply) { m_streamingApplyShader = apply; }
+    bool getRecordingApplyShader() const { return m_recordingApplyShader; }
+    void setRecordingApplyShader(bool apply) { m_recordingApplyShader = apply; }
+
     // Capture info getters
     uint32_t getCaptureWidth() const { return m_captureWidth; }
     uint32_t getCaptureHeight() const { return m_captureHeight; }
@@ -650,6 +668,15 @@ private:
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
+
+    // Master shader pipeline toggle. When false, applyShader is
+    // skipped on the live render path so the user can compare the
+    // effect on/off without dropping the selected shader.
+    bool m_shaderPipelineEnabled = true;
+    // Per-pipeline shader application. False = pipeline pushes the raw
+    // pre-shader source even though the master is on.
+    bool m_streamingApplyShader = true;
+    bool m_recordingApplyShader = true;
 
     // Shader selection
     std::vector<std::string> m_shaderList;

@@ -12,9 +12,9 @@
     <title>Recordings - RetroCapture</title>
     
     <!-- Bootstrap 5 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css">
+    <link href="/vendor/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons (vendored locally) -->
+    <link rel="stylesheet" href="/vendor/bootstrap-icons.css">
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/style.css">
     
@@ -117,24 +117,21 @@
     </style>
 </head>
 <body>
-    <!-- Header -->
-    <header class="portal-header">
-        <div class="container-fluid px-4 py-3">
+    <!-- Top navigation (shared across pages) -->
+    <header class="portal-nav">
+        <div class="container-fluid px-3 px-md-4">
             <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center">
-                    <div class="logo-container me-3">
-                        <i class="bi bi-controller fs-2"></i>
-                    </div>
-                    <div>
-                        <h1 class="portal-title mb-0">Recordings</h1>
-                        <p class="portal-subtitle mb-0">Gerenciar gravações de vídeo</p>
-                    </div>
-                </div>
-                <div class="header-actions">
-                    <a href="/" class="btn btn-icon" title="Voltar ao Painel" onclick="goToHome(event)">
-                        <i class="bi bi-arrow-left"></i>
-                    </a>
-                    <button class="btn btn-icon" onclick="refreshRecordings()" title="Atualizar Lista">
+                <a href="/" class="portal-brand text-decoration-none d-flex align-items-center">
+                    <i class="bi bi-controller fs-3 me-2"></i>
+                    <span class="fw-semibold">RetroCapture</span>
+                </a>
+                <nav class="portal-nav-links d-flex">
+                    <a href="/" class="portal-nav-link"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline">Live</span></a>
+                    <a href="/recordings.html" class="portal-nav-link active"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline">Recordings</span></a>
+                    <a href="/config.html" class="portal-nav-link"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline">Configuration</span></a>
+                </nav>
+                <div class="d-flex align-items-center gap-1">
+                    <button class="btn btn-sm btn-outline-light" onclick="refreshRecordings()" title="Refresh list">
                         <i class="bi bi-arrow-clockwise"></i>
                     </button>
                 </div>
@@ -239,7 +236,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/vendor/bootstrap.bundle.min.js"></script>
     <script src="/api.js"></script>
     <script>
         let recordings = [];

@@ -2398,6 +2398,10 @@ void UIManager::loadConfig()
             {
                 m_currentShader = shader["current"].get<std::string>();
             }
+            if (shader.contains("pipelineEnabled"))
+            {
+                m_shaderPipelineEnabled = shader["pipelineEnabled"].get<bool>();
+            }
         }
 
         // Carregar configurações de fonte
@@ -2479,6 +2483,15 @@ void UIManager::loadConfig()
                 m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
             if (recording.contains("includeAudio"))
                 m_recordingIncludeAudio = recording["includeAudio"];
+            if (recording.contains("applyShader"))
+                m_recordingApplyShader = recording["applyShader"].get<bool>();
+        }
+
+        if (config.contains("streaming"))
+        {
+            auto &streaming = config["streaming"];
+            if (streaming.contains("applyShader"))
+                m_streamingApplyShader = streaming["applyShader"].get<bool>();
         }
 
         LOG_INFO("Configuration loaded from: " + configPath);
@@ -2513,6 +2526,7 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
+            {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
         // Salvar configurações de imagem
@@ -2549,7 +2563,8 @@ void UIManager::saveConfig()
 
         // Salvar shader atual
         config["shader"] = {
-            {"current", m_currentShader.empty() ? "" : m_currentShader}};
+            {"current", m_currentShader.empty() ? "" : m_currentShader},
+            {"pipelineEnabled", m_shaderPipelineEnabled}};
 
         // Salvar configurações de fonte
         config["source"] = {
@@ -2585,7 +2600,8 @@ void UIManager::saveConfig()
             {"container", m_recordingContainer},
             {"outputPath", m_recordingOutputPath},
             {"filenameTemplate", m_recordingFilenameTemplate},
-            {"includeAudio", m_recordingIncludeAudio}};
+            {"includeAudio", m_recordingIncludeAudio},
+            {"applyShader", m_recordingApplyShader}};
 
         // Escrever arquivo
         std::ofstream file(configPath);

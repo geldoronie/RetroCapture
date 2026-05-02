@@ -24,6 +24,22 @@ void UIConfigurationStreaming::render()
     ImGui::Separator();
     renderProfiles();
     ImGui::Separator();
+    {
+        bool apply = m_uiManager->getStreamingApplyShader();
+        if (ImGui::Checkbox("Apply shader to stream", &apply))
+        {
+            m_uiManager->setStreamingApplyShader(apply);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("When off, the stream pushes the raw pre-shader source\n"
+                              "even though the live preview shows the shader applied.\n"
+                              "Useful to broadcast a clean feed while keeping the CRT\n"
+                              "look on screen.");
+        }
+        ImGui::Separator();
+    }
     renderBasicSettings();
     ImGui::Separator();
     renderCodecSettings();
