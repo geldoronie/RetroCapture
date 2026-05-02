@@ -181,10 +181,15 @@ async function loadStatus() {
         const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
         
         document.getElementById('streamStatus').textContent = isActive ? 'Ativo' : 'Inativo';
-        document.getElementById('streamStatusIcon').className = isActive 
-            ? 'bi bi-broadcast text-success' 
+        document.getElementById('streamStatusIcon').className = isActive
+            ? 'bi bi-broadcast text-success'
             : 'bi bi-broadcast text-secondary';
         document.getElementById('clientCount').textContent = status.clientCount || 0;
+
+        // Recording / Source status — fire-and-forget so a slow status
+        // refresh doesn't block the streaming-status path.
+        updateRecordingStatusBadge();
+        updateSourceStatusBadge();
         
         // Atualizar URL do stream se disponível
         if (status.streamUrl) {
@@ -899,29 +904,35 @@ async function loadShaderParameters() {
     try {
         const response = await api.getShaderParameters();
         appState.shaderParameters = response.parameters || [];
-        
+
         const container = document.getElementById('shaderParameters');
         container.innerHTML = '';
-        
+
         if (appState.shaderParameters.length === 0) {
             container.innerHTML = '<div class="col-12 text-muted">Nenhum shader ativo ou sem parâmetros</div>';
             return;
         }
-        
+
         appState.shaderParameters.forEach(param => {
+            const safeName = param.name.replace(/'/g, "\\'");
             const col = document.createElement('div');
             col.className = 'col-md-6';
+            const tooltip = `range ${Number(param.min).toFixed(2)} – ${Number(param.max).toFixed(2)}, default ${Number(param.defaultValue).toFixed(2)}`;
             col.innerHTML = `
-                <label class="form-label">${param.name}${param.description ? ': ' + param.description : ''}</label>
+                <div class="d-flex justify-content-between align-items-baseline">
+                    <label class="form-label mb-1" for="shaderParam_${param.name}" title="${escapeHtml(tooltip)}">${param.name}${param.description ? ': ' + param.description : ''}</label>
+                    <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" title="Reset to default" onclick="resetShaderParameter('${safeName}', ${param.defaultValue})"><i class="bi bi-arrow-counterclockwise small"></i></button>
+                </div>
                 <div class="input-group">
-                    <input type="range" class="form-range" 
-                           id="shaderParam_${param.name}" 
-                           min="${param.min}" 
-                           max="${param.max}" 
-                           step="${param.step || 0.01}" 
+                    <input type="range" class="form-range"
+                           id="shaderParam_${param.name}"
+                           min="${param.min}"
+                           max="${param.max}"
+                           step="${param.step || 0.01}"
                            value="${param.value}"
-                           oninput="updateShaderParameterValue('${param.name.replace(/'/g, "\\'")}', this.value)">
-                    <span class="input-group-text" style="min-width: 80px;" id="shaderParamValue_${param.name}">${param.value.toFixed(2)}</span>
+                           title="${escapeHtml(tooltip)}"
+                           oninput="onShaderParameterInput('${safeName}', this.value)">
+                    <span class="input-group-text" style="min-width: 80px;" id="shaderParamValue_${param.name}">${Number(param.value).toFixed(2)}</span>
                 </div>
             `;
             container.appendChild(col);
@@ -931,22 +942,47 @@ async function loadShaderParameters() {
     }
 }
 
-/**
- * Atualiza o valor de um parâmetro do shader (visual)
- */
-function updateShaderParameterValue(name, value) {
-    document.getElementById(`shaderParamValue_${name}`).textContent = parseFloat(value).toFixed(2);
+// Throttle map for live shader parameter updates — keyed by parameter name.
+// Each entry holds a pending value + a timer id; we send at most once per
+// throttle window to keep the encoder loop free of API request floods.
+const _shaderParamThrottle = {};
+const SHADER_PARAM_THROTTLE_MS = 40; // ~25 updates/sec — feels live, easy on the server
+
+function onShaderParameterInput(name, value) {
+    const display = document.getElementById('shaderParamValue_' + name);
+    if (display) display.textContent = Number(value).toFixed(2);
+
+    const entry = _shaderParamThrottle[name] || (_shaderParamThrottle[name] = { pending: null, timer: null });
+    entry.pending = value;
+    if (entry.timer) return;
+    entry.timer = setTimeout(async () => {
+        const v = entry.pending;
+        entry.timer = null;
+        entry.pending = null;
+        try {
+            await api.setShaderParameter(name, parseFloat(v));
+        } catch (err) {
+            console.error('Failed to set shader parameter ' + name + ':', err);
+        }
+    }, SHADER_PARAM_THROTTLE_MS);
 }
 
-/**
- * Atualiza um parâmetro do shader na API
- */
+function resetShaderParameter(name, defaultValue) {
+    const slider = document.getElementById('shaderParam_' + name);
+    if (slider) slider.value = defaultValue;
+    onShaderParameterInput(name, defaultValue);
+}
+
+// Backwards-compat alias for any inline onchange attributes that may still
+// reference these names elsewhere.
+function updateShaderParameterValue(name, value) {
+    onShaderParameterInput(name, value);
+}
 async function updateShaderParameter(name, value) {
     try {
         await api.setShaderParameter(name, parseFloat(value));
-        // Atualização em tempo real - sem alerta
     } catch (error) {
-        showAlert(`Erro ao atualizar parâmetro ${name}: ` + error.message, 'danger');
+        console.error('Failed to set shader parameter ' + name + ':', error);
     }
 }
 
@@ -2183,4 +2219,339 @@ document.addEventListener('DOMContentLoaded', () => {
             loadAudioData();
         }
     }
+});
+
+
+// ============================================================
+// Profile management (recording / streaming)
+// ============================================================
+
+const PROFILE_KINDS = {
+    recording: {
+        select: "recordingProfileSelect",
+        applyBtn: "recordingProfileApplyBtn",
+        deleteBtn: "recordingProfileDeleteBtn",
+        saveBtn: "recordingProfileSaveBtn",
+        refreshBtn: "recordingProfileRefreshBtn",
+        list: () => api.getRecordingProfiles(),
+        save: (name) => api.saveRecordingProfile(name),
+        apply: (name) => api.applyRecordingProfile(name),
+        remove: (name) => api.deleteRecordingProfile(name),
+        afterApply: () => loadRecordingSettings && loadRecordingSettings(),
+        label: "recording",
+    },
+    streaming: {
+        select: "streamingProfileSelect",
+        applyBtn: "streamingProfileApplyBtn",
+        deleteBtn: "streamingProfileDeleteBtn",
+        saveBtn: "streamingProfileSaveBtn",
+        refreshBtn: "streamingProfileRefreshBtn",
+        list: () => api.getStreamingProfiles(),
+        save: (name) => api.saveStreamingProfile(name),
+        apply: (name) => api.applyStreamingProfile(name),
+        remove: (name) => api.deleteStreamingProfile(name),
+        afterApply: () => loadStreamingSettings && loadStreamingSettings(),
+        label: "streaming",
+    },
+};
+
+const profileCache = { recording: [], streaming: [] };
+
+async function refreshProfiles(kind) {
+    const cfg = PROFILE_KINDS[kind];
+    if (!cfg) return;
+    try {
+        const resp = await cfg.list();
+        const names = (resp && Array.isArray(resp.profiles)) ? resp.profiles : [];
+        profileCache[kind] = names;
+        const sel = document.getElementById(cfg.select);
+        if (!sel) return;
+        const previous = sel.value;
+        sel.innerHTML = "";
+        if (names.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "(no profiles saved)";
+            sel.appendChild(opt);
+        } else {
+            for (const n of names) {
+                const opt = document.createElement("option");
+                opt.value = n;
+                opt.textContent = n;
+                sel.appendChild(opt);
+            }
+            if (names.includes(previous)) sel.value = previous;
+        }
+        updateProfileButtons(kind);
+    } catch (err) {
+        console.error("Failed to refresh " + kind + " profiles:", err);
+    }
+}
+
+function updateProfileButtons(kind) {
+    const cfg = PROFILE_KINDS[kind];
+    const sel = document.getElementById(cfg.select);
+    const has = sel && sel.value && profileCache[kind].includes(sel.value);
+    const applyBtn = document.getElementById(cfg.applyBtn);
+    const deleteBtn = document.getElementById(cfg.deleteBtn);
+    if (applyBtn) applyBtn.disabled = !has;
+    if (deleteBtn) deleteBtn.disabled = !has;
+}
+
+function bindProfileControls(kind) {
+    const cfg = PROFILE_KINDS[kind];
+    const sel = document.getElementById(cfg.select);
+    if (sel) sel.addEventListener("change", () => updateProfileButtons(kind));
+
+    const applyBtn = document.getElementById(cfg.applyBtn);
+    if (applyBtn) applyBtn.addEventListener("click", async () => {
+        const name = document.getElementById(cfg.select).value;
+        if (!name) return;
+        try {
+            await cfg.apply(name);
+            if (cfg.afterApply) await cfg.afterApply();
+        } catch (err) {
+            showAlert("Failed to apply " + cfg.label + " profile: " + err.message, "danger");
+        }
+    });
+
+    const deleteBtn = document.getElementById(cfg.deleteBtn);
+    if (deleteBtn) deleteBtn.addEventListener("click", async () => {
+        const name = document.getElementById(cfg.select).value;
+        if (!name) return;
+        if (!confirm("Delete " + cfg.label + " profile \"" + name + "\"?")) return;
+        try {
+            await cfg.remove(name);
+            await refreshProfiles(kind);
+        } catch (err) {
+            showAlert("Failed to delete " + cfg.label + " profile: " + err.message, "danger");
+        }
+    });
+
+    const saveBtn = document.getElementById(cfg.saveBtn);
+    if (saveBtn) saveBtn.addEventListener("click", () => openSaveProfileModal(kind));
+
+    const refreshBtn = document.getElementById(cfg.refreshBtn);
+    if (refreshBtn) refreshBtn.addEventListener("click", () => refreshProfiles(kind));
+}
+
+let _saveProfileTargetKind = null;
+
+function openSaveProfileModal(kind) {
+    _saveProfileTargetKind = kind;
+    const cfg = PROFILE_KINDS[kind];
+    document.getElementById("saveProfileModalTitle").textContent = "Save " + cfg.label + " profile";
+    const input = document.getElementById("saveProfileNameInput");
+    input.value = "";
+    document.getElementById("saveProfileExistsWarning").classList.add("d-none");
+    const modal = new bootstrap.Modal(document.getElementById("saveProfileModal"));
+    modal.show();
+    setTimeout(() => input.focus(), 200);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    bindProfileControls("recording");
+    bindProfileControls("streaming");
+    refreshProfiles("recording");
+    refreshProfiles("streaming");
+
+    const input = document.getElementById("saveProfileNameInput");
+    if (input) {
+        input.addEventListener("input", () => {
+            if (!_saveProfileTargetKind) return;
+            const exists = profileCache[_saveProfileTargetKind].includes(input.value.trim());
+            document.getElementById("saveProfileExistsWarning").classList.toggle("d-none", !exists);
+        });
+    }
+
+    const confirmBtn = document.getElementById("saveProfileConfirmBtn");
+    if (confirmBtn) {
+        confirmBtn.addEventListener("click", async () => {
+            const kind = _saveProfileTargetKind;
+            const cfg = PROFILE_KINDS[kind];
+            const name = document.getElementById("saveProfileNameInput").value.trim();
+            if (!name) return;
+            try {
+                await cfg.save(name);
+                await refreshProfiles(kind);
+                bootstrap.Modal.getInstance(document.getElementById("saveProfileModal")).hide();
+            } catch (err) {
+                showAlert("Failed to save " + cfg.label + " profile: " + err.message, "danger");
+            }
+        });
+    }
+});
+
+
+
+// ============================================================
+// Live HTTP-TS player (mpegts.js)
+// ============================================================
+
+let _livePlayer = null;
+
+function liveStreamUrl() {
+    // Stream is served on the same HTTPServer as the portal, so a relative
+    // URL works regardless of port. Add a cache-buster so reconnects don't
+    // hit a stale TS segment cached by intermediaries.
+    return '/stream?t=' + Date.now();
+}
+
+function startLivePlayer() {
+    const video = document.getElementById('livePlayer');
+    const status = document.getElementById('livePlayerStatus');
+    const startBtn = document.getElementById('livePlayerStartBtn');
+    const stopBtn = document.getElementById('livePlayerStopBtn');
+    if (!video) return;
+
+    stopLivePlayer(); // tear down any previous instance
+
+    if (typeof mpegts === 'undefined' || !mpegts.isSupported || !mpegts.isSupported()) {
+        // Safari plays MPEG-TS natively; for everything else without MSE
+        // support we fall back to a direct <video> src and hope the
+        // browser can deal with it.
+        video.src = liveStreamUrl();
+        video.play().catch(() => {});
+        if (status) status.textContent = 'Using native browser playback (Safari / fallback).';
+    } else {
+        try {
+            _livePlayer = mpegts.createPlayer({
+                type: 'mpegts',
+                isLive: true,
+                url: liveStreamUrl(),
+            }, {
+                liveBufferLatencyChasing: true,
+                liveBufferLatencyMaxLatency: 1.5,
+                liveBufferLatencyMinRemain: 0.5,
+                lazyLoad: false,
+            });
+            _livePlayer.attachMediaElement(video);
+            _livePlayer.load();
+            _livePlayer.play().catch(() => {});
+            if (status) status.textContent = 'Playing live stream.';
+        } catch (err) {
+            console.error('mpegts.js error:', err);
+            if (status) status.textContent = 'Live player error: ' + err.message;
+            return;
+        }
+    }
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+}
+
+function stopLivePlayer() {
+    const video = document.getElementById('livePlayer');
+    const startBtn = document.getElementById('livePlayerStartBtn');
+    const stopBtn = document.getElementById('livePlayerStopBtn');
+    const status = document.getElementById('livePlayerStatus');
+
+    if (_livePlayer) {
+        try {
+            _livePlayer.pause();
+            _livePlayer.unload();
+            _livePlayer.detachMediaElement();
+            _livePlayer.destroy();
+        } catch (err) {
+            console.warn('Error tearing down mpegts player:', err);
+        }
+        _livePlayer = null;
+    }
+    if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+    }
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    if (status) status.textContent = 'Stopped.';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const startBtn = document.getElementById('livePlayerStartBtn');
+    const stopBtn = document.getElementById('livePlayerStopBtn');
+    if (startBtn) startBtn.addEventListener('click', startLivePlayer);
+    if (stopBtn) stopBtn.addEventListener('click', stopLivePlayer);
+});
+
+
+// ============================================================
+// Status badges (recording / source) — top-bar enrichment
+// ============================================================
+
+async function updateRecordingStatusBadge() {
+    const valueEl = document.getElementById('recordStatus');
+    const iconEl = document.getElementById('recordStatusIcon');
+    if (!valueEl) return;
+    try {
+        const status = await api.getRecordingStatus();
+        const recording = !!(status && status.recording);
+        valueEl.textContent = recording ? 'Recording' : 'Stopped';
+        if (iconEl) {
+            iconEl.className = recording
+                ? 'bi bi-record-circle-fill text-danger'
+                : 'bi bi-record-circle text-secondary';
+        }
+    } catch (err) {
+        valueEl.textContent = '-';
+    }
+}
+
+async function updateSourceStatusBadge() {
+    const valueEl = document.getElementById('sourceStatus');
+    if (!valueEl) return;
+    try {
+        const src = await api.getSource();
+        // Source type: 0=None, 1=V4L2, 2=DirectShow
+        const labels = { 0: 'None', 1: 'V4L2', 2: 'DirectShow' };
+        const label = labels[src && src.type] || 'Unknown';
+        valueEl.textContent = label;
+    } catch (err) {
+        valueEl.textContent = '-';
+    }
+}
+
+
+// ============================================================
+// Preset filtering — visible-vs-hidden matched against the search box.
+// Cards are kept in DOM and just toggled with .d-none, so filtering is
+// instant and we don't lose state (e.g. partially loaded thumbnails).
+// ============================================================
+
+function applyPresetFilter() {
+    const input = document.getElementById('presetSearchInput');
+    if (!input) return;
+    const query = input.value.trim().toLowerCase();
+    const grid = document.getElementById('presetsGrid');
+    if (!grid) return;
+    const cards = grid.querySelectorAll('.preset-card');
+    let visible = 0;
+    cards.forEach(card => {
+        if (!query) {
+            card.parentElement.classList.remove('d-none');
+            visible++;
+            return;
+        }
+        const haystack = card.textContent.toLowerCase();
+        const matches = haystack.includes(query);
+        card.parentElement.classList.toggle('d-none', !matches);
+        if (matches) visible++;
+    });
+    // Show "no matches" hint inline (only when filtered)
+    let hint = document.getElementById('presetFilterHint');
+    if (visible === 0 && query) {
+        if (!hint) {
+            hint = document.createElement('div');
+            hint.id = 'presetFilterHint';
+            hint.className = 'col-12 text-muted small';
+            hint.textContent = 'No presets match this filter.';
+            grid.appendChild(hint);
+        }
+    } else if (hint) {
+        hint.remove();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('presetSearchInput');
+    if (input) input.addEventListener('input', applyPresetFilter);
 });

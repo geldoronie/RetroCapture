@@ -216,6 +216,40 @@ class RetroCaptureAPI {
         return await this.request('PUT', `/recordings/${encodeURIComponent(id)}`, { name: newName });
     }
 
+    // Recording profiles (saved snapshots of recording configuration)
+    async getRecordingProfiles() {
+        return await this.request('GET', '/recording/profiles');
+    }
+
+    async saveRecordingProfile(name) {
+        return await this.request('POST', '/recording/profiles', { name });
+    }
+
+    async applyRecordingProfile(name) {
+        return await this.request('POST', `/recording/profiles/${encodeURIComponent(name)}/apply`);
+    }
+
+    async deleteRecordingProfile(name) {
+        return await this.request('DELETE', `/recording/profiles/${encodeURIComponent(name)}`);
+    }
+
+    // Streaming profiles (saved snapshots of streaming configuration)
+    async getStreamingProfiles() {
+        return await this.request('GET', '/streaming/profiles');
+    }
+
+    async saveStreamingProfile(name) {
+        return await this.request('POST', '/streaming/profiles', { name });
+    }
+
+    async applyStreamingProfile(name) {
+        return await this.request('POST', `/streaming/profiles/${encodeURIComponent(name)}/apply`);
+    }
+
+    async deleteStreamingProfile(name) {
+        return await this.request('DELETE', `/streaming/profiles/${encodeURIComponent(name)}`);
+    }
+
     // Audio API methods
     async getAudioInputSources() {
         return await this.request('GET', '/audio/input-sources');

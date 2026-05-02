@@ -69,7 +69,7 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("/portal-background") != std::string::npos ||
         request.find("/icon-") != std::string::npos ||
         // Verificar se é qualquer arquivo estático (HTML, CSS, JS, etc.)
-        (request.find("GET /") != std::string::npos && 
+        (request.find("GET /") != std::string::npos &&
          (request.find(".html") != std::string::npos ||
           request.find(".css") != std::string::npos ||
           request.find(".js") != std::string::npos ||
@@ -78,7 +78,10 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
           request.find(".jpg") != std::string::npos ||
           request.find(".jpeg") != std::string::npos ||
           request.find(".svg") != std::string::npos ||
-          request.find(".ico") != std::string::npos)))
+          request.find(".ico") != std::string::npos ||
+          request.find(".woff2") != std::string::npos ||
+          request.find(".woff") != std::string::npos ||
+          request.find(".ttf") != std::string::npos)))
     {
         LOG_INFO("WebPortal::isWebPortalRequest - Accepted as web portal request");
         return true;
@@ -1279,6 +1282,18 @@ std::string WebPortal::getContentType(const std::string &filePath) const
     else if (len >= 4 && filePath.substr(len - 4) == ".ico")
     {
         return "image/x-icon";
+    }
+    else if (len >= 6 && filePath.substr(len - 6) == ".woff2")
+    {
+        return "font/woff2";
+    }
+    else if (len >= 5 && filePath.substr(len - 5) == ".woff")
+    {
+        return "font/woff";
+    }
+    else if (len >= 4 && filePath.substr(len - 4) == ".ttf")
+    {
+        return "font/ttf";
     }
     else
     {

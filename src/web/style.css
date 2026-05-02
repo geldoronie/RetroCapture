@@ -853,12 +853,29 @@ body {
     box-shadow: 0 4px 8px var(--shadow);
 }
 
+/* Tabs: keep them on a single row on mobile and scroll horizontally
+   instead of wrapping. The default Bootstrap behavior wraps, which makes
+   the page very tall on phones. */
+.nav-tabs.card-header-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+.nav-tabs.card-header-tabs::-webkit-scrollbar { height: 4px; }
+.nav-tabs.card-header-tabs .nav-item {
+    flex: 0 0 auto;
+}
+.nav-tabs.card-header-tabs .nav-link {
+    white-space: nowrap;
+}
+
 /* Responsive adjustments for controls */
 @media (max-width: 768px) {
     .card-body {
         padding: 1rem;
     }
-    
+
     .nav-tabs .nav-link {
         padding: 0.75rem 1rem;
         font-size: 0.875rem;
