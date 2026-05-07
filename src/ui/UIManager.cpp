@@ -3,7 +3,11 @@
 #include "UICredits.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
+#include "../recording/RecordingProfileManager.h"
+#include "../recording/RecordingSettings.h"
+#include "../streaming/StreamingProfileManager.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
@@ -124,11 +128,17 @@ bool UIManager::init(void *window)
     ImGui_ImplOpenGL3_Init(glslVersion.c_str());
 #endif
 
-    // Scan for shaders (check environment variable for AppImage support)
+    // Scan for shaders. Env override `RETROCAPTURE_SHADER_PATH` ainda é
+    // honrado (AppImage / dev). Caso contrário, usa o assets dir resolvido
+    // (CWD em dev tree, install system-wide ou portable).
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     if (envShaderPath && fs::exists(envShaderPath))
     {
         m_shaderBasePath = envShaderPath;
+    }
+    else
+    {
+        m_shaderBasePath = (fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl").string();
     }
     scanShaders(m_shaderBasePath);
 
@@ -138,6 +148,8 @@ bool UIManager::init(void *window)
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
+    m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
+    m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
     m_configWindow->setJustOpened(true);
 
@@ -453,7 +465,7 @@ void UIManager::renderShaderPanel()
                 if (m_onSavePreset && strlen(m_savePresetPath) > 0)
                 {
                     // Construir caminho completo
-                    fs::path basePath("shaders/shaders_glsl");
+                    fs::path basePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
                     fs::path newPath = basePath / m_savePresetPath;
                     if (newPath.extension() != ".glslp")
                     {
@@ -1161,8 +1173,21 @@ void UIManager::renderInfoPanel()
 
 void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, const std::string &device)
 {
-    m_captureWidth = width;
-    m_captureHeight = height;
+    // width/height são o que o V4L2 entregou (depois do ajuste). Vão pra
+    // m_actualCaptureWidth/Height. Não sobrescrevemos m_captureWidth/Height
+    // (a preferência LÓGICA do usuário) — assim o campo de Resolution na UI
+    // continua mostrando a escolha do usuário, mesmo quando o dispositivo
+    // adjusta pra mais próxima suportada (e o pipeline faz downscale).
+    m_actualCaptureWidth = width;
+    m_actualCaptureHeight = height;
+    if (m_captureWidth == 0)
+    {
+        m_captureWidth = width;
+    }
+    if (m_captureHeight == 0)
+    {
+        m_captureHeight = height;
+    }
     m_captureFps = fps;
     m_captureDevice = device;
     if (m_currentDevice.empty())
@@ -2077,38 +2102,12 @@ void UIManager::scanShaders(const std::string &basePath)
 
 std::string UIManager::getConfigPath() const
 {
-#ifdef _WIN32
-    // Windows: usar APPDATA (ou LOCALAPPDATA como fallback)
-    const char *appDataDir = std::getenv("APPDATA");
-    if (!appDataDir)
+    std::string dir = Paths::getUserConfigDir();
+    if (!dir.empty())
     {
-        appDataDir = std::getenv("LOCALAPPDATA");
+        return (fs::path(dir) / "config.json").string();
     }
-    if (appDataDir)
-    {
-        fs::path configDir = fs::path(appDataDir) / "RetroCapture";
-        // Criar diretório se não existir
-        if (!fs::exists(configDir))
-        {
-            fs::create_directories(configDir);
-        }
-        return (configDir / "config.json").string();
-    }
-#else
-    // Linux/Unix: usar diretório home do usuário
-    const char *homeDir = std::getenv("HOME");
-    if (homeDir)
-    {
-        fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
-        // Criar diretório se não existir
-        if (!fs::exists(configDir))
-        {
-            fs::create_directories(configDir);
-        }
-        return (configDir / "config.json").string();
-    }
-#endif
-    // Fallback: salvar no diretório atual
+    // Fallback: cwd. Não esperado em uso real (sem $HOME / sem %APPDATA%).
     return "retrocapture_config.json";
 }
 
@@ -2193,6 +2192,12 @@ void UIManager::loadConfig()
                 m_captureHeight = capture["height"].get<uint32_t>();
             if (capture.contains("fps"))
                 m_captureFps = capture["fps"].get<uint32_t>();
+            if (capture.contains("sourceOverscanX"))
+                m_sourceOverscanPercentX = capture["sourceOverscanX"].get<float>();
+            if (capture.contains("sourceOverscanY"))
+                m_sourceOverscanPercentY = capture["sourceOverscanY"].get<float>();
+            if (capture.contains("sourceOverscanLocked"))
+                m_sourceOverscanLocked = capture["sourceOverscanLocked"].get<bool>();
         }
 
         // Carregar configurações de imagem
@@ -2393,6 +2398,10 @@ void UIManager::loadConfig()
             {
                 m_currentShader = shader["current"].get<std::string>();
             }
+            if (shader.contains("pipelineEnabled"))
+            {
+                m_shaderPipelineEnabled = shader["pipelineEnabled"].get<bool>();
+            }
         }
 
         // Carregar configurações de fonte
@@ -2474,6 +2483,15 @@ void UIManager::loadConfig()
                 m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
             if (recording.contains("includeAudio"))
                 m_recordingIncludeAudio = recording["includeAudio"];
+            if (recording.contains("applyShader"))
+                m_recordingApplyShader = recording["applyShader"].get<bool>();
+        }
+
+        if (config.contains("streaming"))
+        {
+            auto &streaming = config["streaming"];
+            if (streaming.contains("applyShader"))
+                m_streamingApplyShader = streaming["applyShader"].get<bool>();
         }
 
         LOG_INFO("Configuration loaded from: " + configPath);
@@ -2508,6 +2526,7 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
+            {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
         // Salvar configurações de imagem
@@ -2537,11 +2556,15 @@ void UIManager::saveConfig()
         config["capture"] = {
             {"width", m_captureWidth},
             {"height", m_captureHeight},
-            {"fps", m_captureFps}};
+            {"fps", m_captureFps},
+            {"sourceOverscanX", m_sourceOverscanPercentX},
+            {"sourceOverscanY", m_sourceOverscanPercentY},
+            {"sourceOverscanLocked", m_sourceOverscanLocked}};
 
         // Salvar shader atual
         config["shader"] = {
-            {"current", m_currentShader.empty() ? "" : m_currentShader}};
+            {"current", m_currentShader.empty() ? "" : m_currentShader},
+            {"pipelineEnabled", m_shaderPipelineEnabled}};
 
         // Salvar configurações de fonte
         config["source"] = {
@@ -2577,7 +2600,8 @@ void UIManager::saveConfig()
             {"container", m_recordingContainer},
             {"outputPath", m_recordingOutputPath},
             {"filenameTemplate", m_recordingFilenameTemplate},
-            {"includeAudio", m_recordingIncludeAudio}};
+            {"includeAudio", m_recordingIncludeAudio},
+            {"applyShader", m_recordingApplyShader}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -3149,4 +3173,183 @@ void UIManager::triggerRecordingStartStop(bool start)
     {
         m_onRecordingStartStop(start);
     }
+}
+
+// ----------------------------------------------------------------------
+// Recording profiles
+// ----------------------------------------------------------------------
+
+namespace {
+
+RecordingSettings collectRecordingSettings(const UIManager &ui)
+{
+    RecordingSettings s;
+    s.width = ui.getRecordingWidth();
+    s.height = ui.getRecordingHeight();
+    s.fps = ui.getRecordingFps();
+    s.bitrate = ui.getRecordingBitrate();
+    s.codec = ui.getRecordingVideoCodec();
+    // The struct has a single `preset` field; map it from the active codec.
+    if (s.codec == "h265" || s.codec == "hevc") s.preset = ui.getRecordingH265Preset();
+    else s.preset = ui.getRecordingH264Preset();
+    s.h265Profile = ui.getRecordingH265Profile();
+    s.h265Level = ui.getRecordingH265Level();
+    s.vp8Speed = ui.getRecordingVP8Speed();
+    s.vp9Speed = ui.getRecordingVP9Speed();
+    s.audioBitrate = ui.getRecordingAudioBitrate();
+    s.audioCodec = ui.getRecordingAudioCodec();
+    s.container = ui.getRecordingContainer();
+    s.outputPath = ui.getRecordingOutputPath();
+    s.filenameTemplate = ui.getRecordingFilenameTemplate();
+    s.includeAudio = ui.getRecordingIncludeAudio();
+    return s;
+}
+
+} // namespace
+
+std::vector<std::string> UIManager::listRecordingProfiles()
+{
+    if (!m_recordingProfileManager) return {};
+    return m_recordingProfileManager->list();
+}
+
+bool UIManager::recordingProfileExists(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    return m_recordingProfileManager->exists(name);
+}
+
+bool UIManager::saveRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    RecordingSettings s = collectRecordingSettings(*this);
+    return m_recordingProfileManager->save(name, s);
+}
+
+bool UIManager::deleteRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    return m_recordingProfileManager->remove(name);
+}
+
+bool UIManager::loadRecordingProfile(const std::string &name)
+{
+    if (!m_recordingProfileManager) return false;
+    RecordingSettings s;
+    if (!m_recordingProfileManager->load(name, s)) return false;
+
+    // Apply via triggerXxxChange for each field — that way the
+    // existing callbacks fire and the RecordingManager / on-disk config
+    // see the update exactly as if the user had moved each control by hand.
+    triggerRecordingVideoCodecChange(s.codec);
+    if (s.codec == "h265" || s.codec == "hevc")
+    {
+        triggerRecordingH265PresetChange(s.preset);
+    }
+    else
+    {
+        triggerRecordingH264PresetChange(s.preset);
+    }
+    triggerRecordingH265ProfileChange(s.h265Profile);
+    triggerRecordingH265LevelChange(s.h265Level);
+    triggerRecordingVP8SpeedChange(s.vp8Speed);
+    triggerRecordingVP9SpeedChange(s.vp9Speed);
+    triggerRecordingWidthChange(s.width);
+    triggerRecordingHeightChange(s.height);
+    triggerRecordingFpsChange(s.fps);
+    triggerRecordingBitrateChange(s.bitrate);
+    triggerRecordingAudioCodecChange(s.audioCodec);
+    triggerRecordingAudioBitrateChange(s.audioBitrate);
+    triggerRecordingContainerChange(s.container);
+    triggerRecordingOutputPathChange(s.outputPath);
+    triggerRecordingFilenameTemplateChange(s.filenameTemplate);
+    triggerRecordingIncludeAudioChange(s.includeAudio);
+    return true;
+}
+
+// ----------------------------------------------------------------------
+// Streaming profiles
+// ----------------------------------------------------------------------
+
+namespace {
+
+StreamingSettings collectStreamingSettings(const UIManager &ui)
+{
+    StreamingSettings s;
+    s.port = ui.getStreamingPort();
+    s.width = ui.getStreamingWidth();
+    s.height = ui.getStreamingHeight();
+    s.fps = ui.getStreamingFps();
+    s.bitrate = ui.getStreamingBitrate();
+    s.audioBitrate = ui.getStreamingAudioBitrate();
+    s.videoCodec = ui.getStreamingVideoCodec();
+    s.audioCodec = ui.getStreamingAudioCodec();
+    s.h264Preset = ui.getStreamingH264Preset();
+    s.h265Preset = ui.getStreamingH265Preset();
+    s.h265Profile = ui.getStreamingH265Profile();
+    s.h265Level = ui.getStreamingH265Level();
+    s.vp8Speed = ui.getStreamingVP8Speed();
+    s.vp9Speed = ui.getStreamingVP9Speed();
+    s.maxVideoBufferSize = ui.getStreamingMaxVideoBufferSize();
+    s.maxAudioBufferSize = ui.getStreamingMaxAudioBufferSize();
+    s.maxBufferTimeSeconds = ui.getStreamingMaxBufferTimeSeconds();
+    s.avioBufferSize = ui.getStreamingAVIOBufferSize();
+    return s;
+}
+
+} // namespace
+
+std::vector<std::string> UIManager::listStreamingProfiles()
+{
+    if (!m_streamingProfileManager) return {};
+    return m_streamingProfileManager->list();
+}
+
+bool UIManager::streamingProfileExists(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    return m_streamingProfileManager->exists(name);
+}
+
+bool UIManager::saveStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    StreamingSettings s = collectStreamingSettings(*this);
+    return m_streamingProfileManager->save(name, s);
+}
+
+bool UIManager::deleteStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    return m_streamingProfileManager->remove(name);
+}
+
+bool UIManager::loadStreamingProfile(const std::string &name)
+{
+    if (!m_streamingProfileManager) return false;
+    StreamingSettings s;
+    if (!m_streamingProfileManager->load(name, s)) return false;
+
+    // Apply via the existing triggerXxxChange setters so callbacks fire
+    // and the running streamer / persisted config see the update the
+    // same way they would if the user moved each control by hand.
+    triggerStreamingPortChange(s.port);
+    triggerStreamingVideoCodecChange(s.videoCodec);
+    triggerStreamingH264PresetChange(s.h264Preset);
+    triggerStreamingH265PresetChange(s.h265Preset);
+    triggerStreamingH265ProfileChange(s.h265Profile);
+    triggerStreamingH265LevelChange(s.h265Level);
+    triggerStreamingVP8SpeedChange(s.vp8Speed);
+    triggerStreamingVP9SpeedChange(s.vp9Speed);
+    triggerStreamingWidthChange(s.width);
+    triggerStreamingHeightChange(s.height);
+    triggerStreamingFpsChange(s.fps);
+    triggerStreamingBitrateChange(s.bitrate);
+    triggerStreamingAudioCodecChange(s.audioCodec);
+    triggerStreamingAudioBitrateChange(s.audioBitrate);
+    triggerStreamingMaxVideoBufferSizeChange(s.maxVideoBufferSize);
+    triggerStreamingMaxAudioBufferSizeChange(s.maxAudioBufferSize);
+    triggerStreamingMaxBufferTimeSecondsChange(s.maxBufferTimeSeconds);
+    triggerStreamingAVIOBufferSizeChange(s.avioBufferSize);
+    return true;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 #include <deque>
@@ -86,6 +87,12 @@ public:
     // Obter chunks de áudio de uma zona de sincronização
     std::vector<TimestampedAudio> getAudioChunks(const SyncZone &zone);
 
+    // Obter todos os chunks de áudio ainda não processados, sem gating
+    // por sync zone. Áudio é barato pra encodar e não precisa esperar o
+    // vídeo — drenar continuamente evita o synchronizer dropar chunks
+    // (que causa o áudio terminar antes do vídeo no arquivo).
+    std::vector<TimestampedAudio> getAllUnprocessedAudio();
+
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
     void markAudioProcessed(size_t startIdx, size_t endIdx);
@@ -106,6 +113,11 @@ public:
     size_t getAudioBufferSize() const;
     int64_t getLatestVideoTimestamp() const { return m_latestVideoTimestampUs; }
     int64_t getLatestAudioTimestamp() const { return m_latestAudioTimestampUs; }
+
+    // Contadores de frames/chunks descartados por overflow do buffer.
+    // Não-zero indica que o consumidor (encoder thread) não está acompanhando o produtor.
+    uint64_t getVideoDropCount() const { return m_videoDropCount.load(); }
+    uint64_t getAudioDropCount() const { return m_audioDropCount.load(); }
 
 private:
     // Obter timestamp atual em microssegundos
@@ -128,4 +140,9 @@ private:
     std::deque<TimestampedAudio> m_audioBuffer;
     int64_t m_latestAudioTimestampUs = 0;
     int64_t m_firstAudioTimestampUs = 0;
+
+    // Contadores de overflow. Atomic porque addVideoFrame/addAudioChunk são
+    // chamados de threads distintas dos getters.
+    std::atomic<uint64_t> m_videoDropCount{0};
+    std::atomic<uint64_t> m_audioDropCount{0};
 };

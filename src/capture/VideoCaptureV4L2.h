@@ -72,5 +72,8 @@ private:
     void cleanupBuffers();
     void generateDummyFrame(Frame &frame);
     uint32_t getControlIdFromName(const std::string &controlName);
+    
+    // Helper function to handle device disconnection
+    bool handleDeviceDisconnection(int err, const std::string &operation);
 };
 

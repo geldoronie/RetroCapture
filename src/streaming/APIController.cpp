@@ -145,6 +145,22 @@ bool APIController::handleRequest(int clientFd, const std::string &request)
                 return handleDeletePreset(clientFd, presetName);
             }
         }
+        else if (path.find("/api/v1/recording/profiles/") == 0)
+        {
+            std::string name = path.substr(27); // length of "/api/v1/recording/profiles/"
+            if (!name.empty())
+            {
+                return handleDeleteRecordingProfile(clientFd, name);
+            }
+        }
+        else if (path.find("/api/v1/streaming/profiles/") == 0)
+        {
+            std::string name = path.substr(27); // length of "/api/v1/streaming/profiles/"
+            if (!name.empty())
+            {
+                return handleDeleteStreamingProfile(clientFd, name);
+            }
+        }
         else if (path.find("/api/v1/recordings/") == 0)
         {
             std::string recordingId = path.substr(19); // Length of "/api/v1/recordings/"
@@ -446,6 +462,18 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETAudioStatus(clientFd);
     }
+    else if (path == "/api/v1/recording/profiles")
+    {
+        return handleGETRecordingProfiles(clientFd);
+    }
+    else if (path == "/api/v1/streaming/profiles")
+    {
+        return handleGETStreamingProfiles(clientFd);
+    }
+    else if (path == "/api/v1/source/overscan")
+    {
+        return handleGETSourceOverscan(clientFd);
+    }
 
     send404(clientFd);
     return true;
@@ -534,6 +562,40 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleDisconnectAudioInput(clientFd);
     }
+    else if (path == "/api/v1/source/overscan")
+    {
+        return handleSetSourceOverscan(clientFd, body);
+    }
+    else if (path == "/api/v1/recording/profiles")
+    {
+        return handleSaveRecordingProfile(clientFd, body);
+    }
+    else if (path.find("/api/v1/recording/profiles/") == 0 && path.find("/apply") != std::string::npos)
+    {
+        // /api/v1/recording/profiles/{name}/apply
+        constexpr size_t prefixLen = 27; // length of "/api/v1/recording/profiles/"
+        size_t applyPos = path.find("/apply");
+        if (applyPos != std::string::npos && applyPos > prefixLen)
+        {
+            std::string name = path.substr(prefixLen, applyPos - prefixLen);
+            if (!name.empty()) return handleApplyRecordingProfile(clientFd, name);
+        }
+    }
+    else if (path == "/api/v1/streaming/profiles")
+    {
+        return handleSaveStreamingProfile(clientFd, body);
+    }
+    else if (path.find("/api/v1/streaming/profiles/") == 0 && path.find("/apply") != std::string::npos)
+    {
+        // /api/v1/streaming/profiles/{name}/apply
+        constexpr size_t prefixLen = 27; // length of "/api/v1/streaming/profiles/"
+        size_t applyPos = path.find("/apply");
+        if (applyPos != std::string::npos && applyPos > prefixLen)
+        {
+            std::string name = path.substr(prefixLen, applyPos - prefixLen);
+            if (!name.empty()) return handleApplyStreamingProfile(clientFd, name);
+        }
+    }
 
     send404(clientFd);
     return true;
@@ -550,7 +612,24 @@ bool APIController::handlePUT(int clientFd, const std::string &path, const std::
             return handlePUTRecording(clientFd, recordingId, body);
         }
     }
-    
+
+    // PUT /api/v1/presets/{name}/parameters — patch the stored shader
+    // parameters of an existing preset without touching the rest of it.
+    if (path.find("/api/v1/presets/") == 0)
+    {
+        constexpr size_t prefixLen = 16; // length of "/api/v1/presets/"
+        const std::string suffix = "/parameters";
+        if (path.size() > prefixLen + suffix.size() &&
+            path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0)
+        {
+            std::string name = path.substr(prefixLen, path.size() - prefixLen - suffix.size());
+            if (!name.empty() && name.find('/') == std::string::npos)
+            {
+                return handleUpdatePresetParameters(clientFd, name, body);
+            }
+        }
+    }
+
     // PUT usa os mesmos handlers que POST para outros endpoints
     return handlePOST(clientFd, path, body);
 }
@@ -580,7 +659,9 @@ bool APIController::handleGETShader(int clientFd)
     }
 
     std::ostringstream json;
-    json << "{\"name\": " << jsonString(m_uiManager->getCurrentShader()) << "}";
+    json << "{\"name\": " << jsonString(m_uiManager->getCurrentShader())
+         << ", \"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled())
+         << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
@@ -698,6 +779,70 @@ bool APIController::handleGETImageSettings(int clientFd)
     return true;
 }
 
+bool APIController::handleGETSourceOverscan(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    std::ostringstream out;
+    out << "{"
+        << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+        << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+        << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+        << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSetSourceOverscan(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        // `locked` updated first so the X/Y setters mirror correctly.
+        if (json.contains("locked") && json["locked"].is_boolean())
+        {
+            m_uiManager->setSourceOverscanLocked(json["locked"].get<bool>());
+        }
+        if (json.contains("x") && json["x"].is_number())
+        {
+            float x = json["x"].get<float>();
+            if (x < 0.0f) x = 0.0f;
+            if (x > 30.0f) x = 30.0f;
+            m_uiManager->setSourceOverscanPercentX(x);
+        }
+        if (json.contains("y") && json["y"].is_number())
+        {
+            float y = json["y"].get<float>();
+            if (y < 0.0f) y = 0.0f;
+            if (y > 30.0f) y = 30.0f;
+            m_uiManager->setSourceOverscanPercentY(y);
+        }
+        m_uiManager->saveConfig();
+
+        std::ostringstream out;
+        out << "{"
+            << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+            << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+            << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+            << "}";
+        sendJSONResponse(clientFd, 200, out.str());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
 bool APIController::handleGETStreamingSettings(int clientFd)
 {
     if (!m_uiManager)
@@ -721,7 +866,8 @@ bool APIController::handleGETStreamingSettings(int clientFd)
          << "\"h265Profile\": " << jsonString(m_uiManager->getStreamingH265Profile()) << ", "
          << "\"h265Level\": " << jsonString(m_uiManager->getStreamingH265Level()) << ", "
          << "\"vp8Speed\": " << jsonNumber(m_uiManager->getStreamingVP8Speed()) << ", "
-         << "\"vp9Speed\": " << jsonNumber(m_uiManager->getStreamingVP9Speed())
+         << "\"vp9Speed\": " << jsonNumber(m_uiManager->getStreamingVP9Speed()) << ", "
+         << "\"applyShader\": " << jsonBool(m_uiManager->getStreamingApplyShader())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -954,23 +1100,41 @@ bool APIController::handleSetShader(int clientFd, const std::string &body)
     try
     {
         nlohmann::json json = nlohmann::json::parse(body);
+
+        // Master pipeline toggle: independent of the selected shader path
+        // so the user can A/B compare the effect on/off without losing
+        // their preset choice.
+        bool pipelineTouched = false;
+        if (json.contains("pipelineEnabled") && json["pipelineEnabled"].is_boolean())
+        {
+            m_uiManager->setShaderPipelineEnabled(json["pipelineEnabled"].get<bool>());
+            pipelineTouched = true;
+        }
+
         if (json.contains("shader"))
         {
             std::string shader = json["shader"].get<std::string>();
-
-            // setCurrentShader agora dispara o callback automaticamente
+            // setCurrentShader dispara o callback automaticamente
             m_uiManager->setCurrentShader(shader);
 
             std::ostringstream response;
-            response << "{\"success\": true, \"shader\": " << jsonString(shader) << "}";
+            response << "{\"success\": true, \"shader\": " << jsonString(shader)
+                     << ", \"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled())
+                     << "}";
             sendJSONResponse(clientFd, 200, response.str());
             return true;
         }
-        else
+
+        if (pipelineTouched)
         {
-            sendErrorResponse(clientFd, 400, "Missing 'shader' field");
+            std::ostringstream response;
+            response << "{\"success\": true, \"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled()) << "}";
+            sendJSONResponse(clientFd, 200, response.str());
             return true;
         }
+
+        sendErrorResponse(clientFd, 400, "Missing 'shader' or 'pipelineEnabled' field");
+        return true;
     }
     catch (const std::exception &e)
     {
@@ -1341,6 +1505,14 @@ bool APIController::handleSetStreamingSettings(int clientFd, const std::string &
             updated = true;
         }
 
+        if (json.contains("applyShader") && json["applyShader"].is_boolean())
+        {
+            m_uiManager->setStreamingApplyShader(json["applyShader"].get<bool>());
+            updated = true;
+        }
+
+        if (updated) m_uiManager->saveConfig();
+
         std::ostringstream response;
         response << "{\"success\": " << jsonBool(updated) << "}";
         sendJSONResponse(clientFd, 200, response.str());
@@ -1693,6 +1865,246 @@ bool APIController::handleDeletePreset(int clientFd, const std::string& presetNa
     }
 }
 
+bool APIController::handleUpdatePresetParameters(int clientFd, const std::string &presetName, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        if (!json.contains("parameters") || !json["parameters"].is_object())
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'parameters' object in body");
+            return true;
+        }
+
+        PresetManager presetManager;
+        PresetManager::PresetData data;
+        if (!presetManager.loadPreset(presetName, data))
+        {
+            sendErrorResponse(clientFd, 404, "Preset not found: " + presetName);
+            return true;
+        }
+
+        // Replace stored parameter values. Names not present in the
+        // request are dropped — the caller is expected to send the
+        // full set they want persisted.
+        data.shaderParameters.clear();
+        for (auto it = json["parameters"].begin(); it != json["parameters"].end(); ++it)
+        {
+            if (!it.value().is_number()) continue;
+            data.shaderParameters[it.key()] = it.value().get<float>();
+        }
+
+        if (!presetManager.savePreset(presetName, data))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to save preset");
+            return true;
+        }
+
+        std::ostringstream response;
+        response << "{\"success\": true, \"name\": " << jsonString(presetName)
+                 << ", \"parameters\": " << static_cast<int>(data.shaderParameters.size()) << "}";
+        sendJSONResponse(clientFd, 200, response.str());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+// ----------------------------------------------------------------------
+// Recording profiles
+// ----------------------------------------------------------------------
+
+bool APIController::handleGETRecordingProfiles(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    auto names = m_uiManager->listRecordingProfiles();
+    std::ostringstream out;
+    out << "{\"profiles\": [";
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (i) out << ",";
+        out << jsonString(names[i]);
+    }
+    out << "]}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSaveRecordingProfile(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json j = nlohmann::json::parse(body);
+        if (!j.contains("name") || !j["name"].is_string())
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'name' field");
+            return true;
+        }
+        std::string name = j["name"].get<std::string>();
+        if (!m_uiManager->saveRecordingProfile(name))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to save recording profile");
+            return true;
+        }
+        std::ostringstream out;
+        out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+        sendJSONResponse(clientFd, 200, out.str());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleApplyRecordingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->loadRecordingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Recording profile not found or failed to load: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleDeleteRecordingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->deleteRecordingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Recording profile not found: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+// ----------------------------------------------------------------------
+// Streaming profiles
+// ----------------------------------------------------------------------
+
+bool APIController::handleGETStreamingProfiles(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    auto names = m_uiManager->listStreamingProfiles();
+    std::ostringstream out;
+    out << "{\"profiles\": [";
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (i) out << ",";
+        out << jsonString(names[i]);
+    }
+    out << "]}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSaveStreamingProfile(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json j = nlohmann::json::parse(body);
+        if (!j.contains("name") || !j["name"].is_string())
+        {
+            sendErrorResponse(clientFd, 400, "Missing 'name' field");
+            return true;
+        }
+        std::string name = j["name"].get<std::string>();
+        if (!m_uiManager->saveStreamingProfile(name))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to save streaming profile");
+            return true;
+        }
+        std::ostringstream out;
+        out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+        sendJSONResponse(clientFd, 200, out.str());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleApplyStreamingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->loadStreamingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Streaming profile not found or failed to load: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleDeleteStreamingProfile(int clientFd, const std::string &name)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    if (!m_uiManager->deleteStreamingProfile(name))
+    {
+        sendErrorResponse(clientFd, 404, "Streaming profile not found: " + name);
+        return true;
+    }
+    std::ostringstream out;
+    out << "{\"success\": true, \"name\": " << jsonString(name) << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
 // Recording handlers
 bool APIController::handleGETRecordingSettings(int clientFd)
 {
@@ -1720,7 +2132,8 @@ bool APIController::handleGETRecordingSettings(int clientFd)
          << "\"container\": " << jsonString(m_uiManager->getRecordingContainer()) << ", "
          << "\"outputPath\": " << jsonString(m_uiManager->getRecordingOutputPath()) << ", "
          << "\"filenameTemplate\": " << jsonString(m_uiManager->getRecordingFilenameTemplate()) << ", "
-         << "\"includeAudio\": " << (m_uiManager->getRecordingIncludeAudio() ? "true" : "false")
+         << "\"includeAudio\": " << (m_uiManager->getRecordingIncludeAudio() ? "true" : "false") << ", "
+         << "\"applyShader\": " << jsonBool(m_uiManager->getRecordingApplyShader())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -1869,6 +2282,11 @@ bool APIController::handleSetRecordingSettings(int clientFd, const std::string& 
             m_uiManager->triggerRecordingFilenameTemplateChange(json["filenameTemplate"].get<std::string>());
         if (json.contains("includeAudio"))
             m_uiManager->triggerRecordingIncludeAudioChange(json["includeAudio"].get<bool>());
+        if (json.contains("applyShader") && json["applyShader"].is_boolean())
+        {
+            m_uiManager->setRecordingApplyShader(json["applyShader"].get<bool>());
+            m_uiManager->saveConfig();
+        }
 
         sendJSONResponse(clientFd, 200, "{\"success\": true}");
         return true;

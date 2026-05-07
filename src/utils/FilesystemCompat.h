@@ -556,6 +556,16 @@ namespace fs_helper
         return iter.path();
     }
 
+    inline bool is_regular_file(const fs::directory_iterator& iter)
+    {
+        return iter.is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::directory_iterator& iter)
+    {
+        return iter.path();
+    }
+
     inline std::string get_extension_string(const fs::path& p)
     {
         return p.extension(); // Custom implementation retorna string diretamente
@@ -579,6 +589,16 @@ namespace fs_helper
     }
 
     inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline bool is_regular_file(const fs::directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::directory_iterator& iter)
     {
         return iter->path();
     }
@@ -610,6 +630,16 @@ namespace fs_helper
         return iter->path();
     }
 
+    inline bool is_regular_file(const fs::directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
     inline std::string get_extension_string(const fs::path& p)
     {
         return p.extension().string(); // std::filesystem retorna path, precisa .string()
@@ -637,6 +667,16 @@ namespace fs_helper
         return iter->path();
     }
 
+    inline bool is_regular_file(const fs::directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
     inline std::string get_extension_string(const fs::path& p)
     {
         return p.extension().string(); // std::filesystem retorna path, precisa .string()
@@ -660,6 +700,16 @@ namespace fs_helper
     }
 
     inline fs::path get_path(const fs::recursive_directory_iterator& iter)
+    {
+        return iter->path();
+    }
+
+    inline bool is_regular_file(const fs::directory_iterator& iter)
+    {
+        return iter->is_regular_file();
+    }
+
+    inline fs::path get_path(const fs::directory_iterator& iter)
     {
         return iter->path();
     }

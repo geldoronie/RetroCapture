@@ -32,10 +32,13 @@ fi
 # Versão da aplicação (obtida do CMakeLists.txt)
 # Suporta versões com sufixos como -alpha, -beta, etc.
 VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.5.0-alpha")
+# Sufixo -alpha pra alinhar com convenção das tags (CMake VERSION é só numérica)
+RELEASE_VERSION="${VERSION}-alpha"
 APP_NAME="RetroCapture"
 APP_ID="com.retrocapture.app"
 APP_DIR="AppDir"
 APPIMAGE_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
+RELEASE_APPIMAGE="${APP_NAME}-${RELEASE_VERSION}-linux-x86_64.AppImage"
 
 # Limpar builds anteriores e artefatos
 echo "Limpando builds anteriores e artefatos..."
@@ -134,15 +137,18 @@ fi
 
 # Verificar se o AppImage foi gerado
 if [ -f "$APPIMAGE_NAME" ]; then
+    # Mover pra dist/ com nome de release padronizado (linux-x86_64 + sufixo -alpha)
+    mkdir -p dist
+    mv "$APPIMAGE_NAME" "dist/$RELEASE_APPIMAGE"
     echo ""
     echo "✅ === AppImage gerada com sucesso! ==="
-    echo "📦 Arquivo: $APPIMAGE_NAME"
-    echo "📏 Tamanho: $(du -h "$APPIMAGE_NAME" | cut -f1)"
-    echo "📍 Localização: $(pwd)/$APPIMAGE_NAME"
+    echo "📦 Arquivo: dist/$RELEASE_APPIMAGE"
+    echo "📏 Tamanho: $(du -h "dist/$RELEASE_APPIMAGE" | cut -f1)"
+    echo "📍 Localização: $(pwd)/dist/$RELEASE_APPIMAGE"
     echo ""
     echo "Para executar:"
-    echo "  chmod +x $APPIMAGE_NAME"
-    echo "  ./$APPIMAGE_NAME"
+    echo "  chmod +x dist/$RELEASE_APPIMAGE"
+    echo "  ./dist/$RELEASE_APPIMAGE"
     exit 0
 else
     echo "❌ Erro: AppImage não foi gerada"

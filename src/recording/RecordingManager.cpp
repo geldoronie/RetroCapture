@@ -1,5 +1,6 @@
 #include "RecordingManager.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include "../utils/FilesystemCompat.h"
 #include <fstream>
 #include <ctime>
@@ -57,8 +58,28 @@ std::string RecordingManager::generateFilename(const RecordingSettings &settings
         filename += ".mp4"; // Default
     }
 
-    // Build full path
+    // Build full path. Path relativo (ex: "recordings/" default) é resolvido
+    // contra o diretório Videos do usuário; absoluto é honrado como está.
     fs::path outputDir(settings.outputPath);
+    if (outputDir.is_relative())
+    {
+        std::string videos = Paths::getDefaultRecordingsDir();
+        if (!videos.empty())
+        {
+            // "recordings/" relativo vira <Videos>/RetroCapture/. Path com
+            // sub-diretório (ex: "retro/snes/") é tratado como sub do Videos.
+            if (settings.outputPath == "recordings/" ||
+                settings.outputPath == "recordings" ||
+                settings.outputPath.empty())
+            {
+                outputDir = videos;
+            }
+            else
+            {
+                outputDir = fs::path(videos) / settings.outputPath;
+            }
+        }
+    }
     fs::path fullPath = outputDir / filename;
 
     return fullPath.string();
@@ -209,6 +230,7 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     m_stopRequest = false;
     m_running = true;
     m_recording = true;
+    m_encodingThreadExited.store(false, std::memory_order_relaxed);
     m_encodingThread = std::thread(&RecordingManager::encodingThread, this);
 
     {
@@ -231,10 +253,29 @@ void RecordingManager::stopRecording()
 
     m_stopRequest = true;
 
-    // Wait for encoding thread to finish
+    // Wait for encoding thread to finish, but bail after a deadline so the app
+    // can shut down even if the thread is stuck inside FFmpeg. MediaMuxer's
+    // cleanup is intentionally non-destructive (it sets m_initialized=false
+    // without freeing FFmpeg resources), so a detached thread that keeps
+    // calling muxPacket fails-fast on that flag instead of crashing.
     if (m_encodingThread.joinable())
     {
-        m_encodingThread.join();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline &&
+               !m_encodingThreadExited.load(std::memory_order_acquire))
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        if (m_encodingThreadExited.load(std::memory_order_acquire))
+        {
+            m_encodingThread.join();
+        }
+        else
+        {
+            LOG_ERROR("RecordingManager: encoding thread did not exit within 5s — detaching");
+            m_encodingThread.detach();
+        }
     }
 
     // Flush encoder and get remaining packets
@@ -388,6 +429,41 @@ void RecordingManager::encodingThread()
             cleanupCounter = 0;
         }
 
+        // Drain de áudio independente do sync zone. Audio é cheap pra
+        // encodar (AAC ~256 kbps); deixar audio gated pelo sync zone
+        // empilhava chunks no synchronizer enquanto o video estava lento,
+        // que então dropava do front e o áudio terminava antes do vídeo.
+        // Agora processamos áudio sempre que tiver, e o vídeo segue seu
+        // próprio ritmo.
+        if (m_settings.includeAudio && m_audioSampleRate > 0 && m_audioChannels > 0)
+        {
+            auto pendingAudio = m_synchronizer.getAllUnprocessedAudio();
+            for (const auto &chunk : pendingAudio)
+            {
+                if (m_stopRequest) break;
+                if (chunk.processed || !chunk.samples || chunk.sampleCount == 0) continue;
+
+                std::vector<MediaEncoder::EncodedPacket> aPackets;
+                if (m_encoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
+                                          chunk.captureTimestampUs, aPackets))
+                {
+                    for (const auto &p : aPackets)
+                    {
+                        if (!m_recorder.muxPacket(p))
+                        {
+                            static int audioMuxErrorCount = 0;
+                            if (audioMuxErrorCount++ < 3)
+                            {
+                                LOG_ERROR("RecordingManager: Failed to mux audio packet (drain)");
+                            }
+                        }
+                    }
+                    processedAny = true;
+                }
+                m_synchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
+            }
+        }
+
         // Check for backlog
         size_t videoBufferSize = m_synchronizer.getVideoBufferSize();
         size_t audioBufferSize = m_synchronizer.getAudioBufferSize();
@@ -428,50 +504,22 @@ void RecordingManager::encodingThread()
             }
         }
 
-        // If no valid sync zone, check if we can process video-only
+        // Sem sync zone válido: processa vídeo sozinho. Áudio já foi
+        // drenado acima, então não precisamos esperar nada por ele.
         if (!syncZone.isValid())
         {
-            // If audio is not included or not available, process video-only
-            if (!m_settings.includeAudio || m_audioSampleRate == 0 || m_audioChannels == 0)
+            if (videoBufferSize > 0)
             {
-                // Process video frames without audio synchronization
-                size_t videoBufferSize = m_synchronizer.getVideoBufferSize();
-                if (videoBufferSize > 0)
-                {
-                    // Create a fake sync zone for video-only processing
-                    // Note: isValid() requires audioEndIdx > audioStartIdx, so we set it to 1
-                    syncZone = MediaSynchronizer::SyncZone();
-                    syncZone.videoStartIdx = 0;
-                    syncZone.videoEndIdx = std::min(videoBufferSize, static_cast<size_t>(2)); // Process up to 2 frames
-                    syncZone.audioStartIdx = 0;
-                    syncZone.audioEndIdx = 1; // Set to 1 to pass isValid() check, but we won't process audio
-                    syncZone.startTimeUs = 0;
-                    syncZone.endTimeUs = 1; // Set to 1 to pass isValid() check (startTimeUs < endTimeUs)
-
-                    static bool firstVideoOnlyLog = false;
-                    if (!firstVideoOnlyLog)
-                    {
-                        LOG_INFO("RecordingManager: Processing video-only (no audio sync required)");
-                        firstVideoOnlyLog = true;
-                    }
-                }
-                else
-                {
-                    // No video frames yet - wait a bit
-                    static int noFramesLogCounter = 0;
-                    noFramesLogCounter++;
-                    if (noFramesLogCounter == 1 || noFramesLogCounter % 100 == 0)
-                    {
-                        LOG_INFO("RecordingManager: Waiting for video frames (buffer empty)");
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    continue;
-                }
+                syncZone = MediaSynchronizer::SyncZone();
+                syncZone.videoStartIdx = 0;
+                syncZone.videoEndIdx = std::min(videoBufferSize, static_cast<size_t>(2));
+                syncZone.audioStartIdx = 0;
+                syncZone.audioEndIdx = 1; // satisfaz isValid()
+                syncZone.startTimeUs = 0;
+                syncZone.endTimeUs = 1;
             }
             else
             {
-                // Audio is required but sync zone is invalid - wait for both
-                // Don't process video-only when audio is required to maintain sync
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -536,95 +584,13 @@ void RecordingManager::encodingThread()
                 }
             }
 
-            // Get synchronized audio chunks (only if audio is included and available)
-            std::vector<MediaSynchronizer::TimestampedAudio> audioChunks;
-            if (m_settings.includeAudio && m_audioSampleRate > 0 && m_audioChannels > 0 && syncZone.audioEndIdx > syncZone.audioStartIdx)
-            {
-                audioChunks = m_synchronizer.getAudioChunks(syncZone);
-            }
+            // Áudio já foi drenado no topo da iteração — aqui só vídeo.
 
-            // Process audio chunks
-            // Use same limits as streaming for consistency
-            size_t chunksProcessed = 0;
-            size_t MAX_CHUNKS_PER_ITERATION = hasBacklog ? 8 : 3; // Same as streaming
-
-            for (const auto &chunk : audioChunks)
-            {
-                if (m_stopRequest)
-                {
-                    break;
-                }
-
-                if (chunksProcessed >= MAX_CHUNKS_PER_ITERATION)
-                {
-                    break;
-                }
-
-                if (!chunk.processed && chunk.samples && chunk.sampleCount > 0)
-                {
-                    // Encode audio
-                    std::vector<MediaEncoder::EncodedPacket> packets;
-                    if (m_encoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
-                                              chunk.captureTimestampUs, packets))
-                    {
-                        // Mux packets
-                        for (const auto &packet : packets)
-                        {
-                            if (!m_recorder.muxPacket(packet))
-                            {
-                                static int audioMuxErrorCount = 0;
-                                if (audioMuxErrorCount++ < 3)
-                                {
-                                    LOG_ERROR("RecordingManager: Failed to mux audio packet");
-                                }
-                            }
-                        }
-                        processedAny = true;
-                        chunksProcessed++;
-
-                        // Log first successful audio chunk
-                        static bool firstAudioLogged = false;
-                        if (!firstAudioLogged)
-                        {
-                            LOG_INFO("RecordingManager: First audio chunk encoded and muxed successfully (" +
-                                     std::to_string(chunk.sampleCount) + " samples)");
-                            firstAudioLogged = true;
-                        }
-                    }
-                    else
-                    {
-                        static int audioEncodeErrorCount = 0;
-                        if (audioEncodeErrorCount++ < 3)
-                        {
-                            LOG_WARN("RecordingManager: Failed to encode audio chunk (" +
-                                     std::to_string(chunk.sampleCount) + " samples)");
-                        }
-                    }
-                }
-            }
-
-            // CRITICAL: Mark only frames that were actually processed
-            // Since frames are sorted by timestamp, we need to mark them individually
-            // to avoid marking wrong frames as processed
+            // Marcar frames de vídeo processados (não áudio).
             for (const auto &frame : videoFrames)
             {
-                if (frame.processed || !frame.data)
-                    continue; // Skip if already processed or invalid
-
-                // Find and mark this specific frame in the buffer
-                // We need to find it by timestamp since order may have changed
+                if (frame.processed || !frame.data) continue;
                 m_synchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
-            }
-
-            // Mark audio chunks as processed
-            if (syncZone.audioEndIdx > syncZone.audioStartIdx)
-            {
-                for (const auto &chunk : audioChunks)
-                {
-                    if (chunk.processed || !chunk.samples)
-                        continue;
-                    m_synchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
-                }
             }
 
             // Update status
@@ -659,6 +625,8 @@ void RecordingManager::encodingThread()
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
+
+    m_encodingThreadExited.store(true, std::memory_order_release);
 }
 
 uint64_t RecordingManager::getCurrentDurationUs()

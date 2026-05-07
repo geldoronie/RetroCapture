@@ -30,7 +30,10 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     // EXTRAIR parâmetros de #pragma parameter ANTES de remover
     // Formato: #pragma parameter paramName "Description" default min max step
     std::map<std::string, float> paramDefaults; // Nome -> valor padrão
-    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)");
+    // Aceita default/min/max/step com sinal opcional. Sem o `-?` os pragmas com
+    // min negativo (ex: `x_tilt ... 0.0 -0.5 ...` em crt-geom) eram silenciosamente
+    // descartados, deixando o uniform em 0 e quebrando shaders que dividem por ele.
+    std::regex pragmaParamRegex("#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]*)\"\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)");
     auto pragmaBegin = std::sregex_iterator(processedSource.begin(), processedSource.end(), pragmaParamRegex);
     auto pragmaEnd = std::sregex_iterator();
     for (std::sregex_iterator i = pragmaBegin; i != pragmaEnd; ++i)
@@ -163,10 +166,17 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
         precisionLine = "precision mediump float;\nprecision mediump int;\n";
     }
     
+    // Só ativar PARAMETER_UNIFORM quando o shader DECLARA #pragma parameter.
+    // Shaders como os do crt-royale escondem dezenas de uniforms atrás desse
+    // ifdef e dependem do branch #else (com defaults _static) quando não há
+    // pragma. Definir incondicionalmente fazia esses uniforms ficarem em 0,
+    // colapsando a matemática (sigma=0 → Gaussian = 0 → tela preta).
+    const std::string paramDefine = paramDefaults.empty() ? "" : "#define PARAMETER_UNIFORM\n";
+
     // Construir fontes finais com defines
     // Ordem: version + precision (se ES) + extension (se Desktop) + defines + código
-    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n#define PARAMETER_UNIFORM\n" + vertexCode;
-    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n#define PARAMETER_UNIFORM\n" + fragmentCode;
+    result.vertexSource = versionLine + precisionLine + extensionLine + "#define VERTEX\n" + paramDefine + vertexCode;
+    result.fragmentSource = versionLine + precisionLine + extensionLine + "#define FRAGMENT\n" + paramDefine + fragmentCode;
 
     return result;
 }
@@ -174,12 +184,42 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
 std::string ShaderPreprocessor::processIncludes(const std::string& source, const std::string& basePath)
 {
     std::string result = source;
-    std::regex includeRegex(R"(#include\s+["<]([^">]+)[">])");
+    // Pattern usado por linha — sem multiline flag (não existe no MinGW
+    // antigo do build Windows). Itera linha-a-linha; só processa includes
+    // que estão no começo da linha (após whitespace), ignorando os que
+    // estão dentro de comentário `// ...` (ex: crt-royale tem dezenas).
+    std::regex includeRegex(R"([ \t]*#include\s+["<]([^">]+)[">].*)");
     std::smatch match;
 
     // Processar todos os includes
-    while (std::regex_search(result, match, includeRegex))
+    while (true)
     {
+        // Localiza a próxima linha que case com `^[ \t]*#include ...`.
+        size_t includeLineStart = std::string::npos;
+        size_t includeLineEnd = 0;
+        size_t lineStart = 0;
+        while (lineStart < result.size())
+        {
+            size_t lineEnd = result.find('\n', lineStart);
+            std::string line = (lineEnd == std::string::npos)
+                ? result.substr(lineStart)
+                : result.substr(lineStart, lineEnd - lineStart);
+            if (std::regex_match(line, match, includeRegex))
+            {
+                includeLineStart = lineStart;
+                includeLineEnd = (lineEnd == std::string::npos) ? result.size() : lineEnd;
+                break;
+            }
+            if (lineEnd == std::string::npos) break;
+            lineStart = lineEnd + 1;
+        }
+        if (includeLineStart == std::string::npos)
+        {
+            break; // nenhum include real restante
+        }
+        // Daqui em diante, `match[1]` é o path do include — segue o fluxo
+        // de resolução abaixo, que termina substituindo a linha em
+        // `[includeLineStart, includeLineEnd)` pelo conteúdo carregado.
         std::string includePath = match[1].str();
         std::string fullPath;
 
@@ -260,22 +300,24 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
                 std::string includeDir = includeFilePath.parent_path().string();
                 includeContent = processIncludes(includeContent, includeDir);
 
-                // Substituir o #include pelo conteúdo
-                result = std::regex_replace(result, includeRegex, includeContent, std::regex_constants::format_first_only);
+                // Substituir a LINHA do #include pelo conteúdo (preserva
+                // a estrutura do arquivo e evita pegar `// #include` de
+                // comentários, que regex_replace pegaria).
+                result.replace(includeLineStart, includeLineEnd - includeLineStart, includeContent);
                 LOG_INFO("Arquivo incluído: " + fullPath);
             }
             else
             {
                 LOG_WARN("Falha ao abrir arquivo incluído: " + fullPath);
                 // Remover o #include que falhou
-                result = std::regex_replace(result, includeRegex, "", std::regex_constants::format_first_only);
+                result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
             }
         }
         else
         {
             LOG_WARN("Arquivo incluído não encontrado: " + includePath);
             // Remover o #include que falhou
-            result = std::regex_replace(result, includeRegex, "", std::regex_constants::format_first_only);
+            result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
         }
     }
 

@@ -119,6 +119,8 @@ private:
     bool handleRefreshDSDevices(int clientFd);
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
+    bool handleGETSourceOverscan(int clientFd);
+    bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
 
@@ -145,8 +147,21 @@ private:
     bool handleCreatePreset(int clientFd, const std::string &body);
     bool handleApplyPreset(int clientFd, const std::string &body);
     bool handleDeletePreset(int clientFd, const std::string &presetName);
+    bool handleUpdatePresetParameters(int clientFd, const std::string &presetName, const std::string &body);
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
+
+    // Recording profiles (saved snapshots of recording configuration)
+    bool handleGETRecordingProfiles(int clientFd);
+    bool handleSaveRecordingProfile(int clientFd, const std::string &body);
+    bool handleApplyRecordingProfile(int clientFd, const std::string &name);
+    bool handleDeleteRecordingProfile(int clientFd, const std::string &name);
+
+    // Streaming profiles (saved snapshots of streaming configuration)
+    bool handleGETStreamingProfiles(int clientFd);
+    bool handleSaveStreamingProfile(int clientFd, const std::string &body);
+    bool handleApplyStreamingProfile(int clientFd, const std::string &name);
+    bool handleDeleteStreamingProfile(int clientFd, const std::string &name);
 
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;

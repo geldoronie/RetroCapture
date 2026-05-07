@@ -1,5 +1,6 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
+#include "../utils/Logger.h"
 #include <imgui.h>
 #include <algorithm>
 
@@ -21,14 +22,33 @@ void UIConfigurationStreaming::render()
 
     renderStreamingStatus();
     ImGui::Separator();
+    renderProfiles();
+    ImGui::Separator();
+    {
+        bool apply = m_uiManager->getStreamingApplyShader();
+        if (ImGui::Checkbox("Apply shader to stream", &apply))
+        {
+            m_uiManager->setStreamingApplyShader(apply);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("When off, the stream pushes the raw pre-shader source\n"
+                              "even though the live preview shows the shader applied.\n"
+                              "Useful to broadcast a clean feed while keeping the CRT\n"
+                              "look on screen.");
+        }
+        ImGui::Separator();
+    }
     renderBasicSettings();
     ImGui::Separator();
     renderCodecSettings();
     ImGui::Separator();
     renderBitrateSettings();
     ImGui::Separator();
-    renderAdvancedBufferSettings();
-    ImGui::Separator();
+    // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
+    // is not surfaced in the UI anymore — defaults work for the vast
+    // majority of cases. Power users can still override via config.json.
     renderStartStopButton();
 }
 
@@ -59,6 +79,139 @@ void UIConfigurationStreaming::renderStreamingStatus()
             ImGui::Text("URL: %s", url.c_str());
         }
         ImGui::Text("Clientes conectados: %u", m_uiManager->getStreamClientCount());
+    }
+}
+
+void UIConfigurationStreaming::refreshProfiles()
+{
+    m_profileNames = m_uiManager->listStreamingProfiles();
+    m_profilesDirty = false;
+    if (m_selectedProfileIndex >= static_cast<int>(m_profileNames.size()))
+    {
+        m_selectedProfileIndex = m_profileNames.empty() ? -1 : 0;
+    }
+}
+
+void UIConfigurationStreaming::renderProfiles()
+{
+    if (m_profilesDirty) refreshProfiles();
+
+    ImGui::Text("Profiles");
+    ImGui::Separator();
+
+    const char *currentLabel = (m_selectedProfileIndex >= 0 &&
+                                m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+                                   ? m_profileNames[m_selectedProfileIndex].c_str()
+                                   : "(no profile selected)";
+
+    if (ImGui::BeginCombo("##streaming_profile", currentLabel))
+    {
+        for (int i = 0; i < static_cast<int>(m_profileNames.size()); ++i)
+        {
+            bool selected = (i == m_selectedProfileIndex);
+            if (ImGui::Selectable(m_profileNames[i].c_str(), selected))
+            {
+                m_selectedProfileIndex = i;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        if (m_profileNames.empty())
+        {
+            ImGui::TextDisabled("(no profiles saved)");
+        }
+        ImGui::EndCombo();
+    }
+
+    bool hasSelection = (m_selectedProfileIndex >= 0 &&
+                         m_selectedProfileIndex < static_cast<int>(m_profileNames.size()));
+
+    if (!hasSelection) ImGui::BeginDisabled();
+    if (ImGui::Button("Apply"))
+    {
+        const std::string &name = m_profileNames[m_selectedProfileIndex];
+        if (!m_uiManager->loadStreamingProfile(name))
+        {
+            LOG_ERROR("Failed to load streaming profile: " + name);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete"))
+    {
+        m_showDeleteConfirm = true;
+    }
+    if (!hasSelection) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save as..."))
+    {
+        m_newProfileName[0] = '\0';
+        m_showSaveDialog = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh"))
+    {
+        m_profilesDirty = true;
+    }
+
+    if (m_showSaveDialog) ImGui::OpenPopup("Save Streaming Profile");
+    if (ImGui::BeginPopupModal("Save Streaming Profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Profile name:");
+        ImGui::InputText("##streaming_profile_name", m_newProfileName, sizeof(m_newProfileName));
+
+        std::string nameStr(m_newProfileName);
+        bool exists = !nameStr.empty() && m_uiManager->streamingProfileExists(nameStr);
+        if (exists)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "A profile with this name already exists.");
+        }
+
+        if (ImGui::Button("Save", ImVec2(120, 0)))
+        {
+            if (!nameStr.empty())
+            {
+                if (m_uiManager->saveStreamingProfile(nameStr))
+                {
+                    m_profilesDirty = true;
+                    m_showSaveDialog = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_showSaveDialog = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (m_showDeleteConfirm) ImGui::OpenPopup("Delete Streaming Profile");
+    if (ImGui::BeginPopupModal("Delete Streaming Profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+        {
+            ImGui::Text("Delete profile \"%s\"?", m_profileNames[m_selectedProfileIndex].c_str());
+        }
+        if (ImGui::Button("Delete", ImVec2(120, 0)))
+        {
+            if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+            {
+                m_uiManager->deleteStreamingProfile(m_profileNames[m_selectedProfileIndex]);
+                m_profilesDirty = true;
+                m_selectedProfileIndex = -1;
+            }
+            m_showDeleteConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_showDeleteConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 

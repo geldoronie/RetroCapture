@@ -5,8 +5,13 @@ set -e
 BUILD_TYPE="${1:-Release}"
 FORCE_REBUILD=""
 BUILD_WITH_SDL2_ARG=""
+# Default ON: builds Docker são para distribuição (sob qemu, -march=native pode
+# emitir SVE/SVE2 que crasha em hardware real). Quem quiser nativo passa --native.
+BUILD_COMPATIBLE="ON"
 
 # Processar argumentos
+# Note: SDL2 ativa SDL2; --native desativa o modo compatível (vai pra -march=native);
+# ON/OFF puro continua significando SDL2 (compat. retroativa com o uso anterior).
 for arg in "$@"; do
     case "$arg" in
         Release|Debug)
@@ -15,8 +20,14 @@ for arg in "$@"; do
         --rebuild)
             FORCE_REBUILD="--rebuild"
             ;;
-        SDL2|sdl2|ON|on)
+        SDL2|sdl2)
             BUILD_WITH_SDL2_ARG="$arg"
+            ;;
+        --native|native)
+            BUILD_COMPATIBLE="OFF"
+            ;;
+        --compat|compat)
+            BUILD_COMPATIBLE="ON"
             ;;
         *)
             if [ "$arg" != "$BUILD_TYPE" ]; then
@@ -26,15 +37,29 @@ for arg in "$@"; do
     esac
 done
 
+# Se BUILD_COMPATIBLE_ARM64 estiver definido como variável de ambiente, usar ela
+if [ -n "$BUILD_COMPATIBLE_ARM64" ]; then
+    BUILD_COMPATIBLE="$BUILD_COMPATIBLE_ARM64"
+fi
+
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "❌ Build type inválido: $BUILD_TYPE"
     echo ""
-    echo "Uso: $0 [Release|Debug] [--rebuild] [SDL2]"
-    echo "  Release - Build otimizado para produção (padrão)"
-    echo "  Debug   - Build com símbolos de debug"
-    echo "  --rebuild - Força rebuild completo da imagem Docker (mais lento)"
-    echo "  SDL2    - Compilar com SDL2 (suporte DirectFB/framebuffer)"
+    echo "Uso: $0 [Release|Debug] [--rebuild] [SDL2] [--native|--compat]"
+    echo "  Release    - Build otimizado para produção (padrão)"
+    echo "  Debug      - Build com símbolos de debug"
+    echo "  --rebuild  - Força rebuild completo da imagem Docker (mais lento)"
+    echo "  SDL2       - Compilar com SDL2 (suporte DirectFB/framebuffer)"
+    echo "  --native   - Build com -march=native (uso local — não distribuir)"
+    echo "  --compat   - Build com baseline ARMv8-A portátil (padrão)"
+    exit 1
+fi
+
+# Validar opção de compatibilidade
+if [ "$BUILD_COMPATIBLE" != "ON" ] && [ "$BUILD_COMPATIBLE" != "OFF" ]; then
+    echo "❌ BUILD_COMPATIBLE_ARM64 inválido: $BUILD_COMPATIBLE"
+    echo "   Use: ON ou OFF"
     exit 1
 fi
 
@@ -51,6 +76,11 @@ echo "📦 Build type: $BUILD_TYPE"
 echo "🏗️  Arquitetura: ARM64 (aarch64) - Raspberry Pi 4/5"
 echo "🔧 Base: arm64v8/debian:trixie (FFmpeg 6.1)"
 echo "✅ Compatível com: Debian Trixie ARM64, Raspberry Pi OS 64-bit"
+if [ "$BUILD_COMPATIBLE" = "ON" ]; then
+    echo "🔧 Modo compatível: ON (baseline ARMv8-A, sem SVE/crypto — recomendado para distribuição)"
+else
+    echo "⚡ Modo compatível: OFF (-march=native — só roda em CPUs equivalentes à do build host)"
+fi
 echo ""
 
 if ! command -v docker &> /dev/null; then
@@ -227,6 +257,7 @@ if ! $DOCKER_CMD run --rm $DOCKER_RUN_ARGS \
     --platform linux/arm64 \
     -e BUILD_TYPE="$BUILD_TYPE" \
     -e BUILD_WITH_SDL2="$BUILD_WITH_SDL2" \
+    -e BUILD_COMPATIBLE_ARM64="$BUILD_COMPATIBLE" \
     -v "$(pwd):/work:ro" \
     -v "$(pwd)/build-linux-arm64v8:/work/build-linux-arm64v8:rw" \
     -w /work \
@@ -252,6 +283,37 @@ echo ""
 echo "✅ Concluído!"
 echo "📁 Executável: ./build-linux-arm64v8/bin/retrocapture"
 echo ""
+
+# Empacotar tar.gz pós-build em dist/
+VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "unknown")
+# Sufixo -alpha pra alinhar com convenção das tags (0.6.0 → 0.6.0-alpha)
+RELEASE_VERSION="${VERSION}-alpha"
+SDL_SUFFIX=""
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    SDL_SUFFIX="-sdl2"
+fi
+TARBALL_NAME="RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}.tar.gz"
+STAGING_DIR="dist/staging-arm64v8"
+mkdir -p dist
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}"
+
+if [ -d "build-linux-arm64v8/bin" ]; then
+    cp -r build-linux-arm64v8/bin/. "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}/"
+    if [ -f "README.md" ]; then
+        cp README.md "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}/" 2>/dev/null || true
+    fi
+    if [ -f "LICENSE" ]; then
+        cp LICENSE "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}/" 2>/dev/null || true
+    fi
+    rm -f "dist/$TARBALL_NAME"
+    tar -C "$STAGING_DIR" -czf "dist/$TARBALL_NAME" "RetroCapture-${RELEASE_VERSION}-linux-arm64v8${SDL_SUFFIX}"
+    rm -rf "$STAGING_DIR"
+    echo "📦 Tarball: $(pwd)/dist/$TARBALL_NAME"
+    echo "📏 Tamanho: $(du -h dist/$TARBALL_NAME | cut -f1)"
+    echo ""
+fi
+
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
     echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm64v8/bin/retrocapture"

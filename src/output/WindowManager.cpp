@@ -7,6 +7,31 @@
 #include <GLFW/glfw3native.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <signal.h>
+#include <setjmp.h>
+
+// Static variables for SIGSEGV handling in pollEvents
+namespace {
+    bool sigsegv_handler_installed = false;
+    jmp_buf jump_buffer;
+    WindowManager* current_wm = nullptr;
+    
+    // Signal handler function (must be a regular function, not lambda)
+    void sigsegv_handler(int sig) {
+        if (sig == SIGSEGV && current_wm)
+        {
+            // Mark window as closed to prevent further operations
+            void* window_ptr = current_wm->getWindow();
+            if (window_ptr)
+            {
+                GLFWwindow *w = static_cast<GLFWwindow *>(window_ptr);
+                glfwSetWindowShouldClose(w, GLFW_TRUE);
+            }
+            // Jump back to safe point
+            siglongjmp(jump_buffer, 1);
+        }
+    }
+}
 #endif
 
 WindowManager::WindowManager()
@@ -162,11 +187,59 @@ void WindowManager::shutdown()
 
     if (m_window)
     {
-        glfwDestroyWindow(static_cast<GLFWwindow *>(m_window));
+        GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+        
+#ifdef PLATFORM_LINUX
+        // Use signal handler to catch SIGSEGV during shutdown
+        // This can happen when Wayland connection is invalidated
+        if (!sigsegv_handler_installed)
+        {
+            struct sigaction sa;
+            sa.sa_handler = sigsegv_handler;
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = SA_NODEFER | SA_RESETHAND;
+            sigaction(SIGSEGV, &sa, nullptr);
+            sigsegv_handler_installed = true;
+        }
+        
+        current_wm = this;
+        
+        // Use setjmp/longjmp to recover from SIGSEGV during window destruction
+        if (sigsetjmp(jump_buffer, 1) == 0)
+        {
+            // Try to destroy window - may crash if Wayland connection is invalid
+            glfwDestroyWindow(window);
+        }
+        else
+        {
+            // Recovered from SIGSEGV - window destruction failed but we continue
+            LOG_WARN("SIGSEGV caught during window destruction - continuing shutdown");
+        }
+        
+        current_wm = nullptr;
+#else
+        try
+        {
+            glfwDestroyWindow(window);
+        }
+        catch (...)
+        {
+            LOG_WARN("Exception during window destruction - continuing shutdown");
+        }
+#endif
         m_window = nullptr;
     }
 
-    glfwTerminate();
+    // Terminate GLFW - this should be safe even if window destruction failed
+    try
+    {
+        glfwTerminate();
+    }
+    catch (...)
+    {
+        LOG_WARN("Exception during GLFW termination - continuing");
+    }
+    
     m_initialized = false;
     LOG_INFO("WindowManager shutdown");
 }
@@ -182,15 +255,88 @@ bool WindowManager::shouldClose() const
 
 void WindowManager::swapBuffers()
 {
-    if (m_window)
+    if (!m_window)
     {
-        glfwSwapBuffers(static_cast<GLFWwindow *>(m_window));
+        return;
+    }
+    
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+    
+    // Check if window is still valid before swapping
+    // This prevents crashes when window is invalidated (e.g., KVM switch)
+    if (glfwWindowShouldClose(window))
+    {
+        return;
+    }
+    
+    try
+    {
+        glfwSwapBuffers(window);
+    }
+    catch (...)
+    {
+        // If swap fails, window is likely invalid - log and continue
+        // GLFW will set shouldClose flag automatically
+        LOG_WARN("Failed to swap buffers - window may be invalid");
     }
 }
 
 void WindowManager::pollEvents()
 {
-    glfwPollEvents();
+    if (!m_window)
+    {
+        return;
+    }
+    
+    GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
+    
+    // Check if window should close before polling events
+    // This prevents crashes when Wayland connection is invalidated
+    if (glfwWindowShouldClose(window))
+    {
+        return;
+    }
+    
+#ifdef PLATFORM_LINUX
+    // Use signal handler to catch SIGSEGV from Wayland/GLFW
+    // This happens when USB devices are disconnected and Wayland connection is invalidated
+    if (!sigsegv_handler_installed)
+    {
+        struct sigaction sa;
+        sa.sa_handler = sigsegv_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_NODEFER | SA_RESETHAND; // Reset handler after use
+        sigaction(SIGSEGV, &sa, nullptr);
+        sigsegv_handler_installed = true;
+    }
+    
+    current_wm = this;
+    
+    // Use setjmp/longjmp to recover from SIGSEGV
+    if (sigsetjmp(jump_buffer, 1) == 0)
+    {
+        // Try to poll events - may crash if Wayland connection is invalid
+        glfwPollEvents();
+    }
+    else
+    {
+        // Recovered from SIGSEGV - window is now marked as should close
+        LOG_WARN("SIGSEGV caught in pollEvents - Wayland connection invalidated, window marked for close");
+    }
+    
+    current_wm = nullptr;
+#else
+    // On non-Linux platforms, just call glfwPollEvents normally
+    try
+    {
+        glfwPollEvents();
+    }
+    catch (...)
+    {
+        // If pollEvents fails, window may be invalid - log and continue
+        LOG_WARN("Error polling events - window may be invalid");
+    }
+#endif
 }
 
 void WindowManager::makeCurrent()

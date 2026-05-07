@@ -4,6 +4,13 @@ set -e
 # Build type: Release (default) or Debug
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 
+# Compatibilidade: builds Docker são pra distribuição, então default ON
+# (baseline ARMv8-A sem extensões opcionais — roda em Pi 3/4/5). Para -march=native
+# (uso local em hardware específico) passe BUILD_COMPATIBLE_ARM64=OFF.
+# Sob qemu-user-static, -march=native pode resolver pra um modelo "max" com SVE/SVE2
+# que crasha em hardware real.
+BUILD_COMPATIBLE="${BUILD_COMPATIBLE_ARM64:-ON}"
+
 # Validar build type
 if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     echo "❌ Build type inválido: $BUILD_TYPE"
@@ -11,9 +18,21 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
     exit 1
 fi
 
+# Validar opção de compatibilidade
+if [ "$BUILD_COMPATIBLE" != "ON" ] && [ "$BUILD_COMPATIBLE" != "OFF" ]; then
+    echo "❌ BUILD_COMPATIBLE_ARM64 inválido: $BUILD_COMPATIBLE"
+    echo "   Use: ON ou OFF"
+    exit 1
+fi
+
 echo "🚀 Compilando RetroCapture para Linux ARM64 (Raspberry Pi 4/5)..."
 echo "📦 Build type: $BUILD_TYPE"
 echo "🏗️  Arquitetura: ARM64 (aarch64)"
+if [ "$BUILD_COMPATIBLE" = "ON" ]; then
+    echo "🔧 Modo compatível: ON (baseline ARMv8-A, sem SVE/crypto — recomendado para distribuição)"
+else
+    echo "⚡ Modo compatível: OFF (-march=native — só roda em CPUs equivalentes à do build host)"
+fi
 echo ""
 
 # Verificar se estamos no diretório correto
@@ -74,16 +93,23 @@ if [ "$NUM_CPUS" -gt 20 ]; then
     NUM_CPUS=20
 fi
 
+CMAKE_EXTRA_ARGS=""
+if [ "$BUILD_COMPATIBLE" = "ON" ]; then
+    CMAKE_EXTRA_ARGS="-DBUILD_COMPATIBLE_ARM64=ON"
+fi
+
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "   🔧 Compilando com SDL2 (suporte DirectFB/framebuffer)"
     cmake .. \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DBUILD_WITH_SDL2=ON \
+        $CMAKE_EXTRA_ARGS \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 else
     cmake .. \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        $CMAKE_EXTRA_ARGS \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 fi

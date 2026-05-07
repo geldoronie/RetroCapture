@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 #include "HTTPServer.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #ifdef PLATFORM_LINUX
 #include <sys/socket.h>
 #include <unistd.h>
@@ -68,7 +69,7 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
         request.find("/portal-background") != std::string::npos ||
         request.find("/icon-") != std::string::npos ||
         // Verificar se é qualquer arquivo estático (HTML, CSS, JS, etc.)
-        (request.find("GET /") != std::string::npos && 
+        (request.find("GET /") != std::string::npos &&
          (request.find(".html") != std::string::npos ||
           request.find(".css") != std::string::npos ||
           request.find(".js") != std::string::npos ||
@@ -77,7 +78,10 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
           request.find(".jpg") != std::string::npos ||
           request.find(".jpeg") != std::string::npos ||
           request.find(".svg") != std::string::npos ||
-          request.find(".ico") != std::string::npos)))
+          request.find(".ico") != std::string::npos ||
+          request.find(".woff2") != std::string::npos ||
+          request.find(".woff") != std::string::npos ||
+          request.find(".ttf") != std::string::npos)))
     {
         LOG_INFO("WebPortal::isWebPortalRequest - Accepted as web portal request");
         return true;
@@ -709,77 +713,38 @@ ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
 
 std::string WebPortal::findAssetFile(const std::string &relativePath) const
 {
-    // Função helper para obter diretório de configuração do usuário
-    auto getUserConfigDir = []() -> std::string
-    {
-        const char *homeDir = std::getenv("HOME");
-        if (homeDir)
-        {
-            fs::path configDir = fs::path(homeDir) / ".config" / "retrocapture";
-            return configDir.string();
-        }
-        return "";
-    };
-
-    // Se o caminho já é absoluto, verificar diretamente (prioridade máxima)
+    // Caminho absoluto ganha sempre.
     fs::path testPath(relativePath);
     if (testPath.is_absolute() && fs::exists(testPath))
     {
         return fs::absolute(testPath).string();
     }
 
-    // Extrair apenas o nome do arquivo
     fs::path inputPath(relativePath);
     std::string fileName = inputPath.filename();
 
-    // Lista de locais para buscar (em ordem de prioridade)
     std::vector<std::string> possiblePaths;
 
-    // 1. Variável de ambiente RETROCAPTURE_ASSETS_PATH (para AppImage) - PRIORIDADE MÁXIMA
-    const char *assetsEnvPath = std::getenv("RETROCAPTURE_ASSETS_PATH");
-    if (assetsEnvPath)
+    // 1. User data: customizações do usuário (override do que vem na app).
+    std::string userDataDir = Paths::getUserDataDir();
+    if (!userDataDir.empty())
     {
-        fs::path envAssetsDir(assetsEnvPath);
-        possiblePaths.push_back((envAssetsDir / fileName).string());
-        possiblePaths.push_back((envAssetsDir / relativePath).string());
+        possiblePaths.push_back((fs::path(userDataDir) / relativePath).string());
+        possiblePaths.push_back((fs::path(userDataDir) / fileName).string());
     }
 
-    // 2. Pasta de configuração do usuário (~/.config/retrocapture/assets/) - PRIORIDADE ALTA
-    std::string userConfigDir = getUserConfigDir();
-    if (!userConfigDir.empty())
+    // 2. Read-only assets: shipados com a aplicação (system install ou portable).
+    std::string roAssets = Paths::getReadOnlyAssetsDir();
+    if (!roAssets.empty())
     {
-        fs::path userAssetsDir = fs::path(userConfigDir) / "assets";
-        possiblePaths.push_back((userAssetsDir / relativePath).string());
-        possiblePaths.push_back((userAssetsDir / fileName).string());
+        possiblePaths.push_back((fs::path(roAssets) / relativePath).string());
+        possiblePaths.push_back((fs::path(roAssets) / fileName).string());
     }
 
-    // 3. Diretório do executável/assets/ (tentar obter via /proc/self/exe no Linux)
-    // No Linux, podemos usar readlink em /proc/self/exe para obter o caminho do executável
-    char exePath[1024];
-    #ifdef PLATFORM_LINUX
-    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-    if (len != -1)
-    #else
-    // Windows: usar GetModuleFileName
-    DWORD len = GetModuleFileNameA(NULL, exePath, sizeof(exePath) - 1);
-    if (len != 0)
-    #endif
-    {
-        exePath[len] = '\0';
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path assetsDir = exeDir / "assets";
-        possiblePaths.push_back((assetsDir / relativePath).string());
-        possiblePaths.push_back((assetsDir / fileName).string());
-    }
-
-    // 4. Caminho como fornecido (pode ser relativo)
+    // 3. Caminho como fornecido + cwd fallback (último recurso pra dev).
     possiblePaths.push_back(relativePath);
-
-    // 5. Diretório atual/assets/
     possiblePaths.push_back("./assets/" + fileName);
     possiblePaths.push_back("./assets/" + relativePath);
-
-    // 6. Diretório atual
     possiblePaths.push_back("./" + fileName);
     possiblePaths.push_back("./" + relativePath);
 
@@ -1318,6 +1283,18 @@ std::string WebPortal::getContentType(const std::string &filePath) const
     {
         return "image/x-icon";
     }
+    else if (len >= 6 && filePath.substr(len - 6) == ".woff2")
+    {
+        return "font/woff2";
+    }
+    else if (len >= 5 && filePath.substr(len - 5) == ".woff")
+    {
+        return "font/woff";
+    }
+    else if (len >= 4 && filePath.substr(len - 4) == ".ttf")
+    {
+        return "font/ttf";
+    }
     else
     {
         return "application/octet-stream";
@@ -1383,10 +1360,27 @@ std::string WebPortal::extractFilePath(const std::string &request) const
     bool isIndexHtml = (path == "index.html" || path == "/index.html" || 
                         path.find("/index.html") != std::string::npos);
     
-    bool isStaticFile = (path.find("style.css") != std::string::npos ||
-                         path.find(".css") != std::string::npos ||
-                         path.find(".js") != std::string::npos ||
-                         (path.find(".html") != std::string::npos && !isIndexHtml));
+    // Match the same set of static-file extensions that
+    // isWebPortalRequest accepts. Previously only .css/.js/.html were
+    // recognized here, which silently 404'd legitimate font/image
+    // requests like /vendor/fonts/bootstrap-icons.woff2.
+    auto endsWith = [](const std::string &s, const char *suffix) {
+        size_t n = std::strlen(suffix);
+        return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+    };
+    bool isStaticFile = (
+        endsWith(path, ".css") ||
+        endsWith(path, ".js")  ||
+        endsWith(path, ".json") ||
+        (endsWith(path, ".html") && !isIndexHtml) ||
+        endsWith(path, ".png") ||
+        endsWith(path, ".jpg") ||
+        endsWith(path, ".jpeg") ||
+        endsWith(path, ".svg") ||
+        endsWith(path, ".ico") ||
+        endsWith(path, ".woff2") ||
+        endsWith(path, ".woff") ||
+        endsWith(path, ".ttf"));
 
     LOG_INFO("WebPortal::extractFilePath - isIndexHtml: " + std::string(isIndexHtml ? "true" : "false") + 
              ", isStaticFile: " + std::string(isStaticFile ? "true" : "false") + 
@@ -1424,13 +1418,21 @@ std::string WebPortal::extractFilePath(const std::string &request) const
         }
     }
 
-    // Extrair apenas o nome do arquivo (sem diretórios extras)
-    size_t lastSlash = path.find_last_of('/');
-    if (lastSlash != std::string::npos && lastSlash < path.length() - 1)
+    // Reject path-traversal attempts. Previously this code collapsed
+    // every request to its basename to avoid escaping the web directory,
+    // but that also broke legitimate subdirectories (e.g. /vendor/* and
+    // /vendor/fonts/*). Now we keep the relative path intact and only
+    // refuse anything that includes a ".." segment or absolute markers.
+    if (path.find("..") != std::string::npos)
     {
-        LOG_INFO("WebPortal::extractFilePath - Extracting filename from path: '" + path + "'");
-        path = path.substr(lastSlash + 1);
-        LOG_INFO("WebPortal::extractFilePath - Filename extracted: '" + path + "'");
+        LOG_WARN("WebPortal::extractFilePath - Rejecting path with '..' segment: '" + path + "'");
+        return "";
+    }
+    // Also strip a leading slash defensively; the rest of the path is
+    // joined to the resolved web directory by serveStaticFile.
+    while (!path.empty() && path[0] == '/')
+    {
+        path = path.substr(1);
     }
 
     LOG_INFO("WebPortal::extractFilePath - Returning final path: '" + path + "'");

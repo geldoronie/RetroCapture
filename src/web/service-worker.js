@@ -3,17 +3,30 @@
  * Gerencia cache e funcionalidade offline
  */
 
-const CACHE_NAME = 'retrocapture-v1';
-const RUNTIME_CACHE = 'retrocapture-runtime-v1';
+// Bumped to v3 with the home/config split — landing page is now the
+// live player at "/" and the previous tabbed UI moved to /config.html.
+const CACHE_NAME = 'retrocapture-v3';
+const RUNTIME_CACHE = 'retrocapture-runtime-v3';
 
-// Recursos para cachear na instalação
+// Resources to precache on install
 const PRECACHE_URLS = [
   '/',
   '/index.html',
+  '/config.html',
+  '/recordings.html',
   '/style.css',
+  '/home.js',
   '/control.js',
   '/api.js',
-  // Bootstrap e ícones são carregados via CDN, não precisam ser cacheados
+  '/manifest.json',
+  // Vendored libraries — bundled in /vendor so the PWA install works
+  // fully offline without depending on a CDN at first load.
+  '/vendor/bootstrap.min.css',
+  '/vendor/bootstrap.bundle.min.js',
+  '/vendor/bootstrap-icons.css',
+  '/vendor/mpegts.min.js',
+  '/vendor/fonts/bootstrap-icons.woff',
+  '/vendor/fonts/bootstrap-icons.woff2',
 ];
 
 // Instalar Service Worker e fazer precache
@@ -105,11 +118,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Para recursos estáticos (HTML, CSS, JS), usar cache primeiro
-  if (url.pathname === '/' || 
-      url.pathname === '/index.html' ||
+  // Para recursos estáticos (HTML, CSS, JS, fontes), usar cache primeiro
+  if (url.pathname === '/' ||
+      url.pathname.endsWith('.html') ||
       url.pathname.endsWith('.css') ||
-      url.pathname.endsWith('.js')) {
+      url.pathname.endsWith('.js') ||
+      url.pathname.endsWith('.woff') ||
+      url.pathname.endsWith('.woff2')) {
     event.respondWith(
       caches.match(request)
         .then((cachedResponse) => {

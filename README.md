@@ -16,7 +16,7 @@ RetroCapture was born from the desire to experience retro gaming with the authen
 
 ## ⚠️ Development Status
 
-**RetroCapture is currently in active development (v0.5.0-alpha).**
+**RetroCapture is currently in active development (v0.6.0-alpha).**
 
 ### Shader Support
 
@@ -151,6 +151,14 @@ RetroCapture allows you to apply RetroArch shaders in real-time to your video ca
   - Install: `sudo pacman -S openssl` (Arch/Manjaro) or `sudo apt-get install libssl-dev` (Ubuntu/Debian)
 
 ## 🔨 Building
+
+> **CPU portability for distributed binaries.** All Docker build scripts
+> default to a portable instruction-set baseline (no AVX/AVX2 on x86_64,
+> no SVE/crypto on ARM64), so the artifacts they produce run on a wide
+> range of hardware. Native CMake invocations still default to
+> `-march=native` for local performance. See
+> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for the
+> per-architecture details and how to opt out.
 
 ### Linux (nativo)
 

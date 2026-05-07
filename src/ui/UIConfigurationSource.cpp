@@ -151,71 +151,12 @@ void UIConfigurationSource::renderV4L2Controls()
         ImGui::PopID();
     }
 
-    ImGui::Separator();
-    ImGui::Text("All V4L2 Controls:");
-    ImGui::Separator();
-
-    // Helper function para renderizar controle com range do dispositivo ou padrão
-    auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
-    {
-        if (!m_capture)
-            return;
-
-        int32_t value, min, max;
-
-        // Tentar obter valores do dispositivo usando interface genérica
-        if (m_capture->getControl(name, value) &&
-            m_capture->getControlMin(name, min) &&
-            m_capture->getControlMax(name, max))
-        {
-            // Valores obtidos com sucesso
-        }
-        else
-        {
-            // Se não disponível, usar valores padrão
-            min = defaultMin;
-            max = defaultMax;
-            value = defaultValue;
-        }
-
-        // Clamp valor
-        value = std::max(min, std::min(max, value));
-
-        // Use unique ID with suffix to avoid conflicts with dynamic controls
-        std::string label = std::string(name) + "##manual";
-        if (ImGui::SliderInt(label.c_str(), &value, min, max))
-        {
-            value = std::max(min, std::min(max, value));
-            m_uiManager->triggerV4L2ControlChange(name, value);
-        }
-    };
-
-    // Brightness
-    renderControl("Brightness", -100, 100, 0);
-
-    // Contrast
-    renderControl("Contrast", -100, 100, 0);
-
-    // Saturation
-    renderControl("Saturation", -100, 100, 0);
-
-    // Hue
-    renderControl("Hue", -100, 100, 0);
-
-    // Gain
-    renderControl("Gain", 0, 100, 0);
-
-    // Exposure
-    renderControl("Exposure", -13, 1, 0);
-
-    // Sharpness
-    renderControl("Sharpness", 0, 6, 0);
-
-    // Gamma
-    renderControl("Gamma", 100, 300, 100);
-
-    // White Balance
-    renderControl("White Balance", 2800, 6500, 4000);
+    // (Previously a hardcoded "All V4L2 Controls" block was rendered
+    // here with a fixed list of Brightness/Contrast/Saturation/etc and
+    // assumed default ranges. It duplicated whatever the dynamic
+    // discovery above already shows for the connected device, and used
+    // wrong ranges when the device exposed different bounds. Removed —
+    // the dynamic loop is the source of truth.)
 }
 
 void UIConfigurationSource::renderV4L2DeviceSelection()
@@ -522,6 +463,51 @@ void UIConfigurationSource::renderCaptureSettings()
         }
     }
 
+    // Quando o V4L2 ajusta a resolução pra mais próxima suportada, mostramos
+    // a real do dispositivo abaixo do campo. O pipeline faz downscale antes
+    // do shader chain pra preservar o look retrô da resolução pedida.
+    const uint32_t actualW = m_uiManager->getActualCaptureWidth();
+    const uint32_t actualH = m_uiManager->getActualCaptureHeight();
+    const uint32_t requestedW = m_uiManager->getCaptureWidth();
+    const uint32_t requestedH = m_uiManager->getCaptureHeight();
+    if (actualW > 0 && actualH > 0 &&
+        (actualW != requestedW || actualH != requestedH))
+    {
+        ImGui::TextDisabled("Device delivers %ux%u (downscaled to %ux%u for shader)",
+                            actualW, actualH, requestedW, requestedH);
+    }
+
+    // Overscan: corta uma % das bordas do source antes do downscale. Útil pra
+    // remover letterbox do dispositivo de captura ou aproximar o crop de TV CRT.
+    // Eixos X/Y independentes; lock espelha um no outro.
+    ImGui::Text("Source Overscan:");
+    bool overscanLocked = m_uiManager->getSourceOverscanLocked();
+    if (ImGui::Checkbox("Lock X/Y##overscan_lock", &overscanLocked))
+    {
+        m_uiManager->setSourceOverscanLocked(overscanLocked);
+        m_uiManager->saveConfig();
+    }
+    float overscanX = m_uiManager->getSourceOverscanPercentX();
+    float overscanY = m_uiManager->getSourceOverscanPercentY();
+    ImGui::PushItemWidth(180);
+    if (ImGui::SliderFloat("Horizontal##source_overscan_x", &overscanX, 0.0f, 30.0f, "%.1f%%"))
+    {
+        m_uiManager->setSourceOverscanPercentX(overscanX);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::SliderFloat("Vertical##source_overscan_y", &overscanY, 0.0f, 30.0f, "%.1f%%"))
+    {
+        m_uiManager->setSourceOverscanPercentY(overscanY);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        m_uiManager->saveConfig();
+    }
+    ImGui::PopItemWidth();
+
     // Controle de FPS
     ImGui::Text("Framerate:");
     int fps = static_cast<int>(m_uiManager->getCaptureFps());
@@ -562,13 +548,77 @@ void UIConfigurationSource::renderQuickFPS()
 
 void UIConfigurationSource::renderQuickResolutions()
 {
-    // Resoluções 4:3
-    ImGui::Text("4:3 Resolutions:");
-    if (ImGui::Button("320x240"))
+    // Resoluções nativas de consoles retrô. Quando o dispositivo de captura
+    // não suporta a resolução escolhida, o V4L2 ajusta pra mais próxima e o
+    // pipeline faz downscale antes do shader chain — o efeito CRT/scanline
+    // fica autêntico (cada scanline vira N pixels altos no viewport final).
+    ImGui::Text("Retro Consoles:");
+    if (ImGui::Button("160x144 GB"))
+    {
+        m_uiManager->triggerResolutionChange(160, 144);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("240x160 GBA"))
+    {
+        m_uiManager->triggerResolutionChange(240, 160);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("256x192 SMS"))
+    {
+        m_uiManager->triggerResolutionChange(256, 192);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("256x224 NES/SNES"))
+    {
+        m_uiManager->triggerResolutionChange(256, 224);
+    }
+    if (ImGui::Button("256x240 NES alt"))
+    {
+        m_uiManager->triggerResolutionChange(256, 240);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("224x288 Vertical Arcade"))
+    {
+        m_uiManager->triggerResolutionChange(224, 288);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("320x200 DOS/CGA"))
+    {
+        m_uiManager->triggerResolutionChange(320, 200);
+    }
+    if (ImGui::Button("320x224 Mega Drive"))
+    {
+        m_uiManager->triggerResolutionChange(320, 224);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("320x240 Saturn/PSX"))
     {
         m_uiManager->triggerResolutionChange(320, 240);
     }
     ImGui::SameLine();
+    if (ImGui::Button("304x224 Mega CD"))
+    {
+        m_uiManager->triggerResolutionChange(304, 224);
+    }
+    if (ImGui::Button("384x224 CPS-1"))
+    {
+        m_uiManager->triggerResolutionChange(384, 224);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("384x288 CPS-2 PAL"))
+    {
+        m_uiManager->triggerResolutionChange(384, 288);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("640x448 PSX Hi-Res"))
+    {
+        m_uiManager->triggerResolutionChange(640, 448);
+    }
+
+    ImGui::Separator();
+
+    // Resoluções 4:3
+    ImGui::Text("4:3 Resolutions:");
     if (ImGui::Button("640x480"))
     {
         m_uiManager->triggerResolutionChange(640, 480);

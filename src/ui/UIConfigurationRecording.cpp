@@ -1,5 +1,6 @@
 #include "UIConfigurationRecording.h"
 #include "UIManager.h"
+#include "../utils/Logger.h"
 #include <imgui.h>
 #include <algorithm>
 #include <iomanip>
@@ -23,6 +24,24 @@ void UIConfigurationRecording::render()
 
     renderRecordingStatus();
     ImGui::Separator();
+    renderProfiles();
+    ImGui::Separator();
+    {
+        bool apply = m_uiManager->getRecordingApplyShader();
+        if (ImGui::Checkbox("Apply shader to recording", &apply))
+        {
+            m_uiManager->setRecordingApplyShader(apply);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("When off, the recording captures the raw pre-shader source\n"
+                              "even though the live preview shows the shader applied.\n"
+                              "Useful to archive a clean master while keeping the CRT\n"
+                              "look on screen / on stream.");
+        }
+        ImGui::Separator();
+    }
     renderBasicSettings();
     ImGui::Separator();
     renderCodecSettings();
@@ -82,6 +101,141 @@ void UIConfigurationRecording::renderRecordingStatus()
         {
             ImGui::Text("File: %s", filename.c_str());
         }
+    }
+}
+
+void UIConfigurationRecording::refreshProfiles()
+{
+    m_profileNames = m_uiManager->listRecordingProfiles();
+    m_profilesDirty = false;
+    if (m_selectedProfileIndex >= static_cast<int>(m_profileNames.size()))
+    {
+        m_selectedProfileIndex = m_profileNames.empty() ? -1 : 0;
+    }
+}
+
+void UIConfigurationRecording::renderProfiles()
+{
+    if (m_profilesDirty) refreshProfiles();
+
+    ImGui::Text("Profiles");
+    ImGui::Separator();
+
+    const char *currentLabel = (m_selectedProfileIndex >= 0 &&
+                                m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+                                   ? m_profileNames[m_selectedProfileIndex].c_str()
+                                   : "(no profile selected)";
+
+    if (ImGui::BeginCombo("##recording_profile", currentLabel))
+    {
+        for (int i = 0; i < static_cast<int>(m_profileNames.size()); ++i)
+        {
+            bool selected = (i == m_selectedProfileIndex);
+            if (ImGui::Selectable(m_profileNames[i].c_str(), selected))
+            {
+                m_selectedProfileIndex = i;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        if (m_profileNames.empty())
+        {
+            ImGui::TextDisabled("(no profiles saved)");
+        }
+        ImGui::EndCombo();
+    }
+
+    bool hasSelection = (m_selectedProfileIndex >= 0 &&
+                         m_selectedProfileIndex < static_cast<int>(m_profileNames.size()));
+
+    if (!hasSelection) ImGui::BeginDisabled();
+    if (ImGui::Button("Apply"))
+    {
+        const std::string &name = m_profileNames[m_selectedProfileIndex];
+        if (!m_uiManager->loadRecordingProfile(name))
+        {
+            LOG_ERROR("Failed to load recording profile: " + name);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete"))
+    {
+        m_showDeleteConfirm = true;
+    }
+    if (!hasSelection) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save as..."))
+    {
+        m_newProfileName[0] = '\0';
+        m_showSaveDialog = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh"))
+    {
+        m_profilesDirty = true;
+    }
+
+    // Save dialog
+    if (m_showSaveDialog) ImGui::OpenPopup("Save Recording Profile");
+    if (ImGui::BeginPopupModal("Save Recording Profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Profile name:");
+        ImGui::InputText("##profile_name", m_newProfileName, sizeof(m_newProfileName));
+
+        std::string nameStr(m_newProfileName);
+        bool exists = !nameStr.empty() && m_uiManager->recordingProfileExists(nameStr);
+        if (exists)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "A profile with this name already exists.");
+        }
+
+        if (ImGui::Button("Save", ImVec2(120, 0)))
+        {
+            if (!nameStr.empty())
+            {
+                if (m_uiManager->saveRecordingProfile(nameStr))
+                {
+                    m_profilesDirty = true;
+                    m_showSaveDialog = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_showSaveDialog = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Delete confirm
+    if (m_showDeleteConfirm) ImGui::OpenPopup("Delete Recording Profile");
+    if (ImGui::BeginPopupModal("Delete Recording Profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+        {
+            ImGui::Text("Delete profile \"%s\"?", m_profileNames[m_selectedProfileIndex].c_str());
+        }
+        if (ImGui::Button("Delete", ImVec2(120, 0)))
+        {
+            if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
+            {
+                m_uiManager->deleteRecordingProfile(m_profileNames[m_selectedProfileIndex]);
+                m_profilesDirty = true;
+                m_selectedProfileIndex = -1;
+            }
+            m_showDeleteConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_showDeleteConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 

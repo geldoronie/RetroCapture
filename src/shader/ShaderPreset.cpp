@@ -1,5 +1,6 @@
 #include "ShaderPreset.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -128,6 +129,49 @@ bool ShaderPreset::parseLine(const std::string &line, int &passIndex)
     value.erase(0, value.find_first_not_of(" \t\""));
     value.erase(value.find_last_not_of(" \t\"") + 1);
 
+    // Tratar texturas ANTES da extração de pass-index. Texturas declaradas em
+    // `textures = "SamplerLUT1;..."` quase sempre têm dígito no nome, e sem
+    // este tratamento prévio o parser as confundia com chaves per-pass (shader1,
+    // scale1, etc.) e nunca atribuía path/linear/mipmap/wrap_mode.
+    auto stripSuffix = [&](const std::string &suffix) -> std::string {
+        size_t pos = key.rfind(suffix);
+        if (pos != std::string::npos && pos + suffix.size() == key.size())
+        {
+            return key.substr(0, pos);
+        }
+        return std::string();
+    };
+
+    std::string baseFromLinear = stripSuffix("_linear");
+    std::string baseFromWrap = stripSuffix("_wrap_mode");
+    std::string baseFromMipmap = stripSuffix("_mipmap");
+
+    if (!baseFromLinear.empty() && m_textures.find(baseFromLinear) != m_textures.end())
+    {
+        std::string lower = value;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        m_textures[baseFromLinear].linear = (lower == "true" || lower == "1");
+        return true;
+    }
+    if (!baseFromWrap.empty() && m_textures.find(baseFromWrap) != m_textures.end())
+    {
+        m_textures[baseFromWrap].wrapMode = value;
+        return true;
+    }
+    if (!baseFromMipmap.empty() && m_textures.find(baseFromMipmap) != m_textures.end())
+    {
+        std::string lower = value;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        m_textures[baseFromMipmap].mipmap = (lower == "true" || lower == "1");
+        return true;
+    }
+    if (m_textures.find(key) != m_textures.end())
+    {
+        // <texName> = <path> — atribui o path à textura já declarada.
+        m_textures[key].path = resolvePath(value);
+        return true;
+    }
+
     // Extrair índice do pass
     size_t numPos = key.find_first_of("0123456789");
     if (numPos != std::string::npos)
@@ -224,11 +268,11 @@ bool ShaderPreset::parseLine(const std::string &line, int &passIndex)
              key.find("_mipmap") == std::string::npos) ||
             isTextureName)
         {
-            // É uma textura
+            // Caso o early-handling não tenha alcançado (ex: nome de textura
+            // novo nunca declarado em `textures = ...`), criar entrada aqui.
             ShaderTexture tex;
             tex.path = resolvePath(value);
             m_textures[key] = tex;
-            LOG_INFO("Textura definida: " + key + " -> " + tex.path);
         }
         else if (key.find("Sampler") == 0 && key.find("_wrap_mode") != std::string::npos)
         {
@@ -303,7 +347,9 @@ std::string ShaderPreset::resolvePath(const std::string &path)
 
     fs::path currentPath = fs::current_path();
 
-    // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage)
+    // Usar RETROCAPTURE_SHADER_PATH se disponível (para AppImage),
+    // senão delegar pro `Paths::getReadOnlyAssetsDir()` (que cobre dev tree
+    // / portable / install system-wide).
     const char *envShaderPath = std::getenv("RETROCAPTURE_SHADER_PATH");
     fs::path shaderBasePath;
     if (envShaderPath && fs::exists(envShaderPath))
@@ -312,7 +358,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
     }
     else
     {
-        shaderBasePath = currentPath / "shaders" / "shaders_glsl";
+        shaderBasePath = fs::path(Paths::getReadOnlyAssetsDir()) / "shaders" / "shaders_glsl";
     }
 
     fs::path relPath(path);

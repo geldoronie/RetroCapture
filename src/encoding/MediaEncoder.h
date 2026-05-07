@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -90,6 +91,10 @@ public:
     int64_t getVideoFrameCount() const { return m_videoFrameCount; }
     void resetVideoFrameCount() { m_videoFrameCount = 0; }
 
+    // Eventos de retrocesso de PTS (forçar pra frente para preservar monotonicidade).
+    // Não-zero indica instabilidade no timestamp source.
+    uint64_t getDesyncFrameCount() const { return m_desyncFrameCount.load(std::memory_order_relaxed); }
+
 private:
     // Inicialização de codecs
     bool initializeVideoCodec();
@@ -157,10 +162,23 @@ private:
     // Audio accumulator para acumular samples até ter um frame completo
     std::mutex m_audioAccumulatorMutex;
     std::vector<int16_t> m_audioAccumulator;
-    
-    // Track total samples processed for correct PTS calculation when multiple frames are generated
+
+    // Track total samples processed (mantido pra estatísticas/debug; o PTS
+    // agora vem de capture timestamps, não desta contagem).
     int64_t m_totalAudioSamplesProcessed = 0;
 
-    // Detecção de dessincronização
-    int m_desyncFrameCount = 0;
+    // Capture wall-clock timestamp do *primeiro sample* atualmente no
+    // accumulator. Avança conforme samples são consumidos. Permite que
+    // o PTS do áudio acompanhe o wall clock — se chunks dropam no
+    // synchronizer, a próxima chamada detecta o gap e ressincroniza,
+    // evitando que o áudio termine antes do vídeo (sintoma do desync).
+    int64_t m_audioAccumulatorStartCaptureTsUs = 0;
+    bool m_audioAccumulatorTsValid = false;
+
+    // Contador de eventos de retrocesso de PTS: cada incremento é uma vez que
+    // o calculatedPTS teria ficado <= ao último PTS já emitido e tivemos que
+    // forçá-lo pra frente (m_lastXxxPTS + 1). Indica instabilidade no
+    // timestamp source — o stream ainda fica monotônico, mas isso vira jitter
+    // de duração de frame no arquivo final.
+    std::atomic<uint64_t> m_desyncFrameCount{0};
 };

@@ -23,6 +23,8 @@ class UIConfiguration;
 class UICredits;
 class UICapturePresets;
 class UIRecordings;
+class RecordingProfileManager;
+class StreamingProfileManager;
 
 class UIManager
 {
@@ -304,9 +306,44 @@ public:
     std::string getCurrentShader() const { return m_currentShader; }
     const std::vector<std::string> &getShaderList() const { return m_scannedShaders; }
 
+    // Master shader bypass — when false the shader engine is skipped on
+    // the live render path, so the user can A/B the effect without
+    // losing the selected shader. The per-pipeline overrides below only
+    // apply when the master is on; if the master is off all pipelines
+    // see the raw source.
+    bool getShaderPipelineEnabled() const { return m_shaderPipelineEnabled; }
+    void setShaderPipelineEnabled(bool enabled) { m_shaderPipelineEnabled = enabled; }
+
+    // Per-pipeline shader override. Only consulted when the master
+    // pipeline toggle is on. False means "this pipeline pushes the raw
+    // (pre-shader) source frame even though the live preview shows the
+    // shader". Lets the user record clean video while streaming with
+    // the CRT effect, or vice versa.
+    bool getStreamingApplyShader() const { return m_streamingApplyShader; }
+    void setStreamingApplyShader(bool apply) { m_streamingApplyShader = apply; }
+    bool getRecordingApplyShader() const { return m_recordingApplyShader; }
+    void setRecordingApplyShader(bool apply) { m_recordingApplyShader = apply; }
+
     // Capture info getters
     uint32_t getCaptureWidth() const { return m_captureWidth; }
     uint32_t getCaptureHeight() const { return m_captureHeight; }
+    uint32_t getActualCaptureWidth() const { return m_actualCaptureWidth; }
+    uint32_t getActualCaptureHeight() const { return m_actualCaptureHeight; }
+    float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
+    float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
+    bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
+    void setSourceOverscanPercentX(float pct) {
+        m_sourceOverscanPercentX = pct;
+        if (m_sourceOverscanLocked) m_sourceOverscanPercentY = pct;
+    }
+    void setSourceOverscanPercentY(float pct) {
+        m_sourceOverscanPercentY = pct;
+        if (m_sourceOverscanLocked) m_sourceOverscanPercentX = pct;
+    }
+    void setSourceOverscanLocked(bool locked) {
+        m_sourceOverscanLocked = locked;
+        if (locked) m_sourceOverscanPercentY = m_sourceOverscanPercentX;
+    }
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
     IVideoCapture *getCapture() const { return m_capture; }
@@ -420,6 +457,24 @@ public:
     void triggerRecordingFilenameTemplateChange(const std::string& template_);
     void triggerRecordingIncludeAudioChange(bool include);
     void triggerRecordingStartStop(bool start);
+
+    // Recording profiles — save/load/list/delete the full recording
+    // configuration (codec, preset, bitrate, container, audio, etc.)
+    // as named profiles under $XDG_DATA_HOME/retrocapture/recording_profiles.
+    std::vector<std::string> listRecordingProfiles();
+    bool saveRecordingProfile(const std::string& name);
+    bool loadRecordingProfile(const std::string& name);
+    bool deleteRecordingProfile(const std::string& name);
+    bool recordingProfileExists(const std::string& name);
+
+    // Streaming profiles — analogous to recording profiles, persisting
+    // the streaming configuration (codec, preset, bitrate, port, audio,
+    // buffer tuning) under $XDG_DATA_HOME/retrocapture/streaming_profiles.
+    std::vector<std::string> listStreamingProfiles();
+    bool saveStreamingProfile(const std::string& name);
+    bool loadStreamingProfile(const std::string& name);
+    bool deleteStreamingProfile(const std::string& name);
+    bool streamingProfileExists(const std::string& name);
 
     // Recording callbacks
     void setOnRecordingStartStop(std::function<void(bool)> callback) { m_onRecordingStartStop = callback; }
@@ -610,7 +665,18 @@ private:
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
+    std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
+    std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
+
+    // Master shader pipeline toggle. When false, applyShader is
+    // skipped on the live render path so the user can compare the
+    // effect on/off without dropping the selected shader.
+    bool m_shaderPipelineEnabled = true;
+    // Per-pipeline shader application. False = pipeline pushes the raw
+    // pre-shader source even though the master is on.
+    bool m_streamingApplyShader = true;
+    bool m_recordingApplyShader = true;
 
     // Shader selection
     std::vector<std::string> m_shaderList;
@@ -664,10 +730,19 @@ private:
     std::function<void(const std::string &)> m_onDeviceChanged;
     std::function<void(SourceType)> m_onSourceTypeChanged;
 
-    // Capture info
+    // Capture info: m_captureWidth/Height são a resolução LÓGICA (o que o user
+    // pediu via UI). m_actualCaptureWidth/Height refletem o que o V4L2 entregou
+    // depois do ajuste. Quando diferem, o pipeline faz downscale antes do shader.
     uint32_t m_captureWidth = 0;
     uint32_t m_captureHeight = 0;
+    uint32_t m_actualCaptureWidth = 0;
+    uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
+    // Overscan: crop % das bordas do source antes do downscale.
+    // X horizontal, Y vertical. Locked espelha um no outro.
+    float m_sourceOverscanPercentX = 0.0f;
+    float m_sourceOverscanPercentY = 0.0f;
+    bool m_sourceOverscanLocked = true;
     std::string m_captureDevice;
     std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
     std::function<void(uint32_t)> m_onFramerateChanged;
@@ -724,8 +799,12 @@ private:
     bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
-    size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)
-    size_t m_streamingMaxAudioBufferSize = 20;     // Máximo de chunks no buffer de áudio (5-100)
+    // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)
+    // to give a bit more cushion against client/network jitter — small
+    // frame loss showed up under load even on capable hardware. Audio
+    // bumped to match. Still overridable from config.json.
+    size_t m_streamingMaxVideoBufferSize = 15;     // Máximo de frames no buffer de vídeo (1-50)
+    size_t m_streamingMaxAudioBufferSize = 30;     // Máximo de chunks no buffer de áudio (5-100)
     int64_t m_streamingMaxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (1-30)
     size_t m_streamingAVIOBufferSize = 256 * 1024; // 256KB para buffer AVIO do FFmpeg (64KB-1MB)
 

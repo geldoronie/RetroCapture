@@ -227,6 +227,36 @@ echo ""
 echo "✅ Concluído!"
 echo "📁 Executável: ./build-linux-arm32v7/bin/retrocapture"
 echo ""
+
+# Empacotar tar.gz pós-build em dist/
+VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "unknown")
+RELEASE_VERSION="${VERSION}-alpha"
+SDL_SUFFIX=""
+if [ "$BUILD_WITH_SDL2" = "ON" ]; then
+    SDL_SUFFIX="-sdl2"
+fi
+TARBALL_NAME="RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}.tar.gz"
+STAGING_DIR="dist/staging-arm32v7"
+mkdir -p dist
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}"
+
+if [ -d "build-linux-arm32v7/bin" ]; then
+    cp -r build-linux-arm32v7/bin/. "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}/"
+    if [ -f "README.md" ]; then
+        cp README.md "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}/" 2>/dev/null || true
+    fi
+    if [ -f "LICENSE" ]; then
+        cp LICENSE "$STAGING_DIR/RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}/" 2>/dev/null || true
+    fi
+    rm -f "dist/$TARBALL_NAME"
+    tar -C "$STAGING_DIR" -czf "dist/$TARBALL_NAME" "RetroCapture-${RELEASE_VERSION}-linux-arm32v7${SDL_SUFFIX}"
+    rm -rf "$STAGING_DIR"
+    echo "📦 Tarball: $(pwd)/dist/$TARBALL_NAME"
+    echo "📏 Tamanho: $(du -h dist/$TARBALL_NAME | cut -f1)"
+    echo ""
+fi
+
 if [ "$BUILD_WITH_SDL2" = "ON" ]; then
     echo "💡 Este binário foi compilado com SDL2 (suporte DirectFB/framebuffer)"
     echo "   Para usar DirectFB: export SDL_VIDEODRIVER=directfb && ./build-linux-arm32v7/bin/retrocapture"
