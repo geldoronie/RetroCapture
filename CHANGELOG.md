@@ -7,9 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+
+- WebRTC streaming support
+- RTSP streaming support
+- Additional codec options and configurations
+- Stream authentication and access control
+
+---
+
+## [0.6.0-alpha] - 2026-05-07
+
+Eleventh alpha release. Big reliability pass on the recording / streaming
+pipeline, a major web portal overhaul, named profiles for both streaming and
+recording, and final bits of RetroArch GLSL spec coverage.
+
+**Compared to 0.5.0-alpha**: 11 PRs · 76 files changed · +9,732 / −2,496 lines.
+
 ### Added
 
-- **CPU compatibility mode for distributed binaries** (issue #19)
+- **Recording profiles** (#39) — save / load / delete / apply complete
+  recording settings (codec, bitrate, FPS, shader-apply flag, audio…) by
+  name. Stored as JSON under
+  `~/.local/share/retrocapture/recording_profiles/` (Linux) /
+  `%APPDATA%\RetroCapture\data\recording_profiles\` (Windows). Managed
+  from both the native UI and the web portal.
+- **Streaming profiles** (#42) — same UX as recording profiles, parallel
+  storage under `streaming_profiles/`.
+- **Web portal overhaul** (#43)
+  - Three dedicated pages with shared top navigation: **Home** (live
+    stream player + status), **Recordings** (browse / delete / download),
+    **Configuration** (everything else).
+  - **Live MPEG-TS player** on Home — vendored `mpegts.js` with native
+    fallback.
+  - **Bootstrap + Bootstrap Icons fully vendored** — portal works fully
+    offline via service worker (`v3`).
+  - **Master shader pipeline toggle** — bypass the active preset without
+    losing it.
+  - **Per-pipeline shader override** — stream and recording can
+    independently opt out of the shader, taking the source frame instead
+    of the processed one.
+  - **Editable preset shader parameters** via modal (was native-UI-only).
+  - **Source-tab parity** — V4L2 retro-console preset row matches native
+    UI; duplicated hardcoded V4L2 controls block was removed.
+  - **Overscan controls** exposed in the web UI.
+- **Shader spec coverage** (#29)
+  - Implemented **PassFeedback** ping-pong textures.
+  - Implemented the **OriginalHistory** alias chain and binding of passes
+    by alias.
+  - More upstream RetroArch GLSL presets now load correctly.
+- **Storage path standardization** (#32)
+  - Linux follows **XDG Base Directory** (config / data / cache / videos).
+  - Windows follows **Known Folders** (`SHGetFolderPath` for Roaming
+    AppData, Local AppData, My Videos).
+  - Per-getter env overrides for AppImage / CI / packagers:
+    `RETROCAPTURE_CONFIG_DIR`, `_DATA_DIR`, `_CACHE_DIR`, `_ASSETS_DIR`.
+  - One-shot idempotent migration of legacy
+    `~/.config/retrocapture/assets` → `~/.local/share/retrocapture/`,
+    marker file `MIGRATED.txt` prevents re-runs.
+- **CPU compatibility mode for distributed binaries** (#20, issue #19)
   - `BUILD_COMPATIBLE_X86_64` CMake option — applies `-march=x86-64-v2`
     baseline (or the equivalent `-march=x86-64 -msse4.2 -mno-avx -mno-avx2`
     on toolchains older than GCC 11 / Clang 12). Removes AVX/AVX2 so the
@@ -28,8 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executable links against.
   - `tools/install-deps-manjaro.sh` — automated dependency installation
     for Manjaro / Arch Linux.
-  - `tools/clean-build.sh` — cleans all per-architecture build
-    directories.
+  - `tools/clean-build.sh` — cleans all per-architecture build directories.
+- **Release packaging tooling**
+  - `tools/package-release.sh` — orchestrator that runs every per-platform
+    build script and emits final artifacts under `dist/` together with a
+    `SHA256SUMS` file. Supports `--skip-*` and `--only-*` flags so any
+    subset of platforms can be rebuilt independently.
+  - All four build scripts (AppImage x86_64, Linux ARM64, Linux ARM32v7,
+    Windows installer) now produce artifacts under `dist/` with a unified
+    naming scheme: `RetroCapture-<version>-alpha-<platform>-<arch>.<ext>`.
+  - ARM64 / ARM32 Docker builds package the binary plus `shaders/`,
+    `web/`, `assets/`, `ssl/`, `README.md` and `LICENSE` into a tarball
+    (`RetroCapture-0.6.0-alpha-linux-{arm64v8,arm32v7}.tar.gz`).
 - **Reference documentation**
   - `docs/CPU_COMPATIBILITY.md` — describes the portable baseline for
     each architecture, the compile options, the per-script defaults and
@@ -37,21 +103,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Docker build scripts now default to compatible mode** so the
-  binaries they produce are portable. Native (`-march=native`) builds
-  are still available, but as an explicit opt-in:
+- **Docker build scripts now default to compatible mode** so the binaries
+  they produce are portable. Native (`-march=native`) builds are still
+  available, but as an explicit opt-in:
   - `tools/build-linux-x86_64-docker.sh Release OFF`
   - `tools/build-windows-x86_64-docker.sh Release OFF`
   - `tools/build-linux-arm64v8-docker.sh Release --native`
-- The Windows cross-compile honours the same `BUILD_COMPATIBLE_X86_64`
-  flag, since the MXE / MinGW toolchain inherits `-march=native` from
-  the build host CPU and would otherwise bake AVX/AVX2 into
-  `retrocapture.exe`.
-- Linux x86_64 Docker base image set to Ubuntu 22.04 for broader binary
-  compatibility against systems with older glibc.
+- **Windows cross-compile honours `BUILD_COMPATIBLE_X86_64`** — the MXE /
+  MinGW toolchain inherits `-march=native` from the build host CPU and
+  would otherwise bake AVX/AVX2 into `retrocapture.exe`.
+- **Streaming hardening** (#41)
+  - Audio drains independently and is no longer gated by the sync zone.
+  - TCP send is non-blocking (`MSG_DONTWAIT`).
+  - Client back-pressure handling simplified.
+  - No more audio dropouts during long streaming sessions.
 
 ### Fixed
 
+- **Recording desync at higher quality presets** (#38). Root cause was
+  PTS truncation from `time_base = {1, fps}`; bumped to `{1, 90000}` so
+  PTS granularity matches the encoder's expectations. `medium + 12 Mbps`
+  and above now stay in sync end-to-end.
+- **Recording A/V desync, backpressure and shutdown stability** (#28).
+  Backpressure across the encoding stage; clean shutdown when stopping
+  mid-encode; bounded `stopRecording` join with a 5-second deadline;
+  buffer overflow drops surfaced from `MediaSynchronizer`; `m_desync
+  FrameCount` wired to PTS retrocession events.
+- **Render pipeline latency** (#27). Tightened `glFinish` plus sync
+  `glReadPixels` polling to reduce frame-to-encode latency; capture
+  buffers reused across frames.
+- **Capture presets now actually persist shader parameter overrides**
+  (#33). Previously the overrides were re-loaded from the preset file
+  every time, silently discarding any edits. Also fixes recording
+  thumbnails being saved upside down.
 - **V4L2 capture survives USB device disconnection.** Detect EBADF /
   ENODEV / EIO returned from any V4L2 ioctl, close the file descriptor,
   release mmap'd buffers and fall back to the internal dummy frame
@@ -59,25 +143,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Validates `buf.index` against `m_buffers.size()` before dereferencing
   to avoid an out-of-bounds read after a stale dequeue.
 - **Main loop survives window invalidation.** Re-checks the window
-  pointer and `shouldClose()` flag around `pollEvents` and
-  `swapBuffers` so KVM switching, monitor hot-plug or an X server hiccup
-  no longer segfaults the application. The SDL backend now handles
+  pointer and `shouldClose()` flag around `pollEvents` and `swapBuffers`
+  so KVM switching, monitor hot-plug or an X server hiccup no longer
+  segfaults the application. The SDL backend now handles
   `SDL_WINDOWEVENT_CLOSE` / `HIDDEN` / `EXPOSED` / `FOCUS_LOST` and
   detects an invalid window via `SDL_GetWindowFlags == 0`. The GLFW
   backend installs a SIGSEGV handler around `glfwDestroyWindow` during
   shutdown using `sigsetjmp` / `siglongjmp` to survive faulty driver
   teardown.
-- **Audio capture shutdown is exception-safe.** `AudioCapture::stop
-  Capture()` and `close()` are wrapped in try blocks during
-  `Application::shutdown()` so an exception from PulseAudio / WASAPI
-  during teardown no longer aborts the rest of the cleanup sequence.
+- **Audio capture shutdown is exception-safe.**
+  `AudioCapture::stopCapture()` and `close()` are wrapped in try blocks
+  during `Application::shutdown()`, so an exception from PulseAudio /
+  WASAPI during teardown no longer aborts the rest of the cleanup
+  sequence.
+- **Shader-system polish**: PassPrev<N> {Texture, Input, Output}Size
+  uniforms now bind correctly; `srgb_framebuffer` toggles
+  `GL_FRAMEBUFFER_SRGB` per pass; alpha blending is disabled when drawing
+  shader output to screen; `#pragma parameter` regex accepts negative
+  numbers; `#include` is processed only at start of line; `PARAMETER
+  _UNIFORM` is only defined when the shader actually has a `#pragma
+  parameter`; texture entries are parsed before pass-index extraction;
+  false-positive "no input texture" warning suppressed; pal-singlepass
+  FIRTAPS array-size compile error fixed.
+- **Build script repo-root detection.**
+  `tools/build-windows-installer.sh` was `cd`-ing into `tools/` instead
+  of repo root, causing the "run from project root" guard to fire even
+  when invoked correctly.
 
-### Planned
+### Distribution artifacts
 
-- WebRTC streaming support
-- RTSP streaming support
-- Additional codec options and configurations
-- Stream authentication and access control
+| Platform | Artifact |
+|---|---|
+| Linux x86_64 | `RetroCapture-0.6.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Pi 4/5) | `RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Pi 3) | `RetroCapture-0.6.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe` |
+
+A `SHA256SUMS` file is published alongside the binaries.
+
+### Upgrade notes
+
+- Existing config in `~/.config/retrocapture/config.json` keeps working.
+- First run of 0.6.0 migrates legacy `assets/` and `ssl/` from
+  `~/.config` to `~/.local/share/retrocapture/` (Linux) /
+  `%APPDATA%\RetroCapture\data\` (Windows). Idempotent — marker file
+  `MIGRATED.txt` prevents re-runs.
+- Existing capture presets keep loading. Re-save them once if you want
+  the current shader-parameter overrides to stick (was the bug fixed in
+  #33).
+
+### Pull requests landed
+
+- #20 — feat: CPU compatibility mode for x86-64 builds
+- #27 — perf: render pipeline latency (glFinish, sync glReadPixels)
+- #28 — fix/perf: recording A/V desync, backpressure, shutdown stability
+- #29 — feat: close RetroArch GLSL shader spec gaps (PassFeedback, OriginalHistory)
+- #32 — chore: standardize storage paths (XDG / Known Folders)
+- #33 — fix: capture presets persist shader parameter overrides
+- #38 — fix: recording desync at higher quality presets
+- #39 — feat: recording profiles
+- #41 — chore: streaming audit and harden
+- #42 — feat: streaming profiles
+- #43 — feat: web portal overhaul
 
 ---
 
