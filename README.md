@@ -16,7 +16,7 @@ RetroCapture was born from the desire to experience retro gaming with the authen
 
 ## ⚠️ Development Status
 
-**RetroCapture is currently in active development (v0.5.0-alpha).**
+**RetroCapture is currently in active development (v0.6.0-alpha).**
 
 ### Shader Support
 

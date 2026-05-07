@@ -17,7 +17,8 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 echo "=== RetroCapture Windows Installer Builder ==="
 echo "📦 Build type: $BUILD_TYPE"
@@ -33,7 +34,10 @@ fi
 # O CPack vai gerar o nome automaticamente baseado em CPACK_PACKAGE_FILE_NAME
 # Formato esperado: RetroCapture-{VERSION}-Windows-Setup.exe
 VERSION=$(grep -E "^project\(RetroCapture VERSION" CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+[^ ]*).*/\1/' || echo "0.5.0")
+# Sufixo -alpha pra alinhar com convenção das tags (CMake VERSION é só numérica)
+RELEASE_VERSION="${VERSION}-alpha"
 INSTALLER_NAME="RetroCapture-${VERSION}-Windows-Setup.exe"
+RELEASE_INSTALLER_NAME="RetroCapture-${RELEASE_VERSION}-windows-x86_64-Setup.exe"
 
 # Verificar se Docker está disponível
 if ! command -v docker &> /dev/null; then
@@ -93,12 +97,13 @@ if command -v makensis &> /dev/null; then
     
     # Verificar se o instalador foi gerado
     if [ -f "build-windows-x86_64/${INSTALLER_NAME}" ]; then
-        # Mover para o diretório raiz
-        mv "build-windows-x86_64/${INSTALLER_NAME}" .
+        # Mover para dist/ com nome de release padronizado
+        mkdir -p dist
+        mv "build-windows-x86_64/${INSTALLER_NAME}" "dist/${RELEASE_INSTALLER_NAME}"
         echo ""
         echo "=== Instalador gerado com sucesso! ==="
-        echo "Arquivo: ${INSTALLER_NAME}"
-        echo "Tamanho: $(du -h "${INSTALLER_NAME}" | cut -f1)"
+        echo "Arquivo: dist/${RELEASE_INSTALLER_NAME}"
+        echo "Tamanho: $(du -h "dist/${RELEASE_INSTALLER_NAME}" | cut -f1)"
         exit 0
     else
         echo "Aviso: Instalador não encontrado em build-windows-x86_64/${INSTALLER_NAME}"
@@ -232,14 +237,14 @@ else
     done
 fi
 
-# Se encontrou, mover para o diretório raiz
+# Se encontrou, mover para dist/ com nome de release padronizado
 if [ -n "$INSTALLER_FOUND" ]; then
-    INSTALLER_BASENAME=$(basename "$INSTALLER_FOUND")
-    mv "$INSTALLER_FOUND" .
+    mkdir -p dist
+    mv "$INSTALLER_FOUND" "dist/${RELEASE_INSTALLER_NAME}"
     echo ""
     echo "=== Instalador gerado com sucesso! ==="
-    echo "Arquivo: ${INSTALLER_BASENAME}"
-    echo "Tamanho: $(du -h "${INSTALLER_BASENAME}" | cut -f1)"
+    echo "Arquivo: dist/${RELEASE_INSTALLER_NAME}"
+    echo "Tamanho: $(du -h "dist/${RELEASE_INSTALLER_NAME}" | cut -f1)"
     rm -f build-installer-temp.sh
     exit 0
 else
