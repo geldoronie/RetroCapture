@@ -13,6 +13,7 @@
 #endif
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -20,6 +21,12 @@
 #include <cstdint>
 #include <climits>
 #include "../utils/FilesystemCompat.h"
+
+// Falls back when the CMake compile flag isn't set (e.g. when a tool
+// processes this file without going through the project's build system).
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 
 // Simple JSON helper functions
 namespace
@@ -96,6 +103,23 @@ namespace
     {
         return value ? "true" : "false";
     }
+
+    // FNV-1a 64-bit content hash. Not cryptographic — sufficient for the
+    // remote-client cache-invalidation use case in /meta.
+    std::string fnv1a64Hex(const std::string &content)
+    {
+        const uint64_t FNV_OFFSET = 0xcbf29ce484222325ULL;
+        const uint64_t FNV_PRIME  = 0x100000001b3ULL;
+        uint64_t h = FNV_OFFSET;
+        for (unsigned char c : content)
+        {
+            h ^= c;
+            h *= FNV_PRIME;
+        }
+        std::ostringstream oss;
+        oss << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0') << h;
+        return oss.str();
+    }
 }
 
 APIController::APIController()
@@ -104,7 +128,10 @@ APIController::APIController()
 
 bool APIController::isAPIRequest(const std::string &request) const
 {
-    return request.find("/api/") != std::string::npos;
+    // Routes handled by this controller: /api/v1/* (the REST surface) and
+    // the top-level /meta endpoint used by the remote-stream client protocol.
+    return request.find("/api/") != std::string::npos ||
+           request.find(" /meta") != std::string::npos;
 }
 
 bool APIController::handleRequest(int clientFd, const std::string &request)
@@ -209,6 +236,11 @@ std::string APIController::extractMethod(const std::string &request) const
 std::string APIController::extractPath(const std::string &request) const
 {
     size_t start = request.find(" /api/");
+    if (start == std::string::npos)
+    {
+        // Fall back to top-level routes owned by this controller.
+        start = request.find(" /meta");
+    }
     if (start == std::string::npos)
         return "";
 
@@ -338,7 +370,11 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
 
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
-    if (path == "/api/v1/source")
+    if (path == "/meta")
+    {
+        return handleGETMeta(clientFd);
+    }
+    else if (path == "/api/v1/source")
     {
         return handleGETSource(clientFd);
     }
@@ -976,6 +1012,91 @@ bool APIController::handleGETStatus(int clientFd)
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
+}
+
+// GET /meta — full snapshot of the active shader pipeline + source state, used
+// by a remote RetroCapture client to mirror the server's configuration when
+// consuming /raw. Schema is versioned via "protocolVersion"; see
+// docs/REMOTE_STREAM_PROTOCOL.md.
+bool APIController::handleGETMeta(int clientFd)
+{
+    if (!m_application || !m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "Application or UIManager not available");
+        return true;
+    }
+
+    ShaderEngine *shaderEngine = m_application->getShaderEngine();
+    bool shaderActive = shaderEngine && shaderEngine->isShaderActive();
+    std::string presetName = m_uiManager->getCurrentShader();
+    std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
+    std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
+
+    std::string sourceType;
+    switch (m_uiManager->getSourceType())
+    {
+    case UIManager::SourceType::None: sourceType = "none";       break;
+    case UIManager::SourceType::V4L2: sourceType = "v4l2";       break;
+    case UIManager::SourceType::DS:   sourceType = "directshow"; break;
+    }
+
+    std::ostringstream json;
+    json << "{"
+         << "\"protocolVersion\": 1, "
+         << "\"serverVersion\": " << jsonString(RETROCAPTURE_VERSION) << ", "
+         << "\"shader\": {"
+         <<   "\"active\": "          << jsonBool(shaderActive)                          << ", "
+         <<   "\"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled()) << ", "
+         <<   "\"preset\": "          << jsonString(presetName)                          << ", "
+         <<   "\"presetHash\": "      << jsonString(presetHash)                          << ", "
+         <<   "\"parameters\": [";
+
+    if (shaderActive)
+    {
+        auto params = shaderEngine->getShaderParameters();
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            if (i > 0) json << ", ";
+            const auto &p = params[i];
+            json << "{"
+                 << "\"name\": "         << jsonString(p.name)         << ", "
+                 << "\"value\": "        << jsonNumber(p.value)        << ", "
+                 << "\"defaultValue\": " << jsonNumber(p.defaultValue) << ", "
+                 << "\"min\": "          << jsonNumber(p.min)          << ", "
+                 << "\"max\": "          << jsonNumber(p.max)          << ", "
+                 << "\"step\": "         << jsonNumber(p.step)
+                 << "}";
+        }
+    }
+
+    json <<   "]"
+         << "}, "
+         << "\"source\": {"
+         <<   "\"type\": "   << jsonString(sourceType)                       << ", "
+         <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
+         <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
+         <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())
+         << "}, "
+         << "\"streaming\": {"
+         <<   "\"active\": " << jsonBool(m_uiManager->getStreamingActive()) << ", "
+         <<   "\"url\": "    << jsonString(m_uiManager->getStreamUrl())
+         << "}"
+         << "}";
+
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+std::string APIController::computePresetHash(const std::string &presetPath) const
+{
+    std::ifstream file(presetPath, std::ios::binary);
+    if (!file.is_open())
+    {
+        return "";
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return fnv1a64Hex(buffer.str());
 }
 
 bool APIController::handleGETPlatform(int clientFd)

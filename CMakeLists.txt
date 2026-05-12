@@ -477,6 +477,10 @@ elseif(PLATFORM_MACOS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
 endif()
 
+# Propagar versão do projeto pro código (usado pelo endpoint /meta e afins)
+target_compile_definitions(retrocapture PRIVATE
+    RETROCAPTURE_VERSION="${PROJECT_VERSION}")
+
 # Threading
 find_package(Threads REQUIRED)
 

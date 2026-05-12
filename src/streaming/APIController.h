@@ -96,6 +96,14 @@ private:
      */
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
+    /**
+     * Compute a content hash of a preset file for the /meta endpoint.
+     * Returns an opaque string (e.g. "fnv1a64:abcd...") used by the remote
+     * client to decide whether its locally-cached preset is still valid.
+     * Returns empty string if the file cannot be read.
+     */
+    std::string computePresetHash(const std::string &presetPath) const;
+
     // Endpoints GET (leitura)
     bool handleGET(int clientFd, const std::string &path, const std::string &request);
     bool handleGETSource(int clientFd);
@@ -113,6 +121,7 @@ private:
     bool handleGETV4L2Devices(int clientFd);
     bool handleGETV4L2Controls(int clientFd);
     bool handleGETStatus(int clientFd);
+    bool handleGETMeta(int clientFd);
     bool handleRefreshV4L2Devices(int clientFd);
     bool handleGETPlatform(int clientFd);
     bool handleGETDSDevices(int clientFd);
