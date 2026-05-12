@@ -1,586 +1,353 @@
 # RetroCapture
 
-RetroCapture is a real-time video capture application for Linux and Windows that allows you to apply RetroArch shaders (GLSL) to live video feeds from capture cards, providing authentic retro visual effects and advanced image processing.
-
-## 🎯 Motivation
-
-RetroCapture was born from the desire to experience retro gaming with the authentic feel of classic CRT televisions, while also supporting modern upscaling techniques used in real hardware emulators. The project aims to bridge the gap between nostalgic visual experiences and modern capture technology.
-
-### Key Motivations
-
-- **Authentic Retro Experience**: Apply CRT shaders to recreate the look and feel of classic tube televisions, complete with scanlines, phosphor glow, and curvature effects
-- **Modern Upscaling**: Use advanced upscaling shaders (xBR, Super-xBR, etc.) to enhance image quality while maintaining the retro aesthetic
-- **Real Hardware Emulation**: Achieve visual fidelity similar to what you'd get from real hardware emulators like the Analogue Pocket, MiSTer, or FPGA-based systems
-- **Live Processing**: Process video in real-time from capture cards, allowing you to stream or record with shader effects applied instantly
-- **Flexibility**: Support for hundreds of RetroArch shaders, giving you the freedom to customize your visual experience
-
-## ⚠️ Development Status
-
-**RetroCapture is currently in active development (v0.6.0-alpha).**
-
-### Shader Support
-
-While many shaders work perfectly, not all shaders function as expected. Some complex multi-pass presets may have issues, and certain shader features may not be fully implemented yet. However, a significant number of shaders are working well, including:
-
-- ✅ Most CRT shaders (CRT-Geom, CRT-Pi, CRT-Guest, etc.)
-- ✅ NTSC/PAL shaders
-- ✅ Upscaling shaders (xBR, Super-xBR, etc.)
-- ✅ Handheld console shaders (Game Boy, Game Boy Color, etc.)
-- ✅ Many single-pass and simple multi-pass shaders
-
-### Streaming Status
-
-- ✅ **H.264**: Fully functional and stable
-- ✅ **H.265**: Fully functional with profile and level support
-- ⚠️ **VP8/VP9**: Functional but may appear as "Data: bin_data" in some players (implementation incomplete)
-
-We're continuously working to improve compatibility and add support for more shader features. Contributions and bug reports are welcome!
-
-## ✨ Features
-
-### Video Capture & Processing
-
-- ✅ Real-time video capture via V4L2 (Linux) or DirectShow (Windows)
-- ✅ Full support for RetroArch shaders (GLSL)
-- ✅ Multi-pass presets
-- ✅ Hardware controls (V4L2 on Linux, DirectShow on Windows)
-- ✅ Fullscreen and multi-monitor support
-- ✅ Aspect ratio maintenance
-- ✅ Real-time shader parameter editing
-- ✅ Cross-platform architecture with platform-specific implementations
-
-### Streaming (NEW in 0.2.0-alpha)
-
-- ✅ **HTTP MPEG-TS Streaming**: Stream your processed video over HTTP
-- ✅ **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9
-- ✅ **Audio Streaming**: PulseAudio (Linux) or WASAPI (Windows) integration for system audio capture
-- ✅ **Real-time A/V Synchronization**: Timestamp-based synchronization system
-- ✅ **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
-- ✅ **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
-
-### Video Recording (NEW in 0.5.0-alpha)
-
-- ✅ **Local File Recording**: Record processed video to local files (MP4, MKV, AVI)
-- ✅ **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9 video codecs
-- ✅ **Audio Recording**: AAC, MP3, and Opus audio codecs with optional audio inclusion
-- ✅ **Configurable Quality**: Adjustable resolution, FPS, bitrates, and codec-specific options
-- ✅ **Recording Management**: List, view, delete, and rename recordings
-- ✅ **Thumbnail Generation**: Automatic thumbnail generation from first frame
-- ✅ **Metadata Tracking**: Complete recording metadata with JSON persistence
-- ✅ **Configuration Persistence**: All recording settings saved and restored automatically
-- ✅ **Web Interface**: Full recording control and management through web portal
-
-### Web Portal
-
-- ✅ **Remote Control Interface**: Complete web-based control panel
-- ✅ **REST API**: Full API for remote control of all features
-- ✅ **Real-time Updates**: Live status updates and bidirectional communication
-- ✅ **Progressive Web App (PWA)**: Installable on mobile and desktop
-- ✅ **HTTPS Support**: Optional SSL/TLS encryption
-- ✅ **Customizable UI**: Colors, images, and text labels
-- ✅ **Independent Operation**: Can run separately from streaming
-
-### User Interface
-
-- ✅ Graphical interface with ImGui
-- ✅ Configuration persistence (automatic save/load)
-- ✅ Stream management UI with codec selection
-- ✅ Real-time stream status and client count
-- ✅ Web portal with remote control
-- ✅ Modular UI architecture with separate classes per tab
-
-### Distribution
-
-- ✅ Portable AppImage distribution (Linux)
-- ✅ Windows Installer (NSIS)
-
-## 📸 Visual Examples
-
-### Comparison: Without Shader vs. With Shader
-
-RetroCapture allows you to apply RetroArch shaders in real-time to your video capture, transforming the visual appearance with authentic retro effects.
-
-#### CRT Shader (Mattias)
-
-| Without Shader                                                 | With CRT Mattias Shader                                       |
-| -------------------------------------------------------------- | ------------------------------------------------------------- |
-| ![Without Shader - Mattias](docs/sonic-no-shaders-mattias.png) | ![With Shader - Mattias](docs/sonic-with-shaders-mattias.png) |
-
-#### NTSC Shader
-
-| Without Shader                                           | With NTSC Shader                                        |
-| -------------------------------------------------------- | ------------------------------------------------------- |
-| ![Without Shader - NTSC](docs/sonic-no-shaders-ntsc.png) | ![With Shader - NTSC](docs/sonic-with-shaders-ntsc.png) |
-
-## 📋 Requirements
-
-### Core Dependencies
-
-**Linux:**
-
-- Linux (with V4L2 support)
-- OpenGL 3.3+
-- GLFW 3.x
-- libv4l2
-- libpng
-- X11 (for window manager integration)
-- CMake 3.10+
-- C++17 compiler
-
-**Windows:**
-
-- Windows 7+ (tested on Windows 10/11 and Wine)
-- DirectShow-compatible capture devices
-- OpenGL 3.3+ support
-- CMake 3.10+ (for building)
-- MinGW-w64 or MSVC (for building)
-
-### Streaming Dependencies (for streaming features)
-
-- **FFmpeg** (libavcodec, libavformat, libavutil, libswscale, libswresample)
-  - **libx264**: For H.264 encoding
-  - **libx265**: For H.265/HEVC encoding (optional)
-  - **libvpx**: For VP8/VP9 encoding (optional)
-  - **libfdk-aac** or **libavcodec AAC**: For audio encoding
-- **PulseAudio** (Linux) or **WASAPI** (Windows): For audio capture
-- **nlohmann/json**: For configuration persistence (automatically fetched by CMake)
-
-### Web Portal Dependencies (for web portal features)
-
-- **OpenSSL** (optional): For HTTPS support
-  - Install: `sudo pacman -S openssl` (Arch/Manjaro) or `sudo apt-get install libssl-dev` (Ubuntu/Debian)
-
-## 🔨 Building
-
-> **CPU portability for distributed binaries.** All Docker build scripts
-> default to a portable instruction-set baseline (no AVX/AVX2 on x86_64,
-> no SVE/crypto on ARM64), so the artifacts they produce run on a wide
-> range of hardware. Native CMake invocations still default to
-> `-march=native` for local performance. See
-> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for the
-> per-architecture details and how to opt out.
-
-### Linux (nativo)
-
-```bash
-# Build
-./build.sh
-
-# Run
-./build/bin/retrocapture
-```
-
-### Windows (cross-compile do Linux)
-
-**Opção 1: Gerar Instalador Windows (Recomendado) ⭐**
-
-A forma mais simples para distribuir:
-
-```bash
-# Gerar instalador Windows completo
-./tools/build-windows-installer.sh
-```
-
-Isso irá:
-
-1. Compilar a aplicação via Docker
-2. Gerar instalador NSIS (`RetroCapture-{VERSION}-Windows-Setup.exe`)
-3. Incluir todos os componentes (executável, DLLs, shaders, assets, web portal, SSL)
-
-O instalador estará no diretório raiz do projeto.
-
-**Opção 2: Build Manual (apenas executável)**
-
-```bash
-# Primeira vez (pode demorar 30-60 min para compilar MXE)
-docker-compose build build-windows
-docker-compose run --rm build-windows
-
-# Builds seguintes (muito mais rápido)
-docker-compose run --rm build-windows
-```
-
-O executável estará em `./build-windows-x86_64/bin/retrocapture.exe`
-
-### Raspberry Pi (ARM)
-
-**Opção 1: Build Nativo no Raspberry Pi (Recomendado para Raspberry Pi 4+)**
-
-```bash
-# Instalar dependências
-./tools/install-deps-raspberry-pi.sh
-
-# Build nativo
-./tools/build-on-raspberry-pi.sh
-```
-
-O executável estará em `./build-linux-arm64v8/bin/retrocapture` (ou `build-linux-arm32v7` para ARM32).
-
-**Opção 2: Cross-Compile do Linux x86_64**
-
-```bash
-# Build ARM64v8 (Raspberry Pi 4+)
-./tools/build-linux-arm64v8-docker.sh
-
-# Build ARM32v7 (Raspberry Pi 2, 3, Zero)
-./tools/build-linux-arm32v7-docker.sh
-```
-
-**Nota**: Para Raspberry Pi sem display (headless), o RetroCapture usa SDL2 com DirectFB. Use `--hide-ui` para iniciar sem interface gráfica.
-
-## 📖 Usage
-
-### Basic Usage
-
-```bash
-# Basic capture (V4L2 source)
-./build/bin/retrocapture --source v4l2 --v4l2-device /dev/video0
-
-# With shader
-./build/bin/retrocapture --source v4l2 --preset shaders/shaders_glsl/crt/crt-guest-dr-venom.glslp
-
-# Custom resolution and framerate
-./build/bin/retrocapture --width 1920 --height 1080 --fps 60
-
-# Fullscreen
-./build/bin/retrocapture --fullscreen --monitor 0
-
-# Dummy mode (no capture device)
-./build/bin/retrocapture --source none
-```
-
-### Streaming
-
-Streaming can be configured and started via the GUI (Stream tab), web portal, or CLI. Once streaming is active:
-
-1. **Access the stream**: Open `http://localhost:8080/stream` in a media player (VLC, ffplay, mpv, etc.)
-2. **Multiple clients**: Multiple viewers can connect simultaneously
-3. **Codec selection**: Choose from H.264, H.265, VP8, or VP9 codecs
-4. **Audio included**: System audio is automatically captured and streamed (via PulseAudio)
-
-**Example with ffplay**:
-
-```bash
-# In one terminal, start RetroCapture
-./build/bin/retrocapture --preset shaders/shaders_glsl/crt/crt-pi.glslp
-
-# In another terminal, view the stream
-ffplay http://localhost:8080/stream
-```
-
-**Example with VLC**:
-
-```bash
-# Open VLC → Media → Open Network Stream
-# Enter: http://localhost:8080/stream
-```
-
-### Web Portal
-
-The web portal provides a complete remote control interface accessible from any device on your network:
-
-1. **Access the portal**: Open `http://localhost:8080` (or `https://localhost:8080` if HTTPS is enabled) in a web browser
-2. **Control everything**: Adjust shaders, resolution, FPS, image settings, streaming, and V4L2 controls remotely
-3. **Real-time updates**: All changes are applied immediately without refresh
-4. **Install as PWA**: On mobile devices, you can install the portal as a Progressive Web App for easy access
-
-**Enable web portal via CLI**:
-
-```bash
-# Enable web portal (enabled by default)
-./build/bin/retrocapture --web-portal-enable
-
-# Enable with HTTPS
-./build/bin/retrocapture --web-portal-https --web-portal-ssl-cert ssl/server.crt --web-portal-ssl-key ssl/server.key
-
-# Custom port
-./build/bin/retrocapture --web-portal-port 9000
-```
-
-**Access from mobile device**:
-
-1. Find your computer's local IP (e.g., `192.168.1.100`)
-2. Open `http://192.168.1.100:8080` on your mobile device
-3. Install as PWA (if HTTPS is enabled) for native app experience
-
-**Note**: For PWA installation on local network IPs, HTTPS is required. See `ssl/README.md` for certificate generation instructions.
-
-### Recording
-
-Recording can be configured and started via the GUI (Recording tab), web portal, or API. Once recording is active:
-
-1. **Configure Recording**: Set resolution, FPS, codec, bitrate, container format, and output path
-2. **Start Recording**: Click "Start Recording" button in UI or use API
-3. **Monitor Status**: View recording duration, file size, and filename in real-time
-4. **Stop Recording**: Click "Stop Recording" button when done
-5. **Manage Recordings**: View, download, delete, or rename recordings from the Recordings window
-
-**Recording Features**:
-- Multiple video codecs (H.264, H.265, VP8, VP9)
-- Multiple audio codecs (AAC, MP3, Opus)
-- Multiple container formats (MP4, MKV, AVI)
-- Configurable resolution and frame rate
-- Optional audio recording
-- Automatic thumbnail generation
-- Recording metadata persistence
-
-**Access Recordings**:
-- Local UI: Open "Recordings" window from menu
-- Web Portal: Navigate to Recordings section
-- File System: Recordings saved to configured output directory (default: `recordings/`)
-
-### Command-Line Parameters
-
-#### Shader Options
-
-- `--shader <path>`: Load a simple GLSL shader file (.glsl)
-- `--preset <path>`: Load a RetroArch shader preset (.glslp)
-
-#### Source Type
-
-- `--source <type>`: Select source type
-  - Linux: `none` (dummy mode) or `v4l2` (default: `v4l2`)
-  - Windows: `none` (dummy mode) or `ds` (DirectShow, default: `ds`)
-
-#### Capture Resolution and Framerate
-
-- `--width <pixels>`: Capture width (default: 1920)
-- `--height <pixels>`: Capture height (default: 1080)
-- `--fps <fps>`: Capture framerate (default: 60)
-
-#### Window Configuration
-
-- `--window-width <pixels>`: Initial window width (default: 1920)
-- `--window-height <pixels>`: Initial window height (default: 1080)
-- `--fullscreen`: Start in fullscreen mode
-- `--monitor <index>`: Select monitor for fullscreen (-1 = primary, 0+ = specific monitor)
-- `--maintain-aspect`: Maintain aspect ratio when resizing window
-
-#### Image Processing
-
-- `--brightness <value>`: Overall image brightness (0.0 to 2.0, default: 1.0)
-- `--contrast <value>`: Overall image contrast (0.0 to 2.0, default: 1.0)
-
-#### Hardware Controls
-
-**Linux (V4L2):** These parameters are only applied when `--source v4l2`. They directly control the capture device hardware settings. Values are device-specific and may vary.
-
-- `--v4l2-device <path>`: V4L2 device path (default: `/dev/video0`)
-- `--v4l2-brightness <value>`: V4L2 brightness control (-100 to 100)
-- `--v4l2-contrast <value>`: V4L2 contrast control (-100 to 100)
-- `--v4l2-saturation <value>`: V4L2 saturation control (-100 to 100)
-- `--v4l2-hue <value>`: V4L2 hue control (-100 to 100)
-- `--v4l2-gain <value>`: V4L2 gain control (0 to 100)
-- `--v4l2-exposure <value>`: V4L2 exposure control (-13 to 1)
-- `--v4l2-sharpness <value>`: V4L2 sharpness control (0 to 6)
-- `--v4l2-gamma <value>`: V4L2 gamma control (100 to 300)
-- `--v4l2-whitebalance <value>`: V4L2 white balance temperature control (2800 to 6500)
-
-**Windows (DirectShow):** These parameters are only applied when `--source ds`.
-
-- `--ds-device <index>`: DirectShow device index (default: first available)
-- `--ds-brightness <value>`: DirectShow brightness control (-100 to 100)
-- `--ds-contrast <value>`: DirectShow contrast control (-100 to 100)
-- `--ds-saturation <value>`: DirectShow saturation control (-100 to 100)
-- `--ds-hue <value>`: DirectShow hue control (-100 to 100)
-- `--ds-gain <value>`: DirectShow gain control (0 to 100)
-- `--ds-exposure <value>`: DirectShow exposure control (-13 to 1)
-- `--ds-sharpness <value>`: DirectShow sharpness control (0 to 6)
-- `--ds-gamma <value>`: DirectShow gamma control (100 to 300)
-- `--ds-whitebalance <value>`: DirectShow white balance temperature control (2800 to 6500)
-
-**Note**: Control ranges and availability depend on your capture device. Use the GUI or web portal to discover available controls and their ranges.
-
-#### Web Portal Options
-
-- `--web-portal-enable`: Enable web portal (default: enabled)
-- `--web-portal-disable`: Disable web portal
-- `--web-portal-port <port>`: Web portal port (default: 8080, same as streaming)
-- `--web-portal-https`: Enable HTTPS for web portal
-- `--web-portal-ssl-cert <path>`: SSL certificate path (default: `ssl/server.crt`)
-- `--web-portal-ssl-key <path>`: SSL key path (default: `ssl/server.key`)
-
-### Example Commands
-
-```bash
-# Capture from /dev/video1 at 640x480, 30fps with CRT shader
-./build/bin/retrocapture \
-  --source v4l2 --v4l2-device /dev/video1 \
-  --width 640 --height 480 --fps 30 \
-  --preset shaders/shaders_glsl/crt/crt-pi.glslp
-
-# Fullscreen capture with NTSC shader on monitor 1
-./build/bin/retrocapture \
-  --fullscreen --monitor 1 \
-  --preset shaders/shaders_glsl/ntsc/ntsc-320px-svideo-gauss-scanline.glslp \
-  --maintain-aspect
-
-# Capture with custom brightness/contrast and V4L2 controls
-./build/bin/retrocapture \
-  --source v4l2 \
-  --brightness 1.2 --contrast 1.1 \
-  --v4l2-brightness 60 --v4l2-contrast 40 \
-  --preset shaders/shaders_glsl/crt/crt-geom.glslp
-
-# Enable streaming and web portal with HTTPS
-./build/bin/retrocapture \
-  --source v4l2 \
-  --stream-enable \
-  --web-portal-https \
-  --web-portal-ssl-cert ssl/server.crt \
-  --web-portal-ssl-key ssl/server.key
-
-# Dummy mode for testing without capture device
-./build/bin/retrocapture --source none
-```
-
-## 📦 Building AppImage
-
-```bash
-./tools/build-linux-appimage-x86_64.sh
-```
-
-This will generate a `RetroCapture-<version>-x86_64.AppImage` file that can be run on any compatible Linux distribution without installation.
-
-## 🎮 Using the GUI
-
-Press **F12** to toggle the graphical interface. The GUI provides:
-
-- **Shaders Tab**: Browse and select shaders, edit shader parameters in real-time, save modified presets
-- **Image Tab**: Adjust brightness/contrast, toggle aspect ratio, fullscreen settings, monitor selection
-- **Source Tab**: Select source type (None/V4L2 on Linux, None/DirectShow on Windows), control hardware settings, change resolution/framerate, select capture device
-- **Stream Tab**: Configure streaming settings
-  - Enable/disable streaming
-  - Select video codec (H.264, H.265, VP8, VP9)
-  - Configure codec-specific options (presets, profiles, levels, speed)
-  - Set stream resolution and FPS (via dropdowns)
-  - Adjust video and audio bitrates
-  - View stream URL and active client count
-  - Start/stop streaming with cooldown protection
-- **Recording Tab**: Configure video recording
-  - Real-time recording status (active/inactive, duration, file size, filename)
-  - Resolution and FPS selection (with presets or match capture)
-  - Codec selection and codec-specific options
-  - Bitrate controls with visual sliders
-  - Container format selection (MP4, MKV, AVI)
-  - Output path and filename template configuration
-  - Start/Stop recording button with visual feedback
-- **Recordings Window**: Manage recordings
-  - View recording list with thumbnails
-  - Download recordings
-  - Delete and rename recordings
-  - View recording metadata
-- **Web Portal Tab**: Configure web portal
-  - Enable/disable web portal
-  - Configure HTTPS settings
-  - Customize portal appearance (colors, images, text)
-  - View portal URL and status
-  - Start/stop portal independently from streaming
-- **Info Tab**: View capture device information, resolution, framerate, and application details
-
-**Note**: All settings (including recording settings) are automatically saved to `config.json` and restored on application startup.
-
-## 📚 Documentation
-
-### For Users
-
-- **[CHANGELOG.md](CHANGELOG.md)**: Complete changelog with all version history and new features.
-
-### For Developers
-
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Complete system architecture documentation, main components, data flow, streaming architecture, and code structure.
-
-- **[docs/DESIGN_PATTERNS.md](docs/DESIGN_PATTERNS.md)**: Design patterns used in the project, SOLID principles applied, and contributor guide.
-
-- **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)**: Contribution guidelines, commit rules, and development process.
-
-## 🤝 Contributing
-
-We welcome contributions! Before contributing:
-
-1. Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) to understand commit rules and contribution process
-2. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to understand the code structure
-3. Consult [docs/DESIGN_PATTERNS.md](docs/DESIGN_PATTERNS.md) to follow established patterns
-4. Keep documentation updated when adding new features
-
-### Reporting Issues
-
-When reporting shader compatibility issues, please include:
-
-- Shader preset name and path
-- Error messages (if any)
-- Expected vs. actual behavior
-- Your system information (GPU, drivers, etc.)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🔗 Additional Resources
-
-- **Source Code**: See `src/` for implementations
-- **Shader Examples**: See `shaders/` for shader examples
-- **Build System**: See `build.sh` and `CMakeLists.txt` for build information
-- **Streaming**: See `src/streaming/` for streaming implementation
-- **Audio Capture**: See `src/audio/` for PulseAudio (Linux) and WASAPI (Windows) integration
-- **Video Capture**: See `src/capture/` for V4L2 (Linux) and DirectShow (Windows) implementations
-
-## 🎯 Key Features
-
-RetroCapture provides a comprehensive set of features for real-time video capture and processing:
-
-### Core Features
-
-- **Cross-Platform Support**: Native support for Linux and Windows
-- **Real-Time Video Capture**: Capture from V4L2 devices (Linux) or DirectShow devices (Windows)
-- **RetroArch Shader Support**: Full compatibility with RetroArch GLSL shaders and presets
-- **Multi-Pass Shaders**: Support for complex multi-pass shader presets
-- **Real-Time Processing**: Apply shaders and effects in real-time with minimal latency
-- **Hardware Controls**: Direct control of capture device settings (brightness, contrast, saturation, etc.)
-
-### Streaming & Distribution
-
-- **HTTP MPEG-TS Streaming**: Stream processed video with audio over HTTP
-- **Multi-Codec Support**: H.264, H.265/HEVC, VP8, and VP9 codecs
-- **Audio Streaming**: System audio capture and streaming (PulseAudio on Linux, WASAPI on Windows)
-- **Real-Time A/V Synchronization**: Timestamp-based synchronization system
-- **Multiple Concurrent Clients**: Support for multiple viewers simultaneously
-- **Configurable Quality**: Adjustable bitrates, presets, and codec-specific options
-
-### Web Portal & Remote Control
-
-- **Web-Based Control Interface**: Complete remote control panel accessible from any device
-- **REST API**: Full API for remote control of all application features
-- **Progressive Web App (PWA)**: Installable on mobile devices and desktop
-- **HTTPS/SSL Support**: Optional encryption for web portal and streaming
-- **Real-Time Updates**: Live status updates and bidirectional communication
-- **Customizable UI**: Customize colors, images, and text labels
-
-### User Interface
-
-- **Graphical Interface**: Modern ImGui-based interface with tabbed layout
-- **Configuration Persistence**: Automatic save/load of all settings
-- **Real-Time Parameter Editing**: Edit shader parameters and see changes instantly
-- **Shader Management**: Browse, select, and save shader presets
-- **Stream Management**: Configure and monitor streaming from the UI
-- **Recording Management**: Configure and manage video recordings from the UI
-- **Device Selection**: Easy selection and configuration of capture devices
-
-### Advanced Features
-
-- **Fullscreen & Multi-Monitor**: Fullscreen support with multi-monitor selection
-- **Aspect Ratio Maintenance**: Automatic aspect ratio preservation
-- **Dummy Mode**: Test without capture devices
-- **Modular Architecture**: Clean, extensible codebase following SOLID principles
-- **Cross-Platform Build**: Docker-based cross-compilation for Windows from Linux
-
-For detailed version history and changelog, see [CHANGELOG.md](CHANGELOG.md).
-
-## 🙏 Acknowledgments
-
-- RetroArch community for the extensive shader library
-- GLFW, ImGui, and other open-source projects that make this possible
+> Real-time video capture for Linux and Windows that applies **RetroArch GLSL
+> shaders** (CRT, NTSC, xBR, handheld, …) to live feeds from capture cards.
+> Includes HTTP MPEG-TS streaming, local recording, and a full web portal
+> for remote control.
+
+![Version](https://img.shields.io/badge/version-0.6.0--alpha-orange)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Raspberry%20Pi-lightgrey)
+![Status](https://img.shields.io/badge/status-alpha-yellow)
+
+<!-- SCREENSHOT NEEDED: hero shot. Recommended: native UI fullscreen with a
+     well-known CRT preset applied to a recognizable retro game (Sonic / Mario /
+     Zelda), or the web portal Home page with the live stream playing.
+     Target ~1600x900. Save as docs/screenshots/hero.png -->
+![Hero](docs/screenshots/hero.png)
+
+**[⬇ Download 0.6.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+[Documentation](#documentation) ·
+[Issues](https://github.com/geldoronie/RetroCapture/issues) ·
+[Changelog](CHANGELOG.md)
 
 ---
 
-**Note**: RetroCapture is not affiliated with RetroArch or Sega. This is an independent project for video capture and shader processing.
+## What it does
+
+RetroCapture turns a generic capture card into a "retro-aware" capture rig:
+
+- 🎮 **Real-time capture** from V4L2 (Linux) or DirectShow (Windows) devices.
+- 🌈 **RetroArch GLSL shaders applied live** — single-pass and multi-pass
+  presets, including `PassFeedback` and the `OriginalHistory` alias chain.
+- 📡 **HTTP MPEG-TS streaming** with H.264 / H.265 (VP8 / VP9 experimental)
+  and PulseAudio / WASAPI system-audio capture.
+- ⏺️ **Local recording** to MP4 / MKV / AVI with AAC / MP3 / Opus audio,
+  configurable resolution, FPS and bitrates.
+- 💾 **Named profiles** for both streaming and recording — save / load / delete
+  full configs by name from either the native UI or the web portal.
+- 🌐 **Web portal**: live stream player on Home, recordings browser with
+  thumbnails, full configuration UI, installable as a PWA.
+- 🎛️ **Hardware controls** exposed directly (V4L2 / DirectShow brightness,
+  contrast, saturation, hue, gain, exposure, gamma, white balance, …).
+- 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
+  (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
+
+---
+
+## At a glance
+
+### Shader comparison
+
+RetroCapture applies RetroArch presets in real time. Same capture, different
+shader:
+
+| Without shader | CRT Mattias |
+| -------------- | ----------- |
+| ![Without Shader - Mattias](docs/sonic-no-shaders-mattias.png) | ![With Shader - Mattias](docs/sonic-with-shaders-mattias.png) |
+
+| Without shader | NTSC |
+| -------------- | ---- |
+| ![Without Shader - NTSC](docs/sonic-no-shaders-ntsc.png) | ![With Shader - NTSC](docs/sonic-with-shaders-ntsc.png) |
+
+### Native UI
+
+<!-- SCREENSHOT NEEDED: native ImGui UI with the Shaders tab open and a CRT
+     preset selected, showing the parameter sliders on the right. Capture at
+     ~1280x720. Save as docs/screenshots/native-ui-shaders.png -->
+![Native UI — Shaders tab](docs/screenshots/native-ui-shaders.png)
+
+### Web portal — Home (live player)
+
+<!-- SCREENSHOT NEEDED: web portal Home page, browser window at ~1280x800.
+     Show the embedded MPEG-TS player playing real content, the status panel
+     (FPS, bitrate, clients), and the top navigation. Save as
+     docs/screenshots/portal-home.png -->
+![Web portal — Home](docs/screenshots/portal-home.png)
+
+### Web portal — Recordings browser
+
+<!-- SCREENSHOT NEEDED: web portal Recordings page with a few recordings
+     listed (thumbnails visible, durations, sizes). Save as
+     docs/screenshots/portal-recordings.png -->
+![Web portal — Recordings](docs/screenshots/portal-recordings.png)
+
+### Web portal — Configuration
+
+<!-- SCREENSHOT NEEDED: web portal Configuration page on the Stream or
+     Recording section, showing the profile selector + codec / bitrate
+     controls. Save as docs/screenshots/portal-config.png -->
+![Web portal — Configuration](docs/screenshots/portal-config.png)
+
+### Mobile (PWA)
+
+<!-- SCREENSHOT NEEDED: phone-sized capture (e.g. 390x844) of the portal
+     installed as a PWA. Save as docs/screenshots/portal-mobile.png -->
+![Web portal on mobile](docs/screenshots/portal-mobile.png)
+
+### Profiles in action
+
+<!-- SCREENSHOT NEEDED: profile management modal/panel — either the recording
+     profile selector with a few saved profiles or the streaming one. Save as
+     docs/screenshots/profiles.png -->
+![Named profiles](docs/screenshots/profiles.png)
+
+---
+
+## Download
+
+Pre-built binaries for **0.6.0-alpha** are attached to the
+[latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
+
+| Platform | Artifact |
+| --- | --- |
+| Linux x86_64 | `RetroCapture-0.6.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.6.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe` |
+
+A `SHA256SUMS` file is published alongside the binaries.
+
+> The Linux x86_64 build targets a portable instruction-set baseline
+> (no AVX/AVX2) so it runs on a wide range of CPUs including older
+> Sandy/Ivy Bridge, low-power and virtualized systems. See
+> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for details.
+
+To build from source instead, see [Building](#building) below.
+
+---
+
+## Status
+
+RetroCapture is **alpha** and actively developed. Most things work; some
+edges are still being polished.
+
+| Area | State |
+| --- | --- |
+| Live capture (V4L2 / DirectShow) | ✅ Stable |
+| Shader pipeline (single-pass, multi-pass, PassFeedback, OriginalHistory) | ✅ Stable |
+| H.264 streaming | ✅ Stable |
+| H.265 streaming | ✅ Stable |
+| VP8 / VP9 streaming | ⚠️ Functional but may show as "Data: bin_data" in some players |
+| Local recording (MP4 / MKV / AVI) | ✅ Stable as of 0.6.0 (PTS fix landed) |
+| Web portal | ✅ Stable (full overhaul in 0.6.0) |
+| Profiles (streaming + recording) | ✅ New in 0.6.0 |
+| Raspberry Pi (ARM64 / ARM32) | ✅ Headless via SDL2 + DirectFB |
+
+**Shader compatibility note:** most CRT, NTSC, upscale (xBR, Super-xBR) and
+handheld presets work cleanly. A handful of complex multi-pass presets are
+still being shaken out — bug reports very welcome.
+
+For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
+
+---
+
+## Quick start
+
+### Linux (AppImage)
+
+```bash
+# Download from Releases, then:
+chmod +x RetroCapture-0.6.0-alpha-linux-x86_64.AppImage
+./RetroCapture-0.6.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+```
+
+### Windows
+
+Run the installer (`RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe`),
+then launch RetroCapture from the Start menu. DirectShow is the default
+capture source on Windows.
+
+### Raspberry Pi
+
+```bash
+tar -xzf RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.6.0-alpha-linux-arm64v8
+./retrocapture --source v4l2 --v4l2-device /dev/video0
+```
+
+For Pi 2 / 3 / Zero 2, use the `arm32v7` tarball instead.
+
+### Useful flags
+
+```bash
+# Apply a shader preset
+./retrocapture --preset shaders/shaders_glsl/crt/crt-guest-dr-venom.glslp
+
+# Custom resolution and framerate
+./retrocapture --width 1920 --height 1080 --fps 60
+
+# Fullscreen on monitor 1
+./retrocapture --fullscreen --monitor 1 --maintain-aspect
+
+# No capture device (dummy mode for testing)
+./retrocapture --source none
+
+# Custom web portal port + HTTPS
+./retrocapture --web-portal-port 9000 \
+               --web-portal-https \
+               --web-portal-ssl-cert ssl/server.crt \
+               --web-portal-ssl-key ssl/server.key
+```
+
+Press **F12** to toggle the native UI. Run `./retrocapture --help` for the
+full list of command-line flags (source selection, hardware controls,
+streaming, web portal, …).
+
+---
+
+## Streaming
+
+Once streaming is enabled (UI Stream tab, web portal, or `--stream-enable`),
+the MPEG-TS stream is served at `http://<host>:8080/stream`:
+
+```bash
+# ffplay
+ffplay http://localhost:8080/stream
+
+# VLC
+vlc http://localhost:8080/stream
+
+# mpv
+mpv http://localhost:8080/stream
+```
+
+Multiple clients can connect simultaneously. Bitrate, codec, resolution and
+audio are configured from the UI or via the REST API.
+
+---
+
+## Web portal
+
+The web portal runs on the same port as the stream (default `8080`) and
+gives you full remote control of the application from any browser on
+your network:
+
+- **Home** — live MPEG-TS player (vendored `mpegts.js` with native fallback)
+  plus live status (FPS, bitrate, connected clients).
+- **Recordings** — browse, download, rename and delete recordings with
+  generated thumbnails.
+- **Configuration** — every other setting: source, shader, image processing,
+  stream, recording, hardware controls, profiles.
+- **Offline / PWA** — Bootstrap and Bootstrap Icons are fully vendored and
+  the portal works offline via a service worker; can be installed as a PWA
+  on mobile and desktop.
+
+For PWA installation over a local-network IP, HTTPS is required.
+See [`ssl/README.md`](ssl/README.md) for certificate generation.
+
+---
+
+## Building
+
+> Production builds use the Docker scripts, which default to a portable
+> instruction-set baseline. Native CMake builds default to `-march=native`.
+> See [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md).
+
+### One-shot — build every release artifact
+
+```bash
+./tools/package-release.sh
+```
+
+This runs every platform build in sequence (AppImage x86_64, Linux ARM64,
+Linux ARM32v7, Windows installer) and emits artifacts under `dist/` plus a
+`SHA256SUMS` file. Use `--only-x86`, `--only-arm`, `--only-win` etc. to
+build a subset.
+
+### Per-platform scripts
+
+```bash
+# Linux x86_64 AppImage (Docker — portable baseline)
+./tools/build-linux-appimage-x86_64.sh
+
+# Linux ARM64 / ARM32 cross-compile (Docker + qemu)
+./tools/build-linux-arm64v8-docker.sh
+./tools/build-linux-arm32v7-docker.sh
+
+# Windows installer (NSIS via MXE Docker)
+./tools/build-windows-installer.sh
+
+# Native Linux build (uses your local toolchain)
+./build.sh
+```
+
+All Docker scripts auto-build their image on first run.
+
+### Native build on Raspberry Pi
+
+```bash
+./tools/install-deps-raspberry-pi.sh
+./tools/build-on-raspberry-pi.sh
+```
+
+### Dependencies
+
+**Linux**: V4L2, OpenGL 3.3+, GLFW 3.x, libv4l2, libpng, X11, CMake 3.10+,
+C++17 compiler.
+
+**Windows**: DirectShow-capable device, OpenGL 3.3+, CMake 3.10+, MinGW-w64
+or MSVC.
+
+**Both**: FFmpeg 6.x (libavcodec / libavformat / libavutil / libswscale /
+libswresample) with libx264 (mandatory) and libx265 / libvpx (optional);
+nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
+
+---
+
+## Documentation
+
+- [`CHANGELOG.md`](CHANGELOG.md) — full version history.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture,
+  components, data flow.
+- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns, SOLID
+  notes, contributor guidance.
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions and
+  development process.
+- [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) — instruction-set
+  baselines per architecture, diagnostic workflow.
+
+---
+
+## Contributing
+
+Bug reports, shader-compatibility reports and PRs are very welcome.
+
+Before opening a PR, please read [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)
+for commit conventions and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+for an orientation tour of the codebase.
+
+When reporting a shader that misrenders, please include:
+
+- The preset path (e.g. `shaders/shaders_glsl/crt/<name>.glslp`)
+- Any error messages from the log
+- Expected vs. actual behavior (a screenshot helps a lot)
+- GPU + driver version
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+---
+
+## Acknowledgments
+
+- The **RetroArch community** for the extensive shader library and the
+  GLSL spec that this project implements against.
+- The maintainers of **GLFW**, **Dear ImGui**, **FFmpeg**, **mpegts.js**,
+  **Bootstrap** and **nlohmann/json**.
+
+**Note:** RetroCapture is an independent project and is not affiliated with
+RetroArch, Libretro, Sega, Nintendo, or any other trademark referenced.
