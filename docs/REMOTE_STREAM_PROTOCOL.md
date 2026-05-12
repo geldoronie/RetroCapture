@@ -70,14 +70,50 @@ source state. Content-type is `application/json`.
     ]
   },
 
-  // Source the server is capturing from. The client will configure its
-  // local viewer to match these dimensions and frame rate.
+  // Source the server is capturing from. The client mirrors dimensions,
+  // frame rate, overscan and hardware controls; display-side preferences
+  // (fullscreen / monitor index) are NOT mirrored — those are client-local.
   "source": {
     // One of "none", "v4l2", "directshow".
     "type":   "v4l2",
+    // V4L2 path (e.g. "/dev/video0") or DirectShow device name.
+    // Empty when type == "none".
+    "device": "/dev/video0",
     "width":  640,
     "height": 480,
-    "fps":    60
+    "fps":    60,
+    // Source-side overscan correction (percent on each axis, plus the
+    // X/Y lock toggle from the UI).
+    "overscan": { "x": 0.0, "y": 0.0, "locked": true },
+    // Hardware controls exposed by the active source. Source-type-aware:
+    //   - "v4l2"       — populated from V4L2 ioctls.
+    //   - "directshow" — empty for now; a unified read-only DirectShow
+    //                    controls getter is tracked alongside Phase 2.
+    //   - "none"       — empty.
+    "controls": [
+      {
+        "name":      "brightness",
+        "value":     50,
+        "min":       -100,
+        "max":       100,
+        "step":      1,
+        "available": true
+      }
+    ]
+  },
+
+  // Software image processing applied after capture, before shader. The
+  // client mirrors these because they affect the look of the source frame.
+  "image": {
+    // Multiplicative software brightness / contrast (1.0 = neutral).
+    "brightness":     1.0,
+    "contrast":       1.0,
+    // Whether the renderer preserves the source aspect ratio.
+    "maintainAspect": true,
+    // Output resolution applied after shader, before drawing to window.
+    // 0/0 means "match shader output".
+    "outputWidth":    0,
+    "outputHeight":   0
   },
 
   // Whether /stream and /raw are currently producing frames.
@@ -112,7 +148,7 @@ bump the integer; additive changes (new optional fields) keep it stable.
 
 | protocolVersion | Notes |
 | --- | --- |
-| 1 | Initial Phase 1 snapshot: `shader`, `source`, `streaming` blocks. |
+| 1 | Initial Phase 1 snapshot. Blocks: `shader`, `source` (type, device, dims, overscan, controls), `image`, `streaming`. |
 
 ---
 
@@ -127,13 +163,31 @@ $ curl -s http://localhost:8080/meta | jq .
     "active": true,
     "pipelineEnabled": true,
     "preset": "crt/crt-mattias.glslp",
-    "presetHash": "fnv1a64:0123456789abcdef",
+    "presetHash": "fnv1a64:de5f853079d66290",
     "parameters": [
-      { "name": "CURVATURE",  "value": 0.05, "defaultValue": 0.04, "min": 0.0, "max": 0.10, "step": 0.01 },
-      { "name": "SCANSPEED",  "value": 1.00, "defaultValue": 1.00, "min": 0.0, "max": 5.00, "step": 0.10 }
+      { "name": "CURVATURE", "value": 0.5, "defaultValue": 0.5, "min": 0.0, "max": 1.0,  "step": 0.05 },
+      { "name": "SCANSPEED", "value": 1.0, "defaultValue": 1.0, "min": 0.0, "max": 10.0, "step": 0.5  }
     ]
   },
-  "source":    { "type": "v4l2", "width": 640, "height": 480, "fps": 60 },
+  "source": {
+    "type":     "v4l2",
+    "device":   "/dev/video0",
+    "width":    640,
+    "height":   480,
+    "fps":      60,
+    "overscan": { "x": 0.0, "y": 0.0, "locked": true },
+    "controls": [
+      { "name": "brightness", "value": 50, "min": -100, "max": 100, "step": 1, "available": true },
+      { "name": "contrast",   "value": 40, "min": -100, "max": 100, "step": 1, "available": true }
+    ]
+  },
+  "image": {
+    "brightness":     1.0,
+    "contrast":       1.0,
+    "maintainAspect": true,
+    "outputWidth":    0,
+    "outputHeight":   0
+  },
   "streaming": { "active": true, "url": "http://localhost:8080/stream" }
 }
 ```

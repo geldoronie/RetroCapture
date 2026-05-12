@@ -1073,9 +1073,47 @@ bool APIController::handleGETMeta(int clientFd)
          << "}, "
          << "\"source\": {"
          <<   "\"type\": "   << jsonString(sourceType)                       << ", "
+         <<   "\"device\": " << jsonString(m_uiManager->getCurrentDevice())  << ", "
          <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
          <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
-         <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())
+         <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
+         <<   "\"overscan\": {"
+         <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+         <<     "\"y\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+         <<     "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+         <<   "}, "
+         <<   "\"controls\": [";
+
+    // Hardware controls are source-type-aware: V4L2 has a unified getter today;
+    // DirectShow controls aren't exposed through a single read-only collection
+    // yet, so on Windows the controls array is empty (tracked alongside #47
+    // Phase 2). For "none" we also emit an empty array.
+    if (m_uiManager->getSourceType() == UIManager::SourceType::V4L2)
+    {
+        const auto &controls = m_uiManager->getV4L2Controls();
+        for (size_t i = 0; i < controls.size(); ++i)
+        {
+            if (i > 0) json << ", ";
+            const auto &c = controls[i];
+            json << "{"
+                 << "\"name\": "      << jsonString(c.name) << ", "
+                 << "\"value\": "     << jsonNumber(c.value) << ", "
+                 << "\"min\": "       << jsonNumber(c.min) << ", "
+                 << "\"max\": "       << jsonNumber(c.max) << ", "
+                 << "\"step\": "      << jsonNumber(c.step) << ", "
+                 << "\"available\": " << jsonBool(c.available)
+                 << "}";
+        }
+    }
+
+    json <<   "]"
+         << "}, "
+         << "\"image\": {"
+         <<   "\"brightness\": "     << jsonNumber(m_uiManager->getBrightness())     << ", "
+         <<   "\"contrast\": "       << jsonNumber(m_uiManager->getContrast())       << ", "
+         <<   "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect())   << ", "
+         <<   "\"outputWidth\": "    << jsonNumber(m_uiManager->getOutputWidth())    << ", "
+         <<   "\"outputHeight\": "   << jsonNumber(m_uiManager->getOutputHeight())
          << "}, "
          << "\"streaming\": {"
          <<   "\"active\": " << jsonBool(m_uiManager->getStreamingActive()) << ", "
