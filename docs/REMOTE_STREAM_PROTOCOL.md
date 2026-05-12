@@ -70,40 +70,26 @@ source state. Content-type is `application/json`.
     ]
   },
 
-  // Source the server is capturing from. The client mirrors dimensions,
-  // frame rate, overscan and hardware controls; display-side preferences
-  // (fullscreen / monitor index) are NOT mirrored — those are client-local.
+  // Source-frame configuration as it will arrive on /raw.
+  //
+  // The client's "source" is always the remote stream itself — the server's
+  // capture-chain specifics (V4L2 vs. DirectShow, /dev path, hardware ioctl
+  // values) are intentionally NOT carried here, since the client cannot act
+  // on them. What IS carried is the configuration that describes how each
+  // frame is shaped before reaching the wire.
   "source": {
-    // One of "none", "v4l2", "directshow".
-    "type":   "v4l2",
-    // V4L2 path (e.g. "/dev/video0") or DirectShow device name.
-    // Empty when type == "none".
-    "device": "/dev/video0",
     "width":  640,
     "height": 480,
     "fps":    60,
     // Source-side overscan correction (percent on each axis, plus the
     // X/Y lock toggle from the UI).
-    "overscan": { "x": 0.0, "y": 0.0, "locked": true },
-    // Hardware controls exposed by the active source. Source-type-aware:
-    //   - "v4l2"       — populated from V4L2 ioctls.
-    //   - "directshow" — empty for now; a unified read-only DirectShow
-    //                    controls getter is tracked alongside Phase 2.
-    //   - "none"       — empty.
-    "controls": [
-      {
-        "name":      "brightness",
-        "value":     50,
-        "min":       -100,
-        "max":       100,
-        "step":      1,
-        "available": true
-      }
-    ]
+    "overscan": { "x": 0.0, "y": 0.0, "locked": true }
   },
 
-  // Software image processing applied after capture, before shader. The
-  // client mirrors these because they affect the look of the source frame.
+  // Image-processing settings applied between capture and shader. Carried
+  // for client-side display ("this is how the server is configured") and,
+  // depending on where /raw is tapped in Phase 2, possibly for the client
+  // to reproduce locally as well.
   "image": {
     // Multiplicative software brightness / contrast (1.0 = neutral).
     "brightness":     1.0,
@@ -148,7 +134,7 @@ bump the integer; additive changes (new optional fields) keep it stable.
 
 | protocolVersion | Notes |
 | --- | --- |
-| 1 | Initial Phase 1 snapshot. Blocks: `shader`, `source` (type, device, dims, overscan, controls), `image`, `streaming`. |
+| 1 | Initial Phase 1 snapshot. Blocks: `shader`, `source` (dims, fps, overscan), `image`, `streaming`. |
 
 ---
 
@@ -170,16 +156,10 @@ $ curl -s http://localhost:8080/meta | jq .
     ]
   },
   "source": {
-    "type":     "v4l2",
-    "device":   "/dev/video0",
     "width":    640,
     "height":   480,
     "fps":      60,
-    "overscan": { "x": 0.0, "y": 0.0, "locked": true },
-    "controls": [
-      { "name": "brightness", "value": 50, "min": -100, "max": 100, "step": 1, "available": true },
-      { "name": "contrast",   "value": 40, "min": -100, "max": 100, "step": 1, "available": true }
-    ]
+    "overscan": { "x": 0.0, "y": 0.0, "locked": true }
   },
   "image": {
     "brightness":     1.0,

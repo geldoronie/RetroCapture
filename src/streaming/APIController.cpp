@@ -1032,14 +1032,6 @@ bool APIController::handleGETMeta(int clientFd)
     std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
     std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
 
-    std::string sourceType;
-    switch (m_uiManager->getSourceType())
-    {
-    case UIManager::SourceType::None: sourceType = "none";       break;
-    case UIManager::SourceType::V4L2: sourceType = "v4l2";       break;
-    case UIManager::SourceType::DS:   sourceType = "directshow"; break;
-    }
-
     std::ostringstream json;
     json << "{"
          << "\"protocolVersion\": 1, "
@@ -1072,8 +1064,6 @@ bool APIController::handleGETMeta(int clientFd)
     json <<   "]"
          << "}, "
          << "\"source\": {"
-         <<   "\"type\": "   << jsonString(sourceType)                       << ", "
-         <<   "\"device\": " << jsonString(m_uiManager->getCurrentDevice())  << ", "
          <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
          <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
          <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
@@ -1081,32 +1071,7 @@ bool APIController::handleGETMeta(int clientFd)
          <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
          <<     "\"y\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
          <<     "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-         <<   "}, "
-         <<   "\"controls\": [";
-
-    // Hardware controls are source-type-aware: V4L2 has a unified getter today;
-    // DirectShow controls aren't exposed through a single read-only collection
-    // yet, so on Windows the controls array is empty (tracked alongside #47
-    // Phase 2). For "none" we also emit an empty array.
-    if (m_uiManager->getSourceType() == UIManager::SourceType::V4L2)
-    {
-        const auto &controls = m_uiManager->getV4L2Controls();
-        for (size_t i = 0; i < controls.size(); ++i)
-        {
-            if (i > 0) json << ", ";
-            const auto &c = controls[i];
-            json << "{"
-                 << "\"name\": "      << jsonString(c.name) << ", "
-                 << "\"value\": "     << jsonNumber(c.value) << ", "
-                 << "\"min\": "       << jsonNumber(c.min) << ", "
-                 << "\"max\": "       << jsonNumber(c.max) << ", "
-                 << "\"step\": "      << jsonNumber(c.step) << ", "
-                 << "\"available\": " << jsonBool(c.available)
-                 << "}";
-        }
-    }
-
-    json <<   "]"
+         <<   "}"
          << "}, "
          << "\"image\": {"
          <<   "\"brightness\": "     << jsonNumber(m_uiManager->getBrightness())     << ", "
