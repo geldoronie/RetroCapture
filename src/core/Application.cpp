@@ -393,6 +393,23 @@ bool Application::initCapture()
     if (!m_capture->open(m_devicePath))
     {
         LOG_WARN("Failed to open capture device: " + (m_devicePath.empty() ? "(none)" : m_devicePath));
+
+        // Phase 5b/#47: Remote source has no "dummy fallback" — a remote
+        // stream is either reachable or not. Falling back to dummy here is
+        // what made a failed `--source remote` look like a silent green
+        // screen. Leave m_capture closed and surface the state via the UI;
+        // the user can re-enter a URL and click Connect, which fires the
+        // OnDeviceChanged handler and retries.
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
+        {
+            LOG_INFO("Remote source could not connect. Enter a base URL in the Source tab and click Connect.");
+            if (m_ui)
+            {
+                m_ui->setCaptureInfo(0, 0, 0, "Remote (not connected)");
+            }
+            return true; // Not a fatal initialization error.
+        }
+
         LOG_INFO("Activating dummy mode: generating black frames at specified resolution.");
 #ifdef __linux__
         LOG_INFO("Select a device in the V4L2 tab to use real capture.");
@@ -2088,6 +2105,33 @@ bool Application::initUI()
                                          }
                                      }
 #endif
+
+                                     // Phase 5b/#47: switching INTO Remote — close the
+                                     // current capture (V4L2/DS/None) and stand up an
+                                     // empty VideoCaptureRemote that waits for the
+                                     // user to type a URL + click Connect.
+                                     if (sourceType == UIManager::SourceType::Remote)
+                                     {
+                                         LOG_INFO("Remote source selected — close any active capture, await Connect");
+                                         if (m_remoteMetaSync)
+                                         {
+                                             m_remoteMetaSync->stop();
+                                             m_remoteMetaSync.reset();
+                                         }
+                                         if (m_capture)
+                                         {
+                                             m_capture->stopCapture();
+                                             m_capture->close();
+                                         }
+                                         m_capture = std::make_unique<VideoCaptureRemote>();
+                                         m_devicePath.clear();
+                                         if (m_ui)
+                                         {
+                                             m_ui->setCaptureInfo(0, 0, 0, "Remote (not connected)");
+                                             m_ui->setCurrentDevice("");
+                                             m_ui->setCaptureControls(nullptr);
+                                         }
+                                     }
                                  });
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
@@ -2098,7 +2142,77 @@ bool Application::initUI()
             return;
         }
         processingDeviceChange = true;
-        
+
+        // Phase 5b/#47: when the active source is Remote, this callback
+        // carries the remote BASE URL — not a V4L2 / DirectShow device
+        // path. Spin up (or replace) the VideoCaptureRemote and
+        // RemoteMetaSync to point at the new host. Empty URL == disconnect.
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
+        {
+            LOG_INFO("Remote URL change: " + (devicePath.empty() ? "(disconnect)" : devicePath));
+
+            // Tear down any existing remote pipeline (capture + meta-sync).
+            if (m_remoteMetaSync)
+            {
+                m_remoteMetaSync->stop();
+                m_remoteMetaSync.reset();
+            }
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+            }
+
+            m_devicePath = devicePath;
+
+            if (devicePath.empty())
+            {
+                processingDeviceChange = false;
+                return;
+            }
+
+            // Recreate the capture as Remote (the existing instance might be
+            // V4L2/DS if the user just flipped source type).
+            m_capture = std::make_unique<VideoCaptureRemote>();
+            if (m_capture->open(devicePath))
+            {
+                m_capture->startCapture();
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                         m_captureFps, devicePath);
+                }
+                // Re-start the /meta poller against the new host.
+                m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
+                m_remoteMetaSync->start(devicePath,
+                    [this](const RemoteMetaSync::Snapshot &snap)
+                    {
+                        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
+                        m_pendingRemotePreset          = snap.preset;
+                        m_pendingRemotePresetHash      = snap.presetHash;
+                        m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
+                        m_pendingRemoteParams.clear();
+                        m_pendingRemoteParams.reserve(snap.parameters.size());
+                        for (const auto &p : snap.parameters)
+                        {
+                            m_pendingRemoteParams.emplace_back(p.name, p.value);
+                        }
+                        m_hasPendingRemoteMeta.store(true);
+                    });
+            }
+            else
+            {
+                LOG_WARN("Failed to connect to remote host " + devicePath);
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(0, 0, 0, "Remote (disconnected)");
+                }
+            }
+
+            processingDeviceChange = false;
+            return;
+        }
+
         // If devicePath is empty, it means "None" - activate dummy mode
         if (devicePath.empty())
         {

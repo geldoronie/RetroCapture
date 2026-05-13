@@ -3,6 +3,7 @@
 #include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cstring>
 #ifdef __linux__
 #include <linux/videodev2.h>
 #endif
@@ -40,6 +41,12 @@ void UIConfigurationSource::render()
 
     // Renderizar controles específicos da fonte selecionada
     UIManager::SourceType sourceType = m_uiManager->getSourceType();
+
+    if (sourceType == UIManager::SourceType::Remote)
+    {
+        renderRemoteControls();
+        return;
+    }
 #ifdef __linux__
     if (sourceType == UIManager::SourceType::V4L2)
     {
@@ -73,17 +80,24 @@ void UIConfigurationSource::renderSourceTypeSelection()
     ImGui::Spacing();
 
 // Dropdown para seleção do tipo de fonte
+// "Remote" lives on every platform — it's just an HTTP MPEG-TS consumer.
 #ifdef __linux__
-    const char *sourceTypeNames[] = {"None", "V4L2"};
-    // Mapeamento: índice 0 = None (0), índice 1 = V4L2 (1)
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
+    const char *sourceTypeNames[] = {"None", "V4L2", "Remote"};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::V4L2,
+        UIManager::SourceType::Remote};
 #elif defined(_WIN32)
-    const char *sourceTypeNames[] = {"None", "DirectShow"};
-    // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::DS};
+    const char *sourceTypeNames[] = {"None", "DirectShow", "Remote"};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::DS,
+        UIManager::SourceType::Remote};
 #else
-    const char *sourceTypeNames[] = {"None"};
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
+    const char *sourceTypeNames[] = {"None", "Remote"};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::Remote};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -673,5 +687,77 @@ void UIConfigurationSource::renderQuickResolutions()
     if (ImGui::Button("3840x2160"))
     {
         m_uiManager->triggerResolutionChange(3840, 2160);
+    }
+}
+
+void UIConfigurationSource::renderRemoteControls()
+{
+    // Seed the input buffer from the current device path (which doubles as
+    // the remote URL for Remote source) the first time we render. Without
+    // this the field appears empty even if --remote-url was used.
+    if (m_remoteUrlBuffer[0] == 0)
+    {
+        std::string current = m_uiManager->getCurrentDevice();
+        if (current.empty()) current = "http://localhost:8080";
+        std::strncpy(m_remoteUrlBuffer, current.c_str(), sizeof(m_remoteUrlBuffer) - 1);
+        m_remoteUrlBuffer[sizeof(m_remoteUrlBuffer) - 1] = '\0';
+    }
+
+    ImGui::TextWrapped(
+        "Consume a remote RetroCapture stream. The client decodes the host's "
+        "/raw feed and mirrors its shader pipeline via /meta. See #47.");
+    ImGui::Spacing();
+
+    ImGui::Text("Remote base URL");
+    ImGui::SetNextItemWidth(-100.0f);
+    ImGui::InputText("##remoteUrl", m_remoteUrlBuffer, sizeof(m_remoteUrlBuffer));
+    ImGui::SameLine();
+
+    const std::string currentDevice = m_uiManager->getCurrentDevice();
+    const bool connected = !currentDevice.empty() &&
+                           (m_capture && m_capture->isOpen());
+
+    if (!connected)
+    {
+        if (ImGui::Button("Connect"))
+        {
+            std::string url(m_remoteUrlBuffer);
+            // Strip a trailing slash so the appended /raw and /meta land
+            // cleanly down in VideoCaptureRemote / RemoteMetaSync.
+            while (!url.empty() && url.back() == '/') url.pop_back();
+            if (!url.empty())
+            {
+                // setCurrentDevice fires m_onDeviceChanged, which is
+                // Application's connect-to-remote handler.
+                m_uiManager->setCurrentDevice(url);
+            }
+        }
+    }
+    else
+    {
+        if (ImGui::Button("Disconnect"))
+        {
+            m_uiManager->setCurrentDevice("");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextDisabled("Status");
+    if (m_capture && m_capture->isOpen())
+    {
+        ImGui::Text(" Stream:  %ux%u",
+                    static_cast<unsigned>(m_capture->getWidth()),
+                    static_cast<unsigned>(m_capture->getHeight()));
+    }
+    else
+    {
+        ImGui::TextWrapped(
+            " Not connected. Enter the host's base URL (e.g. "
+            "http://localhost:8080) and click Connect.");
     }
 }

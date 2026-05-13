@@ -114,9 +114,11 @@ void UIConfiguration::render()
 
         if (ImGui::BeginTabItem("Source"))
         {
-            ImGui::BeginDisabled(remote);
+            // Source tab is intentionally NOT wrapped in BeginDisabled(remote):
+            // the source-type dropdown + Remote URL field must stay
+            // interactive so the user can disconnect / point at a different
+            // remote without restarting RetroCapture.
             sourceTab.render();
-            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
