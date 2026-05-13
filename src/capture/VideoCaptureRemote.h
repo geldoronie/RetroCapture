@@ -142,9 +142,24 @@ private:
     std::mutex             m_frameMutex;
     std::deque<QueuedFrame> m_frameQueue;
     // Last frame handed to the consumer — used to keep something on screen
-    // (rather than dummy black) when the queue is momentarily empty.
+    // (rather than dummy black) when the queue is momentarily empty, and
+    // as one of the two endpoints for the per-refresh interpolation
+    // (see m_blendBuffer below).
     QueuedFrame             m_lastConsumed;
     std::atomic<bool>       m_hasFrame{false};
+
+    // Per-refresh interpolation output buffer. The classic 3:2 pulldown
+    // problem (60 fps stream into a 144 Hz panel = 2.4 refreshes per
+    // frame → alternating 2/3-refresh hold times → visible judder) is
+    // a non-integer ratio issue that no choice of stream rate can fully
+    // solve at the client side. Instead, on every captureLatestFrame
+    // call we LERP between m_lastConsumed and the next queued frame
+    // using t = (now - prevTarget) / (nextTarget - prevTarget), so each
+    // refresh shows a unique intermediate image rather than a held
+    // duplicate. Indistinguishable from real motion at typical
+    // stream:refresh ratios; the dependency on the server transmitting
+    // at a "magic" matched rate goes away.
+    std::vector<uint8_t> m_blendBuffer;
 
     // PTS-anchored playback. On the first decoded frame we record the
     // current wall clock as the "stream zero" reference and the frame's

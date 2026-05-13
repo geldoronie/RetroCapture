@@ -233,24 +233,21 @@ bool VideoCaptureRemote::captureFrame(Frame &frame)
 bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    // PTS-anchored release with a half-frame leniency window. The decoder
-    // tagged each queued frame with the wall-clock time it should appear
-    // on screen; we pop frames whose target has been reached, keeping the
-    // most recent one as "currently displayed". The half-frame window
-    // (kReleaseLeadUs) is the fix for "60 fps stream on a 60 Hz display
-    // doesn't feel like 60 fps": with a strict at-or-after PTS gate, a
-    // frame whose PTS jittered 1-2 ms later than the next display refresh
-    // missed that refresh and ended up shown for two cycles instead of
-    // one — invisible 3:2 pulldown judder. Allowing release up to ~8 ms
-    // before the target lets each frame land on the nearest refresh
-    // boundary instead of strictly the next one after PTS. The user
-    // worked around this by streaming at 120 fps, where every poll had
-    // a fresh frame whether or not the gate was strict; with this fix
-    // 60 fps streaming should feel as smooth as 120 fps used to.
-    constexpr int64_t kReleaseLeadUs = 8333; // half a 60 Hz frame
+    // PTS-anchored release with per-refresh linear interpolation. The
+    // decoder tagged each queued frame with the wall-clock time at
+    // which it should appear on screen. We drain frames whose target
+    // has passed (current frame becomes m_lastConsumed), then LERP
+    // between m_lastConsumed and queue.front() based on how far the
+    // current wall clock is between the two — so each refresh of a
+    // 144 Hz panel showing a 60 fps stream gets a unique intermediate
+    // image instead of an alternating 2-or-3-refresh hold. That
+    // eliminates the 3:2 pulldown judder that's otherwise inherent to
+    // any non-integer stream:refresh ratio, and lets the server
+    // transmit at whatever rate it wants without the client needing
+    // a "magic" matched fps.
     const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch()).count();
-    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs + kReleaseLeadUs)
+    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
         m_frameQueue.pop_front();
@@ -260,8 +257,66 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     {
         return false;
     }
-    frame.data   = m_lastConsumed.rgb.data();
-    frame.size   = m_lastConsumed.rgb.size();
+
+    // Output buffer pointer & size — default to the cached frame; the
+    // interpolation path below replaces it with m_blendBuffer when
+    // there's a 'next' frame to interpolate toward. Frame.data is a
+    // non-const uint8_t* in the IVideoCapture contract; cast away
+    // const here because the downstream FrameProcessor never mutates
+    // these bytes — it just uploads them to a texture.
+    uint8_t *outData = m_lastConsumed.rgb.data();
+    size_t outSize   = m_lastConsumed.rgb.size();
+
+    if (!m_frameQueue.empty())
+    {
+        const QueuedFrame &next = m_frameQueue.front();
+        // Both endpoints must have matching dims for a meaningful blend.
+        // The shader pipeline / texture upload would reject a size
+        // mismatch anyway, so just skip interpolation across a resize.
+        if (next.width == m_lastConsumed.width &&
+            next.height == m_lastConsumed.height &&
+            next.rgb.size() == m_lastConsumed.rgb.size() &&
+            next.targetWallUs > m_lastConsumed.targetWallUs)
+        {
+            const int64_t span = next.targetWallUs - m_lastConsumed.targetWallUs;
+            int64_t pos = nowWallUs - m_lastConsumed.targetWallUs;
+            if (pos < 0) pos = 0;
+            if (pos > span) pos = span;
+            // 0..256 fixed-point weight for the *next* frame; (256 - tFp)
+            // weights the previous frame. Tighter than float math and
+            // autovectorises cleanly to AVX2 byte-blend on x86_64.
+            const int tFp     = static_cast<int>((pos * 256) / span);
+            const int oneMinus = 256 - tFp;
+
+            if (tFp > 0 && tFp < 256)
+            {
+                if (m_blendBuffer.size() != m_lastConsumed.rgb.size())
+                {
+                    m_blendBuffer.assign(m_lastConsumed.rgb.size(), 0);
+                }
+                const uint8_t *a = m_lastConsumed.rgb.data();
+                const uint8_t *b = next.rgb.data();
+                uint8_t *o       = m_blendBuffer.data();
+                const size_t n   = m_blendBuffer.size();
+                for (size_t i = 0; i < n; ++i)
+                {
+                    o[i] = static_cast<uint8_t>((a[i] * oneMinus + b[i] * tFp) >> 8);
+                }
+                outData = m_blendBuffer.data();
+                outSize = m_blendBuffer.size();
+            }
+            else if (tFp >= 256)
+            {
+                // Exactly at next frame's target — show next directly.
+                outData = const_cast<uint8_t *>(next.rgb.data());
+                outSize = next.rgb.size();
+            }
+            // tFp == 0 → still on m_lastConsumed, default path.
+        }
+    }
+
+    frame.data   = outData;
+    frame.size   = outSize;
     frame.width  = m_lastConsumed.width;
     frame.height = m_lastConsumed.height;
     frame.format = 0; // RGB24 — FrameProcessor's non-YUYV path
