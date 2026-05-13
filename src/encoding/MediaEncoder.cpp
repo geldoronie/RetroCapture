@@ -548,10 +548,13 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
     codecCtx->profile = FF_PROFILE_H264_MAIN;
 
     AVDictionary *opts = nullptr;
-    // Per-backend tuning. Defaults aim at low-latency live streaming.
+    // Per-backend tuning. hwPreset from the UI overrides the default
+    // when non-empty; meaning differs per backend (NVENC preset / VAAPI
+    // rc_mode / QSV preset / AMF quality).
+    const std::string &userPreset = m_videoConfig.hwPreset;
     if (backend == HardwareEncoder::NVENC)
     {
-        av_dict_set(&opts, "preset", "p4", 0);           // p1=fastest..p7=slowest
+        av_dict_set(&opts, "preset", userPreset.empty() ? "p4" : userPreset.c_str(), 0);
         av_dict_set(&opts, "tune",   "ll",  0);          // low-latency
         av_dict_set(&opts, "rc",     "cbr", 0);
         av_dict_set_int(&opts, "zerolatency", 1, 0);
@@ -559,20 +562,20 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
     }
     else if (backend == HardwareEncoder::VAAPI)
     {
-        av_dict_set(&opts, "rc_mode", "CBR", 0);
+        av_dict_set(&opts, "rc_mode", userPreset.empty() ? "CBR" : userPreset.c_str(), 0);
         // low_power=1 is unsupported on a chunk of AMD parts — let the
         // driver pick the entry path instead.
         av_dict_set_int(&opts, "idr_interval", static_cast<int>(m_videoConfig.fps * 2), 0);
     }
     else if (backend == HardwareEncoder::QSV)
     {
-        av_dict_set(&opts, "preset", "veryfast", 0);
+        av_dict_set(&opts, "preset", userPreset.empty() ? "veryfast" : userPreset.c_str(), 0);
         av_dict_set_int(&opts, "look_ahead", 0, 0);
     }
     else if (backend == HardwareEncoder::AMF)
     {
-        av_dict_set(&opts, "usage", "transcoding", 0);
-        av_dict_set(&opts, "quality", "speed",     0);
+        av_dict_set(&opts, "usage",   "transcoding", 0);
+        av_dict_set(&opts, "quality", userPreset.empty() ? "speed" : userPreset.c_str(), 0);
         av_dict_set(&opts, "rc",      "cbr",       0);
     }
 

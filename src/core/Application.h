@@ -294,6 +294,10 @@ private:
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
     int m_streamingHardwareEncoder = 0;             // 0 = Auto (MediaEncoder::HardwareEncoder enum value)
+    std::string m_streamingNvencPreset = "p4";
+    std::string m_streamingVaapiRcMode = "CBR";
+    std::string m_streamingQsvPreset   = "veryfast";
+    std::string m_streamingAmfQuality  = "speed";
 
     // Buffer configuration
     size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)

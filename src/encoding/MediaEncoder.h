@@ -54,6 +54,14 @@ public:
         int vp8Speed = 12;                // 0-16
         int vp9Speed = 6;                 // 0-9
         HardwareEncoder hardwareEncoder = HardwareEncoder::Auto;
+        // Free-form quality / preset value whose interpretation depends
+        // on the active hardware backend:
+        //   NVENC: "p1".."p7"
+        //   VAAPI: "CBR" / "VBR" / "CQP"
+        //   QSV:   "veryfast".."veryslow"
+        //   AMF:   "speed" / "balanced" / "quality"
+        // Empty string falls back to the backend's hardcoded default.
+        std::string hwPreset;
     };
 
     // Configuração de áudio

@@ -83,6 +83,7 @@ public:
     void setVP9Speed(int speed) { m_vp9Speed = speed; }
     void setHardwareEncoder(MediaEncoder::HardwareEncoder h) { m_hardwareEncoder = h; }
     MediaEncoder::HardwareEncoder getHardwareEncoder() const { return m_hardwareEncoder; }
+    void setHardwareEncoderPreset(const std::string &p) { m_hardwareEncoderPreset = p; }
 
     // HTTPS configuration
     void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
@@ -217,6 +218,7 @@ private:
     int m_vp8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_vp9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
     MediaEncoder::HardwareEncoder m_hardwareEncoder = MediaEncoder::HardwareEncoder::Auto;
+    std::string m_hardwareEncoderPreset;
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*

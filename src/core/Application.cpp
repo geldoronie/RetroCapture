@@ -1109,6 +1109,10 @@ bool Application::initUI()
     m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
     m_streamingH264Preset = m_ui->getStreamingH264Preset();
     m_streamingHardwareEncoder = m_ui->getStreamingHardwareEncoder();
+    m_streamingNvencPreset = m_ui->getStreamingNvencPreset();
+    m_streamingVaapiRcMode = m_ui->getStreamingVaapiRcMode();
+    m_streamingQsvPreset   = m_ui->getStreamingQsvPreset();
+    m_streamingAmfQuality  = m_ui->getStreamingAmfQuality();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1527,6 +1531,30 @@ bool Application::initUI()
             m_streamManager.reset();
             initStreaming();
         } });
+
+    // Per-backend preset/quality strings — same restart-on-change
+    // policy as above, since these all end up in opts that are passed
+    // to avcodec_open2 at MediaEncoder::initializeHardwareVideoCodec.
+    auto restartIfStreaming = [this] {
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    };
+    m_ui->setOnStreamingNvencPresetChanged([this, restartIfStreaming](const std::string &v) {
+        m_streamingNvencPreset = v; restartIfStreaming();
+    });
+    m_ui->setOnStreamingVaapiRcModeChanged([this, restartIfStreaming](const std::string &v) {
+        m_streamingVaapiRcMode = v; restartIfStreaming();
+    });
+    m_ui->setOnStreamingQsvPresetChanged([this, restartIfStreaming](const std::string &v) {
+        m_streamingQsvPreset = v; restartIfStreaming();
+    });
+    m_ui->setOnStreamingAmfQualityChanged([this, restartIfStreaming](const std::string &v) {
+        m_streamingAmfQuality = v; restartIfStreaming();
+    });
 
     // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
@@ -2559,7 +2587,21 @@ bool Application::initStreaming()
     if (m_streamingVideoCodec == "h264")
     {
         tsStreamer->setH264Preset(m_streamingH264Preset);
-        tsStreamer->setHardwareEncoder(static_cast<MediaEncoder::HardwareEncoder>(m_streamingHardwareEncoder));
+        auto hw = static_cast<MediaEncoder::HardwareEncoder>(m_streamingHardwareEncoder);
+        tsStreamer->setHardwareEncoder(hw);
+        // Pick the backend-specific preset string. For Auto we let
+        // MediaEncoder hardcode its default (empty string) since the
+        // actual backend isn't resolved until codec-open time.
+        std::string backendPreset;
+        switch (hw)
+        {
+            case MediaEncoder::HardwareEncoder::NVENC: backendPreset = m_streamingNvencPreset; break;
+            case MediaEncoder::HardwareEncoder::VAAPI: backendPreset = m_streamingVaapiRcMode; break;
+            case MediaEncoder::HardwareEncoder::QSV:   backendPreset = m_streamingQsvPreset;   break;
+            case MediaEncoder::HardwareEncoder::AMF:   backendPreset = m_streamingAmfQuality;  break;
+            default: backendPreset.clear(); break;
+        }
+        tsStreamer->setHardwareEncoderPreset(backendPreset);
     }
     // Configure H.265 preset, profile and level (if applicable)
     else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")

@@ -1951,6 +1951,34 @@ void UIManager::triggerStreamingHardwareEncoderChange(int v)
     saveConfig();
 }
 
+void UIManager::triggerStreamingNvencPresetChange(const std::string &v)
+{
+    m_streamingNvencPreset = v;
+    if (m_onStreamingNvencPresetChanged) m_onStreamingNvencPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingVaapiRcModeChange(const std::string &v)
+{
+    m_streamingVaapiRcMode = v;
+    if (m_onStreamingVaapiRcModeChanged) m_onStreamingVaapiRcModeChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingQsvPresetChange(const std::string &v)
+{
+    m_streamingQsvPreset = v;
+    if (m_onStreamingQsvPresetChanged) m_onStreamingQsvPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
+{
+    m_streamingAmfQuality = v;
+    if (m_onStreamingAmfQualityChanged) m_onStreamingAmfQualityChanged(v);
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2178,6 +2206,14 @@ void UIManager::loadConfig()
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
             if (streaming.contains("hardwareEncoder"))
                 m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
+            if (streaming.contains("nvencPreset"))
+                m_streamingNvencPreset = streaming["nvencPreset"].get<std::string>();
+            if (streaming.contains("vaapiRcMode"))
+                m_streamingVaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
+            if (streaming.contains("qsvPreset"))
+                m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
+            if (streaming.contains("amfQuality"))
+                m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -2539,6 +2575,10 @@ void UIManager::saveConfig()
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
             {"hardwareEncoder", m_streamingHardwareEncoder},
+            {"nvencPreset", m_streamingNvencPreset},
+            {"vaapiRcMode", m_streamingVaapiRcMode},
+            {"qsvPreset",   m_streamingQsvPreset},
+            {"amfQuality",  m_streamingAmfQuality},
             {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 

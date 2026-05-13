@@ -285,6 +285,10 @@ public:
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
     int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
+    std::string getStreamingNvencPreset() const { return m_streamingNvencPreset; }
+    std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
+    std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
+    std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -302,6 +306,10 @@ public:
     void triggerStreamingVP8SpeedChange(int speed);
     void triggerStreamingVP9SpeedChange(int speed);
     void triggerStreamingHardwareEncoderChange(int v);
+    void triggerStreamingNvencPresetChange(const std::string &v);
+    void triggerStreamingVaapiRcModeChange(const std::string &v);
+    void triggerStreamingQsvPresetChange(const std::string &v);
+    void triggerStreamingAmfQualityChange(const std::string &v);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -399,6 +407,10 @@ public:
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
     void setOnStreamingHardwareEncoderChanged(std::function<void(int)> callback) { m_onStreamingHardwareEncoderChanged = callback; }
+    void setOnStreamingNvencPresetChanged(std::function<void(const std::string &)> cb) { m_onStreamingNvencPresetChanged = cb; }
+    void setOnStreamingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onStreamingVaapiRcModeChanged = cb; }
+    void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
+    void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -804,6 +816,15 @@ private:
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
     int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
+    // Per-backend quality / preset values — the Streaming-tab UI shows
+    // whichever combo matches the currently selected hardware encoder.
+    // Stored separately so switching encoders preserves each backend's
+    // previously chosen value rather than collapsing them onto one
+    // shared string whose meaning would shift mid-flight.
+    std::string m_streamingNvencPreset = "p4";      // p1 (fastest) .. p7 (slowest)
+    std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
+    std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
+    std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -837,6 +858,10 @@ private:
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
     std::function<void(int)> m_onStreamingHardwareEncoderChanged;
+    std::function<void(const std::string &)> m_onStreamingNvencPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingVaapiRcModeChanged;
+    std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

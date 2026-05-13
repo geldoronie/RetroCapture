@@ -344,6 +344,67 @@ void UIConfigurationStreaming::renderCodecSettings()
                               "podem falhar em runtime se driver/permissão estiverem ausentes — caso\n"
                               "isso aconteça, o stream volta a libx264 automaticamente.");
         }
+
+        // Backend-specific quality / rate-control combo. libx264 keeps
+        // its existing "Qualidade H.264" dropdown rendered below;
+        // hardware backends each expose the parameter that matters most
+        // for them. Auto is treated as software-fallback for UX purposes
+        // — the actual backend is resolved at codec-open time anyway.
+        MediaEncoder::HardwareEncoder activeHw = options[currentIndex];
+        auto renderEnumCombo = [&](const char *label, const char *const *items, int itemCount,
+                                   const std::string &currentValue,
+                                   std::function<void(const std::string &)> onChange,
+                                   const char *tooltip)
+        {
+            int idx = 0;
+            for (int i = 0; i < itemCount; ++i)
+            {
+                if (currentValue == items[i]) { idx = i; break; }
+            }
+            if (ImGui::Combo(label, &idx, items, itemCount))
+            {
+                onChange(items[idx]);
+            }
+            if (tooltip && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", tooltip);
+            }
+        };
+
+        if (activeHw == MediaEncoder::HardwareEncoder::NVENC)
+        {
+            static const char *items[] = {"p1", "p2", "p3", "p4", "p5", "p6", "p7"};
+            renderEnumCombo("Preset NVENC", items, 7, m_uiManager->getStreamingNvencPreset(),
+                            [this](const std::string &v) { m_uiManager->triggerStreamingNvencPresetChange(v); },
+                            "p1 = fastest (qualidade mais baixa) ... p7 = slowest (melhor qualidade).\n"
+                            "p4 é o equilíbrio recomendado para streaming em tempo real.");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::VAAPI)
+        {
+            static const char *items[] = {"CBR", "VBR", "CQP"};
+            renderEnumCombo("Rate Control VAAPI", items, 3, m_uiManager->getStreamingVaapiRcMode(),
+                            [this](const std::string &v) { m_uiManager->triggerStreamingVaapiRcModeChange(v); },
+                            "CBR = bitrate constante (recomendado para streaming).\n"
+                            "VBR = bitrate variável (melhor pra gravação).\n"
+                            "CQP = qualidade fixa (ignora bitrate, qualidade constante).");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::QSV)
+        {
+            static const char *items[] = {"veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"};
+            renderEnumCombo("Preset QSV", items, 7, m_uiManager->getStreamingQsvPreset(),
+                            [this](const std::string &v) { m_uiManager->triggerStreamingQsvPresetChange(v); },
+                            "Presets do Intel Quick Sync. Mais rápido = menos qualidade.\n"
+                            "veryfast/faster são recomendados pra tempo real.");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::AMF)
+        {
+            static const char *items[] = {"speed", "balanced", "quality"};
+            renderEnumCombo("Qualidade AMF", items, 3, m_uiManager->getStreamingAmfQuality(),
+                            [this](const std::string &v) { m_uiManager->triggerStreamingAmfQualityChange(v); },
+                            "speed = mínima latência, qualidade básica.\n"
+                            "balanced = meio termo.\n"
+                            "quality = melhor visual, latência maior.");
+        }
     }
 
     // Seleção de codec de áudio
