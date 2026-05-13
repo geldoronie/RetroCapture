@@ -217,6 +217,31 @@ void VideoCaptureRemote::stopCapture()
     }
 }
 
+void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
+{
+    if (m_interpolationMode.load() == mode) return;
+    m_interpolationMode.store(mode);
+
+    // Hot-switch hygiene: linear mode keeps a blend of the previous and
+    // next frame stuck on screen until the queue advances, so flipping
+    // back and forth between Linear / Nearest / Off while a stream is
+    // running leaves the previous mode's last frame as a static ghost
+    // ("o primeiro frame que chegou está estático na frente" — exactly
+    // that). Drop any queued frames and forget the last consumed one so
+    // the next captureLatestFrame call rebuilds state from scratch in
+    // the new mode. m_streamAnchored is reset too, so the decode thread
+    // re-establishes the wall-clock anchor on the next decoded frame —
+    // the previous mode's anchor may have drifted relative to where the
+    // new mode wants to start.
+    {
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_frameQueue.clear();
+        m_lastConsumed = QueuedFrame{};
+        m_blendBuffer.clear();
+    }
+    m_streamAnchored.store(false);
+}
+
 void VideoCaptureRemote::setTargetResolution(uint32_t width, uint32_t height)
 {
     // Atomic stores — picked up by the decode thread on the next frame.
@@ -380,7 +405,7 @@ void VideoCaptureRemote::decodeLoop()
             // disconnect. Otherwise the new stream's PTS=0 frame would
             // be timed against the old anchor and either play in the
             // past or sit far in the future.
-            m_streamAnchored = false;
+            m_streamAnchored.store(false);
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 m_frameQueue.clear();
@@ -489,9 +514,9 @@ void VideoCaptureRemote::decodeLoop()
             const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch()).count();
             int64_t targetWallUs = nowWallUs;
-            if (!m_streamAnchored)
+            if (!m_streamAnchored.load())
             {
-                m_streamAnchored = true;
+                m_streamAnchored.store(true);
                 m_streamStartWallUs = nowWallUs;
                 m_firstPtsTicks     = framePtsTicks;
                 if (m_formatCtx && m_videoStreamIdx >= 0)

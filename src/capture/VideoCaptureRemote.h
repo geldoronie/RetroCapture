@@ -95,7 +95,7 @@ public:
         Nearest, // pick the temporally closer frame — clean image, 3:2 pulldown
         Off      // strict PTS gate, hold prev until next is due
     };
-    void setInterpolationMode(InterpolationMode mode) { m_interpolationMode.store(mode); }
+    void setInterpolationMode(InterpolationMode mode);
 
 private:
     void decodeLoop();
@@ -183,7 +183,7 @@ private:
     // screen until then — eliminates the irregular 1/2-refresh-cycle
     // judder we get when network/decoder bursts let us poll multiple
     // new frames in quick succession.
-    bool    m_streamAnchored     = false;
+    std::atomic<bool> m_streamAnchored{false};
     int64_t m_streamStartWallUs  = 0;
     int64_t m_firstPtsTicks      = 0;
     double  m_streamTimebaseSecs = 0.0;
