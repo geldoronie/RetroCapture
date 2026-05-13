@@ -170,15 +170,6 @@ private:
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
 
-    // Push-rate throttle for streaming/recording — the main loop can run
-    // faster than the configured stream FPS when vsync is off or the
-    // display refresh rate is higher than 60 Hz, which produces hundreds
-    // of pushes per second with near-identical timestamps. The encoder
-    // chokes (PTS retrocession, sync-zone overflow) and the client sees
-    // back-and-forth jitter. Track last push wall-clock time and skip
-    // pushes that come within (1 / targetFps) of the previous one.
-    int64_t m_lastStreamPushUs = 0;
-
     // Remote-source render pacing: when consuming a remote /raw stream the
     // client's main loop has no reason to iterate faster than the host's
     // source FPS. Without this cap an idle high-refresh display can

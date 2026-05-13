@@ -3811,27 +3811,23 @@ void Application::run()
                                     memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                                 }
 
-                                // Same target-FPS throttle as the FBO-complete push path
-                                // below — keeps the encoder fed at the configured streaming
-                                // rate regardless of how fast the main loop iterates (no
-                                // vsync, high-refresh-rate display, free-run).
+                                // Push every frame produced by this iteration. The main
+                                // loop is already paced (see the render-pace blocks at the
+                                // end of the loop), so the per-iteration rate matches the
+                                // configured streaming FPS. The earlier dedicated push
+                                // throttle here was meant to protect against an uncapped
+                                // main loop on a high-refresh display, but with main-loop
+                                // pacing in place it just rejected legitimate frames whose
+                                // arrival jittered slightly below 1/fps (observed as
+                                // "push throttle skips=20-24/s" while the encoder sat
+                                // idle waiting for input).
+                                if (m_streamManager && m_streamManager->isActive())
                                 {
-                                    const int64_t pboTargetFps = (m_ui && m_ui->getStreamingFps() > 0) ? m_ui->getStreamingFps() : 60;
-                                    const int64_t pboMinIntervalUs = 1000000LL / pboTargetFps;
-                                    const int64_t pboNowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                                                std::chrono::steady_clock::now().time_since_epoch()).count();
-                                    if (pboNowUs - m_lastStreamPushUs >= pboMinIntervalUs)
-                                    {
-                                        m_lastStreamPushUs = pboNowUs;
-                                        if (m_streamManager && m_streamManager->isActive())
-                                        {
-                                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                        }
-                                        if (m_recordingManager && m_recordingManager->isRecording())
-                                        {
-                                            m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                        }
-                                    }
+                                    m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                }
+                                if (m_recordingManager && m_recordingManager->isRecording())
+                                {
+                                    m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
                                 }
                             }
                             else
@@ -4101,40 +4097,18 @@ void Application::run()
 
                                 // Share frame data between streaming and recording.
                                 // Pula push se o PBO async ainda não tem dados do frame anterior.
-                                //
-                                // Throttle pushes to the configured streaming FPS — when the
-                                // main loop runs faster than the target frame rate (no vsync,
-                                // 240Hz display, free-run), pushing every iteration produces
-                                // hundreds of frames per second arriving at the encoder with
-                                // near-identical timestamps. That causes PTS retrocession,
-                                // overflow drops in the synchronizer and the visible
-                                // "back-and-forth" jitter the client sees.
-                                const int64_t s_targetFps = (m_ui && m_ui->getStreamingFps() > 0) ? m_ui->getStreamingFps() : 60;
-                                const int64_t s_minIntervalUs = 1000000LL / s_targetFps;
-                                const int64_t s_nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                                            std::chrono::steady_clock::now().time_since_epoch()).count();
-                                const bool s_pushAllowed = (s_nowUs - m_lastStreamPushUs >= s_minIntervalUs);
-
-                                // 1s diagnostic so we can confirm the throttle is actually firing.
-                                static int64_t s_lastTickUs = 0;
-                                static uint32_t s_pushCount = 0;
-                                static uint32_t s_skipCount = 0;
-                                if (s_pushAllowed) ++s_pushCount;
-                                else ++s_skipCount;
-                                if (s_lastTickUs == 0) s_lastTickUs = s_nowUs;
-                                if (s_nowUs - s_lastTickUs >= 1000000LL)
+                                // Push every frame the FBO path produces. Main-loop pacing
+                                // (added in cd7b13a / 4b69c72) already caps the iteration rate
+                                // at the configured streaming FPS, so the per-frame interval
+                                // matches the target and there's no risk of overshooting the
+                                // way an uncapped 240 Hz refresh free-run did. An earlier
+                                // dedicated throttle here ended up rejecting ~30 % of
+                                // legitimate frames every second because per-iteration work
+                                // time jittered slightly below 1/fps — visible in the log as
+                                // "push throttle: pushes=37/s skips=24/s" while VAAPI sat idle
+                                // waiting for input.
+                                if (frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
-                                    LOG_INFO("push throttle (FBO): targetFps=" + std::to_string(s_targetFps) +
-                                             " minIntervalUs=" + std::to_string(s_minIntervalUs) +
-                                             " pushes=" + std::to_string(s_pushCount) +
-                                             "/s skips=" + std::to_string(s_skipCount) + "/s");
-                                    s_pushCount = s_skipCount = 0;
-                                    s_lastTickUs = s_nowUs;
-                                }
-
-                                if (s_pushAllowed && frameDataReady && m_streamManager && m_streamManager->isActive())
-                                {
-                                    m_lastStreamPushUs = s_nowUs;
                                     const bool useSource = streamWantsSource && sourceFrameReady;
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
