@@ -121,6 +121,14 @@ private:
 
     std::thread        m_decodeThread;
     std::atomic<bool>  m_decodeRunning{false};
+    // Set during stopCapture()/close() so the FFmpeg interrupt_callback
+    // can abort whichever blocking I/O the decode thread is parked in.
+    // Distinct from m_decodeRunning because m_decodeRunning is only
+    // true while the worker thread is alive; the callback fires from
+    // inside open()/avformat_open_input as well, and we don't want it
+    // tripping during the initial open just because the worker hasn't
+    // started yet.
+    std::atomic<bool>  m_decodeAborted{false};
 
     // Small bounded queue of decoded RGB frames. Decoder pushes to back;
     // consumer pops front. When the queue would exceed kMaxQueued the

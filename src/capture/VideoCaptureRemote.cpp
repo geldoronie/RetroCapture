@@ -77,11 +77,19 @@ bool VideoCaptureRemote::initDecoder()
         [](void *opaque) -> int {
             auto *self = static_cast<VideoCaptureRemote *>(opaque);
             // Returning non-zero asks ffmpeg to abort the current
-            // blocking I/O call with AVERROR_EXIT. We return 1 as
-            // soon as the decode thread has been asked to stop.
-            return self && !self->m_decodeRunning.load() ? 1 : 0;
+            // blocking I/O call with AVERROR_EXIT. Only abort when
+            // stopCapture()/close() has explicitly asked us to —
+            // checking m_decodeRunning instead would trip during the
+            // initial open() (worker thread hasn't started yet, so
+            // the flag is still false) and avformat_open_input would
+            // return Immediate exit right away.
+            return self && self->m_decodeAborted.load() ? 1 : 0;
         };
     static_cast<AVFormatContext *>(m_formatCtx)->interrupt_callback.opaque = this;
+
+    // Clear any stale abort flag from a previous teardown so this
+    // initDecoder pass starts with permission to block in I/O.
+    m_decodeAborted.store(false);
 
     // Hint that we want low-latency probing. Without these flags FFmpeg may
     // buffer up several seconds of input before deciding what stream params
@@ -229,6 +237,12 @@ bool VideoCaptureRemote::startCapture()
 
 void VideoCaptureRemote::stopCapture()
 {
+    // Always set the abort flag — open()'s avformat_open_input path
+    // also observes it through the interrupt callback. Setting it before
+    // the m_decodeRunning early-return below means a stopCapture() that
+    // arrives while open() is still blocking unwinds cleanly even if the
+    // worker thread itself hasn't started yet.
+    m_decodeAborted.store(true);
     if (!m_decodeRunning.load())
     {
         return;
