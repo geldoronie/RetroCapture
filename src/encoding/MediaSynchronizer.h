@@ -130,6 +130,12 @@ private:
     size_t m_maxVideoBufferSize = 15;           // Máximo de frames no buffer (reduzido para evitar atraso)
     size_t m_maxAudioBufferSize = 30;           // Máximo de chunks no buffer (reduzido para evitar atraso)
 
+    // Minimum number of audio chunks kept in the buffer after the eager
+    // mark-processed drain — calculateSyncZone needs at least one audio
+    // timestamp to align with video, and emptying the buffer would
+    // starve every subsequent encode iteration.
+    static constexpr size_t kAudioAnchorChunks = 4;
+
     // Buffers temporais ordenados por timestamp
     mutable std::mutex m_videoBufferMutex;
     std::deque<TimestampedFrame> m_videoBuffer;
