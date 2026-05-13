@@ -152,6 +152,9 @@ public:
 
     void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
     SourceType getSourceType() const { return m_sourceType; }
+    // Phase 5 of #47: client mode (consuming a remote /raw) — UI controls
+    // should render disabled, and a banner advertises the connection.
+    bool isRemoteSource() const { return m_sourceType == SourceType::Remote; }
     void setCurrentDevice(const std::string &device)
     {
         m_currentDevice = device;

@@ -64,6 +64,25 @@ void UIConfiguration::render()
     ImGui::Begin("RetroCapture Controls", &m_visible,
                  ImGuiWindowFlags_NoSavedSettings);
 
+    // Phase 5 of #47: when this RetroCapture is acting as a remote viewer,
+    // configuration controls are mirrored from the host via /meta and must
+    // be inspected only. A coloured banner advertises the connection; the
+    // Info tab stays interactive (it's read-only by nature) while every
+    // other tab is wrapped in BeginDisabled / EndDisabled.
+    const bool remote = m_uiManager && m_uiManager->isRemoteSource();
+    if (remote)
+    {
+        const ImVec4 warningBg(0.45f, 0.12f, 0.12f, 0.85f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, warningBg);
+        ImGui::BeginChild("RemoteBanner", ImVec2(0, ImGui::GetFrameHeight() * 1.2f),
+                          false, ImGuiWindowFlags_NoScrollbar);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("  REMOTE VIEWER MODE — configuration mirrored from host, controls disabled");
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     // Criar instâncias das abas (podem ser membros da classe se necessário)
     static UIConfigurationSource sourceTab(m_uiManager);
     static UIConfigurationShader shaderTab(m_uiManager);
@@ -79,50 +98,66 @@ void UIConfiguration::render()
     {
         if (ImGui::BeginTabItem("Shaders"))
         {
+            ImGui::BeginDisabled(remote);
             shaderTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Image"))
         {
+            ImGui::BeginDisabled(remote);
             imageTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Source"))
         {
+            ImGui::BeginDisabled(remote);
             sourceTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Info"))
         {
+            // Info is read-only by construction — keep it interactive so
+            // users can copy / inspect even in remote mode.
             infoTab.render();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Streaming"))
         {
+            ImGui::BeginDisabled(remote);
             streamingTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Recording"))
         {
+            ImGui::BeginDisabled(remote);
             recordingTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Web Portal"))
         {
+            ImGui::BeginDisabled(remote);
             webPortalTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
 #ifdef __linux__
         if (ImGui::BeginTabItem("Audio"))
         {
+            ImGui::BeginDisabled(remote);
             audioTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 #endif
