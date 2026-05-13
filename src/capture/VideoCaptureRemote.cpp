@@ -258,21 +258,21 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
         return false;
     }
 
-    // Output buffer pointer & size — default to the cached frame; the
-    // interpolation path below replaces it with m_blendBuffer when
-    // there's a 'next' frame to interpolate toward. Frame.data is a
-    // non-const uint8_t* in the IVideoCapture contract; cast away
-    // const here because the downstream FrameProcessor never mutates
-    // these bytes — it just uploads them to a texture.
+    // Default: hand out the cached frame as-is. The Linear / Nearest
+    // branches below may override with a blended or temporally-closer
+    // frame. Frame.data is non-const uint8_t* in the IVideoCapture
+    // contract; cast away const where we point at a queued frame's
+    // buffer because the downstream FrameProcessor only reads.
     uint8_t *outData = m_lastConsumed.rgb.data();
     size_t outSize   = m_lastConsumed.rgb.size();
 
-    if (!m_frameQueue.empty())
+    const InterpolationMode mode = m_interpolationMode.load();
+    if (mode != InterpolationMode::Off && !m_frameQueue.empty())
     {
         const QueuedFrame &next = m_frameQueue.front();
-        // Both endpoints must have matching dims for a meaningful blend.
-        // The shader pipeline / texture upload would reject a size
-        // mismatch anyway, so just skip interpolation across a resize.
+        // Both endpoints must have matching dims for a meaningful blend
+        // / comparison. Skip interpolation across a resize so the
+        // texture upload path doesn't see a half-resized frame.
         if (next.width == m_lastConsumed.width &&
             next.height == m_lastConsumed.height &&
             next.rgb.size() == m_lastConsumed.rgb.size() &&
@@ -282,36 +282,48 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             int64_t pos = nowWallUs - m_lastConsumed.targetWallUs;
             if (pos < 0) pos = 0;
             if (pos > span) pos = span;
-            // 0..256 fixed-point weight for the *next* frame; (256 - tFp)
-            // weights the previous frame. Tighter than float math and
-            // autovectorises cleanly to AVX2 byte-blend on x86_64.
-            const int tFp     = static_cast<int>((pos * 256) / span);
-            const int oneMinus = 256 - tFp;
 
-            if (tFp > 0 && tFp < 256)
+            if (mode == InterpolationMode::Linear)
             {
-                if (m_blendBuffer.size() != m_lastConsumed.rgb.size())
+                // 0..256 fixed-point weight for the *next* frame; the
+                // previous frame gets (256 - tFp). Autovectorises to
+                // AVX2 byte-blend on x86_64.
+                const int tFp     = static_cast<int>((pos * 256) / span);
+                const int oneMinus = 256 - tFp;
+                if (tFp > 0 && tFp < 256)
                 {
-                    m_blendBuffer.assign(m_lastConsumed.rgb.size(), 0);
+                    if (m_blendBuffer.size() != m_lastConsumed.rgb.size())
+                    {
+                        m_blendBuffer.assign(m_lastConsumed.rgb.size(), 0);
+                    }
+                    const uint8_t *a = m_lastConsumed.rgb.data();
+                    const uint8_t *b = next.rgb.data();
+                    uint8_t *o       = m_blendBuffer.data();
+                    const size_t n   = m_blendBuffer.size();
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        o[i] = static_cast<uint8_t>((a[i] * oneMinus + b[i] * tFp) >> 8);
+                    }
+                    outData = m_blendBuffer.data();
+                    outSize = m_blendBuffer.size();
                 }
-                const uint8_t *a = m_lastConsumed.rgb.data();
-                const uint8_t *b = next.rgb.data();
-                uint8_t *o       = m_blendBuffer.data();
-                const size_t n   = m_blendBuffer.size();
-                for (size_t i = 0; i < n; ++i)
+                else if (tFp >= 256)
                 {
-                    o[i] = static_cast<uint8_t>((a[i] * oneMinus + b[i] * tFp) >> 8);
+                    outData = const_cast<uint8_t *>(next.rgb.data());
+                    outSize = next.rgb.size();
                 }
-                outData = m_blendBuffer.data();
-                outSize = m_blendBuffer.size();
+                // tFp == 0 → stays on m_lastConsumed.
             }
-            else if (tFp >= 256)
+            else // InterpolationMode::Nearest
             {
-                // Exactly at next frame's target — show next directly.
-                outData = const_cast<uint8_t *>(next.rgb.data());
-                outSize = next.rgb.size();
+                // Pick whichever target is closer to now in time.
+                if (pos * 2 >= span)
+                {
+                    outData = const_cast<uint8_t *>(next.rgb.data());
+                    outSize = next.rgb.size();
+                }
+                // Otherwise stays on m_lastConsumed.
             }
-            // tFp == 0 → still on m_lastConsumed, default path.
         }
     }
 

@@ -747,6 +747,40 @@ void UIConfigurationSource::renderRemoteControls()
     ImGui::Separator();
     ImGui::Spacing();
 
+    // Display-side interpolation strategy. Independent of stream rate;
+    // the server can be at 60 fps and the client can pick how to fill
+    // the panel's refresh slots between consecutive stream frames.
+    ImGui::TextDisabled("Display interpolation");
+    const char *modes[]      = {"linear", "nearest", "off"};
+    const char *modeLabels[] = {
+        "Linear (smooth, slight ghosting)",
+        "Nearest (clean frames, may stutter)",
+        "Off (strict PTS, may stutter)"
+    };
+    std::string currentMode = m_uiManager->getRemoteInterpolation();
+    int currentModeIndex = 0;
+    for (int i = 0; i < 3; ++i)
+    {
+        if (currentMode == modes[i]) { currentModeIndex = i; break; }
+    }
+    ImGui::SetNextItemWidth(-100.0f);
+    if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
+    {
+        m_uiManager->triggerRemoteInterpolationChange(modes[currentModeIndex]);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Como o client preenche os refreshes do display entre frames do stream:\n"
+                          "Linear: blend prev+next por refresh — movimento contínuo, fantasma leve em movimentos rápidos.\n"
+                          "Nearest: mostra o frame mais próximo no tempo — imagem limpa, mas tem o padrão 3:2 pulldown\n"
+                          "  em qualquer ratio não-inteiro (e.g. 60fps em 144Hz).\n"
+                          "Off: estritamente espera o target do PTS — comportamento mais simples, menor latência.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::TextDisabled("Status");
     if (m_capture && m_capture->isOpen())
     {

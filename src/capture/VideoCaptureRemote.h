@@ -86,6 +86,17 @@ public:
      */
     void setTargetResolution(uint32_t width, uint32_t height);
 
+    // Per-refresh interpolation strategy when filling display refreshes
+    // between two consecutive stream frames. See captureLatestFrame for
+    // the per-mode semantics.
+    enum class InterpolationMode
+    {
+        Linear,  // LERP prev/next — smooth motion, slight ghosting
+        Nearest, // pick the temporally closer frame — clean image, 3:2 pulldown
+        Off      // strict PTS gate, hold prev until next is due
+    };
+    void setInterpolationMode(InterpolationMode mode) { m_interpolationMode.store(mode); }
+
 private:
     void decodeLoop();
     bool initDecoder();
@@ -147,6 +158,8 @@ private:
     // (see m_blendBuffer below).
     QueuedFrame             m_lastConsumed;
     std::atomic<bool>       m_hasFrame{false};
+
+    std::atomic<InterpolationMode> m_interpolationMode{InterpolationMode::Linear};
 
     // Per-refresh interpolation output buffer. The classic 3:2 pulldown
     // problem (60 fps stream into a 144 Hz panel = 2.4 refreshes per

@@ -1979,6 +1979,13 @@ void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
     saveConfig();
 }
 
+void UIManager::triggerRemoteInterpolationChange(const std::string &v)
+{
+    m_remoteInterpolation = v;
+    if (m_onRemoteInterpolationChanged) m_onRemoteInterpolationChanged(v);
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2214,6 +2221,8 @@ void UIManager::loadConfig()
                 m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
             if (streaming.contains("amfQuality"))
                 m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
+            if (streaming.contains("remoteInterpolation"))
+                m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -2579,6 +2588,7 @@ void UIManager::saveConfig()
             {"vaapiRcMode", m_streamingVaapiRcMode},
             {"qsvPreset",   m_streamingQsvPreset},
             {"amfQuality",  m_streamingAmfQuality},
+            {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 

@@ -289,6 +289,7 @@ private:
     std::string m_streamingVaapiRcMode = "CBR";
     std::string m_streamingQsvPreset   = "veryfast";
     std::string m_streamingAmfQuality  = "speed";
+    std::string m_remoteInterpolation  = "linear";
 
     // Buffer configuration
     size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)

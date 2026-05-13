@@ -289,6 +289,7 @@ public:
     std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
     std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
     std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
+    std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -310,6 +311,7 @@ public:
     void triggerStreamingVaapiRcModeChange(const std::string &v);
     void triggerStreamingQsvPresetChange(const std::string &v);
     void triggerStreamingAmfQualityChange(const std::string &v);
+    void triggerRemoteInterpolationChange(const std::string &v);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -411,6 +413,7 @@ public:
     void setOnStreamingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onStreamingVaapiRcModeChanged = cb; }
     void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
     void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
+    void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -825,6 +828,14 @@ private:
     std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
     std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
     std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
+
+    // Client-side interpolation mode for Remote-source playback. Picks
+    // how each display refresh resolves the time between two consecutive
+    // stream frames (see VideoCaptureRemote::captureLatestFrame):
+    //   "linear"  — LERP between prev and next (smooth motion, ghosting)
+    //   "nearest" — show the closer frame (clean image, 3:2 stutter)
+    //   "off"     — strict PTS gate, hold prev until next is due
+    std::string m_remoteInterpolation = "linear";
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -862,6 +873,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingVaapiRcModeChanged;
     std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
     std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
+    std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

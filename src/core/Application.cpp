@@ -358,7 +358,12 @@ bool Application::initCapture()
     if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
     {
         LOG_INFO("Source is remote — creating VideoCaptureRemote");
-        m_capture = std::make_unique<VideoCaptureRemote>();
+        auto remote = std::make_unique<VideoCaptureRemote>();
+        VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
+        if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
+        else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+        remote->setInterpolationMode(imode);
+        m_capture = std::move(remote);
     }
     else
     {
@@ -1122,6 +1127,7 @@ bool Application::initUI()
     m_streamingVaapiRcMode = m_ui->getStreamingVaapiRcMode();
     m_streamingQsvPreset   = m_ui->getStreamingQsvPreset();
     m_streamingAmfQuality  = m_ui->getStreamingAmfQuality();
+    m_remoteInterpolation  = m_ui->getRemoteInterpolation();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1588,6 +1594,20 @@ bool Application::initUI()
     });
     m_ui->setOnStreamingAmfQualityChanged([this, restartIfStreaming](const std::string &v) {
         m_streamingAmfQuality = v; restartIfStreaming();
+    });
+
+    // Remote interpolation mode — applied immediately to the active
+    // VideoCaptureRemote (if any). No streaming restart required since
+    // it's a client-side display decision.
+    m_ui->setOnRemoteInterpolationChanged([this](const std::string &v) {
+        m_remoteInterpolation = v;
+        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        {
+            VideoCaptureRemote::InterpolationMode mode = VideoCaptureRemote::InterpolationMode::Linear;
+            if (v == "nearest") mode = VideoCaptureRemote::InterpolationMode::Nearest;
+            else if (v == "off") mode = VideoCaptureRemote::InterpolationMode::Off;
+            remote->setInterpolationMode(mode);
+        }
     });
 
     // Callbacks for buffer settings
@@ -2244,7 +2264,14 @@ bool Application::initUI()
                                              m_capture->stopCapture();
                                              m_capture->close();
                                          }
-                                         m_capture = std::make_unique<VideoCaptureRemote>();
+                                         {
+                                             auto remote = std::make_unique<VideoCaptureRemote>();
+                                             VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
+                                             if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
+                                             else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+                                             remote->setInterpolationMode(imode);
+                                             m_capture = std::move(remote);
+                                         }
                                          m_devicePath.clear();
                                          if (m_ui)
                                          {
@@ -2294,7 +2321,14 @@ bool Application::initUI()
 
             // Recreate the capture as Remote (the existing instance might be
             // V4L2/DS if the user just flipped source type).
-            m_capture = std::make_unique<VideoCaptureRemote>();
+            {
+                auto remote = std::make_unique<VideoCaptureRemote>();
+                VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
+                if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
+                else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+                remote->setInterpolationMode(imode);
+                m_capture = std::move(remote);
+            }
             if (m_capture->open(devicePath))
             {
                 m_capture->startCapture();
