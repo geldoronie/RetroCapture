@@ -111,8 +111,15 @@ void UIRemoteConnection::render()
         const std::string currentDevice = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
         const bool connected = sourceIsRemote && !currentDevice.empty();
 
+        // Two-frame state machine: button click sets *ShowStatus, the
+        // next render of this state shows the spinning label and arms
+        // *Execute, the frame after runs the blocking call. The user
+        // gets one painted 'Connecting...' / 'Disconnecting...' before
+        // the freeze actually starts.
+        const bool inProgress = (m_pending != PendingAction::None);
         if (!connected)
         {
+            ImGui::BeginDisabled(inProgress);
             if (ImGui::Button("Connect", ImVec2(120, 0)))
             {
                 std::string url(m_urlBuffer);
@@ -121,33 +128,69 @@ void UIRemoteConnection::render()
                 while (!url.empty() && url.back() == '/') url.pop_back();
                 if (!url.empty())
                 {
-                    // Flip source to Remote only if we're not already
-                    // there — triggerSourceTypeChange always re-runs the
-                    // app-level handler (which destroys/recreates the
-                    // capture), and doing it on top of a Remote that's
-                    // halfway through a connect attempt produced the
-                    // double 'Source type changed' / segfault sequence
-                    // the user reported. setCurrentDevice fires
-                    // m_onDeviceChanged, which is the connect-to-remote
-                    // path; one trigger is enough.
-                    if (m_uiManager->getSourceType() != UIManager::SourceType::Remote)
-                    {
-                        m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
-                    }
-                    m_uiManager->setCurrentDevice(url);
+                    m_pendingUrl = url;
+                    m_pending    = PendingAction::ConnectShowStatus;
                 }
             }
+            ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::TextDisabled("not connected");
+            if (m_pending == PendingAction::ConnectShowStatus ||
+                m_pending == PendingAction::ConnectExecute)
+            {
+                ImGui::TextDisabled("connecting...");
+            }
+            else
+            {
+                ImGui::TextDisabled("not connected");
+            }
         }
         else
         {
+            ImGui::BeginDisabled(inProgress);
             if (ImGui::Button("Disconnect", ImVec2(120, 0)))
             {
-                m_uiManager->setCurrentDevice("");
+                m_pending = PendingAction::DisconnectShowStatus;
             }
+            ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+            if (m_pending == PendingAction::DisconnectShowStatus ||
+                m_pending == PendingAction::DisconnectExecute)
+            {
+                ImGui::TextDisabled("disconnecting...");
+            }
+            else
+            {
+                ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+            }
+        }
+
+        // Advance the state machine AFTER all UI for this frame has been
+        // emitted. ShowStatus → Execute on this very frame (the label is
+        // already in ImGui's draw list). Execute runs the blocking call
+        // on the NEXT frame, by which point ShowStatus has painted.
+        switch (m_pending)
+        {
+            case PendingAction::ConnectShowStatus:
+                m_pending = PendingAction::ConnectExecute;
+                break;
+            case PendingAction::ConnectExecute:
+                if (m_uiManager->getSourceType() != UIManager::SourceType::Remote)
+                {
+                    m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
+                }
+                m_uiManager->setCurrentDevice(m_pendingUrl);
+                m_pendingUrl.clear();
+                m_pending = PendingAction::None;
+                break;
+            case PendingAction::DisconnectShowStatus:
+                m_pending = PendingAction::DisconnectExecute;
+                break;
+            case PendingAction::DisconnectExecute:
+                m_uiManager->setCurrentDevice("");
+                m_pending = PendingAction::None;
+                break;
+            case PendingAction::None:
+                break;
         }
 
         ImGui::Spacing();

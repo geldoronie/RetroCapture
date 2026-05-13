@@ -46,4 +46,22 @@ private:
     // first render so the user's previous URL persists across sessions.
     char m_urlBuffer[256] = {};
     bool m_urlSeeded = false;
+
+    // Two-frame state machine for connect/disconnect feedback. The
+    // setCurrentDevice() path blocks ~50-100 ms; if we executed it on
+    // the same frame as the button click, the user never sees a
+    // status change — the click and the result render together. By
+    // deferring the actual call to the NEXT frame we get one paint of
+    // 'Connecting...' / 'Disconnecting...' on screen before the
+    // blocking call starts.
+    enum class PendingAction
+    {
+        None,
+        ConnectShowStatus,   // show 'Connecting...' this frame
+        ConnectExecute,      // run the blocking call this frame
+        DisconnectShowStatus,
+        DisconnectExecute,
+    };
+    PendingAction m_pending = PendingAction::None;
+    std::string m_pendingUrl;
 };
