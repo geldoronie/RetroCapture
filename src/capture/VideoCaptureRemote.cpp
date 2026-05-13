@@ -315,8 +315,12 @@ void VideoCaptureRemote::decodeLoop()
                 rgbBuf.assign(static_cast<size_t>(w) * static_cast<size_t>(h) * 3, 0);
             }
 
-            uint8_t *dstSlices[1] = { rgbBuf.data() };
-            int dstStrides[1]     = { w * 3 };
+            // Write rows in reverse (bottom-up) so the resulting RGB buffer
+            // matches the orientation the rest of the capture pipeline
+            // expects from V4L2 / DirectShow sources — without this, the
+            // image renders upside-down on screen.
+            uint8_t *dstSlices[1] = { rgbBuf.data() + static_cast<size_t>(h - 1) * static_cast<size_t>(w) * 3 };
+            int dstStrides[1]     = { -(w * 3) };
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, h, dstSlices, dstStrides);
             av_frame_unref(frame);
 

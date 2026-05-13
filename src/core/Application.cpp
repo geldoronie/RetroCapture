@@ -565,6 +565,23 @@ bool Application::initCapture()
         LOG_INFO("Capture initialized: " +
                  std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
+
+        // Sync m_captureWidth / m_captureHeight with what the device
+        // actually produces. For V4L2 / DS this is usually a no-op (we
+        // already asked for those dims via setFormat); for Remote the
+        // server picks the dimensions, and without this sync the render
+        // pipeline keeps using the local config defaults — leaving the
+        // image filling only a fraction of the window.
+        const uint32_t actualW = m_capture->getWidth();
+        const uint32_t actualH = m_capture->getHeight();
+        if (actualW > 0 && actualH > 0 && (actualW != m_captureWidth || actualH != m_captureHeight))
+        {
+            LOG_INFO("Adjusting capture dims to actual " +
+                     std::to_string(actualW) + "x" + std::to_string(actualH) +
+                     " (was " + std::to_string(m_captureWidth) + "x" + std::to_string(m_captureHeight) + ")");
+            m_captureWidth  = actualW;
+            m_captureHeight = actualH;
+        }
     }
 
     // Phase 4 of #47: when source is Remote, also poll the host's /meta to
@@ -2177,6 +2194,22 @@ bool Application::initUI()
             if (m_capture->open(devicePath))
             {
                 m_capture->startCapture();
+
+                // Pull the actual stream dimensions from the freshly-opened
+                // decoder and sync the application's idea of capture size.
+                // Without this the rest of the render pipeline keeps using
+                // m_captureWidth / m_captureHeight from the local config
+                // (1920x1080 by default), producing the "image fills only
+                // half the window" symptom when the host streams smaller.
+                const uint32_t actualW = m_capture->getWidth();
+                const uint32_t actualH = m_capture->getHeight();
+                if (actualW > 0 && actualH > 0)
+                {
+                    m_captureWidth  = actualW;
+                    m_captureHeight = actualH;
+                    LOG_INFO("Remote stream dims: " + std::to_string(actualW) + "x" + std::to_string(actualH));
+                }
+
                 if (m_ui)
                 {
                     m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
