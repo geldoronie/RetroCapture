@@ -4264,25 +4264,49 @@ void Application::run()
             // applyPendingRemoteMeta — wastes GPU and produces the
             // 500-fps reading the user spotted in MangoHud. Sleep until
             // the next host-frame deadline.
-            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote && m_remoteSourceFps > 0)
+            //
+            // Fall back to 60 fps when /meta hasn't arrived yet or reports
+            // fps=0 — anything's better than the 1 ms-sleep free-run that
+            // produced the 500 fps reading we're trying to fix.
+            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
             {
+                const uint32_t fps = m_remoteSourceFps > 0 ? m_remoteSourceFps : 60;
                 const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch()).count();
-                const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(m_remoteSourceFps);
+                const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(fps);
                 if (m_lastFrameSwapUs == 0)
                 {
                     m_lastFrameSwapUs = nowUs;
                 }
                 const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
+
+                // 1 s telemetry — confirms the pacing actually runs in the
+                // remote-source code path. Removable after verifying.
+                static int64_t s_lastPaceTickUs = 0;
+                static uint32_t s_paceIters = 0;
+                static uint32_t s_paceSleeps = 0;
+                ++s_paceIters;
+                if (s_lastPaceTickUs == 0) s_lastPaceTickUs = nowUs;
                 if (elapsedUs < targetIntervalUs)
                 {
                     const int64_t sleepUs = targetIntervalUs - elapsedUs;
+                    ++s_paceSleeps;
 #ifdef PLATFORM_LINUX
                     usleep(static_cast<useconds_t>(sleepUs));
 #else
                     Sleep(static_cast<DWORD>(sleepUs / 1000));
 #endif
                 }
+                if (nowUs - s_lastPaceTickUs >= 1000000LL)
+                {
+                    LOG_INFO("remote render pace: fps=" + std::to_string(fps) +
+                             " iters=" + std::to_string(s_paceIters) +
+                             "/s sleeps=" + std::to_string(s_paceSleeps) +
+                             "/s sourceFpsFromMeta=" + std::to_string(m_remoteSourceFps));
+                    s_paceIters = s_paceSleeps = 0;
+                    s_lastPaceTickUs = nowUs;
+                }
+
                 m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
             }
             else
