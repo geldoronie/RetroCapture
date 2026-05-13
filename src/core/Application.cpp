@@ -2300,6 +2300,20 @@ bool Application::initUI()
         {
             LOG_INFO("Remote URL change: " + (devicePath.empty() ? "(disconnect)" : devicePath));
 
+            // Disconnect path optimisation: drop the on-screen frame
+            // BEFORE waiting on the decode thread's join. The texture
+            // upload happens on the main thread, so by the time we get
+            // here we own m_frameProcessor and can wipe it immediately;
+            // otherwise the user sees the last received frame frozen on
+            // screen for the full ~50-100 ms it can take stopCapture to
+            // unwind the interrupted I/O. Combined with the new
+            // 'Disconnecting...' status the window shows, the perceived
+            // freeze on Disconnect goes away.
+            if (devicePath.empty() && m_frameProcessor)
+            {
+                m_frameProcessor->deleteTexture();
+            }
+
             // Tear down any existing remote pipeline (capture + meta-sync).
             if (m_remoteMetaSync)
             {
@@ -2316,6 +2330,13 @@ bool Application::initUI()
 
             if (devicePath.empty())
             {
+                // Mark the UI as cleanly disconnected so the connection
+                // window stops showing 'Stream: WxH' from the last
+                // session.
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(0, 0, 0, "");
+                }
                 processingDeviceChange = false;
                 return;
             }
