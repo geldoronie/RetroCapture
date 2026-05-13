@@ -164,6 +164,15 @@ bool Application::init()
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
 
+    // Apply the source-type-appropriate vsync mode on startup so a user
+    // who saved Remote as their source gets the display-refresh-aligned
+    // playback path immediately instead of only after the next source
+    // change. setOnSourceTypeChanged handles all subsequent transitions.
+    if (m_window && m_ui)
+    {
+        m_window->setVsync(m_ui->getSourceType() == UIManager::SourceType::Remote);
+    }
+
     LOG_INFO("Application initialized successfully");
     return true;
 }
@@ -2031,6 +2040,26 @@ bool Application::initUI()
     m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
                                  {
                                      LOG_INFO("Source type changed via UI");
+
+                                     // Remote-source playback wants vsync ON so frame
+                                     // changes land on display refresh boundaries — this
+                                     // is what eliminated the 'stuttering at 60 fps but
+                                     // smooth at 120 fps' artefact: without vsync our
+                                     // ~60 Hz pacing drifts relative to the panel's own
+                                     // 60 Hz refresh, dropping the occasional frame across
+                                     // a refresh boundary. With vsync the loop's effective
+                                     // rate IS the panel's rate, and the strict PTS gate
+                                     // hands the queue's current head out at exactly the
+                                     // next refresh.
+                                     //
+                                     // Local capture keeps vsync OFF — capture/encoder
+                                     // threads can't tolerate the main loop stalling when
+                                     // the window is minimized (compositors sometimes
+                                     // park vsync at 0 Hz for backgrounded windows).
+                                     if (m_window)
+                                     {
+                                         m_window->setVsync(sourceType == UIManager::SourceType::Remote);
+                                     }
 
                                      if (sourceType == UIManager::SourceType::None)
                                      {

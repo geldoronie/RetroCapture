@@ -20,10 +20,18 @@ public:
     
     bool init(const WindowConfig& config);
     void shutdown();
-    
+
     bool shouldClose() const;
     void swapBuffers();
     void pollEvents();
+
+    // Runtime vsync toggle. Mirrors what config.vsync did at init but
+    // lets the rest of the app switch the swap interval mid-session —
+    // remote-source playback wants vsync ON so frames land on display
+    // refresh boundaries (no judder), while local capture/streaming
+    // wants vsync OFF so a backgrounded window doesn't stall the
+    // capture/encoder threads waiting on a refresh that never comes.
+    void setVsync(bool enabled);
     
     void makeCurrent();
     
