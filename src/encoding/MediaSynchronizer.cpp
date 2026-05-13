@@ -305,6 +305,15 @@ void MediaSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
             m_videoBuffer[i].processed = true;
         }
     }
+    // Eager front-drain — keep the bounded buffer from filling up with
+    // already-encoded frames waiting for the 5 s "old data" cleanup to
+    // catch them. Without this drain, processed frames squat on the
+    // ring slots and addVideoFrame ends up overflowing on perfectly
+    // healthy pipelines because every slot reads "already processed".
+    while (!m_videoBuffer.empty() && m_videoBuffer.front().processed)
+    {
+        m_videoBuffer.pop_front();
+    }
 }
 
 void MediaSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
@@ -316,6 +325,10 @@ void MediaSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
         {
             m_audioBuffer[i].processed = true;
         }
+    }
+    while (!m_audioBuffer.empty() && m_audioBuffer.front().processed)
+    {
+        m_audioBuffer.pop_front();
     }
 }
 
@@ -331,6 +344,10 @@ void MediaSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
             break; // Only mark first match (should be unique)
         }
     }
+    while (!m_videoBuffer.empty() && m_videoBuffer.front().processed)
+    {
+        m_videoBuffer.pop_front();
+    }
 }
 
 void MediaSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
@@ -344,6 +361,10 @@ void MediaSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
             chunk.processed = true;
             break; // Only mark first match (should be unique)
         }
+    }
+    while (!m_audioBuffer.empty() && m_audioBuffer.front().processed)
+    {
+        m_audioBuffer.pop_front();
     }
 }
 
