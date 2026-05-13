@@ -539,20 +539,29 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
         codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
+    // H.264 profile: pin to Main. Every hardware encoder we target
+    // supports Main, but consumer AMD VAAPI builds frequently don't
+    // expose High encoding entrypoints ("No usable encoding entrypoint
+    // found for profile VAProfileH264High" is the user-visible
+    // signature). If even Main fails we let the outer dispatcher fall
+    // back to libx264.
+    codecCtx->profile = FF_PROFILE_H264_MAIN;
+
     AVDictionary *opts = nullptr;
     // Per-backend tuning. Defaults aim at low-latency live streaming.
     if (backend == HardwareEncoder::NVENC)
     {
-        av_dict_set(&opts, "preset", "p4", 0);           // medium-speed quality preset (p1=fastest..p7=slowest)
+        av_dict_set(&opts, "preset", "p4", 0);           // p1=fastest..p7=slowest
         av_dict_set(&opts, "tune",   "ll",  0);          // low-latency
         av_dict_set(&opts, "rc",     "cbr", 0);
         av_dict_set_int(&opts, "zerolatency", 1, 0);
-        av_dict_set_int(&opts, "bf",          0, 0);     // no B-frames in low-latency mode
+        av_dict_set_int(&opts, "bf",          0, 0);
     }
     else if (backend == HardwareEncoder::VAAPI)
     {
         av_dict_set(&opts, "rc_mode", "CBR", 0);
-        av_dict_set_int(&opts, "low_power", 1, 0);
+        // low_power=1 is unsupported on a chunk of AMD parts — let the
+        // driver pick the entry path instead.
         av_dict_set_int(&opts, "idr_interval", static_cast<int>(m_videoConfig.fps * 2), 0);
     }
     else if (backend == HardwareEncoder::QSV)
@@ -567,15 +576,16 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
         av_dict_set(&opts, "rc",      "cbr",       0);
     }
 
-    int ret = avcodec_open2(codecCtx, codec, &opts);
+    int openRet = avcodec_open2(codecCtx, codec, &opts);
     av_dict_free(&opts);
-    if (ret < 0)
+    if (openRet < 0)
     {
         char errBuf[256] = {0};
-        av_strerror(ret, errBuf, sizeof(errBuf));
+        av_strerror(openRet, errBuf, sizeof(errBuf));
         LOG_WARN(std::string("MediaEncoder: avcodec_open2 failed for ") + codecName + ": " + errBuf);
         return false;
     }
+    LOG_INFO(std::string("MediaEncoder: ") + codecName + " opened with profile Main");
 
     AVFrame *swFrame = av_frame_alloc();
     if (!swFrame)
