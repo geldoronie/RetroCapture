@@ -160,7 +160,17 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
     // Phase 2 of #47: same audio chunk feeds the /raw pipeline. The /raw
     // muxer needs audio packets too — only the video frame source differs
     // between /stream (post-shader) and /raw (pre-shader).
-    if (m_rawMediaEncoder.isInitialized())
+    //
+    // Gate on hasRawClients() so the /raw audio encoder doesn't start
+    // running its PTS clock before any /raw video frame is pushed. Without
+    // this gate, audio would accumulate its sample-count-based PTS for the
+    // full pre-connect window while video stays at PTS=0; the muxer then
+    // emits audio packets at "stream has been running for N seconds" while
+    // video starts at 0, which ffplay flags as "DTS … < … out of order"
+    // and our client renders as the visible ghost / back-and-forth jitter.
+    // With the gate, both streams begin their PTS counters at the same
+    // wall-clock moment — the first frame after the first client arrives.
+    if (m_rawMediaEncoder.isInitialized() && hasRawClients())
     {
         m_rawStreamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
     }
