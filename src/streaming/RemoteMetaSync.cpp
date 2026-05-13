@@ -59,6 +59,30 @@ namespace
         return !out.host.empty();
     }
 
+    // Opens a TCP connection to host:port. Returns INVALID_SOCK on failure.
+    socket_t connectTcp(const UrlParts &u)
+    {
+        addrinfo hints{};
+        hints.ai_family   = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo *res = nullptr;
+        if (getaddrinfo(u.host.c_str(), u.port.c_str(), &hints, &res) != 0 || !res)
+        {
+            return INVALID_SOCK;
+        }
+        socket_t sock = INVALID_SOCK;
+        for (addrinfo *p = res; p != nullptr; p = p->ai_next)
+        {
+            sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+            if (sock == INVALID_SOCK) continue;
+            if (::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) break;
+            closeSocket(sock);
+            sock = INVALID_SOCK;
+        }
+        freeaddrinfo(res);
+        return sock;
+    }
+
     // Synchronous HTTP/1.1 GET with a 5-second receive deadline. Returns
     // the response body on 2xx, empty string otherwise. Logs errors but
     // doesn't throw — callers treat empty as "skip this poll".
@@ -71,25 +95,7 @@ namespace
             return {};
         }
 
-        addrinfo hints{};
-        hints.ai_family   = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo *res = nullptr;
-        if (getaddrinfo(u.host.c_str(), u.port.c_str(), &hints, &res) != 0 || !res)
-        {
-            return {};
-        }
-
-        socket_t sock = INVALID_SOCK;
-        for (addrinfo *p = res; p != nullptr; p = p->ai_next)
-        {
-            sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-            if (sock == INVALID_SOCK) continue;
-            if (::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) break;
-            closeSocket(sock);
-            sock = INVALID_SOCK;
-        }
-        freeaddrinfo(res);
+        socket_t sock = connectTcp(u);
         if (sock == INVALID_SOCK) return {};
 
         // 5-second receive timeout so a wedged remote doesn't stall the
@@ -149,6 +155,64 @@ namespace
 
         return response.substr(sep + 4);
     }
+
+    // Parses the /meta JSON snapshot body into the Snapshot struct.
+    // Returns false on parse error. Shared by both the short-poll
+    // (httpGet) and long-poll (SSE) paths.
+    bool parseSnapshotJSON(const std::string &body, RemoteMetaSync::Snapshot &out)
+    {
+        try
+        {
+            auto j = nlohmann::json::parse(body);
+            out.protocolVersion = j.value("protocolVersion", 0);
+            out.serverVersion   = j.value("serverVersion", std::string{});
+
+            if (j.contains("shader") && j["shader"].is_object())
+            {
+                const auto &s = j["shader"];
+                out.shaderActive    = s.value("active", false);
+                out.pipelineEnabled = s.value("pipelineEnabled", true);
+                out.preset          = s.value("preset", std::string{});
+                out.presetHash      = s.value("presetHash", std::string{});
+                if (s.contains("parameters") && s["parameters"].is_array())
+                {
+                    out.parameters.clear();
+                    out.parameters.reserve(s["parameters"].size());
+                    for (const auto &p : s["parameters"])
+                    {
+                        RemoteMetaSync::ParamOverride po;
+                        po.name  = p.value("name", std::string{});
+                        po.value = p.value("value", 0.0f);
+                        if (!po.name.empty())
+                        {
+                            out.parameters.push_back(std::move(po));
+                        }
+                    }
+                }
+            }
+
+            if (j.contains("source") && j["source"].is_object())
+            {
+                const auto &s = j["source"];
+                out.sourceWidth  = s.value("width",  0u);
+                out.sourceHeight = s.value("height", 0u);
+                out.sourceFps    = s.value("fps",    0u);
+            }
+
+            if (j.contains("image") && j["image"].is_object())
+            {
+                const auto &im = j["image"];
+                out.imageBrightness = im.value("brightness", 1.0f);
+                out.imageContrast   = im.value("contrast",   1.0f);
+            }
+            return true;
+        }
+        catch (const std::exception &e)
+        {
+            LOG_WARN(std::string("RemoteMetaSync: JSON parse failed — ") + e.what());
+            return false;
+        }
+    }
 }
 
 RemoteMetaSync::RemoteMetaSync() = default;
@@ -203,94 +267,224 @@ bool RemoteMetaSync::fetchOnce(Snapshot &out)
 {
     std::string body = httpGet(m_baseUrl + "/meta");
     if (body.empty()) return false;
+    return parseSnapshotJSON(body, out);
+}
 
-    try
+void RemoteMetaSync::dispatchIfChanged(const Snapshot &snap)
+{
+    std::vector<float> currentValues;
+    currentValues.reserve(snap.parameters.size());
+    for (const auto &p : snap.parameters)
     {
-        auto j = nlohmann::json::parse(body);
-        out.protocolVersion = j.value("protocolVersion", 0);
-        out.serverVersion   = j.value("serverVersion", std::string{});
+        currentValues.push_back(p.value);
+    }
 
-        if (j.contains("shader") && j["shader"].is_object())
+    const bool presetChanged  = (snap.preset           != m_lastPreset);
+    const bool hashChanged    = (snap.presetHash       != m_lastPresetHash);
+    const bool toggleChanged  = (snap.pipelineEnabled  != m_lastPipelineEnabled);
+    const bool paramsChanged  = (currentValues         != m_lastParamValues);
+
+    if (presetChanged || hashChanged || toggleChanged || paramsChanged)
+    {
+        if (m_cb) m_cb(snap);
+        m_lastPreset          = snap.preset;
+        m_lastPresetHash      = snap.presetHash;
+        m_lastPipelineEnabled = snap.pipelineEnabled;
+        m_lastParamValues     = std::move(currentValues);
+    }
+}
+
+// Long-poll on /meta with SSE. Phase 6 of #47.
+//
+// Returns true if the SSE handshake succeeded and the connection then
+// ended (server closed, network blip, stop requested). Returns false if
+// the server's response wasn't text/event-stream — caller falls back to
+// short-poll fetchOnce(). Old RetroCapture builds (Phases 1-5) that only
+// know HTTP GET on /meta will land in the false branch and the client
+// transparently degrades to 1 s polling.
+bool RemoteMetaSync::runSSE()
+{
+    UrlParts u;
+    if (!parseHttpUrl(m_baseUrl + "/meta", u))
+    {
+        return false;
+    }
+
+    socket_t sock = connectTcp(u);
+    if (sock == INVALID_SOCK) return false;
+
+    // No recv timeout for SSE — the connection is intentionally long-lived.
+    // We rely on send-failure detection on the server side (their keepalive
+    // comment + payload writes) to notice broken sockets.
+
+    std::string req;
+    req.reserve(256);
+    req += "GET ";
+    req += u.path;
+    req += " HTTP/1.1\r\nHost: ";
+    req += u.host;
+    if (u.port != "80")
+    {
+        req += ':';
+        req += u.port;
+    }
+    req += "\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n";
+    req += "Connection: keep-alive\r\n\r\n";
+
+    if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)
+    {
+        closeSocket(sock);
+        return false;
+    }
+
+    // Read response headers — accumulate until we see "\r\n\r\n".
+    std::string buf;
+    buf.reserve(2048);
+    char chunk[2048];
+    while (m_running.load())
+    {
+        int n = ::recv(sock, chunk, sizeof(chunk), 0);
+        if (n <= 0)
         {
-            const auto &s = j["shader"];
-            out.shaderActive    = s.value("active", false);
-            out.pipelineEnabled = s.value("pipelineEnabled", true);
-            out.preset          = s.value("preset", std::string{});
-            out.presetHash      = s.value("presetHash", std::string{});
-            if (s.contains("parameters") && s["parameters"].is_array())
+            closeSocket(sock);
+            return false;
+        }
+        buf.append(chunk, static_cast<size_t>(n));
+        if (buf.find("\r\n\r\n") != std::string::npos) break;
+        if (buf.size() > 16 * 1024) { closeSocket(sock); return false; }
+    }
+    if (!m_running.load()) { closeSocket(sock); return true; }
+
+    size_t headerEnd = buf.find("\r\n\r\n");
+    std::string headerSection = buf.substr(0, headerEnd);
+    // Status line check — accept any 2xx.
+    {
+        size_t sp = headerSection.find(' ');
+        if (sp == std::string::npos) { closeSocket(sock); return false; }
+        int code = std::atoi(headerSection.c_str() + sp + 1);
+        if (code < 200 || code >= 300) { closeSocket(sock); return false; }
+    }
+    // Content-Type check — must be text/event-stream for SSE.
+    {
+        std::string lower = headerSection;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+        if (lower.find("text/event-stream") == std::string::npos)
+        {
+            // Server responded with the old one-shot JSON snapshot — parse it
+            // and dispatch, then return false so the caller falls back to
+            // short-polling (since this server doesn't support SSE).
+            std::string body = buf.substr(headerEnd + 4);
+            Snapshot snap;
+            if (parseSnapshotJSON(body, snap))
             {
-                out.parameters.clear();
-                out.parameters.reserve(s["parameters"].size());
-                for (const auto &p : s["parameters"])
+                dispatchIfChanged(snap);
+            }
+            closeSocket(sock);
+            return false;
+        }
+    }
+
+    LOG_INFO("RemoteMetaSync: SSE stream established with " + m_baseUrl);
+
+    std::string body = buf.substr(headerEnd + 4);
+    buf.clear();
+
+    auto processEvents = [&](std::string &stream)
+    {
+        size_t eventEnd;
+        while ((eventEnd = stream.find("\n\n")) != std::string::npos)
+        {
+            std::string event = stream.substr(0, eventEnd);
+            stream.erase(0, eventEnd + 2);
+
+            std::string data;
+            size_t pos = 0;
+            while (pos < event.size())
+            {
+                size_t lineEnd = event.find('\n', pos);
+                std::string line = (lineEnd == std::string::npos)
+                                       ? event.substr(pos)
+                                       : event.substr(pos, lineEnd - pos);
+                pos = (lineEnd == std::string::npos) ? event.size() : lineEnd + 1;
+                // Strip CR if present.
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty() || line[0] == ':') continue; // blank or comment
+                if (line.compare(0, 5, "data:") == 0)
                 {
-                    ParamOverride po;
-                    po.name  = p.value("name", std::string{});
-                    po.value = p.value("value", 0.0f);
-                    if (!po.name.empty())
-                    {
-                        out.parameters.push_back(std::move(po));
-                    }
+                    std::string d = line.substr(5);
+                    if (!d.empty() && d.front() == ' ') d.erase(0, 1);
+                    if (!data.empty()) data += '\n';
+                    data += d;
+                }
+                // Other SSE fields (event:, id:, retry:) are ignored.
+            }
+
+            if (!data.empty())
+            {
+                Snapshot snap;
+                if (parseSnapshotJSON(data, snap))
+                {
+                    dispatchIfChanged(snap);
                 }
             }
         }
+    };
 
-        if (j.contains("source") && j["source"].is_object())
-        {
-            const auto &s = j["source"];
-            out.sourceWidth  = s.value("width",  0u);
-            out.sourceHeight = s.value("height", 0u);
-            out.sourceFps    = s.value("fps",    0u);
-        }
+    processEvents(body);
 
-        if (j.contains("image") && j["image"].is_object())
-        {
-            const auto &im = j["image"];
-            out.imageBrightness = im.value("brightness", 1.0f);
-            out.imageContrast   = im.value("contrast",   1.0f);
-        }
-
-        return true;
-    }
-    catch (const std::exception &e)
+    while (m_running.load())
     {
-        LOG_WARN(std::string("RemoteMetaSync: JSON parse failed — ") + e.what());
-        return false;
+        int n = ::recv(sock, chunk, sizeof(chunk), 0);
+        if (n <= 0) break;
+        body.append(chunk, static_cast<size_t>(n));
+        if (body.size() > 256 * 1024)
+        {
+            // Sanity cap. Drop anything before the last complete event boundary.
+            size_t lastSep = body.rfind("\n\n");
+            body = (lastSep == std::string::npos) ? std::string{} : body.substr(lastSep + 2);
+        }
+        processEvents(body);
     }
+
+    closeSocket(sock);
+    return true;
 }
 
 void RemoteMetaSync::pollLoop()
 {
+    // SSE-first strategy: try the long-poll, fall back to short-poll when
+    // the server doesn't speak event-stream. Reconnect with backoff on
+    // either failure mode.
+    int sseFailureStreak = 0;
     while (m_running.load())
     {
-        Snapshot snap;
-        if (fetchOnce(snap))
+        if (runSSE())
         {
-            // Build a value vector for the parameter dedup check.
-            std::vector<float> currentValues;
-            currentValues.reserve(snap.parameters.size());
-            for (const auto &p : snap.parameters)
+            // Stream ended — assume transient (network blip, server
+            // restart). Reconnect after a short pause.
+            sseFailureStreak = 0;
+        }
+        else
+        {
+            // SSE not supported / connect failure / parse error.
+            sseFailureStreak++;
+            if (sseFailureStreak == 1)
             {
-                currentValues.push_back(p.value);
+                LOG_INFO("RemoteMetaSync: SSE unavailable, falling back to short-poll");
             }
-
-            const bool presetChanged  = (snap.preset     != m_lastPreset);
-            const bool hashChanged    = (snap.presetHash != m_lastPresetHash);
-            const bool toggleChanged  = (snap.pipelineEnabled != m_lastPipelineEnabled);
-            const bool paramsChanged  = (currentValues != m_lastParamValues);
-
-            if (presetChanged || hashChanged || toggleChanged || paramsChanged)
+            // One short-poll round to keep deltas flowing.
+            Snapshot snap;
+            if (fetchOnce(snap))
             {
-                if (m_cb) m_cb(snap);
-                m_lastPreset          = snap.preset;
-                m_lastPresetHash      = snap.presetHash;
-                m_lastPipelineEnabled = snap.pipelineEnabled;
-                m_lastParamValues     = std::move(currentValues);
+                dispatchIfChanged(snap);
             }
         }
 
-        // Sleep in 100 ms slices so stop() is responsive without resorting
-        // to condition variables for this very-low-rate poller.
-        int remaining = m_pollIntervalMs;
+        // Reconnect / re-poll cadence: shorter for SSE retries (likely
+        // transient), longer for failing short-polls (likely peer down).
+        const int sleepMs = (sseFailureStreak > 3) ? m_pollIntervalMs : 500;
+        int remaining = sleepMs;
         while (remaining > 0 && m_running.load())
         {
             const int slice = std::min(remaining, 100);

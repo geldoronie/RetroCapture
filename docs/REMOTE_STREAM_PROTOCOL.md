@@ -5,9 +5,8 @@ This document describes the wire format between a RetroCapture **server**
 that wants to consume the host's stream while applying the shader **locally**
 at its own native resolution.
 
-Status: **Phases 1–2 landed.** Client-side consumption (remote source mode,
-read-only UI), asset bundle transport and live-update WebSocket are tracked
-in [issue #47](https://github.com/geldoronie/RetroCapture/issues/47).
+Status: **Phases 1–6 landed.** Asset bundle transport is tracked in
+[issue #47](https://github.com/geldoronie/RetroCapture/issues/47).
 
 ---
 
@@ -120,10 +119,28 @@ source state. Content-type is `application/json`.
 
 ### Caching
 
-Responses MUST NOT be cached by the client. Phase 6 will add a WebSocket
-upgrade on this same path so the client receives parameter / preset
-deltas without polling; until then the client polls on a short interval
-(suggested: 1 s during steady state).
+Responses MUST NOT be cached by the client.
+
+### Live updates via Server-Sent Events (Phase 6)
+
+The same `/meta` path accepts an SSE upgrade. When the client sends:
+
+```
+GET /meta HTTP/1.1
+Accept: text/event-stream
+```
+
+…the server responds with `Content-Type: text/event-stream` and keeps
+the connection open, pushing a `data: {snapshot}\n\n` event whenever
+the snapshot changes. The first event sent is the current snapshot
+(equivalent to the regular `GET /meta` body). A `: keepalive\n\n`
+comment is sent every 30 s while idle.
+
+Clients that accept `application/json` (no `Accept: text/event-stream`)
+continue to get the one-shot snapshot — no breaking change for older
+consumers. The reference client (`RemoteMetaSync` in this repo) tries
+SSE first and transparently falls back to short-poll if the server
+doesn't advertise `text/event-stream`.
 
 ---
 

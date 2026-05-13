@@ -82,6 +82,23 @@ private:
      */
     bool fetchOnce(Snapshot &out);
 
+    /**
+     * @brief Opens an SSE long-poll on `<baseUrl>/meta` and dispatches
+     *        snapshot deltas as they arrive. Returns true if the SSE
+     *        handshake succeeded (the connection later ended cleanly or
+     *        the server closed it), false if the server does not appear
+     *        to support text/event-stream — the caller should fall back
+     *        to short-poll fetchOnce() in that case. Phase 6 of #47.
+     */
+    bool runSSE();
+
+    /**
+     * @brief Common dispatch path — emits the callback if the snapshot
+     *        differs from the last delivered one and updates the dedup
+     *        state. Called from both polling and SSE paths.
+     */
+    void dispatchIfChanged(const Snapshot &snap);
+
     std::string         m_baseUrl;
     SnapshotCallback    m_cb;
     int                 m_pollIntervalMs = 1000;

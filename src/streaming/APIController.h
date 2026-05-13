@@ -121,7 +121,20 @@ private:
     bool handleGETV4L2Devices(int clientFd);
     bool handleGETV4L2Controls(int clientFd);
     bool handleGETStatus(int clientFd);
-    bool handleGETMeta(int clientFd);
+    bool handleGETMeta(int clientFd, const std::string &request);
+    /**
+     * Long-lived Server-Sent Events loop on /meta — pushes snapshot deltas
+     * to the connected client every ~250 ms whenever the JSON changes,
+     * plus a comment keepalive every 30 s. Returns when the client
+     * disconnects or sending fails. Phase 6 of #47.
+     */
+    bool handleGETMetaSSE(int clientFd);
+    /**
+     * Builds the /meta JSON snapshot. Pure function over current
+     * Application / UIManager / ShaderEngine state — safe to call from
+     * the SSE loop on every tick.
+     */
+    std::string buildMetaSnapshotJSON();
     bool handleRefreshV4L2Devices(int clientFd);
     bool handleGETPlatform(int clientFd);
     bool handleGETDSDevices(int clientFd);

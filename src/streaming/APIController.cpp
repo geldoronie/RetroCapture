@@ -15,7 +15,9 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 #include <fstream>
 #include <cstdint>
@@ -372,7 +374,7 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
 {
     if (path == "/meta")
     {
-        return handleGETMeta(clientFd);
+        return handleGETMeta(clientFd, request);
     }
     else if (path == "/api/v1/source")
     {
@@ -1014,16 +1016,14 @@ bool APIController::handleGETStatus(int clientFd)
     return true;
 }
 
-// GET /meta — full snapshot of the active shader pipeline + source state, used
-// by a remote RetroCapture client to mirror the server's configuration when
-// consuming /raw. Schema is versioned via "protocolVersion"; see
-// docs/REMOTE_STREAM_PROTOCOL.md.
-bool APIController::handleGETMeta(int clientFd)
+// Builds the /meta JSON snapshot from current application state. Pure
+// helper — no I/O, no side effects — so the SSE push loop in
+// handleGETMetaSSE can call it cheaply on every tick.
+std::string APIController::buildMetaSnapshotJSON()
 {
     if (!m_application || !m_uiManager)
     {
-        sendErrorResponse(clientFd, 500, "Application or UIManager not available");
-        return true;
+        return "{}";
     }
 
     ShaderEngine *shaderEngine = m_application->getShaderEngine();
@@ -1086,7 +1086,124 @@ bool APIController::handleGETMeta(int clientFd)
          << "}"
          << "}";
 
-    sendJSONResponse(clientFd, 200, json.str());
+    return json.str();
+}
+
+// GET /meta — full snapshot of the active shader pipeline + source state, used
+// by a remote RetroCapture client to mirror the server's configuration when
+// consuming /raw. Schema is versioned via "protocolVersion"; see
+// docs/REMOTE_STREAM_PROTOCOL.md.
+//
+// Two transports on the same path (Phase 6 of #47):
+//   - regular HTTP GET → returns a one-shot JSON snapshot (Phase 1)
+//   - Accept: text/event-stream → upgrades to Server-Sent Events and
+//     pushes deltas until the client disconnects
+bool APIController::handleGETMeta(int clientFd, const std::string &request)
+{
+    if (!m_application || !m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "Application or UIManager not available");
+        return true;
+    }
+
+    // Sniff for an SSE-flavoured request. Case-insensitive on the header
+    // name but not the value — text/event-stream is the canonical token.
+    auto headerHasSSE = [](const std::string &req) -> bool
+    {
+        size_t pos = 0;
+        while (pos < req.size())
+        {
+            size_t eol = req.find("\r\n", pos);
+            if (eol == std::string::npos) break;
+            std::string line = req.substr(pos, eol - pos);
+            if (line.size() >= 7)
+            {
+                std::string head = line.substr(0, 7);
+                for (auto &c : head) c = static_cast<char>(::tolower(c));
+                if (head == "accept:")
+                {
+                    if (line.find("text/event-stream") != std::string::npos)
+                    {
+                        return true;
+                    }
+                }
+            }
+            pos = eol + 2;
+            if (line.empty()) break; // end of headers
+        }
+        return false;
+    };
+
+    if (headerHasSSE(request))
+    {
+        return handleGETMetaSSE(clientFd);
+    }
+
+    sendJSONResponse(clientFd, 200, buildMetaSnapshotJSON());
+    return true;
+}
+
+bool APIController::handleGETMetaSSE(int clientFd)
+{
+    // Send SSE response headers. X-Accel-Buffering: no asks reverse
+    // proxies (notably nginx) not to buffer the stream — without it the
+    // client wouldn't see deltas until a buffer flushed.
+    const std::string headers =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: keep-alive\r\n"
+        "X-Accel-Buffering: no\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "\r\n";
+
+    if (sendData(clientFd, headers.data(), headers.size()) < 0)
+    {
+        return true;
+    }
+
+    auto sendEvent = [&](const std::string &json) -> bool
+    {
+        std::string msg;
+        msg.reserve(json.size() + 16);
+        msg += "data: ";
+        msg += json;
+        msg += "\n\n";
+        return sendData(clientFd, msg.data(), msg.size()) >= 0;
+    };
+
+    std::string lastSnapshot = buildMetaSnapshotJSON();
+    if (!sendEvent(lastSnapshot))
+    {
+        return true;
+    }
+
+    auto lastKeepalive = std::chrono::steady_clock::now();
+
+    while (true)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+        std::string snap = buildMetaSnapshotJSON();
+        if (snap != lastSnapshot)
+        {
+            if (!sendEvent(snap)) break;
+            lastSnapshot = std::move(snap);
+            lastKeepalive = std::chrono::steady_clock::now();
+            continue;
+        }
+
+        // Send a comment-line keepalive every 30 s so idle TCP doesn't
+        // get reaped by NAT / proxies.
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastKeepalive).count() >= 30)
+        {
+            static const char *kKeepalive = ": keepalive\n\n";
+            if (sendData(clientFd, kKeepalive, std::strlen(kKeepalive)) < 0) break;
+            lastKeepalive = now;
+        }
+    }
+
     return true;
 }
 
