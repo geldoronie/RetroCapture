@@ -1236,10 +1236,18 @@ bool HTTPTSStreamer::initializeEncoding()
 
 bool HTTPTSStreamer::initializeRawPipeline()
 {
-    // Configurar segundo MediaSynchronizer com os mesmos valores do /stream.
+    // The /raw synchronizer gets noticeably bigger buffers than /stream
+    // (~1 s of video and ~1 s of audio). The /raw consumer is the
+    // dedicated raw-encoder thread; bursts in the push side or brief
+    // hiccups in the encoder shouldn't show up as drops on a fed-by-
+    // identical-source pipeline whose only consumer is supposed to keep
+    // up. The bigger buffer absorbs those bursts without imposing
+    // meaningful latency — the encoder still pulls in near-real-time.
+    const size_t rawMaxVideo = std::max<size_t>(m_maxVideoBufferSize, 60);
+    const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 120);
     m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
-    m_rawStreamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
-    m_rawStreamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
+    m_rawStreamSynchronizer.setMaxVideoBufferSize(rawMaxVideo);
+    m_rawStreamSynchronizer.setMaxAudioBufferSize(rawMaxAudio);
     m_rawStreamSynchronizer.setSyncTolerance(50 * 1000LL);
 
     // Strategy B (#47): /raw shares codec config (bitrate, codec, preset)
@@ -3061,11 +3069,23 @@ void HTTPTSStreamer::rawEncodingThread()
     int cleanupCounter = 0;
     const int CLEANUP_INTERVAL = 10;
 
+    // Rolling 1 s telemetry — surfaces whether the raw encoder is keeping
+    // up with the push rate, and how often calculateSyncZone refuses to
+    // hand frames over (which would starve the encoder even when CPU is
+    // idle).
+    auto statStart = std::chrono::steady_clock::now();
+    uint32_t statVideoEncoded   = 0;
+    uint32_t statAudioEncoded   = 0;
+    uint32_t statIterations     = 0;
+    uint32_t statSyncInvalid    = 0;
+    size_t   statMaxQueueDepth  = 0;
+
     while (m_running)
     {
         if (m_stopRequest) break;
 
         bool processedAny = false;
+        ++statIterations;
 
         cleanupCounter++;
         if (cleanupCounter >= CLEANUP_INTERVAL)
@@ -3091,6 +3111,7 @@ void HTTPTSStreamer::rawEncodingThread()
                         m_rawMediaMuxer.muxPacket(p);
                     }
                     processedAny = true;
+                    ++statAudioEncoded;
                 }
                 m_rawStreamSynchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
             }
@@ -3098,6 +3119,7 @@ void HTTPTSStreamer::rawEncodingThread()
 
         size_t videoBufferSize = m_rawStreamSynchronizer.getVideoBufferSize();
         size_t audioBufferSize = m_rawStreamSynchronizer.getAudioBufferSize();
+        if (videoBufferSize > statMaxQueueDepth) statMaxQueueDepth = videoBufferSize;
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
         MediaSynchronizer::SyncZone syncZone = m_rawStreamSynchronizer.calculateSyncZone();
@@ -3126,6 +3148,7 @@ void HTTPTSStreamer::rawEncodingThread()
                         }
                         processedAny = true;
                         framesProcessed++;
+                        ++statVideoEncoded;
                     }
                 }
             }
@@ -3140,6 +3163,24 @@ void HTTPTSStreamer::rawEncodingThread()
                     m_rawHeaderWritten = true;
                 }
             }
+        }
+        else
+        {
+            ++statSyncInvalid;
+        }
+
+        // Emit telemetry once per second.
+        auto nowTs = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - statStart).count() >= 1)
+        {
+            LOG_INFO("/raw encoder: video=" + std::to_string(statVideoEncoded) +
+                     "/s audio=" + std::to_string(statAudioEncoded) +
+                     "/s iters=" + std::to_string(statIterations) +
+                     " syncInvalid=" + std::to_string(statSyncInvalid) +
+                     " maxVidQueue=" + std::to_string(statMaxQueueDepth));
+            statVideoEncoded = statAudioEncoded = statIterations = statSyncInvalid = 0;
+            statMaxQueueDepth = 0;
+            statStart = nowTs;
         }
 
         if (processedAny)
