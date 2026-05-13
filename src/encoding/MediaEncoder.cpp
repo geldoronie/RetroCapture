@@ -895,21 +895,21 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
 
     if (isVideo)
     {
-        // PTS is in DISPLAY order — when libx264 emits B-frames (any
-        // preset slower than ultrafast/superfast can), a B-frame's PTS
-        // is legitimately smaller than the previous packet's PTS in
-        // decode order: the B-frame displays between an I-frame and a
-        // P-frame, but is emitted by the encoder AFTER the P-frame it
-        // references. Forcing PTS monotonic here was rewriting B-frame
-        // PTS values so they ended up displayed in the wrong order —
-        // that's exactly the back-and-forth ghost effect the user saw
-        // when picking a slower preset / higher bitrate.
+        // PTS is in DISPLAY order, DTS is in DECODE order. We do NOT
+        // force PTS monotonic across packets — that was breaking
+        // B-frame display order in slower presets (visible ghost
+        // effect). PTS values pass through.
         //
-        // Only DTS needs to be strictly monotonic; libx264 already
-        // guarantees that, but we keep the check as defense in depth.
-        // Clamping DTS to PTS was equally wrong — for a B-frame
-        // DTS > PTS is the entire point (decoded after the future
-        // P-frame it depends on, displayed earlier than it).
+        // DTS still needs to be strictly monotonic, both for muxer
+        // sanity and because libavcodec occasionally emits packets
+        // with duplicate / regressing DTS (observed under medium
+        // preset + higher bitrate). When we bump DTS forward to
+        // maintain monotonicity we may push it above the packet's
+        // PTS — but MPEG-TS requires PTS >= DTS for every packet
+        // ("pts < dts in stream 0" error). When that happens we
+        // pull PTS up to match the bumped DTS so the invariant
+        // holds. Display order is preserved relative to other
+        // packets because DTS monotonicity is preserved.
         if (dts != AV_NOPTS_VALUE_LOCAL)
         {
             if (m_lastVideoDTS >= 0 && dts <= m_lastVideoDTS)
@@ -918,9 +918,12 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
             }
             m_lastVideoDTS = dts;
         }
+        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && pts < dts)
+        {
+            pts = dts;
+        }
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            // Tracked for telemetry only — no longer used to clamp.
             m_lastVideoPTS = pts;
         }
     }

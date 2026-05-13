@@ -770,20 +770,13 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
 
     if (isVideo)
     {
-        // PTS is in DISPLAY order, DTS is in DECODE order. With
-        // B-frames (any preset slower than ultrafast/superfast can
-        // emit them), PTS values legitimately go non-monotonically in
-        // the encode/decode order: a B-frame is emitted after the
-        // P-frame it references but displayed before it. Forcing PTS
-        // monotonic here rewrote B-frame PTS values, so the client
-        // ended up displaying frames in the wrong order — the visible
-        // ghost / back-and-forth effect the user saw when picking a
-        // slower preset.
-        //
-        // We still enforce strict DTS monotonicity (libavcodec already
-        // guarantees this, but defence in depth is cheap), and we no
-        // longer clamp DTS to PTS — DTS > PTS is the defining property
-        // of a B-frame.
+        // PTS is in DISPLAY order; we do NOT force it monotonic here
+        // (would mangle B-frame display order). DTS still must be
+        // strictly monotonic for the muxer to accept packets in MPEG-TS.
+        // When the monotonic bump pushes DTS past the packet's PTS we
+        // pull PTS up to match: MPEG-TS rejects "pts < dts in stream"
+        // with Invalid argument and we lose the packet entirely, which
+        // is worse than a one-tick PTS shift.
         if (dts != AV_NOPTS_VALUE_LOCAL)
         {
             if (m_lastVideoDTS >= 0 && dts <= m_lastVideoDTS)
@@ -791,6 +784,10 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
                 dts = m_lastVideoDTS + 1;
             }
             m_lastVideoDTS = dts;
+        }
+        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && pts < dts)
+        {
+            pts = dts;
         }
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
@@ -802,7 +799,6 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
                          ", last: " + std::to_string(m_lastVideoPTS) +
                          ", delta: " + std::to_string(pts - m_lastVideoPTS));
             }
-            // Tracked for telemetry only — no longer used to clamp.
             m_lastVideoPTS = pts;
         }
     }
