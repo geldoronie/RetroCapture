@@ -170,6 +170,15 @@ private:
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
 
+    // Push-rate throttle for streaming/recording — the main loop can run
+    // faster than the configured stream FPS when vsync is off or the
+    // display refresh rate is higher than 60 Hz, which produces hundreds
+    // of pushes per second with near-identical timestamps. The encoder
+    // chokes (PTS retrocession, sync-zone overflow) and the client sees
+    // back-and-forth jitter. Track last push wall-clock time and skip
+    // pushes that come within (1 / targetFps) of the previous one.
+    int64_t m_lastStreamPushUs = 0;
+
     // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
     // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
     std::unique_ptr<class RemoteMetaSync> m_remoteMetaSync;

@@ -3745,13 +3745,27 @@ void Application::run()
                                     memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                                 }
 
-                                if (m_streamManager && m_streamManager->isActive())
+                                // Same target-FPS throttle as the FBO-complete push path
+                                // below — keeps the encoder fed at the configured streaming
+                                // rate regardless of how fast the main loop iterates (no
+                                // vsync, high-refresh-rate display, free-run).
                                 {
-                                    m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                }
-                                if (m_recordingManager && m_recordingManager->isRecording())
-                                {
-                                    m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    const int64_t pboTargetFps = (m_ui && m_ui->getStreamingFps() > 0) ? m_ui->getStreamingFps() : 60;
+                                    const int64_t pboMinIntervalUs = 1000000LL / pboTargetFps;
+                                    const int64_t pboNowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch()).count();
+                                    if (pboNowUs - m_lastStreamPushUs >= pboMinIntervalUs)
+                                    {
+                                        m_lastStreamPushUs = pboNowUs;
+                                        if (m_streamManager && m_streamManager->isActive())
+                                        {
+                                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
+                                        if (m_recordingManager && m_recordingManager->isRecording())
+                                        {
+                                            m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
+                                    }
                                 }
                             }
                             else
@@ -4021,8 +4035,23 @@ void Application::run()
 
                                 // Share frame data between streaming and recording.
                                 // Pula push se o PBO async ainda não tem dados do frame anterior.
-                                if (frameDataReady && m_streamManager && m_streamManager->isActive())
+                                //
+                                // Throttle pushes to the configured streaming FPS — when the
+                                // main loop runs faster than the target frame rate (no vsync,
+                                // 240Hz display, free-run), pushing every iteration produces
+                                // hundreds of frames per second arriving at the encoder with
+                                // near-identical timestamps. That causes PTS retrocession,
+                                // overflow drops in the synchronizer and the visible
+                                // "back-and-forth" jitter the client sees.
+                                const int64_t s_targetFps = (m_ui && m_ui->getStreamingFps() > 0) ? m_ui->getStreamingFps() : 60;
+                                const int64_t s_minIntervalUs = 1000000LL / s_targetFps;
+                                const int64_t s_nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                            std::chrono::steady_clock::now().time_since_epoch()).count();
+                                const bool s_pushAllowed = (s_nowUs - m_lastStreamPushUs >= s_minIntervalUs);
+
+                                if (s_pushAllowed && frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
+                                    m_lastStreamPushUs = s_nowUs;
                                     const bool useSource = streamWantsSource && sourceFrameReady;
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
