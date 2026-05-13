@@ -937,6 +937,26 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // different state mirrors (format header, client list, mutex).
     if (isRawRequest)
     {
+        // /raw is only meaningful while streaming is actually running —
+        // the raw encoder pipeline is brought up by initializeRawPipeline
+        // as part of start() and torn down by stop(). Without it, the
+        // HTTP socket accepts the connection and ffmpeg/avformat_open_input
+        // sees a valid TS-ish header (whatever the muxer flushed before
+        // shutdown) but no further packets ever arrive — the user-visible
+        // symptom is "client says connected but stream stays black".
+        // Bail with 503 so the client treats it as a failed connect.
+        if (!m_rawMediaEncoder.isInitialized())
+        {
+            const char *response = "HTTP/1.1 503 Service Unavailable\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "Streaming is not running on this server. "
+                                   "Start streaming on the host before connecting.";
+            m_httpServer.sendData(clientFd, response, strlen(response));
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
         {
             std::lock_guard<std::mutex> headerLock(m_rawHeaderMutex);
             if (m_rawHeaderWritten && !m_rawFormatHeader.empty())
