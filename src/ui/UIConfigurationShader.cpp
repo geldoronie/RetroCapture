@@ -55,8 +55,14 @@ void UIConfigurationShader::renderShaderSelection()
 {
     ImGui::Text("Shader Preset:");
 
-    // Combo box for shader selection
+    // Combo box for shader selection + Rescan button on the same row.
+    // The Rescan action used to live in the File menu, but it's only
+    // meaningful in the context of this list — moved here so the user
+    // doesn't have to leave the Shaders tab to refresh after dropping
+    // a new .glslp into the shaders folder.
     std::string currentShader = m_uiManager->getCurrentShader();
+    float buttonWidth = ImGui::CalcTextSize("Rescan").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
     if (ImGui::BeginCombo("##shader", currentShader.empty() ? "None" : currentShader.c_str()))
     {
         if (ImGui::Selectable("None", currentShader.empty()))
@@ -80,6 +86,15 @@ void UIConfigurationShader::renderShaderSelection()
             }
         }
         ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Rescan"))
+    {
+        m_uiManager->scanShaders("shaders/shaders_glsl");
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Re-scan the shaders folder for newly added .glslp presets.");
     }
 
     ImGui::Separator();

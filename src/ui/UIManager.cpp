@@ -285,11 +285,8 @@ void UIManager::render()
     {
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("Rescan Shaders"))
-            {
-                scanShaders(m_shaderBasePath);
-            }
-            ImGui::Separator();
+            // 'Rescan Shaders' moved next to the Shader dropdown in the
+            // Shaders tab — that's where the list it refreshes lives.
             if (ImGui::MenuItem("Exit", "Esc"))
             {
                 if (m_window)
@@ -349,18 +346,20 @@ void UIManager::render()
         }
         if (ImGui::BeginMenu("Remote"))
         {
-            // Only a Remote-mode source with a non-empty device path counts
-            // as 'connected' for this menu — a V4L2 capture would also have
-            // a non-empty m_currentDevice (its /dev/videoN path) but isn't
-            // a remote viewer connection.
-            const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, !connected))
+            // 'Connect to Remote...' is always enabled — the window shows
+            // either Connect or Disconnect based on the current state, so
+            // it doubles as a status / management panel. Disabling the
+            // menu item while connected made the window unreachable once
+            // closed, which forced users into restart-to-recover.
+            if (ImGui::MenuItem("Connect to Remote..."))
             {
                 if (m_remoteConnectionWindow)
                 {
                     m_remoteConnectionWindow->setVisible(true);
                 }
             }
+            // Quick Disconnect shortcut — only shown when relevant.
+            const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
             if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
             {
                 setCurrentDevice("");

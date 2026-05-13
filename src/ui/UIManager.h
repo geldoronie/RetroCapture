@@ -804,9 +804,10 @@ public:
     void loadConfig();
     std::string getConfigPath() const;
 
-private:
     // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
+
+private:
     void scanV4L2Devices();
 
     std::vector<std::string> m_scannedShaders;
