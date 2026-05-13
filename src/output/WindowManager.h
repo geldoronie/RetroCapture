@@ -32,6 +32,14 @@ public:
     // wants vsync OFF so a backgrounded window doesn't stall the
     // capture/encoder threads waiting on a refresh that never comes.
     void setVsync(bool enabled);
+
+    // Whether the OS reports the window as focused (i.e. receiving
+    // input). The main loop uses this to disable vsync when the user
+    // alt-tabs away — most compositors park vsync at 0 Hz for
+    // backgrounded windows, which would otherwise block swapBuffers
+    // forever and stall the entire main loop (queue fills, drops
+    // pile up, no recovery until focus returns).
+    bool isFocused() const;
     
     void makeCurrent();
     

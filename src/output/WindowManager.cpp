@@ -355,6 +355,12 @@ void WindowManager::setVsync(bool enabled)
     }
 }
 
+bool WindowManager::isFocused() const
+{
+    if (!m_window) return false;
+    return glfwGetWindowAttrib(static_cast<GLFWwindow *>(m_window), GLFW_FOCUSED) != 0;
+}
+
 void WindowManager::setResizeCallback(std::function<void(int, int)> callback)
 {
     m_resizeCallback = callback;

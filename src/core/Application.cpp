@@ -4339,24 +4339,38 @@ void Application::run()
             }
 
             // Pacing policy:
-            //  - Remote source: vsync (enabled in setOnSourceTypeChanged
-            //    when entering Remote) drives the loop at the panel's
-            //    display refresh rate. Adding a stream-fps software
-            //    pacing on top capped the loop at 60 Hz even on a
-            //    144 Hz panel, which is what made 60 fps streams look
-            //    choppy ("3:2 pulldown" 2-3 refresh pattern) compared
-            //    to 120 fps: the user couldn't use the extra refreshes
-            //    the panel had on offer because we were sleeping
-            //    through them. Free-running with vsync gives the
-            //    cleanest possible cadence at whatever stream:refresh
-            //    ratio the user picked.
+            //  - Remote source: vsync drives the loop at the panel's
+            //    display refresh rate. Vsync is toggled on focus —
+            //    when the window is backgrounded a lot of compositors
+            //    park vsync at 0 Hz, so swapBuffers would block forever
+            //    and the main loop would stop draining the frame queue
+            //    (the user-observed "consumed=0 drops=60/s queueDepth=20"
+            //    stall). When unfocused we disable vsync and add a
+            //    small sleep to avoid burning CPU on hidden refreshes.
             //  - Local source streaming: keep the existing software
             //    pace at the configured streaming FPS so we don't
             //    burn GPU + glReadPixels for frames the encoder will
             //    just throttle.
             if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
             {
-                // No software pacing — vsync does the work.
+                const bool focused = m_window && m_window->isFocused();
+                if (m_window && focused != m_remoteWindowFocused)
+                {
+                    m_window->setVsync(focused);
+                    m_remoteWindowFocused = focused;
+                }
+                if (!focused)
+                {
+                    // Hidden / backgrounded — sleep a frame's worth so
+                    // captureLatestFrame still drains the queue at a
+                    // reasonable rate without spinning the CPU.
+#ifdef PLATFORM_LINUX
+                    usleep(16000);
+#else
+                    Sleep(16);
+#endif
+                }
+                // When focused, vsync does the pacing.
             }
             else
             {
