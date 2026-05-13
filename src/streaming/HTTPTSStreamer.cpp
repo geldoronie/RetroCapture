@@ -2967,7 +2967,14 @@ void HTTPTSStreamer::encodingThread()
             // Processar frames de vídeo (com controle de taxa para evitar aceleração)
             // Aumentar limite quando há backlog para evitar perda de frames
             size_t framesProcessed = 0;
-            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2; // Mais frames quando há backlog
+            // Bigger catchup batch under backlog — when the bound on
+            // frames-per-iteration is too small the encoder thread can't
+            // drain a transient spike before the next push, the
+            // synchronizer fills, and addVideoFrame starts dropping at
+            // the source even though the encoder is well within its
+            // throughput budget. 30 covers a full second of vsync push
+            // in a single iteration.
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 30 : 2;
 
             for (const auto &frame : videoFrames)
             {
@@ -3003,8 +3010,20 @@ void HTTPTSStreamer::encodingThread()
             // Audio was already drained at the top of the loop, no need
             // to process it again here.
 
-            // Marcar frames de vídeo processados
-            m_streamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+            // Mark ONLY the frames we actually encoded as processed — not
+            // the entire sync zone. The previous behaviour silently
+            // dropped any frames beyond MAX_FRAMES_PER_ITERATION (they
+            // got marked processed without ever hitting the encoder),
+            // which both wastes capture work and produces visible gaps in
+            // the stream during transient bursts. Frames left unmarked
+            // here stay in the buffer and are picked up on the next loop
+            // iteration.
+            if (framesProcessed > 0)
+            {
+                m_streamSynchronizer.markVideoProcessed(
+                    syncZone.videoStartIdx,
+                    syncZone.videoStartIdx + framesProcessed);
+            }
 
             // Capturar header do formato se disponível
             {
@@ -3129,7 +3148,8 @@ void HTTPTSStreamer::rawEncodingThread()
             auto videoFrames = m_rawStreamSynchronizer.getVideoFrames(syncZone);
 
             size_t framesProcessed = 0;
-            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2;
+            // Match the /stream side's bigger catchup batch under backlog.
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 30 : 2;
 
             for (const auto &frame : videoFrames)
             {
@@ -3153,7 +3173,17 @@ void HTTPTSStreamer::rawEncodingThread()
                 }
             }
 
-            m_rawStreamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+            // Mark only actually-encoded frames as processed (same fix
+            // as the /stream encodingThread). Frames beyond
+            // MAX_FRAMES_PER_ITERATION stay unprocessed and get picked
+            // up on the next iteration instead of being silently
+            // dropped.
+            if (framesProcessed > 0)
+            {
+                m_rawStreamSynchronizer.markVideoProcessed(
+                    syncZone.videoStartIdx,
+                    syncZone.videoStartIdx + framesProcessed);
+            }
 
             {
                 std::lock_guard<std::mutex> lock(m_rawHeaderMutex);
