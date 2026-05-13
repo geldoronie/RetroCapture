@@ -20,13 +20,35 @@ void UIRemoteConnection::render()
 {
     if (!m_visible || !m_uiManager) return;
 
+    // Source-aware: getCurrentDevice() returns whatever the active capture
+    // path needs as its "device" — for V4L2/DS that's a filesystem path
+    // like /dev/video0, NOT a URL. Treat it as a URL only when the source
+    // is already Remote; otherwise seed the buffer with the default.
+    const bool sourceIsRemote = (m_uiManager->getSourceType() == UIManager::SourceType::Remote);
     if (!m_urlSeeded)
     {
-        std::string current = m_uiManager->getCurrentDevice();
+        std::string current = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
         if (current.empty()) current = "http://localhost:8080";
         std::strncpy(m_urlBuffer, current.c_str(), sizeof(m_urlBuffer) - 1);
         m_urlBuffer[sizeof(m_urlBuffer) - 1] = '\0';
         m_urlSeeded = true;
+    }
+    else if (sourceIsRemote)
+    {
+        // While in Remote mode, keep the buffer mirroring the active
+        // device path (so Disconnect-then-reopen shows the URL the user
+        // was last on, and an external --remote-url switch is reflected).
+        // Do NOT overwrite while typing — only sync when the user isn't
+        // editing this field.
+        if (!ImGui::IsItemActive())
+        {
+            std::string current = m_uiManager->getCurrentDevice();
+            if (!current.empty() && current != std::string(m_urlBuffer))
+            {
+                std::strncpy(m_urlBuffer, current.c_str(), sizeof(m_urlBuffer) - 1);
+                m_urlBuffer[sizeof(m_urlBuffer) - 1] = '\0';
+            }
+        }
     }
 
     ImGui::SetNextWindowSize(ImVec2(520, 320), ImGuiCond_FirstUseEver);
@@ -77,8 +99,12 @@ void UIRemoteConnection::render()
         ImGui::Separator();
         ImGui::Spacing();
 
-        const std::string currentDevice = m_uiManager->getCurrentDevice();
-        const bool connected = !currentDevice.empty() &&
+        // 'Connected' here means we're in Remote source mode AND have a
+        // URL set AND the capture is open. Without the source-type check
+        // the window mis-reported a local V4L2/DS capture as a remote
+        // connection (V4L2 also uses getCurrentDevice + isOpen).
+        const std::string currentDevice = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
+        const bool connected = sourceIsRemote && !currentDevice.empty() &&
                                (m_capture && m_capture->isOpen());
 
         if (!connected)

@@ -339,6 +339,10 @@ void UIManager::render()
         }
         if (ImGui::BeginMenu("Remote"))
         {
+            // Only a Remote-mode source with a non-empty device path counts
+            // as 'connected' for this menu — a V4L2 capture would also have
+            // a non-empty m_currentDevice (its /dev/videoN path) but isn't
+            // a remote viewer connection.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
             if (ImGui::MenuItem("Connect to Remote...", nullptr, false, !connected))
             {
