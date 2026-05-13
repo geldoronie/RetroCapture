@@ -3,11 +3,12 @@
 #include "IVideoCapture.h"
 
 #include <atomic>
+#include <cstdint>
+#include <deque>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
-#include <cstdint>
-#include <string>
 
 // Forward-declare FFmpeg types so the FFmpeg headers stay out of this .h
 struct AVFormatContext;
@@ -109,13 +110,25 @@ private:
     std::thread        m_decodeThread;
     std::atomic<bool>  m_decodeRunning{false};
 
-    // Latest decoded frame buffer. captureFrame / captureLatestFrame copy
-    // from here. Single-slot — newer frames overwrite older ones if the
-    // consumer hasn't pulled them yet (lossy by design; the encoder thread
-    // upstream will keep producing).
-    std::mutex            m_frameMutex;
-    std::vector<uint8_t>  m_latestRGB;
-    uint32_t              m_latestW = 0;
-    uint32_t              m_latestH = 0;
-    std::atomic<bool>     m_hasFrame{false};
+    // Small bounded queue of decoded RGB frames. Decoder pushes to back;
+    // consumer pops front. When the queue would exceed kMaxQueued the
+    // oldest frame is dropped — bounds the latency at a few frames while
+    // absorbing TCP / decoder bursts that would otherwise overwrite mid-
+    // burst frames if we kept a single-slot buffer. Replaces the "single
+    // slot, newer overwrites older" design from the first cut of this
+    // class.
+    struct QueuedFrame
+    {
+        std::vector<uint8_t> rgb;
+        uint32_t             width  = 0;
+        uint32_t             height = 0;
+    };
+    static constexpr size_t kMaxQueued = 3;
+
+    std::mutex             m_frameMutex;
+    std::deque<QueuedFrame> m_frameQueue;
+    // Last frame handed to the consumer — used to keep something on screen
+    // (rather than dummy black) when the queue is momentarily empty.
+    QueuedFrame             m_lastConsumed;
+    std::atomic<bool>       m_hasFrame{false};
 };

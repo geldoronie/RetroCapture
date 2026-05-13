@@ -163,8 +163,8 @@ void VideoCaptureRemote::close()
     m_url.clear();
     {
         std::lock_guard<std::mutex> lock(m_frameMutex);
-        m_latestRGB.clear();
-        m_latestW = m_latestH = 0;
+        m_frameQueue.clear();
+        m_lastConsumed = QueuedFrame{};
         m_hasFrame.store(false);
     }
 }
@@ -228,14 +228,24 @@ bool VideoCaptureRemote::captureFrame(Frame &frame)
 bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    if (!m_hasFrame.load() || m_latestRGB.empty())
+    // Pop the oldest queued frame and remember it as the "last consumed"
+    // so subsequent reads with an empty queue still return something
+    // sensible (the previous frame) instead of false — keeping the main
+    // loop's render path hot avoids the dummy/black flash that single-
+    // slot semantics produced under bursty decode timing.
+    if (!m_frameQueue.empty())
+    {
+        m_lastConsumed = std::move(m_frameQueue.front());
+        m_frameQueue.pop_front();
+    }
+    if (m_lastConsumed.rgb.empty())
     {
         return false;
     }
-    frame.data   = m_latestRGB.data();
-    frame.size   = m_latestRGB.size();
-    frame.width  = m_latestW;
-    frame.height = m_latestH;
+    frame.data   = m_lastConsumed.rgb.data();
+    frame.size   = m_lastConsumed.rgb.size();
+    frame.width  = m_lastConsumed.width;
+    frame.height = m_lastConsumed.height;
     frame.format = 0; // RGB24 — FrameProcessor's non-YUYV path
     return true;
 }
@@ -343,16 +353,22 @@ void VideoCaptureRemote::decodeLoop()
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, srcH, dstSlices, dstStrides);
             av_frame_unref(frame);
 
-            // Publish the new frame at its post-rescale dims.
+            // Push the new frame onto the bounded queue. Drop the oldest
+            // if we've already buffered kMaxQueued — keeps latency bounded
+            // while absorbing the TCP / decoder bursts that would
+            // otherwise show up as visible stuttering with a single-slot
+            // buffer.
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
-                if (m_latestRGB.size() != rgbBuf.size())
+                QueuedFrame qf;
+                qf.rgb.assign(rgbBuf.begin(), rgbBuf.end());
+                qf.width  = static_cast<uint32_t>(dstW);
+                qf.height = static_cast<uint32_t>(dstH);
+                if (m_frameQueue.size() >= kMaxQueued)
                 {
-                    m_latestRGB.resize(rgbBuf.size());
+                    m_frameQueue.pop_front();
                 }
-                std::memcpy(m_latestRGB.data(), rgbBuf.data(), rgbBuf.size());
-                m_latestW = static_cast<uint32_t>(dstW);
-                m_latestH = static_cast<uint32_t>(dstH);
+                m_frameQueue.push_back(std::move(qf));
             }
             m_width  = static_cast<uint32_t>(dstW);
             m_height = static_cast<uint32_t>(dstH);
