@@ -531,10 +531,22 @@ void VideoCaptureRemote::decodeLoop()
                 const int64_t deltaTicks = framePtsTicks - m_firstPtsTicks;
                 const int64_t deltaUs    = static_cast<int64_t>(static_cast<double>(deltaTicks) * m_streamTimebaseSecs * 1e6);
                 targetWallUs = m_streamStartWallUs + deltaUs;
-                // If we've fallen far behind (deltaUs in the past), snap
-                // the anchor forward so we don't accumulate latency
-                // forever when the stream pauses and resumes.
-                if (targetWallUs + 500'000 < nowWallUs)
+                // Watchdog in both directions:
+                //  - >500 ms in the past: the stream paused / network
+                //    blipped, our queue would otherwise sit on stale
+                //    frames forever. Snap anchor forward.
+                //  - >500 ms in the future: the first-frame PTS we
+                //    used to anchor was bogus (commonly the very
+                //    first decoded packet arrives with AV_NOPTS_VALUE
+                //    and we substituted 0, so the second frame's real
+                //    PTS suddenly puts targets a full second ahead of
+                //    wall clock). That symptom was the user-reported
+                //    "primeiro frame translúcido sobre tudo": linear
+                //    mode held a ~95 %-F1 / 5 %-F2 blend on screen for
+                //    the whole 1 s catch-up window. Re-anchor on this
+                //    frame so we don't keep ghosting F1 forever.
+                if (targetWallUs + 500'000 < nowWallUs ||
+                    targetWallUs > nowWallUs + 500'000)
                 {
                     m_streamStartWallUs = nowWallUs;
                     m_firstPtsTicks     = framePtsTicks;
