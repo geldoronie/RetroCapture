@@ -895,20 +895,21 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
 
     if (isVideo)
     {
-        if (pts != AV_NOPTS_VALUE_LOCAL)
-        {
-            if (m_lastVideoPTS >= 0 && pts <= m_lastVideoPTS)
-            {
-                pts = m_lastVideoPTS + 1;
-                uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (total == 1 || (total % 60) == 0)
-                {
-                    LOG_WARN("MediaEncoder: PTS retrocession on video frame (total: " +
-                             std::to_string(total) + ")");
-                }
-            }
-            m_lastVideoPTS = pts;
-        }
+        // PTS is in DISPLAY order — when libx264 emits B-frames (any
+        // preset slower than ultrafast/superfast can), a B-frame's PTS
+        // is legitimately smaller than the previous packet's PTS in
+        // decode order: the B-frame displays between an I-frame and a
+        // P-frame, but is emitted by the encoder AFTER the P-frame it
+        // references. Forcing PTS monotonic here was rewriting B-frame
+        // PTS values so they ended up displayed in the wrong order —
+        // that's exactly the back-and-forth ghost effect the user saw
+        // when picking a slower preset / higher bitrate.
+        //
+        // Only DTS needs to be strictly monotonic; libx264 already
+        // guarantees that, but we keep the check as defense in depth.
+        // Clamping DTS to PTS was equally wrong — for a B-frame
+        // DTS > PTS is the entire point (decoded after the future
+        // P-frame it depends on, displayed earlier than it).
         if (dts != AV_NOPTS_VALUE_LOCAL)
         {
             if (m_lastVideoDTS >= 0 && dts <= m_lastVideoDTS)
@@ -917,10 +918,10 @@ void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
             }
             m_lastVideoDTS = dts;
         }
-        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && dts > pts)
+        if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            dts = pts;
-            m_lastVideoDTS = dts;
+            // Tracked for telemetry only — no longer used to clamp.
+            m_lastVideoPTS = pts;
         }
     }
     else

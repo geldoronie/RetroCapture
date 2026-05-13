@@ -685,11 +685,11 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         }
     }
 
-    if (pkt->pts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
-    {
-        pkt->dts = pkt->pts;
-    }
-
+    // DTS > PTS is the defining property of a B-frame (decoded after
+    // the future P-frame it depends on, displayed earlier than it).
+    // We used to clamp DTS to PTS here, which broke B-frame ordering
+    // for any preset slower than ultrafast — fix removed alongside
+    // the matching clamp in ensureMonotonicPTS.
     ensureMonotonicPTS(pkt->pts, pkt->dts, packet.isVideo);
 
     {
@@ -770,50 +770,40 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
 
     if (isVideo)
     {
+        // PTS is in DISPLAY order, DTS is in DECODE order. With
+        // B-frames (any preset slower than ultrafast/superfast can
+        // emit them), PTS values legitimately go non-monotonically in
+        // the encode/decode order: a B-frame is emitted after the
+        // P-frame it references but displayed before it. Forcing PTS
+        // monotonic here rewrote B-frame PTS values, so the client
+        // ended up displaying frames in the wrong order — the visible
+        // ghost / back-and-forth effect the user saw when picking a
+        // slower preset.
+        //
+        // We still enforce strict DTS monotonicity (libavcodec already
+        // guarantees this, but defence in depth is cheap), and we no
+        // longer clamp DTS to PTS — DTS > PTS is the defining property
+        // of a B-frame.
+        if (dts != AV_NOPTS_VALUE_LOCAL)
+        {
+            if (m_lastVideoDTS >= 0 && dts <= m_lastVideoDTS)
+            {
+                dts = m_lastVideoDTS + 1;
+            }
+            m_lastVideoDTS = dts;
+        }
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            // CRITICAL: Only prevent retrocession (PTS going backwards)
-            // Don't force minimum increment - use PTS as calculated for correct speed
-            // This ensures video speed matches reality based on timestamps
-            if (m_lastVideoPTS >= 0 && pts <= m_lastVideoPTS)
-            {
-                // Log when we prevent retrocession
-                static int retroLogCounter = 0;
-                if (retroLogCounter++ < 5)
-                {
-                    LOG_WARN("MediaMuxer: Preventing PTS retrocession - last: " + std::to_string(m_lastVideoPTS) +
-                             ", calculated: " + std::to_string(pts) + ", adjusted to: " + std::to_string(m_lastVideoPTS + 1));
-                }
-                // PTS would go backwards - just increment by 1 to prevent retrocession
-                // But don't force a large increment that would slow down the video
-                pts = m_lastVideoPTS + 1;
-            }
-            // Otherwise, use PTS as-is for correct speed
-
-            // Log PTS progression occasionally
             static int muxLogCounter = 0;
             muxLogCounter++;
             if (muxLogCounter == 1 || muxLogCounter % 300 == 0)
             {
                 LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) +
                          ", last: " + std::to_string(m_lastVideoPTS) +
-                         ", increment: " + std::to_string(pts - m_lastVideoPTS));
+                         ", delta: " + std::to_string(pts - m_lastVideoPTS));
             }
-
+            // Tracked for telemetry only — no longer used to clamp.
             m_lastVideoPTS = pts;
-        }
-        if (dts != AV_NOPTS_VALUE_LOCAL)
-        {
-            if (m_lastVideoDTS >= 0 && dts < m_lastVideoDTS)
-            {
-                dts = m_lastVideoDTS + 1;
-            }
-            m_lastVideoDTS = dts;
-        }
-        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && dts > pts)
-        {
-            dts = pts;
-            m_lastVideoDTS = dts;
         }
     }
     else
