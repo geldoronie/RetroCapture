@@ -3100,7 +3100,6 @@ void HTTPTSStreamer::rawEncodingThread()
     uint32_t statVideoEncoded   = 0;
     uint32_t statAudioEncoded   = 0;
     uint32_t statIterations     = 0;
-    uint32_t statSyncInvalid    = 0;
     size_t   statMaxQueueDepth  = 0;
 
     while (m_running)
@@ -3145,49 +3144,39 @@ void HTTPTSStreamer::rawEncodingThread()
         if (videoBufferSize > statMaxQueueDepth) statMaxQueueDepth = videoBufferSize;
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
-        MediaSynchronizer::SyncZone syncZone = m_rawStreamSynchronizer.calculateSyncZone();
-
-        if (syncZone.isValid())
+        // Drain video independently of the audio sync zone, mirroring
+        // the audio-drain path above. The /raw output is MPEG-TS, and
+        // av_interleaved_write_frame already orders packets across
+        // streams by DTS — we don't need calculateSyncZone to gate the
+        // per-stream encoding. Gating on it produced "video=0/s
+        // audio=0/s iters=1801 syncInvalid=1801" stalls whenever audio
+        // capture jittered briefly and the audio/video buffers fell out
+        // of the 50 ms overlap tolerance, even though the video queue
+        // had frames ready to encode.
         {
-            auto videoFrames = m_rawStreamSynchronizer.getVideoFrames(syncZone);
-
+            auto pendingVideo = m_rawStreamSynchronizer.getAllUnprocessedVideo();
             size_t framesProcessed = 0;
-            // Match the /stream side's bigger catchup batch under backlog.
             size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 30 : 2;
 
-            for (const auto &frame : videoFrames)
+            for (const auto &frame : pendingVideo)
             {
                 if (m_stopRequest) break;
                 if (framesProcessed >= MAX_FRAMES_PER_ITERATION) break;
+                if (frame.processed || !frame.data || frame.width == 0 || frame.height == 0) continue;
 
-                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
+                std::vector<MediaEncoder::EncodedPacket> packets;
+                if (m_rawMediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                                 frame.captureTimestampUs, packets))
                 {
-                    std::vector<MediaEncoder::EncodedPacket> packets;
-                    if (m_rawMediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
-                                                     frame.captureTimestampUs, packets))
+                    for (const auto &packet : packets)
                     {
-                        for (const auto &packet : packets)
-                        {
-                            m_rawMediaMuxer.muxPacket(packet);
-                        }
-                        processedAny = true;
-                        framesProcessed++;
-                        ++statVideoEncoded;
-                        // Mark the specific frame we just encoded as
-                        // processed, by its capture timestamp. Marking by
-                        // index range (start, start+N) was broken — the
-                        // encoder loop skips frames already flagged
-                        // processed, so the indices that ended up
-                        // encoded weren't necessarily the first N
-                        // positions of the sync zone. The wrong frames
-                        // got marked, the actually-encoded ones stayed
-                        // unprocessed in the buffer and the next
-                        // iteration re-encoded them — which is exactly
-                        // why /raw was producing 200 fps from a 60 fps
-                        // push rate.
-                        m_rawStreamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
+                        m_rawMediaMuxer.muxPacket(packet);
                     }
+                    processedAny = true;
+                    framesProcessed++;
+                    ++statVideoEncoded;
                 }
+                m_rawStreamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
             }
 
             {
@@ -3199,10 +3188,6 @@ void HTTPTSStreamer::rawEncodingThread()
                 }
             }
         }
-        else
-        {
-            ++statSyncInvalid;
-        }
 
         // Emit telemetry once per second.
         auto nowTs = std::chrono::steady_clock::now();
@@ -3211,9 +3196,8 @@ void HTTPTSStreamer::rawEncodingThread()
             LOG_INFO("/raw encoder: video=" + std::to_string(statVideoEncoded) +
                      "/s audio=" + std::to_string(statAudioEncoded) +
                      "/s iters=" + std::to_string(statIterations) +
-                     " syncInvalid=" + std::to_string(statSyncInvalid) +
                      " maxVidQueue=" + std::to_string(statMaxQueueDepth));
-            statVideoEncoded = statAudioEncoded = statIterations = statSyncInvalid = 0;
+            statVideoEncoded = statAudioEncoded = statIterations = 0;
             statMaxQueueDepth = 0;
             statStart = nowTs;
         }

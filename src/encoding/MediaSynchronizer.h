@@ -93,6 +93,15 @@ public:
     // (que causa o áudio terminar antes do vídeo no arquivo).
     std::vector<TimestampedAudio> getAllUnprocessedAudio();
 
+    // Mesma ideia para vídeo — usado pelo /raw encoder thread, onde o
+    // muxer MPEG-TS reordena pacotes por DTS de qualquer jeito, e o
+    // gating por sync zone estava produzindo segundos inteiros sem
+    // saída de vídeo sempre que o áudio momentaneamente parava de
+    // chegar. (calculateSyncZone retorna inválido quando os timestamps
+    // de áudio e vídeo não se sobrepõem dentro da tolerância, o que
+    // acontece em jitter de captura sem culpa real.)
+    std::vector<TimestampedFrame> getAllUnprocessedVideo();
+
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
     void markAudioProcessed(size_t startIdx, size_t endIdx);

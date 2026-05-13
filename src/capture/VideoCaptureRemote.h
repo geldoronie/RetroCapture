@@ -128,7 +128,16 @@ private:
         // loop from frame.pts and the stream anchor — see decodeLoop().
         int64_t              targetWallUs = 0;
     };
-    static constexpr size_t kMaxQueued = 5;
+    // Bigger buffer absorbs the bursty arrival pattern produced by the
+    // server's variable-rate encoder + TCP buffering. PTS-anchored
+    // release means frames sit in the queue waiting for their target
+    // display moment, so bursts that arrive faster than the stream's
+    // average rate stack up briefly before draining. 5 was tight enough
+    // that bursts overflowed regularly (user observed drops=1-7/s in
+    // the decode loop telemetry); 20 gives ~500 ms of headroom at 40
+    // fps which is plenty for ordinary network jitter and still under
+    // the latency budget for distributed shader preview.
+    static constexpr size_t kMaxQueued = 20;
 
     std::mutex             m_frameMutex;
     std::deque<QueuedFrame> m_frameQueue;
