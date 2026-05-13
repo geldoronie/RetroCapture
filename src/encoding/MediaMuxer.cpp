@@ -468,12 +468,33 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     }
     if (formatCtx->pb)
     {
-        LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) + 
+        LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) +
                  ", bytes written: " + std::to_string(formatCtx->pb->pos));
-        
+
         // Flush buffer AVIO após escrever header para garantir que dados sejam escritos
         avio_flush(formatCtx->pb);
         LOG_INFO("MediaMuxer: Flushed AVIO buffer after header write");
+    }
+
+    // Mark the captured bytes as the complete server-side header NOW,
+    // instead of waiting for m_headerCaptureSize (64 KB) to fill. For
+    // streaming endpoints that idle until a client connects (like /raw),
+    // no media packets flow before connect — so the capture would never
+    // hit 64 KB and m_headerWritten stayed false, meaning the connecting
+    // client received zero bootstrap bytes and saw the stream mid-flow.
+    // What avformat_write_header itself wrote (PAT/PMT for MPEG-TS, plus
+    // any codec-extradata embedded by the format) is enough for the
+    // client demuxer to identify the streams and pick up parsing at the
+    // next inline keyframe — the rest of the "header" was just early
+    // media data that warmed the wire, not protocol bootstrap.
+    {
+        std::lock_guard<std::mutex> lock(m_headerMutex);
+        if (!m_headerWritten && !m_formatHeader.empty())
+        {
+            m_headerWritten = true;
+            LOG_INFO("MediaMuxer: Header marked complete with " +
+                     std::to_string(m_formatHeader.size()) + " captured bytes");
+        }
     }
     LOG_INFO("MediaMuxer: Format header written successfully");
 
