@@ -622,6 +622,19 @@ bool Application::initCapture()
                 }
                 m_pendingRemoteSourceWidth  = snap.sourceWidth;
                 m_pendingRemoteSourceHeight = snap.sourceHeight;
+                // Image-tab values: seed only once per connection — see
+                // applyPendingRemoteMeta for the gate. Stash the values
+                // from this snapshot; if it's the first one we'll apply
+                // them on the GL thread, otherwise the apply gate skips.
+                if (!m_remoteImageSeeded)
+                {
+                    m_pendingRemoteImageBrightness     = snap.imageBrightness;
+                    m_pendingRemoteImageContrast       = snap.imageContrast;
+                    m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
+                    m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
+                    m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
+                    m_hasPendingRemoteImageSeed        = true;
+                }
                 // Plain assignment — uint32_t is atomic on every platform
                 // we target, and a momentarily stale read in the main
                 // loop is harmless (just one extra render iteration at
@@ -2337,6 +2350,10 @@ bool Application::initUI()
                 {
                     m_ui->setCaptureInfo(0, 0, 0, "");
                 }
+                // Re-arm the Image seed for the next connection — each
+                // session gets one seed from /meta, after which the user
+                // owns the values locally.
+                m_remoteImageSeeded = false;
                 processingDeviceChange = false;
                 return;
             }
@@ -2392,6 +2409,16 @@ bool Application::initUI()
                         }
                         m_pendingRemoteSourceWidth  = snap.sourceWidth;
                         m_pendingRemoteSourceHeight = snap.sourceHeight;
+                        // Image-tab seed — first snapshot per connection only.
+                        if (!m_remoteImageSeeded)
+                        {
+                            m_pendingRemoteImageBrightness     = snap.imageBrightness;
+                            m_pendingRemoteImageContrast       = snap.imageContrast;
+                            m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
+                            m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
+                            m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
+                            m_hasPendingRemoteImageSeed        = true;
+                        }
                         if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
                         m_hasPendingRemoteMeta.store(true);
                     });
@@ -5208,6 +5235,10 @@ void Application::applyPendingRemoteMeta()
     bool pipelineEnabled = true;
     std::vector<std::pair<std::string, float>> params;
     uint32_t sourceW = 0, sourceH = 0;
+    bool seedImage = false;
+    float imgBrightness = 1.0f, imgContrast = 1.0f;
+    bool imgMaintainAspect = true;
+    uint32_t imgOutW = 0, imgOutH = 0;
     {
         std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
         preset           = std::move(m_pendingRemotePreset);
@@ -5216,7 +5247,36 @@ void Application::applyPendingRemoteMeta()
         params           = std::move(m_pendingRemoteParams);
         sourceW          = m_pendingRemoteSourceWidth;
         sourceH          = m_pendingRemoteSourceHeight;
+        if (m_hasPendingRemoteImageSeed)
+        {
+            seedImage         = true;
+            imgBrightness     = m_pendingRemoteImageBrightness;
+            imgContrast       = m_pendingRemoteImageContrast;
+            imgMaintainAspect = m_pendingRemoteImageMaintainAspect;
+            imgOutW           = m_pendingRemoteImageOutputWidth;
+            imgOutH           = m_pendingRemoteImageOutputHeight;
+            m_hasPendingRemoteImageSeed = false;
+        }
         m_hasPendingRemoteMeta.store(false);
+    }
+
+    // Seed the local Image tab from the host on the very first snapshot
+    // per connection. m_remoteImageSeeded flips true here and gates the
+    // callback so subsequent snapshots leave these values alone — the
+    // user is free to tweak the local Image controls after the initial
+    // sync.
+    if (seedImage && m_ui)
+    {
+        m_ui->setBrightness(imgBrightness);
+        m_ui->setContrast(imgContrast);
+        m_ui->setMaintainAspect(imgMaintainAspect);
+        m_ui->setOutputResolution(imgOutW, imgOutH);
+        m_remoteImageSeeded = true;
+        LOG_INFO("RemoteMetaSync: seeded local Image from host — brightness=" +
+                 std::to_string(imgBrightness) + " contrast=" +
+                 std::to_string(imgContrast) + " maintainAspect=" +
+                 std::to_string(imgMaintainAspect) + " output=" +
+                 std::to_string(imgOutW) + "x" + std::to_string(imgOutH));
     }
 
     // Tell the remote capture to rescale to the host's source dims (if the

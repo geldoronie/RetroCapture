@@ -121,16 +121,21 @@ void UIConfiguration::render()
             ImGui::EndTabItem();
         }
 
+        // Image stays visible in remote mode too — brightness, contrast,
+        // aspect ratio, fullscreen and output resolution are display-side
+        // choices that make sense for a viewer to override. The server
+        // seeds defaults via /meta on the initial connect; after that
+        // the user is free to tweak.
+        if (ImGui::BeginTabItem("Image"))
+        {
+            imageTab.render();
+            ImGui::EndTabItem();
+        }
+
         // Everything below this point is producer-side configuration and
         // is hidden while the local instance is acting as a remote viewer.
         if (!remote)
         {
-            if (ImGui::BeginTabItem("Image"))
-            {
-                imageTab.render();
-                ImGui::EndTabItem();
-            }
-
             if (ImGui::BeginTabItem("Source"))
             {
                 sourceTab.render();

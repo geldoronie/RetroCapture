@@ -202,8 +202,11 @@ namespace
             if (j.contains("image") && j["image"].is_object())
             {
                 const auto &im = j["image"];
-                out.imageBrightness = im.value("brightness", 1.0f);
-                out.imageContrast   = im.value("contrast",   1.0f);
+                out.imageBrightness     = im.value("brightness", 1.0f);
+                out.imageContrast       = im.value("contrast",   1.0f);
+                out.imageMaintainAspect = im.value("maintainAspect", true);
+                out.imageOutputWidth    = im.value("outputWidth",  0u);
+                out.imageOutputHeight   = im.value("outputHeight", 0u);
             }
             return true;
         }

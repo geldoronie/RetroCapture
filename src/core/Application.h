@@ -196,6 +196,17 @@ private:
     // source size, not the smaller transmission size.
     uint32_t                         m_pendingRemoteSourceWidth  = 0;
     uint32_t                         m_pendingRemoteSourceHeight = 0;
+    // Host's Image-tab values from /meta. Only applied on the FIRST
+    // snapshot after a connect — m_remoteImageSeeded gates the apply
+    // so subsequent snapshots don't stomp whatever the local user
+    // tweaked after the seed.
+    bool                             m_remoteImageSeeded = false;
+    float                            m_pendingRemoteImageBrightness     = 1.0f;
+    float                            m_pendingRemoteImageContrast       = 1.0f;
+    bool                             m_pendingRemoteImageMaintainAspect = true;
+    uint32_t                         m_pendingRemoteImageOutputWidth    = 0;
+    uint32_t                         m_pendingRemoteImageOutputHeight   = 0;
+    bool                             m_hasPendingRemoteImageSeed        = false;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.

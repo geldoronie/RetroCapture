@@ -44,10 +44,17 @@ public:
         uint32_t                     sourceWidth     = 0;
         uint32_t                     sourceHeight    = 0;
         uint32_t                     sourceFps       = 0;
-        // image block (mirrored for client display; may also be re-applied
-        // locally depending on where /raw is tapped in Phase 2)
-        float                        imageBrightness = 1.0f;
-        float                        imageContrast   = 1.0f;
+        // image block — client uses these as seed values on the initial
+        // connect (so the viewer starts with the same brightness /
+        // aspect-ratio / output-size as the host). After the first
+        // snapshot they're informational only; the user is free to
+        // tweak the local Image tab without the next snapshot stomping
+        // them.
+        float                        imageBrightness     = 1.0f;
+        float                        imageContrast       = 1.0f;
+        bool                         imageMaintainAspect = true;
+        uint32_t                     imageOutputWidth    = 0;
+        uint32_t                     imageOutputHeight   = 0;
     };
 
     using SnapshotCallback = std::function<void(const Snapshot &)>;
