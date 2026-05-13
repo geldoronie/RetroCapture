@@ -3003,27 +3003,21 @@ void HTTPTSStreamer::encodingThread()
                         }
                         processedAny = true;
                         framesProcessed++;
+                        // Mark this specific frame as processed by its
+                        // capture timestamp — see the matching note in
+                        // rawEncodingThread for why index-range marking
+                        // was wrong (it marked the first N slots of the
+                        // sync zone, but the loop skips already-
+                        // processed frames so the actually-encoded ones
+                        // were not at those positions and got re-encoded
+                        // on subsequent iterations).
+                        m_streamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
                     }
                 }
             }
 
             // Audio was already drained at the top of the loop, no need
             // to process it again here.
-
-            // Mark ONLY the frames we actually encoded as processed — not
-            // the entire sync zone. The previous behaviour silently
-            // dropped any frames beyond MAX_FRAMES_PER_ITERATION (they
-            // got marked processed without ever hitting the encoder),
-            // which both wastes capture work and produces visible gaps in
-            // the stream during transient bursts. Frames left unmarked
-            // here stay in the buffer and are picked up on the next loop
-            // iteration.
-            if (framesProcessed > 0)
-            {
-                m_streamSynchronizer.markVideoProcessed(
-                    syncZone.videoStartIdx,
-                    syncZone.videoStartIdx + framesProcessed);
-            }
 
             // Capturar header do formato se disponível
             {
@@ -3169,20 +3163,21 @@ void HTTPTSStreamer::rawEncodingThread()
                         processedAny = true;
                         framesProcessed++;
                         ++statVideoEncoded;
+                        // Mark the specific frame we just encoded as
+                        // processed, by its capture timestamp. Marking by
+                        // index range (start, start+N) was broken — the
+                        // encoder loop skips frames already flagged
+                        // processed, so the indices that ended up
+                        // encoded weren't necessarily the first N
+                        // positions of the sync zone. The wrong frames
+                        // got marked, the actually-encoded ones stayed
+                        // unprocessed in the buffer and the next
+                        // iteration re-encoded them — which is exactly
+                        // why /raw was producing 200 fps from a 60 fps
+                        // push rate.
+                        m_rawStreamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
                     }
                 }
-            }
-
-            // Mark only actually-encoded frames as processed (same fix
-            // as the /stream encodingThread). Frames beyond
-            // MAX_FRAMES_PER_ITERATION stay unprocessed and get picked
-            // up on the next iteration instead of being silently
-            // dropped.
-            if (framesProcessed > 0)
-            {
-                m_rawStreamSynchronizer.markVideoProcessed(
-                    syncZone.videoStartIdx,
-                    syncZone.videoStartIdx + framesProcessed);
             }
 
             {
