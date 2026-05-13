@@ -4049,6 +4049,23 @@ void Application::run()
                                                             std::chrono::steady_clock::now().time_since_epoch()).count();
                                 const bool s_pushAllowed = (s_nowUs - m_lastStreamPushUs >= s_minIntervalUs);
 
+                                // 1s diagnostic so we can confirm the throttle is actually firing.
+                                static int64_t s_lastTickUs = 0;
+                                static uint32_t s_pushCount = 0;
+                                static uint32_t s_skipCount = 0;
+                                if (s_pushAllowed) ++s_pushCount;
+                                else ++s_skipCount;
+                                if (s_lastTickUs == 0) s_lastTickUs = s_nowUs;
+                                if (s_nowUs - s_lastTickUs >= 1000000LL)
+                                {
+                                    LOG_INFO("push throttle (FBO): targetFps=" + std::to_string(s_targetFps) +
+                                             " minIntervalUs=" + std::to_string(s_minIntervalUs) +
+                                             " pushes=" + std::to_string(s_pushCount) +
+                                             "/s skips=" + std::to_string(s_skipCount) + "/s");
+                                    s_pushCount = s_skipCount = 0;
+                                    s_lastTickUs = s_nowUs;
+                                }
+
                                 if (s_pushAllowed && frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
                                     m_lastStreamPushUs = s_nowUs;
