@@ -604,6 +604,8 @@ bool Application::initCapture()
                 {
                     m_pendingRemoteParams.emplace_back(p.name, p.value);
                 }
+                m_pendingRemoteSourceWidth  = snap.sourceWidth;
+                m_pendingRemoteSourceHeight = snap.sourceHeight;
                 m_hasPendingRemoteMeta.store(true);
             });
     }
@@ -4850,13 +4852,35 @@ void Application::applyPendingRemoteMeta()
     std::string presetHash;
     bool pipelineEnabled = true;
     std::vector<std::pair<std::string, float>> params;
+    uint32_t sourceW = 0, sourceH = 0;
     {
         std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
         preset           = std::move(m_pendingRemotePreset);
         presetHash       = std::move(m_pendingRemotePresetHash);
         pipelineEnabled  = m_pendingRemotePipelineEnabled;
         params           = std::move(m_pendingRemoteParams);
+        sourceW          = m_pendingRemoteSourceWidth;
+        sourceH          = m_pendingRemoteSourceHeight;
         m_hasPendingRemoteMeta.store(false);
+    }
+
+    // Tell the remote capture to rescale to the host's source dims (if the
+    // stream is encoded at a different size) and sync our render-size view
+    // so downstream FBO / viewport calculations use the right values.
+    if (sourceW > 0 && sourceH > 0)
+    {
+        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        {
+            remote->setTargetResolution(sourceW, sourceH);
+        }
+        if (sourceW != m_captureWidth || sourceH != m_captureHeight)
+        {
+            LOG_INFO("Remote source dims from /meta: " +
+                     std::to_string(sourceW) + "x" + std::to_string(sourceH) +
+                     " (was " + std::to_string(m_captureWidth) + "x" + std::to_string(m_captureHeight) + ")");
+            m_captureWidth  = sourceW;
+            m_captureHeight = sourceH;
+        }
     }
 
     if (!m_shaderEngine || !m_ui)

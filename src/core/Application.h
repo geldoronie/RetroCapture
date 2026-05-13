@@ -180,6 +180,11 @@ private:
     std::string                      m_appliedRemotePresetHash;
     bool                             m_pendingRemotePipelineEnabled = true;
     std::vector<std::pair<std::string, float>> m_pendingRemoteParams;
+    // Host's source resolution from /meta. The capture rescales /raw to
+    // these dims so the local shader sees frames at the host's logical
+    // source size, not the smaller transmission size.
+    uint32_t                         m_pendingRemoteSourceWidth  = 0;
+    uint32_t                         m_pendingRemoteSourceHeight = 0;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.

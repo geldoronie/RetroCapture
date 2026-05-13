@@ -61,9 +61,28 @@ public:
     bool startCapture() override;
     void stopCapture() override;
 
-    uint32_t getWidth() const override { return m_width; }
-    uint32_t getHeight() const override { return m_height; }
+    uint32_t getWidth() const override
+    {
+        const uint32_t tw = m_targetWidth.load();
+        return tw ? tw : m_width;
+    }
+    uint32_t getHeight() const override
+    {
+        const uint32_t th = m_targetHeight.load();
+        return th ? th : m_height;
+    }
     uint32_t getPixelFormat() const override { return m_pixelFormat; }
+
+    /**
+     * Resize the decoded frame to (width, height) before delivering it to
+     * the rest of the capture pipeline. Used by the remote-source path
+     * when the host's /meta reports a different source resolution than
+     * what the /raw stream is encoded at — the client wants the shader
+     * to run on the host's logical source dims, not the smaller
+     * transmission dims. Pass (0, 0) to disable rescaling and pass the
+     * decoded frames through at their native size.
+     */
+    void setTargetResolution(uint32_t width, uint32_t height);
 
 private:
     void decodeLoop();
@@ -76,6 +95,11 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_pixelFormat = 0; // 0 means "RGB24" for downstream FrameProcessor
+
+    // Optional rescale target. 0/0 means "pass through at stream resolution".
+    // Mutated from the application's main thread; read on the decode thread.
+    std::atomic<uint32_t> m_targetWidth{0};
+    std::atomic<uint32_t> m_targetHeight{0};
 
     AVFormatContext *m_formatCtx = nullptr;
     AVCodecContext  *m_codecCtx  = nullptr;

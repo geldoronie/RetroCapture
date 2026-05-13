@@ -212,6 +212,14 @@ void VideoCaptureRemote::stopCapture()
     }
 }
 
+void VideoCaptureRemote::setTargetResolution(uint32_t width, uint32_t height)
+{
+    // Atomic stores — picked up by the decode thread on the next frame.
+    // sws_getCachedContext detects the size change and rebuilds.
+    m_targetWidth.store(width);
+    m_targetHeight.store(height);
+}
+
 bool VideoCaptureRemote::captureFrame(Frame &frame)
 {
     return captureLatestFrame(frame);
@@ -291,15 +299,26 @@ void VideoCaptureRemote::decodeLoop()
                 break;
             }
 
-            const int w = frame->width;
-            const int h = frame->height;
-            if (w <= 0 || h <= 0) { av_frame_unref(frame); continue; }
+            const int srcW = frame->width;
+            const int srcH = frame->height;
+            if (srcW <= 0 || srcH <= 0) { av_frame_unref(frame); continue; }
+
+            // Apply optional rescale target. When the host reports a source
+            // resolution via /meta that differs from the encoded /raw size,
+            // Application calls setTargetResolution so the shader pipeline
+            // sees frames at the host's logical source dims (so e.g. CRT
+            // scanline density / NTSC artefact spacing match the look the
+            // host renders locally). When unset, pass through at stream size.
+            const uint32_t tgtW32 = m_targetWidth.load();
+            const uint32_t tgtH32 = m_targetHeight.load();
+            const int dstW = (tgtW32 > 0) ? static_cast<int>(tgtW32) : srcW;
+            const int dstH = (tgtH32 > 0) ? static_cast<int>(tgtH32) : srcH;
 
             // (Re)build the sws context if dimensions or pixfmt changed.
             const AVPixelFormat srcFmt = static_cast<AVPixelFormat>(frame->format);
             m_swsCtx = sws_getCachedContext(m_swsCtx,
-                                            w, h, srcFmt,
-                                            w, h, AV_PIX_FMT_RGB24,
+                                            srcW, srcH, srcFmt,
+                                            dstW, dstH, AV_PIX_FMT_RGB24,
                                             SWS_BILINEAR, nullptr, nullptr, nullptr);
             if (!m_swsCtx)
             {
@@ -308,23 +327,23 @@ void VideoCaptureRemote::decodeLoop()
                 continue;
             }
 
-            if (w != rgbW || h != rgbH)
+            if (dstW != rgbW || dstH != rgbH)
             {
-                rgbW = w;
-                rgbH = h;
-                rgbBuf.assign(static_cast<size_t>(w) * static_cast<size_t>(h) * 3, 0);
+                rgbW = dstW;
+                rgbH = dstH;
+                rgbBuf.assign(static_cast<size_t>(dstW) * static_cast<size_t>(dstH) * 3, 0);
             }
 
             // Write rows in reverse (bottom-up) so the resulting RGB buffer
             // matches the orientation the rest of the capture pipeline
             // expects from V4L2 / DirectShow sources — without this, the
             // image renders upside-down on screen.
-            uint8_t *dstSlices[1] = { rgbBuf.data() + static_cast<size_t>(h - 1) * static_cast<size_t>(w) * 3 };
-            int dstStrides[1]     = { -(w * 3) };
-            sws_scale(m_swsCtx, frame->data, frame->linesize, 0, h, dstSlices, dstStrides);
+            uint8_t *dstSlices[1] = { rgbBuf.data() + static_cast<size_t>(dstH - 1) * static_cast<size_t>(dstW) * 3 };
+            int dstStrides[1]     = { -(dstW * 3) };
+            sws_scale(m_swsCtx, frame->data, frame->linesize, 0, srcH, dstSlices, dstStrides);
             av_frame_unref(frame);
 
-            // Publish the new frame.
+            // Publish the new frame at its post-rescale dims.
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 if (m_latestRGB.size() != rgbBuf.size())
@@ -332,11 +351,11 @@ void VideoCaptureRemote::decodeLoop()
                     m_latestRGB.resize(rgbBuf.size());
                 }
                 std::memcpy(m_latestRGB.data(), rgbBuf.data(), rgbBuf.size());
-                m_latestW = static_cast<uint32_t>(w);
-                m_latestH = static_cast<uint32_t>(h);
+                m_latestW = static_cast<uint32_t>(dstW);
+                m_latestH = static_cast<uint32_t>(dstH);
             }
-            m_width  = static_cast<uint32_t>(w);
-            m_height = static_cast<uint32_t>(h);
+            m_width  = static_cast<uint32_t>(dstW);
+            m_height = static_cast<uint32_t>(dstH);
             m_hasFrame.store(true);
         }
     }
