@@ -5,9 +5,9 @@ This document describes the wire format between a RetroCapture **server**
 that wants to consume the host's stream while applying the shader **locally**
 at its own native resolution.
 
-Status: **Phase 1 — metadata endpoint only.** The `/raw` stream endpoint,
-client mode, asset bundle transport and live-update WebSocket are tracked in
-[issue #47](https://github.com/geldoronie/RetroCapture/issues/47).
+Status: **Phases 1–2 landed.** Client-side consumption (remote source mode,
+read-only UI), asset bundle transport and live-update WebSocket are tracked
+in [issue #47](https://github.com/geldoronie/RetroCapture/issues/47).
 
 ---
 
@@ -15,9 +15,9 @@ client mode, asset bundle transport and live-update WebSocket are tracked in
 
 | Path | Purpose | Phase |
 | --- | --- | --- |
-| `/stream` | Existing post-shader MPEG-TS stream — unchanged, consumed by VLC / mpv / ffplay / the web portal. | already shipped |
-| `/meta` | JSON snapshot of the active shader pipeline + source state. **(this document)** | Phase 1 |
-| `/raw` | Pre-shader MPEG-TS stream, encoded straight from the capture pipeline. | Phase 2 |
+| `/stream` | Existing post-shader MPEG-TS stream — unchanged, consumed by VLC / mpv / ffplay / the web portal. May or may not have a shader applied, depending on the host's per-pipeline override. | already shipped |
+| `/meta` | JSON snapshot of the active shader pipeline + source state. | Phase 1 |
+| `/raw` | **Always** pre-shader MPEG-TS stream, encoded from the same capture pipeline as `/stream` but tapped before the shader pass. | Phase 2 |
 | `/meta/shader-bundle?preset=<name>` | Tarball with the preset file plus every `#include`d file and referenced LUT texture. | Phase 4 |
 
 The client only needs the server's **base URL** (e.g. `http://host:8080`) —
@@ -124,6 +124,39 @@ Responses MUST NOT be cached by the client. Phase 6 will add a WebSocket
 upgrade on this same path so the client receives parameter / preset
 deltas without polling; until then the client polls on a short interval
 (suggested: 1 s during steady state).
+
+---
+
+---
+
+## `GET /raw`
+
+Identical to `/stream` in wire format (MPEG-TS over HTTP, `Content-Type:
+video/mp2t`) but the video frames are tapped from the capture pipeline
+**before** the shader pass. Audio is the same as `/stream`. Codec config
+(bitrate, codec, preset) is shared with `/stream` — running a `/raw`
+client at a different bitrate than the host's `/stream` is not supported
+in Phase 2.
+
+Properties:
+
+- The host's per-pipeline shader-bypass toggle ("Apply shader pipeline"
+  in the UI) flips `/stream`'s contents but **does not affect `/raw`** —
+  `/raw` is always pre-shader by contract.
+- The raw encoder is **lazy**: when no clients are connected to `/raw`,
+  no pre-shader frames are pushed into its pipeline. The CPU cost of
+  the second encoder only materializes while a remote client is
+  actively consuming.
+- A single MPEG-TS muxer state per output — a brand-new `/raw` client
+  starts receiving packets from the next keyframe boundary.
+
+```console
+$ ffplay http://host:8080/raw     # raw source feed, no shader
+$ ffplay http://host:8080/stream  # current /stream contents
+```
+
+A future RetroCapture client (Phase 3+) consumes `/raw` and applies the
+shader described in `/meta` locally at its own native render resolution.
 
 ---
 

@@ -3782,8 +3782,12 @@ void Application::run()
                                                                !m_ui->getStreamingApplyShader();
                                 const bool recordWantsSource = m_ui && m_recordingManager && m_recordingManager->isRecording() &&
                                                                !m_ui->getRecordingApplyShader();
+                                // Phase 2 of #47: /raw is by-contract pre-shader, so any connected
+                                // /raw client also triggers the source-frame capture below.
+                                const bool rawWantsSource = m_streamManager && m_streamManager->isActive() &&
+                                                            m_streamManager->hasRawClients();
                                 const bool needSourceCapture = masterOn && shaderActive &&
-                                                               (streamWantsSource || recordWantsSource);
+                                                               (streamWantsSource || recordWantsSource || rawWantsSource);
 
                                 bool sourceFrameReady = false;
                                 uint32_t sourceFrameW = 0, sourceFrameH = 0;
@@ -3845,6 +3849,15 @@ void Application::run()
                                     else
                                     {
                                         m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    }
+
+                                    // Phase 2 of #47: also feed the /raw output (pre-shader, always).
+                                    // hasRawClients() gates this so the encoder idles when nothing
+                                    // is listening — the CPU cost only shows up when a remote
+                                    // client is actually consuming the raw feed.
+                                    if (sourceFrameReady && m_streamManager->hasRawClients())
+                                    {
+                                        m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
                                     }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())

@@ -155,7 +155,33 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
     int64_t captureTimestampUs = getTimestampUs();
 
     // Adicionar áudio ao MediaSynchronizer
-    return m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
+    bool ok = m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
+
+    // Phase 2 of #47: same audio chunk feeds the /raw pipeline. The /raw
+    // muxer needs audio packets too — only the video frame source differs
+    // between /stream (post-shader) and /raw (pre-shader).
+    if (m_rawMediaEncoder.isInitialized())
+    {
+        m_rawStreamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
+    }
+
+    return ok;
+}
+
+bool HTTPTSStreamer::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height)
+{
+    if (!data || !m_active || width == 0 || height == 0)
+    {
+        return false;
+    }
+    if (!m_rawMediaEncoder.isInitialized())
+    {
+        // Raw pipeline didn't come up — accept the push as a no-op so callers
+        // don't have to special-case it.
+        return false;
+    }
+    int64_t captureTimestampUs = getTimestampUs();
+    return m_rawStreamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 
 bool HTTPTSStreamer::start()
@@ -360,6 +386,15 @@ bool HTTPTSStreamer::start()
     m_encodingThread = std::thread(&HTTPTSStreamer::encodingThread, this);
     m_encodingThread.detach();
 
+    // Phase 2 of #47: parallel encoder for the /raw output. Idles when no
+    // /raw clients are connected (Application.cpp gates pushes via
+    // hasRawClients()), so the resting CPU cost is negligible.
+    if (m_rawMediaEncoder.isInitialized())
+    {
+        m_rawEncodingThread = std::thread(&HTTPTSStreamer::rawEncodingThread, this);
+        m_rawEncodingThread.detach();
+    }
+
     return true;
 }
 
@@ -559,6 +594,17 @@ void HTTPTSStreamer::stop()
         m_clientCount = 0;
     }
 
+    // Phase 2 of #47: same for /raw clients.
+    {
+        std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+        for (int clientFd : m_rawClientSockets)
+        {
+            m_httpServer.closeClient(clientFd);
+        }
+        m_rawClientSockets.clear();
+        m_rawClientCount = 0;
+    }
+
     // Aguardar um tempo para threads processarem m_stopRequest e terminarem
     // Como threads são detached, precisamos aguardar um tempo razoável
     // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
@@ -718,6 +764,24 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // Isso garante que requisições de stream não sejam capturadas pelo portal
     bool isStreamRequest = (request.find("/stream") != std::string::npos);
 
+    // Phase 2 of #47: detect /raw with a tight match against the request-line
+    // path (vs. /stream's loose substring match, kept as-is for compat).
+    bool isRawRequest = false;
+    {
+        size_t methodEnd = request.find(' ');
+        if (methodEnd != std::string::npos)
+        {
+            size_t pathEnd = request.find(' ', methodEnd + 1);
+            if (pathEnd != std::string::npos)
+            {
+                std::string path = request.substr(methodEnd + 1, pathEnd - methodEnd - 1);
+                size_t q = path.find('?');
+                if (q != std::string::npos) path = path.substr(0, q);
+                isRawRequest = (path == "/raw");
+            }
+        }
+    }
+
     // Extrair prefixo base para verificar requisições com prefixo
     // Prioridade: 1) X-Forwarded-Prefix header, 2) path da requisição
     std::string basePrefixForDetection = "";
@@ -817,8 +881,8 @@ void HTTPTSStreamer::handleClient(int clientFd)
         // Se não foi processada, continuar para outras verificações
     }
 
-    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream e se Web Portal estiver habilitado
-    if (m_webPortalEnabled && !isStreamRequest)
+    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream nem /raw e se Web Portal estiver habilitado
+    if (m_webPortalEnabled && !isStreamRequest && !isRawRequest)
     {
         if (m_webPortal.isWebPortalRequest(request))
         {
@@ -831,7 +895,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         }
     }
 
-    if (!isStreamRequest)
+    if (!isStreamRequest && !isRawRequest)
     {
         send404(clientFd);
         m_httpServer.closeClient(clientFd);
@@ -855,6 +919,53 @@ void HTTPTSStreamer::handleClient(int clientFd)
         m_httpServer.closeClient(clientFd);
         return;
     }
+
+    // Phase 2 of #47: branch on /raw vs /stream — same protocol on the wire,
+    // different state mirrors (format header, client list, mutex).
+    if (isRawRequest)
+    {
+        {
+            std::lock_guard<std::mutex> headerLock(m_rawHeaderMutex);
+            if (m_rawHeaderWritten && !m_rawFormatHeader.empty())
+            {
+                ssize_t headerSent = m_httpServer.sendData(clientFd, m_rawFormatHeader.data(), m_rawFormatHeader.size());
+                if (headerSent < 0)
+                {
+                    LOG_ERROR("Failed to send raw format header to client");
+                    m_httpServer.closeClient(clientFd);
+                    return;
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+            m_rawClientSockets.push_back(clientFd);
+            m_rawClientCount = m_rawClientSockets.size();
+        }
+
+        while (!m_stopRequest && m_running)
+        {
+            char dummy;
+            ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
+            if (result <= 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        m_httpServer.closeClient(clientFd);
+        {
+            std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+            auto it = std::find(m_rawClientSockets.begin(), m_rawClientSockets.end(), clientFd);
+            if (it != m_rawClientSockets.end())
+            {
+                m_rawClientSockets.erase(it);
+                m_rawClientCount = m_rawClientSockets.size();
+            }
+        }
+        return;
+    }
+
+    // /stream path — unchanged from before Phase 2.
 
     // Enviar header do formato MPEG-TS se já foi capturado
     {
@@ -1000,6 +1111,55 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
     }
 }
 
+int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
+{
+    // Mirror of writeToClients, operating on the /raw output state. Kept as
+    // a near-duplicate so the /stream path stays byte-for-byte unchanged.
+    if (!buf || buf_size <= 0 || m_stopRequest)
+    {
+        return buf_size;
+    }
+
+    {
+        std::lock_guard<std::mutex> headerLock(m_rawHeaderMutex);
+        if (!m_rawHeaderWritten && m_rawMediaMuxer.isHeaderWritten())
+        {
+            m_rawFormatHeader = m_rawMediaMuxer.getFormatHeader();
+            m_rawHeaderWritten = true;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+        if (m_stopRequest || m_rawClientSockets.empty())
+        {
+            return buf_size;
+        }
+
+        auto it = m_rawClientSockets.begin();
+        while (it != m_rawClientSockets.end())
+        {
+            int clientFd = *it;
+            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
+            if (sent < 0)
+            {
+                m_httpServer.closeClient(clientFd);
+                it = m_rawClientSockets.erase(it);
+                m_rawClientCount = m_rawClientSockets.size();
+            }
+            else
+            {
+                // sent == 0 (would-block) and partial sends are treated the
+                // same way as in writeToClients — keep the client connected
+                // and move on.
+                ++it;
+            }
+        }
+
+        return buf_size;
+    }
+}
+
 bool HTTPTSStreamer::initializeEncoding()
 {
     // Configurar MediaSynchronizer com valores configuráveis
@@ -1062,7 +1222,100 @@ bool HTTPTSStreamer::initializeEncoding()
     }
 
     LOG_INFO("MediaMuxer inicializado com sucesso - encoding pronto para streaming");
+
+    // Phase 2 of #47: also bring up the /raw pipeline so RetroCapture remote
+    // clients can consume the pre-shader feed. Soft-fail — if /raw can't
+    // come up, log it and keep /stream working.
+    if (!initializeRawPipeline())
+    {
+        LOG_WARN("Failed to initialize /raw pipeline — /stream still functional");
+    }
+
     return true;
+}
+
+bool HTTPTSStreamer::initializeRawPipeline()
+{
+    // Configurar segundo MediaSynchronizer com os mesmos valores do /stream.
+    m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
+    m_rawStreamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
+    m_rawStreamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
+    m_rawStreamSynchronizer.setSyncTolerance(50 * 1000LL);
+
+    // Strategy B (#47): /raw shares codec config (bitrate, codec, preset)
+    // with /stream. Separate encoder/muxer state lives parallel below.
+    MediaEncoder::VideoConfig videoConfig;
+    videoConfig.width    = m_width;
+    videoConfig.height   = m_height;
+    videoConfig.fps      = m_fps;
+    videoConfig.bitrate  = m_videoBitrate;
+    videoConfig.codec    = m_videoCodecName;
+    videoConfig.preset   = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? m_h264Preset : m_h265Preset;
+    videoConfig.profile  = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? "baseline" : "";
+    videoConfig.h265Profile = m_h265Profile;
+    videoConfig.h265Level   = m_h265Level;
+    videoConfig.vp8Speed    = m_vp8Speed;
+    videoConfig.vp9Speed    = m_vp9Speed;
+
+    MediaEncoder::AudioConfig audioConfig;
+    audioConfig.sampleRate = m_audioSampleRate;
+    audioConfig.channels   = m_audioChannelsCount;
+    audioConfig.bitrate    = m_audioBitrate;
+    audioConfig.codec      = m_audioCodecName;
+
+    LOG_INFO("Inicializando MediaEncoder /raw (mesma config do /stream)");
+
+    if (!m_rawMediaEncoder.initialize(videoConfig, audioConfig, true))
+    {
+        LOG_ERROR("Failed to initialize raw MediaEncoder");
+        return false;
+    }
+
+    auto rawWriteCallback = [this](const uint8_t *data, size_t size) -> int
+    {
+        return this->writeToRawClients(data, size);
+    };
+
+    if (!m_rawMediaMuxer.initialize(videoConfig, audioConfig,
+                                    m_rawMediaEncoder.getVideoCodecContext(),
+                                    m_rawMediaEncoder.getAudioCodecContext(),
+                                    "", // streaming via callback
+                                    rawWriteCallback,
+                                    m_avioBufferSize))
+    {
+        LOG_ERROR("Failed to initialize raw MediaMuxer");
+        m_rawMediaEncoder.cleanup();
+        return false;
+    }
+
+    LOG_INFO("Raw pipeline inicializado — /raw pronto para servir pre-shader");
+    return true;
+}
+
+void HTTPTSStreamer::cleanupRawPipeline()
+{
+    if (m_rawMediaEncoder.isInitialized())
+    {
+        std::vector<MediaEncoder::EncodedPacket> packets;
+        m_rawMediaEncoder.flush(packets);
+        for (const auto &p : packets)
+        {
+            m_rawMediaMuxer.muxPacket(p);
+        }
+    }
+    if (m_rawMediaMuxer.isInitialized())
+    {
+        m_rawMediaMuxer.flush();
+    }
+    m_rawMediaMuxer.cleanup();
+    m_rawMediaEncoder.cleanup();
+    m_rawStreamSynchronizer.clear();
+
+    {
+        std::lock_guard<std::mutex> lock(m_rawHeaderMutex);
+        m_rawFormatHeader.clear();
+        m_rawHeaderWritten = false;
+    }
 }
 
 void HTTPTSStreamer::cleanupEncoding()
@@ -1105,6 +1358,9 @@ void HTTPTSStreamer::cleanupEncoding()
             m_headerWritten = false;
         }
     }
+
+    // Phase 2 of #47: also tear down the /raw pipeline.
+    cleanupRawPipeline();
 }
 
 bool HTTPTSStreamer::initializeVideoCodec()
@@ -2791,4 +3047,124 @@ void HTTPTSStreamer::encodingThread()
     }
 
     return;
+}
+
+void HTTPTSStreamer::rawEncodingThread()
+{
+    // Mirror of encodingThread() but driving the /raw pipeline. Lives as a
+    // near-duplicate for Phase 2 of #47; refactoring into a shared loop body
+    // is intentionally deferred until the dual-output story is stable. Skips
+    // doing any work when no /raw client is connected — Application.cpp gates
+    // pushRawFrame via hasRawClients(), so under typical use this thread idles.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    int cleanupCounter = 0;
+    const int CLEANUP_INTERVAL = 10;
+
+    while (m_running)
+    {
+        if (m_stopRequest) break;
+
+        bool processedAny = false;
+
+        cleanupCounter++;
+        if (cleanupCounter >= CLEANUP_INTERVAL)
+        {
+            m_rawStreamSynchronizer.cleanupOldData();
+            cleanupCounter = 0;
+        }
+
+        // Drain audio independently — same reasoning as encodingThread.
+        {
+            auto pendingAudio = m_rawStreamSynchronizer.getAllUnprocessedAudio();
+            for (const auto &chunk : pendingAudio)
+            {
+                if (m_stopRequest) break;
+                if (chunk.processed || !chunk.samples || chunk.sampleCount == 0) continue;
+
+                std::vector<MediaEncoder::EncodedPacket> aPackets;
+                if (m_rawMediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
+                                                  chunk.captureTimestampUs, aPackets))
+                {
+                    for (const auto &p : aPackets)
+                    {
+                        m_rawMediaMuxer.muxPacket(p);
+                    }
+                    processedAny = true;
+                }
+                m_rawStreamSynchronizer.markAudioChunkProcessedByTimestamp(chunk.captureTimestampUs);
+            }
+        }
+
+        size_t videoBufferSize = m_rawStreamSynchronizer.getVideoBufferSize();
+        size_t audioBufferSize = m_rawStreamSynchronizer.getAudioBufferSize();
+        bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
+
+        MediaSynchronizer::SyncZone syncZone = m_rawStreamSynchronizer.calculateSyncZone();
+
+        if (syncZone.isValid())
+        {
+            auto videoFrames = m_rawStreamSynchronizer.getVideoFrames(syncZone);
+
+            size_t framesProcessed = 0;
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2;
+
+            for (const auto &frame : videoFrames)
+            {
+                if (m_stopRequest) break;
+                if (framesProcessed >= MAX_FRAMES_PER_ITERATION) break;
+
+                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
+                {
+                    std::vector<MediaEncoder::EncodedPacket> packets;
+                    if (m_rawMediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                                     frame.captureTimestampUs, packets))
+                    {
+                        for (const auto &packet : packets)
+                        {
+                            m_rawMediaMuxer.muxPacket(packet);
+                        }
+                        processedAny = true;
+                        framesProcessed++;
+                    }
+                }
+            }
+
+            m_rawStreamSynchronizer.markVideoProcessed(syncZone.videoStartIdx, syncZone.videoEndIdx);
+
+            {
+                std::lock_guard<std::mutex> lock(m_rawHeaderMutex);
+                if (!m_rawHeaderWritten && m_rawMediaMuxer.isHeaderWritten())
+                {
+                    m_rawFormatHeader = m_rawMediaMuxer.getFormatHeader();
+                    m_rawHeaderWritten = true;
+                }
+            }
+        }
+
+        if (processedAny)
+        {
+            if (hasBacklog)
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+            else
+            {
+                int64_t frameTimeUs = 1000000LL / static_cast<int64_t>(m_fps);
+                std::this_thread::sleep_for(std::chrono::microseconds(frameTimeUs / 2));
+            }
+        }
+        else
+        {
+            bool hasPendingData = (videoBufferSize > 0 || audioBufferSize > 0);
+            if (!hasPendingData)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            else
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+            }
+        }
+    }
 }
