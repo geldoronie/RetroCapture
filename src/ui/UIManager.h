@@ -143,7 +143,8 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2 // DirectShow (Windows)
+        DS = 2, // DirectShow (Windows)
+        Remote = 3 // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
     };
 
     // Source type setter (para uso pelas classes de abas)

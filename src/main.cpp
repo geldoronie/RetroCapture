@@ -13,12 +13,14 @@ void printUsage(const char *programName)
     std::cout << "  --preset <path>        Load preset with multiple passes (.glslp)\n";
     std::cout << "\nCapture Options:\n";
 #ifdef __linux__
-    std::cout << "  --source <type>        Source type: none, v4l2 (default: v4l2)\n";
+    std::cout << "  --source <type>        Source type: none, v4l2, remote (default: v4l2)\n";
 #elif defined(_WIN32)
-    std::cout << "  --source <type>        Source type: none, ds (default: ds)\n";
+    std::cout << "  --source <type>        Source type: none, ds, remote (default: ds)\n";
 #else
-    std::cout << "  --source <type>        Source type: none (default: none)\n";
+    std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
+    std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
+    std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
     std::cout << "  --width <value>        Capture width (default: 1920)\n";
     std::cout << "  --height <value>       Capture height (default: 1080)\n";
     std::cout << "  --fps <value>          Capture framerate (default: 60)\n";
@@ -96,6 +98,7 @@ int main(int argc, char *argv[])
 
     std::string shaderPath;
     std::string presetPath;
+    std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
@@ -195,22 +198,28 @@ int main(int argc, char *argv[])
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
 #ifdef __linux__
-            if (sourceType != "none" && sourceType != "v4l2")
+            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
 #elif defined(_WIN32)
-            if (sourceType != "none" && sourceType != "ds")
+            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
 #else
-            if (sourceType != "none")
+            if (sourceType != "none" && sourceType != "remote")
 #endif
             {
 #ifdef __linux__
-                LOG_ERROR("Invalid source type. Use 'none' or 'v4l2'");
+                LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
 #elif defined(_WIN32)
-                LOG_ERROR("Invalid source type. Use 'none' or 'ds'");
+                LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
 #else
-                LOG_ERROR("Invalid source type. Use 'none'");
+                LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
 #endif
                 return 1;
             }
+        }
+        else if (arg == "--remote-url" && i + 1 < argc)
+        {
+            // Phase 3 of #47: base URL of the remote RetroCapture server.
+            // Client appends /raw (and /meta in Phase 4) by convention.
+            remoteUrl = argv[++i];
         }
         else if (arg == "--v4l2-device" && i + 1 < argc)
         {
@@ -634,6 +643,20 @@ int main(int argc, char *argv[])
 #elif defined(_WIN32)
     bool isDSSource = (sourceType == "ds");
 #endif
+    bool isRemoteSource = (sourceType == "remote");
+
+    // Phase 3 of #47: remote source needs a base URL up front.
+    if (isRemoteSource && remoteUrl.empty())
+    {
+        LOG_ERROR("--source remote requires --remote-url <base-url> (e.g. http://host:8080)");
+        return 1;
+    }
+    // Hand the URL to Application via the same devicePath field — semantically
+    // it's the "where to read frames from" string for any source kind.
+    if (isRemoteSource)
+    {
+        devicePath = remoteUrl;
+    }
 
     LOG_INFO("Initializing application...");
     LOG_INFO("Source type: " + sourceType);
@@ -648,6 +671,10 @@ int main(int argc, char *argv[])
         LOG_INFO("DirectShow device: " + devicePath);
     }
 #endif
+    if (isRemoteSource)
+    {
+        LOG_INFO("Remote URL: " + remoteUrl);
+    }
     LOG_INFO("Capture resolution: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Window size: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
@@ -781,6 +808,13 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // Phase 3 of #47: remote source carries the base URL in devicePath; the
+    // platform-conditional V4L2/DS branches above already skipped it.
+    if (isRemoteSource)
+    {
+        app.setDevicePath(devicePath);
+    }
+
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
@@ -823,6 +857,8 @@ int main(int argc, char *argv[])
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
 #endif
+    if (sourceType == "remote")
+        sourceTypeEnum = UIManager::SourceType::Remote;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
     

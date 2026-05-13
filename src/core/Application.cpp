@@ -3,6 +3,7 @@
 #include "../utils/Paths.h"
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
+#include "../capture/VideoCaptureRemote.h"
 #ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
 #endif
@@ -339,7 +340,19 @@ bool Application::initRenderer()
 bool Application::initCapture()
 {
     LOG_INFO("Creating VideoCapture...");
-    m_capture = VideoCaptureFactory::create();
+
+    // Phase 3 of #47: if the UIManager already has the source type set to
+    // Remote (CLI selected --source remote), build the remote capture
+    // instead of the platform-default V4L2 / DirectShow factory.
+    if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
+    {
+        LOG_INFO("Source is remote — creating VideoCaptureRemote");
+        m_capture = std::make_unique<VideoCaptureRemote>();
+    }
+    else
+    {
+        m_capture = VideoCaptureFactory::create();
+    }
     if (!m_capture)
     {
         LOG_ERROR("Failed to create VideoCapture for this platform");
