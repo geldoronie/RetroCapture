@@ -66,7 +66,12 @@ bool VideoCaptureRemote::initDecoder()
     AVDictionary *opts = nullptr;
     av_dict_set(&opts, "probesize",    "32768",        0); // bytes
     av_dict_set(&opts, "analyzeduration", "500000",    0); // microseconds (0.5s)
-    av_dict_set(&opts, "fflags",       "nobuffer",     0);
+    // Note: deliberately NOT setting "fflags: nobuffer" here — without
+    // FFmpeg's internal packet buffer, av_read_frame returns whatever the
+    // socket has *right now*, which on a bursty TCP stream means several
+    // packets arrive together and then a quiet period. Letting FFmpeg
+    // buffer ~2-3 packets internally smooths consumption without
+    // meaningfully hurting the live-stream latency floor.
     av_dict_set(&opts, "timeout",      "5000000",      0); // 5s read timeout (microseconds)
 
     int rc = avformat_open_input(&m_formatCtx, rawUrl.c_str(), nullptr, &opts);
@@ -237,6 +242,7 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
         m_frameQueue.pop_front();
+        ++m_statConsumed;
     }
     if (m_lastConsumed.rgb.empty())
     {
@@ -358,6 +364,7 @@ void VideoCaptureRemote::decodeLoop()
             // while absorbing the TCP / decoder bursts that would
             // otherwise show up as visible stuttering with a single-slot
             // buffer.
+            bool droppedOldest = false;
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 QueuedFrame qf;
@@ -367,12 +374,29 @@ void VideoCaptureRemote::decodeLoop()
                 if (m_frameQueue.size() >= kMaxQueued)
                 {
                     m_frameQueue.pop_front();
+                    droppedOldest = true;
                 }
                 m_frameQueue.push_back(std::move(qf));
             }
             m_width  = static_cast<uint32_t>(dstW);
             m_height = static_cast<uint32_t>(dstH);
             m_hasFrame.store(true);
+
+            // Periodic decode stats so we can spot rate mismatches in the
+            // log — produce/drop counts over the last second.
+            ++m_statProduced;
+            if (droppedOldest) ++m_statDropped;
+            auto nowTs = std::chrono::steady_clock::now();
+            if (m_statStart.time_since_epoch().count() == 0) m_statStart = nowTs;
+            if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - m_statStart).count() >= 1)
+            {
+                LOG_INFO("VideoCaptureRemote: decoded=" + std::to_string(m_statProduced) +
+                         "/s consumed=" + std::to_string(m_statConsumed) +
+                         "/s drops=" + std::to_string(m_statDropped) +
+                         " queueDepth=" + std::to_string(m_frameQueue.size()));
+                m_statProduced = m_statConsumed = m_statDropped = 0;
+                m_statStart = nowTs;
+            }
         }
     }
 

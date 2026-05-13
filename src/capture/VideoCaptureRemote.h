@@ -3,6 +3,7 @@
 #include "IVideoCapture.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -123,7 +124,7 @@ private:
         uint32_t             width  = 0;
         uint32_t             height = 0;
     };
-    static constexpr size_t kMaxQueued = 3;
+    static constexpr size_t kMaxQueued = 5;
 
     std::mutex             m_frameMutex;
     std::deque<QueuedFrame> m_frameQueue;
@@ -131,4 +132,12 @@ private:
     // (rather than dummy black) when the queue is momentarily empty.
     QueuedFrame             m_lastConsumed;
     std::atomic<bool>       m_hasFrame{false};
+
+    // Rolling 1-second decode/consume counters — produces a periodic
+    // LOG_INFO so rate mismatches and dropped-burst frames are visible
+    // in the log. Reset every second.
+    uint32_t m_statProduced = 0;
+    uint32_t m_statConsumed = 0;
+    uint32_t m_statDropped  = 0;
+    std::chrono::steady_clock::time_point m_statStart;
 };
