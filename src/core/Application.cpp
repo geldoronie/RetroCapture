@@ -4304,30 +4304,25 @@ void Application::run()
                 m_window->swapBuffers();
             }
 
-            // Render pacing for the valid-frame branch. The else-branch
-            // below has the same block; both paths need it because the
-            // outer if/else is "frame ready vs not" and most iterations
-            // hit the valid-frame branch — without pacing here the main
-            // loop free-runs at display refresh (the 1000+ fps reading
-            // the user saw in MangoHud right after /raw client connect).
+            // Pacing policy:
+            //  - Remote source: vsync (enabled in setOnSourceTypeChanged
+            //    when entering Remote) drives the loop at the panel's
+            //    display refresh rate. Adding a stream-fps software
+            //    pacing on top capped the loop at 60 Hz even on a
+            //    144 Hz panel, which is what made 60 fps streams look
+            //    choppy ("3:2 pulldown" 2-3 refresh pattern) compared
+            //    to 120 fps: the user couldn't use the extra refreshes
+            //    the panel had on offer because we were sleeping
+            //    through them. Free-running with vsync gives the
+            //    cleanest possible cadence at whatever stream:refresh
+            //    ratio the user picked.
+            //  - Local source streaming: keep the existing software
+            //    pace at the configured streaming FPS so we don't
+            //    burn GPU + glReadPixels for frames the encoder will
+            //    just throttle.
             if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
             {
-                const uint32_t fps = m_remoteSourceFps > 0 ? m_remoteSourceFps : 60;
-                const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch()).count();
-                const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(fps);
-                if (m_lastFrameSwapUs == 0) m_lastFrameSwapUs = nowUs;
-                const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
-                if (elapsedUs < targetIntervalUs)
-                {
-                    const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
-                    usleep(static_cast<useconds_t>(sleepUs));
-#else
-                    Sleep(static_cast<DWORD>(sleepUs / 1000));
-#endif
-                }
-                m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
+                // No software pacing — vsync does the work.
             }
             else
             {
