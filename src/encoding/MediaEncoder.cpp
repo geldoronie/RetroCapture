@@ -142,7 +142,17 @@ bool MediaEncoder::initializeVideoCodec()
     codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
     codecCtx->bit_rate = m_videoConfig.bitrate;
     codecCtx->thread_count = 0;
-    codecCtx->thread_type = FF_THREAD_SLICE;
+    // FF_THREAD_FRAME parallelises encoding across consecutive frames
+    // (each thread works on a different frame) instead of FF_THREAD_SLICE
+    // which divides one frame into parallel slices. On a multi-core CPU
+    // with libx264 at non-trivial presets the per-frame budget is the
+    // bottleneck — slice threading caps how much we can speed up a
+    // single frame, but frame threading lets us keep N frames in flight
+    // simultaneously and roughly multiply throughput by core count.
+    // Adds ~thread_count frames of latency (libx264 holds a few frames
+    // in its pipeline), acceptable for a /raw distribution stream where
+    // we already buffer ~500 ms on the client.
+    codecCtx->thread_type = FF_THREAD_FRAME;
 
     // Configurar global header baseado no uso (streaming vs arquivo)
     // Para gravação em arquivo: usar global header (extradata no header do container)
