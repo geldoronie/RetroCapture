@@ -123,6 +123,10 @@ private:
         std::vector<uint8_t> rgb;
         uint32_t             width  = 0;
         uint32_t             height = 0;
+        // Wall-clock target time (steady_clock microseconds) at which this
+        // frame should become the on-screen frame. Computed in the decode
+        // loop from frame.pts and the stream anchor — see decodeLoop().
+        int64_t              targetWallUs = 0;
     };
     static constexpr size_t kMaxQueued = 5;
 
@@ -132,6 +136,20 @@ private:
     // (rather than dummy black) when the queue is momentarily empty.
     QueuedFrame             m_lastConsumed;
     std::atomic<bool>       m_hasFrame{false};
+
+    // PTS-anchored playback. On the first decoded frame we record the
+    // current wall clock as the "stream zero" reference and the frame's
+    // PTS as the stream PTS origin. Every subsequent frame's target wall
+    // time = m_streamStartWallUs + (pts - m_firstPtsTicks) * timebase.
+    // captureLatestFrame() then only releases a frame once its target
+    // time has been reached, holding the previously released frame on
+    // screen until then — eliminates the irregular 1/2-refresh-cycle
+    // judder we get when network/decoder bursts let us poll multiple
+    // new frames in quick succession.
+    bool    m_streamAnchored     = false;
+    int64_t m_streamStartWallUs  = 0;
+    int64_t m_firstPtsTicks      = 0;
+    double  m_streamTimebaseSecs = 0.0;
 
     // Rolling 1-second decode/consume counters — produces a periodic
     // LOG_INFO so rate mismatches and dropped-burst frames are visible

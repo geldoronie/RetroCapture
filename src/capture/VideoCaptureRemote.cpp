@@ -233,12 +233,19 @@ bool VideoCaptureRemote::captureFrame(Frame &frame)
 bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    // Pop the oldest queued frame and remember it as the "last consumed"
-    // so subsequent reads with an empty queue still return something
-    // sensible (the previous frame) instead of false — keeping the main
-    // loop's render path hot avoids the dummy/black flash that single-
-    // slot semantics produced under bursty decode timing.
-    if (!m_frameQueue.empty())
+    // PTS-anchored release: the decoder tagged each queued frame with the
+    // wall-clock time it should appear on screen (see decodeLoop). Pop
+    // any frames whose target time has been reached, keeping the most
+    // recent one as "currently displayed". Frames still in the future
+    // stay in the queue so the next poll picks them up at the right
+    // moment. This replaces the "always pop the front" behaviour that
+    // showed every queued frame as fast as the main loop polled —
+    // producing the bursty / irregular hold times the user noticed as
+    // "perdemos frame rate" judder on a 60Hz display fed a ~40 fps
+    // stream.
+    const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
         m_frameQueue.pop_front();
@@ -357,7 +364,50 @@ void VideoCaptureRemote::decodeLoop()
             uint8_t *dstSlices[1] = { rgbBuf.data() + static_cast<size_t>(dstH - 1) * static_cast<size_t>(dstW) * 3 };
             int dstStrides[1]     = { -(dstW * 3) };
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, srcH, dstSlices, dstStrides);
+
+            // Capture the frame's PTS in stream timebase units BEFORE
+            // unref'ing. Used together with the per-stream anchor below
+            // to compute when this frame should appear on screen.
+            const int64_t framePtsTicks = (frame->pts != AV_NOPTS_VALUE) ? frame->pts : 0;
             av_frame_unref(frame);
+
+            // Establish the wall-clock anchor on the first decoded frame.
+            // From here on, every frame's target display time is computed
+            // off this anchor — so the consumer can hold each frame on
+            // screen for its exact stream-defined duration, rather than
+            // showing whatever-is-in-the-queue at every 16 ms poll, which
+            // produces visibly irregular hold times when the network /
+            // decoder delivers frames in bursts.
+            const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch()).count();
+            int64_t targetWallUs = nowWallUs;
+            if (!m_streamAnchored)
+            {
+                m_streamAnchored = true;
+                m_streamStartWallUs = nowWallUs;
+                m_firstPtsTicks     = framePtsTicks;
+                if (m_formatCtx && m_videoStreamIdx >= 0)
+                {
+                    const AVRational tb = m_formatCtx->streams[m_videoStreamIdx]->time_base;
+                    m_streamTimebaseSecs = av_q2d(tb);
+                }
+                if (m_streamTimebaseSecs <= 0.0) m_streamTimebaseSecs = 1.0 / 90000.0;
+            }
+            else
+            {
+                const int64_t deltaTicks = framePtsTicks - m_firstPtsTicks;
+                const int64_t deltaUs    = static_cast<int64_t>(static_cast<double>(deltaTicks) * m_streamTimebaseSecs * 1e6);
+                targetWallUs = m_streamStartWallUs + deltaUs;
+                // If we've fallen far behind (deltaUs in the past), snap
+                // the anchor forward so we don't accumulate latency
+                // forever when the stream pauses and resumes.
+                if (targetWallUs + 500'000 < nowWallUs)
+                {
+                    m_streamStartWallUs = nowWallUs;
+                    m_firstPtsTicks     = framePtsTicks;
+                    targetWallUs        = nowWallUs;
+                }
+            }
 
             // Push the new frame onto the bounded queue. Drop the oldest
             // if we've already buffered kMaxQueued — keeps latency bounded
@@ -369,8 +419,9 @@ void VideoCaptureRemote::decodeLoop()
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 QueuedFrame qf;
                 qf.rgb.assign(rgbBuf.begin(), rgbBuf.end());
-                qf.width  = static_cast<uint32_t>(dstW);
-                qf.height = static_cast<uint32_t>(dstH);
+                qf.width        = static_cast<uint32_t>(dstW);
+                qf.height       = static_cast<uint32_t>(dstH);
+                qf.targetWallUs = targetWallUs;
                 if (m_frameQueue.size() >= kMaxQueued)
                 {
                     m_frameQueue.pop_front();
