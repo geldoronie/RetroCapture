@@ -1941,6 +1941,16 @@ void UIManager::triggerStreamingVP9SpeedChange(int speed)
     saveConfig();
 }
 
+void UIManager::triggerStreamingHardwareEncoderChange(int v)
+{
+    m_streamingHardwareEncoder = v;
+    if (m_onStreamingHardwareEncoderChanged)
+    {
+        m_onStreamingHardwareEncoderChanged(v);
+    }
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2166,6 +2176,8 @@ void UIManager::loadConfig()
                 m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+            if (streaming.contains("hardwareEncoder"))
+                m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -2526,6 +2538,7 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
+            {"hardwareEncoder", m_streamingHardwareEncoder},
             {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 

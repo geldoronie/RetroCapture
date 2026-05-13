@@ -5,6 +5,7 @@
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
 #include "../streaming/RemoteMetaSync.h"
+#include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
 #endif
@@ -1107,6 +1108,7 @@ bool Application::initUI()
     m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
     m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
     m_streamingH264Preset = m_ui->getStreamingH264Preset();
+    m_streamingHardwareEncoder = m_ui->getStreamingHardwareEncoder();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1506,6 +1508,19 @@ bool Application::initUI()
                                         {
         m_streamingVP9Speed = speed;
         // If streaming is active, restart to apply new speed
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        } });
+
+    m_ui->setOnStreamingHardwareEncoderChanged([this](int v)
+                                               {
+        m_streamingHardwareEncoder = v;
+        // Encoder backend is set at codec-init time inside MediaEncoder;
+        // a live stream needs a restart for the new selection to take
+        // effect (just like a preset / bitrate change does).
         if (m_streamingEnabled && m_streamManager) {
             m_streamManager->stop();
             m_streamManager->cleanup();
@@ -2544,6 +2559,7 @@ bool Application::initStreaming()
     if (m_streamingVideoCodec == "h264")
     {
         tsStreamer->setH264Preset(m_streamingH264Preset);
+        tsStreamer->setHardwareEncoder(static_cast<MediaEncoder::HardwareEncoder>(m_streamingHardwareEncoder));
     }
     // Configure H.265 preset, profile and level (if applicable)
     else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
@@ -4981,6 +4997,7 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.streamingH265Level = m_streamingH265Level;
         data.streamingVP8Speed = m_streamingVP8Speed;
         data.streamingVP9Speed = m_streamingVP9Speed;
+        data.streamingHardwareEncoder = m_streamingHardwareEncoder;
     }
 
     // Collect V4L2 controls (if applicable)

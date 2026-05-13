@@ -81,6 +81,8 @@ public:
     void setH265Level(const std::string &level) { m_h265Level = level; }
     void setVP8Speed(int speed) { m_vp8Speed = speed; }
     void setVP9Speed(int speed) { m_vp9Speed = speed; }
+    void setHardwareEncoder(MediaEncoder::HardwareEncoder h) { m_hardwareEncoder = h; }
+    MediaEncoder::HardwareEncoder getHardwareEncoder() const { return m_hardwareEncoder; }
 
     // HTTPS configuration
     void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
@@ -214,6 +216,7 @@ private:
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_vp8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_vp9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    MediaEncoder::HardwareEncoder m_hardwareEncoder = MediaEncoder::HardwareEncoder::Auto;
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*

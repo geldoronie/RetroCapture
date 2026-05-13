@@ -1,6 +1,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
 #include "../utils/Logger.h"
+#include "../encoding/MediaEncoder.h"
 #include <imgui.h>
 #include <algorithm>
 
@@ -305,6 +306,44 @@ void UIConfigurationStreaming::renderCodecSettings()
     if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_uiManager->triggerStreamingVideoCodecChange(videoCodecs[currentVideoCodecIndex]);
+    }
+
+    // Hardware encoder dropdown — populated from what ffmpeg was built
+    // with on this host. Auto always present; Software always present;
+    // the hardware backends only show up when the corresponding codec
+    // (h264_nvenc, h264_vaapi, …) is compiled into the linked ffmpeg.
+    // Only relevant for H.264 — the other codecs in this project go
+    // through their software encoders exclusively.
+    if (currentVideoCodec == "h264")
+    {
+        std::vector<MediaEncoder::HardwareEncoder> available = MediaEncoder::detectAvailableEncoders();
+        // Prepend Auto so the user can let the app pick.
+        std::vector<MediaEncoder::HardwareEncoder> options;
+        options.push_back(MediaEncoder::HardwareEncoder::Auto);
+        for (auto h : available) options.push_back(h);
+
+        std::vector<const char *> labels;
+        labels.reserve(options.size());
+        for (auto h : options) labels.push_back(MediaEncoder::hardwareEncoderName(h));
+
+        int current = m_uiManager->getStreamingHardwareEncoder();
+        int currentIndex = 0;
+        for (size_t i = 0; i < options.size(); ++i)
+        {
+            if (static_cast<int>(options[i]) == current) { currentIndex = static_cast<int>(i); break; }
+        }
+        if (ImGui::Combo("Encoder", &currentIndex, labels.data(), static_cast<int>(labels.size())))
+        {
+            m_uiManager->triggerStreamingHardwareEncoderChange(static_cast<int>(options[currentIndex]));
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Auto = tenta hardware (NVENC/VAAPI/QSV/AMF) e cai pra software se falhar.\n"
+                              "Software = libx264 garantido em qualquer máquina.\n"
+                              "Backends de hardware só aparecem se o ffmpeg foi compilado com suporte e\n"
+                              "podem falhar em runtime se driver/permissão estiverem ausentes — caso\n"
+                              "isso aconteça, o stream volta a libx264 automaticamente.");
+        }
     }
 
     // Seleção de codec de áudio

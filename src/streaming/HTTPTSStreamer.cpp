@@ -1191,6 +1191,7 @@ bool HTTPTSStreamer::initializeEncoding()
     videoConfig.h265Level = m_h265Level;
     videoConfig.vp8Speed = m_vp8Speed;
     videoConfig.vp9Speed = m_vp9Speed;
+    videoConfig.hardwareEncoder = m_hardwareEncoder;
 
     MediaEncoder::AudioConfig audioConfig;
     audioConfig.sampleRate = m_audioSampleRate;
@@ -1274,6 +1275,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     videoConfig.h265Level   = m_h265Level;
     videoConfig.vp8Speed    = m_vp8Speed;
     videoConfig.vp9Speed    = m_vp9Speed;
+    videoConfig.hardwareEncoder = m_hardwareEncoder;
 
     MediaEncoder::AudioConfig audioConfig;
     audioConfig.sampleRate = m_audioSampleRate;

@@ -7,11 +7,75 @@ extern "C"
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 }
 
 #include "../utils/FFmpegCompat.h"
+#include <mutex>
+
+const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
+{
+    switch (h)
+    {
+        case HardwareEncoder::Auto:     return "Auto";
+        case HardwareEncoder::Software: return "Software (libx264)";
+        case HardwareEncoder::NVENC:    return "NVIDIA NVENC";
+        case HardwareEncoder::VAAPI:    return "VAAPI (Linux)";
+        case HardwareEncoder::QSV:      return "Intel Quick Sync";
+        case HardwareEncoder::AMF:      return "AMD AMF (Windows)";
+    }
+    return "?";
+}
+
+const char *MediaEncoder::hardwareEncoderCodec(HardwareEncoder h)
+{
+    switch (h)
+    {
+        case HardwareEncoder::Auto:     return "";          // resolved at runtime
+        case HardwareEncoder::Software: return "libx264";
+        case HardwareEncoder::NVENC:    return "h264_nvenc";
+        case HardwareEncoder::VAAPI:    return "h264_vaapi";
+        case HardwareEncoder::QSV:      return "h264_qsv";
+        case HardwareEncoder::AMF:      return "h264_amf";
+    }
+    return "";
+}
+
+std::vector<MediaEncoder::HardwareEncoder> MediaEncoder::detectAvailableEncoders()
+{
+    static std::vector<HardwareEncoder> cache;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        // Software always available (libx264 is a hard dependency of the build).
+        cache.push_back(HardwareEncoder::Software);
+
+        const HardwareEncoder candidates[] = {
+            HardwareEncoder::NVENC,
+            HardwareEncoder::VAAPI,
+            HardwareEncoder::QSV,
+            HardwareEncoder::AMF,
+        };
+        for (HardwareEncoder candidate : candidates)
+        {
+            const char *codecName = hardwareEncoderCodec(candidate);
+            if (!codecName || !*codecName) continue;
+            // avcodec_find_encoder_by_name only tells us the codec is
+            // compiled into ffmpeg, not that the host can actually use it
+            // — but it's a cheap first filter that excludes builds where
+            // the hw lib wasn't linked in (e.g. ffmpeg without nvenc).
+            // Real availability is confirmed when we try to open it at
+            // initialize() time and gracefully fall back on failure.
+            if (avcodec_find_encoder_by_name(codecName) != nullptr)
+            {
+                cache.push_back(candidate);
+                LOG_INFO(std::string("MediaEncoder: hardware encoder available — ") + hardwareEncoderName(candidate));
+            }
+        }
+    });
+    return cache;
+}
 
 MediaEncoder::MediaEncoder()
 {
@@ -53,6 +117,66 @@ bool MediaEncoder::initialize(const VideoConfig &videoConfig, const AudioConfig 
 
 bool MediaEncoder::initializeVideoCodec()
 {
+    // Hardware encoder dispatcher. Only applies when the user requested
+    // h264 — the hardware backends in this project all encode H.264.
+    // For other codecs (h265/vp8/vp9) we keep the original software path.
+    if (m_videoConfig.codec == "h264" || m_videoConfig.codec == "libx264")
+    {
+        HardwareEncoder selected = m_videoConfig.hardwareEncoder;
+        if (selected == HardwareEncoder::Auto)
+        {
+            // Walk the same priority list detectAvailableEncoders uses,
+            // picking the first hardware backend that's compiled in. The
+            // actual open() may still fail (driver missing etc.) — we
+            // fall back to software in that case.
+            for (HardwareEncoder candidate : { HardwareEncoder::NVENC,
+                                               HardwareEncoder::VAAPI,
+                                               HardwareEncoder::QSV,
+                                               HardwareEncoder::AMF })
+            {
+                if (avcodec_find_encoder_by_name(hardwareEncoderCodec(candidate)))
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+            if (selected == HardwareEncoder::Auto) selected = HardwareEncoder::Software;
+        }
+
+        if (selected != HardwareEncoder::Software)
+        {
+            if (initializeHardwareVideoCodec(selected))
+            {
+                m_activeHardwareEncoder = selected;
+                LOG_INFO(std::string("MediaEncoder: using hardware encoder — ") + hardwareEncoderName(selected));
+                return true;
+            }
+            LOG_WARN(std::string("MediaEncoder: hardware backend ") + hardwareEncoderName(selected) +
+                     " failed to initialize, falling back to software libx264");
+            // Tear down anything the failed HW init may have allocated
+            // so the software path below starts from a clean slate.
+            if (m_videoCodecContext)
+            {
+                AVCodecContext *cc = static_cast<AVCodecContext *>(m_videoCodecContext);
+                avcodec_free_context(&cc);
+                m_videoCodecContext = nullptr;
+            }
+            if (m_hwFramesCtx)
+            {
+                AVBufferRef *ref = static_cast<AVBufferRef *>(m_hwFramesCtx);
+                av_buffer_unref(&ref);
+                m_hwFramesCtx = nullptr;
+            }
+            if (m_hwDeviceCtx)
+            {
+                AVBufferRef *ref = static_cast<AVBufferRef *>(m_hwDeviceCtx);
+                av_buffer_unref(&ref);
+                m_hwDeviceCtx = nullptr;
+            }
+        }
+        m_activeHardwareEncoder = HardwareEncoder::Software;
+    }
+
     // Tentar encontrar codec por nome primeiro, depois por ID
     const AVCodec *codec = nullptr;
 
@@ -285,6 +409,214 @@ bool MediaEncoder::initializeVideoCodec()
     return true;
 }
 
+namespace
+{
+    AVHWDeviceType deviceTypeForBackend(MediaEncoder::HardwareEncoder b)
+    {
+        switch (b)
+        {
+            case MediaEncoder::HardwareEncoder::VAAPI: return AV_HWDEVICE_TYPE_VAAPI;
+            case MediaEncoder::HardwareEncoder::QSV:   return AV_HWDEVICE_TYPE_QSV;
+            case MediaEncoder::HardwareEncoder::AMF:   return AV_HWDEVICE_TYPE_D3D11VA;
+            default:                                   return AV_HWDEVICE_TYPE_NONE;
+        }
+    }
+
+    AVPixelFormat hwPixelFormatForBackend(MediaEncoder::HardwareEncoder b)
+    {
+        switch (b)
+        {
+            case MediaEncoder::HardwareEncoder::VAAPI: return AV_PIX_FMT_VAAPI;
+            case MediaEncoder::HardwareEncoder::QSV:   return AV_PIX_FMT_QSV;
+            case MediaEncoder::HardwareEncoder::AMF:   return AV_PIX_FMT_D3D11;
+            default:                                   return AV_PIX_FMT_NV12;
+        }
+    }
+}
+
+bool MediaEncoder::createHardwareContext(HardwareEncoder backend)
+{
+    // NVENC accepts software-allocated YUV420P frames directly; no need
+    // to spin up an AVHWFramesContext. The other backends (VAAPI, QSV,
+    // AMF/D3D11VA) require a HW device + HW frames context, with the
+    // codec receiving AVFrames whose .data lives in GPU memory.
+    if (backend == HardwareEncoder::NVENC) return true;
+
+    AVHWDeviceType type = deviceTypeForBackend(backend);
+    if (type == AV_HWDEVICE_TYPE_NONE) return false;
+
+    AVBufferRef *deviceCtx = nullptr;
+    int rc = av_hwdevice_ctx_create(&deviceCtx, type, nullptr, nullptr, 0);
+    if (rc < 0 || !deviceCtx)
+    {
+        char errBuf[128] = {0};
+        av_strerror(rc, errBuf, sizeof(errBuf));
+        LOG_WARN(std::string("MediaEncoder: av_hwdevice_ctx_create failed for ") +
+                 hardwareEncoderName(backend) + ": " + errBuf);
+        return false;
+    }
+    m_hwDeviceCtx = deviceCtx;
+
+    AVBufferRef *framesCtxRef = av_hwframe_ctx_alloc(deviceCtx);
+    if (!framesCtxRef)
+    {
+        LOG_WARN("MediaEncoder: av_hwframe_ctx_alloc failed");
+        return false;
+    }
+    AVHWFramesContext *framesCtx = reinterpret_cast<AVHWFramesContext *>(framesCtxRef->data);
+    framesCtx->format    = hwPixelFormatForBackend(backend);
+    framesCtx->sw_format = AV_PIX_FMT_NV12;
+    framesCtx->width     = m_videoConfig.width;
+    framesCtx->height    = m_videoConfig.height;
+    framesCtx->initial_pool_size = 8; // small pool — keep enough surfaces for the in-flight frame threads
+    rc = av_hwframe_ctx_init(framesCtxRef);
+    if (rc < 0)
+    {
+        char errBuf[128] = {0};
+        av_strerror(rc, errBuf, sizeof(errBuf));
+        LOG_WARN(std::string("MediaEncoder: av_hwframe_ctx_init failed: ") + errBuf);
+        av_buffer_unref(&framesCtxRef);
+        return false;
+    }
+    m_hwFramesCtx = framesCtxRef;
+    return true;
+}
+
+bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
+{
+    const char *codecName = hardwareEncoderCodec(backend);
+    const AVCodec *codec = avcodec_find_encoder_by_name(codecName);
+    if (!codec)
+    {
+        LOG_WARN(std::string("MediaEncoder: codec ") + codecName + " not present in this ffmpeg build");
+        return false;
+    }
+
+    if (!createHardwareContext(backend))
+    {
+        return false;
+    }
+
+    AVCodecContext *codecCtx = avcodec_alloc_context3(codec);
+    if (!codecCtx)
+    {
+        LOG_ERROR("MediaEncoder: avcodec_alloc_context3 failed for hardware codec");
+        return false;
+    }
+    m_videoCodecContext = codecCtx;
+
+    codecCtx->codec_id   = codec->id;
+    codecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+    codecCtx->width      = m_videoConfig.width;
+    codecCtx->height     = m_videoConfig.height;
+    codecCtx->time_base  = {1, 90000};
+    codecCtx->framerate  = {static_cast<int>(m_videoConfig.fps), 1};
+    codecCtx->gop_size   = static_cast<int>(m_videoConfig.fps * 2);
+    codecCtx->max_b_frames = 0;
+    codecCtx->bit_rate   = m_videoConfig.bitrate;
+    codecCtx->thread_count = 1; // hardware encoders manage their own parallelism
+
+    if (backend == HardwareEncoder::NVENC)
+    {
+        // NVENC accepts a regular software YUV420P input frame.
+        codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
+    }
+    else
+    {
+        // VAAPI / QSV / AMF require their hardware-surface pixel format
+        // and a populated hw_frames_ctx.
+        codecCtx->pix_fmt = hwPixelFormatForBackend(backend);
+        codecCtx->hw_frames_ctx = av_buffer_ref(static_cast<AVBufferRef *>(m_hwFramesCtx));
+        if (!codecCtx->hw_frames_ctx)
+        {
+            LOG_ERROR("MediaEncoder: failed to attach hw_frames_ctx to codec");
+            return false;
+        }
+    }
+
+    if (m_forStreaming == false || codec->id == AV_CODEC_ID_HEVC)
+    {
+        codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    AVDictionary *opts = nullptr;
+    // Per-backend tuning. Defaults aim at low-latency live streaming.
+    if (backend == HardwareEncoder::NVENC)
+    {
+        av_dict_set(&opts, "preset", "p4", 0);           // medium-speed quality preset (p1=fastest..p7=slowest)
+        av_dict_set(&opts, "tune",   "ll",  0);          // low-latency
+        av_dict_set(&opts, "rc",     "cbr", 0);
+        av_dict_set_int(&opts, "zerolatency", 1, 0);
+        av_dict_set_int(&opts, "bf",          0, 0);     // no B-frames in low-latency mode
+    }
+    else if (backend == HardwareEncoder::VAAPI)
+    {
+        av_dict_set(&opts, "rc_mode", "CBR", 0);
+        av_dict_set_int(&opts, "low_power", 1, 0);
+        av_dict_set_int(&opts, "idr_interval", static_cast<int>(m_videoConfig.fps * 2), 0);
+    }
+    else if (backend == HardwareEncoder::QSV)
+    {
+        av_dict_set(&opts, "preset", "veryfast", 0);
+        av_dict_set_int(&opts, "look_ahead", 0, 0);
+    }
+    else if (backend == HardwareEncoder::AMF)
+    {
+        av_dict_set(&opts, "usage", "transcoding", 0);
+        av_dict_set(&opts, "quality", "speed",     0);
+        av_dict_set(&opts, "rc",      "cbr",       0);
+    }
+
+    int ret = avcodec_open2(codecCtx, codec, &opts);
+    av_dict_free(&opts);
+    if (ret < 0)
+    {
+        char errBuf[256] = {0};
+        av_strerror(ret, errBuf, sizeof(errBuf));
+        LOG_WARN(std::string("MediaEncoder: avcodec_open2 failed for ") + codecName + ": " + errBuf);
+        return false;
+    }
+
+    AVFrame *swFrame = av_frame_alloc();
+    if (!swFrame)
+    {
+        LOG_ERROR("MediaEncoder: failed to allocate software AVFrame");
+        return false;
+    }
+    // The software-side frame we fill with NV12/YUV420P pixel data — for
+    // NVENC this is the frame we feed directly; for VAAPI/QSV/AMF it
+    // becomes the upload source via av_hwframe_transfer_data.
+    swFrame->format = (backend == HardwareEncoder::NVENC) ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_NV12;
+    swFrame->width  = m_videoConfig.width;
+    swFrame->height = m_videoConfig.height;
+    if (av_frame_get_buffer(swFrame, 0) < 0)
+    {
+        LOG_ERROR("MediaEncoder: failed to allocate sw frame buffer");
+        av_frame_free(&swFrame);
+        return false;
+    }
+    m_videoFrame = swFrame;
+
+    if (backend != HardwareEncoder::NVENC)
+    {
+        AVFrame *hwFrame = av_frame_alloc();
+        if (!hwFrame)
+        {
+            LOG_ERROR("MediaEncoder: failed to allocate hw AVFrame");
+            return false;
+        }
+        if (av_hwframe_get_buffer(static_cast<AVBufferRef *>(m_hwFramesCtx), hwFrame, 0) < 0)
+        {
+            LOG_ERROR("MediaEncoder: av_hwframe_get_buffer failed");
+            av_frame_free(&hwFrame);
+            return false;
+        }
+        m_hwVideoFrame = hwFrame;
+    }
+
+    return true;
+}
+
 bool MediaEncoder::initializeAudioCodec()
 {
     const AVCodec *codec = nullptr;
@@ -486,9 +818,21 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         }
     }
 
+    // Hardware backends that need NV12 (VAAPI/QSV/AMF upload via NV12
+    // surfaces) set frame->format = NV12; software / NVENC keep YUV420P.
+    // We honour whatever the frame asks for so the same code path covers
+    // both — the sws context is rebuilt if any of source dims / dest dims
+    // / dest format changes.
+    AVPixelFormat dstFormat = static_cast<AVPixelFormat>(frame->format);
+    if (dstFormat != AV_PIX_FMT_YUV420P && dstFormat != AV_PIX_FMT_NV12)
+    {
+        dstFormat = AV_PIX_FMT_YUV420P;
+    }
+
     SwsContext *swsCtx = static_cast<SwsContext *>(m_swsContext);
     if (!swsCtx || m_swsSrcWidth != width || m_swsSrcHeight != height ||
-        m_swsDstWidth != dstWidth || m_swsDstHeight != dstHeight)
+        m_swsDstWidth != dstWidth || m_swsDstHeight != dstHeight ||
+        static_cast<int>(m_swsDstFormat) != static_cast<int>(dstFormat))
     {
         if (swsCtx)
         {
@@ -497,7 +841,7 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
 
         swsCtx = sws_getContext(
             width, height, AV_PIX_FMT_RGB24,
-            dstWidth, dstHeight, AV_PIX_FMT_YUV420P,
+            dstWidth, dstHeight, dstFormat,
             SWS_BILINEAR, nullptr, nullptr, nullptr);
 
         if (!swsCtx)
@@ -511,6 +855,7 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         m_swsSrcHeight = height;
         m_swsDstWidth = dstWidth;
         m_swsDstHeight = dstHeight;
+        m_swsDstFormat = static_cast<int>(dstFormat);
     }
 
     if (av_frame_make_writable(frame) < 0)
@@ -1022,13 +1367,37 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     }
     m_videoFrameCount++;
 
-    int ret = avcodec_send_frame(codecCtx, videoFrame);
+    // HW backends that hold pixel data in a GPU surface (VAAPI / QSV /
+    // AMF / D3D11) need the software-side NV12 frame uploaded to a
+    // hardware surface before the codec can consume it. NVENC and the
+    // software path skip this and feed the sw frame directly.
+    AVFrame *frameToSend = videoFrame;
+    if (m_hwVideoFrame &&
+        m_activeHardwareEncoder != HardwareEncoder::Software &&
+        m_activeHardwareEncoder != HardwareEncoder::NVENC)
+    {
+        AVFrame *hwFrame = static_cast<AVFrame *>(m_hwVideoFrame);
+        int rc = av_hwframe_transfer_data(hwFrame, videoFrame, 0);
+        if (rc < 0)
+        {
+            char errBuf[128] = {0};
+            av_strerror(rc, errBuf, sizeof(errBuf));
+            LOG_ERROR(std::string("MediaEncoder: av_hwframe_transfer_data failed: ") + errBuf);
+            return false;
+        }
+        hwFrame->pts        = videoFrame->pts;
+        hwFrame->pict_type  = videoFrame->pict_type;
+        FFmpegCompat::setKeyFrame(hwFrame, forceKeyframe);
+        frameToSend = hwFrame;
+    }
+
+    int ret = avcodec_send_frame(codecCtx, frameToSend);
     if (ret < 0)
     {
         if (ret == AVERROR(EAGAIN))
         {
             receiveVideoPackets(packets, captureTimestampUs);
-            ret = avcodec_send_frame(codecCtx, videoFrame);
+            ret = avcodec_send_frame(codecCtx, frameToSend);
         }
         if (ret < 0 && ret != AVERROR(EAGAIN))
         {
@@ -1036,6 +1405,9 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
             return false;
         }
     }
+    // Suppress -Wunused for the conditional re-send variable when the HW
+    // path is inactive.
+    (void)frameToSend;
 
     return receiveVideoPackets(packets, captureTimestampUs);
 }

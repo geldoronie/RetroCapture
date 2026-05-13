@@ -252,6 +252,11 @@ public:
     void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    // Hardware encoder selection — uses int so we don't have to pull
+    // MediaEncoder.h into the UI layer. Stored as int matching the
+    // MediaEncoder::HardwareEncoder enum values (Auto=0, Software=1,
+    // NVENC=2, VAAPI=3, QSV=4, AMF=5).
+    void setStreamingHardwareEncoder(int v) { m_streamingHardwareEncoder = v; }
 
     // Buffer settings
     void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
@@ -279,6 +284,7 @@ public:
     std::string getStreamingH265Level() const { return m_streamingH265Level; }
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
+    int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -295,6 +301,7 @@ public:
     void triggerStreamingH265LevelChange(const std::string &level);
     void triggerStreamingVP8SpeedChange(int speed);
     void triggerStreamingVP9SpeedChange(int speed);
+    void triggerStreamingHardwareEncoderChange(int v);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -391,6 +398,7 @@ public:
     void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
+    void setOnStreamingHardwareEncoderChanged(std::function<void(int)> callback) { m_onStreamingHardwareEncoderChanged = callback; }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -795,6 +803,7 @@ private:
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -827,6 +836,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
+    std::function<void(int)> m_onStreamingHardwareEncoderChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;
