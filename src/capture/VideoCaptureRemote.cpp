@@ -233,19 +233,24 @@ bool VideoCaptureRemote::captureFrame(Frame &frame)
 bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    // PTS-anchored release: the decoder tagged each queued frame with the
-    // wall-clock time it should appear on screen (see decodeLoop). Pop
-    // any frames whose target time has been reached, keeping the most
-    // recent one as "currently displayed". Frames still in the future
-    // stay in the queue so the next poll picks them up at the right
-    // moment. This replaces the "always pop the front" behaviour that
-    // showed every queued frame as fast as the main loop polled —
-    // producing the bursty / irregular hold times the user noticed as
-    // "perdemos frame rate" judder on a 60Hz display fed a ~40 fps
-    // stream.
+    // PTS-anchored release with a half-frame leniency window. The decoder
+    // tagged each queued frame with the wall-clock time it should appear
+    // on screen; we pop frames whose target has been reached, keeping the
+    // most recent one as "currently displayed". The half-frame window
+    // (kReleaseLeadUs) is the fix for "60 fps stream on a 60 Hz display
+    // doesn't feel like 60 fps": with a strict at-or-after PTS gate, a
+    // frame whose PTS jittered 1-2 ms later than the next display refresh
+    // missed that refresh and ended up shown for two cycles instead of
+    // one — invisible 3:2 pulldown judder. Allowing release up to ~8 ms
+    // before the target lets each frame land on the nearest refresh
+    // boundary instead of strictly the next one after PTS. The user
+    // worked around this by streaming at 120 fps, where every poll had
+    // a fresh frame whether or not the gate was strict; with this fix
+    // 60 fps streaming should feel as smooth as 120 fps used to.
+    constexpr int64_t kReleaseLeadUs = 8333; // half a 60 Hz frame
     const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch()).count();
-    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs)
+    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs + kReleaseLeadUs)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
         m_frameQueue.pop_front();
