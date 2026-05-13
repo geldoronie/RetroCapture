@@ -285,6 +285,38 @@ void VideoCaptureRemote::decodeLoop()
 
     while (m_decodeRunning.load())
     {
+        // Reconnect path: when the previous av_read_frame tore the
+        // connection down (server stop / network blip) we land here
+        // with m_formatCtx == nullptr. Try to (re)open the input,
+        // back off on failure, keep trying until the application
+        // asks us to stop.
+        if (!m_formatCtx)
+        {
+            cleanupDecoder(); // belt-and-braces: drop any half-init state
+            if (!initDecoder())
+            {
+                LOG_WARN("VideoCaptureRemote: reconnect to " + m_url + " failed, retrying in 2 s");
+                cleanupDecoder();
+                for (int i = 0; i < 20 && m_decodeRunning.load(); ++i)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                continue;
+            }
+            // Fresh stream: reset the PTS anchor and clear any stale
+            // frames that were sitting in the queue from before the
+            // disconnect. Otherwise the new stream's PTS=0 frame would
+            // be timed against the old anchor and either play in the
+            // past or sit far in the future.
+            m_streamAnchored = false;
+            {
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                m_frameQueue.clear();
+            }
+            rgbW = 0; rgbH = 0; rgbBuf.clear();
+            LOG_INFO("VideoCaptureRemote: reconnected to " + m_url);
+        }
+
         int rc = av_read_frame(m_formatCtx, packet);
         if (rc < 0)
         {
@@ -295,8 +327,12 @@ void VideoCaptureRemote::decodeLoop()
             }
             char errBuf[128] = {0};
             av_strerror(rc, errBuf, sizeof(errBuf));
-            LOG_WARN("VideoCaptureRemote::decodeLoop — av_read_frame: " + std::string(errBuf));
-            break; // Connection lost / EOF — exit loop.
+            LOG_WARN("VideoCaptureRemote::decodeLoop — av_read_frame: " + std::string(errBuf) +
+                     " — tearing down and waiting to reconnect");
+            // Tear down so the top of the outer loop reopens. Don't
+            // exit the thread — server is allowed to come back.
+            cleanupDecoder();
+            continue;
         }
 
         if (packet->stream_index != m_videoStreamIdx)

@@ -615,10 +615,13 @@ void HTTPTSStreamer::stop()
         m_rawClientCount = 0;
     }
 
-    // Aguardar um tempo para threads processarem m_stopRequest e terminarem
-    // Como threads são detached, precisamos aguardar um tempo razoável
-    // Reduzido para evitar bloqueio prolongado - threads devem terminar rapidamente
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+    // Aguardar um tempo para threads detached processarem m_stopRequest e
+    // terminarem. Os loops checam m_running/m_stopRequest a cada iteração,
+    // que para os encoder threads é <30ms e para os client handlers é a
+    // próxima recv (~10ms). 10s era exagero — congelava a UI quando o
+    // restart era disparado por um callback de setting na thread principal.
+    // 1.5s dá margem confortável sem trancar a interface.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
     // Registrar timestamp de quando parou para cooldown
     {
@@ -962,7 +965,16 @@ void HTTPTSStreamer::handleClient(int clientFd)
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
-        m_httpServer.closeClient(clientFd);
+        // Atomically remove from the broadcast list AND close the fd,
+        // both under the list lock. Without this writeToRawClients
+        // (which also detects send failures and closes the fd) and the
+        // handler thread could double-close the same fd value — and
+        // because Linux reuses fd numbers immediately, the second close
+        // sometimes shut down a freshly-accepted unrelated connection,
+        // breaking every subsequent client until streaming was
+        // restarted. Whichever path finds the fd still in the list
+        // wins the close; the loser sees an empty find result and exits
+        // without touching the fd.
         {
             std::lock_guard<std::mutex> lock(m_rawOutputMutex);
             auto it = std::find(m_rawClientSockets.begin(), m_rawClientSockets.end(), clientFd);
@@ -970,6 +982,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             {
                 m_rawClientSockets.erase(it);
                 m_rawClientCount = m_rawClientSockets.size();
+                m_httpServer.closeClient(clientFd);
             }
         }
         return;
@@ -1015,8 +1028,9 @@ void HTTPTSStreamer::handleClient(int clientFd)
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // evitar busy-waiting
     }
 
-    // Cliente desconectou - remover da lista
-    m_httpServer.closeClient(clientFd);
+    // Atomically remove from the broadcast list AND close the fd, same
+    // pattern as the /raw branch above — avoids the double-close race
+    // with writeToClients on disconnect.
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
@@ -1024,6 +1038,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         {
             m_clientSockets.erase(it);
             m_clientCount = m_clientSockets.size();
+            m_httpServer.closeClient(clientFd);
         }
     }
 }
