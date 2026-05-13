@@ -1,6 +1,5 @@
 #include "UIRemoteConnection.h"
 #include "UIManager.h"
-#include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <cstring>
 
@@ -103,9 +102,14 @@ void UIRemoteConnection::render()
         // URL set AND the capture is open. Without the source-type check
         // the window mis-reported a local V4L2/DS capture as a remote
         // connection (V4L2 also uses getCurrentDevice + isOpen).
+        // Liveness derived from UIManager only — the old code dereferenced
+        // a cached IVideoCapture* that went dangling the moment the user
+        // pressed Connect (the connect handler destroys-and-recreates
+        // m_capture inside the same frame). UIManager's caller-side info
+        // is updated by Application after the swap completes, so it's
+        // safe to consult from here.
         const std::string currentDevice = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
-        const bool connected = sourceIsRemote && !currentDevice.empty() &&
-                               (m_capture && m_capture->isOpen());
+        const bool connected = sourceIsRemote && !currentDevice.empty();
 
         if (!connected)
         {
@@ -117,11 +121,19 @@ void UIRemoteConnection::render()
                 while (!url.empty() && url.back() == '/') url.pop_back();
                 if (!url.empty())
                 {
-                    // setCurrentDevice fires m_onDeviceChanged, Application's
-                    // connect-to-remote handler. Also flips Source to Remote
-                    // so the existing remote-capture path takes over.
-                    m_uiManager->setSourceType(UIManager::SourceType::Remote);
-                    m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
+                    // Flip source to Remote only if we're not already
+                    // there — triggerSourceTypeChange always re-runs the
+                    // app-level handler (which destroys/recreates the
+                    // capture), and doing it on top of a Remote that's
+                    // halfway through a connect attempt produced the
+                    // double 'Source type changed' / segfault sequence
+                    // the user reported. setCurrentDevice fires
+                    // m_onDeviceChanged, which is the connect-to-remote
+                    // path; one trigger is enough.
+                    if (m_uiManager->getSourceType() != UIManager::SourceType::Remote)
+                    {
+                        m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
+                    }
                     m_uiManager->setCurrentDevice(url);
                 }
             }
@@ -143,10 +155,12 @@ void UIRemoteConnection::render()
         ImGui::Spacing();
 
         ImGui::TextDisabled("Status");
-        if (m_capture && m_capture->isOpen())
+        if (connected)
         {
-            ImGui::Text("Stream: %ux%u",
-                        m_capture->getWidth(), m_capture->getHeight());
+            const uint32_t w = m_uiManager->getCaptureWidth();
+            const uint32_t h = m_uiManager->getCaptureHeight();
+            if (w > 0 && h > 0) ImGui::Text("Stream: %ux%u", w, h);
+            else                ImGui::Text("Connecting...");
         }
         else
         {

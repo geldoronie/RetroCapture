@@ -29,13 +29,17 @@ public:
     void setVisible(bool visible);
     bool isVisible() const { return m_visible; }
 
-    // Capture pointer is consulted to decide whether to show
-    // Connect or Disconnect, and to read the live status / dims.
-    void setCapture(IVideoCapture *capture) { m_capture = capture; }
+    // setCapture is intentionally a no-op kept for ABI compatibility
+    // with the wiring in Application. The window was crashing on
+    // use-after-free because the m_capture pointer it cached went
+    // dangling the moment the user clicked Connect (the device-change
+    // callback destroys and recreates m_capture inside the same frame).
+    // Now we read all connection state through UIManager getters which
+    // remain valid across the swap.
+    void setCapture(IVideoCapture *) {}
 
 private:
     UIManager *m_uiManager = nullptr;
-    IVideoCapture *m_capture = nullptr;
     bool m_visible = false;
 
     // ImGui InputText buffer, seeded from the saved device path on
