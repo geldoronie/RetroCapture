@@ -4,6 +4,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
+#include "../streaming/RemoteMetaSync.h"
 #ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
 #endif
@@ -547,6 +548,30 @@ bool Application::initCapture()
         LOG_INFO("Capture initialized: " +
                  std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
+    }
+
+    // Phase 4 of #47: when source is Remote, also poll the host's /meta to
+    // mirror the active shader + parameters locally. Snapshot deltas are
+    // staged on m_pendingRemote* and consumed on the GL thread inside the
+    // main loop (see applyPendingRemoteMeta()).
+    if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote && !m_devicePath.empty())
+    {
+        m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
+        m_remoteMetaSync->start(m_devicePath,
+            [this](const RemoteMetaSync::Snapshot &snap)
+            {
+                std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
+                m_pendingRemotePreset          = snap.preset;
+                m_pendingRemotePresetHash      = snap.presetHash;
+                m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
+                m_pendingRemoteParams.clear();
+                m_pendingRemoteParams.reserve(snap.parameters.size());
+                for (const auto &p : snap.parameters)
+                {
+                    m_pendingRemoteParams.emplace_back(p.name, p.value);
+                }
+                m_hasPendingRemoteMeta.store(true);
+            });
     }
 
     return true;
@@ -2692,7 +2717,11 @@ void Application::run()
             LOG_WARN("Window is invalid - exiting main loop");
             break;
         }
-        
+
+        // Phase 4 of #47: drain pending remote /meta deltas onto this
+        // thread before any GL work. Cheap when nothing pending.
+        applyPendingRemoteMeta();
+
         m_window->pollEvents();
         
         // Check again after polling events (window may have been invalidated)
@@ -4663,6 +4692,73 @@ std::string Application::resolveShaderPath(const std::string &shaderPath) const
     fs::path fullPath = shaderBasePath / shaderPath;
 
     return fullPath.string();
+}
+
+void Application::applyPendingRemoteMeta()
+{
+    if (!m_hasPendingRemoteMeta.load()) return;
+
+    // Snapshot the pending values out from under the polling thread.
+    std::string preset;
+    std::string presetHash;
+    bool pipelineEnabled = true;
+    std::vector<std::pair<std::string, float>> params;
+    {
+        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
+        preset           = std::move(m_pendingRemotePreset);
+        presetHash       = std::move(m_pendingRemotePresetHash);
+        pipelineEnabled  = m_pendingRemotePipelineEnabled;
+        params           = std::move(m_pendingRemoteParams);
+        m_hasPendingRemoteMeta.store(false);
+    }
+
+    if (!m_shaderEngine || !m_ui)
+    {
+        return;
+    }
+
+    // Phase 4 minimum: resolve preset by name in the local shader library.
+    // If the preset isn't there, log and keep whatever shader the client
+    // already has — Phase 4b will fetch the bundle from /meta/shader-bundle
+    // and cache it locally for these cases.
+    bool reloaded = false;
+    if (!preset.empty() && presetHash != m_appliedRemotePresetHash)
+    {
+        const std::string fullPath = resolveShaderPath(preset);
+        if (!fullPath.empty())
+        {
+            LOG_INFO("RemoteMetaSync: applying host preset '" + preset + "' (hash " + presetHash + ")");
+            if (m_shaderEngine->loadPreset(fullPath))
+            {
+                m_ui->setCurrentShader(preset);
+                m_appliedRemotePresetHash = presetHash;
+                reloaded = true;
+            }
+            else
+            {
+                LOG_WARN("RemoteMetaSync: failed to load preset locally — bundle fetch is a Phase 4b TODO");
+            }
+        }
+    }
+
+    // Master pipeline toggle: mirror the host's "Apply shader pipeline".
+    m_ui->setShaderPipelineEnabled(pipelineEnabled);
+
+    // Parameter overrides apply on top of whatever preset is now active.
+    // After a preset reload, the engine's parameters are at their preset
+    // defaults; layering the host's overrides on top reproduces the look.
+    if (!params.empty())
+    {
+        for (const auto &kv : params)
+        {
+            m_shaderEngine->setShaderParameter(kv.first, kv.second);
+        }
+        if (reloaded)
+        {
+            LOG_INFO("RemoteMetaSync: applied " + std::to_string(params.size()) +
+                     " parameter override(s)");
+        }
+    }
 }
 
 // Recording methods

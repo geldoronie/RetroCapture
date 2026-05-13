@@ -138,6 +138,11 @@ public:
     
     // Shader path resolution (centralized)
     std::string resolveShaderPath(const std::string& shaderPath) const;
+
+    // Phase 4 of #47: drains pending remote /meta snapshot onto the GL
+    // thread. Called once per main-loop iteration; cheap no-op when
+    // m_hasPendingRemoteMeta is false.
+    void applyPendingRemoteMeta();
     fs::path getShaderBasePath() const;
     
     // Thread-safe resolution change scheduling
@@ -164,6 +169,17 @@ private:
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
+
+    // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
+    // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
+    std::unique_ptr<class RemoteMetaSync> m_remoteMetaSync;
+    std::mutex                       m_pendingRemoteMutex;
+    std::atomic<bool>                m_hasPendingRemoteMeta{false};
+    std::string                      m_pendingRemotePreset;
+    std::string                      m_pendingRemotePresetHash;
+    std::string                      m_appliedRemotePresetHash;
+    bool                             m_pendingRemotePipelineEnabled = true;
+    std::vector<std::pair<std::string, float>> m_pendingRemoteParams;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.

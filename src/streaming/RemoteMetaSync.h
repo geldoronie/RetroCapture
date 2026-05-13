@@ -1,0 +1,98 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <thread>
+#include <vector>
+
+/**
+ * @brief Polls the remote host's /meta endpoint and dispatches snapshot
+ *        deltas via a callback.
+ *
+ * Phase 4 of issue #47. Runs in a background thread, fetches /meta every
+ * `pollIntervalMs` (default ~1 s), parses the JSON snapshot defined in
+ * docs/REMOTE_STREAM_PROTOCOL.md, and invokes the registered callback
+ * whenever the host's shader / parameters change. Callback is invoked on
+ * the polling thread — receivers must marshal back to the main / GL
+ * thread if they touch GL state (ShaderEngine::loadPreset etc.).
+ *
+ * The polling cadence is a placeholder until Phase 6 wires a WebSocket
+ * upgrade on the same endpoint for sub-second deltas.
+ */
+class RemoteMetaSync
+{
+public:
+    struct ParamOverride
+    {
+        std::string name;
+        float       value = 0.0f;
+    };
+
+    struct Snapshot
+    {
+        int                          protocolVersion = 0;
+        std::string                  serverVersion;
+        // shader block
+        bool                         shaderActive    = false;
+        bool                         pipelineEnabled = true;
+        std::string                  preset;        // e.g. "crt/crt-mattias.glslp"
+        std::string                  presetHash;
+        std::vector<ParamOverride>   parameters;
+        // source block
+        uint32_t                     sourceWidth     = 0;
+        uint32_t                     sourceHeight    = 0;
+        uint32_t                     sourceFps       = 0;
+        // image block (mirrored for client display; may also be re-applied
+        // locally depending on where /raw is tapped in Phase 2)
+        float                        imageBrightness = 1.0f;
+        float                        imageContrast   = 1.0f;
+    };
+
+    using SnapshotCallback = std::function<void(const Snapshot &)>;
+
+    RemoteMetaSync();
+    ~RemoteMetaSync();
+
+    /**
+     * @brief Start polling.
+     * @param baseUrl  Remote server base URL (e.g. "http://host:8080").
+     *                 "/meta" is appended internally.
+     * @param cb       Invoked on every snapshot that differs from the last
+     *                 one we delivered. Snapshots that match (same preset,
+     *                 same hash, same parameter values) are filtered out.
+     * @param pollIntervalMs Time between polls. Clamped to >= 250 ms.
+     */
+    bool start(const std::string &baseUrl, SnapshotCallback cb, int pollIntervalMs = 1000);
+
+    /**
+     * @brief Stop the polling thread (joins).
+     */
+    void stop();
+
+    bool isRunning() const { return m_running.load(); }
+
+private:
+    void pollLoop();
+
+    /**
+     * @brief Performs a single HTTP GET against `<baseUrl>/meta` and parses
+     *        the JSON into `out`. Returns false on network / parse error.
+     */
+    bool fetchOnce(Snapshot &out);
+
+    std::string         m_baseUrl;
+    SnapshotCallback    m_cb;
+    int                 m_pollIntervalMs = 1000;
+
+    std::thread         m_thread;
+    std::atomic<bool>   m_running{false};
+
+    // Dedup state — only fire the callback when the snapshot actually
+    // changed. Compared against the new snapshot before dispatch.
+    std::string         m_lastPreset;
+    std::string         m_lastPresetHash;
+    bool                m_lastPipelineEnabled = true;
+    std::vector<float>  m_lastParamValues;
+};
