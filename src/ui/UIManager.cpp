@@ -1,6 +1,7 @@
 #include "UIManager.h"
 #include "UIConfiguration.h"
 #include "UICredits.h"
+#include "UIRemoteConnection.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
@@ -148,6 +149,7 @@ bool UIManager::init(void *window)
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
+    m_remoteConnectionWindow = std::make_unique<UIRemoteConnection>(this);
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
@@ -335,6 +337,22 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Remote"))
+        {
+            const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, !connected))
+            {
+                if (m_remoteConnectionWindow)
+                {
+                    m_remoteConnectionWindow->setVisible(true);
+                }
+            }
+            if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
+            {
+                setCurrentDevice("");
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Help"))
         {
             if (m_creditsWindow)
@@ -360,6 +378,12 @@ void UIManager::render()
     if (m_creditsWindow)
     {
         m_creditsWindow->render();
+    }
+
+    // Renderizar janela de conexão remota
+    if (m_remoteConnectionWindow)
+    {
+        m_remoteConnectionWindow->render();
     }
 
     // Renderizar janela de presets

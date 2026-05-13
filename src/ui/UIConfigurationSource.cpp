@@ -79,25 +79,25 @@ void UIConfigurationSource::renderSourceTypeSelection()
     ImGui::Separator();
     ImGui::Spacing();
 
-// Dropdown para seleção do tipo de fonte
-// "Remote" lives on every platform — it's just an HTTP MPEG-TS consumer.
+    // Dropdown para seleção do tipo de fonte de captura local.
+    // 'Remote' não vive mais aqui — virou o seu próprio menu top-level
+    // ('Remote → Connect to Remote...') com janela dedicada para URL +
+    // interpolação. A aba Source fica focada só nas opções de captura
+    // física da máquina.
 #ifdef __linux__
-    const char *sourceTypeNames[] = {"None", "V4L2", "Remote"};
+    const char *sourceTypeNames[] = {"None", "V4L2"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::V4L2,
-        UIManager::SourceType::Remote};
+        UIManager::SourceType::V4L2};
 #elif defined(_WIN32)
-    const char *sourceTypeNames[] = {"None", "DirectShow", "Remote"};
+    const char *sourceTypeNames[] = {"None", "DirectShow"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::DS,
-        UIManager::SourceType::Remote};
+        UIManager::SourceType::DS};
 #else
-    const char *sourceTypeNames[] = {"None", "Remote"};
+    const char *sourceTypeNames[] = {"None"};
     UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None,
-        UIManager::SourceType::Remote};
+        UIManager::SourceType::None};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -692,106 +692,22 @@ void UIConfigurationSource::renderQuickResolutions()
 
 void UIConfigurationSource::renderRemoteControls()
 {
-    // Seed the input buffer from the current device path (which doubles as
-    // the remote URL for Remote source) the first time we render. Without
-    // this the field appears empty even if --remote-url was used.
-    if (m_remoteUrlBuffer[0] == 0)
-    {
-        std::string current = m_uiManager->getCurrentDevice();
-        if (current.empty()) current = "http://localhost:8080";
-        std::strncpy(m_remoteUrlBuffer, current.c_str(), sizeof(m_remoteUrlBuffer) - 1);
-        m_remoteUrlBuffer[sizeof(m_remoteUrlBuffer) - 1] = '\0';
-    }
-
+    // Remote-mode controls moved out of the Source tab into a dedicated
+    // top-level menu entry ('Remote → Connect to Remote...'). This stub
+    // just points the user at the new location when they land here with
+    // a Remote source already loaded from config.
     ImGui::TextWrapped(
-        "Consume a remote RetroCapture stream. The client decodes the host's "
-        "/raw feed and mirrors its shader pipeline via /meta. See #47.");
+        "Remote viewer mode — connection controls moved to the 'Remote' menu. "
+        "Use 'Remote → Connect to Remote...' to manage URL, interpolation and "
+        "the connect/disconnect actions.");
     ImGui::Spacing();
-
-    ImGui::Text("Remote base URL");
-    ImGui::SetNextItemWidth(-100.0f);
-    ImGui::InputText("##remoteUrl", m_remoteUrlBuffer, sizeof(m_remoteUrlBuffer));
-    ImGui::SameLine();
-
     const std::string currentDevice = m_uiManager->getCurrentDevice();
-    const bool connected = !currentDevice.empty() &&
-                           (m_capture && m_capture->isOpen());
-
-    if (!connected)
+    if (!currentDevice.empty())
     {
-        if (ImGui::Button("Connect"))
-        {
-            std::string url(m_remoteUrlBuffer);
-            // Strip a trailing slash so the appended /raw and /meta land
-            // cleanly down in VideoCaptureRemote / RemoteMetaSync.
-            while (!url.empty() && url.back() == '/') url.pop_back();
-            if (!url.empty())
-            {
-                // setCurrentDevice fires m_onDeviceChanged, which is
-                // Application's connect-to-remote handler.
-                m_uiManager->setCurrentDevice(url);
-            }
-        }
-    }
-    else
-    {
-        if (ImGui::Button("Disconnect"))
-        {
-            m_uiManager->setCurrentDevice("");
-        }
-        ImGui::SameLine();
         ImGui::TextDisabled("connected to %s", currentDevice.c_str());
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Display-side interpolation strategy. Independent of stream rate;
-    // the server can be at 60 fps and the client can pick how to fill
-    // the panel's refresh slots between consecutive stream frames.
-    ImGui::TextDisabled("Display interpolation");
-    const char *modes[]      = {"linear", "nearest", "off"};
-    const char *modeLabels[] = {
-        "Linear (smooth, slight ghosting)",
-        "Nearest (clean frames, may stutter)",
-        "Off (strict PTS, may stutter)"
-    };
-    std::string currentMode = m_uiManager->getRemoteInterpolation();
-    int currentModeIndex = 0;
-    for (int i = 0; i < 3; ++i)
-    {
-        if (currentMode == modes[i]) { currentModeIndex = i; break; }
-    }
-    ImGui::SetNextItemWidth(-100.0f);
-    if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
-    {
-        m_uiManager->triggerRemoteInterpolationChange(modes[currentModeIndex]);
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Como o client preenche os refreshes do display entre frames do stream:\n"
-                          "Linear: blend prev+next por refresh — movimento contínuo, fantasma leve em movimentos rápidos.\n"
-                          "Nearest: mostra o frame mais próximo no tempo — imagem limpa, mas tem o padrão 3:2 pulldown\n"
-                          "  em qualquer ratio não-inteiro (e.g. 60fps em 144Hz).\n"
-                          "Off: estritamente espera o target do PTS — comportamento mais simples, menor latência.");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::TextDisabled("Status");
-    if (m_capture && m_capture->isOpen())
-    {
-        ImGui::Text(" Stream:  %ux%u",
-                    static_cast<unsigned>(m_capture->getWidth()),
-                    static_cast<unsigned>(m_capture->getHeight()));
-    }
     else
     {
-        ImGui::TextWrapped(
-            " Not connected. Enter the host's base URL (e.g. "
-            "http://localhost:8080) and click Connect.");
+        ImGui::TextDisabled("not connected");
     }
 }

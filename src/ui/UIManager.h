@@ -21,6 +21,7 @@ class IAudioCapture;
 // Forward declarations
 class UIConfiguration;
 class UICredits;
+class UIRemoteConnection;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
@@ -414,6 +415,11 @@ public:
     void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
     void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
     void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
+
+    // Accessor used by Application to keep the connection-window's
+    // capture pointer current — the window reads .isOpen() / dims to
+    // decide whether to show Connect or Disconnect.
+    UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -692,6 +698,7 @@ private:
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
+    std::unique_ptr<class UIRemoteConnection> m_remoteConnectionWindow;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*

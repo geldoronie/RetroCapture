@@ -20,6 +20,7 @@
 #endif
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
+#include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
@@ -3196,6 +3197,13 @@ void Application::run()
         if (m_ui)
         {
             m_ui->beginFrame();
+            // Keep the Remote connection window's capture pointer current.
+            // Cheap pointer swap each iteration; UIRemoteConnection only
+            // dereferences it inside its own render() guarded by m_visible.
+            if (auto *win = m_ui->getRemoteConnectionWindow())
+            {
+                win->setCapture(m_capture.get());
+            }
         }
 
         // Try to capture and process the latest frame (discarding old frames)
