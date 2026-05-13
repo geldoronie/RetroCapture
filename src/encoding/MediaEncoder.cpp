@@ -29,8 +29,21 @@ const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
     return "?";
 }
 
-const char *MediaEncoder::hardwareEncoderCodec(HardwareEncoder h)
+const char *MediaEncoder::hardwareEncoderCodec(HardwareEncoder h, bool isHEVC)
 {
+    if (isHEVC)
+    {
+        switch (h)
+        {
+            case HardwareEncoder::Auto:     return "";
+            case HardwareEncoder::Software: return "libx265";
+            case HardwareEncoder::NVENC:    return "hevc_nvenc";
+            case HardwareEncoder::VAAPI:    return "hevc_vaapi";
+            case HardwareEncoder::QSV:      return "hevc_qsv";
+            case HardwareEncoder::AMF:      return "hevc_amf";
+        }
+        return "";
+    }
     switch (h)
     {
         case HardwareEncoder::Auto:     return "";          // resolved at runtime
@@ -59,18 +72,21 @@ std::vector<MediaEncoder::HardwareEncoder> MediaEncoder::detectAvailableEncoders
         };
         for (HardwareEncoder candidate : candidates)
         {
-            const char *codecName = hardwareEncoderCodec(candidate);
-            if (!codecName || !*codecName) continue;
-            // avcodec_find_encoder_by_name only tells us the codec is
-            // compiled into ffmpeg, not that the host can actually use it
-            // — but it's a cheap first filter that excludes builds where
-            // the hw lib wasn't linked in (e.g. ffmpeg without nvenc).
-            // Real availability is confirmed when we try to open it at
-            // initialize() time and gracefully fall back on failure.
-            if (avcodec_find_encoder_by_name(codecName) != nullptr)
+            const char *h264Name = hardwareEncoderCodec(candidate, false);
+            const char *hevcName = hardwareEncoderCodec(candidate, true);
+            const bool hasH264 = h264Name && *h264Name && avcodec_find_encoder_by_name(h264Name) != nullptr;
+            const bool hasHEVC = hevcName && *hevcName && avcodec_find_encoder_by_name(hevcName) != nullptr;
+            // Probe both the H.264 and HEVC builds — a backend is
+            // reported as available if either codec is compiled in.
+            // (Typically both come from the same ffmpeg library, but
+            // some custom builds drop one.) Real availability is
+            // confirmed at codec-open time; on failure we fall back to
+            // software for that specific codec.
+            if (hasH264 || hasHEVC)
             {
                 cache.push_back(candidate);
-                LOG_INFO(std::string("MediaEncoder: hardware encoder available — ") + hardwareEncoderName(candidate));
+                LOG_INFO(std::string("MediaEncoder: hardware encoder available — ") + hardwareEncoderName(candidate) +
+                         " (h264=" + (hasH264 ? "yes" : "no") + ", hevc=" + (hasHEVC ? "yes" : "no") + ")");
             }
         }
     });
@@ -117,24 +133,30 @@ bool MediaEncoder::initialize(const VideoConfig &videoConfig, const AudioConfig 
 
 bool MediaEncoder::initializeVideoCodec()
 {
-    // Hardware encoder dispatcher. Only applies when the user requested
-    // h264 — the hardware backends in this project all encode H.264.
-    // For other codecs (h265/vp8/vp9) we keep the original software path.
-    if (m_videoConfig.codec == "h264" || m_videoConfig.codec == "libx264")
+    // Hardware encoder dispatcher. Applies to both H.264 and H.265 —
+    // the other codecs in this project (vp8/vp9) have no hardware
+    // equivalents we support, they keep the software-only path.
+    const bool wantHEVC = (m_videoConfig.codec == "h265" ||
+                           m_videoConfig.codec == "libx265" ||
+                           m_videoConfig.codec == "hevc");
+    const bool wantH264 = (m_videoConfig.codec == "h264" ||
+                           m_videoConfig.codec == "libx264");
+    if (wantH264 || wantHEVC)
     {
         HardwareEncoder selected = m_videoConfig.hardwareEncoder;
         if (selected == HardwareEncoder::Auto)
         {
             // Walk the same priority list detectAvailableEncoders uses,
-            // picking the first hardware backend that's compiled in. The
-            // actual open() may still fail (driver missing etc.) — we
-            // fall back to software in that case.
+            // picking the first hardware backend whose codec for the
+            // user-selected family is compiled in. open() may still
+            // fail (driver missing etc.) — we fall back to software in
+            // that case.
             for (HardwareEncoder candidate : { HardwareEncoder::NVENC,
                                                HardwareEncoder::VAAPI,
                                                HardwareEncoder::QSV,
                                                HardwareEncoder::AMF })
             {
-                if (avcodec_find_encoder_by_name(hardwareEncoderCodec(candidate)))
+                if (avcodec_find_encoder_by_name(hardwareEncoderCodec(candidate, wantHEVC)))
                 {
                     selected = candidate;
                     break;
@@ -152,7 +174,7 @@ bool MediaEncoder::initializeVideoCodec()
                 return true;
             }
             LOG_WARN(std::string("MediaEncoder: hardware backend ") + hardwareEncoderName(selected) +
-                     " failed to initialize, falling back to software libx264");
+                     " failed to initialize, falling back to software libx264/libx265");
             // Tear down anything the failed HW init may have allocated
             // so the software path below starts from a clean slate.
             if (m_videoCodecContext)
@@ -484,7 +506,10 @@ bool MediaEncoder::createHardwareContext(HardwareEncoder backend)
 
 bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
 {
-    const char *codecName = hardwareEncoderCodec(backend);
+    const bool wantHEVC = (m_videoConfig.codec == "h265" ||
+                           m_videoConfig.codec == "libx265" ||
+                           m_videoConfig.codec == "hevc");
+    const char *codecName = hardwareEncoderCodec(backend, wantHEVC);
     const AVCodec *codec = avcodec_find_encoder_by_name(codecName);
     if (!codec)
     {
@@ -539,13 +564,13 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
         codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    // H.264 profile: pin to Main. Every hardware encoder we target
-    // supports Main, but consumer AMD VAAPI builds frequently don't
-    // expose High encoding entrypoints ("No usable encoding entrypoint
-    // found for profile VAProfileH264High" is the user-visible
-    // signature). If even Main fails we let the outer dispatcher fall
-    // back to libx264.
-    codecCtx->profile = FF_PROFILE_H264_MAIN;
+    // Profile selection: pin to Main for both H.264 and HEVC. Every
+    // hardware encoder we target supports Main; consumer AMD VAAPI
+    // builds frequently lack High encoding entrypoints (the user-visible
+    // signature is "No usable encoding entrypoint found for profile
+    // VAProfileH264High"). If Main also fails we let the outer
+    // dispatcher fall back to the software encoder for that codec.
+    codecCtx->profile = wantHEVC ? FF_PROFILE_HEVC_MAIN : FF_PROFILE_H264_MAIN;
 
     AVDictionary *opts = nullptr;
     // Per-backend tuning. hwPreset from the UI overrides the default

@@ -33,10 +33,15 @@ public:
     };
 
     static const char *hardwareEncoderName(HardwareEncoder h);   // display label
-    static const char *hardwareEncoderCodec(HardwareEncoder h);  // ffmpeg codec name
+    // Returns the ffmpeg codec name for the given backend, choosing
+    // h264_* or hevc_* based on `isHEVC`. The other codecs in the
+    // project (vp8/vp9) don't have hardware equivalents we support.
+    static const char *hardwareEncoderCodec(HardwareEncoder h, bool isHEVC = false);
     // Returns the subset of HardwareEncoder values whose ffmpeg codec
     // can actually be opened on this machine. Always includes Software.
-    // First call may probe; subsequent calls return cached results.
+    // Probes both the H.264 and HEVC builds — a backend is reported as
+    // available if either codec is compiled in. First call may probe;
+    // subsequent calls return cached results.
     static std::vector<HardwareEncoder> detectAvailableEncoders();
 
     // Configuração de vídeo

@@ -312,9 +312,9 @@ void UIConfigurationStreaming::renderCodecSettings()
     // with on this host. Auto always present; Software always present;
     // the hardware backends only show up when the corresponding codec
     // (h264_nvenc, h264_vaapi, …) is compiled into the linked ffmpeg.
-    // Only relevant for H.264 — the other codecs in this project go
-    // through their software encoders exclusively.
-    if (currentVideoCodec == "h264")
+    // Relevant for both H.264 and H.265 — the other codecs in this
+    // project (vp8/vp9) have no hardware equivalents we support.
+    if (currentVideoCodec == "h264" || currentVideoCodec == "h265" || currentVideoCodec == "hevc")
     {
         std::vector<MediaEncoder::HardwareEncoder> available = MediaEncoder::detectAvailableEncoders();
         // Prepend Auto so the user can let the app pick.

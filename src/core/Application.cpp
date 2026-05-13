@@ -1399,14 +1399,39 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    m_ui->setOnStreamingWidthChanged([this](uint32_t width)
-                                     { m_streamingWidth = width; });
+    // Resolution / FPS changes need the same restart-if-streaming policy
+    // as bitrate/preset — initStreaming() bakes width/height/fps into the
+    // MediaEncoder + MediaMuxer at construction time, so just storing the
+    // new value on the field has no effect on a live stream.
+    m_ui->setOnStreamingWidthChanged([this](uint32_t width) {
+        m_streamingWidth = width;
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
 
-    m_ui->setOnStreamingHeightChanged([this](uint32_t height)
-                                      { m_streamingHeight = height; });
+    m_ui->setOnStreamingHeightChanged([this](uint32_t height) {
+        m_streamingHeight = height;
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
 
-    m_ui->setOnStreamingFpsChanged([this](uint32_t fps)
-                                   { m_streamingFps = fps; });
+    m_ui->setOnStreamingFpsChanged([this](uint32_t fps) {
+        m_streamingFps = fps;
+        if (m_streamingEnabled && m_streamManager) {
+            m_streamManager->stop();
+            m_streamManager->cleanup();
+            m_streamManager.reset();
+            initStreaming();
+        }
+    });
 
     m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate)
                                        {
