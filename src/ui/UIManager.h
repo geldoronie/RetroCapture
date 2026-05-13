@@ -164,6 +164,14 @@ public:
             m_onDeviceChanged(device);
         }
     }
+    // Update the device path without firing the device-change callback.
+    // Used by Application when it needs to mark a failed connect cleared
+    // from inside the same callback — calling setCurrentDevice would
+    // re-enter and either hang or recurse depending on the guard.
+    void setCurrentDeviceSilent(const std::string &device)
+    {
+        m_currentDevice = device;
+    }
     std::string getCurrentDevice() const { return m_currentDevice; }
 
     // Métodos auxiliares para disparar callbacks via API (tornados públicos para uso pelas classes de abas)

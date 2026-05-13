@@ -60,6 +60,29 @@ bool VideoCaptureRemote::initDecoder()
     // FFmpeg networking init — idempotent, cheap to call.
     avformat_network_init();
 
+    // Allocate format context up-front so we can install the interrupt
+    // callback before avformat_open_input is called. Without the
+    // callback ffmpeg's blocking I/O sits in recv()/connect() until its
+    // 5 s timeout, ignoring our stopCapture()/close() — the decode loop
+    // ends up keeping the socket and the decode thread alive for up to
+    // 5 s after Disconnect, which is what produced 'decoded=60/s
+    // consumed=0/s drops=60' in the logs after the user hit Disconnect.
+    m_formatCtx = avformat_alloc_context();
+    if (!m_formatCtx)
+    {
+        LOG_ERROR("VideoCaptureRemote: avformat_alloc_context failed");
+        return false;
+    }
+    static_cast<AVFormatContext *>(m_formatCtx)->interrupt_callback.callback =
+        [](void *opaque) -> int {
+            auto *self = static_cast<VideoCaptureRemote *>(opaque);
+            // Returning non-zero asks ffmpeg to abort the current
+            // blocking I/O call with AVERROR_EXIT. We return 1 as
+            // soon as the decode thread has been asked to stop.
+            return self && !self->m_decodeRunning.load() ? 1 : 0;
+        };
+    static_cast<AVFormatContext *>(m_formatCtx)->interrupt_callback.opaque = this;
+
     // Hint that we want low-latency probing. Without these flags FFmpeg may
     // buffer up several seconds of input before deciding what stream params
     // it has.

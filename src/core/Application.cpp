@@ -2380,8 +2380,15 @@ bool Application::initUI()
                 LOG_WARN("Failed to connect to remote host " + devicePath);
                 if (m_ui)
                 {
-                    m_ui->setCaptureInfo(0, 0, 0, "Remote (disconnected)");
+                    m_ui->setCaptureInfo(0, 0, 0, "Remote (failed)");
+                    // Clear the current device so the connection window
+                    // stops reporting 'connected'. Done via direct
+                    // assignment because setCurrentDevice("") would
+                    // re-enter this callback and we're still inside its
+                    // processingDeviceChange guard.
+                    m_ui->setCurrentDeviceSilent("");
                 }
+                m_devicePath.clear();
             }
 
             processingDeviceChange = false;
