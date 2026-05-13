@@ -319,20 +319,30 @@ void UIManager::render()
                     m_configWindow->setVisible(!visible);
                 }
             }
-            if (m_capturePresetsWindow)
+            // Capture Presets and Recordings are producer-side windows;
+            // they operate on the local capture device, not on a stream
+            // received from a remote host. Hide them while the client is
+            // in remote viewer mode so the user can't accidentally try to
+            // apply a preset that would be a no-op or open a recordings
+            // browser that's listing the wrong machine's files.
+            const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+            if (!clientMode)
             {
-                bool visible = m_capturePresetsWindow->isVisible();
-                if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                if (m_capturePresetsWindow)
                 {
-                    m_capturePresetsWindow->setVisible(!visible);
+                    bool visible = m_capturePresetsWindow->isVisible();
+                    if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                    {
+                        m_capturePresetsWindow->setVisible(!visible);
+                    }
                 }
-            }
-            if (m_recordingsWindow)
-            {
-                bool visible = m_recordingsWindow->isVisible();
-                if (ImGui::MenuItem("Recordings", nullptr, visible))
+                if (m_recordingsWindow)
                 {
-                    m_recordingsWindow->setVisible(!visible);
+                    bool visible = m_recordingsWindow->isVisible();
+                    if (ImGui::MenuItem("Recordings", nullptr, visible))
+                    {
+                        m_recordingsWindow->setVisible(!visible);
+                    }
                 }
             }
             ImGui::EndMenu();
@@ -370,6 +380,17 @@ void UIManager::render()
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
+    }
+
+    // While in client mode (Remote source + active connection), force the
+    // producer-only windows shut so the user can't accidentally have them
+    // sitting open from a previous local session — the menu hides their
+    // toggles too, so without this they'd be unreachable but still drawing.
+    const bool clientModeActive = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+    if (clientModeActive)
+    {
+        if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
+        if (m_recordingsWindow)     m_recordingsWindow->setVisible(false);
     }
 
     // Renderizar janela de configuração
