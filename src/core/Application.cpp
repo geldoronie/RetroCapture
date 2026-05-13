@@ -606,6 +606,11 @@ bool Application::initCapture()
                 }
                 m_pendingRemoteSourceWidth  = snap.sourceWidth;
                 m_pendingRemoteSourceHeight = snap.sourceHeight;
+                // Plain assignment — uint32_t is atomic on every platform
+                // we target, and a momentarily stale read in the main
+                // loop is harmless (just one extra render iteration at
+                // most).
+                if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
                 m_hasPendingRemoteMeta.store(true);
             });
     }
@@ -2232,6 +2237,9 @@ bool Application::initUI()
                         {
                             m_pendingRemoteParams.emplace_back(p.name, p.value);
                         }
+                        m_pendingRemoteSourceWidth  = snap.sourceWidth;
+                        m_pendingRemoteSourceHeight = snap.sourceHeight;
+                        if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
                         m_hasPendingRemoteMeta.store(true);
                     });
             }
@@ -4248,12 +4256,74 @@ void Application::run()
                 m_window->swapBuffers();
             }
 
-// Do a small sleep to not consume 100% CPU
+            // Remote-source render pacing: when this client is consuming a
+            // remote /raw stream, there's no point iterating faster than
+            // the host's source FPS. Without this cap an idle 144 / 240 /
+            // 360 Hz display will spin the main loop at hundreds of fps,
+            // re-rendering the same decoded frame and re-running
+            // applyPendingRemoteMeta — wastes GPU and produces the
+            // 500-fps reading the user spotted in MangoHud. Sleep until
+            // the next host-frame deadline.
+            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote && m_remoteSourceFps > 0)
+            {
+                const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch()).count();
+                const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(m_remoteSourceFps);
+                if (m_lastFrameSwapUs == 0)
+                {
+                    m_lastFrameSwapUs = nowUs;
+                }
+                const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
+                if (elapsedUs < targetIntervalUs)
+                {
+                    const int64_t sleepUs = targetIntervalUs - elapsedUs;
 #ifdef PLATFORM_LINUX
-            usleep(1000); // 1ms
+                    usleep(static_cast<useconds_t>(sleepUs));
 #else
-            Sleep(1); // 1ms sleep
+                    Sleep(static_cast<DWORD>(sleepUs / 1000));
 #endif
+                }
+                m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
+            }
+            else
+            {
+                // Local-source path (V4L2 / DS / None / no remote source
+                // info yet). When streaming is active, pace the main loop
+                // to match the configured streaming FPS so we don't burn
+                // GPU + glReadPixels work re-rendering a frame the encoder
+                // throttle will discard anyway. When streaming is idle,
+                // fall back to the existing 1 ms sleep so the local
+                // preview stays responsive on whatever refresh rate the
+                // display happens to run at.
+                bool streamingActive = (m_streamManager && m_streamManager->isActive());
+                if (streamingActive && m_ui)
+                {
+                    const uint32_t targetFps = m_ui->getStreamingFps() > 0 ? m_ui->getStreamingFps() : 60;
+                    const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch()).count();
+                    const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(targetFps);
+                    if (m_lastFrameSwapUs == 0) m_lastFrameSwapUs = nowUs;
+                    const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
+                    if (elapsedUs < targetIntervalUs)
+                    {
+                        const int64_t sleepUs = targetIntervalUs - elapsedUs;
+#ifdef PLATFORM_LINUX
+                        usleep(static_cast<useconds_t>(sleepUs));
+#else
+                        Sleep(static_cast<DWORD>(sleepUs / 1000));
+#endif
+                    }
+                    m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
+                }
+                else
+                {
+#ifdef PLATFORM_LINUX
+                    usleep(1000);
+#else
+                    Sleep(1);
+#endif
+                }
+            }
         }
     }
 

@@ -179,6 +179,17 @@ private:
     // pushes that come within (1 / targetFps) of the previous one.
     int64_t m_lastStreamPushUs = 0;
 
+    // Remote-source render pacing: when consuming a remote /raw stream the
+    // client's main loop has no reason to iterate faster than the host's
+    // source FPS. Without this cap an idle high-refresh display can
+    // re-render the same decoded frame hundreds of times per source frame
+    // — wasted GPU and CPU, plus the ImGui frame counter ends up showing
+    // 500+ fps regardless of how slow the underlying source is.
+    // sourceFps comes from /meta; m_lastFrameSwapUs tracks the timestamp
+    // of the last completed main-loop iteration to compute the next sleep.
+    uint32_t m_remoteSourceFps = 0;
+    int64_t  m_lastFrameSwapUs = 0;
+
     // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
     // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
     std::unique_ptr<class RemoteMetaSync> m_remoteMetaSync;
