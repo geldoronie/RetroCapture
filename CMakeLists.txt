@@ -224,9 +224,13 @@ if(PLATFORM_LINUX)
     pkg_check_modules(V4L2 REQUIRED libv4l2)
 endif()
 
-# PulseAudio (Linux only)
+# PulseAudio (Linux only). pulse-simple provides the synchronous API
+# used by the remote-stream playback sink (AudioPlaybackPulse) — the
+# capture path needs only libpulse, but adding pulse-simple here keeps
+# both linkers happy when the playback code is compiled in.
 if(PLATFORM_LINUX)
     pkg_check_modules(PULSE REQUIRED libpulse)
+    pkg_check_modules(PULSE_SIMPLE REQUIRED libpulse-simple)
 endif()
 
 # OpenSSL for HTTPS support - sempre habilitado se disponível
@@ -477,6 +481,10 @@ elseif(PLATFORM_MACOS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
 endif()
 
+# Propagar versão do projeto pro código (usado pelo endpoint /meta e afins)
+target_compile_definitions(retrocapture PRIVATE
+    RETROCAPTURE_VERSION="${PROJECT_VERSION}")
+
 # Threading
 find_package(Threads REQUIRED)
 
@@ -531,7 +539,7 @@ if(PLATFORM_LINUX)
         endif()
     endif()
 
-    list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES})
+    list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES} ${PULSE_SIMPLE_LIBRARIES})
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
     list(APPEND LINK_LIBS

@@ -131,6 +131,40 @@ void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount)
     }
 }
 
+void StreamManager::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height)
+{
+    if (!m_active || !data)
+    {
+        return;
+    }
+
+    // The raw output is an MPEG-TS-specific concept (Phase 2 of #47); only
+    // dispatch to streamers that actually support it. Future non-TS
+    // streamers (e.g. WebRTC) won't have the raw concept and are silently
+    // skipped here.
+    for (auto &streamer : m_streamers)
+    {
+        if (!streamer->isActive()) continue;
+        if (auto *ts = dynamic_cast<HTTPTSStreamer *>(streamer.get()))
+        {
+            ts->pushRawFrame(data, width, height);
+        }
+    }
+}
+
+bool StreamManager::hasRawClients() const
+{
+    for (const auto &streamer : m_streamers)
+    {
+        if (!streamer->isActive()) continue;
+        if (auto *ts = dynamic_cast<const HTTPTSStreamer *>(streamer.get()))
+        {
+            if (ts->hasRawClients()) return true;
+        }
+    }
+    return false;
+}
+
 std::vector<std::string> StreamManager::getStreamUrls() const
 {
     std::vector<std::string> urls;

@@ -21,6 +21,7 @@ class IAudioCapture;
 // Forward declarations
 class UIConfiguration;
 class UICredits;
+class UIRemoteConnection;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
@@ -143,7 +144,8 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2 // DirectShow (Windows)
+        DS = 2, // DirectShow (Windows)
+        Remote = 3 // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -151,6 +153,9 @@ public:
 
     void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
     SourceType getSourceType() const { return m_sourceType; }
+    // Phase 5 of #47: client mode (consuming a remote /raw) — UI controls
+    // should render disabled, and a banner advertises the connection.
+    bool isRemoteSource() const { return m_sourceType == SourceType::Remote; }
     void setCurrentDevice(const std::string &device)
     {
         m_currentDevice = device;
@@ -158,6 +163,14 @@ public:
         {
             m_onDeviceChanged(device);
         }
+    }
+    // Update the device path without firing the device-change callback.
+    // Used by Application when it needs to mark a failed connect cleared
+    // from inside the same callback — calling setCurrentDevice would
+    // re-enter and either hang or recurse depending on the guard.
+    void setCurrentDeviceSilent(const std::string &device)
+    {
+        m_currentDevice = device;
     }
     std::string getCurrentDevice() const { return m_currentDevice; }
 
@@ -248,6 +261,11 @@ public:
     void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    // Hardware encoder selection — uses int so we don't have to pull
+    // MediaEncoder.h into the UI layer. Stored as int matching the
+    // MediaEncoder::HardwareEncoder enum values (Auto=0, Software=1,
+    // NVENC=2, VAAPI=3, QSV=4, AMF=5).
+    void setStreamingHardwareEncoder(int v) { m_streamingHardwareEncoder = v; }
 
     // Buffer settings
     void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
@@ -275,6 +293,12 @@ public:
     std::string getStreamingH265Level() const { return m_streamingH265Level; }
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
+    int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
+    std::string getStreamingNvencPreset() const { return m_streamingNvencPreset; }
+    std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
+    std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
+    std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
+    std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -291,6 +315,12 @@ public:
     void triggerStreamingH265LevelChange(const std::string &level);
     void triggerStreamingVP8SpeedChange(int speed);
     void triggerStreamingVP9SpeedChange(int speed);
+    void triggerStreamingHardwareEncoderChange(int v);
+    void triggerStreamingNvencPresetChange(const std::string &v);
+    void triggerStreamingVaapiRcModeChange(const std::string &v);
+    void triggerStreamingQsvPresetChange(const std::string &v);
+    void triggerStreamingAmfQualityChange(const std::string &v);
+    void triggerRemoteInterpolationChange(const std::string &v);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -387,6 +417,17 @@ public:
     void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
+    void setOnStreamingHardwareEncoderChanged(std::function<void(int)> callback) { m_onStreamingHardwareEncoderChanged = callback; }
+    void setOnStreamingNvencPresetChanged(std::function<void(const std::string &)> cb) { m_onStreamingNvencPresetChanged = cb; }
+    void setOnStreamingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onStreamingVaapiRcModeChanged = cb; }
+    void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
+    void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
+    void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
+
+    // Accessor used by Application to keep the connection-window's
+    // capture pointer current — the window reads .isOpen() / dims to
+    // decide whether to show Connect or Disconnect.
+    UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -665,6 +706,7 @@ private:
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
+    std::unique_ptr<class UIRemoteConnection> m_remoteConnectionWindow;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
@@ -762,9 +804,10 @@ public:
     void loadConfig();
     std::string getConfigPath() const;
 
-private:
     // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
+
+private:
     void scanV4L2Devices();
 
     std::vector<std::string> m_scannedShaders;
@@ -791,6 +834,24 @@ private:
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
+    // Per-backend quality / preset values — the Streaming-tab UI shows
+    // whichever combo matches the currently selected hardware encoder.
+    // Stored separately so switching encoders preserves each backend's
+    // previously chosen value rather than collapsing them onto one
+    // shared string whose meaning would shift mid-flight.
+    std::string m_streamingNvencPreset = "p4";      // p1 (fastest) .. p7 (slowest)
+    std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
+    std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
+    std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
+
+    // Client-side interpolation mode for Remote-source playback. Picks
+    // how each display refresh resolves the time between two consecutive
+    // stream frames (see VideoCaptureRemote::captureLatestFrame):
+    //   "linear"  — LERP between prev and next (smooth motion, ghosting)
+    //   "nearest" — show the closer frame (clean image, 3:2 stutter)
+    //   "off"     — strict PTS gate, hold prev until next is due
+    std::string m_remoteInterpolation = "linear";
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -823,6 +884,12 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
+    std::function<void(int)> m_onStreamingHardwareEncoderChanged;
+    std::function<void(const std::string &)> m_onStreamingNvencPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingVaapiRcModeChanged;
+    std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
+    std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

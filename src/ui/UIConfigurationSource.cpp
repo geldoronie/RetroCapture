@@ -3,6 +3,7 @@
 #include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cstring>
 #ifdef __linux__
 #include <linux/videodev2.h>
 #endif
@@ -40,6 +41,12 @@ void UIConfigurationSource::render()
 
     // Renderizar controles específicos da fonte selecionada
     UIManager::SourceType sourceType = m_uiManager->getSourceType();
+
+    if (sourceType == UIManager::SourceType::Remote)
+    {
+        renderRemoteControls();
+        return;
+    }
 #ifdef __linux__
     if (sourceType == UIManager::SourceType::V4L2)
     {
@@ -72,18 +79,25 @@ void UIConfigurationSource::renderSourceTypeSelection()
     ImGui::Separator();
     ImGui::Spacing();
 
-// Dropdown para seleção do tipo de fonte
+    // Dropdown for selecting the local capture source type.
+    // 'Remote' no longer lives here — it now has its own top-level menu
+    // ('Remote → Connect to Remote...') with a dedicated window for URL
+    // and interpolation. The Source tab focuses only on physical capture
+    // options local to the machine.
 #ifdef __linux__
     const char *sourceTypeNames[] = {"None", "V4L2"};
-    // Mapeamento: índice 0 = None (0), índice 1 = V4L2 (1)
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::V4L2};
 #elif defined(_WIN32)
     const char *sourceTypeNames[] = {"None", "DirectShow"};
-    // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::DS};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::DS};
 #else
     const char *sourceTypeNames[] = {"None"};
-    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -673,5 +687,27 @@ void UIConfigurationSource::renderQuickResolutions()
     if (ImGui::Button("3840x2160"))
     {
         m_uiManager->triggerResolutionChange(3840, 2160);
+    }
+}
+
+void UIConfigurationSource::renderRemoteControls()
+{
+    // Remote-mode controls moved out of the Source tab into a dedicated
+    // top-level menu entry ('Remote → Connect to Remote...'). This stub
+    // just points the user at the new location when they land here with
+    // a Remote source already loaded from config.
+    ImGui::TextWrapped(
+        "Remote viewer mode — connection controls moved to the 'Remote' menu. "
+        "Use 'Remote → Connect to Remote...' to manage URL, interpolation and "
+        "the connect/disconnect actions.");
+    ImGui::Spacing();
+    const std::string currentDevice = m_uiManager->getCurrentDevice();
+    if (!currentDevice.empty())
+    {
+        ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+    }
+    else
+    {
+        ImGui::TextDisabled("not connected");
     }
 }

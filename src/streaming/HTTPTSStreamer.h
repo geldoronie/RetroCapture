@@ -56,6 +56,14 @@ public:
     uint32_t getClientCount() const override;
     void cleanup() override;
 
+    // Raw-stream pipeline (Phase 2 of #47): a second MPEG-TS output served
+    // at /raw, fed with pre-shader frames. Same codec config as /stream; the
+    // contract is that /raw is ALWAYS pre-shader regardless of any
+    // per-pipeline shader-bypass toggle that may flip /stream's contents.
+    bool pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height);
+    uint32_t getRawClientCount() const { return m_rawClientCount.load(); }
+    bool hasRawClients() const { return m_rawClientCount.load() > 0; }
+
     // Additional configuration methods
     void setVideoBitrate(uint32_t bitrate) { m_videoBitrate = bitrate; }
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
@@ -73,6 +81,9 @@ public:
     void setH265Level(const std::string &level) { m_h265Level = level; }
     void setVP8Speed(int speed) { m_vp8Speed = speed; }
     void setVP9Speed(int speed) { m_vp9Speed = speed; }
+    void setHardwareEncoder(MediaEncoder::HardwareEncoder h) { m_hardwareEncoder = h; }
+    MediaEncoder::HardwareEncoder getHardwareEncoder() const { return m_hardwareEncoder; }
+    void setHardwareEncoderPreset(const std::string &p) { m_hardwareEncoderPreset = p; }
 
     // HTTPS configuration
     void enableHTTPS(bool enable) { m_enableHTTPS = enable; }
@@ -163,6 +174,10 @@ private:
 
 private:
     void serverThread();
+    void rawEncodingThread();     // Phase 2 of #47 — drains the raw synchronizer.
+    bool initializeRawPipeline(); // Phase 2 of #47 — sets up the raw encoder + muxer.
+    void cleanupRawPipeline();    // Phase 2 of #47 — tears down the raw encoder + muxer.
+    int  writeToRawClients(const uint8_t *buf, int buf_size); // Phase 2 of #47.
     void handleClient(int clientFd);
     void send404(int clientFd);     // Enviar resposta 404
     void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
@@ -202,6 +217,8 @@ private:
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_vp8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_vp9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    MediaEncoder::HardwareEncoder m_hardwareEncoder = MediaEncoder::HardwareEncoder::Auto;
+    std::string m_hardwareEncoderPreset;
 
     // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
     void *m_videoCodecContext = nullptr; // AVCodecContext*
@@ -285,7 +302,8 @@ private:
 
     // Threads
     std::thread m_serverThread;
-    std::thread m_encodingThread; // Thread única para encoding
+    std::thread m_encodingThread;    // Thread única para encoding do /stream
+    std::thread m_rawEncodingThread; // Thread única para encoding do /raw (Phase 2 de #47)
 
     // HTTP/HTTPS Server
     HTTPServer m_httpServer;
@@ -303,6 +321,25 @@ private:
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
+
+    // ─── Raw pipeline state (Phase 2 of #47) ──────────────────────────────
+    //
+    // Parallel mirror of the /stream pipeline above, fed with pre-shader
+    // frames. Shares the codec config (bitrate / codec / preset) — Strategy B
+    // of the design — but uses its own encoder, muxer, synchronizer, client
+    // list and format-header cache so the two outputs are fully independent.
+    MediaEncoder      m_rawMediaEncoder;
+    MediaMuxer        m_rawMediaMuxer;
+    MediaSynchronizer m_rawStreamSynchronizer;
+
+    std::mutex m_rawOutputMutex; // Proteger m_rawClientSockets e writeToRawClients
+    std::mutex m_rawHeaderMutex; // Proteger m_rawFormatHeader
+
+    std::atomic<uint32_t> m_rawClientCount{0};
+    std::vector<int>      m_rawClientSockets;
+
+    std::vector<uint8_t> m_rawFormatHeader;
+    bool                 m_rawHeaderWritten = false;
 
     // Web Portal - responsável por servir a página web
     WebPortal m_webPortal;

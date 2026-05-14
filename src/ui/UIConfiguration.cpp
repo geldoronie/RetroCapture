@@ -64,6 +64,30 @@ void UIConfiguration::render()
     ImGui::Begin("RetroCapture Controls", &m_visible,
                  ImGuiWindowFlags_NoSavedSettings);
 
+    // Phase 5 of #47: when this RetroCapture is acting as a remote viewer,
+    // the only configuration that makes sense for the user to touch is the
+    // Info panel (read-only inspection of the mirrored host state) and
+    // Shaders for completeness — but Source/Streaming/Recording/Web Portal/
+    // Audio belong to a producer role and don't apply to a viewer. Rather
+    // than show them disabled (visually noisy, hints at functionality the
+    // user can't have), we hide the entire tabs while connected. Disconnect
+    // brings them back. A banner explains the mode so the user isn't
+    // confused why the rest disappeared.
+    const bool remote = m_uiManager && m_uiManager->isRemoteSource() &&
+                        !m_uiManager->getCurrentDevice().empty();
+    if (remote)
+    {
+        const ImVec4 warningBg(0.45f, 0.12f, 0.12f, 0.85f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, warningBg);
+        ImGui::BeginChild("RemoteBanner", ImVec2(0, ImGui::GetFrameHeight() * 1.2f),
+                          false, ImGuiWindowFlags_NoScrollbar);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("  REMOTE VIEWER MODE — viewing a host stream. Disconnect from the 'Remote' menu to manage local capture.");
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     // Criar instâncias das abas (podem ser membros da classe se necessário)
     static UIConfigurationSource sourceTab(m_uiManager);
     static UIConfigurationShader shaderTab(m_uiManager);
@@ -77,55 +101,73 @@ void UIConfiguration::render()
     // Tabs
     if (ImGui::BeginTabBar("MainTabs"))
     {
-        if (ImGui::BeginTabItem("Shaders"))
-        {
-            shaderTab.render();
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Image"))
-        {
-            imageTab.render();
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Source"))
-        {
-            sourceTab.render();
-            ImGui::EndTabItem();
-        }
-
+        // Info is always available — it's a read-only inspection panel that
+        // applies to both local capture and remote viewing.
         if (ImGui::BeginTabItem("Info"))
         {
             infoTab.render();
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Streaming"))
+        // Shaders stays visible in remote mode — the host's preset is
+        // mirrored via /meta and the user may want to inspect what's
+        // running. Disabled wrapper kept so they can't edit the values
+        // (those are owned by the host).
+        if (ImGui::BeginTabItem("Shaders"))
         {
-            streamingTab.render();
+            ImGui::BeginDisabled(remote);
+            shaderTab.render();
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Recording"))
+        // Image stays visible in remote mode too — brightness, contrast,
+        // aspect ratio, fullscreen and output resolution are display-side
+        // choices that make sense for a viewer to override. The server
+        // seeds defaults via /meta on the initial connect; after that
+        // the user is free to tweak.
+        if (ImGui::BeginTabItem("Image"))
         {
-            recordingTab.render();
+            imageTab.render();
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Web Portal"))
+        // Everything below this point is producer-side configuration and
+        // is hidden while the local instance is acting as a remote viewer.
+        if (!remote)
         {
-            webPortalTab.render();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Source"))
+            {
+                sourceTab.render();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Streaming"))
+            {
+                streamingTab.render();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Recording"))
+            {
+                recordingTab.render();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Web Portal"))
+            {
+                webPortalTab.render();
+                ImGui::EndTabItem();
+            }
 
 #ifdef __linux__
-        if (ImGui::BeginTabItem("Audio"))
-        {
-            audioTab.render();
-            ImGui::EndTabItem();
-        }
+            if (ImGui::BeginTabItem("Audio"))
+            {
+                audioTab.render();
+                ImGui::EndTabItem();
+            }
 #endif
+        }
 
         ImGui::EndTabBar();
     }

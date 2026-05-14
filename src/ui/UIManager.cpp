@@ -1,6 +1,7 @@
 #include "UIManager.h"
 #include "UIConfiguration.h"
 #include "UICredits.h"
+#include "UIRemoteConnection.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
@@ -148,6 +149,7 @@ bool UIManager::init(void *window)
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
+    m_remoteConnectionWindow = std::make_unique<UIRemoteConnection>(this);
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
@@ -283,11 +285,8 @@ void UIManager::render()
     {
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("Rescan Shaders"))
-            {
-                scanShaders(m_shaderBasePath);
-            }
-            ImGui::Separator();
+            // 'Rescan Shaders' moved next to the Shader dropdown in the
+            // Shaders tab — that's where the list it refreshes lives.
             if (ImGui::MenuItem("Exit", "Esc"))
             {
                 if (m_window)
@@ -317,21 +316,53 @@ void UIManager::render()
                     m_configWindow->setVisible(!visible);
                 }
             }
-            if (m_capturePresetsWindow)
+            // Capture Presets and Recordings are producer-side windows;
+            // they operate on the local capture device, not on a stream
+            // received from a remote host. Hide them while the client is
+            // in remote viewer mode so the user can't accidentally try to
+            // apply a preset that would be a no-op or open a recordings
+            // browser that's listing the wrong machine's files.
+            const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+            if (!clientMode)
             {
-                bool visible = m_capturePresetsWindow->isVisible();
-                if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                if (m_capturePresetsWindow)
                 {
-                    m_capturePresetsWindow->setVisible(!visible);
+                    bool visible = m_capturePresetsWindow->isVisible();
+                    if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                    {
+                        m_capturePresetsWindow->setVisible(!visible);
+                    }
+                }
+                if (m_recordingsWindow)
+                {
+                    bool visible = m_recordingsWindow->isVisible();
+                    if (ImGui::MenuItem("Recordings", nullptr, visible))
+                    {
+                        m_recordingsWindow->setVisible(!visible);
+                    }
                 }
             }
-            if (m_recordingsWindow)
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Remote"))
+        {
+            // 'Connect to Remote...' is always enabled — the window shows
+            // either Connect or Disconnect based on the current state, so
+            // it doubles as a status / management panel. Disabling the
+            // menu item while connected made the window unreachable once
+            // closed, which forced users into restart-to-recover.
+            if (ImGui::MenuItem("Connect to Remote..."))
             {
-                bool visible = m_recordingsWindow->isVisible();
-                if (ImGui::MenuItem("Recordings", nullptr, visible))
+                if (m_remoteConnectionWindow)
                 {
-                    m_recordingsWindow->setVisible(!visible);
+                    m_remoteConnectionWindow->setVisible(true);
                 }
+            }
+            // Quick Disconnect shortcut — only shown when relevant.
+            const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+            if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
+            {
+                setCurrentDevice("");
             }
             ImGui::EndMenu();
         }
@@ -350,6 +381,17 @@ void UIManager::render()
         ImGui::EndMainMenuBar();
     }
 
+    // While in client mode (Remote source + active connection), force the
+    // producer-only windows shut so the user can't accidentally have them
+    // sitting open from a previous local session — the menu hides their
+    // toggles too, so without this they'd be unreachable but still drawing.
+    const bool clientModeActive = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+    if (clientModeActive)
+    {
+        if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
+        if (m_recordingsWindow)     m_recordingsWindow->setVisible(false);
+    }
+
     // Renderizar janela de configuração
     if (m_configWindow)
     {
@@ -360,6 +402,12 @@ void UIManager::render()
     if (m_creditsWindow)
     {
         m_creditsWindow->render();
+    }
+
+    // Renderizar janela de conexão remota
+    if (m_remoteConnectionWindow)
+    {
+        m_remoteConnectionWindow->render();
     }
 
     // Renderizar janela de presets
@@ -1941,6 +1989,51 @@ void UIManager::triggerStreamingVP9SpeedChange(int speed)
     saveConfig();
 }
 
+void UIManager::triggerStreamingHardwareEncoderChange(int v)
+{
+    m_streamingHardwareEncoder = v;
+    if (m_onStreamingHardwareEncoderChanged)
+    {
+        m_onStreamingHardwareEncoderChanged(v);
+    }
+    saveConfig();
+}
+
+void UIManager::triggerStreamingNvencPresetChange(const std::string &v)
+{
+    m_streamingNvencPreset = v;
+    if (m_onStreamingNvencPresetChanged) m_onStreamingNvencPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingVaapiRcModeChange(const std::string &v)
+{
+    m_streamingVaapiRcMode = v;
+    if (m_onStreamingVaapiRcModeChanged) m_onStreamingVaapiRcModeChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingQsvPresetChange(const std::string &v)
+{
+    m_streamingQsvPreset = v;
+    if (m_onStreamingQsvPresetChanged) m_onStreamingQsvPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
+{
+    m_streamingAmfQuality = v;
+    if (m_onStreamingAmfQualityChanged) m_onStreamingAmfQualityChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerRemoteInterpolationChange(const std::string &v)
+{
+    m_remoteInterpolation = v;
+    if (m_onRemoteInterpolationChanged) m_onRemoteInterpolationChanged(v);
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2166,6 +2259,18 @@ void UIManager::loadConfig()
                 m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+            if (streaming.contains("hardwareEncoder"))
+                m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
+            if (streaming.contains("nvencPreset"))
+                m_streamingNvencPreset = streaming["nvencPreset"].get<std::string>();
+            if (streaming.contains("vaapiRcMode"))
+                m_streamingVaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
+            if (streaming.contains("qsvPreset"))
+                m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
+            if (streaming.contains("amfQuality"))
+                m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
+            if (streaming.contains("remoteInterpolation"))
+                m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -2526,6 +2631,12 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
+            {"hardwareEncoder", m_streamingHardwareEncoder},
+            {"nvencPreset", m_streamingNvencPreset},
+            {"vaapiRcMode", m_streamingVaapiRcMode},
+            {"qsvPreset",   m_streamingQsvPreset},
+            {"amfQuality",  m_streamingAmfQuality},
+            {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
