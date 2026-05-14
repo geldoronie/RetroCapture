@@ -465,8 +465,29 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             //   m_streamStartWallUs + (frame_pts_us - m_firstPtsUs).
             // The audio-equivalent 'now' in wall-clock units is then
             //   m_streamStartWallUs + (audio_pts_us - m_firstPtsUs).
-            const int64_t audioRelUs = audioPtsAbsUs - m_firstPtsUs.load();
-            nowWallUs = m_streamStartWallUs + audioRelUs;
+            const int64_t audioRelUs    = audioPtsAbsUs - m_firstPtsUs.load();
+            const int64_t audioNowWall  = m_streamStartWallUs + audioRelUs;
+            // Sanity gate: only let audio drive the video clock if it's
+            // within ±500 ms of wall-clock. If the audio clock has run
+            // off (pa_simple_get_latency reports stale, the playback
+            // sink hasn't actually started accepting samples, etc.) we'd
+            // otherwise hold every video frame back forever and the
+            // queue fills (the user-observed
+            // 'decoded=60/s consumed=30/s drops=30/s queueDepth=20').
+            const int64_t drift = audioNowWall - nowWallUs;
+            if (drift > -500'000 && drift < 500'000)
+            {
+                nowWallUs = audioNowWall;
+            }
+            else
+            {
+                static int driftLogCount = 0;
+                if (driftLogCount++ < 5)
+                {
+                    LOG_WARN("VideoCaptureRemote: audio clock drift=" + std::to_string(drift) +
+                             "us — falling back to wall clock for A/V sync");
+                }
+            }
         }
     }
 
