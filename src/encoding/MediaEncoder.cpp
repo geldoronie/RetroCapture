@@ -300,17 +300,31 @@ bool MediaEncoder::initializeVideoCodec()
     // we already buffer ~500 ms on the client.
     codecCtx->thread_type = FF_THREAD_FRAME;
 
-    // Configurar global header baseado no uso (streaming vs arquivo)
-    // Para gravação em arquivo: usar global header (extradata no header do container)
-    // Para streaming: não usar global header, usar repeat-headers (extradata em cada keyframe)
-    if (codec->id == AV_CODEC_ID_HEVC || codec->id == AV_CODEC_ID_VP8 || codec->id == AV_CODEC_ID_VP9)
+    // Configurar global header baseado no uso (streaming vs arquivo).
+    // File recording: usa global header (extradata no header do container).
+    // Streaming MPEG-TS: NÃO usar global header — o demuxer no client
+    //   conecta no meio do stream e nunca recebe o extradata do container,
+    //   então VPS/SPS/PPS precisam estar inline no bitstream a cada
+    //   keyframe (libx264 'repeat-headers=1' / libx265 'repeat-headers=1').
+    //   HEVC sempre estava marcando GLOBAL_HEADER aqui mesmo em streaming,
+    //   o que produzia o sintoma observado: SPS truncado/lixado no client
+    //   ('Truncating likely oversized VPS 128575 > 4096', 'Invalid NAL
+    //   unit 35') e a imagem virava artefato.
+    if (m_forStreaming)
     {
-        codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        // streaming: nenhum codec usa global header
+        if (codec->id == AV_CODEC_ID_VP8 || codec->id == AV_CODEC_ID_VP9)
+        {
+            // VP8/VP9 em WebM precisam de extradata no container; mas o
+            // pipeline streaming nunca foi exposto pra VPx, então o
+            // efeito prático é zero. Mantemos GLOBAL_HEADER por
+            // segurança até alguém realmente streamar VPx.
+            codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        }
     }
-    else if (codec->id == AV_CODEC_ID_H264 && !m_forStreaming)
+    else
     {
-        // Para H.264 em gravação de arquivo, usar global header para simplificar
-        // FFmpeg vai lidar com extradata automaticamente
+        // file recording: todos os codecs com global header
         codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
@@ -362,6 +376,13 @@ bool MediaEncoder::initializeVideoCodec()
         if (m_forStreaming)
         {
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
+            // Inline VPS/SPS/PPS at every keyframe — libx265 equivalent
+            // of libx264's repeat-headers. Without this, a client that
+            // joins the MPEG-TS stream after the first keyframe never
+            // receives the parameter sets and reads NAL data as random
+            // bytes ('Invalid NAL unit 35', 'Truncating likely oversized
+            // VPS', 'PCM bit depth out of range').
+            av_dict_set(&opts, "x265-params", "repeat-headers=1:annexb=1", 0);
         }
         else
         {
@@ -584,6 +605,11 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
         av_dict_set(&opts, "rc",     "cbr", 0);
         av_dict_set_int(&opts, "zerolatency", 1, 0);
         av_dict_set_int(&opts, "bf",          0, 0);
+        // hevc_nvenc/h264_nvenc: emit VPS/SPS/PPS in front of every IDR
+        // so MPEG-TS clients that join mid-stream get the parameter
+        // sets without needing the muxer's extradata. Without this the
+        // client sees keyframes with no headers and decodes garbage.
+        av_dict_set_int(&opts, "forced-idr", 1, 0);
     }
     else if (backend == HardwareEncoder::VAAPI)
     {
@@ -591,17 +617,26 @@ bool MediaEncoder::initializeHardwareVideoCodec(HardwareEncoder backend)
         // low_power=1 is unsupported on a chunk of AMD parts — let the
         // driver pick the entry path instead.
         av_dict_set_int(&opts, "idr_interval", static_cast<int>(m_videoConfig.fps * 2), 0);
+        // hevc_vaapi / h264_vaapi emit headers inline by default when
+        // every IDR is forced (vs. only first keyframe). No additional
+        // option needed beyond idr_interval; mid-stream join works.
     }
     else if (backend == HardwareEncoder::QSV)
     {
         av_dict_set(&opts, "preset", userPreset.empty() ? "veryfast" : userPreset.c_str(), 0);
         av_dict_set_int(&opts, "look_ahead", 0, 0);
+        // QSV's 'idr_interval' is in seconds and inserts inline headers
+        // at every IDR. 0 = once per GOP (default) is sufficient.
     }
     else if (backend == HardwareEncoder::AMF)
     {
         av_dict_set(&opts, "usage",   "transcoding", 0);
         av_dict_set(&opts, "quality", userPreset.empty() ? "speed" : userPreset.c_str(), 0);
         av_dict_set(&opts, "rc",      "cbr",       0);
+        // header_insertion_mode=idr → emit VPS/SPS/PPS at every IDR
+        // frame (default 'none' only emits once and leaves mid-stream
+        // joiners without parameter sets).
+        av_dict_set(&opts, "header_insertion_mode", "idr", 0);
     }
 
     int openRet = avcodec_open2(codecCtx, codec, &opts);
