@@ -79,11 +79,11 @@ void UIConfigurationSource::renderSourceTypeSelection()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Dropdown para seleção do tipo de fonte de captura local.
-    // 'Remote' não vive mais aqui — virou o seu próprio menu top-level
-    // ('Remote → Connect to Remote...') com janela dedicada para URL +
-    // interpolação. A aba Source fica focada só nas opções de captura
-    // física da máquina.
+    // Dropdown for selecting the local capture source type.
+    // 'Remote' no longer lives here — it now has its own top-level menu
+    // ('Remote → Connect to Remote...') with a dedicated window for URL
+    // and interpolation. The Source tab focuses only on physical capture
+    // options local to the machine.
 #ifdef __linux__
     const char *sourceTypeNames[] = {"None", "V4L2"};
     UIManager::SourceType sourceTypeMap[] = {

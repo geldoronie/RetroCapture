@@ -468,8 +468,8 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     }
     if (formatCtx->pb)
     {
-        LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) +
-                 ", bytes written: " + std::to_string(formatCtx->pb->pos));
+        LOG_DEBUG("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) +
+                  ", bytes written: " + std::to_string(formatCtx->pb->pos));
 
         // Flush buffer AVIO após escrever header para garantir que dados sejam escritos
         avio_flush(formatCtx->pb);
@@ -492,8 +492,8 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
         if (!m_headerWritten && !m_formatHeader.empty())
         {
             m_headerWritten = true;
-            LOG_INFO("MediaMuxer: Header marked complete with " +
-                     std::to_string(m_formatHeader.size()) + " captured bytes");
+            LOG_DEBUG("MediaMuxer: Header marked complete with " +
+                      std::to_string(m_formatHeader.size()) + " captured bytes");
         }
     }
     LOG_INFO("MediaMuxer: Format header written successfully");

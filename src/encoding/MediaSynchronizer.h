@@ -87,19 +87,19 @@ public:
     // Obter chunks de áudio de uma zona de sincronização
     std::vector<TimestampedAudio> getAudioChunks(const SyncZone &zone);
 
-    // Obter todos os chunks de áudio ainda não processados, sem gating
-    // por sync zone. Áudio é barato pra encodar e não precisa esperar o
-    // vídeo — drenar continuamente evita o synchronizer dropar chunks
-    // (que causa o áudio terminar antes do vídeo no arquivo).
+    // Drain every audio chunk that hasn't been processed yet, with no
+    // sync-zone gating. Audio is cheap to encode and doesn't need to
+    // wait on video — continuous drain stops the synchronizer from
+    // dropping chunks (which caused audio to end before video in
+    // recorded files).
     std::vector<TimestampedAudio> getAllUnprocessedAudio();
 
-    // Mesma ideia para vídeo — usado pelo /raw encoder thread, onde o
-    // muxer MPEG-TS reordena pacotes por DTS de qualquer jeito, e o
-    // gating por sync zone estava produzindo segundos inteiros sem
-    // saída de vídeo sempre que o áudio momentaneamente parava de
-    // chegar. (calculateSyncZone retorna inválido quando os timestamps
-    // de áudio e vídeo não se sobrepõem dentro da tolerância, o que
-    // acontece em jitter de captura sem culpa real.)
+    // Same idea for video — used by the /raw encoder thread, where the
+    // MPEG-TS muxer reorders packets by DTS regardless, and sync-zone
+    // gating was producing whole seconds with no video output whenever
+    // audio briefly stopped arriving. (calculateSyncZone returns invalid
+    // when audio and video timestamps don't overlap within the
+    // tolerance, which happens under normal capture jitter.)
     std::vector<TimestampedFrame> getAllUnprocessedVideo();
 
     // Marcar dados como processados

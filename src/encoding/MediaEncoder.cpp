@@ -300,44 +300,41 @@ bool MediaEncoder::initializeVideoCodec()
     // we already buffer ~500 ms on the client.
     codecCtx->thread_type = FF_THREAD_FRAME;
 
-    // Configurar global header baseado no uso (streaming vs arquivo).
-    // File recording: usa global header (extradata no header do container).
-    // Streaming MPEG-TS: NÃO usar global header — o demuxer no client
-    //   conecta no meio do stream e nunca recebe o extradata do container,
-    //   então VPS/SPS/PPS precisam estar inline no bitstream a cada
-    //   keyframe (libx264 'repeat-headers=1' / libx265 'repeat-headers=1').
-    //   HEVC sempre estava marcando GLOBAL_HEADER aqui mesmo em streaming,
-    //   o que produzia o sintoma observado: SPS truncado/lixado no client
-    //   ('Truncating likely oversized VPS 128575 > 4096', 'Invalid NAL
-    //   unit 35') e a imagem virava artefato.
+    // Global-header policy depends on use: file recording carries
+    // extradata in the container header, but a streaming MPEG-TS client
+    // connecting mid-stream never receives that extradata, so VPS/SPS/PPS
+    // must travel inline with each keyframe (libx264/libx265
+    // 'repeat-headers=1'). HEVC used to always set GLOBAL_HEADER here
+    // even for streaming, which produced the truncated VPS / 'Invalid
+    // NAL unit 35' artefacts observed on the client.
     if (m_forStreaming)
     {
-        // streaming: nenhum codec usa global header
+        // Streaming: no codec sets global header.
         if (codec->id == AV_CODEC_ID_VP8 || codec->id == AV_CODEC_ID_VP9)
         {
-            // VP8/VP9 em WebM precisam de extradata no container; mas o
-            // pipeline streaming nunca foi exposto pra VPx, então o
+            // VP8/VP9 in WebM need extradata in the container, but the
+            // streaming pipeline never exposes VPx, so the conservative
             // efeito prático é zero. Mantemos GLOBAL_HEADER por
-            // segurança até alguém realmente streamar VPx.
+            // default to GLOBAL_HEADER until someone actually streams VPx.
             codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
         }
     }
     else
     {
-        // file recording: todos os codecs com global header
+        // File recording: every codec uses global header.
         codecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    // Configurar opções específicas do codec
+    // Codec-specific options
     AVDictionary *opts = nullptr;
     if (codec->id == AV_CODEC_ID_H264)
     {
         av_dict_set(&opts, "preset", m_videoConfig.preset.c_str(), 0);
-        // tune=zerolatency mantido em ambos os modos: ele desliga
-        // lookahead/B-frames internos do x264. Em arquivo o lookahead
-        // só cobraria CPU/frame extra (lookahead default 40 frames =
-        // ~10% mais work), o que derruba encoders abaixo de realtime
-        // em presets >= fast. zerolatency mantém custo previsível.
+        // tune=zerolatency in both modes: it disables x264's internal
+        // lookahead / B-frames. For file recording the lookahead would
+        // only cost extra CPU per frame (default 40-frame lookahead =
+        // ~10% more work) and pushes encoders below realtime at
+        // preset >= fast. zerolatency keeps cost predictable.
         av_dict_set(&opts, "tune", "zerolatency", 0);
         av_dict_set(&opts, "profile", m_videoConfig.profile.c_str(), 0);
         int keyint = static_cast<int>(m_videoConfig.fps * 2);
@@ -348,7 +345,7 @@ bool MediaEncoder::initializeVideoCodec()
 
         if (m_forStreaming)
         {
-            // Streaming HTTP-TS: vbv apertado limita variação de bitrate.
+            // HTTP-TS streaming: tight vbv caps bitrate variation.
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
             av_dict_set_int(&opts, "repeat-headers", 1, 0);
         }

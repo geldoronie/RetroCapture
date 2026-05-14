@@ -190,15 +190,12 @@ bool VideoCaptureRemote::initDecoder()
     // client plays video only. This keeps the audio path additive —
     // a failure here doesn't break the rest of the remote viewer.
     m_audioStreamIdx = -1;
-    LOG_INFO("VideoCaptureRemote: scanning " + std::to_string(m_formatCtx->nb_streams) + " stream(s) for audio");
     for (unsigned int i = 0; i < m_formatCtx->nb_streams; ++i)
     {
-        const AVMediaType t = m_formatCtx->streams[i]->codecpar->codec_type;
-        LOG_INFO("VideoCaptureRemote:   stream " + std::to_string(i) + " type=" + std::to_string(static_cast<int>(t)) +
-                 " codec_id=" + std::to_string(m_formatCtx->streams[i]->codecpar->codec_id));
-        if (t == AVMEDIA_TYPE_AUDIO && m_audioStreamIdx < 0)
+        if (m_formatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
         {
             m_audioStreamIdx = static_cast<int>(i);
+            break;
         }
     }
     if (m_audioStreamIdx < 0)
@@ -216,11 +213,9 @@ bool VideoCaptureRemote::initDecoder()
         if (aCodec)
         {
             m_audioCodecCtx = avcodec_alloc_context3(aCodec);
-            const bool gotCtx = m_audioCodecCtx != nullptr;
+            const bool gotCtx    = m_audioCodecCtx != nullptr;
             const bool gotParams = gotCtx && avcodec_parameters_to_context(m_audioCodecCtx, aPar) >= 0;
-            const int openRet = gotParams ? avcodec_open2(m_audioCodecCtx, aCodec, nullptr) : -1;
-            LOG_INFO("VideoCaptureRemote: audio codec setup — ctx=" + std::to_string(gotCtx) +
-                     " params=" + std::to_string(gotParams) + " openRet=" + std::to_string(openRet));
+            const int  openRet   = gotParams ? avcodec_open2(m_audioCodecCtx, aCodec, nullptr) : -1;
             if (gotCtx && gotParams && openRet >= 0)
             {
                 // Open the system sink at the decoder's native format
@@ -891,10 +886,10 @@ void VideoCaptureRemote::decodeLoop()
             if (m_statStart.time_since_epoch().count() == 0) m_statStart = nowTs;
             if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - m_statStart).count() >= 1)
             {
-                LOG_INFO("VideoCaptureRemote: decoded=" + std::to_string(m_statProduced) +
-                         "/s consumed=" + std::to_string(m_statConsumed) +
-                         "/s drops=" + std::to_string(m_statDropped) +
-                         " queueDepth=" + std::to_string(m_frameQueue.size()));
+                LOG_DEBUG("VideoCaptureRemote: decoded=" + std::to_string(m_statProduced) +
+                          "/s consumed=" + std::to_string(m_statConsumed) +
+                          "/s drops=" + std::to_string(m_statDropped) +
+                          " queueDepth=" + std::to_string(m_frameQueue.size()));
                 m_statProduced = m_statConsumed = m_statDropped = 0;
                 m_statStart = nowTs;
             }

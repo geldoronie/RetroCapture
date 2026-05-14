@@ -891,10 +891,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
             m_httpServer.closeClient(clientFd);
             return;
         }
-        // Se não foi processada, continuar para outras verificações
+        // Fall through to other checks if not handled.
     }
 
-    // IMPORTANTE: Verificar portal web APENAS se NÃO for stream nem /raw e se Web Portal estiver habilitado
+    // Only consult the web portal when this is neither a stream nor /raw
+    // request and the portal is enabled.
     if (m_webPortalEnabled && !isStreamRequest && !isRawRequest)
     {
         if (m_webPortal.isWebPortalRequest(request))
@@ -904,7 +905,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 m_httpServer.closeClient(clientFd);
                 return;
             }
-            // Se não foi processada, continuar para outras verificações
+            // Fall through to other checks if not handled.
         }
     }
 
@@ -1320,7 +1321,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     audioConfig.bitrate    = m_audioBitrate;
     audioConfig.codec      = m_audioCodecName;
 
-    LOG_INFO("Inicializando MediaEncoder /raw (mesma config do /stream)");
+    LOG_INFO("Initializing /raw MediaEncoder (same config as /stream)");
 
     if (!m_rawMediaEncoder.initialize(videoConfig, audioConfig, true))
     {
@@ -1345,7 +1346,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
         return false;
     }
 
-    LOG_INFO("Raw pipeline inicializado — /raw pronto para servir pre-shader");
+    LOG_INFO("Raw pipeline initialized — /raw ready to serve pre-shader frames");
     return true;
 }
 
@@ -3232,10 +3233,10 @@ void HTTPTSStreamer::rawEncodingThread()
         auto nowTs = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - statStart).count() >= 1)
         {
-            LOG_INFO("/raw encoder: video=" + std::to_string(statVideoEncoded) +
-                     "/s audio=" + std::to_string(statAudioEncoded) +
-                     "/s iters=" + std::to_string(statIterations) +
-                     " maxVidQueue=" + std::to_string(statMaxQueueDepth));
+            LOG_DEBUG("/raw encoder: video=" + std::to_string(statVideoEncoded) +
+                      "/s audio=" + std::to_string(statAudioEncoded) +
+                      "/s iters=" + std::to_string(statIterations) +
+                      " maxVidQueue=" + std::to_string(statMaxQueueDepth));
             statVideoEncoded = statAudioEncoded = statIterations = 0;
             statMaxQueueDepth = 0;
             statStart = nowTs;

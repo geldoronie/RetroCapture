@@ -4521,31 +4521,14 @@ void Application::run()
                 }
                 const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
 
-                // 1 s telemetry — confirms the pacing actually runs in the
-                // remote-source code path. Removable after verifying.
-                static int64_t s_lastPaceTickUs = 0;
-                static uint32_t s_paceIters = 0;
-                static uint32_t s_paceSleeps = 0;
-                ++s_paceIters;
-                if (s_lastPaceTickUs == 0) s_lastPaceTickUs = nowUs;
                 if (elapsedUs < targetIntervalUs)
                 {
                     const int64_t sleepUs = targetIntervalUs - elapsedUs;
-                    ++s_paceSleeps;
 #ifdef PLATFORM_LINUX
                     usleep(static_cast<useconds_t>(sleepUs));
 #else
                     Sleep(static_cast<DWORD>(sleepUs / 1000));
 #endif
-                }
-                if (nowUs - s_lastPaceTickUs >= 1000000LL)
-                {
-                    LOG_INFO("remote render pace: fps=" + std::to_string(fps) +
-                             " iters=" + std::to_string(s_paceIters) +
-                             "/s sleeps=" + std::to_string(s_paceSleeps) +
-                             "/s sourceFpsFromMeta=" + std::to_string(m_remoteSourceFps));
-                    s_paceIters = s_paceSleeps = 0;
-                    s_lastPaceTickUs = nowUs;
                 }
 
                 m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
