@@ -100,18 +100,19 @@ bool VideoCaptureRemote::initDecoder()
     // initDecoder pass starts with permission to block in I/O.
     m_decodeAborted.store(false);
 
-    // Probing budget: needs to be large enough for ffmpeg to see at
-    // least one packet of EACH expected stream so audio gets
-    // detected alongside video. The original 32 KB / 500 ms values
-    // were tuned for low-latency video-only probing, but they undercut
-    // the audio stream — at 256 kbit/s AAC the first audio packet can
-    // take ~30 ms-100 ms to arrive after the first video packet on a
-    // bursty TCP feed, and the demuxer can chew through 32 KB of
-    // video before that audio packet shows up. Raised to numbers
-    // closer to ffprobe's defaults so audio is consistently found.
+    // Probing budget: must see at least one packet of each expected
+    // stream so audio is detected, but every byte the probe consumes
+    // becomes a packet sitting in the demuxer's internal buffer when
+    // the decode loop starts. Too generous a probe means the decoder
+    // chews through that buffer at non-real-time rates ('decoded=83/s'
+    // catch-up the user observed) and the queue fills before the
+    // wall-clock-driven consumer can drain it. 256 KB at ~3 Mbit/s
+    // is ~0.7 s of stream — plenty for the second audio packet (AAC
+    // packets arrive every ~23 ms) but small enough that the catch-up
+    // settles in a couple of frames.
     AVDictionary *opts = nullptr;
-    av_dict_set(&opts, "probesize",       "1048576", 0); // 1 MB
-    av_dict_set(&opts, "analyzeduration", "2000000", 0); // 2 s
+    av_dict_set(&opts, "probesize",       "262144",  0); // 256 KB
+    av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1 s
     // Note: deliberately NOT setting "fflags: nobuffer" here — without
     // FFmpeg's internal packet buffer, av_read_frame returns whatever the
     // socket has *right now*, which on a bursty TCP stream means several
