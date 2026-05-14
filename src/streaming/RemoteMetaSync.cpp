@@ -286,14 +286,27 @@ void RemoteMetaSync::dispatchIfChanged(const Snapshot &snap)
     const bool hashChanged    = (snap.presetHash       != m_lastPresetHash);
     const bool toggleChanged  = (snap.pipelineEnabled  != m_lastPipelineEnabled);
     const bool paramsChanged  = (currentValues         != m_lastParamValues);
+    // Source resolution/fps must participate in the delta check, otherwise
+    // a host that switches capture resolution (e.g. 1920x1080 → 1280x720)
+    // never wakes the client up — the new dimensions live in every /meta
+    // payload but match preset/hash/params from before, so the snapshot
+    // gets dropped here and the client keeps allocating textures at the
+    // old size. Treat any change in source dims/fps as a delta worth
+    // dispatching so applyPendingRemoteMeta() can resize the capture.
+    const bool sourceChanged  = (snap.sourceWidth      != m_lastSourceWidth)  ||
+                                (snap.sourceHeight     != m_lastSourceHeight) ||
+                                (snap.sourceFps        != m_lastSourceFps);
 
-    if (presetChanged || hashChanged || toggleChanged || paramsChanged)
+    if (presetChanged || hashChanged || toggleChanged || paramsChanged || sourceChanged)
     {
         if (m_cb) m_cb(snap);
         m_lastPreset          = snap.preset;
         m_lastPresetHash      = snap.presetHash;
         m_lastPipelineEnabled = snap.pipelineEnabled;
         m_lastParamValues     = std::move(currentValues);
+        m_lastSourceWidth     = snap.sourceWidth;
+        m_lastSourceHeight    = snap.sourceHeight;
+        m_lastSourceFps       = snap.sourceFps;
     }
 }
 

@@ -119,4 +119,7 @@ private:
     std::string         m_lastPresetHash;
     bool                m_lastPipelineEnabled = true;
     std::vector<float>  m_lastParamValues;
+    uint32_t            m_lastSourceWidth  = 0;
+    uint32_t            m_lastSourceHeight = 0;
+    uint32_t            m_lastSourceFps    = 0;
 };
