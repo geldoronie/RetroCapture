@@ -251,13 +251,51 @@ bool VideoCaptureRemote::initDecoder()
                     // but the sink wants packed float32. swr_convert
                     // handles both layout and sample-format conversions
                     // transparently per audio frame.
-                    m_swrCtx = swr_alloc();
-                    FFmpegCompat::setSwrChannelLayout(m_swrCtx, "in_chlayout",  static_cast<int>(channels));
-                    FFmpegCompat::setSwrChannelLayout(m_swrCtx, "out_chlayout", static_cast<int>(channels));
-                    av_opt_set_int(m_swrCtx, "in_sample_rate",     m_audioCodecCtx->sample_rate, 0);
-                    av_opt_set_int(m_swrCtx, "out_sample_rate",    rate,                          0);
-                    av_opt_set_sample_fmt(m_swrCtx, "in_sample_fmt",  m_audioCodecCtx->sample_fmt, 0);
-                    av_opt_set_sample_fmt(m_swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLT,          0);
+                    // Resampler setup with explicit channel layout —
+                    // setSwrChannelLayout wrapper was leaving the layout
+                    // unset on some ffmpeg builds ('swr_init failed:
+                    // Input channel count and layout are unset' in the
+                    // user log). swr_alloc_set_opts2 / the input-frame
+                    // path takes the layout directly from the codec
+                    // context, which is what the decoder actually emits,
+                    // so we hand the codec's layout in verbatim and tell
+                    // the output to mirror it.
+#if FFMPEG_USE_NEW_CHANNEL_LAYOUT
+                    int allocRet = swr_alloc_set_opts2(
+                        &m_swrCtx,
+                        &m_audioCodecCtx->ch_layout,   // out layout
+                        AV_SAMPLE_FMT_FLT,             // out fmt
+                        static_cast<int>(rate),        // out rate
+                        &m_audioCodecCtx->ch_layout,   // in layout
+                        m_audioCodecCtx->sample_fmt,   // in fmt
+                        m_audioCodecCtx->sample_rate,  // in rate
+                        0, nullptr);
+                    if (allocRet < 0)
+                    {
+                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts2 failed (" + std::to_string(allocRet) + ") — disabling audio");
+                        if (m_swrCtx) swr_free(&m_swrCtx);
+                        m_audioPlayback.reset();
+                        m_swrCtx = nullptr;
+                    }
+                    else
+#else
+                    int64_t layout = av_get_default_channel_layout(static_cast<int>(channels));
+                    m_swrCtx = swr_alloc_set_opts(
+                        nullptr,
+                        layout,                        // out layout
+                        AV_SAMPLE_FMT_FLT,             // out fmt
+                        static_cast<int>(rate),        // out rate
+                        layout,                        // in layout (assume same)
+                        m_audioCodecCtx->sample_fmt,   // in fmt
+                        m_audioCodecCtx->sample_rate,  // in rate
+                        0, nullptr);
+                    if (!m_swrCtx)
+                    {
+                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts failed — disabling audio");
+                        m_audioPlayback.reset();
+                    }
+                    else
+#endif
                     if (swr_init(m_swrCtx) < 0)
                     {
                         LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
