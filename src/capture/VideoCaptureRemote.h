@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -16,6 +17,8 @@ struct AVFormatContext;
 struct AVCodecContext;
 struct AVFrame;
 struct SwsContext;
+struct SwrContext;
+class  IAudioPlayback;
 
 /**
  * @brief Remote MPEG-TS source — consumes /raw from another RetroCapture
@@ -119,6 +122,19 @@ private:
     SwsContext      *m_swsCtx    = nullptr;
     int              m_videoStreamIdx = -1;
 
+    // Remote-stream audio path. Activated when the /raw demuxer
+    // exposes an audio stream — we decode it alongside video in the
+    // same decodeLoop and submit the float-PCM samples to the
+    // platform playback sink. The sink's getClockUs() becomes the
+    // A/V master clock for the captureLatestFrame() blend gate.
+    AVCodecContext  *m_audioCodecCtx = nullptr;
+    SwrContext      *m_swrCtx        = nullptr;
+    int              m_audioStreamIdx = -1;
+    std::unique_ptr<IAudioPlayback> m_audioPlayback;
+    // Reusable scratch so we don't reallocate per audio frame. Sized
+    // by the resampler's max-output estimate.
+    std::vector<float> m_audioScratch;
+
     std::thread        m_decodeThread;
     std::atomic<bool>  m_decodeRunning{false};
     // Set during stopCapture()/close() so the FFmpeg interrupt_callback
@@ -194,6 +210,13 @@ private:
     std::atomic<bool> m_streamAnchored{false};
     int64_t m_streamStartWallUs  = 0;
     int64_t m_firstPtsTicks      = 0;
+    // PTS of the first video frame in microseconds. Lets the audio
+    // path (which has its own stream timebase) translate its absolute
+    // PTS into the same stream-origin-relative coordinate the video
+    // queue uses. Both audio and video share the same MPEG-TS clock,
+    // so subtracting this gives 'microseconds since the first frame
+    // of the stream'.
+    std::atomic<int64_t> m_firstPtsUs{0};
     double  m_streamTimebaseSecs = 0.0;
 
     // Rolling 1-second decode/consume counters — produces a periodic

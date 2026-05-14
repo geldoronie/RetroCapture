@@ -1,14 +1,23 @@
 #include "VideoCaptureRemote.h"
 #include "../utils/Logger.h"
+#include "../audio/IAudioPlayback.h"
+#ifdef __linux__
+#include "../audio/AudioPlaybackPulse.h"
+#elif defined(_WIN32)
+#include "../audio/AudioPlaybackWASAPI.h"
+#endif
 
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 }
 
+#include "../utils/FFmpegCompat.h"
 #include <chrono>
 #include <cstring>
 
@@ -168,6 +177,89 @@ bool VideoCaptureRemote::initDecoder()
     LOG_INFO("VideoCaptureRemote: decoder ready — " + std::to_string(m_width) + "x" + std::to_string(m_height) +
              " codec=" + std::string(codec->name));
 
+    // Audio decoder + playback. The /raw stream always carries audio
+    // (see HTTPTSStreamer::pushAudio) so we expect to find an audio
+    // stream alongside the video; if not, we silently skip and the
+    // client plays video only. This keeps the audio path additive —
+    // a failure here doesn't break the rest of the remote viewer.
+    m_audioStreamIdx = -1;
+    for (unsigned int i = 0; i < m_formatCtx->nb_streams; ++i)
+    {
+        if (m_formatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+        {
+            m_audioStreamIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (m_audioStreamIdx >= 0)
+    {
+        AVCodecParameters *aPar = m_formatCtx->streams[m_audioStreamIdx]->codecpar;
+        const AVCodec *aCodec = avcodec_find_decoder(aPar->codec_id);
+        if (aCodec)
+        {
+            m_audioCodecCtx = avcodec_alloc_context3(aCodec);
+            if (m_audioCodecCtx &&
+                avcodec_parameters_to_context(m_audioCodecCtx, aPar) >= 0 &&
+                avcodec_open2(m_audioCodecCtx, aCodec, nullptr) >= 0)
+            {
+                // Open the system sink at the decoder's native format
+                // (e.g. AAC stereo 44.1 kHz). Shared-mode WASAPI /
+                // PulseAudio both auto-resample to whatever the device
+                // is configured for.
+#ifdef __linux__
+                m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
+#elif defined(_WIN32)
+                m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
+#endif
+                const uint32_t rate     = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
+                // Channel count compat: AVCodecContext.channels was
+                // deprecated in FFmpeg 5.1 in favour of ch_layout.nb_channels.
+                // Use whichever the build exposes.
+#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
+                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->channels);
+#else
+                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->ch_layout.nb_channels);
+#endif
+                if (!m_audioPlayback || !m_audioPlayback->open(rate, channels))
+                {
+                    LOG_WARN("VideoCaptureRemote: audio playback open failed — continuing video-only");
+                    m_audioPlayback.reset();
+                }
+                else
+                {
+                    // Resampler: decoder may emit planar floats / s16,
+                    // but the sink wants packed float32. swr_convert
+                    // handles both layout and sample-format conversions
+                    // transparently per audio frame.
+                    m_swrCtx = swr_alloc();
+                    FFmpegCompat::setSwrChannelLayout(m_swrCtx, "in_chlayout",  static_cast<int>(channels));
+                    FFmpegCompat::setSwrChannelLayout(m_swrCtx, "out_chlayout", static_cast<int>(channels));
+                    av_opt_set_int(m_swrCtx, "in_sample_rate",     m_audioCodecCtx->sample_rate, 0);
+                    av_opt_set_int(m_swrCtx, "out_sample_rate",    rate,                          0);
+                    av_opt_set_sample_fmt(m_swrCtx, "in_sample_fmt",  m_audioCodecCtx->sample_fmt, 0);
+                    av_opt_set_sample_fmt(m_swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLT,          0);
+                    if (swr_init(m_swrCtx) < 0)
+                    {
+                        LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
+                        swr_free(&m_swrCtx);
+                        m_audioPlayback.reset();
+                    }
+                    else
+                    {
+                        LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
+                                 " Hz x " + std::to_string(channels) + " ch, codec=" +
+                                 std::string(aCodec->name));
+                    }
+                }
+            }
+            else
+            {
+                LOG_WARN("VideoCaptureRemote: audio codec open failed");
+                if (m_audioCodecCtx) avcodec_free_context(&m_audioCodecCtx);
+            }
+        }
+    }
+
     return true;
 }
 
@@ -189,6 +281,27 @@ void VideoCaptureRemote::cleanupDecoder()
         m_formatCtx = nullptr;
     }
     m_videoStreamIdx = -1;
+
+    // Audio side: same teardown order as video. Close the sink first
+    // so the playback thread (WASAPI) exits before we free the codec
+    // state it might still be reading PTS from.
+    if (m_audioPlayback)
+    {
+        m_audioPlayback->close();
+        m_audioPlayback.reset();
+    }
+    if (m_swrCtx)
+    {
+        swr_free(&m_swrCtx);
+        m_swrCtx = nullptr;
+    }
+    if (m_audioCodecCtx)
+    {
+        avcodec_free_context(&m_audioCodecCtx);
+        m_audioCodecCtx = nullptr;
+    }
+    m_audioStreamIdx = -1;
+    m_audioScratch.clear();
 }
 
 void VideoCaptureRemote::close()
@@ -277,6 +390,11 @@ void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
         m_blendBuffer.clear();
     }
     m_streamAnchored.store(false);
+    m_firstPtsUs.store(0);
+    // Flush stale audio so a mode-switch doesn't leak samples from
+    // the previous timing window into the new one (would briefly
+    // glitch the clock until the buffer drained).
+    if (m_audioPlayback) m_audioPlayback->flush();
 }
 
 void VideoCaptureRemote::setTargetResolution(uint32_t width, uint32_t height)
@@ -307,8 +425,31 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     // any non-integer stream:refresh ratio, and lets the server
     // transmit at whatever rate it wants without the client needing
     // a "magic" matched fps.
-    const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+    // A/V sync — audio is the master clock when the remote stream
+    // carries audio (the typical case). Audio is significantly more
+    // sensitive to timing glitches than video; locking the video
+    // gate to the audio output keeps lip-sync correct even when the
+    // wall clock drifts relative to the audio device clock (which it
+    // will, over minutes-long sessions). Without audio we fall back
+    // to wall-clock + anchor.
+    int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (m_audioPlayback && m_audioPlayback->isOpen() && m_streamAnchored.load())
+    {
+        const int64_t audioPtsAbsUs = m_audioPlayback->getClockUs();
+        if (audioPtsAbsUs > 0)
+        {
+            // audioPtsAbsUs is in the same coordinate the video frame
+            // PTS uses (microseconds, stream-origin-relative to 0).
+            // Each video frame's targetWallUs was computed as
+            //   m_streamStartWallUs + (frame_pts_us - m_firstPtsUs).
+            // The audio-equivalent 'now' in wall-clock units is then
+            //   m_streamStartWallUs + (audio_pts_us - m_firstPtsUs).
+            const int64_t audioRelUs = audioPtsAbsUs - m_firstPtsUs.load();
+            nowWallUs = m_streamStartWallUs + audioRelUs;
+        }
+    }
+
     while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
@@ -443,6 +584,8 @@ void VideoCaptureRemote::decodeLoop()
             // be timed against the old anchor and either play in the
             // past or sit far in the future.
             m_streamAnchored.store(false);
+            m_firstPtsUs.store(0);
+            if (m_audioPlayback) m_audioPlayback->flush();
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 m_frameQueue.clear();
@@ -466,6 +609,59 @@ void VideoCaptureRemote::decodeLoop()
             // Tear down so the top of the outer loop reopens. Don't
             // exit the thread — server is allowed to come back.
             cleanupDecoder();
+            continue;
+        }
+
+        // Audio packets: decode, resample to packed float32, push to
+        // the playback sink. The sink's getClockUs() is the A/V master
+        // clock for the video gating below.
+        if (packet->stream_index == m_audioStreamIdx && m_audioCodecCtx && m_audioPlayback)
+        {
+            if (avcodec_send_packet(m_audioCodecCtx, packet) >= 0)
+            {
+                AVFrame *aFrame = av_frame_alloc();
+                while (aFrame && avcodec_receive_frame(m_audioCodecCtx, aFrame) >= 0)
+                {
+                    const int nbIn    = aFrame->nb_samples;
+                    const int outRate = m_audioCodecCtx->sample_rate;
+                    // Resampler may need extra output samples — ask
+                    // it how many it will emit for this frame.
+                    int64_t maxOut = swr_get_out_samples(m_swrCtx, nbIn);
+                    if (maxOut < nbIn) maxOut = nbIn;
+                    const int channels =
+#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
+                        m_audioCodecCtx->channels;
+#else
+                        m_audioCodecCtx->ch_layout.nb_channels;
+#endif
+                    const size_t neededFloats = static_cast<size_t>(maxOut) * static_cast<size_t>(channels);
+                    if (m_audioScratch.size() < neededFloats)
+                    {
+                        m_audioScratch.assign(neededFloats, 0.0f);
+                    }
+                    uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
+                    const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
+                                                     const_cast<const uint8_t **>(aFrame->data), nbIn);
+                    if (produced > 0)
+                    {
+                        // Convert the frame's PTS (stream-tb units)
+                        // to stream-origin-relative microseconds the
+                        // same way the video path does it — see the
+                        // anchor logic below. We can reuse the anchor
+                        // because both streams share the same /raw
+                        // demuxer.
+                        const int64_t aPts = (aFrame->pts != AV_NOPTS_VALUE) ? aFrame->pts : 0;
+                        const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
+                        const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aPts) * av_q2d(tb) * 1e6);
+                        m_audioPlayback->submit(m_audioScratch.data(),
+                                                static_cast<size_t>(produced),
+                                                ptsUs);
+                    }
+                    av_frame_unref(aFrame);
+                }
+                if (aFrame) av_frame_free(&aFrame);
+            }
+            av_packet_unref(packet);
             continue;
         }
 
@@ -562,31 +758,23 @@ void VideoCaptureRemote::decodeLoop()
                     m_streamTimebaseSecs = av_q2d(tb);
                 }
                 if (m_streamTimebaseSecs <= 0.0) m_streamTimebaseSecs = 1.0 / 90000.0;
+                // Also store firstPts in microseconds so the audio path
+                // can convert its own absolute PTS into the same
+                // stream-origin-relative coordinate system.
+                m_firstPtsUs.store(static_cast<int64_t>(static_cast<double>(framePtsTicks) * m_streamTimebaseSecs * 1e6));
             }
             else
             {
                 const int64_t deltaTicks = framePtsTicks - m_firstPtsTicks;
                 const int64_t deltaUs    = static_cast<int64_t>(static_cast<double>(deltaTicks) * m_streamTimebaseSecs * 1e6);
                 targetWallUs = m_streamStartWallUs + deltaUs;
-                // Watchdog in both directions:
-                //  - >500 ms in the past: the stream paused / network
-                //    blipped, our queue would otherwise sit on stale
-                //    frames forever. Snap anchor forward.
-                //  - >500 ms in the future: the first-frame PTS we
-                //    used to anchor was bogus (commonly the very
-                //    first decoded packet arrives with AV_NOPTS_VALUE
-                //    and we substituted 0, so the second frame's real
-                //    PTS suddenly puts targets a full second ahead of
-                //    wall clock). That symptom was the user-reported
-                //    "primeiro frame translúcido sobre tudo": linear
-                //    mode held a ~95 %-F1 / 5 %-F2 blend on screen for
-                //    the whole 1 s catch-up window. Re-anchor on this
-                //    frame so we don't keep ghosting F1 forever.
+                // Watchdog in both directions: see prior comment for why.
                 if (targetWallUs + 500'000 < nowWallUs ||
                     targetWallUs > nowWallUs + 500'000)
                 {
                     m_streamStartWallUs = nowWallUs;
                     m_firstPtsTicks     = framePtsTicks;
+                    m_firstPtsUs.store(static_cast<int64_t>(static_cast<double>(framePtsTicks) * m_streamTimebaseSecs * 1e6));
                     targetWallUs        = nowWallUs;
                 }
             }
