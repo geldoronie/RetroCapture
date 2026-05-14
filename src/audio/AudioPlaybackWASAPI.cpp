@@ -14,6 +14,19 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "avrt.lib")
 
+// The MXE / older mingw-w64 audioclient.h ships with some
+// AUDCLNT_STREAMFLAGS_* constants missing. Their bit values are
+// stable across SDK versions (defined by the Windows API contract),
+// so define them locally when absent. With these flags WASAPI handles
+// rate / channel-count conversion for us in shared mode — without
+// them we'd have to match the device's mix format exactly.
+#ifndef AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+#define AUDCLNT_STREAMFLAGS_EVENTCALLBACK   0x00040000
+#endif
+#ifndef AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+#define AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM  0x80000000
+#endif
+
 namespace
 {
     constexpr REFERENCE_TIME kBufferDurationHns = 50 * 10000; // 50 ms in 100-ns units
@@ -74,9 +87,19 @@ bool AudioPlaybackWASAPI::open(uint32_t sampleRate, uint32_t channels)
     fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
     fmt.cbSize          = 0;
 
+    // AUTOCONVERTPCM lets WASAPI insert its own resampler between us
+    // and the device's mix format, so we can submit at whatever rate
+    // the AAC stream uses without matching the OS-selected default.
+    // SRC_DEFAULT_QUALITY would tune the resampler but isn't defined
+    // by the older mingw-w64 headers in the MXE toolchain — the
+    // default quality is fine for streaming use anyway.
+    DWORD streamFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
+#ifdef AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY
+    streamFlags |= AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+#endif
     hr = m_audioClient->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        streamFlags,
         kBufferDurationHns,
         0,
         &fmt,

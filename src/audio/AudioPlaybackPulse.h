@@ -2,6 +2,8 @@
 
 #include "IAudioPlayback.h"
 
+#ifdef __linux__
+
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -48,3 +50,5 @@ private:
     int64_t            m_lastSubmittedPtsUs = 0;
     bool               m_anySubmitted       = false;
 };
+
+#endif // __linux__

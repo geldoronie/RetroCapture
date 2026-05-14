@@ -1,4 +1,7 @@
 #include "AudioPlaybackPulse.h"
+
+#ifdef __linux__
+
 #include "../utils/Logger.h"
 
 #include <pulse/simple.h>
@@ -144,3 +147,5 @@ void AudioPlaybackPulse::flush()
     m_lastSubmittedPtsUs = 0;
     m_anySubmitted       = false;
 }
+
+#endif // __linux__
