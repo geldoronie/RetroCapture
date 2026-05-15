@@ -25,6 +25,7 @@
 #include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
+#include "../streaming/DirectoryClient.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -3081,6 +3082,12 @@ void Application::run()
         // thread before any GL work. Cheap when nothing pending.
         applyPendingRemoteMeta();
 
+        // Phase 2 of #49: reconcile the public-directory publish state
+        // with whatever the UI toggle currently says. Cheap when no
+        // transition is needed (just compares two booleans and a few
+        // strings).
+        syncDirectoryClient();
+
         m_window->pollEvents();
         
         // Check again after polling events (window may have been invalidated)
@@ -5327,6 +5334,127 @@ void Application::applyPendingRemoteMeta()
             LOG_INFO("RemoteMetaSync: applied " + std::to_string(params.size()) +
                      " parameter override(s)");
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// #49 Phase 2 — public directory publish lifecycle
+//
+// The UI owns the "publish on/off" toggle plus the user-visible
+// metadata fields. This method, called once per main-loop iteration,
+// reconciles those UI fields with the DirectoryClient instance that
+// actually talks HTTP to the directory service:
+//
+//   - toggle OFF → ensure DirectoryClient is stopped
+//   - toggle ON, client Idle → build a Config from UI state, start
+//   - toggle ON, client Active → no-op (changes are applied via
+//     PATCH on the next heartbeat tick if updateMetadata was called)
+//
+// Always cheap when there's no transition; just compares the toggle
+// against the current state.
+// ─────────────────────────────────────────────────────────────────────
+void Application::syncDirectoryClient()
+{
+    if (!m_ui) return;
+
+    // Lazy-init: we only spin up the client if the user has ever
+    // expressed interest. Saves a few KB of object state for the
+    // common case where nobody publishes.
+    const bool wantPublish = m_ui->getDirectoryPublishEnabled();
+    if (!wantPublish && !m_directoryClient) return;
+    if (!m_directoryClient)
+    {
+        m_directoryClient = std::make_unique<DirectoryClient>();
+    }
+
+    auto state = m_directoryClient->getState();
+
+    if (!wantPublish)
+    {
+        if (state != DirectoryClient::State::Idle)
+        {
+            m_directoryClient->stop();
+            m_ui->setDirectoryStatusText("Idle");
+        }
+        return;
+    }
+
+    // wantPublish == true beyond this point.
+    if (state == DirectoryClient::State::Idle)
+    {
+        // Build Config from current UI + streaming state.
+        DirectoryClient::Config cfg;
+        cfg.directoryUrl     = m_ui->getDirectoryUrl();
+        cfg.name             = m_ui->getDirectoryStreamName();
+        cfg.hostNickname     = m_ui->getDirectoryHostNickname();
+        cfg.shader           = m_ui->getCurrentShader();
+        cfg.resolutionW      = m_ui->getCaptureWidth();
+        cfg.resolutionH      = m_ui->getCaptureHeight();
+        cfg.fps              = m_ui->getCaptureFps();
+        cfg.codec            = m_ui->getStreamingVideoCodec() == "h265" ? "h265" : "h264";
+        cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
+        cfg.endpointMode     = m_ui->getDirectoryEndpointMode();
+        cfg.version          = "0.7.0-alpha";
+
+        if (cfg.endpointMode == "custom")
+        {
+            cfg.endpoint = m_ui->getDirectoryCustomEndpoint();
+        }
+        else
+        {
+            // Direct mode: best-effort endpoint from the locally-known
+            // stream URL. The server backfills publicIp with the
+            // request source IP anyway; this URL is what other clients
+            // will try to connect to verbatim, so it does matter that
+            // it's reachable from outside. Phase 2.5's Cloudflare
+            // Tunnel integration replaces this with the tunnel URL.
+            const std::string &local = m_ui->getStreamUrl();
+            if (!local.empty())
+            {
+                cfg.endpoint = local;
+            }
+            else
+            {
+                cfg.endpoint = "http://localhost:" + std::to_string(m_ui->getStreamingPort()) + "/raw";
+            }
+        }
+
+        if (m_directoryClient->start(cfg))
+        {
+            m_ui->setDirectoryStatusText("Registering…");
+        }
+        else
+        {
+            m_ui->setDirectoryStatusText("Error: " + m_directoryClient->getLastError());
+            // Roll the toggle back so the UI shows the actual state.
+            m_ui->setDirectoryPublishEnabled(false);
+        }
+        return;
+    }
+
+    // State display — translate enum to one-liner.
+    std::string status;
+    switch (state)
+    {
+        case DirectoryClient::State::Registering: status = "Registering…"; break;
+        case DirectoryClient::State::Active:
+        {
+            const auto id = m_directoryClient->getStreamId();
+            status = id.empty() ? "Active" : "Active — " + id;
+            break;
+        }
+        case DirectoryClient::State::Error:
+        {
+            const auto err = m_directoryClient->getLastError();
+            status = err.empty() ? "Error" : "Error: " + err;
+            break;
+        }
+        case DirectoryClient::State::Stopping: status = "Stopping…"; break;
+        case DirectoryClient::State::Idle:      status = "Idle"; break;
+    }
+    if (m_ui->getDirectoryStatusText() != status)
+    {
+        m_ui->setDirectoryStatusText(status);
     }
 }
 

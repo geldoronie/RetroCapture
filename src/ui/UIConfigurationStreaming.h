@@ -28,6 +28,7 @@ private:
     void renderBitrateSettings();
     void renderAdvancedBufferSettings();
     void renderStartStopButton();
+    void renderDirectoryPublish();        // #49 Phase 2
 
     // Codec-specific settings
     void renderH264Settings();
@@ -42,6 +43,9 @@ private:
     char m_newProfileName[128] = "";
     bool m_showSaveDialog = false;
     bool m_showDeleteConfirm = false;
+
+    // Directory-publish UI state (#49 Phase 2)
+    bool m_dirShowPrivacyModal = false;       // true while privacy popup is open
 
     void refreshProfiles();
 };

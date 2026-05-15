@@ -247,6 +247,26 @@ public:
     void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
     void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
     bool isStreamingProcessing() const { return m_streamingProcessing; }
+
+    // ── Public-directory publish settings (#49 Phase 2) ──
+    bool getDirectoryPublishEnabled() const          { return m_directoryPublishEnabled; }
+    void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
+    const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
+    void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
+    const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
+    void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
+    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
+    const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
+    void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
+    const std::string &getDirectoryEndpointMode() const { return m_directoryEndpointMode; }
+    void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
+    const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
+    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
+    void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
+    const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
+    void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -858,6 +878,20 @@ private:
     bool m_canStartStreaming = true;            // Pode iniciar streaming (não está em cooldown)
     int64_t m_streamingCooldownRemainingMs = 0; // Tempo restante de cooldown em ms
     bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
+
+    // Public-directory publish settings (#49 Phase 2). State here is
+    // UI-side only; Application owns the DirectoryClient that
+    // actually talks to the directory service and mirrors the toggle
+    // from here every frame.
+    bool        m_directoryPublishEnabled = false;
+    std::string m_directoryUrl            = "http://localhost:8081";
+    std::string m_directoryStreamName     = "";
+    std::string m_directoryHostNickname   = "";
+    std::string m_directoryPassword       = "";       // optional; empty = no password
+    std::string m_directoryEndpointMode   = "direct"; // "direct" | "custom" (Phase 2.5 will add "tunnel-cloudflare")
+    std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
+    bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
+    std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
     // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)

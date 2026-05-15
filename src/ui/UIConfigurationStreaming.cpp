@@ -47,6 +47,8 @@ void UIConfigurationStreaming::render()
     ImGui::Separator();
     renderBitrateSettings();
     ImGui::Separator();
+    renderDirectoryPublish();      // #49 Phase 2
+    ImGui::Separator();
     // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
     // is not surfaced in the UI anymore — defaults work for the vast
     // majority of cases. Power users can still override via config.json.
@@ -764,5 +766,201 @@ void UIConfigurationStreaming::renderStartStopButton()
                 m_uiManager->triggerStreamingStartStop(true);
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Public directory publish (#49 Phase 2)
+//
+// Opt-in section that lets the host announce its stream in the
+// directory service. The actual networking lives in Application's
+// DirectoryClient instance; this UI is purely a user-facing surface
+// that toggles enabled-state and edits the metadata fields, then
+// reads back a status string Application writes after each
+// register/heartbeat tick.
+// ─────────────────────────────────────────────────────────────────────
+void UIConfigurationStreaming::renderDirectoryPublish()
+{
+    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Public directory");
+    ImGui::TextWrapped(
+        "Optionally list this stream in a public directory so other "
+        "RetroCapture clients can find it without you sharing the URL "
+        "out of band.");
+    ImGui::Spacing();
+
+    // ── Privacy modal: shown the first time the user flips the toggle
+    // on. Once accepted, the ack flag sticks and we never show it
+    // again unless the user toggles it back from the warning text.
+    if (m_dirShowPrivacyModal)
+    {
+        ImGui::OpenPopup("Publish to public directory");
+        m_dirShowPrivacyModal = false;
+    }
+    if (ImGui::BeginPopupModal("Publish to public directory", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped(
+            "Publishing exposes your stream's connection information "
+            "(URL and, in 'Direct' mode, your public IP) to anyone "
+            "browsing the directory.");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Consider using a reverse tunnel (Cloudflare Tunnel, "
+            "Tailscale Funnel, your own VPS) and selecting 'Custom' "
+            "endpoint mode if you'd rather not expose your home IP.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Accept and publish", ImVec2(180, 0)))
+        {
+            m_uiManager->setDirectoryPrivacyAcked(true);
+            m_uiManager->setDirectoryPublishEnabled(true);
+            m_uiManager->saveConfig();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_uiManager->setDirectoryPublishEnabled(false);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ── Master toggle. If the user has never accepted the warning,
+    // turning it on first opens the modal — only after they accept
+    // does the flag actually flip to true (the modal sets it).
+    bool enabled = m_uiManager->getDirectoryPublishEnabled();
+    if (ImGui::Checkbox("Publish this stream to the public directory", &enabled))
+    {
+        if (enabled && !m_uiManager->getDirectoryPrivacyAcked())
+        {
+            // Need consent first. Roll the toggle back to off until
+            // the modal flips it on (or the user cancels).
+            m_uiManager->setDirectoryPublishEnabled(false);
+            m_dirShowPrivacyModal = true;
+        }
+        else
+        {
+            m_uiManager->setDirectoryPublishEnabled(enabled);
+            m_uiManager->saveConfig();
+        }
+    }
+
+    if (!m_uiManager->getDirectoryPublishEnabled())
+    {
+        ImGui::TextDisabled("Disabled — nothing is announced.");
+        return;
+    }
+
+    // ── Editable fields. saveConfig() is called on every edit so the
+    // settings persist across runs even if the user doesn't manually
+    // save a profile.
+    ImGui::Spacing();
+
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryStreamName().c_str());
+        if (ImGui::InputText("Stream name", buf, sizeof(buf)))
+        {
+            m_uiManager->setDirectoryStreamName(buf);
+            m_uiManager->saveConfig();
+        }
+    }
+    {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryHostNickname().c_str());
+        if (ImGui::InputText("Nickname (optional)", buf, sizeof(buf)))
+        {
+            m_uiManager->setDirectoryHostNickname(buf);
+            m_uiManager->saveConfig();
+        }
+    }
+    {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryPassword().c_str());
+        if (ImGui::InputText("Password (optional)", buf, sizeof(buf), ImGuiInputTextFlags_Password))
+        {
+            m_uiManager->setDirectoryPassword(buf);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "If set, clients must enter this password to connect.\n"
+                "The directory only stores the flag that a password is\n"
+                "required — never the password itself.");
+        }
+    }
+
+    // Endpoint-mode dropdown. Phase 2 ships Direct + Custom; Phase
+    // 2.5 will add Cloudflare Tunnel as the recommended default.
+    {
+        const char *modes[] = { "Direct (port-forwarded)", "Custom URL" };
+        const char *keys[]  = { "direct",                  "custom" };
+        int current = 0;
+        for (int i = 0; i < 2; ++i)
+        {
+            if (m_uiManager->getDirectoryEndpointMode() == keys[i]) { current = i; break; }
+        }
+        if (ImGui::Combo("Endpoint mode", &current, modes, 2))
+        {
+            m_uiManager->setDirectoryEndpointMode(keys[current]);
+            m_uiManager->saveConfig();
+        }
+    }
+
+    if (m_uiManager->getDirectoryEndpointMode() == "custom")
+    {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryCustomEndpoint().c_str());
+        if (ImGui::InputText("Custom endpoint URL", buf, sizeof(buf)))
+        {
+            m_uiManager->setDirectoryCustomEndpoint(buf);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Paste the public URL you've already set up\n"
+                              "(FRP, Cloudflare Tunnel, ngrok, your own domain…).");
+        }
+    }
+    else
+    {
+        ImGui::TextDisabled(
+            "Direct mode uses your local streaming endpoint as advertised.\n"
+            "Requires your stream port to be reachable from the public internet\n"
+            "(port-forwarding) — won't work behind CGNAT.");
+    }
+
+    // Advanced: directory URL override.
+    if (ImGui::TreeNode("Advanced"))
+    {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryUrl().c_str());
+        if (ImGui::InputText("Directory URL", buf, sizeof(buf)))
+        {
+            m_uiManager->setDirectoryUrl(buf);
+            m_uiManager->saveConfig();
+        }
+        ImGui::TreePop();
+    }
+
+    // Status surface. Application writes a one-line string after every
+    // register / heartbeat cycle; we just display it.
+    ImGui::Spacing();
+    ImGui::Text("Status:");
+    ImGui::SameLine();
+    const std::string &status = m_uiManager->getDirectoryStatusText();
+    if (status.rfind("Active", 0) == 0)
+    {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", status.c_str());
+    }
+    else if (status.rfind("Error", 0) == 0)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s", status.c_str());
+    }
+    else
+    {
+        ImGui::TextDisabled("%s", status.c_str());
     }
 }

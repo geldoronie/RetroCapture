@@ -2285,6 +2285,18 @@ void UIManager::loadConfig()
                 if (buffer.contains("avioBufferSize"))
                     m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
             }
+            if (streaming.contains("directory"))
+            {
+                auto &dir = streaming["directory"];
+                if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
+                if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
+                if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
+                if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
+                if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
+                if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
+                if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
+                if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
+            }
         }
 
         // Carregar configurações de captura
@@ -2638,7 +2650,22 @@ void UIManager::saveConfig()
             {"amfQuality",  m_streamingAmfQuality},
             {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
+            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}},
+            // #49 Phase 2: public directory publish settings.
+            // The password is persisted because the user re-uses it
+            // across sessions; the runtime streamId + ownerToken are
+            // never persisted (per the spec — a new run is a new
+            // directory entry).
+            {"directory", {
+                {"publishEnabled", m_directoryPublishEnabled},
+                {"url",            m_directoryUrl},
+                {"streamName",     m_directoryStreamName},
+                {"hostNickname",   m_directoryHostNickname},
+                {"password",       m_directoryPassword},
+                {"endpointMode",   m_directoryEndpointMode},
+                {"customEndpoint", m_directoryCustomEndpoint},
+                {"privacyAcked",   m_directoryPrivacyAcked},
+            }}};
 
         // Salvar configurações de imagem
         config["image"] = {
