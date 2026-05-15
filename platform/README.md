@@ -23,6 +23,27 @@ Only directories that exist today are populated. The rest are listed
 above as a forward-looking guide so future additions land in a
 predictable place.
 
+## Running things locally
+
+Everything under `platform/` is orchestrated by a single
+`docker-compose.yml` at this level. Bringing the full stack up:
+
+```bash
+cd platform
+docker compose up           # all services
+docker compose up directory # just one
+```
+
+Per-service test suites run via Compose profiles:
+
+```bash
+docker compose --profile test run --rm directory-test
+```
+
+Each individual service still owns its own `Dockerfile` (multi-stage:
+`deps → test → build → runtime`) so the build can be reproduced
+outside Compose if needed.
+
 ## What goes here vs. `src/`
 
 | Lives in `src/` | Lives in `platform/` |

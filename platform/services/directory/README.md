@@ -11,17 +11,21 @@ Wire-format spec: [`docs/DIRECTORY_PROTOCOL.md`](../../../docs/DIRECTORY_PROTOCO
 
 ## Quick start
 
+Orchestration lives at `platform/docker-compose.yml`. From there:
+
 ```bash
-# from this directory
-docker compose up --build
+cd platform
+docker compose up directory                                    # run it
+docker compose --profile test run --rm directory-test           # test it
 ```
 
 The service binds to `:8081` by default (override with `DIRECTORY_PORT`)
-and persists to `./data/directory.db`. Verify it's up:
+and persists to `./services/directory/data/directory.db`. Verify it's
+up:
 
 ```bash
 curl http://localhost:8081/health
-# → {"status":"ok"}
+# → {"data":{"status":"ok","protocol_version":1},"error":null}
 ```
 
 ## Configuration
@@ -46,17 +50,20 @@ incrementally as Phase 1 of #49 progresses.
 ## Local development
 
 The service has no runtime dependencies beyond SQLite (which is
-embedded). For the most ergonomic loop:
+embedded). For the most ergonomic loop, all commands run from
+`platform/`:
 
 ```bash
-docker compose up --build       # rebuild and run
-docker compose down             # stop
-rm -rf data/                    # nuke local state
+docker compose up directory                              # run
+docker compose --profile test run --rm directory-test     # test
+docker compose down                                       # stop
+rm -rf services/directory/data/                          # nuke local state
 ```
 
 If you do have Go installed locally and prefer not to use Docker:
 
 ```bash
+cd platform/services/directory
 go run ./cmd/directory
 ```
 

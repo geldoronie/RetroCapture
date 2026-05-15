@@ -79,13 +79,19 @@ sprinkled around.
 
 ### Dev workflow
 
+Orchestration lives one level up at `platform/docker-compose.yml` so a
+single command can bring the whole platform stack online. To work on a
+single service in isolation:
+
 ```bash
-cd platform/services/<service>
-docker compose up --build
+cd platform
+docker compose up <service>                                 # run it
+docker compose --profile test run --rm <service>-test        # test it
 ```
 
-`docker-compose.yml` is the source of truth for "how do I run this
-locally". CI mirrors the same Dockerfile so behaviour matches.
+Each service's `Dockerfile` (multi-stage: `deps → test → build →
+runtime`) is the source of truth for how it builds. CI mirrors the
+same Dockerfile so behaviour matches.
 
 ### Naming
 
