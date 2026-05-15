@@ -5424,21 +5424,16 @@ void Application::syncDirectoryClient()
         }
         else
         {
-            // Direct mode: best-effort endpoint from the locally-known
-            // stream URL. The server backfills publicIp with the
-            // request source IP anyway; this URL is what other clients
-            // will try to connect to verbatim, so it does matter that
-            // it's reachable from outside. Phase 2.5's Cloudflare
-            // Tunnel integration replaces this with the tunnel URL.
-            const std::string &local = m_ui->getStreamUrl();
-            if (!local.empty())
-            {
-                cfg.endpoint = local;
-            }
-            else
-            {
-                cfg.endpoint = "http://localhost:" + std::to_string(m_ui->getStreamingPort()) + "/raw";
-            }
+            // Direct mode: the directory's `endpoint` field is a
+            // BASE URL (http://host:port). The client appends /raw
+            // and /meta by convention; if we include them here they
+            // get appended again ('/raw/raw' → 404). The local stream
+            // URL ends in '/stream' which is wrong here for the same
+            // reason — never reuse it for the directory endpoint.
+            //
+            // Phase 2.5 (Cloudflare Tunnel) will replace this with
+            // the tunnel base URL.
+            cfg.endpoint = "http://localhost:" + std::to_string(m_ui->getStreamingPort());
         }
 
         if (m_directoryClient->start(cfg))
