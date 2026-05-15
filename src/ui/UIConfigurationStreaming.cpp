@@ -790,7 +790,8 @@ void UIConfigurationStreaming::renderDirectoryPublish()
 
     // ── Privacy modal: shown the first time the user flips the toggle
     // on. Once accepted, the ack flag sticks and we never show it
-    // again unless the user toggles it back from the warning text.
+    // again. The actual OpenPopup() call has to happen *inside* the
+    // same window pass as the BeginPopupModal that follows.
     if (m_dirShowPrivacyModal)
     {
         ImGui::OpenPopup("Publish to public directory");
@@ -826,41 +827,13 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         ImGui::EndPopup();
     }
 
-    // ── Master toggle. If the user has never accepted the warning,
-    // turning it on first opens the modal — only after they accept
-    // does the flag actually flip to true (the modal sets it).
-    bool enabled = m_uiManager->getDirectoryPublishEnabled();
-    if (ImGui::Checkbox("Publish this stream to the public directory", &enabled))
-    {
-        if (enabled && !m_uiManager->getDirectoryPrivacyAcked())
-        {
-            // Need consent first. Roll the toggle back to off until
-            // the modal flips it on (or the user cancels).
-            m_uiManager->setDirectoryPublishEnabled(false);
-            m_dirShowPrivacyModal = true;
-        }
-        else
-        {
-            m_uiManager->setDirectoryPublishEnabled(enabled);
-            m_uiManager->saveConfig();
-        }
-    }
-
-    if (!m_uiManager->getDirectoryPublishEnabled())
-    {
-        ImGui::TextDisabled("Disabled — nothing is announced.");
-        return;
-    }
-
-    // ── Editable fields. saveConfig() is called on every edit so the
-    // settings persist across runs even if the user doesn't manually
-    // save a profile.
-    ImGui::Spacing();
-
+    // ── Editable fields, always visible. The user fills these in
+    // first, then flips the toggle below. saveConfig() persists each
+    // edit so the settings survive across runs.
     {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryStreamName().c_str());
-        if (ImGui::InputText("Stream name", buf, sizeof(buf)))
+        if (ImGui::InputText("Stream name *", buf, sizeof(buf)))
         {
             m_uiManager->setDirectoryStreamName(buf);
             m_uiManager->saveConfig();
@@ -943,6 +916,73 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             m_uiManager->saveConfig();
         }
         ImGui::TreePop();
+    }
+
+    ImGui::Spacing();
+
+    // ── Master toggle. Three things have to be true to flip it on:
+    //   - the user filled in a non-empty stream name
+    //   - in 'custom' mode, the user filled in a non-empty endpoint
+    //   - the user has accepted the privacy warning (modal handles
+    //     this; the toggle stays off until accept fires)
+    //
+    // We compute a one-line reason string that explains why the
+    // toggle is disabled, so the user doesn't have to guess.
+    const std::string trimmedName     = m_uiManager->getDirectoryStreamName();
+    const std::string trimmedCustom   = m_uiManager->getDirectoryCustomEndpoint();
+    const std::string mode            = m_uiManager->getDirectoryEndpointMode();
+    const bool        currentlyOn     = m_uiManager->getDirectoryPublishEnabled();
+    std::string       blockedReason;
+    if (trimmedName.empty())
+    {
+        blockedReason = "Fill in 'Stream name' to enable publishing.";
+    }
+    else if (mode == "custom" && trimmedCustom.empty())
+    {
+        blockedReason = "Fill in the custom endpoint URL to enable publishing.";
+    }
+    const bool canToggle = blockedReason.empty();
+
+    // The checkbox is always rendered; we just disable it when the
+    // prerequisites aren't met. A user already mid-publish sees the
+    // checkbox on; clearing the name field doesn't kick them out
+    // because the running DirectoryClient holds its own Config copy.
+    if (!canToggle && !currentlyOn)
+    {
+        ImGui::BeginDisabled();
+    }
+    bool enabled = currentlyOn;
+    if (ImGui::Checkbox("Publish this stream to the public directory", &enabled))
+    {
+        if (enabled)
+        {
+            if (!m_uiManager->getDirectoryPrivacyAcked())
+            {
+                // Need consent first. Modal flips the toggle on once
+                // accepted, or leaves it off on cancel.
+                m_uiManager->setDirectoryPublishEnabled(false);
+                m_dirShowPrivacyModal = true;
+            }
+            else
+            {
+                m_uiManager->setDirectoryPublishEnabled(true);
+                m_uiManager->saveConfig();
+            }
+        }
+        else
+        {
+            m_uiManager->setDirectoryPublishEnabled(false);
+            m_uiManager->saveConfig();
+        }
+    }
+    if (!canToggle && !currentlyOn)
+    {
+        ImGui::EndDisabled();
+    }
+
+    if (!canToggle && !currentlyOn)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", blockedReason.c_str());
     }
 
     // Status surface. Application writes a one-line string after every
