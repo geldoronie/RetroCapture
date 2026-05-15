@@ -5379,11 +5379,28 @@ void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
 
-    // Lazy-init: we only spin up the client if the user has ever
-    // expressed interest. Saves a few KB of object state for the
-    // common case where nobody publishes.
-    const bool wantPublish = m_ui->getDirectoryPublishEnabled();
-    if (!wantPublish && !m_directoryClient) return;
+    // Publish only makes sense when there's actually a stream being
+    // served. Two scenarios where this gate matters:
+    //   1. User toggled publish on previously, the persisted config
+    //      flag stays true, and now they launch a second instance on
+    //      the same machine just to view (client mode). Without the
+    //      gate, that client instance would happily try to register
+    //      itself in the directory even though it has nothing to
+    //      advertise — duplicate-looking entries from the same IP.
+    //   2. User toggles publish on before pressing Start Streaming.
+    //      The entry would advertise an endpoint that 503s for any
+    //      client that tried to connect. Better to not list at all
+    //      until /raw is serving.
+    //
+    // 'Streaming active' is the right signal here — it's set by
+    // StreamManager once a streamer has bound its port and is
+    // accepting clients. Toggle stays on (persisted) so as soon as
+    // streaming actually starts, publish kicks in automatically.
+    const bool wantPublish    = m_ui->getDirectoryPublishEnabled();
+    const bool streamingLive  = m_ui->getStreamingActive();
+    const bool shouldPublish  = wantPublish && streamingLive;
+
+    if (!shouldPublish && !m_directoryClient) return;
     if (!m_directoryClient)
     {
         m_directoryClient = std::make_unique<DirectoryClient>();
@@ -5391,12 +5408,26 @@ void Application::syncDirectoryClient()
 
     auto state = m_directoryClient->getState();
 
-    if (!wantPublish)
+    if (!shouldPublish)
     {
         if (state != DirectoryClient::State::Idle)
         {
             m_directoryClient->stop();
-            m_ui->setDirectoryStatusText("Idle");
+            // Surface why we stopped so the user understands the
+            // toggle is still on but nothing is listed right now.
+            if (wantPublish && !streamingLive)
+            {
+                m_ui->setDirectoryStatusText("Waiting for streaming to start");
+            }
+            else
+            {
+                m_ui->setDirectoryStatusText("Idle");
+            }
+        }
+        else if (wantPublish && !streamingLive &&
+                 m_ui->getDirectoryStatusText() != "Waiting for streaming to start")
+        {
+            m_ui->setDirectoryStatusText("Waiting for streaming to start");
         }
         return;
     }
