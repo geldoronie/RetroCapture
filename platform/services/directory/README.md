@@ -1,0 +1,69 @@
+# `directory` service
+
+Public registry of opt-in RetroCapture streams. A host that wants its
+stream to appear in the in-app browse list publishes here; clients
+fetch the list and decide which one to join. The service never sees
+stream bytes — only metadata.
+
+Tracking issue: [#49](../../../issues/49).
+Wire-format spec: [`docs/DIRECTORY_PROTOCOL.md`](../../../docs/DIRECTORY_PROTOCOL.md)
+(forthcoming; will be written alongside Phase 1 of #49).
+
+## Quick start
+
+```bash
+# from this directory
+docker compose up --build
+```
+
+The service binds to `:8081` by default (override with `DIRECTORY_PORT`)
+and persists to `./data/directory.db`. Verify it's up:
+
+```bash
+curl http://localhost:8081/health
+# → {"status":"ok"}
+```
+
+## Configuration
+
+All configuration is via environment variables. Defaults are tuned for
+local development.
+
+| Variable                | Default                | Purpose                                              |
+|-------------------------|------------------------|------------------------------------------------------|
+| `DIRECTORY_PORT`        | `8081`                 | TCP port the HTTP server binds to.                   |
+| `DIRECTORY_DB_PATH`     | `./data/directory.db`  | SQLite file path. Parent directory must exist.       |
+| `DIRECTORY_LOG_LEVEL`   | `info`                 | `debug` / `info` / `warn` / `error`.                 |
+| `DIRECTORY_TTL_SECONDS` | `120`                  | How long an entry survives without a fresh heartbeat. |
+
+## Endpoints
+
+The full list is specified in
+[`docs/DIRECTORY_PROTOCOL.md`](../../../docs/DIRECTORY_PROTOCOL.md).
+At Phase 1 bootstrap only `GET /health` is implemented; the rest land
+incrementally as Phase 1 of #49 progresses.
+
+## Local development
+
+The service has no runtime dependencies beyond SQLite (which is
+embedded). For the most ergonomic loop:
+
+```bash
+docker compose up --build       # rebuild and run
+docker compose down             # stop
+rm -rf data/                    # nuke local state
+```
+
+If you do have Go installed locally and prefer not to use Docker:
+
+```bash
+go run ./cmd/directory
+```
+
+CI and production both go through the Dockerfile so the local
+non-Docker path is a convenience, not the canonical way to run it.
+
+## Layout
+
+See [`platform/services/README.md`](../README.md) for the convention
+this service follows.
