@@ -1,36 +1,37 @@
 # syntax=docker/dockerfile:1
 #
-# Two-stage build: compile in golang:alpine, ship a static binary on
-# a scratch base. ~10 MB final image, no shell, no package manager,
-# minimal attack surface.
+# Multi-stage build:
 #
-# CGO is disabled so the binary is fully static. SQLite support will
-# require switching to `modernc.org/sqlite` (pure-Go) rather than
-# `mattn/go-sqlite3` (cgo) when storage lands — keeping CGO=0 here
-# makes that constraint explicit from day one.
+#   - `deps`   downloads modules once; cached unless go.mod/sum changes.
+#   - `test`   runs `go test ./...` against the current source. Used by
+#              `docker compose run --rm test` and by CI. Failing tests
+#              fail the build of this stage.
+#   - `build`  produces the static binary.
+#   - `runtime` final image FROM scratch.
+#
+# CGO is disabled so the binary is fully static (the storage layer
+# uses modernc.org/sqlite, which is pure Go, so no SQLite shared
+# library is needed).
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS deps
 WORKDIR /src
-
-# Cache the module graph separately from source so changes to .go
-# files don't invalidate the dependency download layer.
-COPY go.mod go.sum* ./
+COPY go.mod go.sum ./
 RUN go mod download
 
+FROM deps AS test
 COPY . .
+RUN go test ./... -count=1
 
-# Strip debug symbols & DWARF (-s -w) and ensure a fully static
-# binary. -trimpath removes the build host's paths from the binary.
+FROM deps AS build
+COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags "-s -w" \
     -o /out/directory \
     ./cmd/directory
 
-FROM scratch
+FROM scratch AS runtime
 COPY --from=build /out/directory /directory
-# data/ is bind-mounted by docker-compose; we expose the default path
-# as documentation, the runtime creates the dir if missing.
 ENV DIRECTORY_DB_PATH=/data/directory.db
 EXPOSE 8081
 ENTRYPOINT ["/directory"]

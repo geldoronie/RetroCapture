@@ -11,11 +11,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/api"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/config"
+	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/reaper"
+	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/store"
 )
 
 func main() {
@@ -38,20 +41,42 @@ func run() error {
 		"port", cfg.Port,
 		"db_path", cfg.DBPath,
 		"ttl_seconds", int(cfg.TTL.Seconds()),
+		"protocol_version", api.ProtocolVersion,
 	)
 
-	server := &api.Server{Logger: logger}
+	if dir := filepath.Dir(cfg.DBPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("mkdir db dir: %w", err)
+		}
+	}
+
+	st, err := store.Open(cfg.DBPath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+
+	server := &api.Server{
+		Logger: logger,
+		Store:  st,
+		TTL:    cfg.TTL,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	rp := &reaper.Reaper{
+		Store:    st,
+		Logger:   logger,
+		Interval: 60 * time.Second,
+	}
+	rp.Start(ctx)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
 		Handler:           server.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	// Graceful shutdown: catch SIGINT/SIGTERM, stop accepting new
-	// connections, drain in-flight requests up to a hard deadline.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {

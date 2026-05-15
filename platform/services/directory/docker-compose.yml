@@ -1,15 +1,20 @@
 # Local development orchestration for the directory service.
 #
 # Usage:
-#   docker compose up --build
+#   docker compose up --build           # run the service
+#   docker compose run --rm test        # run the test suite once
+#   docker compose down                 # stop
+#   rm -rf data/                        # nuke local state
 #
 # The service binds to :8081 on the host. Data is persisted to ./data/
 # in this directory so the SQLite database survives `docker compose
-# down`. Nuke local state with `rm -rf data/`.
+# down`.
 
 services:
   directory:
-    build: .
+    build:
+      context: .
+      target: runtime
     image: retrocapture-directory:dev
     container_name: retrocapture-directory
     ports:
@@ -22,7 +27,18 @@ services:
       DIRECTORY_LOG_LEVEL: "debug"
       DIRECTORY_TTL_SECONDS: "120"
     restart: unless-stopped
-    # No container-side healthcheck: the image is FROM scratch and
-    # has no shell / curl to probe with. Liveness probing is the
+    # No container-side healthcheck: the runtime image is FROM scratch
+    # and has no shell / curl to probe with. Liveness probing is the
     # orchestrator's job in production; `curl localhost:8081/health`
     # from the host is enough for local dev.
+
+  # Run the Go test suite end-to-end inside the same toolchain image
+  # used for the production build. Invoked as:
+  #   docker compose run --rm test
+  test:
+    build:
+      context: .
+      target: test
+    image: retrocapture-directory:test
+    profiles: ["test"]
+    command: ["true"]    # the RUN in the test stage already executed all tests
