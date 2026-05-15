@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 /**
  * @brief True when the peer connected on `clientFd` is on a local
  *        network (RFC1918 / loopback / link-local).
@@ -26,4 +28,30 @@
 namespace LanCheck
 {
     bool isLanClient(int clientFd);
+
+    /**
+     * True when the HTTP request was forwarded through an internet-
+     * facing reverse proxy (Cloudflare, Tailscale Funnel,
+     * generic XFF chain). Independent of the socket-level peer check
+     * because tunnels and proxies make the peer IP look local while
+     * the *actual* visitor is on the public internet. Treat a hit
+     * here as 'not LAN' regardless of what isLanClient() says.
+     *
+     * Headers checked:
+     *   - Cf-Connecting-Ip  (Cloudflare)
+     *   - Cf-Ray            (Cloudflare)
+     *   - X-Forwarded-For   (generic reverse-proxy chain)
+     *   - X-Real-IP         (nginx convention)
+     *   - True-Client-Ip    (Akamai / Cloudflare Enterprise)
+     */
+    bool cameFromInternetProxy(const std::string &rawRequest);
+
+    /**
+     * Convenience: true iff the request originates from the local
+     * network in BOTH senses — direct peer is on LAN AND no
+     * reverse-proxy header indicates an internet origin. This is
+     * what UI gates ('hide Configuration to internet visitors')
+     * should use.
+     */
+    bool isLocalRequest(int clientFd, const std::string &rawRequest);
 }

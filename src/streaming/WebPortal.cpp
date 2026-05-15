@@ -137,7 +137,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     const bool configRequest = request.find("GET /config.html") != std::string::npos ||
                                request.find("/config.html ") != std::string::npos ||
                                request.find("/config.html?") != std::string::npos;
-    if (configRequest && !LanCheck::isLanClient(clientFd))
+    if (configRequest && !LanCheck::isLocalRequest(clientFd, request))
     {
         LOG_WARN("WebPortal::handleRequest - /config.html denied: requester not on LAN");
         const char *response =
@@ -386,7 +386,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         std::string content = readFileContent(recordingsPath);
         if (!content.empty())
         {
-            if (!LanCheck::isLanClient(clientFd))
+            if (!LanCheck::isLocalRequest(clientFd, request))
             {
                 stripConfigNavLink(content);
             }
@@ -423,7 +423,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         request.find("/index.html") != std::string::npos)
     {
         LOG_INFO("WebPortal::handleRequest - Serving main web page (index.html)");
-        return serveWebPage(clientFd, basePrefix);
+        return serveWebPage(clientFd, request, basePrefix);
     }
 
     // Se chegou aqui e não foi um arquivo estático nem página principal, enviar 404
@@ -433,7 +433,8 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     return true; // Retornar true para indicar que a requisição foi processada (mesmo que com 404)
 }
 
-bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
+bool WebPortal::serveWebPage(int clientFd, const std::string &request,
+                              const std::string &basePrefix) const
 {
     std::string webDir = getWebDirectory();
     std::string indexPath = webDir + "/index.html";
@@ -638,7 +639,7 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
         }
     }
 
-    if (!LanCheck::isLanClient(clientFd))
+    if (!LanCheck::isLocalRequest(clientFd, request))
     {
         stripConfigNavLink(html);
     }

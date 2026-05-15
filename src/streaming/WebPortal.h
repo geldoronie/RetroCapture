@@ -97,7 +97,8 @@ public:
      * @param basePrefix Prefixo base para URLs (ex: "/retrocapture")
      * @return true se servido com sucesso, false caso contrário
      */
-    bool serveWebPage(int clientFd, const std::string &basePrefix = "") const;
+    bool serveWebPage(int clientFd, const std::string &request,
+                      const std::string &basePrefix = "") const;
 
     /**
      * Serve um arquivo estático (CSS, JS, etc.)
