@@ -313,10 +313,26 @@ Hitting a limit → `429` with `error.code = "rate_limited"` and a
 
 The directory only stores `passwordRequired: bool`. The actual password
 never crosses this wire. Clients joining a passworded stream prompt the
-user for the password, hash it (sha256), and authenticate **directly
-against the host's** `/raw` and `/meta` endpoints — not against the
-directory. See `docs/REMOTE_STREAM_PROTOCOL.md` for the password
-handshake.
+user for the password and authenticate **directly against the host's
+HTTP surface** — not against the directory.
+
+The host gates the *entire* HTTP surface behind the password whenever
+one is configured, not just `/raw` and `/meta`. That includes the web
+portal HTML, its JS / CSS / font assets, the MPEG-TS `/stream`, the
+PWA service worker, `/meta`, and the raw `/raw` endpoint. Two auth
+schemes are accepted on the same routes:
+
+- **Basic** — `Authorization: Basic base64("any:<password>")`, what
+  any browser hitting `https://stream-host/` will produce after the
+  first `401`. Username is ignored; only the password is checked.
+- **Bearer** — `Authorization: Bearer <sha256-hex(password)>`, what
+  the native client sends so the password itself never crosses the
+  wire after the user types it once.
+
+The host compares the supplied value (either the basic-auth password
+or the bearer hash) against the sha256 of its configured password.
+Wrong / missing credentials return `401 WWW-Authenticate: Basic
+realm="RetroCapture"` so a browser pops the login dialog.
 
 ## Privacy
 
