@@ -330,6 +330,15 @@ void UIRemoteConnection::renderBrowseTab()
         }
         for (const auto &e : entries)
         {
+            // PushID(streamId) so two entries that happen to share a
+            // visible name don't collide in ImGui's ID stack (the
+            // Selectable label below is otherwise the only thing that
+            // disambiguates rows, and duplicate names are common — a
+            // user with several test registrations lingering inside
+            // the TTL window will see them all listed). Without this
+            // ImGui logs 'visible items with conflicting ID' and the
+            // click never reaches the right row.
+            ImGui::PushID(e.streamId.c_str());
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             // Selectable spans the row so the click target is generous.
@@ -358,6 +367,7 @@ void UIRemoteConnection::renderBrowseTab()
                 // the action to land on the Manual tab.
                 m_browseSelectedUrl = e.endpoint;
             }
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
