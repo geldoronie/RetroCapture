@@ -3,6 +3,13 @@
 
 #include <nlohmann/json.hpp>
 
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/dict.h>
+#include <libavutil/error.h>
+}
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -167,6 +174,61 @@ namespace
         return response.substr(sep + 4);
     }
 
+    // FFmpeg-avio-backed HTTP GET. Handles http:// and https:// equally
+    // — the TLS stack FFmpeg was linked against (OpenSSL / GnuTLS /
+    // SChannel) does the heavy lifting, so we don't carry our own
+    // crypto. Used by the short-poll path (fetchOnce); the raw-socket
+    // httpGet above is kept around for the SSE handshake which
+    // doesn't need TLS yet (the SSE path is plaintext-only and falls
+    // back to short-poll automatically when the URL is https://).
+    //
+    // Returns the response body on 2xx; empty string on any failure.
+    // FFmpeg's avio surfaces HTTP errors as negative avio_read results
+    // and we treat those as "skip this poll" — matching the original
+    // httpGet's contract.
+    std::string httpGetViaAvio(const std::string &fullUrl,
+                                const std::string &authToken,
+                                int recvTimeoutMs = 5000)
+    {
+        avformat_network_init();
+
+        AVDictionary *opts = nullptr;
+        av_dict_set_int(&opts, "rw_timeout", static_cast<int64_t>(recvTimeoutMs) * 1000, 0); // µs
+        av_dict_set(&opts, "user_agent", "RetroCapture/0.7", 0);
+        std::string headers = "Accept: application/json\r\n";
+        if (!authToken.empty())
+        {
+            headers += "Authorization: Bearer ";
+            headers += authToken;
+            headers += "\r\n";
+        }
+        av_dict_set(&opts, "headers", headers.c_str(), 0);
+
+        AVIOContext *io = nullptr;
+        int rc = avio_open2(&io, fullUrl.c_str(), AVIO_FLAG_READ, nullptr, &opts);
+        av_dict_free(&opts);
+        if (rc < 0)
+        {
+            char errbuf[256] = {};
+            av_strerror(rc, errbuf, sizeof(errbuf));
+            LOG_WARN(std::string("RemoteMetaSync: avio_open2 failed for ") + fullUrl + ": " + errbuf);
+            return {};
+        }
+
+        std::string body;
+        body.reserve(4096);
+        unsigned char buf[2048];
+        for (;;)
+        {
+            int n = avio_read(io, buf, sizeof(buf));
+            if (n <= 0) break;
+            body.append(reinterpret_cast<const char *>(buf), static_cast<size_t>(n));
+            if (body.size() > 256 * 1024) break; // sanity cap
+        }
+        avio_closep(&io);
+        return body;
+    }
+
     // Parses the /meta JSON snapshot body into the Snapshot struct.
     // Returns false on parse error. Shared by both the short-poll
     // (httpGet) and long-poll (SSE) paths.
@@ -279,7 +341,12 @@ void RemoteMetaSync::stop()
 
 bool RemoteMetaSync::fetchOnce(Snapshot &out)
 {
-    std::string body = httpGet(m_baseUrl + "/meta", m_authToken);
+    // Use FFmpeg's avio so http:// and https:// both work transparently.
+    // The host's tunnel URL (Cloudflare Quick Tunnel etc.) is HTTPS,
+    // and our hand-rolled httpGet only speaks plaintext — using avio
+    // here piggybacks on the TLS stack FFmpeg is already linked
+    // against (OpenSSL / GnuTLS / SChannel depending on the build).
+    std::string body = httpGetViaAvio(m_baseUrl + "/meta", m_authToken);
     if (body.empty()) return false;
     return parseSnapshotJSON(body, out);
 }
