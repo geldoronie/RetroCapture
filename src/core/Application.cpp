@@ -27,6 +27,7 @@
 #include "../streaming/StreamManager.h"
 #include "../streaming/DirectoryClient.h"
 #include "../streaming/DirectoryBrowser.h"
+#include "../ui/UIDirectoryBrowser.h"
 #include "../streaming/CloudflaredManager.h"
 #include "../utils/PasswordHash.h"
 
@@ -3306,18 +3307,21 @@ void Application::run()
             if (auto *win = m_ui->getRemoteConnectionWindow())
             {
                 win->setCapture(m_capture.get());
+            }
 
-                // #49 Phase 4: keep the directory browser running while
-                // the Connect-to-Remote window is open. Lazy-construct
-                // on first sighting so we don't pay for the worker
-                // thread when the user never opens the window.
-                if (win->isVisible())
+            // #49 Phase 4: keep the directory browser running while
+            // the dedicated 'Browse public directory' window is open.
+            // Lazy-construct on first sighting so we don't pay for
+            // the worker thread when the user never opens the window.
+            if (auto *browseWin = m_ui->getDirectoryBrowserWindow())
+            {
+                if (browseWin->isVisible())
                 {
                     if (!m_directoryBrowser)
                     {
                         m_directoryBrowser = std::make_unique<DirectoryBrowser>();
                     }
-                    win->setDirectoryBrowser(m_directoryBrowser.get());
+                    browseWin->setDirectoryBrowser(m_directoryBrowser.get());
                     if (!m_directoryBrowser->isRunning())
                     {
                         m_directoryBrowser->start(m_ui->getDirectoryUrl());

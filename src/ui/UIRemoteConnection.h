@@ -47,6 +47,16 @@ public:
     /// this window just reads snapshots and triggers refreshes.
     void setDirectoryBrowser(DirectoryBrowser *b) { m_browser = b; }
 
+    /**
+     * Arm the connect state machine with the given URL. Called from
+     * UIDirectoryBrowser when the user picks a stream from the list,
+     * so the two-frame 'Connecting…' feedback and the existing
+     * triggerSourceTypeChange / setCurrentDevice plumbing live in
+     * exactly one place. Also opens this window so the user can see
+     * the progress.
+     */
+    void triggerConnect(const std::string &url);
+
 private:
     UIManager *m_uiManager = nullptr;
     bool m_visible = false;
@@ -57,24 +67,6 @@ private:
     // first render so the user's previous URL persists across sessions.
     char m_urlBuffer[256] = {};
     bool m_urlSeeded = false;
-
-    // Sort state for the browse tab. Kept here (per-window) rather
-    // than in UIManager because nothing else reads it.
-    int m_browseSortIndex = 0;          // 0=clients, 1=recent, 2=name
-    char m_browseSearch[64] = {};       // free-text filter
-
-    // When the user clicks a row, we stash the URL here so the next
-    // frame can switch to the Manual tab and run the Connect button's
-    // state machine against it.
-    std::string m_browseSelectedUrl;
-
-    // Password-prompt state (#49 Phase 3). When the user picks a
-    // password-protected stream we open a modal first; on accept we
-    // hash the typed password into m_uiManager->setRemoteAuthToken()
-    // and proceed with the connect.
-    bool m_showPasswordModal = false;
-    char m_passwordBuffer[128] = {};
-    std::string m_pendingProtectedUrl;
 
     // Two-frame state machine for connect/disconnect feedback. The
     // setCurrentDevice() path blocks ~50-100 ms; if we executed it on
@@ -95,7 +87,6 @@ private:
     std::string m_pendingUrl;
 
     void renderManualTab(bool sourceIsRemote, const std::string &currentDevice, bool connected);
-    void renderBrowseTab();
     void renderStatusFooter(bool connected);
     void advanceStateMachine();
 };

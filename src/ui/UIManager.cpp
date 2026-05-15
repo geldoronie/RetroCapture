@@ -2,6 +2,7 @@
 #include "UIConfiguration.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
+#include "UIDirectoryBrowser.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
@@ -107,12 +108,29 @@ bool UIManager::init(void *window)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    io.IniFilename = "RetroCapture.ini";
-    std::string oldIniPath = "imgui.ini";
-    if (fs::exists(oldIniPath))
+    // Anchor the ImGui ini to the user-data dir so window
+    // positions/sizes/collapse state survive across runs regardless
+    // of which directory the binary was launched from. CWD-relative
+    // worked while everyone ran from build/bin during dev but breaks
+    // for installed builds and Wine launches. m_iniPath has to outlive
+    // ImGui (it holds the pointer verbatim), so we keep it on the
+    // UIManager instance.
     {
-        fs::remove(oldIniPath);
-        LOG_INFO("Old configuration file removed: " + oldIniPath);
+        std::error_code ec;
+        fs::path userDir = fs::path(Paths::getUserDataDir());
+        fs::create_directories(userDir, ec);
+        m_iniPath = (userDir / "imgui.ini").string();
+        io.IniFilename = m_iniPath.c_str();
+        LOG_INFO("ImGui ini path: " + m_iniPath);
+    }
+    // Migrate the legacy CWD-anchored configs out of the way once.
+    for (const char *legacy : { "RetroCapture.ini", "imgui.ini" })
+    {
+        if (fs::exists(legacy))
+        {
+            fs::remove(legacy);
+            LOG_INFO(std::string("Removed legacy ini at CWD: ") + legacy);
+        }
     }
 
     // Setup Dear ImGui style
@@ -150,6 +168,8 @@ bool UIManager::init(void *window)
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
     m_remoteConnectionWindow = std::make_unique<UIRemoteConnection>(this);
+    m_directoryBrowserWindow = std::make_unique<UIDirectoryBrowser>(this);
+    m_directoryBrowserWindow->setRemoteConnectionWindow(m_remoteConnectionWindow.get());
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
@@ -358,6 +378,13 @@ void UIManager::render()
                     m_remoteConnectionWindow->setVisible(true);
                 }
             }
+            if (ImGui::MenuItem("Browse public directory..."))
+            {
+                if (m_directoryBrowserWindow)
+                {
+                    m_directoryBrowserWindow->setVisible(true);
+                }
+            }
             // Quick Disconnect shortcut — only shown when relevant.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
             if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
@@ -408,6 +435,11 @@ void UIManager::render()
     if (m_remoteConnectionWindow)
     {
         m_remoteConnectionWindow->render();
+    }
+
+    if (m_directoryBrowserWindow)
+    {
+        m_directoryBrowserWindow->render();
     }
 
     // Renderizar janela de presets

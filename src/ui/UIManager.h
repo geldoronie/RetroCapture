@@ -22,6 +22,7 @@ class IAudioCapture;
 class UIConfiguration;
 class UICredits;
 class UIRemoteConnection;
+class UIDirectoryBrowser;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
@@ -472,6 +473,7 @@ public:
     // capture pointer current — the window reads .isOpen() / dims to
     // decide whether to show Connect or Disconnect.
     UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
+    UIDirectoryBrowser *getDirectoryBrowserWindow() const { return m_directoryBrowserWindow.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -751,6 +753,11 @@ private:
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
     std::unique_ptr<class UIRemoteConnection> m_remoteConnectionWindow;
+    std::unique_ptr<class UIDirectoryBrowser> m_directoryBrowserWindow;
+
+    // ImGui's IO holds a raw pointer to the ini path string; keep the
+    // backing storage alive on UIManager for the whole lifetime.
+    std::string m_iniPath;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*

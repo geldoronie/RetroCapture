@@ -52,17 +52,20 @@ void UIConfiguration::render()
         // Definir tamanho inicial menor que 640x480 (usar 600x400 para caber em resoluções menores)
         ImVec2 initialSize(600.0f, 400.0f);
 
-        // Configurar posição e tamanho inicial (ignora o que está salvo no .ini)
-        ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
+        // ImGuiCond_FirstUseEver so the saved ini wins on subsequent
+        // launches but the placement still falls into a sensible spot
+        // the very first time. _Always was forcing the user's resized
+        // window back to 600x400 every reopen.
+        ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(initialSize, ImGuiCond_FirstUseEver);
 
         m_justOpened = false;
     }
 
-    // Janela flutuante redimensionável
-    // Usar ImGuiWindowFlags_NoSavedSettings para não salvar posição/tamanho no .ini
-    ImGui::Begin("RetroCapture Controls", &m_visible,
-                 ImGuiWindowFlags_NoSavedSettings);
+    // Janela flutuante redimensionável. NoSavedSettings has been
+    // removed so ImGui persists position / size / collapse state via
+    // the ini file the UIManager points at.
+    ImGui::Begin("RetroCapture Controls", &m_visible);
 
     // Phase 5 of #47: when this RetroCapture is acting as a remote viewer,
     // the only configuration that makes sense for the user to touch is the
