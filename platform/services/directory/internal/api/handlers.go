@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -159,6 +160,25 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.TTL)
+
+	// In 'direct' mode the host doesn't reliably know its own public
+	// IP — it just registers the placeholder it knows (typically
+	// localhost or its LAN address) and trusts us to rewrite the host
+	// component of the endpoint URL with the IP we observed on the
+	// register request. This is the behaviour documented in
+	// docs/DIRECTORY_PROTOCOL.md under "Endpoint exposure modes".
+	//
+	// tunnel-cloudflare and custom modes are taken verbatim: the host
+	// already announced a publicly reachable URL, and rewriting the
+	// host would actually break the entry (the request comes through
+	// Cloudflare's egress, not from where the stream lives).
+	finalEndpoint := req.Endpoint
+	if req.EndpointMode == "direct" {
+		if rewritten, ok := rewriteEndpointHost(req.Endpoint, clientIP(r)); ok {
+			finalEndpoint = rewritten
+		}
+	}
+
 	st := store.Stream{
 		StreamID:         streamID,
 		OwnerToken:       ownerToken,
@@ -170,7 +190,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		FPS:              req.FPS,
 		Codec:            req.Codec,
 		PasswordRequired: req.PasswordRequired,
-		Endpoint:         req.Endpoint,
+		Endpoint:         finalEndpoint,
 		EndpointMode:     req.EndpointMode,
 		ClientCount:      0,
 		PublicIP:         clientIP(r),
@@ -513,6 +533,42 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(Envelope{Data: nil, Error: &APIError{Code: code, Message: msg}})
+}
+
+// rewriteEndpointHost replaces the host component of a registered URL
+// with the request's source IP, preserving scheme, port, and path.
+// Used for endpointMode == "direct" where the host can't reliably know
+// its own public IP. Returns (rewritten, true) on success, ("", false)
+// when the input isn't a parseable URL we can safely transform — the
+// caller falls back to the host-announced value in that case.
+//
+// Edge cases handled:
+//   - URL has no port  → write back without one (preserves the
+//     "scheme + host" shape the host announced)
+//   - URL has a port   → preserve it (whatever the host wants clients
+//     to connect to, possibly behind a port-forward)
+//   - Path / query     → preserved verbatim
+//   - Source IP is IPv6 → wrap in brackets so the URL stays parseable
+func rewriteEndpointHost(rawURL, sourceIP string) (string, bool) {
+	if rawURL == "" || sourceIP == "" {
+		return "", false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	hostOnly := sourceIP
+	// IPv6 needs brackets when combined with a port (and url.URL
+	// happily accepts brackets even without one).
+	if ip := net.ParseIP(sourceIP); ip != nil && ip.To4() == nil {
+		hostOnly = "[" + sourceIP + "]"
+	}
+	if port := u.Port(); port != "" {
+		u.Host = hostOnly + ":" + port
+	} else {
+		u.Host = hostOnly
+	}
+	return u.String(), true
 }
 
 // newToken returns a 32-byte cryptographically-random hex string. Used

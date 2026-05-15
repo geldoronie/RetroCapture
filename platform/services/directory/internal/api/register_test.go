@@ -168,6 +168,52 @@ func TestRegister_OwnerTokenNeverEchoedInGet(t *testing.T) {
 	}
 }
 
+// In direct mode the directory rewrites the endpoint's host with the
+// request's source IP, since the host can't reliably know its own
+// public IP. Scheme + port + path are preserved.
+func TestRegister_DirectModeRewritesEndpointHost(t *testing.T) {
+	h, st := newTestServer(t)
+	req := validRegisterReq()
+	req.EndpointMode = "direct"
+	req.Endpoint     = "http://localhost:9000"
+	rec, env := doJSONFrom(t, h, "POST", "/register", req, "203.0.113.42:1234")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	r := mustData[RegisterResponse](t, env)
+	got, err := st.Get(t.Context(), r.StreamID)
+	if err != nil {
+		t.Fatalf("entry missing: %v", err)
+	}
+	want := "http://203.0.113.42:9000"
+	if got.Endpoint != want {
+		t.Fatalf("endpoint = %q, want %q (host should be rewritten with source IP, port preserved)",
+			got.Endpoint, want)
+	}
+}
+
+// custom mode is taken verbatim — the host announced a URL it knows
+// works, often through a tunnel where the directory's source-IP
+// would be the tunnel egress (wrong).
+func TestRegister_CustomModePreservesEndpoint(t *testing.T) {
+	h, st := newTestServer(t)
+	req := validRegisterReq()
+	req.EndpointMode = "custom"
+	req.Endpoint     = "https://my-tunnel.example.com/stream"
+	rec, env := doJSONFrom(t, h, "POST", "/register", req, "203.0.113.42:1234")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	r := mustData[RegisterResponse](t, env)
+	got, err := st.Get(t.Context(), r.StreamID)
+	if err != nil {
+		t.Fatalf("entry missing: %v", err)
+	}
+	if got.Endpoint != req.Endpoint {
+		t.Fatalf("endpoint mutated to %q, want %q (custom mode is verbatim)", got.Endpoint, req.Endpoint)
+	}
+}
+
 // Public IP comes from the request, not the body — host cannot spoof
 // it by claiming to be elsewhere.
 func TestRegister_PublicIPRecordedFromRequest(t *testing.T) {
