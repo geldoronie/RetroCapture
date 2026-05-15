@@ -19,6 +19,18 @@ type Config struct {
 	DBPath   string
 	LogLevel slog.Level
 	TTL      time.Duration
+
+	// Rate limits, per source IP per hour. Tuned for the alpha-scale
+	// expected traffic (a few hundred concurrent hosts), generous
+	// enough that legitimate users — including a developer who
+	// restarts the host process many times in an hour — don't trip
+	// them. Tighten in production deploy via env vars if abuse shows
+	// up.
+	RateRegisterPerHour  int
+	RateHeartbeatPerHour int
+	RatePatchPerHour     int
+	RateListPerHour      int
+	RateReportPerHour    int
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -26,10 +38,26 @@ type Config struct {
 // fall back to defaults.
 func Load() (Config, error) {
 	cfg := Config{
-		Port:     8081,
-		DBPath:   "./data/directory.db",
-		LogLevel: slog.LevelInfo,
-		TTL:      120 * time.Second,
+		Port:                 8081,
+		DBPath:               "./data/directory.db",
+		LogLevel:             slog.LevelInfo,
+		TTL:                  120 * time.Second,
+		RateRegisterPerHour:  60,
+		RateHeartbeatPerHour: 600,
+		RatePatchPerHour:     60,
+		RateListPerHour:      600,
+		RateReportPerHour:    30,
+	}
+
+	parsePositiveInt := func(name string, dst *int) error {
+		if v := os.Getenv(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("%s must be a positive integer, got %q", name, v)
+			}
+			*dst = n
+		}
+		return nil
 	}
 
 	if v := os.Getenv("DIRECTORY_PORT"); v != "" {
@@ -66,6 +94,12 @@ func Load() (Config, error) {
 		}
 		cfg.TTL = time.Duration(n) * time.Second
 	}
+
+	if err := parsePositiveInt("DIRECTORY_RATE_REGISTER_PER_HOUR",  &cfg.RateRegisterPerHour);  err != nil { return cfg, err }
+	if err := parsePositiveInt("DIRECTORY_RATE_HEARTBEAT_PER_HOUR", &cfg.RateHeartbeatPerHour); err != nil { return cfg, err }
+	if err := parsePositiveInt("DIRECTORY_RATE_PATCH_PER_HOUR",     &cfg.RatePatchPerHour);     err != nil { return cfg, err }
+	if err := parsePositiveInt("DIRECTORY_RATE_LIST_PER_HOUR",      &cfg.RateListPerHour);      err != nil { return cfg, err }
+	if err := parsePositiveInt("DIRECTORY_RATE_REPORT_PER_HOUR",    &cfg.RateReportPerHour);    err != nil { return cfg, err }
 
 	return cfg, nil
 }

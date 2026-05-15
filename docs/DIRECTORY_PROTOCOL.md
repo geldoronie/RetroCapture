@@ -272,19 +272,27 @@ report queue) is well-covered by IP-scoped limits with generous
 ceilings that accommodate several concurrent streams from the same
 home network.
 
-| Endpoint                       | Limit per IP        |
-|--------------------------------|---------------------|
-| `POST /register`               | 5 / hour            |
-| `POST /heartbeat`              | 600 / hour          |
-| `PATCH /streams/<id>`          | 60 / hour           |
-| `DELETE /streams/<id>`         | unlimited           |
-| `GET /streams`                 | 600 / hour          |
-| `GET /streams/<id>`            | 600 / hour          |
-| `POST /streams/<id>/report`    | 10 / hour           |
-| `GET /health`                  | unlimited           |
+| Endpoint                       | Default per IP      | Env override                          |
+|--------------------------------|---------------------|---------------------------------------|
+| `POST /register`               | 60 / hour           | `DIRECTORY_RATE_REGISTER_PER_HOUR`    |
+| `POST /heartbeat`              | 600 / hour          | `DIRECTORY_RATE_HEARTBEAT_PER_HOUR`   |
+| `PATCH /streams/<id>`          | 60 / hour           | `DIRECTORY_RATE_PATCH_PER_HOUR`       |
+| `DELETE /streams/<id>`         | unlimited           | —                                     |
+| `GET /streams`                 | 600 / hour          | `DIRECTORY_RATE_LIST_PER_HOUR`        |
+| `GET /streams/<id>`            | 600 / hour          | (same as `/streams`)                  |
+| `POST /streams/<id>/report`    | 30 / hour           | `DIRECTORY_RATE_REPORT_PER_HOUR`      |
+| `GET /health`                  | unlimited           | —                                     |
+
+The defaults are tuned to be generous enough that legitimate use —
+including a developer restarting the host process many times during a
+debugging session — doesn't hit them. Production deploys can tighten
+the values via the env vars listed above.
 
 `POST /heartbeat` at 600/h supports up to ~5 concurrent streams from
 one IP at the natural 30-second cadence, with headroom for retries.
+`POST /register` at 60/h accommodates active iteration (one publish
+toggle / app restart per minute on average) while still preventing a
+single IP from filling the database in seconds.
 
 Hitting a limit → `429` with `error.code = "rate_limited"` and a
 `Retry-After` header in seconds (rounded up, always >= 1).

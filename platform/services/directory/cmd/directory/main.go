@@ -57,12 +57,15 @@ func run() error {
 	}
 	defer st.Close()
 
-	// Rate-limit policies. Values per docs/DIRECTORY_PROTOCOL.md.
-	limRegister := ratelimit.New(ratelimit.PerHour(5))
-	limHeartbeat := ratelimit.New(ratelimit.PerHour(600))
-	limPatch := ratelimit.New(ratelimit.PerHour(60))
-	limList := ratelimit.New(ratelimit.PerHour(600))
-	limReport := ratelimit.New(ratelimit.PerHour(10))
+	// Rate-limit policies. Defaults per docs/DIRECTORY_PROTOCOL.md;
+	// each is overridable via the matching DIRECTORY_RATE_*_PER_HOUR
+	// env var so the operator can tighten in production or loosen
+	// during local development without recompiling.
+	limRegister := ratelimit.New(ratelimit.PerHour(cfg.RateRegisterPerHour))
+	limHeartbeat := ratelimit.New(ratelimit.PerHour(cfg.RateHeartbeatPerHour))
+	limPatch := ratelimit.New(ratelimit.PerHour(cfg.RatePatchPerHour))
+	limList := ratelimit.New(ratelimit.PerHour(cfg.RateListPerHour))
+	limReport := ratelimit.New(ratelimit.PerHour(cfg.RateReportPerHour))
 
 	server := &api.Server{
 		Logger:         logger,

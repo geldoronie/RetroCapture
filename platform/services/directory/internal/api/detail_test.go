@@ -11,9 +11,19 @@ import (
 
 func TestGet_HappyPath(t *testing.T) {
 	h, _ := newTestServer(t)
-	id, _ := registerOne(t, h)
 
-	rec, env := doJSON(t, h, "GET", "/streams/"+id, nil)
+	// Use custom endpoint mode so the endpoint round-trips verbatim
+	// (direct mode rewrites the host with the request source IP; that
+	// rewrite is covered by TestRegister_DirectModeRewritesEndpointHost).
+	req := validRegisterReq()
+	req.EndpointMode = "custom"
+	rec, env := doJSON(t, h, "POST", "/register", req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	id := mustData[RegisterResponse](t, env).StreamID
+
+	rec, env = doJSON(t, h, "GET", "/streams/"+id, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -21,13 +31,11 @@ func TestGet_HappyPath(t *testing.T) {
 	if view.StreamID != id {
 		t.Fatalf("streamId = %q, want %q", view.StreamID, id)
 	}
-	// All the canonical fields from a valid register should round-trip.
-	want := validRegisterReq()
-	if view.Name != want.Name || view.HostNickname != want.HostNickname ||
-		view.Shader != want.Shader || view.Endpoint != want.Endpoint ||
-		view.EndpointMode != want.EndpointMode || view.Codec != want.Codec ||
-		view.FPS != want.FPS || view.Resolution != want.Resolution {
-		t.Fatalf("round-trip mismatch: got=%+v want input=%+v", view, want)
+	if view.Name != req.Name || view.HostNickname != req.HostNickname ||
+		view.Shader != req.Shader || view.Endpoint != req.Endpoint ||
+		view.EndpointMode != req.EndpointMode || view.Codec != req.Codec ||
+		view.FPS != req.FPS || view.Resolution != req.Resolution {
+		t.Fatalf("round-trip mismatch: got=%+v want input=%+v", view, req)
 	}
 }
 
