@@ -366,24 +366,30 @@ void UIManager::render()
         }
         if (ImGui::BeginMenu("Remote"))
         {
-            // 'Connect to Remote...' is always enabled — the window shows
-            // either Connect or Disconnect based on the current state, so
-            // it doubles as a status / management panel. Disabling the
-            // menu item while connected made the window unreachable once
-            // closed, which forced users into restart-to-recover.
-            if (ImGui::MenuItem("Connect to Remote..."))
+            // While the host is actively streaming we hide the client
+            // entry points — receiving someone else's stream while
+            // publishing our own is a configuration mistake (the local
+            // capture source would compete with the inbound remote feed
+            // for the same display path). The menu items go grey, the
+            // open windows are closed below.
+            const bool clientEntryAllowed = !m_streamingActive;
+            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, clientEntryAllowed))
             {
                 if (m_remoteConnectionWindow)
                 {
                     m_remoteConnectionWindow->setVisible(true);
                 }
             }
-            if (ImGui::MenuItem("Browse public directory..."))
+            if (ImGui::MenuItem("Browse public directory...", nullptr, false, clientEntryAllowed))
             {
                 if (m_directoryBrowserWindow)
                 {
                     m_directoryBrowserWindow->setVisible(true);
                 }
+            }
+            if (m_streamingActive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Disabled while streaming as host.");
             }
             // Quick Disconnect shortcut — only shown when relevant.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
@@ -413,6 +419,15 @@ void UIManager::render()
     // sitting open from a previous local session — the menu hides their
     // toggles too, so without this they'd be unreachable but still drawing.
     const bool clientModeActive = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+    // Symmetric to the menu-item gating above: when we're streaming as
+    // host, force the client-side windows shut. Without this the user
+    // could have left them open from before they hit Start Streaming
+    // and they'd remain visible (and active) on screen.
+    if (m_streamingActive)
+    {
+        if (m_remoteConnectionWindow) m_remoteConnectionWindow->setVisible(false);
+        if (m_directoryBrowserWindow) m_directoryBrowserWindow->setVisible(false);
+    }
     if (clientModeActive)
     {
         if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);

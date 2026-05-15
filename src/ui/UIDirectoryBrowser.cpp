@@ -33,6 +33,43 @@ namespace
         if (mode == "custom")            return "custom";
         return "direct";
     }
+
+    // Draws a small padlock at the current cursor using ImDrawList
+    // primitives. The default ImGui font ships ASCII + Latin-1 only, so
+    // U+1F512 renders as the missing-glyph fallback ('?') — drawing
+    // primitives sidestep the font question entirely.
+    void drawPadlockIcon()
+    {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        const float scale = ImGui::GetFontSize() / 13.0f;
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+
+        const float bodyW   = 10.0f * scale;
+        const float bodyH   =  7.0f * scale;
+        const float radius  =  3.0f * scale;
+        const float thick   =  1.5f * scale;
+        const ImU32 color   = ImGui::GetColorU32(ImGuiCol_Text);
+
+        // Vertical centering inside one text line.
+        const float lineH = ImGui::GetTextLineHeight();
+        const float iconH = bodyH + radius + thick * 0.5f;
+        const float yPad  = (lineH - iconH) * 0.5f;
+        const float x0    = origin.x;
+        const float y0    = origin.y + (yPad > 0.0f ? yPad : 0.0f);
+
+        const float PI = 3.14159265358979323846f;
+        const ImVec2 shackleCenter(x0 + bodyW * 0.5f, y0 + radius);
+        dl->PathArcTo(shackleCenter, radius, PI, 2.0f * PI, 16);
+        dl->PathStroke(color, ImDrawFlags_None, thick);
+
+        const ImVec2 bodyTL(x0,             y0 + radius);
+        const ImVec2 bodyBR(x0 + bodyW,     y0 + radius + bodyH);
+        dl->AddRectFilled(bodyTL, bodyBR, color, 1.0f * scale);
+
+        // Reserve layout space so the cell behaves like a normal text
+        // row (hover hit-testing, table sizing, etc.).
+        ImGui::Dummy(ImVec2(bodyW, lineH));
+    }
 }
 
 UIDirectoryBrowser::UIDirectoryBrowser(UIManager *uiManager)
@@ -155,11 +192,10 @@ void UIDirectoryBrowser::renderTable()
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        // Tiny status column for the password padlock. The padlock glyph
-        // (U+1F512) is outside the default ImGui font; we still ship it
-        // — when the font can't map it the cell renders the fallback
-        // glyph, but the column itself remains a clear binary indicator.
-        ImGui::TableSetupColumn("\xf0\x9f\x94\x92", ImGuiTableColumnFlags_WidthFixed, 28.0f);
+        // Tiny status column for the password padlock. Header is short
+        // text since the default ImGui font can't render U+1F512; the
+        // padlock glyph in each cell is drawn via ImDrawList primitives.
+        ImGui::TableSetupColumn("Pwd", ImGuiTableColumnFlags_WidthFixed, 28.0f);
         ImGui::TableSetupColumn("Host",     ImGuiTableColumnFlags_WidthStretch, 2.0f);
         ImGui::TableSetupColumn("Shader",   ImGuiTableColumnFlags_WidthStretch, 2.5f);
         ImGui::TableSetupColumn("Res\xc3\x97""FPS",  ImGuiTableColumnFlags_WidthFixed, 95.0f);
@@ -201,9 +237,7 @@ void UIDirectoryBrowser::renderTable()
             ImGui::TableNextColumn();
             if (e.passwordRequired)
             {
-                // Padlock (U+1F512). Tooltip explains the cell semantics
-                // for users whose font can't render the glyph.
-                ImGui::TextUnformatted("\xf0\x9f\x94\x92");
+                drawPadlockIcon();
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Password required");
             }
             ImGui::TableNextColumn();
