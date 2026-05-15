@@ -2329,16 +2329,36 @@ bool Application::initUI()
                 m_frameProcessor->deleteTexture();
             }
 
-            // Tear down any existing remote pipeline (capture + meta-sync).
-            if (m_remoteMetaSync)
+            // Tear down any existing remote pipeline on a background
+            // thread so the main loop doesn't stall while
+            // VideoCaptureRemote joins its decode thread (up to ~1.5 s
+            // with the interrupt callback). We move ownership of both
+            // objects into a detached worker; the main thread
+            // continues immediately to spin up the new capture.
+            //
+            // Switching from one remote URL straight to another used
+            // to freeze the UI for the full join duration; this is
+            // what made "click another stream while connected" feel
+            // unresponsive even though the new connection itself was
+            // already fast.
+            if (m_remoteMetaSync || m_capture)
             {
-                m_remoteMetaSync->stop();
-                m_remoteMetaSync.reset();
-            }
-            if (m_capture)
-            {
-                m_capture->stopCapture();
-                m_capture->close();
+                auto deadCapture = std::move(m_capture);
+                auto deadMeta    = std::move(m_remoteMetaSync);
+                std::thread([cap = std::move(deadCapture),
+                             meta = std::move(deadMeta)]() mutable {
+                    if (meta)
+                    {
+                        meta->stop();
+                        meta.reset();
+                    }
+                    if (cap)
+                    {
+                        cap->stopCapture();
+                        cap->close();
+                        cap.reset();
+                    }
+                }).detach();
             }
 
             m_devicePath = devicePath;
