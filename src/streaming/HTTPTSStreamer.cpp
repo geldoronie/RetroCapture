@@ -784,6 +784,25 @@ void HTTPTSStreamer::handleClient(int clientFd)
             m_httpServer.closeClient(clientFd);
             return;
         }
+
+        // The SO_RCVTIMEO we set above is socket-wide and persists
+        // for the rest of this connection. That's fine for the read
+        // phase (and would auto-cap a stuck request) but BAD for the
+        // /stream monitoring loop later, where recv is intentionally
+        // a long-living 'detect disconnect' watch — there a 5 s
+        // EAGAIN would be mis-read as a peer-close and tear the
+        // stream down every 5 s. Reset the timeout to unlimited
+        // (tv = 0) before we leave this block.
+#ifdef _WIN32
+        DWORD tvOff = 0;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char *>(&tvOff), sizeof(tvOff));
+#else
+        timeval tvOff{};
+        tvOff.tv_sec  = 0;
+        tvOff.tv_usec = 0;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tvOff, sizeof(tvOff));
+#endif
     }
     ssize_t bytesRead = static_cast<ssize_t>(request.size());
     (void)bytesRead;
