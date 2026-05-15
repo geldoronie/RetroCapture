@@ -37,4 +37,23 @@ namespace HttpAuth
     /// configured" and always returns true.
     bool authorized(const std::string &rawRequest,
                     const std::string &expectedHash);
+
+    /// Returns the plaintext password from an HTTP Basic
+    /// Authorization header, or empty string when no Basic header is
+    /// present. The username portion (anything before the ':') is
+    /// ignored — only the password contributes to the comparison.
+    /// Returns empty for malformed base64 too.
+    std::string extractBasicPassword(const std::string &rawRequest);
+
+    /// Browser-friendly variant of `authorized()`. Accepts either
+    ///   - Authorization: Bearer <sha256(password)>  (RetroCapture
+    ///     client form)
+    /// or
+    ///   - Authorization: Basic base64("user:password")  (browser
+    ///     native auth popup)
+    /// or a `?token=...` query fallback. The Basic form runs
+    /// sha256(password) internally so callers compare against the
+    /// same hash on both sides.
+    bool authorizedAnyScheme(const std::string &rawRequest,
+                             const std::string &expectedHash);
 }

@@ -855,6 +855,45 @@ void HTTPTSStreamer::handleClient(int clientFd)
         return;
     }
 
+    // Top-level password gate. When the user has set a stream
+    // password (via the publish UI), EVERYTHING on this HTTP server
+    // needs auth — the portal HTML, the static assets, the live
+    // /stream feed, the /api routes, and the directory-facing
+    // /raw + /meta endpoints alike. Without this gate, a passworded
+    // stream would still let any external visitor see the live video
+    // by opening the portal URL in a browser; the password would
+    // only protect the directory-side endpoints. That's a leak.
+    //
+    // Two auth schemes are accepted via HttpAuth::authorizedAnyScheme:
+    //   - Authorization: Bearer <sha256(password)>  (RetroCapture
+    //     client, mpegts.js with custom header, programmatic users)
+    //   - Authorization: Basic base64("user:password")  (browser's
+    //     native popup; the username portion is ignored)
+    //
+    // On reject we send 401 + WWW-Authenticate: Basic so the browser
+    // pops its credentials dialog and remembers the answer for the
+    // rest of the session.
+    {
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!pwHash.empty() && !HttpAuth::authorizedAnyScheme(request, pwHash))
+        {
+            const char *response =
+                "HTTP/1.1 401 Unauthorized\r\n"
+                "WWW-Authenticate: Basic realm=\"RetroCapture\"\r\n"
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "Password required.";
+            m_httpServer.sendData(clientFd, response, strlen(response));
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+    }
+
     // Verificar tipo de requisição (ANTES de verificar portal web).
     //
     // Both classifications match against the REQUEST-LINE PATH only —
