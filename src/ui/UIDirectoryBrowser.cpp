@@ -151,10 +151,15 @@ void UIDirectoryBrowser::renderTable()
                                      | ImGuiTableFlags_BordersInnerH
                                      | ImGuiTableFlags_ScrollY
                                      | ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable("##dirTable", 7, tableFlags, ImVec2(0, -ImGui::GetFrameHeightWithSpacing())))
+    if (ImGui::BeginTable("##dirTable", 8, tableFlags, ImVec2(0, -ImGui::GetFrameHeightWithSpacing())))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        // Tiny status column for the password padlock. The padlock glyph
+        // (U+1F512) is outside the default ImGui font; we still ship it
+        // — when the font can't map it the cell renders the fallback
+        // glyph, but the column itself remains a clear binary indicator.
+        ImGui::TableSetupColumn("\xf0\x9f\x94\x92", ImGuiTableColumnFlags_WidthFixed, 28.0f);
         ImGui::TableSetupColumn("Host",     ImGuiTableColumnFlags_WidthStretch, 2.0f);
         ImGui::TableSetupColumn("Shader",   ImGuiTableColumnFlags_WidthStretch, 2.5f);
         ImGui::TableSetupColumn("Res\xc3\x97""FPS",  ImGuiTableColumnFlags_WidthFixed, 95.0f);
@@ -184,7 +189,6 @@ void UIDirectoryBrowser::renderTable()
             std::string label;
             if (versionMismatch) label += "\xe2\x9a\xa0 ";
             label += e.name;
-            if (e.passwordRequired) label += " [locked]";
             const bool clicked = ImGui::Selectable(label.c_str(), false,
                                                    ImGuiSelectableFlags_SpanAllColumns);
             if (versionMismatch && ImGui::IsItemHovered())
@@ -193,6 +197,14 @@ void UIDirectoryBrowser::renderTable()
                     "Host version: %s\nThis client: %s\n"
                     "Wire protocol may differ — connection may fail or behave oddly.",
                     e.version.c_str(), RETROCAPTURE_VERSION);
+            }
+            ImGui::TableNextColumn();
+            if (e.passwordRequired)
+            {
+                // Padlock (U+1F512). Tooltip explains the cell semantics
+                // for users whose font can't render the glyph.
+                ImGui::TextUnformatted("\xf0\x9f\x94\x92");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Password required");
             }
             ImGui::TableNextColumn();
             ImGui::Text("%s", e.hostNickname.empty() ? "\xe2\x80\x94" : e.hostNickname.c_str());
