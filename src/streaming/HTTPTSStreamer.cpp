@@ -725,17 +725,68 @@ void HTTPTSStreamer::handleClient(int clientFd)
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, (const char *)&flag, sizeof(flag));
 #endif
 
-    // Ler requisição HTTP
-    char buffer[4096];
-    ssize_t bytesRead = m_httpServer.receiveData(clientFd, buffer, sizeof(buffer) - 1);
-    if (bytesRead <= 0)
+    // Read the HTTP request. We must loop until we see the header
+    // terminator (\r\n\r\n) because TCP doesn't guarantee that an
+    // entire request arrives in one segment — common when fronted
+    // by Cloudflare or any tunnel where slow-start fragments the
+    // request across multiple packets. The original code took the
+    // single-recv shortcut, which on localhost always returned the
+    // full request (loopback has huge MTU and one-shot delivery)
+    // but on external paths returned 1-N bytes and the rest of the
+    // request was abandoned, surfacing later as `Request preview: �`
+    // garbage and broken asset loads in the portal.
+    //
+    // Cap the total bytes we'll accumulate (16 KB header limit) and
+    // the total wait time (5 s) so a malicious or stuck client can't
+    // hold a handler thread indefinitely.
+    std::string request;
+    request.reserve(2048);
     {
-        m_httpServer.closeClient(clientFd);
-        return;
-    }
+        char buffer[4096];
+        constexpr size_t kMaxHeaderBytes = 16 * 1024;
+        constexpr int    kRecvTimeoutMs  = 5000;
 
-    buffer[bytesRead] = '\0';
-    std::string request(buffer);
+        // SO_RCVTIMEO so each recv has a deadline. Without it, a
+        // peer that opens the connection and sends nothing would
+        // park a thread forever.
+#ifdef _WIN32
+        DWORD tv = kRecvTimeoutMs;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char *>(&tv), sizeof(tv));
+#else
+        timeval tv{};
+        tv.tv_sec  = kRecvTimeoutMs / 1000;
+        tv.tv_usec = (kRecvTimeoutMs % 1000) * 1000;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
+        while (request.size() < kMaxHeaderBytes)
+        {
+            ssize_t n = m_httpServer.receiveData(clientFd, buffer,
+                                                  sizeof(buffer) - 1);
+            if (n <= 0)
+            {
+                // 0 = peer closed, <0 = error or timeout. If we have
+                // partial data buffered there's no point trying to
+                // parse it as a valid HTTP request.
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+            buffer[n] = '\0';
+            request.append(buffer, static_cast<size_t>(n));
+            // Headers fully arrived?
+            if (request.find("\r\n\r\n") != std::string::npos) break;
+        }
+        if (request.find("\r\n\r\n") == std::string::npos)
+        {
+            // Headers larger than 16 KB or stream never produced a
+            // terminator — either malformed or hostile. Drop.
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+    }
+    ssize_t bytesRead = static_cast<ssize_t>(request.size());
+    (void)bytesRead;
 
     // Se HTTPS está habilitado E Web Portal está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
     // HTTPS só faz sentido se o Web Portal estiver ativo

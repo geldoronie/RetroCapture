@@ -759,24 +759,43 @@ ssize_t WebPortal::sendAll(int clientFd, const void *data, size_t size) const
     // Cap the loop at ~10 s of EAGAIN retries (1000 iterations × 10 ms)
     // so a wedged client doesn't hold the request thread forever.
     int eagainRetries = 0;
+    int totalIterations = 0;
+    size_t totalSent = 0;
     constexpr int kMaxEagainRetries = 1000;
 
     while (remaining > 0)
     {
         ssize_t n = sendData(clientFd, p, remaining);
-        if (n < 0) return -1;   // hard error — connection probably reset
+        ++totalIterations;
+        if (n < 0)
+        {
+            LOG_WARN("WebPortal::sendAll — hard error after " + std::to_string(totalSent) +
+                     "/" + std::to_string(size) + " bytes (fd=" + std::to_string(clientFd) +
+                     ", iter=" + std::to_string(totalIterations) + ")");
+            return -1;
+        }
 
         if (n == 0)
         {
             // EAGAIN / EWOULDBLOCK — kernel buffer momentarily full.
-            if (++eagainRetries > kMaxEagainRetries) return -1;
+            if (++eagainRetries > kMaxEagainRetries)
+            {
+                LOG_WARN("WebPortal::sendAll — gave up after 10 s EAGAIN, " +
+                         std::to_string(totalSent) + "/" + std::to_string(size) +
+                         " bytes (fd=" + std::to_string(clientFd) + ")");
+                return -1;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
         eagainRetries = 0;
         p         += n;
         remaining -= static_cast<size_t>(n);
+        totalSent += static_cast<size_t>(n);
     }
+    LOG_INFO("WebPortal::sendAll — sent " + std::to_string(size) +
+             " bytes in " + std::to_string(totalIterations) + " iter(s) (fd=" +
+             std::to_string(clientFd) + ")");
     return static_cast<ssize_t>(size);
 }
 
