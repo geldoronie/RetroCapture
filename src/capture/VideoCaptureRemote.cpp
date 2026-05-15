@@ -121,6 +121,19 @@ bool VideoCaptureRemote::initDecoder()
     // meaningfully hurting the live-stream latency floor.
     av_dict_set(&opts, "timeout",      "5000000",      0); // 5s read timeout (microseconds)
 
+    // #49 Phase 3 — when the host has set a password on /raw, the
+    // client must present the bearer token (sha256 hex of the
+    // password). FFmpeg's HTTP demuxer concatenates the value of the
+    // "headers" option onto its outbound request line, so we hand it
+    // a single Authorization header here. Empty token == no auth
+    // configured, omit the header entirely so the host's
+    // open-by-default path still works.
+    if (!m_authToken.empty())
+    {
+        const std::string hdr = "Authorization: Bearer " + m_authToken + "\r\n";
+        av_dict_set(&opts, "headers", hdr.c_str(), 0);
+    }
+
     int rc = avformat_open_input(&m_formatCtx, rawUrl.c_str(), nullptr, &opts);
     av_dict_free(&opts);
     if (rc < 0)

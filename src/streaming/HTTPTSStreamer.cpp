@@ -1,4 +1,5 @@
 #include "HTTPTSStreamer.h"
+#include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 
@@ -115,6 +116,17 @@ void HTTPTSStreamer::setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioB
 void HTTPTSStreamer::setAudioCodec(const std::string &codecName)
 {
     m_audioCodecName = codecName;
+}
+
+void HTTPTSStreamer::setStreamPasswordHash(const std::string &sha256Hex)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_passwordMu);
+        m_streamPasswordHash = sha256Hex;
+    }
+    // Forward to the embedded APIController so /meta (which is routed
+    // through it, not handled here) shares the same gate.
+    m_apiController.setStreamPasswordHash(sha256Hex);
 }
 
 bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
@@ -938,6 +950,32 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // different state mirrors (format header, client list, mutex).
     if (isRawRequest)
     {
+        // #49 Phase 3 — password gate. When the user has configured a
+        // stream password, /raw rejects unauthenticated connections
+        // with 401 + WWW-Authenticate so any CLI / FFmpeg consumer
+        // can surface the missing-token failure cleanly. /stream is
+        // intentionally not gated — it stays open for VLC / mpv /
+        // browser portal viewers.
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!HttpAuth::authorized(request, pwHash))
+        {
+            const char *response = "HTTP/1.1 401 Unauthorized\r\n"
+                                   "WWW-Authenticate: Bearer realm=\"retrocapture-raw\"\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "This stream requires a password. "
+                                   "Send Authorization: Bearer <sha256(password)> "
+                                   "or append ?token=<sha256(password)> to the URL.";
+            m_httpServer.sendData(clientFd, response, strlen(response));
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+
         // /raw is only meaningful while streaming is actually running —
         // the raw encoder pipeline is brought up by initializeRawPipeline
         // as part of start() and torn down by stop(). Without it, the

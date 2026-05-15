@@ -1,6 +1,7 @@
 #include "UIRemoteConnection.h"
 #include "UIManager.h"
 #include "../streaming/DirectoryBrowser.h"
+#include "../utils/PasswordHash.h"
 
 #include <imgui.h>
 
@@ -360,12 +361,24 @@ void UIRemoteConnection::renderBrowseTab()
 
             if (clicked)
             {
-                // Stash the URL → next frame we mirror into the Manual
-                // tab's buffer and arm the connect state machine. We
-                // don't run the connect inline because we're inside a
-                // tab item that switches away when the user expects
-                // the action to land on the Manual tab.
-                m_browseSelectedUrl = e.endpoint;
+                if (e.passwordRequired)
+                {
+                    // Defer the connect until the user types the
+                    // password in the modal we open below. Clearing
+                    // m_browseSelectedUrl ensures the post-click block
+                    // doesn't fire on its own.
+                    m_pendingProtectedUrl = e.endpoint;
+                    m_passwordBuffer[0]   = '\0';
+                    m_showPasswordModal   = true;
+                }
+                else
+                {
+                    // No password required: clear any leftover token
+                    // from a previous protected connect and proceed
+                    // straight to the connect state machine.
+                    if (m_uiManager) m_uiManager->setRemoteAuthToken("");
+                    m_browseSelectedUrl = e.endpoint;
+                }
             }
             ImGui::PopID();
         }
@@ -395,6 +408,49 @@ void UIRemoteConnection::renderBrowseTab()
     ImGui::Spacing();
     ImGui::TextDisabled("Showing %zu of %d total stream(s). Auto-refresh every 30 s.",
                         entries.size(), snap.totalCount);
+
+    // ── Password modal for protected streams (#49 Phase 3).
+    if (m_showPasswordModal)
+    {
+        ImGui::OpenPopup("Stream password");
+        m_showPasswordModal = false;
+    }
+    if (ImGui::BeginPopupModal("Stream password", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("This stream is password-protected. Enter the password "
+                           "the host configured to connect.");
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(280);
+        bool submitted = ImGui::InputText("##pw", m_passwordBuffer, sizeof(m_passwordBuffer),
+                                          ImGuiInputTextFlags_Password |
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        bool accept = ImGui::Button("Connect", ImVec2(120, 0)) || submitted;
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_pendingProtectedUrl.clear();
+            m_passwordBuffer[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        if (accept)
+        {
+            // Hash whatever they typed (even empty — the server will
+            // reject with 401 and surface that as a Connect failure
+            // in the existing flow). Then arm the connect path the
+            // same way an unprotected row would.
+            if (m_uiManager)
+            {
+                m_uiManager->setRemoteAuthToken(
+                    PasswordHash::sha256Hex(std::string(m_passwordBuffer)));
+            }
+            m_browseSelectedUrl = m_pendingProtectedUrl;
+            m_pendingProtectedUrl.clear();
+            std::memset(m_passwordBuffer, 0, sizeof(m_passwordBuffer));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

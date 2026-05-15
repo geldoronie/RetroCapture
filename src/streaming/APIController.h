@@ -3,6 +3,7 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <mutex>
 
 class UIManager;
 class Application;
@@ -53,6 +54,14 @@ public:
      * @return true se a requisição foi processada, false caso contrário
      */
     bool handleRequest(int clientFd, const std::string &request);
+
+    /**
+     * #49 Phase 3 — Updates the password hash used to gate /meta.
+     * Pass an empty string to disable auth. Mirrors the behaviour of
+     * HTTPTSStreamer::setStreamPasswordHash; Application keeps both
+     * in sync with the UI on every frame.
+     */
+    void setStreamPasswordHash(const std::string &sha256Hex);
 
 private:
     /**
@@ -188,4 +197,8 @@ private:
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
     HTTPServer *m_httpServer = nullptr; // Ponteiro para HTTPServer
+
+    // #49 Phase 3 — sha256(password) hex; empty == no auth.
+    mutable std::mutex m_passwordMu;
+    std::string        m_streamPasswordHash;
 };

@@ -27,6 +27,7 @@
 #include "../streaming/StreamManager.h"
 #include "../streaming/DirectoryClient.h"
 #include "../streaming/DirectoryBrowser.h"
+#include "../utils/PasswordHash.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -2380,6 +2381,18 @@ bool Application::initUI()
                 return;
             }
 
+            // #49 Phase 3 — pull the bearer token the connection UI
+            // (or password modal) stashed for this connect. Consumed
+            // exactly once: read here, cleared immediately so a
+            // subsequent unprotected connect doesn't accidentally
+            // inherit the previous stream's token.
+            std::string authToken;
+            if (m_ui)
+            {
+                authToken = m_ui->getRemoteAuthToken();
+                m_ui->setRemoteAuthToken("");
+            }
+
             // Recreate the capture as Remote (the existing instance might be
             // V4L2/DS if the user just flipped source type).
             {
@@ -2388,6 +2401,7 @@ bool Application::initUI()
                 if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                 else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                 remote->setInterpolationMode(imode);
+                remote->setAuthToken(authToken);
                 m_capture = std::move(remote);
             }
             if (m_capture->open(devicePath))
@@ -2416,6 +2430,7 @@ bool Application::initUI()
                 }
                 // Re-start the /meta poller against the new host.
                 m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
+                m_remoteMetaSync->setAuthToken(authToken);
                 m_remoteMetaSync->start(devicePath,
                     [this](const RemoteMetaSync::Snapshot &snap)
                     {
@@ -5398,6 +5413,20 @@ void Application::applyPendingRemoteMeta()
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
+
+    // #49 Phase 3 — keep the server-side password gate in sync with
+    // whatever the user typed in the publish UI. We hash on every
+    // call (cheap, sha256 of < 1 KB), but the StreamManager setter
+    // is a no-op when the value hasn't changed. Done outside the
+    // wantPublish gate below so the gate stays active even on
+    // streams the user doesn't publicly list (someone you handed the
+    // URL directly is still protected).
+    if (m_streamManager)
+    {
+        const std::string &raw = m_ui->getDirectoryPassword();
+        m_streamManager->setStreamPasswordHash(
+            raw.empty() ? std::string{} : PasswordHash::sha256Hex(raw));
+    }
 
     // Publish only makes sense when there's actually a stream being
     // served. Two scenarios where this gate matters:

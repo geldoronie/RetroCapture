@@ -100,12 +100,21 @@ public:
     };
     void setInterpolationMode(InterpolationMode mode);
 
+    /**
+     * #49 Phase 3 — bearer token sent to the host's /raw endpoint
+     * for password-protected streams. Set before open(); empty
+     * string disables the header (the host's open-by-default path
+     * doesn't require it).
+     */
+    void setAuthToken(const std::string &tokenHex) { m_authToken = tokenHex; }
+
 private:
     void decodeLoop();
     bool initDecoder();
     void cleanupDecoder();
 
     std::string m_url;        // base URL — "/raw" is appended internally
+    std::string m_authToken;  // sha256 hex of password, empty == no auth
     std::atomic<bool> m_open{false};
 
     uint32_t m_width = 0;

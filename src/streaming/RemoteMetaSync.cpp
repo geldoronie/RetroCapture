@@ -86,7 +86,11 @@ namespace
     // Synchronous HTTP/1.1 GET with a 5-second receive deadline. Returns
     // the response body on 2xx, empty string otherwise. Logs errors but
     // doesn't throw — callers treat empty as "skip this poll".
-    std::string httpGet(const std::string &fullUrl)
+    //
+    // authToken (#49 Phase 3) is the sha256 hex of the user's stream
+    // password; when non-empty it's sent as an Authorization: Bearer
+    // header. Empty token means "no auth", header omitted.
+    std::string httpGet(const std::string &fullUrl, const std::string &authToken = "")
     {
         UrlParts u;
         if (!parseHttpUrl(fullUrl, u))
@@ -120,7 +124,14 @@ namespace
             req += ':';
             req += u.port;
         }
-        req += "\r\nConnection: close\r\nAccept: application/json\r\n\r\n";
+        req += "\r\nConnection: close\r\nAccept: application/json\r\n";
+        if (!authToken.empty())
+        {
+            req += "Authorization: Bearer ";
+            req += authToken;
+            req += "\r\n";
+        }
+        req += "\r\n";
 
         if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)
         {
@@ -268,7 +279,7 @@ void RemoteMetaSync::stop()
 
 bool RemoteMetaSync::fetchOnce(Snapshot &out)
 {
-    std::string body = httpGet(m_baseUrl + "/meta");
+    std::string body = httpGet(m_baseUrl + "/meta", m_authToken);
     if (body.empty()) return false;
     return parseSnapshotJSON(body, out);
 }
@@ -345,6 +356,12 @@ bool RemoteMetaSync::runSSE()
         req += u.port;
     }
     req += "\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n";
+    if (!m_authToken.empty())
+    {
+        req += "Authorization: Bearer ";
+        req += m_authToken;
+        req += "\r\n";
+    }
     req += "Connection: keep-alive\r\n\r\n";
 
     if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)

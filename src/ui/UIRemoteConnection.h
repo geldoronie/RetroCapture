@@ -68,6 +68,14 @@ private:
     // state machine against it.
     std::string m_browseSelectedUrl;
 
+    // Password-prompt state (#49 Phase 3). When the user picks a
+    // password-protected stream we open a modal first; on accept we
+    // hash the typed password into m_uiManager->setRemoteAuthToken()
+    // and proceed with the connect.
+    bool m_showPasswordModal = false;
+    char m_passwordBuffer[128] = {};
+    std::string m_pendingProtectedUrl;
+
     // Two-frame state machine for connect/disconnect feedback. The
     // setCurrentDevice() path blocks ~50-100 ms; if we executed it on
     // the same frame as the button click, the user never sees a

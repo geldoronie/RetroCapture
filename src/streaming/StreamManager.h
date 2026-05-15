@@ -106,6 +106,14 @@ public:
     void setWebPortalEnabled(bool enabled);
 
     /**
+     * #49 Phase 3 — propagate the configured stream-password hash
+     * (sha256 hex) to every HTTPTSStreamer currently registered.
+     * Empty string disables auth. Application calls this every
+     * frame so a toggle in the UI takes effect on the next request.
+     */
+    void setStreamPasswordHash(const std::string &sha256Hex);
+
+    /**
      * Enable/disable HTTPS in HTTPTSStreamer (if available)
      * This can be called while streaming is active
      */

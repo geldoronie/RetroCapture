@@ -260,6 +260,17 @@ std::string StreamManager::getFoundSSLKeyPath() const
     return "";
 }
 
+void StreamManager::setStreamPasswordHash(const std::string &sha256Hex)
+{
+    for (auto &streamer : m_streamers)
+    {
+        if (auto *ts = dynamic_cast<HTTPTSStreamer *>(streamer.get()))
+        {
+            ts->setStreamPasswordHash(sha256Hex);
+        }
+    }
+}
+
 void StreamManager::setWebPortalEnabled(bool enabled)
 {
     for (auto &streamer : m_streamers)

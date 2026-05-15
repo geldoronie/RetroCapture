@@ -267,6 +267,8 @@ public:
     void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
     const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
     void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
+    void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -892,6 +894,12 @@ private:
     std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+
+    // Transient bearer token for the next remote connect (#49 Phase 3).
+    // sha256 hex of the password the user typed in the prompt. Not
+    // persisted: set on browse-click or Manual-tab connect, consumed
+    // by Application's onDeviceChanged callback, then cleared.
+    std::string m_remoteAuthToken;
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
     // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)

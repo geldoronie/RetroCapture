@@ -76,6 +76,18 @@ public:
                          size_t avioBufferSize);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
+
+    // #49 Phase 3 — stream password.
+    //
+    // The hash is the lowercase hex sha256 of whatever the user typed
+    // in the publish UI. Pass an empty string to disable auth.
+    // Application keeps this in sync with UIManager every frame so a
+    // toggle in the UI takes effect on the next request.
+    //
+    // Only /raw is gated; /stream stays open so VLC / mpv / portal
+    // viewers keep working regardless of whether the directory entry
+    // is password-protected.
+    void setStreamPasswordHash(const std::string &sha256Hex);
     void setH265Preset(const std::string &preset) { m_h265Preset = preset; }
     void setH265Profile(const std::string &profile) { m_h265Profile = profile; }
     void setH265Level(const std::string &level) { m_h265Level = level; }
@@ -212,6 +224,13 @@ private:
     std::string m_videoCodecName = "h264";
     std::string m_audioCodecName = "aac";
     std::string m_h264Preset = "veryfast"; // Preset H.264 configurável via UI
+
+    // #49 Phase 3 — sha256 hex of the user's password (empty == no auth).
+    // Accessed from the request-handler thread; atomic update via the
+    // setter under a mutex so a setStreamPasswordHash from the main
+    // thread can't tear with a concurrent compare in handleRequest.
+    mutable std::mutex m_passwordMu;
+    std::string        m_streamPasswordHash;
     std::string m_h265Preset = "veryfast"; // Preset H.265 configurável via UI
     std::string m_h265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
