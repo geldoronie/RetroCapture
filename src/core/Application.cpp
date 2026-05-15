@@ -29,6 +29,10 @@
 #include "../streaming/DirectoryBrowser.h"
 #include "../streaming/CloudflaredManager.h"
 #include "../utils/PasswordHash.h"
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -5559,7 +5563,7 @@ void Application::syncDirectoryClient()
         cfg.codec            = m_ui->getStreamingVideoCodec() == "h265" ? "h265" : "h264";
         cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
         cfg.endpointMode     = mode;
-        cfg.version          = "0.7.0-alpha";
+        cfg.version          = RETROCAPTURE_VERSION;
 
         if (cfg.endpointMode == "tunnel-cloudflare")
         {
@@ -5620,6 +5624,15 @@ void Application::syncDirectoryClient()
     {
         m_ui->setDirectoryStatusText(status);
     }
+
+    // Mirror telemetry counters into UIManager every frame so the
+    // publish section can render them without holding a pointer to
+    // DirectoryClient.
+    const auto stats = m_directoryClient->getStats();
+    m_ui->setDirectoryStats(stats.registerOk, stats.registerFail,
+                            stats.heartbeatOk, stats.heartbeatFail,
+                            stats.patchOk, stats.patchFail,
+                            stats.secondsSinceLastHeartbeat);
 }
 
 // Recording methods

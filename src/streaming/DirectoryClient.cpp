@@ -74,6 +74,15 @@ bool DirectoryClient::start(const Config &cfg)
         m_ownerToken.clear();
         m_lastError.clear();
     }
+    // Reset telemetry on every fresh start so the displayed numbers
+    // reflect the current session, not history across reconfigures.
+    m_registerOk.store(0);
+    m_registerFail.store(0);
+    m_heartbeatOk.store(0);
+    m_heartbeatFail.store(0);
+    m_patchOk.store(0);
+    m_patchFail.store(0);
+    m_lastHeartbeatSteadyMs.store(-1);
     m_stopRequested.store(false);
     m_state.store(State::Registering);
     m_thread = std::thread([this] { workerLoop(); });
@@ -134,6 +143,26 @@ std::string DirectoryClient::getLastError() const
 {
     std::lock_guard<std::mutex> lock(m_mu);
     return m_lastError;
+}
+
+DirectoryClient::Stats DirectoryClient::getStats() const
+{
+    Stats s;
+    s.registerOk    = m_registerOk.load();
+    s.registerFail  = m_registerFail.load();
+    s.heartbeatOk   = m_heartbeatOk.load();
+    s.heartbeatFail = m_heartbeatFail.load();
+    s.patchOk       = m_patchOk.load();
+    s.patchFail     = m_patchFail.load();
+
+    const int64_t lastMs = m_lastHeartbeatSteadyMs.load();
+    if (lastMs >= 0)
+    {
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+        s.secondsSinceLastHeartbeat = (nowMs - lastMs) / 1000;
+    }
+    return s;
 }
 
 void DirectoryClient::setError(const std::string &msg)
@@ -262,6 +291,7 @@ bool DirectoryClient::doRegister()
     {
         setError("register transport failure: " + resp.error);
         LOG_WARN("DirectoryClient::doRegister — " + resp.error);
+        m_registerFail.fetch_add(1);
         return false;
     }
     if (resp.statusCode != 201)
@@ -269,6 +299,7 @@ bool DirectoryClient::doRegister()
         setError("register HTTP " + std::to_string(resp.statusCode));
         LOG_WARN("DirectoryClient::doRegister — HTTP " + std::to_string(resp.statusCode) +
                  " body: " + resp.body.substr(0, 256));
+        m_registerFail.fetch_add(1);
         return false;
     }
 
@@ -285,9 +316,11 @@ bool DirectoryClient::doRegister()
     {
         setError(std::string("register parse failure: ") + e.what());
         LOG_WARN(std::string("DirectoryClient::doRegister — parse: ") + e.what());
+        m_registerFail.fetch_add(1);
         return false;
     }
 
+    m_registerOk.fetch_add(1);
     LOG_INFO("DirectoryClient: registered streamId=" + m_streamId);
     return true;
 }
@@ -316,6 +349,7 @@ bool DirectoryClient::doHeartbeat()
     if (!resp.ok)
     {
         setError("heartbeat transport: " + resp.error);
+        m_heartbeatFail.fetch_add(1);
         return false;
     }
     if (resp.statusCode == 404)
@@ -324,6 +358,7 @@ bool DirectoryClient::doHeartbeat()
         // loop iteration by clearing our id and dropping back to
         // Registering.
         LOG_WARN("DirectoryClient: heartbeat 404 — server expired our entry, will re-register");
+        m_heartbeatFail.fetch_add(1);
         {
             std::lock_guard<std::mutex> lock(m_mu);
             m_streamId.clear();
@@ -336,9 +371,14 @@ bool DirectoryClient::doHeartbeat()
     if (resp.statusCode != 200)
     {
         setError("heartbeat HTTP " + std::to_string(resp.statusCode));
+        m_heartbeatFail.fetch_add(1);
         return false;
     }
     setError("");
+    m_heartbeatOk.fetch_add(1);
+    m_lastHeartbeatSteadyMs.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
     return true;
 }
 
@@ -376,14 +416,17 @@ bool DirectoryClient::doPatchIfPending()
     if (!resp.ok)
     {
         setError("patch transport: " + resp.error);
+        m_patchFail.fetch_add(1);
         return false;
     }
     if (resp.statusCode != 204)
     {
         setError("patch HTTP " + std::to_string(resp.statusCode));
+        m_patchFail.fetch_add(1);
         return false;
     }
     setError("");
+    m_patchOk.fetch_add(1);
     return true;
 }
 

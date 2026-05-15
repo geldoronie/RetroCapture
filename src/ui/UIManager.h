@@ -269,6 +269,28 @@ public:
     void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
+
+    // Directory telemetry getters/setters (#49 Phase 5).
+    uint64_t getDirectoryRegisterOk()    const { return m_directoryRegisterOk; }
+    uint64_t getDirectoryRegisterFail()  const { return m_directoryRegisterFail; }
+    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryHeartbeatOk; }
+    uint64_t getDirectoryHeartbeatFail() const { return m_directoryHeartbeatFail; }
+    uint64_t getDirectoryPatchOk()       const { return m_directoryPatchOk; }
+    uint64_t getDirectoryPatchFail()     const { return m_directoryPatchFail; }
+    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directorySecondsSinceLastHeartbeat; }
+    void setDirectoryStats(uint64_t regOk, uint64_t regFail,
+                           uint64_t hbOk, uint64_t hbFail,
+                           uint64_t patchOk, uint64_t patchFail,
+                           int64_t secondsSinceLastHeartbeat)
+    {
+        m_directoryRegisterOk    = regOk;
+        m_directoryRegisterFail  = regFail;
+        m_directoryHeartbeatOk   = hbOk;
+        m_directoryHeartbeatFail = hbFail;
+        m_directoryPatchOk       = patchOk;
+        m_directoryPatchFail     = patchFail;
+        m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
+    }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -894,6 +916,16 @@ private:
     std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+
+    // Per-session telemetry counters mirrored from DirectoryClient
+    // (#49 Phase 5). Application writes each frame; UI reads.
+    uint64_t m_directoryRegisterOk     = 0;
+    uint64_t m_directoryRegisterFail   = 0;
+    uint64_t m_directoryHeartbeatOk    = 0;
+    uint64_t m_directoryHeartbeatFail  = 0;
+    uint64_t m_directoryPatchOk        = 0;
+    uint64_t m_directoryPatchFail      = 0;
+    int64_t  m_directorySecondsSinceLastHeartbeat = -1;
 
     // Transient bearer token for the next remote connect (#49 Phase 3).
     // sha256 hex of the password the user typed in the prompt. Not

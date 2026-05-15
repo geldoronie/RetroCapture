@@ -5,6 +5,10 @@
 
 #include <imgui.h>
 
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -317,7 +321,7 @@ void UIRemoteConnection::renderBrowseTab()
         ImGui::TableSetupColumn("Shader",   ImGuiTableColumnFlags_WidthStretch, 2.5f);
         ImGui::TableSetupColumn("Res×FPS",  ImGuiTableColumnFlags_WidthFixed,   95.0f);
         ImGui::TableSetupColumn("Codec",    ImGuiTableColumnFlags_WidthFixed,   45.0f);
-        ImGui::TableSetupColumn("Clients",  ImGuiTableColumnFlags_WidthFixed,   60.0f);
+        ImGui::TableSetupColumn("Clients (\xe2\x89\x88)",  ImGuiTableColumnFlags_WidthFixed,   60.0f);
         ImGui::TableSetupColumn("Mode",     ImGuiTableColumnFlags_WidthFixed,   80.0f);
         ImGui::TableHeadersRow();
 
@@ -342,10 +346,27 @@ void UIRemoteConnection::renderBrowseTab()
             ImGui::PushID(e.streamId.c_str());
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            // Selectable spans the row so the click target is generous.
-            std::string label = e.name;
+
+            // Version-mismatch warning: when the host announces a
+            // build that doesn't match ours, the wire protocol may
+            // have drifted. Prepending a ⚠ glyph + a tooltip on the
+            // row is a soft signal — the user can still try to
+            // connect; we just don't promise it'll work.
+            const bool versionMismatch = !e.version.empty() &&
+                                         e.version != std::string(RETROCAPTURE_VERSION);
+
+            std::string label;
+            if (versionMismatch) label += "\xe2\x9a\xa0 "; // warning sign U+26A0
+            label += e.name;
             if (e.passwordRequired) label += " [locked]";
             const bool clicked = ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+            if (versionMismatch && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Host version: %s\nThis client: %s\n"
+                    "Wire protocol may differ — connection may fail or behave oddly.",
+                    e.version.c_str(), RETROCAPTURE_VERSION);
+            }
             ImGui::TableNextColumn();
             ImGui::Text("%s", e.hostNickname.empty() ? "—" : e.hostNickname.c_str());
             ImGui::TableNextColumn();

@@ -1016,4 +1016,30 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     {
         ImGui::TextDisabled("%s", status.c_str());
     }
+
+    // Per-session telemetry (#49 Phase 5). Hidden behind a tree node
+    // so the publish section stays compact for normal users; opens
+    // on demand when something looks off and the user wants to dig.
+    if (ImGui::TreeNode("Telemetry"))
+    {
+        const int64_t since = m_uiManager->getDirectorySecondsSinceLastHeartbeat();
+        ImGui::Text("register   ok=%llu  fail=%llu",
+                    (unsigned long long)m_uiManager->getDirectoryRegisterOk(),
+                    (unsigned long long)m_uiManager->getDirectoryRegisterFail());
+        ImGui::Text("heartbeat  ok=%llu  fail=%llu",
+                    (unsigned long long)m_uiManager->getDirectoryHeartbeatOk(),
+                    (unsigned long long)m_uiManager->getDirectoryHeartbeatFail());
+        ImGui::Text("patch      ok=%llu  fail=%llu",
+                    (unsigned long long)m_uiManager->getDirectoryPatchOk(),
+                    (unsigned long long)m_uiManager->getDirectoryPatchFail());
+        if (since < 0)
+        {
+            ImGui::TextDisabled("last successful heartbeat: never");
+        }
+        else
+        {
+            ImGui::Text("last successful heartbeat: %llds ago", (long long)since);
+        }
+        ImGui::TreePop();
+    }
 }

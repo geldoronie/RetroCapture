@@ -86,6 +86,23 @@ public:
         std::string endpointMode;
     };
 
+    /**
+     * Per-session counters surfaced to the UI so the user can tell
+     * whether publish is actually working. Reset on every start().
+     */
+    struct Stats
+    {
+        uint64_t registerOk    = 0;
+        uint64_t registerFail  = 0;
+        uint64_t heartbeatOk   = 0;
+        uint64_t heartbeatFail = 0;
+        uint64_t patchOk       = 0;
+        uint64_t patchFail     = 0;
+        // Steady-clock seconds since the last successful heartbeat.
+        // -1 when no heartbeat has succeeded yet (or after a delete).
+        int64_t  secondsSinceLastHeartbeat = -1;
+    };
+
     DirectoryClient();
     ~DirectoryClient();
 
@@ -115,6 +132,7 @@ public:
     State       getState() const     { return m_state.load(); }
     std::string getStreamId() const;
     std::string getLastError() const;
+    Stats       getStats() const;
 
 private:
     void workerLoop();
@@ -133,6 +151,16 @@ private:
     std::string         m_streamId;       // assigned by /register
     std::string         m_ownerToken;     // ditto
     std::string         m_lastError;
+
+    // Telemetry. Atomic so the UI can read them off the main thread
+    // without locking; the worker thread is the only writer.
+    std::atomic<uint64_t> m_registerOk{0};
+    std::atomic<uint64_t> m_registerFail{0};
+    std::atomic<uint64_t> m_heartbeatOk{0};
+    std::atomic<uint64_t> m_heartbeatFail{0};
+    std::atomic<uint64_t> m_patchOk{0};
+    std::atomic<uint64_t> m_patchFail{0};
+    std::atomic<int64_t>  m_lastHeartbeatSteadyMs{-1}; // -1 == none yet
 
     mutable std::mutex  m_mu;
     std::condition_variable m_cv;         // wakes worker for early exit / patch
