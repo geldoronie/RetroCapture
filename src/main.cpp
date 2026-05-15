@@ -664,7 +664,7 @@ int main(int argc, char *argv[])
     if (browseDirectory)
     {
         const std::string url = browseDirectoryUrl.empty()
-                                    ? std::string("http://localhost:8081")
+                                    ? std::string("http://directory.retrocapture.com")
                                     : browseDirectoryUrl;
         auto resp = HttpClient::send(HttpClient::Method::GET, url + "/streams");
         if (!resp.ok)

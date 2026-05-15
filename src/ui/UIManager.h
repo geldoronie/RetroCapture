@@ -886,7 +886,7 @@ private:
     // actually talks to the directory service and mirrors the toggle
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
-    std::string m_directoryUrl            = "http://localhost:8081";
+    std::string m_directoryUrl            = "http://directory.retrocapture.com";
     std::string m_directoryStreamName     = "";
     std::string m_directoryHostNickname   = "";
     std::string m_directoryPassword       = "";       // optional; empty = no password

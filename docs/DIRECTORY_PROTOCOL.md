@@ -333,7 +333,15 @@ handshake.
 
 ## Discovery
 
-The directory's URL is overridable on the client side
-(`--directory-url`), so anyone can run their own instance and point a
-client at it. The default URL is baked into RetroCapture's binary and
-controlled by the project maintainer.
+The canonical directory URL is **`http://directory.retrocapture.com`** —
+that's the default the binary ships with for both the in-app browse
+window and the `--browse-directory` CLI flag. It's plain HTTP because
+RetroCapture's embedded HTTP client doesn't speak TLS yet; the same
+host also serves HTTPS for browsers and `curl` reaching the service
+from outside the app.
+
+The default is overridable on the client side (`--directory-url` on
+the CLI, or the "Directory URL" field under Advanced in the publish
+section of the Streaming tab), so anyone can run their own instance
+and point a client at it. The default URL is baked into
+RetroCapture's binary and controlled by the project maintainer.
