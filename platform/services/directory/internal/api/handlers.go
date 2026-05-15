@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/ratelimit"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/store"
 	"github.com/google/uuid"
 )
@@ -50,25 +51,54 @@ const (
 )
 
 // Server holds the dependencies the HTTP handlers need.
+//
+// The Limit* fields are optional. A nil limiter means the endpoint is
+// unlimited (which is what /health and DELETE want by spec). main.go
+// wires real limiters with the production rates; tests can wire
+// tight ones to exercise the 429 path.
 type Server struct {
 	Logger *slog.Logger
 	Store  *store.Store
 	TTL    time.Duration
+
+	LimitRegister  *ratelimit.Limiter // POST /register
+	LimitHeartbeat *ratelimit.Limiter // POST /heartbeat
+	LimitPatch     *ratelimit.Limiter // PATCH /streams/{id}
+	LimitList      *ratelimit.Limiter // GET /streams and GET /streams/{id}
+	LimitReport    *ratelimit.Limiter // POST /streams/{id}/report
 }
 
 // Routes returns the http.Handler the service should serve from.
 // Every endpoint is registered here so the surface is auditable in
-// one place.
+// one place. Each entry visibly states its rate-limit policy via the
+// `ratelimit.Wrap` call — endpoints without a limiter (nil) pass
+// through unchanged.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("POST /register", s.handleRegister)
-	mux.HandleFunc("POST /heartbeat", s.handleHeartbeat)
-	mux.HandleFunc("GET /streams", s.handleListStreams)
-	mux.HandleFunc("GET /streams/{id}", s.handleGetStream)
-	mux.HandleFunc("PATCH /streams/{id}", s.handlePatchStream)
+	mux.HandleFunc("GET /health", s.handleHealth) // unlimited
+
+	mux.HandleFunc("POST /register",
+		ratelimit.Wrap(s.LimitRegister, ratelimit.ClientIPKey, s.handleRegister))
+
+	mux.HandleFunc("POST /heartbeat",
+		ratelimit.Wrap(s.LimitHeartbeat, ratelimit.ClientIPKey, s.handleHeartbeat))
+
+	mux.HandleFunc("GET /streams",
+		ratelimit.Wrap(s.LimitList, ratelimit.ClientIPKey, s.handleListStreams))
+
+	mux.HandleFunc("GET /streams/{id}",
+		ratelimit.Wrap(s.LimitList, ratelimit.ClientIPKey, s.handleGetStream))
+
+	mux.HandleFunc("PATCH /streams/{id}",
+		ratelimit.Wrap(s.LimitPatch, ratelimit.ClientIPKey, s.handlePatchStream))
+
+	// DELETE is intentionally unlimited per the spec — the owner
+	// token gates abuse, and we want disconnect to always succeed.
 	mux.HandleFunc("DELETE /streams/{id}", s.handleDeleteStream)
-	mux.HandleFunc("POST /streams/{id}/report", s.handleReportStream)
+
+	mux.HandleFunc("POST /streams/{id}/report",
+		ratelimit.Wrap(s.LimitReport, ratelimit.ClientIPKey, s.handleReportStream))
+
 	return s.withRequestLogging(mux)
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/api"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/config"
+	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/ratelimit"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/reaper"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/store"
 )
@@ -56,21 +57,39 @@ func run() error {
 	}
 	defer st.Close()
 
+	// Rate-limit policies. Values per docs/DIRECTORY_PROTOCOL.md.
+	limRegister := ratelimit.New(ratelimit.PerHour(5))
+	limHeartbeat := ratelimit.New(ratelimit.PerHour(600))
+	limPatch := ratelimit.New(ratelimit.PerHour(60))
+	limList := ratelimit.New(ratelimit.PerHour(600))
+	limReport := ratelimit.New(ratelimit.PerHour(10))
+
 	server := &api.Server{
-		Logger: logger,
-		Store:  st,
-		TTL:    cfg.TTL,
+		Logger:         logger,
+		Store:          st,
+		TTL:            cfg.TTL,
+		LimitRegister:  limRegister,
+		LimitHeartbeat: limHeartbeat,
+		LimitPatch:     limPatch,
+		LimitList:      limList,
+		LimitReport:    limReport,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	rp := &reaper.Reaper{
+	// Reaper: deletes expired entries.
+	(&reaper.Reaper{
 		Store:    st,
 		Logger:   logger,
 		Interval: 60 * time.Second,
-	}
-	rp.Start(ctx)
+	}).Start(ctx)
+
+	// Rate-limit bucket eviction: every hour, drop buckets we haven't
+	// seen in 2 h. Keeps the in-memory map bounded without ever
+	// punishing a returning client.
+	go evictRateLimitBuckets(ctx, logger,
+		limRegister, limHeartbeat, limPatch, limList, limReport)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -99,4 +118,23 @@ func run() error {
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+func evictRateLimitBuckets(ctx context.Context, logger *slog.Logger, limiters ...*ratelimit.Limiter) {
+	t := time.NewTicker(1 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			total := 0
+			for _, l := range limiters {
+				total += l.EvictStale(2 * time.Hour)
+			}
+			if total > 0 {
+				logger.Info("ratelimit_evicted", "count", total)
+			}
+		}
+	}
 }

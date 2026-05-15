@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/ratelimit"
 	"github.com/geldoronie/RetroCapture/platform/services/directory/internal/store"
 )
 
@@ -337,6 +339,71 @@ func TestReport(t *testing.T) {
 	})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("report status = %d, want 202", rec.Code)
+	}
+}
+
+func TestRateLimit429OnRegister(t *testing.T) {
+	// Build a server with a tight register limiter so the 6th attempt
+	// fires the 429 path without polluting the other tests.
+	st, err := store.Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	srv := &Server{
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:         st,
+		TTL:           2 * time.Minute,
+		LimitRegister: ratelimit.New(ratelimit.Config{Rate: 0.0001, Capacity: 2}),
+	}
+	h := srv.Routes()
+
+	// Two register attempts pass.
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		body, _ := json.Marshal(validRegisterReq())
+		req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "1.1.1.1:1000"
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("request %d: status = %d, want 201", i, rec.Code)
+		}
+	}
+
+	// Third gets rate-limited.
+	rec := httptest.NewRecorder()
+	body, _ := json.Marshal(validRegisterReq())
+	req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "1.1.1.1:1000"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third request: status = %d, want 429", rec.Code)
+	}
+	ra := rec.Header().Get("Retry-After")
+	if n, err := strconv.Atoi(ra); err != nil || n < 1 {
+		t.Fatalf("Retry-After = %q, want positive int", ra)
+	}
+	var env Envelope
+	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+		t.Fatalf("decode 429 body: %v", err)
+	}
+	if env.Error == nil || env.Error.Code != "rate_limited" {
+		t.Fatalf("error envelope = %+v, want rate_limited", env.Error)
+	}
+
+	// Different IP gets its own bucket → still works.
+	rec = httptest.NewRecorder()
+	body, _ = json.Marshal(validRegisterReq())
+	req = httptest.NewRequest("POST", "/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "2.2.2.2:1000"
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("different-IP register: status = %d, want 201", rec.Code)
 	}
 }
 

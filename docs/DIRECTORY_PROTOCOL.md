@@ -265,21 +265,29 @@ Rate-limited per source IP to prevent griefing.
 
 ## Rate limits
 
-Enforced per source IP unless noted otherwise.
+All limits are token-bucket per **source IP**. Keying per-streamId
+would require parsing the request body in middleware, and the
+practical abuse surface (filling the DB, spamming reads, griefing the
+report queue) is well-covered by IP-scoped limits with generous
+ceilings that accommodate several concurrent streams from the same
+home network.
 
-| Endpoint                       | Limit              |
-|--------------------------------|--------------------|
-| `POST /register`               | 5 per hour         |
-| `POST /heartbeat`              | 120 per hour per `streamId` (absorbs retries) |
-| `PATCH /streams/<id>`          | 30 per hour per `streamId` |
-| `DELETE /streams/<id>`         | unlimited          |
-| `GET /streams`                 | 600 per hour       |
-| `GET /streams/<id>`            | 600 per hour       |
-| `POST /streams/<id>/report`    | 10 per hour        |
-| `GET /health`                  | unlimited          |
+| Endpoint                       | Limit per IP        |
+|--------------------------------|---------------------|
+| `POST /register`               | 5 / hour            |
+| `POST /heartbeat`              | 600 / hour          |
+| `PATCH /streams/<id>`          | 60 / hour           |
+| `DELETE /streams/<id>`         | unlimited           |
+| `GET /streams`                 | 600 / hour          |
+| `GET /streams/<id>`            | 600 / hour          |
+| `POST /streams/<id>/report`    | 10 / hour           |
+| `GET /health`                  | unlimited           |
+
+`POST /heartbeat` at 600/h supports up to ~5 concurrent streams from
+one IP at the natural 30-second cadence, with headroom for retries.
 
 Hitting a limit → `429` with `error.code = "rate_limited"` and a
-`Retry-After` header in seconds.
+`Retry-After` header in seconds (rounded up, always >= 1).
 
 ## TTL semantics
 
