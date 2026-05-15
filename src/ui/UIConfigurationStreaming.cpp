@@ -868,21 +868,26 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     // Endpoint-mode dropdown. Phase 2 ships Direct + Custom; Phase
     // 2.5 will add Cloudflare Tunnel as the recommended default.
     {
-        const char *modes[] = { "Direct (port-forwarded)", "Custom URL" };
-        const char *keys[]  = { "direct",                  "custom" };
+        const char *modes[] = {
+            "Direct (port-forwarded)",
+            "Cloudflare Tunnel",
+            "Custom URL"
+        };
+        const char *keys[]  = { "direct", "tunnel-cloudflare", "custom" };
         int current = 0;
-        for (int i = 0; i < 2; ++i)
+        for (int i = 0; i < 3; ++i)
         {
             if (m_uiManager->getDirectoryEndpointMode() == keys[i]) { current = i; break; }
         }
-        if (ImGui::Combo("Endpoint mode", &current, modes, 2))
+        if (ImGui::Combo("Endpoint mode", &current, modes, 3))
         {
             m_uiManager->setDirectoryEndpointMode(keys[current]);
             m_uiManager->saveConfig();
         }
     }
 
-    if (m_uiManager->getDirectoryEndpointMode() == "custom")
+    const std::string endpointMode = m_uiManager->getDirectoryEndpointMode();
+    if (endpointMode == "custom")
     {
         char buf[512];
         std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryCustomEndpoint().c_str());
@@ -894,8 +899,16 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         if (ImGui::IsItemHovered())
         {
             ImGui::SetTooltip("Paste the public URL you've already set up\n"
-                              "(FRP, Cloudflare Tunnel, ngrok, your own domain…).");
+                              "(FRP, Tailscale Funnel, ngrok, your own domain…).");
         }
+    }
+    else if (endpointMode == "tunnel-cloudflare")
+    {
+        ImGui::TextDisabled(
+            "RetroCapture will run `cloudflared` to expose your stream via\n"
+            "a Cloudflare Quick Tunnel. Requires cloudflared installed and\n"
+            "on PATH (no Cloudflare account needed). The assigned URL will\n"
+            "appear in the Status line below once the tunnel is up.");
     }
     else
     {

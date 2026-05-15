@@ -27,6 +27,7 @@
 #include "../streaming/StreamManager.h"
 #include "../streaming/DirectoryClient.h"
 #include "../streaming/DirectoryBrowser.h"
+#include "../streaming/CloudflaredManager.h"
 #include "../utils/PasswordHash.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
@@ -5448,6 +5449,31 @@ void Application::syncDirectoryClient()
     const bool wantPublish    = m_ui->getDirectoryPublishEnabled();
     const bool streamingLive  = m_ui->getStreamingActive();
     const bool shouldPublish  = wantPublish && streamingLive;
+    const std::string mode    = m_ui->getDirectoryEndpointMode();
+
+    // #49 Phase 2.5 — manage the cloudflared child process whenever
+    // the user has tunnel-cloudflare selected. We tear it down on
+    // any of: publish toggle off, streaming offline, mode switched
+    // away. Lazy-construct on first need so plain direct/custom-mode
+    // users never spawn an extra thread.
+    const bool wantTunnel = shouldPublish && (mode == "tunnel-cloudflare");
+    if (wantTunnel)
+    {
+        if (!m_cloudflaredManager)
+        {
+            m_cloudflaredManager = std::make_unique<CloudflaredManager>();
+        }
+        auto cfState = m_cloudflaredManager->getState();
+        if (cfState == CloudflaredManager::State::Idle)
+        {
+            m_cloudflaredManager->start(m_ui->getStreamingPort());
+        }
+    }
+    else if (m_cloudflaredManager &&
+             m_cloudflaredManager->getState() != CloudflaredManager::State::Idle)
+    {
+        m_cloudflaredManager->stop();
+    }
 
     if (!shouldPublish && !m_directoryClient) return;
     if (!m_directoryClient)
@@ -5482,6 +5508,43 @@ void Application::syncDirectoryClient()
     }
 
     // wantPublish == true beyond this point.
+
+    // For tunnel mode, gate the DirectoryClient on cloudflared having
+    // actually handed us a URL. Anything earlier would advertise a
+    // localhost endpoint that nobody outside this machine can reach.
+    std::string tunnelUrl;
+    if (mode == "tunnel-cloudflare")
+    {
+        if (!m_cloudflaredManager)
+        {
+            m_ui->setDirectoryStatusText("Tunnel unavailable");
+            return;
+        }
+        auto cfState = m_cloudflaredManager->getState();
+        switch (cfState)
+        {
+            case CloudflaredManager::State::Active:
+                tunnelUrl = m_cloudflaredManager->getUrl();
+                break;
+            case CloudflaredManager::State::Spawning:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
+                return;
+            case CloudflaredManager::State::NotFound:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText(
+                    "Error: cloudflared not installed — install from cloudflare.com/products/tunnel");
+                return;
+            case CloudflaredManager::State::Crashed:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText("Error: tunnel crashed — " + m_cloudflaredManager->getLastError());
+                return;
+            default:
+                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
+                return;
+        }
+    }
+
     if (state == DirectoryClient::State::Idle)
     {
         // Build Config from current UI + streaming state.
@@ -5495,10 +5558,14 @@ void Application::syncDirectoryClient()
         cfg.fps              = m_ui->getCaptureFps();
         cfg.codec            = m_ui->getStreamingVideoCodec() == "h265" ? "h265" : "h264";
         cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
-        cfg.endpointMode     = m_ui->getDirectoryEndpointMode();
+        cfg.endpointMode     = mode;
         cfg.version          = "0.7.0-alpha";
 
-        if (cfg.endpointMode == "custom")
+        if (cfg.endpointMode == "tunnel-cloudflare")
+        {
+            cfg.endpoint = tunnelUrl;
+        }
+        else if (cfg.endpointMode == "custom")
         {
             cfg.endpoint = m_ui->getDirectoryCustomEndpoint();
         }
