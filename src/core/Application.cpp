@@ -26,6 +26,7 @@
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
 #include "../streaming/DirectoryClient.h"
+#include "../streaming/DirectoryBrowser.h"
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -3265,6 +3266,27 @@ void Application::run()
             if (auto *win = m_ui->getRemoteConnectionWindow())
             {
                 win->setCapture(m_capture.get());
+
+                // #49 Phase 4: keep the directory browser running while
+                // the Connect-to-Remote window is open. Lazy-construct
+                // on first sighting so we don't pay for the worker
+                // thread when the user never opens the window.
+                if (win->isVisible())
+                {
+                    if (!m_directoryBrowser)
+                    {
+                        m_directoryBrowser = std::make_unique<DirectoryBrowser>();
+                    }
+                    win->setDirectoryBrowser(m_directoryBrowser.get());
+                    if (!m_directoryBrowser->isRunning())
+                    {
+                        m_directoryBrowser->start(m_ui->getDirectoryUrl());
+                    }
+                }
+                else if (m_directoryBrowser && m_directoryBrowser->isRunning())
+                {
+                    m_directoryBrowser->stop();
+                }
             }
         }
 

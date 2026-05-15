@@ -4,15 +4,20 @@
 
 class UIManager;
 class IVideoCapture;
+class DirectoryBrowser;
 
 /**
  * UIRemoteConnection — dedicated window for the Remote viewer mode.
  *
- * Surfaces:
- *  - Remote base URL input
- *  - Display interpolation dropdown (linear / nearest / off)
- *  - Connect / Disconnect button
- *  - Connection status / stream dims
+ * Two tabs:
+ *   - Manual URL: type a remote base URL and click Connect (original
+ *     flow).
+ *   - Browse directory (#49 Phase 4): live list of streams pulled from
+ *     the directory service; click a row to populate the Manual URL
+ *     tab and connect.
+ *
+ * Common to both: display interpolation dropdown and connection
+ * status / stream dimensions.
  *
  * Lives outside the Source tab on purpose: connecting to a remote
  * RetroCapture instance is conceptually a different operating mode
@@ -38,14 +43,30 @@ public:
     // remain valid across the swap.
     void setCapture(IVideoCapture *) {}
 
+    /// Inject the directory browser. Application owns the lifetime;
+    /// this window just reads snapshots and triggers refreshes.
+    void setDirectoryBrowser(DirectoryBrowser *b) { m_browser = b; }
+
 private:
     UIManager *m_uiManager = nullptr;
     bool m_visible = false;
+
+    DirectoryBrowser *m_browser = nullptr;
 
     // ImGui InputText buffer, seeded from the saved device path on
     // first render so the user's previous URL persists across sessions.
     char m_urlBuffer[256] = {};
     bool m_urlSeeded = false;
+
+    // Sort state for the browse tab. Kept here (per-window) rather
+    // than in UIManager because nothing else reads it.
+    int m_browseSortIndex = 0;          // 0=clients, 1=recent, 2=name
+    char m_browseSearch[64] = {};       // free-text filter
+
+    // When the user clicks a row, we stash the URL here so the next
+    // frame can switch to the Manual tab and run the Connect button's
+    // state machine against it.
+    std::string m_browseSelectedUrl;
 
     // Two-frame state machine for connect/disconnect feedback. The
     // setCurrentDevice() path blocks ~50-100 ms; if we executed it on
@@ -64,4 +85,9 @@ private:
     };
     PendingAction m_pending = PendingAction::None;
     std::string m_pendingUrl;
+
+    void renderManualTab(bool sourceIsRemote, const std::string &currentDevice, bool connected);
+    void renderBrowseTab();
+    void renderStatusFooter(bool connected);
+    void advanceStateMachine();
 };

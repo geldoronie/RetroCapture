@@ -1,6 +1,9 @@
 #include "core/Application.h"
 #include "ui/UIManager.h"
+#include "utils/HttpClient.h"
 #include "utils/Logger.h"
+#include <nlohmann/json.hpp>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <algorithm>
@@ -21,6 +24,9 @@ void printUsage(const char *programName)
 #endif
     std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
     std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
+    std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
+    std::cout << "  --directory-url <url>  Override the directory service URL (default http://localhost:8081).\n";
+    std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
     std::cout << "  --width <value>        Capture width (default: 1920)\n";
     std::cout << "  --height <value>       Capture height (default: 1080)\n";
     std::cout << "  --fps <value>          Capture framerate (default: 60)\n";
@@ -99,6 +105,8 @@ int main(int argc, char *argv[])
     std::string shaderPath;
     std::string presetPath;
     std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
+    bool        browseDirectory = false;     // #49 Phase 4: --browse-directory
+    std::string browseDirectoryUrl;          // optional, defaults to http://localhost:8081
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
@@ -220,6 +228,18 @@ int main(int argc, char *argv[])
             // Phase 3 of #47: base URL of the remote RetroCapture server.
             // Client appends /raw (and /meta in Phase 4) by convention.
             remoteUrl = argv[++i];
+        }
+        else if (arg == "--browse-directory")
+        {
+            // #49 Phase 4: print current directory listing to stdout
+            // and exit. Optional --directory-url overrides the default.
+            browseDirectory = true;
+        }
+        else if (arg == "--directory-url" && i + 1 < argc)
+        {
+            // Overrides the URL --browse-directory queries (and the
+            // default the app uses internally when launched normally).
+            browseDirectoryUrl = argv[++i];
         }
         else if (arg == "--v4l2-device" && i + 1 < argc)
         {
@@ -634,6 +654,64 @@ int main(int argc, char *argv[])
             LOG_WARN("Argumento desconhecido: " + arg);
             printUsage(argv[0]);
             return 1;
+        }
+    }
+
+    // #49 Phase 4: --browse-directory is a one-shot CLI command.
+    // Fetch the directory's list, print as a plain-text table, exit.
+    // Intentionally bypasses the app's full init so it stays fast
+    // and works headless (CI / scripting).
+    if (browseDirectory)
+    {
+        const std::string url = browseDirectoryUrl.empty()
+                                    ? std::string("http://localhost:8081")
+                                    : browseDirectoryUrl;
+        auto resp = HttpClient::send(HttpClient::Method::GET, url + "/streams");
+        if (!resp.ok)
+        {
+            std::cerr << "browse-directory: fetch failed: " << resp.error << "\n";
+            return 2;
+        }
+        if (resp.statusCode != 200)
+        {
+            std::cerr << "browse-directory: HTTP " << resp.statusCode
+                      << " — " << resp.body << "\n";
+            return 2;
+        }
+        try
+        {
+            auto j = nlohmann::json::parse(resp.body);
+            auto data = j.at("data");
+            int total = data.value("totalCount", 0);
+            std::cout << "Directory: " << url << "  (" << total << " stream(s))\n";
+            std::cout << std::string(78, '-') << "\n";
+            std::cout << std::left
+                      << std::setw(28) << "Name"
+                      << std::setw(14) << "Host"
+                      << std::setw(10) << "Codec"
+                      << std::setw(6)  << "Clt"
+                      << "Endpoint\n";
+            std::cout << std::string(78, '-') << "\n";
+            if (data.contains("streams"))
+            {
+                for (const auto &row : data["streams"])
+                {
+                    std::cout << std::left
+                              << std::setw(28) << row.value("name", "").substr(0, 27)
+                              << std::setw(14) << row.value("hostNickname", "").substr(0, 13)
+                              << std::setw(10) << row.value("codec", "")
+                              << std::setw(6)  << row.value("clientCount", 0)
+                              << row.value("endpoint", "")
+                              << (row.value("passwordRequired", false) ? "  [locked]" : "")
+                              << "\n";
+                }
+            }
+            return 0;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "browse-directory: parse failed: " << e.what() << "\n";
+            return 2;
         }
     }
 
