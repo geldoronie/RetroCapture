@@ -34,13 +34,35 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
     size_t requestPreview = request.length() < 200 ? request.length() : 200;
     LOG_INFO("WebPortal::isWebPortalRequest - Request preview: " + request.substr(0, requestPreview));
     
-    // NÃO capturar requisições de stream (deixar para HTTPTSStreamer processar)
-    if (request.find("/stream") != std::string::npos ||
-        request.find("/segment_") != std::string::npos ||
-        request.find(".ts") != std::string::npos)
+    // NÃO capturar requisições de stream (deixar para HTTPTSStreamer
+    // processar). The original code searched the entire request blob
+    // for substrings; that false-matched when the host header or
+    // Referer happened to contain "/stream" (e.g. a deployment on
+    // stream.retrocapture.com sends `Referer: https://stream...`
+    // which contains "/stream" via the "//"). Now we parse the
+    // request-line path and match exactly.
     {
-        LOG_INFO("WebPortal::isWebPortalRequest - Rejected (stream request)");
-        return false;
+        size_t methodEnd = request.find(' ');
+        if (methodEnd != std::string::npos)
+        {
+            size_t pathEnd = request.find(' ', methodEnd + 1);
+            if (pathEnd != std::string::npos)
+            {
+                std::string path = request.substr(methodEnd + 1, pathEnd - methodEnd - 1);
+                size_t q = path.find('?');
+                if (q != std::string::npos) path = path.substr(0, q);
+                const bool isStream  = (path == "/stream" || path.rfind("/stream/", 0) == 0);
+                const bool isSegment = (path.rfind("/segment_", 0) == 0 ||
+                                        path.find("/segment_") != std::string::npos);
+                const bool isTsFile  = (path.size() >= 3 &&
+                                        path.substr(path.size() - 3) == ".ts");
+                if (isStream || isSegment || isTsFile)
+                {
+                    LOG_INFO("WebPortal::isWebPortalRequest - Rejected (stream request)");
+                    return false;
+                }
+            }
+        }
     }
 
     // Verificar se é uma requisição para o portal web

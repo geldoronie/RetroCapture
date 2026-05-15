@@ -836,12 +836,19 @@ void HTTPTSStreamer::handleClient(int clientFd)
         return;
     }
 
-    // Verificar tipo de requisição (ANTES de verificar portal web)
-    // Isso garante que requisições de stream não sejam capturadas pelo portal
-    bool isStreamRequest = (request.find("/stream") != std::string::npos);
-
-    // Phase 2 of #47: detect /raw with a tight match against the request-line
-    // path (vs. /stream's loose substring match, kept as-is for compat).
+    // Verificar tipo de requisição (ANTES de verificar portal web).
+    //
+    // Both classifications match against the REQUEST-LINE PATH only —
+    // never against the full request string. The original isStreamRequest
+    // used `request.find("/stream")` against the whole blob, which
+    // false-matched for users whose host header / Referer happened to
+    // contain that substring. Concretely, deploying behind a hostname
+    // like `stream.retrocapture.com` made every sub-resource request
+    // (which carries `Referer: https://stream.retrocapture.com/`) light
+    // up as a stream request — assets ended up served by the MPEG-TS
+    // handler with Content-Type: video/mp2t, the browser refused to
+    // execute them, and the page hung waiting for never-ending data.
+    bool isStreamRequest = false;
     bool isRawRequest = false;
     {
         size_t methodEnd = request.find(' ');
@@ -853,7 +860,8 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 std::string path = request.substr(methodEnd + 1, pathEnd - methodEnd - 1);
                 size_t q = path.find('?');
                 if (q != std::string::npos) path = path.substr(0, q);
-                isRawRequest = (path == "/raw");
+                isStreamRequest = (path == "/stream" || path.rfind("/stream/", 0) == 0);
+                isRawRequest    = (path == "/raw");
             }
         }
     }
