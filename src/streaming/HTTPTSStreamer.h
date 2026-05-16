@@ -24,6 +24,7 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+#include <unordered_map>
 
 // Forward declarations
 class Application;
@@ -337,6 +338,33 @@ private:
     // Output buffer for clients
     std::vector<int> m_clientSockets;
 
+    /**
+     * Per-client outbound tail buffer.
+     *
+     * The encoder thread feeds writeToClients() with TS packets at the
+     * source FPS. When a client (typically the browser side of a
+     * Cloudflare/FRP tunnel) can't drain the kernel TCP send buffer
+     * fast enough, send() returns partial or EAGAIN. Silently dropping
+     * the unsent tail — which the original implementation did — breaks
+     * MPEG-TS continuity counters and mpegts.js loses the SourceBuffer
+     * forever (visible to the user as "playback freezes after a while
+     * and never recovers"). Stashing the unsent bytes here and
+     * draining them on the next call preserves byte order across
+     * brief network glitches.
+     *
+     * Bounded so a hopelessly slow client doesn't grow memory without
+     * limit; on overflow we close the fd, mirroring how the existing
+     * code reacts to send() returning -1.
+     */
+    struct ClientPending
+    {
+        std::vector<uint8_t> tail;
+        size_t tailOffset = 0;
+        size_t pending() const { return tail.size() - tailOffset; }
+    };
+    static constexpr size_t kMaxClientBacklog = 4 * 1024 * 1024; // 4 MB
+    std::unordered_map<int, ClientPending> m_clientPending;
+
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
@@ -356,6 +384,7 @@ private:
 
     std::atomic<uint32_t> m_rawClientCount{0};
     std::vector<int>      m_rawClientSockets;
+    std::unordered_map<int, ClientPending> m_rawClientPending; // same semantics as m_clientPending
 
     std::vector<uint8_t> m_rawFormatHeader;
     bool                 m_rawHeaderWritten = false;

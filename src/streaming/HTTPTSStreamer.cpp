@@ -613,6 +613,7 @@ void HTTPTSStreamer::stop()
             m_httpServer.closeClient(clientFd);
         }
         m_clientSockets.clear();
+        m_clientPending.clear();
         m_clientCount = 0;
     }
 
@@ -624,6 +625,7 @@ void HTTPTSStreamer::stop()
             m_httpServer.closeClient(clientFd);
         }
         m_rawClientSockets.clear();
+        m_rawClientPending.clear();
         m_rawClientCount = 0;
     }
 
@@ -1157,6 +1159,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             if (it != m_rawClientSockets.end())
             {
                 m_rawClientSockets.erase(it);
+                m_rawClientPending.erase(clientFd);
                 m_rawClientCount = m_rawClientSockets.size();
                 m_httpServer.closeClient(clientFd);
             }
@@ -1213,6 +1216,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         if (it != m_clientSockets.end())
         {
             m_clientSockets.erase(it);
+            m_clientPending.erase(clientFd);
             m_clientCount = m_clientSockets.size();
             m_httpServer.closeClient(clientFd);
         }
@@ -1247,63 +1251,110 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         }
     }
 
-    // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
+    // Broadcast to every connected client. EAGAIN / partial sends used
+    // to silently drop the unsent tail; that corrupts MPEG-TS framing
+    // and mpegts.js loses the SourceBuffer permanently. We now stash
+    // the leftover bytes in a per-client tail buffer and drain it on
+    // the next call so byte order is preserved across brief slow-downs.
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
 
-        // Verificar novamente após adquirir o lock
         if (m_stopRequest || m_clientSockets.empty())
         {
-            // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
             return buf_size;
         }
 
         auto it = m_clientSockets.begin();
         while (it != m_clientSockets.end())
         {
-            int clientFd = *it;
+            const int clientFd = *it;
+            ClientPending &p = m_clientPending[clientFd]; // default-construct if missing
+            bool drop = false;
 
-            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
-            if (sent < 0)
+            // 1. Try to drain any pending bytes from a previous call first.
+            //    Order matters: we cannot send 'buf' before the existing
+            //    tail or the receiver sees a discontinuity.
+            while (p.pending() > 0)
             {
-                // Erro fatal (conexão fechada, etc.) - remover cliente
-                static int errorLogCount = 0;
-                if (errorLogCount++ < 5) // Log apenas as primeiras 5 ocorrências para evitar spam
+                ssize_t sent = m_httpServer.sendData(
+                    clientFd,
+                    p.tail.data() + p.tailOffset,
+                    p.pending());
+                if (sent < 0) { drop = true; break; }
+                if (sent == 0) break; // EAGAIN — kernel buffer still full
+                p.tailOffset += static_cast<size_t>(sent);
+                if (p.tailOffset >= p.tail.size())
                 {
-                    LOG_WARN("Erro ao enviar dados para cliente (fd=" + std::to_string(clientFd) + "): sent=" + std::to_string(sent));
+                    p.tail.clear();
+                    p.tailOffset = 0;
                 }
+            }
+
+            // 2. If the tail is empty, try the new payload directly.
+            size_t newOffset = 0;
+            if (!drop && p.pending() == 0)
+            {
+                while (newOffset < static_cast<size_t>(buf_size))
+                {
+                    ssize_t sent = m_httpServer.sendData(
+                        clientFd,
+                        buf + newOffset,
+                        static_cast<size_t>(buf_size) - newOffset);
+                    if (sent < 0) { drop = true; break; }
+                    if (sent == 0) break; // EAGAIN
+                    newOffset += static_cast<size_t>(sent);
+                }
+            }
+
+            // 3. Stash anything we couldn't send so the next call resumes
+            //    from exactly where we left off.
+            if (!drop)
+            {
+                if (p.pending() > 0)
+                {
+                    // Couldn't drain the old tail — append the new payload
+                    // whole, otherwise the receiver would see buf before
+                    // the still-queued previous packet.
+                    p.tail.insert(p.tail.end(), buf, buf + buf_size);
+                }
+                else if (newOffset < static_cast<size_t>(buf_size))
+                {
+                    p.tail.assign(buf + newOffset, buf + buf_size);
+                    p.tailOffset = 0;
+                }
+
+                // Compact the partially-consumed prefix once it gets
+                // chunky so the tail doesn't grow unbounded just from
+                // offset accounting.
+                if (p.tailOffset > 64 * 1024)
+                {
+                    p.tail.erase(p.tail.begin(),
+                                 p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
+                    p.tailOffset = 0;
+                }
+
+                // Hopelessly slow client: backlog past the bound means
+                // the receiver has been falling behind for seconds. Cut
+                // them rather than burn memory forever.
+                if (p.pending() > kMaxClientBacklog)
+                {
+                    LOG_WARN("/stream client fd=" + std::to_string(clientFd) +
+                             " send backlog " + std::to_string(p.pending()) +
+                             " bytes exceeded cap (" + std::to_string(kMaxClientBacklog) +
+                             ") — closing");
+                    drop = true;
+                }
+            }
+
+            if (drop)
+            {
                 m_httpServer.closeClient(clientFd);
+                m_clientPending.erase(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
-            else if (sent == 0)
-            {
-                // sent == 0 now means "would block" on both platforms:
-                // Linux uses MSG_DONTWAIT and maps EAGAIN to 0; Windows
-                // maps WSAEWOULDBLOCK to 0. Treat as transient — the
-                // packet is dropped for this client this round, but the
-                // client stays connected and gets the next one. Keeps a
-                // slow client from blocking the encoder thread (which
-                // holds the broadcast mutex).
-                ++it;
-            }
-            else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
-            {
-                // Enviado parcialmente - tentar enviar o restante
-                // No Windows, isso pode acontecer, mas devemos tentar enviar o restante
-                static int partialLogCount = 0;
-                if (partialLogCount++ < 3) // Log apenas as primeiras 3 ocorrências
-                {
-                    LOG_WARN("Envio parcial para cliente (fd=" + std::to_string(clientFd) +
-                             "): enviado=" + std::to_string(sent) + "/" + std::to_string(buf_size));
-                }
-                // Por enquanto, considerar como sucesso parcial e continuar
-                // Em uma implementação mais robusta, poderíamos tentar enviar o restante
-                ++it;
-            }
             else
             {
-                // Sucesso - todos os bytes foram enviados
                 ++it;
             }
         }
@@ -1330,6 +1381,10 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
         }
     }
 
+    // Same tail-buffer logic as writeToClients — see the long comment
+    // there. /raw clients are FFmpeg-driven and rarely hit backpressure
+    // in practice (no Cloudflare hop), but the corruption mode is
+    // identical so we apply the same fix for symmetry.
     {
         std::lock_guard<std::mutex> lock(m_rawOutputMutex);
         if (m_stopRequest || m_rawClientSockets.empty())
@@ -1340,19 +1395,76 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
         auto it = m_rawClientSockets.begin();
         while (it != m_rawClientSockets.end())
         {
-            int clientFd = *it;
-            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
-            if (sent < 0)
+            const int clientFd = *it;
+            ClientPending &p = m_rawClientPending[clientFd];
+            bool drop = false;
+
+            while (p.pending() > 0)
+            {
+                ssize_t sent = m_httpServer.sendData(
+                    clientFd,
+                    p.tail.data() + p.tailOffset,
+                    p.pending());
+                if (sent < 0) { drop = true; break; }
+                if (sent == 0) break;
+                p.tailOffset += static_cast<size_t>(sent);
+                if (p.tailOffset >= p.tail.size())
+                {
+                    p.tail.clear();
+                    p.tailOffset = 0;
+                }
+            }
+
+            size_t newOffset = 0;
+            if (!drop && p.pending() == 0)
+            {
+                while (newOffset < static_cast<size_t>(buf_size))
+                {
+                    ssize_t sent = m_httpServer.sendData(
+                        clientFd,
+                        buf + newOffset,
+                        static_cast<size_t>(buf_size) - newOffset);
+                    if (sent < 0) { drop = true; break; }
+                    if (sent == 0) break;
+                    newOffset += static_cast<size_t>(sent);
+                }
+            }
+
+            if (!drop)
+            {
+                if (p.pending() > 0)
+                {
+                    p.tail.insert(p.tail.end(), buf, buf + buf_size);
+                }
+                else if (newOffset < static_cast<size_t>(buf_size))
+                {
+                    p.tail.assign(buf + newOffset, buf + buf_size);
+                    p.tailOffset = 0;
+                }
+                if (p.tailOffset > 64 * 1024)
+                {
+                    p.tail.erase(p.tail.begin(),
+                                 p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
+                    p.tailOffset = 0;
+                }
+                if (p.pending() > kMaxClientBacklog)
+                {
+                    LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
+                             " send backlog " + std::to_string(p.pending()) +
+                             " bytes exceeded cap — closing");
+                    drop = true;
+                }
+            }
+
+            if (drop)
             {
                 m_httpServer.closeClient(clientFd);
+                m_rawClientPending.erase(clientFd);
                 it = m_rawClientSockets.erase(it);
                 m_rawClientCount = m_rawClientSockets.size();
             }
             else
             {
-                // sent == 0 (would-block) and partial sends are treated the
-                // same way as in writeToClients — keep the client connected
-                // and move on.
                 ++it;
             }
         }
