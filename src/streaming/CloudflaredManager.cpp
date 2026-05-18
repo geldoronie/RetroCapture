@@ -1,5 +1,6 @@
 #include "CloudflaredManager.h"
 
+#include "CloudflaredDownloader.h"
 #include "../utils/Logger.h"
 
 #include <cstring>
@@ -67,6 +68,23 @@ bool CloudflaredManager::start(uint16_t localPort)
     const std::string portStr = std::to_string(localPort);
     const std::string localUrl = "http://localhost:" + portStr;
 
+    // Resolve which cloudflared binary to invoke. Falls back through
+    // CLI override → user-data-dir cache → system PATH; empty means
+    // no binary at all and the UI is expected to offer the download
+    // flow. Caching the path locally keeps the rest of this function
+    // identical between platforms.
+    const std::string binaryPath = CloudflaredDownloader::resolveBinaryPath();
+    if (binaryPath.empty())
+    {
+        std::lock_guard<std::mutex> lock(m_mu);
+        m_lastError = "cloudflared not available — accept the download "
+                      "in the Streaming tab or pass --cloudflared-binary";
+        m_state.store(State::NotFound);
+        LOG_WARN("CloudflaredManager: no cloudflared binary resolved");
+        return false;
+    }
+    LOG_INFO("CloudflaredManager: using binary at " + binaryPath);
+
 #ifdef _WIN32
     // Pipe for stdout. HANDLE_FLAG_INHERIT so the child inherits the
     // write end (and only that one — the read end stays parent-only).
@@ -92,13 +110,16 @@ bool CloudflaredManager::start(uint16_t localPort)
     si.hStdError  = writeEnd;
     si.dwFlags    = STARTF_USESTDHANDLES;
 
-    // CreateProcess wants a mutable cmdline buffer.
-    std::string cmd = "cloudflared tunnel --url " + localUrl;
+    // CreateProcess wants a mutable cmdline buffer. argv[0] is
+    // double-quoted so a binaryPath with spaces (typical on Windows:
+    // C:\Users\<name>\AppData\Roaming\RetroCapture\…) parses
+    // correctly.
+    std::string cmd = "\"" + binaryPath + "\" tunnel --url " + localUrl;
     std::vector<char> mutableCmd(cmd.begin(), cmd.end());
     mutableCmd.push_back('\0');
 
     BOOL ok = CreateProcessA(
-        nullptr,                  // image path looked up via PATH
+        binaryPath.c_str(),       // explicit image path; no PATH lookup needed
         mutableCmd.data(),
         nullptr, nullptr,
         TRUE,                     // inherit handles
@@ -111,7 +132,8 @@ bool CloudflaredManager::start(uint16_t localPort)
     {
         CloseHandle(readEnd);
         std::lock_guard<std::mutex> lock(m_mu);
-        m_lastError = "cloudflared not found (install it and ensure it's on PATH)";
+        m_lastError = "Failed to launch cloudflared at " + binaryPath +
+                      " (Win32 error " + std::to_string(GetLastError()) + ")";
         m_state.store(State::NotFound);
         return false;
     }
@@ -157,14 +179,19 @@ bool CloudflaredManager::start(uint16_t localPort)
             ::close(pipeFds[1]);
         }
 
-        // execvp's argv must be mutable C strings.
-        std::string p1 = "cloudflared";
-        std::string p2 = "tunnel";
-        std::string p3 = "--url";
-        std::string p4 = localUrl;
-        char *argv[] = { p1.data(), p2.data(), p3.data(), p4.data(), nullptr };
-        ::execvp("cloudflared", argv);
-        // If we got here, execvp failed. _exit so destructors don't run.
+        // exec by absolute path — binaryPath came from
+        // resolveBinaryPath() which already knows where the binary is
+        // (cache, CLI override, or a PATH lookup we did ourselves), so
+        // there's no reason to ask the kernel to search again. argv[0]
+        // by convention is the binary's name; using the full path also
+        // works and matches what shell-launched processes see.
+        std::string p0 = binaryPath;
+        std::string p1 = "tunnel";
+        std::string p2 = "--url";
+        std::string p3 = localUrl;
+        char *argv[] = { p0.data(), p1.data(), p2.data(), p3.data(), nullptr };
+        ::execv(binaryPath.c_str(), argv);
+        // If we got here, execv failed. _exit so destructors don't run.
         _exit(127);
     }
 

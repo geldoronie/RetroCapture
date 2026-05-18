@@ -865,24 +865,53 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         }
     }
 
-    // Endpoint-mode dropdown. Phase 2 ships Direct + Custom; Phase
-    // 2.5 will add Cloudflare Tunnel as the recommended default.
+    // Endpoint-mode dropdown.
+    //
+    // Cloudflare Tunnel only appears on platforms where cloudflared
+    // has an upstream release (linux/amd64, linux/arm64, win/amd64
+    // today — see CloudflaredDownloader::isPlatformSupported). On
+    // ARM32 and other unsupported targets we drop the entry from the
+    // list entirely and fall back to Direct / Custom URL.
     {
-        const char *modes[] = {
-            "Direct (port-forwarded)",
-            "Cloudflare Tunnel",
-            "Custom URL"
-        };
-        const char *keys[]  = { "direct", "tunnel-cloudflare", "custom" };
-        int current = 0;
-        for (int i = 0; i < 3; ++i)
+        const bool cfSupported = CloudflaredDownloader::isPlatformSupported();
+        std::vector<const char *> modes  = { "Direct (port-forwarded)" };
+        std::vector<const char *> keys   = { "direct" };
+        if (cfSupported)
         {
-            if (m_uiManager->getDirectoryEndpointMode() == keys[i]) { current = i; break; }
+            modes.push_back("Cloudflare Tunnel");
+            keys.push_back("tunnel-cloudflare");
         }
-        if (ImGui::Combo("Endpoint mode", &current, modes, 3))
+        modes.push_back("Custom URL");
+        keys.push_back("custom");
+
+        // If the stored mode is now unavailable (e.g. saved config from
+        // an x86_64 host and the user opened on a Pi 3), fall back to
+        // Direct so the dropdown isn't stuck on a missing entry.
+        std::string stored = m_uiManager->getDirectoryEndpointMode();
+        int current = 0;
+        bool storedFound = false;
+        for (size_t i = 0; i < keys.size(); ++i)
+        {
+            if (stored == keys[i]) { current = static_cast<int>(i); storedFound = true; break; }
+        }
+        if (!storedFound)
+        {
+            m_uiManager->setDirectoryEndpointMode("direct");
+            m_uiManager->saveConfig();
+            current = 0;
+        }
+
+        if (ImGui::Combo("Endpoint mode", &current,
+                         modes.data(), static_cast<int>(modes.size())))
         {
             m_uiManager->setDirectoryEndpointMode(keys[current]);
             m_uiManager->saveConfig();
+        }
+        if (!cfSupported && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Cloudflare Tunnel is hidden because there's "
+                              "no upstream cloudflared binary for this "
+                              "architecture.");
         }
     }
 
@@ -906,9 +935,10 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     {
         ImGui::TextDisabled(
             "RetroCapture will run `cloudflared` to expose your stream via\n"
-            "a Cloudflare Quick Tunnel. Requires cloudflared installed and\n"
-            "on PATH (no Cloudflare account needed). The assigned URL will\n"
-            "appear in the Status line below once the tunnel is up.");
+            "a Cloudflare Quick Tunnel. No Cloudflare account needed; the\n"
+            "URL is randomized each run. Public IP is never exposed.");
+        ImGui::Spacing();
+        renderCloudflaredDownload();
     }
     else
     {
@@ -1041,5 +1071,142 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             ImGui::Text("last successful heartbeat: %llds ago", (long long)since);
         }
         ImGui::TreePop();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Cloudflared auto-download UI (#53 / Phase 2.5b)
+//
+// Rendered inline inside the Cloudflare Tunnel branch of the endpoint
+// dropdown rather than as a modal, because:
+//   * the user is already looking at this row of the config — popping
+//     a modal on top would just hide the context for the action;
+//   * the worker thread fires progress updates several times a second
+//     and an inline progress bar is the natural place to surface them;
+//   * Cancel is a no-op (no abort hook on the worker yet) so a modal
+//     with an active Cancel button would be misleading.
+//
+// State is read out of m_cfProgress under m_cfMu — the worker thread
+// writes there from beginDownloadAsync's callback.
+// ─────────────────────────────────────────────────────────────────────
+void UIConfigurationStreaming::renderCloudflaredDownload()
+{
+    using Stage = CloudflaredDownloader::Stage;
+
+    // Snapshot under the lock so we don't tear a half-written
+    // std::string between the worker writing and the UI reading.
+    CloudflaredDownloader::Progress snap;
+    {
+        std::lock_guard<std::mutex> lock(m_cfMu);
+        snap = m_cfProgress;
+    }
+
+    const bool resolved = !CloudflaredDownloader::resolveBinaryPath().empty();
+    const bool cached   = CloudflaredDownloader::isCached();
+    const bool busy     = (snap.stage == Stage::Connecting ||
+                           snap.stage == Stage::Downloading ||
+                           snap.stage == Stage::Verifying ||
+                           snap.stage == Stage::Installing) &&
+                          m_cfStartedThisRun;
+
+    // Resolved & not currently downloading → all good, just say so.
+    if (resolved && !busy)
+    {
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f),
+                           "cloudflared ready.");
+        ImGui::SameLine();
+        if (cached)
+        {
+            ImGui::TextDisabled("(downloaded copy, version %s)",
+                                CloudflaredDownloader::pinnedVersion().c_str());
+        }
+        else
+        {
+            ImGui::TextDisabled("(found on PATH)");
+        }
+        return;
+    }
+
+    // Busy path: progress bar + stage line, no buttons.
+    if (busy)
+    {
+        const char *stageLabel = "Working...";
+        switch (snap.stage)
+        {
+            case Stage::Connecting:  stageLabel = "Connecting to github.com..."; break;
+            case Stage::Downloading: stageLabel = "Downloading cloudflared..."; break;
+            case Stage::Verifying:   stageLabel = "Verifying SHA256..."; break;
+            case Stage::Installing:  stageLabel = "Installing..."; break;
+            default: break;
+        }
+        ImGui::TextUnformatted(stageLabel);
+        if (snap.stage == Stage::Downloading)
+        {
+            char overlay[64];
+            if (snap.bytesTotal > 0)
+            {
+                std::snprintf(overlay, sizeof(overlay), "%.1f / %.1f MB",
+                              static_cast<double>(snap.bytesDone)  / (1024.0 * 1024.0),
+                              static_cast<double>(snap.bytesTotal) / (1024.0 * 1024.0));
+            }
+            else
+            {
+                std::snprintf(overlay, sizeof(overlay), "%.1f MB",
+                              static_cast<double>(snap.bytesDone) / (1024.0 * 1024.0));
+            }
+            ImGui::ProgressBar(snap.progress01, ImVec2(-1.0f, 0.0f), overlay);
+        }
+        else
+        {
+            // Indeterminate stages — show a full bar with the stage
+            // label so the user has visual feedback that something is
+            // happening.
+            ImGui::ProgressBar(1.0f, ImVec2(-1.0f, 0.0f), stageLabel);
+        }
+        return;
+    }
+
+    // Failed since last attempt: show the error, allow retry.
+    if (snap.stage == Stage::Failed && m_cfStartedThisRun)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                           "Download failed:");
+        ImGui::TextWrapped("%s", snap.error.empty()
+                                     ? "(unknown error)"
+                                     : snap.error.c_str());
+        ImGui::Spacing();
+    }
+
+    // Idle / Failed state: offer the download. Disable the button on
+    // unsupported platforms (defence in depth — the ARM32 path also
+    // hides the whole Cloudflare Tunnel dropdown entry).
+    const bool supported = CloudflaredDownloader::isPlatformSupported();
+    ImGui::TextWrapped(
+        "cloudflared isn't installed yet. RetroCapture can download it "
+        "(~%s MB, %s) from the official Cloudflare release on GitHub. "
+        "The file is verified with a pinned SHA256 before being used.",
+        // Rough binary size for the UI — exact value is in the .cpp.
+        "40",
+        CloudflaredDownloader::pinnedVersion().c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!supported);
+    if (ImGui::Button("Download cloudflared", ImVec2(220, 0)))
+    {
+        m_cfStartedThisRun = true;
+        {
+            std::lock_guard<std::mutex> lock(m_cfMu);
+            m_cfProgress = {};
+            m_cfProgress.stage = Stage::Connecting;
+        }
+        CloudflaredDownloader::beginDownloadAsync(
+            [this](const CloudflaredDownloader::Progress &p) {
+                std::lock_guard<std::mutex> lock(m_cfMu);
+                m_cfProgress = p;
+            });
+    }
+    ImGui::EndDisabled();
+    if (!supported && ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("No upstream cloudflared binary for this architecture.");
     }
 }
