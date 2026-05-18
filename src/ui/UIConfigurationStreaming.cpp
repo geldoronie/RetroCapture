@@ -1112,6 +1112,28 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         ImGui::TextDisabled("%s", status.c_str());
     }
 
+    // Cloudflare Quick Tunnel URLs come from a fresh wildcard DNS entry
+    // that Cloudflare's resolver needs a moment to publish globally.
+    // Empirically anywhere from a few seconds to a couple of minutes,
+    // depending on which resolver the client side hits. Surface this
+    // up front so a user who clicks Publish and immediately tries to
+    // connect from another machine doesn't conclude the tunnel is
+    // broken when really it just hasn't propagated yet. Named tunnels
+    // skip this — those use the user's own zone where TTLs are
+    // typically tight.
+    {
+        const bool isCfTunnel = (m_uiManager->getDirectoryEndpointMode() == "tunnel-cloudflare");
+        const bool isQuick    = (m_uiManager->getDirectoryTunnelMode() == "quick");
+        if (isCfTunnel && isQuick && status.rfind("Active", 0) == 0)
+        {
+            ImGui::TextDisabled(
+                "Note: the trycloudflare.com URL can take up to ~2 minutes\n"
+                "to resolve from other networks (DNS propagation). Browsers\n"
+                "and clients trying to connect immediately may see 'host not\n"
+                "found' — that clears on its own once DNS catches up.");
+        }
+    }
+
     // Per-session telemetry (#49 Phase 5). Hidden behind a tree node
     // so the publish section stays compact for normal users; opens
     // on demand when something looks off and the user wants to dig.
