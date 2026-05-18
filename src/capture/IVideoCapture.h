@@ -51,5 +51,13 @@ public:
     virtual uint32_t getWidth() const = 0;
     virtual uint32_t getHeight() const = 0;
     virtual uint32_t getPixelFormat() const = 0;
+
+    /**
+     * Hint for the UI that a remote capture has been failing to
+     * reconnect for long enough that the host is probably down (not
+     * just hiccupping). Local capture backends always return false.
+     * See VideoCaptureRemote for the threshold (#58).
+     */
+    virtual bool isHostLikelyOffline() const { return false; }
 };
 

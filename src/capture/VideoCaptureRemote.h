@@ -235,4 +235,27 @@ private:
     uint32_t m_statConsumed = 0;
     uint32_t m_statDropped  = 0;
     std::chrono::steady_clock::time_point m_statStart;
+
+public:
+    /**
+     * Reconnect-backoff signal for the UI (#58).
+     *
+     * True once `decodeLoop` has retried the connection enough times
+     * to suspect the host is gone for good rather than briefly
+     * hiccuping (~15 min at the 60s ceiling = 30 consecutive
+     * failures). The remote-connection window reads this and shows
+     * "Host appears offline" so the user can stop expecting a quick
+     * recovery and disconnect/reconnect manually if they want.
+     *
+     * Cleared as soon as any reconnect succeeds.
+     */
+    bool isHostLikelyOffline() const override { return m_hostLikelyOffline.load(); }
+
+private:
+    // Capped exponential backoff state. The table is consulted with
+    // `m_consecutiveReconnectFailures` clamped to the table size; on
+    // any successful reconnect the counter resets to 0 (and the
+    // offline hint clears with it).
+    std::atomic<uint32_t> m_consecutiveReconnectFailures{0};
+    std::atomic<bool>     m_hostLikelyOffline{false};
 };

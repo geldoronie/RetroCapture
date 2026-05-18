@@ -1,5 +1,6 @@
 #include "UIRemoteConnection.h"
 #include "UIManager.h"
+#include "../capture/IVideoCapture.h"
 #include "../streaming/DirectoryBrowser.h"
 #include "../utils/PasswordHash.h"
 
@@ -226,6 +227,22 @@ void UIRemoteConnection::renderStatusFooter(bool connected)
     else
     {
         ImGui::Text("Idle.");
+    }
+
+    // #58 — surface the prolonged-reconnect-failure hint. Visible on
+    // any state because once the host is suspected offline the user
+    // wants the message regardless of whether we're mid-handshake or
+    // already given up on this attempt. Cleared automatically by
+    // VideoCaptureRemote on the next successful reconnect.
+    IVideoCapture *cap = m_uiManager ? m_uiManager->getCapture() : nullptr;
+    if (cap && cap->isHostLikelyOffline())
+    {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Host appears offline.");
+        ImGui::TextWrapped("RetroCapture is still retrying in the background "
+                           "but the host hasn't answered for a while. "
+                           "Disconnect and reconnect to retry immediately.");
     }
 }
 
