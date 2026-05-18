@@ -189,7 +189,6 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
     // Combo box for device selection
     // Adicionar "None" como primeira opção
     std::string currentDevice = m_uiManager->getCurrentDevice();
-    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
     int selectedIndex = -1;
 
     // Verificar se "None" está selecionado
@@ -209,6 +208,15 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
             }
         }
     }
+
+    // If currentDevice is set but doesn't match any V4L2 path, it's
+    // leftover state from another source type (typically a remote
+    // URL when the user had Remote mode active before switching to
+    // V4L2). Showing it raw in the dropdown made http://localhost:…
+    // appear as if it were a video device. Display "None" instead.
+    std::string displayText = (currentDevice.empty() || selectedIndex < 0)
+                              ? "None (No device)"
+                              : currentDevice;
 
     if (ImGui::BeginCombo("##device", displayText.c_str()))
     {
@@ -366,15 +374,15 @@ void UIConfigurationSource::renderDSDeviceSelection()
     // Combo box for device selection
     // Adicionar "None" como primeira opção
     std::string currentDevice = m_uiManager->getCurrentDevice();
-    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
-    
+
     // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
     if (currentDevices.empty())
     {
         ImGui::TextWrapped("Nenhum dispositivo DirectShow encontrado. Clique em Refresh para atualizar.");
         ImGui::Spacing();
     }
-    int selectedIndex = -1;
+    int         selectedIndex = -1;
+    std::string matchedLabel;
 
     // Verificar se "None" está selecionado
     if (currentDevice.empty())
@@ -389,11 +397,21 @@ void UIConfigurationSource::renderDSDeviceSelection()
             if (currentDevices[i].id == currentDevice || currentDevices[i].name == currentDevice)
             {
                 selectedIndex = static_cast<int>(i) + 1; // +1 porque "None" é 0
-                displayText = currentDevices[i].name + " (" + currentDevices[i].id + ")";
+                matchedLabel  = currentDevices[i].name + " (" + currentDevices[i].id + ")";
                 break;
             }
         }
     }
+
+    // If currentDevice is set but no DS device matched, the value
+    // belongs to a different source type (typically a remote URL
+    // like http://localhost:8080 left over from Remote mode). It
+    // used to be rendered raw inside the dropdown — show "None"
+    // instead so the field doesn't claim a URL is a DirectShow
+    // camera.
+    std::string displayText;
+    if (selectedIndex == 0 || selectedIndex < 0) displayText = "None (No device)";
+    else                                          displayText = matchedLabel;
 
     if (ImGui::BeginCombo("##dsdevice", displayText.c_str()))
     {
