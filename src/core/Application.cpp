@@ -5495,6 +5495,7 @@ void Application::syncDirectoryClient()
                 {
                     cfg.mode      = CloudflaredManager::Mode::Named;
                     cfg.tunnelId  = id;
+                    cfg.hostname  = host;
                     cfg.publicUrl = "https://" + host;
                     m_cloudflaredManager->start(cfg);
                 }

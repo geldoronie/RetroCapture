@@ -78,7 +78,8 @@ public:
         Mode        mode      = Mode::Quick;
         uint16_t    localPort = 0;
         std::string tunnelId;   // Named only — cloudflared tunnel id
-        std::string publicUrl;  // Named only — pre-known hostname
+        std::string hostname;   // Named only — bare hostname (e.g. stream.example.com)
+        std::string publicUrl;  // Named only — "https://<hostname>", what we advertise
     };
 
     CloudflaredManager();

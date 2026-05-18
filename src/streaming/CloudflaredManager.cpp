@@ -21,37 +21,57 @@
 
 namespace
 {
+    // Path to the tunnel-specific credentials JSON that
+    // `cloudflared tunnel create` writes. Required for `tunnel run`
+    // to authenticate; if absent, the child exits within a few
+    // hundred ms.
+    std::string credentialsJsonPath(const std::string &tunnelId)
+    {
+#ifdef _WIN32
+        const char *userProfile = ::getenv("USERPROFILE");
+        if (!userProfile) return {};
+        return std::string(userProfile) + "\\.cloudflared\\" + tunnelId + ".json";
+#else
+        const char *home = ::getenv("HOME");
+        if (!home) return {};
+        return std::string(home) + "/.cloudflared/" + tunnelId + ".json";
+#endif
+    }
+
     // Cloudflared's `tunnel run` reads ingress + credentials from a
     // YAML config file. We generate one per-run inside the user-data
-    // cloudflared cache so each tunnel id has its own minimal config
-    // pointing at the local stream port. The user's ~/.cloudflared
-    // credentials JSON (written by `cloudflared tunnel login`) is
-    // referenced by absolute path so we don't duplicate it.
+    // cloudflared cache.
+    //
+    // Cloudflared 2023+ requires:
+    //   1. The LAST ingress rule must be a catch-all (no hostname)
+    //      pointing at `http_status:NNN` (a special pseudo-service).
+    //   2. All preceding rules must specify a hostname.
+    // A previous shape that put `service: http://...` as a hostname-
+    // less catch-all parsed but caused the child to exit
+    // immediately at runtime with no useful stderr through the pipe.
     std::string writeNamedTunnelConfig(const std::string &tunnelId,
+                                       const std::string &hostname,
                                        uint16_t           localPort)
     {
         fs::path dir = fs::path(Paths::getUserDataDir()) / "cloudflared";
         try { fs::create_directories(dir); } catch (...) {}
         fs::path cfgPath = dir / (tunnelId + ".yml");
 
-        // The credentials file is at ~/.cloudflared/<id>.json on both
-        // platforms after `cloudflared tunnel login` + create. We
-        // hand its path verbatim — quote it to survive spaces in the
-        // user's home directory (typical on Windows).
-        std::string credentialsPath;
-#ifdef _WIN32
-        const char *userProfile = ::getenv("USERPROFILE");
-        if (userProfile) credentialsPath = std::string(userProfile) + "\\.cloudflared\\" + tunnelId + ".json";
-#else
-        const char *home = ::getenv("HOME");
-        if (home) credentialsPath = std::string(home) + "/.cloudflared/" + tunnelId + ".json";
-#endif
+        const std::string credentialsPath = credentialsJsonPath(tunnelId);
 
         std::string yaml;
         yaml += "tunnel: " + tunnelId + "\n";
         yaml += "credentials-file: \"" + credentialsPath + "\"\n";
         yaml += "ingress:\n";
-        yaml += "  - service: http://localhost:" + std::to_string(localPort) + "\n";
+        if (!hostname.empty())
+        {
+            yaml += "  - hostname: " + hostname + "\n";
+            yaml += "    service: http://localhost:" + std::to_string(localPort) + "\n";
+        }
+        // Catch-all: every request that doesn't match the hostname
+        // above (or anything at all, if hostname is empty) returns
+        // 404. Required by cloudflared's ingress validator.
+        yaml += "  - service: http_status:404\n";
 
         FILE *fp = ::fopen(cfgPath.string().c_str(), "wb");
         if (!fp) return {};
@@ -141,7 +161,34 @@ bool CloudflaredManager::start(const TunnelConfig &cfg)
             m_state.store(State::NotFound);
             return false;
         }
-        namedConfigPath = writeNamedTunnelConfig(cfg.tunnelId, cfg.localPort);
+        if (cfg.hostname.empty())
+        {
+            std::lock_guard<std::mutex> lock(m_mu);
+            m_lastError = "Named tunnel requested but hostname is empty";
+            m_state.store(State::NotFound);
+            return false;
+        }
+        // Pre-flight: the tunnel credentials JSON must be on disk for
+        // `tunnel run` to authenticate. The file is created
+        // automatically when the user creates the tunnel via our UI
+        // (or via `cloudflared tunnel create` on the CLI), but if
+        // they imported a tunnel that was created on another machine
+        // it won't be here and cloudflared will silently die ~200 ms
+        // after spawn.
+        {
+            const std::string credPath = credentialsJsonPath(cfg.tunnelId);
+            if (credPath.empty() || !fs::exists(fs::path(credPath)))
+            {
+                std::lock_guard<std::mutex> lock(m_mu);
+                m_lastError = "Tunnel credentials not found at " + credPath +
+                              ". This tunnel was likely created on another machine — "
+                              "re-create it here or copy the credentials JSON.";
+                m_state.store(State::NotFound);
+                LOG_ERROR("CloudflaredManager: " + m_lastError);
+                return false;
+            }
+        }
+        namedConfigPath = writeNamedTunnelConfig(cfg.tunnelId, cfg.hostname, cfg.localPort);
         if (namedConfigPath.empty())
         {
             std::lock_guard<std::mutex> lock(m_mu);
@@ -149,6 +196,8 @@ bool CloudflaredManager::start(const TunnelConfig &cfg)
             m_state.store(State::NotFound);
             return false;
         }
+        LOG_INFO("CloudflaredManager: named-tunnel config at " + namedConfigPath +
+                 " (hostname: " + cfg.hostname + ")");
     }
 
     // Resolve which cloudflared binary to invoke. Falls back through
@@ -420,7 +469,8 @@ void CloudflaredManager::readerLoop()
             char c = chunk[i];
             if (c == '\n')
             {
-                // Try to extract a tunnel URL from this line.
+                // Try to extract a tunnel URL from this line (Quick
+                // mode only — Named tunnels never print one).
                 std::smatch m;
                 if (std::regex_search(lineBuf, m, tunnelUrlRegex()))
                 {
@@ -428,6 +478,31 @@ void CloudflaredManager::readerLoop()
                     m_url = m[1].str();
                     m_state.store(State::Active);
                     LOG_INFO("CloudflaredManager: tunnel URL = " + m_url);
+                }
+                else if (!lineBuf.empty())
+                {
+                    // Echo cloudflared's own output so a crash leaves
+                    // a paper trail. Without this, Named-mode failures
+                    // would show up as "child exited unexpectedly —"
+                    // with an empty error string. ERR/WRN cloudflared
+                    // lines get LOG_WARN so they're visible by
+                    // default; everything else gets LOG_INFO. Keep an
+                    // eye on m_lastError too — a stderr line that
+                    // mentions "error" is a strong hint about why
+                    // the child is about to die.
+                    bool isError = (lineBuf.find("error") != std::string::npos ||
+                                    lineBuf.find("ERR")   != std::string::npos ||
+                                    lineBuf.find("fatal") != std::string::npos);
+                    if (isError)
+                    {
+                        LOG_WARN("cloudflared: " + lineBuf);
+                        std::lock_guard<std::mutex> lock(m_mu);
+                        if (m_lastError.empty()) m_lastError = lineBuf;
+                    }
+                    else
+                    {
+                        LOG_INFO("cloudflared: " + lineBuf);
+                    }
                 }
                 lineBuf.clear();
             }
