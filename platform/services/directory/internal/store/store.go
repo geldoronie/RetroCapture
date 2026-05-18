@@ -394,12 +394,14 @@ func (s *Store) DeleteExpired(ctx context.Context, cutoff time.Time) (int64, err
 
 // InsertReport appends a moderation report row. Append-only — the
 // directory itself never reads these back; the operator pulls them
-// out manually for triage.
-func (s *Store) InsertReport(ctx context.Context, streamID, reporterIP, reason, contact string) error {
+// out manually for triage. The reportID is the same R-XXXXXXXX
+// receipt handed back to the user, indexed so the maintainer can
+// look up a report by the number the reporter quoted.
+func (s *Store) InsertReport(ctx context.Context, streamID, reportID, reporterIP, reason, contact string) error {
 	_, err := s.db.ExecContext(ctx, `
-        INSERT INTO stream_reports(stream_id, reporter_ip, reason, contact, reported_at)
-        VALUES(?,?,?,?,?)
-    `, streamID, reporterIP, reason, contact, time.Now().Unix())
+        INSERT INTO stream_reports(stream_id, report_id, reporter_ip, reason, contact, reported_at)
+        VALUES(?,?,?,?,?,?)
+    `, streamID, reportID, reporterIP, reason, contact, time.Now().Unix())
 	return err
 }
 

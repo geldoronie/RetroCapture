@@ -422,18 +422,24 @@ func (s *Server) handleReportStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Store.InsertReport(r.Context(), streamID, s.clientIP(r), req.Reason, req.ReporterContact); err != nil {
-		s.Logger.Error("report_failed", "err", err, "stream_id", streamID)
-		writeError(w, http.StatusInternalServerError, CodeInternal, "failed to record report")
-		return
-	}
 	// Receipt ID handed back to the user so they have a reference to
 	// quote if they ever need to follow up with the maintainer. Short
 	// hex + R- prefix so it's recognisable as a report id and not
 	// confused with a tunnel id or any other UUID floating around.
-	// Logged at info so the maintainer can grep the log for a given
-	// receipt and find the original row.
-	reportID, _ := newReceiptID()
+	// Generated before InsertReport so it's persisted alongside the
+	// row (and indexed) — the maintainer can pivot from a quoted
+	// receipt back to the original report without grepping the log.
+	reportID, err := newReceiptID()
+	if err != nil {
+		s.Logger.Error("report_receipt_failed", "err", err)
+		writeError(w, http.StatusInternalServerError, CodeInternal, "failed to generate report id")
+		return
+	}
+	if err := s.Store.InsertReport(r.Context(), streamID, reportID, s.clientIP(r), req.Reason, req.ReporterContact); err != nil {
+		s.Logger.Error("report_failed", "err", err, "stream_id", streamID)
+		writeError(w, http.StatusInternalServerError, CodeInternal, "failed to record report")
+		return
+	}
 	s.Logger.Info("report_received",
 		"stream_id", streamID,
 		"reporter_ip", s.clientIP(r),
