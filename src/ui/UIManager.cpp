@@ -2132,10 +2132,14 @@ void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 
 void UIManager::triggerDeviceChange(const std::string &device)
 {
-    // If device changed, clear formats list to force refresh
+    // If device changed, clear formats list and format ID to force refresh
     if (m_currentDevice != device)
     {
         m_avfoundationFormats.clear();
+        // CRITICAL: Clear format ID when device changes
+        // Format IDs are device-specific and should not be applied to different devices
+        m_currentFormatId.clear();
+        LOG_INFO("Device changed from " + m_currentDevice + " to " + device + ", cleared format cache and format ID");
     }
     m_currentDevice = device;
     if (m_onDeviceChanged)
@@ -2685,8 +2689,23 @@ void UIManager::loadConfig()
             }
             if (avf.contains("formatId") && !avf["formatId"].is_null())
             {
-                m_currentFormatId = avf["formatId"].get<std::string>();
-                LOG_INFO("Loaded AVFoundation format from config: " + m_currentFormatId);
+                std::string savedFormatId = avf["formatId"].get<std::string>();
+                // Only load format ID if it matches the current device
+                // Format IDs are device-specific, so we should only apply if device matches
+                if (!savedFormatId.empty() && !m_currentDevice.empty())
+                {
+                    // Format ID will be validated when device is opened
+                    // For now, just store it - it will be cleared if device changes
+                    m_currentFormatId = savedFormatId;
+                    LOG_INFO("Loaded AVFoundation format from config: " + m_currentFormatId + 
+                             " (will be validated when device opens)");
+                }
+                else if (!savedFormatId.empty())
+                {
+                    // Format ID saved but no device - clear it
+                    LOG_INFO("Format ID found in config but no device, clearing format ID");
+                    m_currentFormatId.clear();
+                }
             }
             if (avf.contains("audioDeviceId") && !avf["audioDeviceId"].is_null())
             {

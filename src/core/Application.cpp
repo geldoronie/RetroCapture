@@ -2132,11 +2132,36 @@ bool Application::initUI()
                                                  // Check if there's a saved format
                                                  if (m_ui)
                                                  {
+                                                     // CRITICAL: Load formats for the device BEFORE trying to apply saved format
+                                                     m_ui->refreshAVFoundationFormats(devicePath);
+                                                     
                                                      std::string savedFormatId = m_ui->getCurrentFormatId();
                                                      if (!savedFormatId.empty())
                                                      {
-                                                         m_ui->refreshAVFoundationFormats(devicePath);
-                                                         m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                                                         // Verify that the saved format exists in the formats list for THIS device
+                                                         auto formats = m_ui->getAVFoundationFormats(devicePath);
+                                                         bool formatExists = false;
+                                                         for (const auto& format : formats)
+                                                         {
+                                                             if (format.id == savedFormatId)
+                                                             {
+                                                                 formatExists = true;
+                                                                 break;
+                                                             }
+                                                         }
+                                                         
+                                                         if (formatExists)
+                                                         {
+                                                             LOG_INFO("Saved format found in device formats list, applying: " + savedFormatId);
+                                                             m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                                                         }
+                                                         else
+                                                         {
+                                                             LOG_WARN("Saved format ID not found in formats list for device " + devicePath + 
+                                                                      ", format may be from a different device. Clearing saved format.");
+                                                             // Clear the invalid format ID - it doesn't belong to this device
+                                                             m_ui->setAVFoundationFormatById("", devicePath); // Clear format
+                                                         }
                                                      }
                                                      
                                                      // Apply saved audio device if available
@@ -2266,10 +2291,10 @@ bool Application::initUI()
         {
             std::lock_guard<std::mutex> lock(m_deviceChangeMutex);
         
-            // Close current device (or dummy mode)
-            if (m_capture) {
+        // Close current device (or dummy mode)
+        if (m_capture) {
                 // CRITICAL: Stop capture first to prevent new frames/audio from being queued
-                m_capture->stopCapture();
+            m_capture->stopCapture();
                 
                 // IMPORTANT: Stop and close audio output BEFORE closing capture device
                 // This prevents the audio output from trying to read from a cleared audio buffer
@@ -2285,20 +2310,20 @@ bool Application::initUI()
                 // audio while close() is executing
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 
-                m_capture->close();
+            m_capture->close();
                 
-                // Disable dummy mode when trying to open real device
-                m_capture->setDummyMode(false);
-            }
-            
-            // Update device path
-            m_devicePath = devicePath;
-            
-            // Clear FrameProcessor texture when changing device
-            if (m_frameProcessor) {
-                m_frameProcessor->deleteTexture();
-            }
-            
+            // Disable dummy mode when trying to open real device
+            m_capture->setDummyMode(false);
+        }
+        
+        // Update device path
+        m_devicePath = devicePath;
+        
+        // Clear FrameProcessor texture when changing device
+        if (m_frameProcessor) {
+            m_frameProcessor->deleteTexture();
+        }
+        
             // Reopen with new device (still within mutex lock)
             if (!m_capture || !m_capture->open(devicePath)) {
                 // Failed to open device
@@ -2309,72 +2334,63 @@ bool Application::initUI()
         
         // From here on, mutex is released - long operations can proceed without blocking main loop
         // Device was successfully opened (we returned above if it failed)
-        LOG_INFO("Device opened successfully, configuring format...");
+            LOG_INFO("Device opened successfully, configuring format...");
         
         // For AVFoundation, check if there's a saved format ID to apply
 #ifdef __APPLE__
         if (m_ui && m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
         {
-            // CRITICAL: Don't refresh formats immediately after opening device
-            // This can cause deadlock if the device is still being configured
-            // Formats list should already be populated from previous refresh or will be loaded when needed
-            // m_ui->refreshAVFoundationFormats(devicePath); // REMOVED to prevent deadlock
+            // CRITICAL: Load formats for the NEW device BEFORE trying to apply saved format
+            // This ensures we have the correct format list for the current device
+            LOG_INFO("Loading formats for device: " + devicePath);
+            m_ui->refreshAVFoundationFormats(devicePath);
             
+            // Get saved format ID (may be empty if device changed, as format ID is cleared on device change)
             std::string savedFormatId = m_ui->getCurrentFormatId();
             LOG_INFO("Checking for saved format ID: " + (savedFormatId.empty() ? "(empty)" : savedFormatId));
+            
             if (!savedFormatId.empty())
             {
-                LOG_INFO("Applying saved AVFoundation format: " + savedFormatId);
-                m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
-                // Verify format was applied
-                std::string currentFormatId = m_ui->getCurrentFormatId();
-                LOG_INFO("Format ID after application: " + (currentFormatId.empty() ? "(empty)" : currentFormatId));
-                LOG_INFO("Saved format applied, starting capture...");
-                
-                // Apply saved audio device if available
-                std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
-                if (!savedAudioDeviceId.empty())
+                // Verify that the saved format exists in the formats list for THIS device
+                auto formats = m_ui->getAVFoundationFormats(devicePath);
+                bool formatExists = false;
+                for (const auto& format : formats)
                 {
-                    LOG_INFO("Applying saved AVFoundation audio device: " + savedAudioDeviceId);
-                    m_ui->setAVFoundationAudioDevice(savedAudioDeviceId);
+                    if (format.id == savedFormatId)
+                    {
+                        formatExists = true;
+                        break;
+                    }
                 }
                 
-                // Format application already handles resolution and FPS
-                // Continue to start capture
-                if (m_capture->startCapture()) {
-                    LOG_INFO("startCapture() returned true - device should be active (light on)");
-                } else {
-                    LOG_ERROR("startCapture() returned false - device was NOT activated!");
+                if (formatExists)
+                {
+                    LOG_INFO("Saved format found in device formats list, applying: " + savedFormatId);
+                    m_ui->setAVFoundationFormatById(savedFormatId, devicePath);
+                    // Verify format was applied
+                    std::string currentFormatId = m_ui->getCurrentFormatId();
+                    LOG_INFO("Format ID after application: " + (currentFormatId.empty() ? "(empty)" : currentFormatId));
                 }
-                
-                // Update device path and UI information
-                m_devicePath = devicePath; // Update Application's device path
-                if (m_ui) {
-                    // CRITICAL: Don't refresh formats immediately after startCapture()
-                    // This can cause deadlock if the device is still being configured
-                    // Formats will be refreshed when needed by the UI
-                    m_ui->refreshAVFoundationFormats(devicePath); // REMOVED to prevent deadlock
-                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                        m_captureFps, devicePath);
-                    m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
-                    // CRITICAL: Don't set capture controls immediately after startCapture()
-                    // This can cause deadlock if the device is still being configured
-                    // Controls will be set when needed by the UI
-                    m_ui->setCaptureControls(m_capture.get()); // REMOVED to prevent deadlock
+                else
+                {
+                    LOG_WARN("Saved format ID not found in formats list for device " + devicePath + 
+                             ", format may be from a different device. Clearing saved format.");
+                    // Clear the invalid format ID - it doesn't belong to this device
+                    m_ui->setAVFoundationFormatById("", devicePath); // Clear format
                 }
-                
-                LOG_INFO("Device changed successfully with saved format");
-                processingDeviceChange = false;
-                return;
             }
-        }
-#endif
-        
-        // Default behavior: Reconfigure format and framerate
-        if (m_capture && m_capture->setFormat(oldWidth, oldHeight, 0)) {
-            LOG_INFO("Format configured, configuring framerate...");
-            m_capture->setFramerate(oldFps);
-            LOG_INFO("Framerate configured, starting capture (startCapture)...");
+            
+            LOG_INFO("Format configuration complete, starting capture...");
+            
+            // Apply saved audio device if available
+            std::string savedAudioDeviceId = m_ui->getAVFoundationAudioDevice();
+            if (!savedAudioDeviceId.empty())
+            {
+                LOG_INFO("Applying saved AVFoundation audio device: " + savedAudioDeviceId);
+                m_ui->setAVFoundationAudioDevice(savedAudioDeviceId);
+            }
+            
+            // Start capture
             if (m_capture->startCapture()) {
                 LOG_INFO("startCapture() returned true - device should be active (light on)");
             } else {
@@ -2384,6 +2400,32 @@ bool Application::initUI()
             // Update device path and UI information
             m_devicePath = devicePath; // Update Application's device path
             if (m_ui) {
+                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                    m_captureFps, devicePath);
+                m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
+                m_ui->setCaptureControls(m_capture.get());
+            }
+            
+            LOG_INFO("Device changed successfully");
+            processingDeviceChange = false;
+            return;
+        }
+#endif
+        
+        // Default behavior: Reconfigure format and framerate
+        if (m_capture && m_capture->setFormat(oldWidth, oldHeight, 0)) {
+                LOG_INFO("Format configured, configuring framerate...");
+                m_capture->setFramerate(oldFps);
+                LOG_INFO("Framerate configured, starting capture (startCapture)...");
+                if (m_capture->startCapture()) {
+                    LOG_INFO("startCapture() returned true - device should be active (light on)");
+                } else {
+                    LOG_ERROR("startCapture() returned false - device was NOT activated!");
+                }
+                
+            // Update device path and UI information
+            m_devicePath = devicePath; // Update Application's device path
+                if (m_ui) {
 #ifdef __APPLE__
                 // For AVFoundation, apply saved audio device AFTER device is opened
                 if (m_ui->getSourceType() == UIManager::SourceType::AVFoundation)
@@ -2402,29 +2444,29 @@ bool Application::initUI()
                     }
                 }
 #endif
-                m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
-                                    m_captureFps, devicePath);
+                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(), 
+                                        m_captureFps, devicePath);
                 m_ui->setCurrentDevice(devicePath); // Update UI to show selected device
                 
                 // CRITICAL: Don't set capture controls immediately after startCapture()
                 // This can cause deadlock if the device is still being configured
                 // Controls will be set when needed by the UI
                 m_ui->setCaptureControls(m_capture.get()); // REMOVED to prevent deadlock
-            }
-            
-            LOG_INFO("Device changed successfully");
-            processingDeviceChange = false;
-        } else {
-            LOG_ERROR("Failed to configure format on new device");
-            // Close device if failed
+                }
+                
+                LOG_INFO("Device changed successfully");
+                processingDeviceChange = false;
+            } else {
+                LOG_ERROR("Failed to configure format on new device");
+                // Close device if failed
             if (m_capture) {
                 m_capture->close();
             }
-            if (m_ui) {
-                m_ui->setCaptureInfo(0, 0, 0, "Error");
+                if (m_ui) {
+                    m_ui->setCaptureInfo(0, 0, 0, "Error");
+                }
+                processingDeviceChange = false;
             }
-            processingDeviceChange = false;
-        }
         // Note: If device open failed, we already returned above, so no else needed here
     });
 
@@ -4358,7 +4400,7 @@ void Application::run()
                                 if (m_streamManager && m_streamManager->isActive())
                                 {
                                     static int streamPushLogCount = 0;
-                                    if (streamPushLogCount++ < 3 && m_ui)           
+                                    if (streamPushLogCount++ < 3 && m_ui)
                                     {
                                         LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
                                         LOG_INFO("Frame size being pushed: " + std::to_string(actualCaptureWidth) + "x" + std::to_string(actualCaptureHeight));
@@ -4533,7 +4575,7 @@ void Application::run()
             // IMPORTANT: Always do swapBuffers so window is updated and visible
             if (m_window)
             {
-                m_window->swapBuffers();
+            m_window->swapBuffers();
             }
             else
             {
