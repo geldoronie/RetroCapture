@@ -585,12 +585,19 @@ namespace CloudflaredAccount
             }
             return out;
         }
-        // cloudflared prepends a banner line on stdout in some
-        // releases (e.g. "A newer version of cloudflared is available")
-        // and writes its own structured logs to stderr-merged-into-
-        // stdout via our pipe setup. nlohmann::json wants pure JSON,
-        // so trim everything before the first '[' (the JSON array
-        // marker) and parse from there.
+        // cloudflared writes its own structured logs to stderr (which
+        // our pipe merges into stdout) and appends them AFTER the JSON
+        // payload. So a real-world output looks like:
+        //
+        //   [ { "id": "abc", ... }, { "id": "def", ... } ]
+        //   {"level":"info","msg":"shutting down","time":"..."}
+        //   {"level":"info","msg":"...","time":"..."}
+        //
+        // We need to feed nlohmann::json *exactly* the first top-level
+        // value — find the opening '[' (or '{') and walk the source
+        // tracking brace depth + string state until we hit the
+        // matching close. Everything beyond that is logs and gets
+        // dropped.
         size_t jsonStart = stdoutBuf.find_first_of("[{");
         if (jsonStart == std::string::npos)
         {
@@ -599,16 +606,35 @@ namespace CloudflaredAccount
             // plain text. Treat as an empty list rather than an error.
             return out;
         }
-        std::string jsonPart = stdoutBuf.substr(jsonStart);
-        // Cloudflared occasionally appends a trailing log line after
-        // the JSON ('cloudflared exited cleanly' etc.). Trim from the
-        // last matching ']' or '}' too so we feed nlohmann a clean
-        // document.
-        size_t jsonEnd = jsonPart.find_last_of("]}");
-        if (jsonEnd != std::string::npos)
+        const char open  = stdoutBuf[jsonStart];
+        const char close = (open == '[') ? ']' : '}';
+        size_t   jsonEnd = std::string::npos;
         {
-            jsonPart.resize(jsonEnd + 1);
+            int  depth    = 0;
+            bool inString = false;
+            bool escape   = false;
+            for (size_t i = jsonStart; i < stdoutBuf.size(); ++i)
+            {
+                char c = stdoutBuf[i];
+                if (inString)
+                {
+                    if (escape)        escape = false;
+                    else if (c == '\\') escape = true;
+                    else if (c == '"')  inString = false;
+                    continue;
+                }
+                if (c == '"')         { inString = true; continue; }
+                if (c == open)          ++depth;
+                else if (c == close)
+                {
+                    --depth;
+                    if (depth == 0) { jsonEnd = i; break; }
+                }
+            }
         }
+        std::string jsonPart = (jsonEnd != std::string::npos)
+            ? stdoutBuf.substr(jsonStart, jsonEnd - jsonStart + 1)
+            : stdoutBuf.substr(jsonStart);
         try
         {
             auto j = json::parse(jsonPart);
