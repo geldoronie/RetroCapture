@@ -104,24 +104,37 @@ void UIInfoPanel::renderRemoteInfo()
     ImGui::Text("Connection");
     ImGui::Separator();
 
-    IVideoCapture *cap = m_uiManager->getCapture();
-    if (!cap || !cap->isOpen())
-    {
-        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "Reconnecting...");
-        ImGui::TextWrapped("Waiting for the host to come back. "
-                           "Reconnect attempts back off up to 60 s "
-                           "between tries.");
-    }
-    else if (cap->isHostLikelyOffline())
+    // UIManager::getCapture() is null in Remote mode (Application
+    // passes nullptr to setCaptureControls so the V4L2/DS-specific
+    // hardware controls UI hides itself). So we can't reach the
+    // VideoCaptureRemote through that path — Application mirrors the
+    // offline flag onto UIManager every frame instead.
+    //
+    // 'Connected' here means we've received at least one frame, which
+    // is what getCaptureWidth/Height > 0 already signals (it's the
+    // same heuristic UIRemoteConnection's footer uses). 'Reconnecting'
+    // means we're armed but haven't decoded a frame yet. 'Host likely
+    // offline' is the long-failure hint from #58 — it can fire while
+    // Connected if a previously-good stream just dropped, so it takes
+    // priority over the connected indicator.
+    const bool hasFrames = (w > 0 && h > 0);
+    if (m_uiManager->getRemoteHostLikelyOffline())
     {
         ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "Host likely offline");
         ImGui::TextWrapped("The client is still retrying in the background. "
                            "Disconnect and reconnect from the Remote menu "
                            "to retry immediately.");
     }
-    else
+    else if (hasFrames)
     {
         ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Connected");
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "Reconnecting...");
+        ImGui::TextWrapped("Waiting for the host's first frame. "
+                           "Reconnect attempts back off up to 60 s "
+                           "between tries.");
     }
 }
 

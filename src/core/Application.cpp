@@ -5460,6 +5460,20 @@ void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
 
+    // Mirror the remote capture's reconnect-backoff flag onto
+    // UIManager so the Info panel and other UI surfaces can read it
+    // without holding the VideoCaptureRemote pointer themselves. In
+    // host mode m_capture isn't a VideoCaptureRemote and the
+    // dynamic_cast falls through to false (#58 follow-up).
+    {
+        bool offline = false;
+        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        {
+            offline = remote->isHostLikelyOffline();
+        }
+        m_ui->setRemoteHostLikelyOffline(offline);
+    }
+
     // #49 Phase 3 — keep the server-side password gate in sync with
     // whatever the user typed in the publish UI. We hash on every
     // call (cheap, sha256 of < 1 KB), but the StreamManager setter

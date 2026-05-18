@@ -234,8 +234,13 @@ void UIRemoteConnection::renderStatusFooter(bool connected)
     // wants the message regardless of whether we're mid-handshake or
     // already given up on this attempt. Cleared automatically by
     // VideoCaptureRemote on the next successful reconnect.
-    IVideoCapture *cap = m_uiManager ? m_uiManager->getCapture() : nullptr;
-    if (cap && cap->isHostLikelyOffline())
+    //
+    // The flag is mirrored onto UIManager every frame by
+    // Application::syncDirectoryClient — m_uiManager->getCapture()
+    // returns null in Remote mode (Application passes nullptr to
+    // setCaptureControls to hide the V4L2/DS hardware-controls UI),
+    // so we'd never see the flag if we went through that pointer.
+    if (m_uiManager && m_uiManager->getRemoteHostLikelyOffline())
     {
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),

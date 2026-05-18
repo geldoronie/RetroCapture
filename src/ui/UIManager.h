@@ -415,6 +415,15 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getActualCaptureWidth() const { return m_actualCaptureWidth; }
     uint32_t getActualCaptureHeight() const { return m_actualCaptureHeight; }
+
+    // Mirror of VideoCaptureRemote::isHostLikelyOffline() pushed by
+    // Application every frame. Lives here because in Remote mode the
+    // UIManager's m_capture pointer is null (Application passes
+    // nullptr to setCaptureControls to suppress the V4L2/DS hardware
+    // controls) so the Info panel can't dynamic-cast its way to the
+    // flag. Default false in host mode (#58).
+    bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
+    void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -842,6 +851,7 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
+    bool     m_remoteHostLikelyOffline = false;
     // Overscan: crop % das bordas do source antes do downscale.
     // X horizontal, Y vertical. Locked espelha um no outro.
     float m_sourceOverscanPercentX = 0.0f;
