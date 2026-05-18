@@ -1316,6 +1316,14 @@ void UIConfigurationStreaming::renderCloudflaredNamedTunnelSetup()
         return;
     }
 
+    // Scope all the ImGui IDs in this section under "namedTunnel" so
+    // generic button labels ("Refresh", "Cancel", "Create") don't
+    // collide with identically-named buttons rendered elsewhere in
+    // the same window (the streaming profiles block has its own
+    // "Refresh"). Without this ImGui pops up the "2 visible items
+    // with conflicting ID" debug overlay.
+    ImGui::PushID("namedTunnel");
+
     ImGui::Text("Named Cloudflare Tunnel");
     ImGui::Spacing();
 
@@ -1605,4 +1613,6 @@ void UIConfigurationStreaming::renderCloudflaredNamedTunnelSetup()
             ImGui::TextColored(col, "%s", m_lastRouteResult.c_str());
         }
     }
+
+    ImGui::PopID();
 }

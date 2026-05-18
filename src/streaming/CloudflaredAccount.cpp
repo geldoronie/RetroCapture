@@ -585,9 +585,33 @@ namespace CloudflaredAccount
             }
             return out;
         }
+        // cloudflared prepends a banner line on stdout in some
+        // releases (e.g. "A newer version of cloudflared is available")
+        // and writes its own structured logs to stderr-merged-into-
+        // stdout via our pipe setup. nlohmann::json wants pure JSON,
+        // so trim everything before the first '[' (the JSON array
+        // marker) and parse from there.
+        size_t jsonStart = stdoutBuf.find_first_of("[{");
+        if (jsonStart == std::string::npos)
+        {
+            // No JSON marker at all — usually means the user has zero
+            // tunnels and cloudflared printed "No tunnels were found"
+            // plain text. Treat as an empty list rather than an error.
+            return out;
+        }
+        std::string jsonPart = stdoutBuf.substr(jsonStart);
+        // Cloudflared occasionally appends a trailing log line after
+        // the JSON ('cloudflared exited cleanly' etc.). Trim from the
+        // last matching ']' or '}' too so we feed nlohmann a clean
+        // document.
+        size_t jsonEnd = jsonPart.find_last_of("]}");
+        if (jsonEnd != std::string::npos)
+        {
+            jsonPart.resize(jsonEnd + 1);
+        }
         try
         {
-            auto j = json::parse(stdoutBuf);
+            auto j = json::parse(jsonPart);
             if (j.is_array())
             {
                 for (const auto &t : j)
@@ -603,6 +627,11 @@ namespace CloudflaredAccount
         catch (const std::exception &ex)
         {
             errorOut = std::string("Failed to parse tunnel list JSON: ") + ex.what();
+            // Help diagnose what cloudflared actually printed — first
+            // 120 chars of raw stdout, single-line.
+            std::string preview = stdoutBuf.substr(0, 120);
+            for (auto &c : preview) if (c == '\n' || c == '\r') c = ' ';
+            errorOut += " — stdout starts with: " + preview;
         }
         return out;
     }
