@@ -1,4 +1,5 @@
 #include "HTTPTSStreamer.h"
+#include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 
@@ -115,6 +116,17 @@ void HTTPTSStreamer::setBufferConfig(size_t maxVideoBufferSize, size_t maxAudioB
 void HTTPTSStreamer::setAudioCodec(const std::string &codecName)
 {
     m_audioCodecName = codecName;
+}
+
+void HTTPTSStreamer::setStreamPasswordHash(const std::string &sha256Hex)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_passwordMu);
+        m_streamPasswordHash = sha256Hex;
+    }
+    // Forward to the embedded APIController so /meta (which is routed
+    // through it, not handled here) shares the same gate.
+    m_apiController.setStreamPasswordHash(sha256Hex);
 }
 
 bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
@@ -601,6 +613,7 @@ void HTTPTSStreamer::stop()
             m_httpServer.closeClient(clientFd);
         }
         m_clientSockets.clear();
+        m_clientPending.clear();
         m_clientCount = 0;
     }
 
@@ -612,6 +625,7 @@ void HTTPTSStreamer::stop()
             m_httpServer.closeClient(clientFd);
         }
         m_rawClientSockets.clear();
+        m_rawClientPending.clear();
         m_rawClientCount = 0;
     }
 
@@ -713,17 +727,87 @@ void HTTPTSStreamer::handleClient(int clientFd)
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, (const char *)&flag, sizeof(flag));
 #endif
 
-    // Ler requisição HTTP
-    char buffer[4096];
-    ssize_t bytesRead = m_httpServer.receiveData(clientFd, buffer, sizeof(buffer) - 1);
-    if (bytesRead <= 0)
+    // Read the HTTP request. We must loop until we see the header
+    // terminator (\r\n\r\n) because TCP doesn't guarantee that an
+    // entire request arrives in one segment — common when fronted
+    // by Cloudflare or any tunnel where slow-start fragments the
+    // request across multiple packets. The original code took the
+    // single-recv shortcut, which on localhost always returned the
+    // full request (loopback has huge MTU and one-shot delivery)
+    // but on external paths returned 1-N bytes and the rest of the
+    // request was abandoned, surfacing later as `Request preview: �`
+    // garbage and broken asset loads in the portal.
+    //
+    // Cap the total bytes we'll accumulate (16 KB header limit) and
+    // the total wait time (5 s) so a malicious or stuck client can't
+    // hold a handler thread indefinitely.
+    std::string request;
+    request.reserve(2048);
     {
-        m_httpServer.closeClient(clientFd);
-        return;
-    }
+        char buffer[4096];
+        constexpr size_t kMaxHeaderBytes = 16 * 1024;
+        constexpr int    kRecvTimeoutMs  = 5000;
 
-    buffer[bytesRead] = '\0';
-    std::string request(buffer);
+        // SO_RCVTIMEO so each recv has a deadline. Without it, a
+        // peer that opens the connection and sends nothing would
+        // park a thread forever.
+#ifdef _WIN32
+        DWORD tv = kRecvTimeoutMs;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char *>(&tv), sizeof(tv));
+#else
+        timeval tv{};
+        tv.tv_sec  = kRecvTimeoutMs / 1000;
+        tv.tv_usec = (kRecvTimeoutMs % 1000) * 1000;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
+        while (request.size() < kMaxHeaderBytes)
+        {
+            ssize_t n = m_httpServer.receiveData(clientFd, buffer,
+                                                  sizeof(buffer) - 1);
+            if (n <= 0)
+            {
+                // 0 = peer closed, <0 = error or timeout. If we have
+                // partial data buffered there's no point trying to
+                // parse it as a valid HTTP request.
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+            buffer[n] = '\0';
+            request.append(buffer, static_cast<size_t>(n));
+            // Headers fully arrived?
+            if (request.find("\r\n\r\n") != std::string::npos) break;
+        }
+        if (request.find("\r\n\r\n") == std::string::npos)
+        {
+            // Headers larger than 16 KB or stream never produced a
+            // terminator — either malformed or hostile. Drop.
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+
+        // The SO_RCVTIMEO we set above is socket-wide and persists
+        // for the rest of this connection. That's fine for the read
+        // phase (and would auto-cap a stuck request) but BAD for the
+        // /stream monitoring loop later, where recv is intentionally
+        // a long-living 'detect disconnect' watch — there a 5 s
+        // EAGAIN would be mis-read as a peer-close and tear the
+        // stream down every 5 s. Reset the timeout to unlimited
+        // (tv = 0) before we leave this block.
+#ifdef _WIN32
+        DWORD tvOff = 0;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char *>(&tvOff), sizeof(tvOff));
+#else
+        timeval tvOff{};
+        tvOff.tv_sec  = 0;
+        tvOff.tv_usec = 0;
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tvOff, sizeof(tvOff));
+#endif
+    }
+    ssize_t bytesRead = static_cast<ssize_t>(request.size());
+    (void)bytesRead;
 
     // Se HTTPS está habilitado E Web Portal está habilitado mas o cliente está usando HTTP, redirecionar para HTTPS
     // HTTPS só faz sentido se o Web Portal estiver ativo
@@ -773,12 +857,58 @@ void HTTPTSStreamer::handleClient(int clientFd)
         return;
     }
 
-    // Verificar tipo de requisição (ANTES de verificar portal web)
-    // Isso garante que requisições de stream não sejam capturadas pelo portal
-    bool isStreamRequest = (request.find("/stream") != std::string::npos);
+    // Top-level password gate. When the user has set a stream
+    // password (via the publish UI), EVERYTHING on this HTTP server
+    // needs auth — the portal HTML, the static assets, the live
+    // /stream feed, the /api routes, and the directory-facing
+    // /raw + /meta endpoints alike. Without this gate, a passworded
+    // stream would still let any external visitor see the live video
+    // by opening the portal URL in a browser; the password would
+    // only protect the directory-side endpoints. That's a leak.
+    //
+    // Two auth schemes are accepted via HttpAuth::authorizedAnyScheme:
+    //   - Authorization: Bearer <sha256(password)>  (RetroCapture
+    //     client, mpegts.js with custom header, programmatic users)
+    //   - Authorization: Basic base64("user:password")  (browser's
+    //     native popup; the username portion is ignored)
+    //
+    // On reject we send 401 + WWW-Authenticate: Basic so the browser
+    // pops its credentials dialog and remembers the answer for the
+    // rest of the session.
+    {
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!pwHash.empty() && !HttpAuth::authorizedAnyScheme(request, pwHash))
+        {
+            const char *response =
+                "HTTP/1.1 401 Unauthorized\r\n"
+                "WWW-Authenticate: Basic realm=\"RetroCapture\"\r\n"
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "Password required.";
+            m_httpServer.sendData(clientFd, response, strlen(response));
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+    }
 
-    // Phase 2 of #47: detect /raw with a tight match against the request-line
-    // path (vs. /stream's loose substring match, kept as-is for compat).
+    // Verificar tipo de requisição (ANTES de verificar portal web).
+    //
+    // Both classifications match against the REQUEST-LINE PATH only —
+    // never against the full request string. The original isStreamRequest
+    // used `request.find("/stream")` against the whole blob, which
+    // false-matched for users whose host header / Referer happened to
+    // contain that substring. Concretely, deploying behind a hostname
+    // like `stream.retrocapture.com` made every sub-resource request
+    // (which carries `Referer: https://stream.retrocapture.com/`) light
+    // up as a stream request — assets ended up served by the MPEG-TS
+    // handler with Content-Type: video/mp2t, the browser refused to
+    // execute them, and the page hung waiting for never-ending data.
+    bool isStreamRequest = false;
     bool isRawRequest = false;
     {
         size_t methodEnd = request.find(' ');
@@ -790,7 +920,8 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 std::string path = request.substr(methodEnd + 1, pathEnd - methodEnd - 1);
                 size_t q = path.find('?');
                 if (q != std::string::npos) path = path.substr(0, q);
-                isRawRequest = (path == "/raw");
+                isStreamRequest = (path == "/stream" || path.rfind("/stream/", 0) == 0);
+                isRawRequest    = (path == "/raw");
             }
         }
     }
@@ -938,6 +1069,32 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // different state mirrors (format header, client list, mutex).
     if (isRawRequest)
     {
+        // #49 Phase 3 — password gate. When the user has configured a
+        // stream password, /raw rejects unauthenticated connections
+        // with 401 + WWW-Authenticate so any CLI / FFmpeg consumer
+        // can surface the missing-token failure cleanly. /stream is
+        // intentionally not gated — it stays open for VLC / mpv /
+        // browser portal viewers.
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!HttpAuth::authorized(request, pwHash))
+        {
+            const char *response = "HTTP/1.1 401 Unauthorized\r\n"
+                                   "WWW-Authenticate: Bearer realm=\"retrocapture-raw\"\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "This stream requires a password. "
+                                   "Send Authorization: Bearer <sha256(password)> "
+                                   "or append ?token=<sha256(password)> to the URL.";
+            m_httpServer.sendData(clientFd, response, strlen(response));
+            m_httpServer.closeClient(clientFd);
+            return;
+        }
+
         // /raw is only meaningful while streaming is actually running —
         // the raw encoder pipeline is brought up by initializeRawPipeline
         // as part of start() and torn down by stop(). Without it, the
@@ -1002,6 +1159,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             if (it != m_rawClientSockets.end())
             {
                 m_rawClientSockets.erase(it);
+                m_rawClientPending.erase(clientFd);
                 m_rawClientCount = m_rawClientSockets.size();
                 m_httpServer.closeClient(clientFd);
             }
@@ -1058,6 +1216,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
         if (it != m_clientSockets.end())
         {
             m_clientSockets.erase(it);
+            m_clientPending.erase(clientFd);
             m_clientCount = m_clientSockets.size();
             m_httpServer.closeClient(clientFd);
         }
@@ -1092,63 +1251,110 @@ int HTTPTSStreamer::writeToClients(const uint8_t *buf, int buf_size)
         }
     }
 
-    // Enviar dados diretamente para todos os clientes (sem buffer, sem sincronização)
+    // Broadcast to every connected client. EAGAIN / partial sends used
+    // to silently drop the unsent tail; that corrupts MPEG-TS framing
+    // and mpegts.js loses the SourceBuffer permanently. We now stash
+    // the leftover bytes in a per-client tail buffer and drain it on
+    // the next call so byte order is preserved across brief slow-downs.
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
 
-        // Verificar novamente após adquirir o lock
         if (m_stopRequest || m_clientSockets.empty())
         {
-            // Sem clientes conectados ou parada solicitada, retornar sucesso para não bloquear o FFmpeg
             return buf_size;
         }
 
         auto it = m_clientSockets.begin();
         while (it != m_clientSockets.end())
         {
-            int clientFd = *it;
+            const int clientFd = *it;
+            ClientPending &p = m_clientPending[clientFd]; // default-construct if missing
+            bool drop = false;
 
-            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
-            if (sent < 0)
+            // 1. Try to drain any pending bytes from a previous call first.
+            //    Order matters: we cannot send 'buf' before the existing
+            //    tail or the receiver sees a discontinuity.
+            while (p.pending() > 0)
             {
-                // Erro fatal (conexão fechada, etc.) - remover cliente
-                static int errorLogCount = 0;
-                if (errorLogCount++ < 5) // Log apenas as primeiras 5 ocorrências para evitar spam
+                ssize_t sent = m_httpServer.sendData(
+                    clientFd,
+                    p.tail.data() + p.tailOffset,
+                    p.pending());
+                if (sent < 0) { drop = true; break; }
+                if (sent == 0) break; // EAGAIN — kernel buffer still full
+                p.tailOffset += static_cast<size_t>(sent);
+                if (p.tailOffset >= p.tail.size())
                 {
-                    LOG_WARN("Erro ao enviar dados para cliente (fd=" + std::to_string(clientFd) + "): sent=" + std::to_string(sent));
+                    p.tail.clear();
+                    p.tailOffset = 0;
                 }
+            }
+
+            // 2. If the tail is empty, try the new payload directly.
+            size_t newOffset = 0;
+            if (!drop && p.pending() == 0)
+            {
+                while (newOffset < static_cast<size_t>(buf_size))
+                {
+                    ssize_t sent = m_httpServer.sendData(
+                        clientFd,
+                        buf + newOffset,
+                        static_cast<size_t>(buf_size) - newOffset);
+                    if (sent < 0) { drop = true; break; }
+                    if (sent == 0) break; // EAGAIN
+                    newOffset += static_cast<size_t>(sent);
+                }
+            }
+
+            // 3. Stash anything we couldn't send so the next call resumes
+            //    from exactly where we left off.
+            if (!drop)
+            {
+                if (p.pending() > 0)
+                {
+                    // Couldn't drain the old tail — append the new payload
+                    // whole, otherwise the receiver would see buf before
+                    // the still-queued previous packet.
+                    p.tail.insert(p.tail.end(), buf, buf + buf_size);
+                }
+                else if (newOffset < static_cast<size_t>(buf_size))
+                {
+                    p.tail.assign(buf + newOffset, buf + buf_size);
+                    p.tailOffset = 0;
+                }
+
+                // Compact the partially-consumed prefix once it gets
+                // chunky so the tail doesn't grow unbounded just from
+                // offset accounting.
+                if (p.tailOffset > 64 * 1024)
+                {
+                    p.tail.erase(p.tail.begin(),
+                                 p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
+                    p.tailOffset = 0;
+                }
+
+                // Hopelessly slow client: backlog past the bound means
+                // the receiver has been falling behind for seconds. Cut
+                // them rather than burn memory forever.
+                if (p.pending() > kMaxClientBacklog)
+                {
+                    LOG_WARN("/stream client fd=" + std::to_string(clientFd) +
+                             " send backlog " + std::to_string(p.pending()) +
+                             " bytes exceeded cap (" + std::to_string(kMaxClientBacklog) +
+                             ") — closing");
+                    drop = true;
+                }
+            }
+
+            if (drop)
+            {
                 m_httpServer.closeClient(clientFd);
+                m_clientPending.erase(clientFd);
                 it = m_clientSockets.erase(it);
                 m_clientCount = m_clientSockets.size();
             }
-            else if (sent == 0)
-            {
-                // sent == 0 now means "would block" on both platforms:
-                // Linux uses MSG_DONTWAIT and maps EAGAIN to 0; Windows
-                // maps WSAEWOULDBLOCK to 0. Treat as transient — the
-                // packet is dropped for this client this round, but the
-                // client stays connected and gets the next one. Keeps a
-                // slow client from blocking the encoder thread (which
-                // holds the broadcast mutex).
-                ++it;
-            }
-            else if (static_cast<size_t>(sent) < static_cast<size_t>(buf_size))
-            {
-                // Enviado parcialmente - tentar enviar o restante
-                // No Windows, isso pode acontecer, mas devemos tentar enviar o restante
-                static int partialLogCount = 0;
-                if (partialLogCount++ < 3) // Log apenas as primeiras 3 ocorrências
-                {
-                    LOG_WARN("Envio parcial para cliente (fd=" + std::to_string(clientFd) +
-                             "): enviado=" + std::to_string(sent) + "/" + std::to_string(buf_size));
-                }
-                // Por enquanto, considerar como sucesso parcial e continuar
-                // Em uma implementação mais robusta, poderíamos tentar enviar o restante
-                ++it;
-            }
             else
             {
-                // Sucesso - todos os bytes foram enviados
                 ++it;
             }
         }
@@ -1175,6 +1381,10 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
         }
     }
 
+    // Same tail-buffer logic as writeToClients — see the long comment
+    // there. /raw clients are FFmpeg-driven and rarely hit backpressure
+    // in practice (no Cloudflare hop), but the corruption mode is
+    // identical so we apply the same fix for symmetry.
     {
         std::lock_guard<std::mutex> lock(m_rawOutputMutex);
         if (m_stopRequest || m_rawClientSockets.empty())
@@ -1185,19 +1395,76 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
         auto it = m_rawClientSockets.begin();
         while (it != m_rawClientSockets.end())
         {
-            int clientFd = *it;
-            ssize_t sent = m_httpServer.sendData(clientFd, buf, buf_size);
-            if (sent < 0)
+            const int clientFd = *it;
+            ClientPending &p = m_rawClientPending[clientFd];
+            bool drop = false;
+
+            while (p.pending() > 0)
+            {
+                ssize_t sent = m_httpServer.sendData(
+                    clientFd,
+                    p.tail.data() + p.tailOffset,
+                    p.pending());
+                if (sent < 0) { drop = true; break; }
+                if (sent == 0) break;
+                p.tailOffset += static_cast<size_t>(sent);
+                if (p.tailOffset >= p.tail.size())
+                {
+                    p.tail.clear();
+                    p.tailOffset = 0;
+                }
+            }
+
+            size_t newOffset = 0;
+            if (!drop && p.pending() == 0)
+            {
+                while (newOffset < static_cast<size_t>(buf_size))
+                {
+                    ssize_t sent = m_httpServer.sendData(
+                        clientFd,
+                        buf + newOffset,
+                        static_cast<size_t>(buf_size) - newOffset);
+                    if (sent < 0) { drop = true; break; }
+                    if (sent == 0) break;
+                    newOffset += static_cast<size_t>(sent);
+                }
+            }
+
+            if (!drop)
+            {
+                if (p.pending() > 0)
+                {
+                    p.tail.insert(p.tail.end(), buf, buf + buf_size);
+                }
+                else if (newOffset < static_cast<size_t>(buf_size))
+                {
+                    p.tail.assign(buf + newOffset, buf + buf_size);
+                    p.tailOffset = 0;
+                }
+                if (p.tailOffset > 64 * 1024)
+                {
+                    p.tail.erase(p.tail.begin(),
+                                 p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
+                    p.tailOffset = 0;
+                }
+                if (p.pending() > kMaxClientBacklog)
+                {
+                    LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
+                             " send backlog " + std::to_string(p.pending()) +
+                             " bytes exceeded cap — closing");
+                    drop = true;
+                }
+            }
+
+            if (drop)
             {
                 m_httpServer.closeClient(clientFd);
+                m_rawClientPending.erase(clientFd);
                 it = m_rawClientSockets.erase(it);
                 m_rawClientCount = m_rawClientSockets.size();
             }
             else
             {
-                // sent == 0 (would-block) and partial sends are treated the
-                // same way as in writeToClients — keep the client connected
-                // and move on.
                 ++it;
             }
         }

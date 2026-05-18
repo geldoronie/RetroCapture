@@ -74,6 +74,14 @@ public:
     bool start(const std::string &baseUrl, SnapshotCallback cb, int pollIntervalMs = 1000);
 
     /**
+     * #49 Phase 3 — bearer token (sha256 hex of password) sent on
+     * every /meta request. Must be called before start(). Empty
+     * string disables the header. Mirrors VideoCaptureRemote's
+     * setAuthToken.
+     */
+    void setAuthToken(const std::string &tokenHex) { m_authToken = tokenHex; }
+
+    /**
      * @brief Stop the polling thread (joins).
      */
     void stop();
@@ -107,6 +115,7 @@ private:
     void dispatchIfChanged(const Snapshot &snap);
 
     std::string         m_baseUrl;
+    std::string         m_authToken;  // sha256 hex; empty == no auth
     SnapshotCallback    m_cb;
     int                 m_pollIntervalMs = 1000;
 

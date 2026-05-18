@@ -4,15 +4,20 @@
 
 class UIManager;
 class IVideoCapture;
+class DirectoryBrowser;
 
 /**
  * UIRemoteConnection — dedicated window for the Remote viewer mode.
  *
- * Surfaces:
- *  - Remote base URL input
- *  - Display interpolation dropdown (linear / nearest / off)
- *  - Connect / Disconnect button
- *  - Connection status / stream dims
+ * Two tabs:
+ *   - Manual URL: type a remote base URL and click Connect (original
+ *     flow).
+ *   - Browse directory (#49 Phase 4): live list of streams pulled from
+ *     the directory service; click a row to populate the Manual URL
+ *     tab and connect.
+ *
+ * Common to both: display interpolation dropdown and connection
+ * status / stream dimensions.
  *
  * Lives outside the Source tab on purpose: connecting to a remote
  * RetroCapture instance is conceptually a different operating mode
@@ -38,9 +43,25 @@ public:
     // remain valid across the swap.
     void setCapture(IVideoCapture *) {}
 
+    /// Inject the directory browser. Application owns the lifetime;
+    /// this window just reads snapshots and triggers refreshes.
+    void setDirectoryBrowser(DirectoryBrowser *b) { m_browser = b; }
+
+    /**
+     * Arm the connect state machine with the given URL. Called from
+     * UIDirectoryBrowser when the user picks a stream from the list,
+     * so the two-frame 'Connecting…' feedback and the existing
+     * triggerSourceTypeChange / setCurrentDevice plumbing live in
+     * exactly one place. Also opens this window so the user can see
+     * the progress.
+     */
+    void triggerConnect(const std::string &url);
+
 private:
     UIManager *m_uiManager = nullptr;
     bool m_visible = false;
+
+    DirectoryBrowser *m_browser = nullptr;
 
     // ImGui InputText buffer, seeded from the saved device path on
     // first render so the user's previous URL persists across sessions.
@@ -64,4 +85,8 @@ private:
     };
     PendingAction m_pending = PendingAction::None;
     std::string m_pendingUrl;
+
+    void renderManualTab(bool sourceIsRemote, const std::string &currentDevice, bool connected);
+    void renderStatusFooter(bool connected);
+    void advanceStateMachine();
 };

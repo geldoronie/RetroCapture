@@ -22,6 +22,7 @@ class IAudioCapture;
 class UIConfiguration;
 class UICredits;
 class UIRemoteConnection;
+class UIDirectoryBrowser;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
@@ -247,6 +248,50 @@ public:
     void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
     void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
     bool isStreamingProcessing() const { return m_streamingProcessing; }
+
+    // ── Public-directory publish settings (#49 Phase 2) ──
+    bool getDirectoryPublishEnabled() const          { return m_directoryPublishEnabled; }
+    void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
+    const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
+    void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
+    const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
+    void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
+    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
+    const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
+    void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
+    const std::string &getDirectoryEndpointMode() const { return m_directoryEndpointMode; }
+    void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
+    const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
+    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
+    void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
+    const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
+    void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
+    void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
+
+    // Directory telemetry getters/setters (#49 Phase 5).
+    uint64_t getDirectoryRegisterOk()    const { return m_directoryRegisterOk; }
+    uint64_t getDirectoryRegisterFail()  const { return m_directoryRegisterFail; }
+    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryHeartbeatOk; }
+    uint64_t getDirectoryHeartbeatFail() const { return m_directoryHeartbeatFail; }
+    uint64_t getDirectoryPatchOk()       const { return m_directoryPatchOk; }
+    uint64_t getDirectoryPatchFail()     const { return m_directoryPatchFail; }
+    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directorySecondsSinceLastHeartbeat; }
+    void setDirectoryStats(uint64_t regOk, uint64_t regFail,
+                           uint64_t hbOk, uint64_t hbFail,
+                           uint64_t patchOk, uint64_t patchFail,
+                           int64_t secondsSinceLastHeartbeat)
+    {
+        m_directoryRegisterOk    = regOk;
+        m_directoryRegisterFail  = regFail;
+        m_directoryHeartbeatOk   = hbOk;
+        m_directoryHeartbeatFail = hbFail;
+        m_directoryPatchOk       = patchOk;
+        m_directoryPatchFail     = patchFail;
+        m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
+    }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -428,6 +473,7 @@ public:
     // capture pointer current — the window reads .isOpen() / dims to
     // decide whether to show Connect or Disconnect.
     UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
+    UIDirectoryBrowser *getDirectoryBrowserWindow() const { return m_directoryBrowserWindow.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -707,6 +753,11 @@ private:
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
     std::unique_ptr<class UIRemoteConnection> m_remoteConnectionWindow;
+    std::unique_ptr<class UIDirectoryBrowser> m_directoryBrowserWindow;
+
+    // ImGui's IO holds a raw pointer to the ini path string; keep the
+    // backing storage alive on UIManager for the whole lifetime.
+    std::string m_iniPath;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
@@ -858,6 +909,36 @@ private:
     bool m_canStartStreaming = true;            // Pode iniciar streaming (não está em cooldown)
     int64_t m_streamingCooldownRemainingMs = 0; // Tempo restante de cooldown em ms
     bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
+
+    // Public-directory publish settings (#49 Phase 2). State here is
+    // UI-side only; Application owns the DirectoryClient that
+    // actually talks to the directory service and mirrors the toggle
+    // from here every frame.
+    bool        m_directoryPublishEnabled = false;
+    std::string m_directoryUrl            = "http://directory.retrocapture.com";
+    std::string m_directoryStreamName     = "";
+    std::string m_directoryHostNickname   = "";
+    std::string m_directoryPassword       = "";       // optional; empty = no password
+    std::string m_directoryEndpointMode   = "direct"; // "direct" | "custom" (Phase 2.5 will add "tunnel-cloudflare")
+    std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
+    bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
+    std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+
+    // Per-session telemetry counters mirrored from DirectoryClient
+    // (#49 Phase 5). Application writes each frame; UI reads.
+    uint64_t m_directoryRegisterOk     = 0;
+    uint64_t m_directoryRegisterFail   = 0;
+    uint64_t m_directoryHeartbeatOk    = 0;
+    uint64_t m_directoryHeartbeatFail  = 0;
+    uint64_t m_directoryPatchOk        = 0;
+    uint64_t m_directoryPatchFail      = 0;
+    int64_t  m_directorySecondsSinceLastHeartbeat = -1;
+
+    // Transient bearer token for the next remote connect (#49 Phase 3).
+    // sha256 hex of the password the user typed in the prompt. Not
+    // persisted: set on browse-click or Manual-tab connect, consumed
+    // by Application's onDeviceChanged callback, then cleared.
+    std::string m_remoteAuthToken;
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
     // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)

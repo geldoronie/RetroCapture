@@ -143,6 +143,10 @@ public:
     // thread. Called once per main-loop iteration; cheap no-op when
     // m_hasPendingRemoteMeta is false.
     void applyPendingRemoteMeta();
+
+    // #49 Phase 2: reconciles the public-directory publish state with
+    // the UI toggle. Called every frame; cheap when no transition.
+    void syncDirectoryClient();
     fs::path getShaderBasePath() const;
     
     // Thread-safe resolution change scheduling
@@ -166,6 +170,9 @@ private:
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
+    std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
+    std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
+    std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

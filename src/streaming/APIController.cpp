@@ -3,6 +3,7 @@
 #include "../ui/UIManager.h"
 #include "../shader/ShaderEngine.h"
 #include "HTTPServer.h"
+#include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
 #include "../utils/PresetManager.h"
 #include "../recording/RecordingSettings.h"
@@ -134,6 +135,12 @@ bool APIController::isAPIRequest(const std::string &request) const
     // the top-level /meta endpoint used by the remote-stream client protocol.
     return request.find("/api/") != std::string::npos ||
            request.find(" /meta") != std::string::npos;
+}
+
+void APIController::setStreamPasswordHash(const std::string &sha256Hex)
+{
+    std::lock_guard<std::mutex> lock(m_passwordMu);
+    m_streamPasswordHash = sha256Hex;
 }
 
 bool APIController::handleRequest(int clientFd, const std::string &request)
@@ -1104,6 +1111,32 @@ bool APIController::handleGETMeta(int clientFd, const std::string &request)
     {
         sendErrorResponse(clientFd, 500, "Application or UIManager not available");
         return true;
+    }
+
+    // #49 Phase 3 — password gate. Same wire contract as /raw:
+    // Authorization: Bearer <sha256(password)>, or ?token=... query
+    // fallback. Empty configured hash means no auth required.
+    {
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!HttpAuth::authorized(request, pwHash))
+        {
+            const char *response = "HTTP/1.1 401 Unauthorized\r\n"
+                                   "WWW-Authenticate: Bearer realm=\"retrocapture-meta\"\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "This stream's metadata is password-protected. "
+                                   "Send Authorization: Bearer <sha256(password)>.";
+            if (m_httpServer)
+            {
+                m_httpServer->sendData(clientFd, response, strlen(response));
+            }
+            return true;
+        }
     }
 
     // Sniff for an SSE-flavoured request. Case-insensitive on the header

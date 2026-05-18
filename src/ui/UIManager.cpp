@@ -2,6 +2,7 @@
 #include "UIConfiguration.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
+#include "UIDirectoryBrowser.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
@@ -107,12 +108,29 @@ bool UIManager::init(void *window)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    io.IniFilename = "RetroCapture.ini";
-    std::string oldIniPath = "imgui.ini";
-    if (fs::exists(oldIniPath))
+    // Anchor the ImGui ini to the user-data dir so window
+    // positions/sizes/collapse state survive across runs regardless
+    // of which directory the binary was launched from. CWD-relative
+    // worked while everyone ran from build/bin during dev but breaks
+    // for installed builds and Wine launches. m_iniPath has to outlive
+    // ImGui (it holds the pointer verbatim), so we keep it on the
+    // UIManager instance.
     {
-        fs::remove(oldIniPath);
-        LOG_INFO("Old configuration file removed: " + oldIniPath);
+        std::error_code ec;
+        fs::path userDir = fs::path(Paths::getUserDataDir());
+        fs::create_directories(userDir, ec);
+        m_iniPath = (userDir / "imgui.ini").string();
+        io.IniFilename = m_iniPath.c_str();
+        LOG_INFO("ImGui ini path: " + m_iniPath);
+    }
+    // Migrate the legacy CWD-anchored configs out of the way once.
+    for (const char *legacy : { "RetroCapture.ini", "imgui.ini" })
+    {
+        if (fs::exists(legacy))
+        {
+            fs::remove(legacy);
+            LOG_INFO(std::string("Removed legacy ini at CWD: ") + legacy);
+        }
     }
 
     // Setup Dear ImGui style
@@ -150,6 +168,8 @@ bool UIManager::init(void *window)
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
     m_remoteConnectionWindow = std::make_unique<UIRemoteConnection>(this);
+    m_directoryBrowserWindow = std::make_unique<UIDirectoryBrowser>(this);
+    m_directoryBrowserWindow->setRemoteConnectionWindow(m_remoteConnectionWindow.get());
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
     m_configWindow->setVisible(true);
@@ -346,17 +366,30 @@ void UIManager::render()
         }
         if (ImGui::BeginMenu("Remote"))
         {
-            // 'Connect to Remote...' is always enabled — the window shows
-            // either Connect or Disconnect based on the current state, so
-            // it doubles as a status / management panel. Disabling the
-            // menu item while connected made the window unreachable once
-            // closed, which forced users into restart-to-recover.
-            if (ImGui::MenuItem("Connect to Remote..."))
+            // While the host is actively streaming we hide the client
+            // entry points — receiving someone else's stream while
+            // publishing our own is a configuration mistake (the local
+            // capture source would compete with the inbound remote feed
+            // for the same display path). The menu items go grey, the
+            // open windows are closed below.
+            const bool clientEntryAllowed = !m_streamingActive;
+            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, clientEntryAllowed))
             {
                 if (m_remoteConnectionWindow)
                 {
                     m_remoteConnectionWindow->setVisible(true);
                 }
+            }
+            if (ImGui::MenuItem("Browse public directory...", nullptr, false, clientEntryAllowed))
+            {
+                if (m_directoryBrowserWindow)
+                {
+                    m_directoryBrowserWindow->setVisible(true);
+                }
+            }
+            if (m_streamingActive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Disabled while streaming as host.");
             }
             // Quick Disconnect shortcut — only shown when relevant.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
@@ -386,6 +419,15 @@ void UIManager::render()
     // sitting open from a previous local session — the menu hides their
     // toggles too, so without this they'd be unreachable but still drawing.
     const bool clientModeActive = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+    // Symmetric to the menu-item gating above: when we're streaming as
+    // host, force the client-side windows shut. Without this the user
+    // could have left them open from before they hit Start Streaming
+    // and they'd remain visible (and active) on screen.
+    if (m_streamingActive)
+    {
+        if (m_remoteConnectionWindow) m_remoteConnectionWindow->setVisible(false);
+        if (m_directoryBrowserWindow) m_directoryBrowserWindow->setVisible(false);
+    }
     if (clientModeActive)
     {
         if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
@@ -408,6 +450,11 @@ void UIManager::render()
     if (m_remoteConnectionWindow)
     {
         m_remoteConnectionWindow->render();
+    }
+
+    if (m_directoryBrowserWindow)
+    {
+        m_directoryBrowserWindow->render();
     }
 
     // Renderizar janela de presets
@@ -2285,6 +2332,18 @@ void UIManager::loadConfig()
                 if (buffer.contains("avioBufferSize"))
                     m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
             }
+            if (streaming.contains("directory"))
+            {
+                auto &dir = streaming["directory"];
+                if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
+                if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
+                if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
+                if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
+                if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
+                if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
+                if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
+                if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
+            }
         }
 
         // Carregar configurações de captura
@@ -2638,7 +2697,22 @@ void UIManager::saveConfig()
             {"amfQuality",  m_streamingAmfQuality},
             {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
+            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}},
+            // #49 Phase 2: public directory publish settings.
+            // The password is persisted because the user re-uses it
+            // across sessions; the runtime streamId + ownerToken are
+            // never persisted (per the spec — a new run is a new
+            // directory entry).
+            {"directory", {
+                {"publishEnabled", m_directoryPublishEnabled},
+                {"url",            m_directoryUrl},
+                {"streamName",     m_directoryStreamName},
+                {"hostNickname",   m_directoryHostNickname},
+                {"password",       m_directoryPassword},
+                {"endpointMode",   m_directoryEndpointMode},
+                {"customEndpoint", m_directoryCustomEndpoint},
+                {"privacyAcked",   m_directoryPrivacyAcked},
+            }}};
 
         // Salvar configurações de imagem
         config["image"] = {

@@ -24,6 +24,7 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+#include <unordered_map>
 
 // Forward declarations
 class Application;
@@ -76,6 +77,18 @@ public:
                          size_t avioBufferSize);
     void setAudioCodec(const std::string &codecName);
     void setH264Preset(const std::string &preset) { m_h264Preset = preset; }
+
+    // #49 Phase 3 — stream password.
+    //
+    // The hash is the lowercase hex sha256 of whatever the user typed
+    // in the publish UI. Pass an empty string to disable auth.
+    // Application keeps this in sync with UIManager every frame so a
+    // toggle in the UI takes effect on the next request.
+    //
+    // Only /raw is gated; /stream stays open so VLC / mpv / portal
+    // viewers keep working regardless of whether the directory entry
+    // is password-protected.
+    void setStreamPasswordHash(const std::string &sha256Hex);
     void setH265Preset(const std::string &preset) { m_h265Preset = preset; }
     void setH265Profile(const std::string &profile) { m_h265Profile = profile; }
     void setH265Level(const std::string &level) { m_h265Level = level; }
@@ -212,6 +225,13 @@ private:
     std::string m_videoCodecName = "h264";
     std::string m_audioCodecName = "aac";
     std::string m_h264Preset = "veryfast"; // Preset H.264 configurável via UI
+
+    // #49 Phase 3 — sha256 hex of the user's password (empty == no auth).
+    // Accessed from the request-handler thread; atomic update via the
+    // setter under a mutex so a setStreamPasswordHash from the main
+    // thread can't tear with a concurrent compare in handleRequest.
+    mutable std::mutex m_passwordMu;
+    std::string        m_streamPasswordHash;
     std::string m_h265Preset = "veryfast"; // Preset H.265 configurável via UI
     std::string m_h265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
     std::string m_h265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
@@ -318,6 +338,33 @@ private:
     // Output buffer for clients
     std::vector<int> m_clientSockets;
 
+    /**
+     * Per-client outbound tail buffer.
+     *
+     * The encoder thread feeds writeToClients() with TS packets at the
+     * source FPS. When a client (typically the browser side of a
+     * Cloudflare/FRP tunnel) can't drain the kernel TCP send buffer
+     * fast enough, send() returns partial or EAGAIN. Silently dropping
+     * the unsent tail — which the original implementation did — breaks
+     * MPEG-TS continuity counters and mpegts.js loses the SourceBuffer
+     * forever (visible to the user as "playback freezes after a while
+     * and never recovers"). Stashing the unsent bytes here and
+     * draining them on the next call preserves byte order across
+     * brief network glitches.
+     *
+     * Bounded so a hopelessly slow client doesn't grow memory without
+     * limit; on overflow we close the fd, mirroring how the existing
+     * code reacts to send() returning -1.
+     */
+    struct ClientPending
+    {
+        std::vector<uint8_t> tail;
+        size_t tailOffset = 0;
+        size_t pending() const { return tail.size() - tailOffset; }
+    };
+    static constexpr size_t kMaxClientBacklog = 4 * 1024 * 1024; // 4 MB
+    std::unordered_map<int, ClientPending> m_clientPending;
+
     // Header do formato MPEG-TS (enviado quando cliente se conecta)
     std::vector<uint8_t> m_formatHeader;
     bool m_headerWritten = false;
@@ -337,6 +384,7 @@ private:
 
     std::atomic<uint32_t> m_rawClientCount{0};
     std::vector<int>      m_rawClientSockets;
+    std::unordered_map<int, ClientPending> m_rawClientPending; // same semantics as m_clientPending
 
     std::vector<uint8_t> m_rawFormatHeader;
     bool                 m_rawHeaderWritten = false;

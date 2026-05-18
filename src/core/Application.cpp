@@ -25,6 +25,15 @@
 #include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
+#include "../streaming/DirectoryClient.h"
+#include "../streaming/DirectoryBrowser.h"
+#include "../ui/UIDirectoryBrowser.h"
+#include "../streaming/CloudflaredManager.h"
+#include "../utils/PasswordHash.h"
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -2327,16 +2336,36 @@ bool Application::initUI()
                 m_frameProcessor->deleteTexture();
             }
 
-            // Tear down any existing remote pipeline (capture + meta-sync).
-            if (m_remoteMetaSync)
+            // Tear down any existing remote pipeline on a background
+            // thread so the main loop doesn't stall while
+            // VideoCaptureRemote joins its decode thread (up to ~1.5 s
+            // with the interrupt callback). We move ownership of both
+            // objects into a detached worker; the main thread
+            // continues immediately to spin up the new capture.
+            //
+            // Switching from one remote URL straight to another used
+            // to freeze the UI for the full join duration; this is
+            // what made "click another stream while connected" feel
+            // unresponsive even though the new connection itself was
+            // already fast.
+            if (m_remoteMetaSync || m_capture)
             {
-                m_remoteMetaSync->stop();
-                m_remoteMetaSync.reset();
-            }
-            if (m_capture)
-            {
-                m_capture->stopCapture();
-                m_capture->close();
+                auto deadCapture = std::move(m_capture);
+                auto deadMeta    = std::move(m_remoteMetaSync);
+                std::thread([cap = std::move(deadCapture),
+                             meta = std::move(deadMeta)]() mutable {
+                    if (meta)
+                    {
+                        meta->stop();
+                        meta.reset();
+                    }
+                    if (cap)
+                    {
+                        cap->stopCapture();
+                        cap->close();
+                        cap.reset();
+                    }
+                }).detach();
             }
 
             m_devicePath = devicePath;
@@ -2358,6 +2387,18 @@ bool Application::initUI()
                 return;
             }
 
+            // #49 Phase 3 — pull the bearer token the connection UI
+            // (or password modal) stashed for this connect. Consumed
+            // exactly once: read here, cleared immediately so a
+            // subsequent unprotected connect doesn't accidentally
+            // inherit the previous stream's token.
+            std::string authToken;
+            if (m_ui)
+            {
+                authToken = m_ui->getRemoteAuthToken();
+                m_ui->setRemoteAuthToken("");
+            }
+
             // Recreate the capture as Remote (the existing instance might be
             // V4L2/DS if the user just flipped source type).
             {
@@ -2366,6 +2407,7 @@ bool Application::initUI()
                 if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                 else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                 remote->setInterpolationMode(imode);
+                remote->setAuthToken(authToken);
                 m_capture = std::move(remote);
             }
             if (m_capture->open(devicePath))
@@ -2394,6 +2436,7 @@ bool Application::initUI()
                 }
                 // Re-start the /meta poller against the new host.
                 m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
+                m_remoteMetaSync->setAuthToken(authToken);
                 m_remoteMetaSync->start(devicePath,
                     [this](const RemoteMetaSync::Snapshot &snap)
                     {
@@ -3081,6 +3124,12 @@ void Application::run()
         // thread before any GL work. Cheap when nothing pending.
         applyPendingRemoteMeta();
 
+        // Phase 2 of #49: reconcile the public-directory publish state
+        // with whatever the UI toggle currently says. Cheap when no
+        // transition is needed (just compares two booleans and a few
+        // strings).
+        syncDirectoryClient();
+
         m_window->pollEvents();
         
         // Check again after polling events (window may have been invalidated)
@@ -3258,6 +3307,30 @@ void Application::run()
             if (auto *win = m_ui->getRemoteConnectionWindow())
             {
                 win->setCapture(m_capture.get());
+            }
+
+            // #49 Phase 4: keep the directory browser running while
+            // the dedicated 'Browse public directory' window is open.
+            // Lazy-construct on first sighting so we don't pay for
+            // the worker thread when the user never opens the window.
+            if (auto *browseWin = m_ui->getDirectoryBrowserWindow())
+            {
+                if (browseWin->isVisible())
+                {
+                    if (!m_directoryBrowser)
+                    {
+                        m_directoryBrowser = std::make_unique<DirectoryBrowser>();
+                    }
+                    browseWin->setDirectoryBrowser(m_directoryBrowser.get());
+                    if (!m_directoryBrowser->isRunning())
+                    {
+                        m_directoryBrowser->start(m_ui->getDirectoryUrl());
+                    }
+                }
+                else if (m_directoryBrowser && m_directoryBrowser->isRunning())
+                {
+                    m_directoryBrowser->stop();
+                }
             }
         }
 
@@ -5328,6 +5401,242 @@ void Application::applyPendingRemoteMeta()
                      " parameter override(s)");
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// #49 Phase 2 — public directory publish lifecycle
+//
+// The UI owns the "publish on/off" toggle plus the user-visible
+// metadata fields. This method, called once per main-loop iteration,
+// reconciles those UI fields with the DirectoryClient instance that
+// actually talks HTTP to the directory service:
+//
+//   - toggle OFF → ensure DirectoryClient is stopped
+//   - toggle ON, client Idle → build a Config from UI state, start
+//   - toggle ON, client Active → no-op (changes are applied via
+//     PATCH on the next heartbeat tick if updateMetadata was called)
+//
+// Always cheap when there's no transition; just compares the toggle
+// against the current state.
+// ─────────────────────────────────────────────────────────────────────
+void Application::syncDirectoryClient()
+{
+    if (!m_ui) return;
+
+    // #49 Phase 3 — keep the server-side password gate in sync with
+    // whatever the user typed in the publish UI. We hash on every
+    // call (cheap, sha256 of < 1 KB), but the StreamManager setter
+    // is a no-op when the value hasn't changed. Done outside the
+    // wantPublish gate below so the gate stays active even on
+    // streams the user doesn't publicly list (someone you handed the
+    // URL directly is still protected).
+    if (m_streamManager)
+    {
+        const std::string &raw = m_ui->getDirectoryPassword();
+        m_streamManager->setStreamPasswordHash(
+            raw.empty() ? std::string{} : PasswordHash::sha256Hex(raw));
+    }
+
+    // Publish only makes sense when there's actually a stream being
+    // served. Two scenarios where this gate matters:
+    //   1. User toggled publish on previously, the persisted config
+    //      flag stays true, and now they launch a second instance on
+    //      the same machine just to view (client mode). Without the
+    //      gate, that client instance would happily try to register
+    //      itself in the directory even though it has nothing to
+    //      advertise — duplicate-looking entries from the same IP.
+    //   2. User toggles publish on before pressing Start Streaming.
+    //      The entry would advertise an endpoint that 503s for any
+    //      client that tried to connect. Better to not list at all
+    //      until /raw is serving.
+    //
+    // 'Streaming active' is the right signal here — it's set by
+    // StreamManager once a streamer has bound its port and is
+    // accepting clients. Toggle stays on (persisted) so as soon as
+    // streaming actually starts, publish kicks in automatically.
+    const bool wantPublish    = m_ui->getDirectoryPublishEnabled();
+    const bool streamingLive  = m_ui->getStreamingActive();
+    const bool shouldPublish  = wantPublish && streamingLive;
+    const std::string mode    = m_ui->getDirectoryEndpointMode();
+
+    // #49 Phase 2.5 — manage the cloudflared child process whenever
+    // the user has tunnel-cloudflare selected. We tear it down on
+    // any of: publish toggle off, streaming offline, mode switched
+    // away. Lazy-construct on first need so plain direct/custom-mode
+    // users never spawn an extra thread.
+    const bool wantTunnel = shouldPublish && (mode == "tunnel-cloudflare");
+    if (wantTunnel)
+    {
+        if (!m_cloudflaredManager)
+        {
+            m_cloudflaredManager = std::make_unique<CloudflaredManager>();
+        }
+        auto cfState = m_cloudflaredManager->getState();
+        if (cfState == CloudflaredManager::State::Idle)
+        {
+            m_cloudflaredManager->start(m_ui->getStreamingPort());
+        }
+    }
+    else if (m_cloudflaredManager &&
+             m_cloudflaredManager->getState() != CloudflaredManager::State::Idle)
+    {
+        m_cloudflaredManager->stop();
+    }
+
+    if (!shouldPublish && !m_directoryClient) return;
+    if (!m_directoryClient)
+    {
+        m_directoryClient = std::make_unique<DirectoryClient>();
+    }
+
+    auto state = m_directoryClient->getState();
+
+    if (!shouldPublish)
+    {
+        if (state != DirectoryClient::State::Idle)
+        {
+            m_directoryClient->stop();
+            // Surface why we stopped so the user understands the
+            // toggle is still on but nothing is listed right now.
+            if (wantPublish && !streamingLive)
+            {
+                m_ui->setDirectoryStatusText("Waiting for streaming to start");
+            }
+            else
+            {
+                m_ui->setDirectoryStatusText("Idle");
+            }
+        }
+        else if (wantPublish && !streamingLive &&
+                 m_ui->getDirectoryStatusText() != "Waiting for streaming to start")
+        {
+            m_ui->setDirectoryStatusText("Waiting for streaming to start");
+        }
+        return;
+    }
+
+    // wantPublish == true beyond this point.
+
+    // For tunnel mode, gate the DirectoryClient on cloudflared having
+    // actually handed us a URL. Anything earlier would advertise a
+    // localhost endpoint that nobody outside this machine can reach.
+    std::string tunnelUrl;
+    if (mode == "tunnel-cloudflare")
+    {
+        if (!m_cloudflaredManager)
+        {
+            m_ui->setDirectoryStatusText("Tunnel unavailable");
+            return;
+        }
+        auto cfState = m_cloudflaredManager->getState();
+        switch (cfState)
+        {
+            case CloudflaredManager::State::Active:
+                tunnelUrl = m_cloudflaredManager->getUrl();
+                break;
+            case CloudflaredManager::State::Spawning:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
+                return;
+            case CloudflaredManager::State::NotFound:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText(
+                    "Error: cloudflared not installed — install from cloudflare.com/products/tunnel");
+                return;
+            case CloudflaredManager::State::Crashed:
+                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
+                m_ui->setDirectoryStatusText("Error: tunnel crashed — " + m_cloudflaredManager->getLastError());
+                return;
+            default:
+                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
+                return;
+        }
+    }
+
+    if (state == DirectoryClient::State::Idle)
+    {
+        // Build Config from current UI + streaming state.
+        DirectoryClient::Config cfg;
+        cfg.directoryUrl     = m_ui->getDirectoryUrl();
+        cfg.name             = m_ui->getDirectoryStreamName();
+        cfg.hostNickname     = m_ui->getDirectoryHostNickname();
+        cfg.shader           = m_ui->getCurrentShader();
+        cfg.resolutionW      = m_ui->getCaptureWidth();
+        cfg.resolutionH      = m_ui->getCaptureHeight();
+        cfg.fps              = m_ui->getCaptureFps();
+        cfg.codec            = m_ui->getStreamingVideoCodec() == "h265" ? "h265" : "h264";
+        cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
+        cfg.endpointMode     = mode;
+        cfg.version          = RETROCAPTURE_VERSION;
+
+        if (cfg.endpointMode == "tunnel-cloudflare")
+        {
+            cfg.endpoint = tunnelUrl;
+        }
+        else if (cfg.endpointMode == "custom")
+        {
+            cfg.endpoint = m_ui->getDirectoryCustomEndpoint();
+        }
+        else
+        {
+            // Direct mode: the directory's `endpoint` field is a
+            // BASE URL (http://host:port). The client appends /raw
+            // and /meta by convention; if we include them here they
+            // get appended again ('/raw/raw' → 404). The local stream
+            // URL ends in '/stream' which is wrong here for the same
+            // reason — never reuse it for the directory endpoint.
+            //
+            // Phase 2.5 (Cloudflare Tunnel) will replace this with
+            // the tunnel base URL.
+            cfg.endpoint = "http://localhost:" + std::to_string(m_ui->getStreamingPort());
+        }
+
+        if (m_directoryClient->start(cfg))
+        {
+            m_ui->setDirectoryStatusText("Registering…");
+        }
+        else
+        {
+            m_ui->setDirectoryStatusText("Error: " + m_directoryClient->getLastError());
+            // Roll the toggle back so the UI shows the actual state.
+            m_ui->setDirectoryPublishEnabled(false);
+        }
+        return;
+    }
+
+    // State display — translate enum to one-liner.
+    std::string status;
+    switch (state)
+    {
+        case DirectoryClient::State::Registering: status = "Registering…"; break;
+        case DirectoryClient::State::Active:
+        {
+            const auto id = m_directoryClient->getStreamId();
+            status = id.empty() ? "Active" : "Active — " + id;
+            break;
+        }
+        case DirectoryClient::State::Error:
+        {
+            const auto err = m_directoryClient->getLastError();
+            status = err.empty() ? "Error" : "Error: " + err;
+            break;
+        }
+        case DirectoryClient::State::Stopping: status = "Stopping…"; break;
+        case DirectoryClient::State::Idle:      status = "Idle"; break;
+    }
+    if (m_ui->getDirectoryStatusText() != status)
+    {
+        m_ui->setDirectoryStatusText(status);
+    }
+
+    // Mirror telemetry counters into UIManager every frame so the
+    // publish section can render them without holding a pointer to
+    // DirectoryClient.
+    const auto stats = m_directoryClient->getStats();
+    m_ui->setDirectoryStats(stats.registerOk, stats.registerFail,
+                            stats.heartbeatOk, stats.heartbeatFail,
+                            stats.patchOk, stats.patchFail,
+                            stats.secondsSinceLastHeartbeat);
 }
 
 // Recording methods

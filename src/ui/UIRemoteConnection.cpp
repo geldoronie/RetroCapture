@@ -1,6 +1,16 @@
 #include "UIRemoteConnection.h"
 #include "UIManager.h"
+#include "../streaming/DirectoryBrowser.h"
+#include "../utils/PasswordHash.h"
+
 #include <imgui.h>
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 
 UIRemoteConnection::UIRemoteConnection(UIManager *uiManager)
@@ -13,6 +23,23 @@ UIRemoteConnection::~UIRemoteConnection() = default;
 void UIRemoteConnection::setVisible(bool visible)
 {
     m_visible = visible;
+}
+
+void UIRemoteConnection::triggerConnect(const std::string &url)
+{
+    std::string clean = url;
+    while (!clean.empty() && clean.back() == '/') clean.pop_back();
+    if (clean.empty()) return;
+
+    // Mirror into the URL input so the user sees what they just
+    // committed to, plus arm the existing state machine. Pop the
+    // window open so the connection feedback is visible — the user
+    // may have arrived here from the Browse window.
+    std::strncpy(m_urlBuffer, clean.c_str(), sizeof(m_urlBuffer) - 1);
+    m_urlBuffer[sizeof(m_urlBuffer) - 1] = '\0';
+    m_pendingUrl = clean;
+    m_pending    = PendingAction::ConnectShowStatus;
+    m_visible    = true;
 }
 
 void UIRemoteConnection::render()
@@ -50,6 +77,9 @@ void UIRemoteConnection::render()
         }
     }
 
+    const std::string currentDevice = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
+    const bool connected = sourceIsRemote && !currentDevice.empty();
+
     ImGui::SetNextWindowSize(ImVec2(520, 320), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Connect to Remote", &m_visible))
     {
@@ -57,158 +87,172 @@ void UIRemoteConnection::render()
             "Consume a remote RetroCapture stream. The client decodes the "
             "host's /raw feed and mirrors its shader pipeline via /meta.");
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::Text("Remote base URL");
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##remoteUrl", m_urlBuffer, sizeof(m_urlBuffer));
-
-        ImGui::Spacing();
-
-        // Interpolation mode dropdown — same options the Source-tab path
-        // used to expose. Lives here now so all the Remote-mode controls
-        // are co-located.
-        const char *modes[]      = {"linear", "nearest", "off"};
-        const char *modeLabels[] = {
-            "Linear (smooth, slight ghosting)",
-            "Nearest (clean frames, may stutter)",
-            "Off (strict PTS, may stutter)"
-        };
-        std::string currentMode = m_uiManager->getRemoteInterpolation();
-        int currentModeIndex = 0;
-        for (int i = 0; i < 3; ++i)
-        {
-            if (currentMode == modes[i]) { currentModeIndex = i; break; }
-        }
-        ImGui::Text("Display interpolation");
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
-        {
-            m_uiManager->triggerRemoteInterpolationChange(modes[currentModeIndex]);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Linear: blend prev+next por refresh — fluido, leve fantasma em movimento rápido.\n"
-                              "Nearest: frame mais próximo no tempo — limpo, com 3:2 pulldown em ratio não-inteiro.\n"
-                              "Off: estritamente espera o PTS — comportamento simples, sem ghosting nem suavização.");
-        }
-
+        ImGui::TextDisabled("Tip: Remote → Browse public directory… to pick from the public list.");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // 'Connected' here means we're in Remote source mode AND have a
-        // URL set AND the capture is open. Without the source-type check
-        // the window mis-reported a local V4L2/DS capture as a remote
-        // connection (V4L2 also uses getCurrentDevice + isOpen).
-        // Liveness derived from UIManager only — the old code dereferenced
-        // a cached IVideoCapture* that went dangling the moment the user
-        // pressed Connect (the connect handler destroys-and-recreates
-        // m_capture inside the same frame). UIManager's caller-side info
-        // is updated by Application after the swap completes, so it's
-        // safe to consult from here.
-        const std::string currentDevice = sourceIsRemote ? m_uiManager->getCurrentDevice() : std::string();
-        const bool connected = sourceIsRemote && !currentDevice.empty();
-
-        // Two-frame state machine: button click sets *ShowStatus, the
-        // next render of this state shows the spinning label and arms
-        // *Execute, the frame after runs the blocking call. The user
-        // gets one painted 'Connecting...' / 'Disconnecting...' before
-        // the freeze actually starts.
-        const bool inProgress = (m_pending != PendingAction::None);
-        if (!connected)
-        {
-            ImGui::BeginDisabled(inProgress);
-            if (ImGui::Button("Connect", ImVec2(120, 0)))
-            {
-                std::string url(m_urlBuffer);
-                // Strip a trailing slash so the appended /raw and /meta land
-                // cleanly down in VideoCaptureRemote / RemoteMetaSync.
-                while (!url.empty() && url.back() == '/') url.pop_back();
-                if (!url.empty())
-                {
-                    m_pendingUrl = url;
-                    m_pending    = PendingAction::ConnectShowStatus;
-                }
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (m_pending == PendingAction::ConnectShowStatus ||
-                m_pending == PendingAction::ConnectExecute)
-            {
-                ImGui::TextDisabled("connecting...");
-            }
-            else
-            {
-                ImGui::TextDisabled("not connected");
-            }
-        }
-        else
-        {
-            ImGui::BeginDisabled(inProgress);
-            if (ImGui::Button("Disconnect", ImVec2(120, 0)))
-            {
-                m_pending = PendingAction::DisconnectShowStatus;
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (m_pending == PendingAction::DisconnectShowStatus ||
-                m_pending == PendingAction::DisconnectExecute)
-            {
-                ImGui::TextDisabled("disconnecting...");
-            }
-            else
-            {
-                ImGui::TextDisabled("connected to %s", currentDevice.c_str());
-            }
-        }
-
-        // Advance the state machine AFTER all UI for this frame has been
-        // emitted. ShowStatus → Execute on this very frame (the label is
-        // already in ImGui's draw list). Execute runs the blocking call
-        // on the NEXT frame, by which point ShowStatus has painted.
-        switch (m_pending)
-        {
-            case PendingAction::ConnectShowStatus:
-                m_pending = PendingAction::ConnectExecute;
-                break;
-            case PendingAction::ConnectExecute:
-                if (m_uiManager->getSourceType() != UIManager::SourceType::Remote)
-                {
-                    m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
-                }
-                m_uiManager->setCurrentDevice(m_pendingUrl);
-                m_pendingUrl.clear();
-                m_pending = PendingAction::None;
-                break;
-            case PendingAction::DisconnectShowStatus:
-                m_pending = PendingAction::DisconnectExecute;
-                break;
-            case PendingAction::DisconnectExecute:
-                m_uiManager->setCurrentDevice("");
-                m_pending = PendingAction::None;
-                break;
-            case PendingAction::None:
-                break;
-        }
+        renderManualTab(sourceIsRemote, currentDevice, connected);
 
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextDisabled("Status");
-        if (connected)
-        {
-            const uint32_t w = m_uiManager->getCaptureWidth();
-            const uint32_t h = m_uiManager->getCaptureHeight();
-            if (w > 0 && h > 0) ImGui::Text("Stream: %ux%u", w, h);
-            else                ImGui::Text("Connecting...");
-        }
-        else
-        {
-            ImGui::Text("Idle.");
-        }
+        renderStatusFooter(connected);
     }
     ImGui::End();
+
+    // Always advance the state machine even if the window is now
+    // covered — connect/disconnect MUST progress once initiated.
+    advanceStateMachine();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Manual URL tab — the original flow.
+// ─────────────────────────────────────────────────────────────────────
+void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
+                                         const std::string &currentDevice,
+                                         bool connected)
+{
+    ImGui::Spacing();
+    ImGui::Text("Remote base URL");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##remoteUrl", m_urlBuffer, sizeof(m_urlBuffer));
+
+    ImGui::Spacing();
+
+    // Interpolation mode dropdown — same options the Source-tab path
+    // used to expose. Lives here now so all the Remote-mode controls
+    // are co-located.
+    const char *modes[]      = {"linear", "nearest", "off"};
+    const char *modeLabels[] = {
+        "Linear (smooth, slight ghosting)",
+        "Nearest (clean frames, may stutter)",
+        "Off (strict PTS, may stutter)"
+    };
+    std::string currentMode = m_uiManager->getRemoteInterpolation();
+    int currentModeIndex = 0;
+    for (int i = 0; i < 3; ++i)
+    {
+        if (currentMode == modes[i]) { currentModeIndex = i; break; }
+    }
+    ImGui::Text("Display interpolation");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
+    {
+        m_uiManager->triggerRemoteInterpolationChange(modes[currentModeIndex]);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Linear: blend prev+next por refresh — fluido, leve fantasma em movimento rápido.\n"
+                          "Nearest: frame mais próximo no tempo — limpo, com 3:2 pulldown em ratio não-inteiro.\n"
+                          "Off: estritamente espera o PTS — comportamento simples, sem ghosting nem suavização.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Two-frame state machine: button click sets *ShowStatus, the
+    // next render of this state shows the spinning label and arms
+    // *Execute, the frame after runs the blocking call. The user
+    // gets one painted 'Connecting...' / 'Disconnecting...' before
+    // the freeze actually starts.
+    const bool inProgress = (m_pending != PendingAction::None);
+    if (!connected)
+    {
+        ImGui::BeginDisabled(inProgress);
+        if (ImGui::Button("Connect", ImVec2(120, 0)))
+        {
+            std::string url(m_urlBuffer);
+            // Strip a trailing slash so the appended /raw and /meta land
+            // cleanly down in VideoCaptureRemote / RemoteMetaSync.
+            while (!url.empty() && url.back() == '/') url.pop_back();
+            if (!url.empty())
+            {
+                m_pendingUrl = url;
+                m_pending    = PendingAction::ConnectShowStatus;
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (m_pending == PendingAction::ConnectShowStatus ||
+            m_pending == PendingAction::ConnectExecute)
+        {
+            ImGui::TextDisabled("connecting...");
+        }
+        else
+        {
+            ImGui::TextDisabled("not connected");
+        }
+    }
+    else
+    {
+        ImGui::BeginDisabled(inProgress);
+        if (ImGui::Button("Disconnect", ImVec2(120, 0)))
+        {
+            m_pending = PendingAction::DisconnectShowStatus;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (m_pending == PendingAction::DisconnectShowStatus ||
+            m_pending == PendingAction::DisconnectExecute)
+        {
+            ImGui::TextDisabled("disconnecting...");
+        }
+        else
+        {
+            ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Footer
+// ─────────────────────────────────────────────────────────────────────
+void UIRemoteConnection::renderStatusFooter(bool connected)
+{
+    ImGui::TextDisabled("Status");
+    if (connected)
+    {
+        const uint32_t w = m_uiManager->getCaptureWidth();
+        const uint32_t h = m_uiManager->getCaptureHeight();
+        if (w > 0 && h > 0) ImGui::Text("Stream: %ux%u", w, h);
+        else                ImGui::Text("Connecting...");
+    }
+    else if (m_pending == PendingAction::ConnectShowStatus ||
+             m_pending == PendingAction::ConnectExecute)
+    {
+        ImGui::Text("Connecting…");
+    }
+    else
+    {
+        ImGui::Text("Idle.");
+    }
+}
+
+void UIRemoteConnection::advanceStateMachine()
+{
+    switch (m_pending)
+    {
+        case PendingAction::ConnectShowStatus:
+            m_pending = PendingAction::ConnectExecute;
+            break;
+        case PendingAction::ConnectExecute:
+            if (m_uiManager->getSourceType() != UIManager::SourceType::Remote)
+            {
+                m_uiManager->triggerSourceTypeChange(UIManager::SourceType::Remote);
+            }
+            m_uiManager->setCurrentDevice(m_pendingUrl);
+            m_pendingUrl.clear();
+            m_pending = PendingAction::None;
+            break;
+        case PendingAction::DisconnectShowStatus:
+            m_pending = PendingAction::DisconnectExecute;
+            break;
+        case PendingAction::DisconnectExecute:
+            m_uiManager->setCurrentDevice("");
+            m_pending = PendingAction::None;
+            break;
+        case PendingAction::None:
+            break;
+    }
 }
