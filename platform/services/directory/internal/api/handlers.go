@@ -67,6 +67,15 @@ type Server struct {
 	LimitPatch     *ratelimit.Limiter // PATCH /streams/{id}
 	LimitList      *ratelimit.Limiter // GET /streams and GET /streams/{id}
 	LimitReport    *ratelimit.Limiter // POST /streams/{id}/report
+
+	// When true, the source IP returned by clientIP() honours
+	// Cf-Connecting-Ip / True-Client-Ip / X-Real-Ip / X-Forwarded-For
+	// in that order before falling back to the TCP RemoteAddr. Should
+	// be ON when the directory sits behind a reverse proxy that
+	// forwards the real client IP via headers (FRP + cloudflared,
+	// nginx with proxy_protocol off, etc.) and OFF when the service is
+	// exposed directly. main.go reads DIRECTORY_TRUST_PROXY_HEADERS.
+	TrustProxyHeaders bool
 }
 
 // Routes returns the http.Handler the service should serve from.
@@ -76,29 +85,33 @@ type Server struct {
 // through unchanged.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	// Rate limits key off s.clientIP so the same proxy IP doesn't
+	// burn the whole bucket for everyone behind it when the service
+	// is deployed behind FRP / Cloudflare and TrustProxyHeaders is on.
+	keyFn := func(r *http.Request) string { return s.clientIP(r) }
 	mux.HandleFunc("GET /health", s.handleHealth) // unlimited
 
 	mux.HandleFunc("POST /register",
-		ratelimit.Wrap(s.LimitRegister, ratelimit.ClientIPKey, s.handleRegister))
+		ratelimit.Wrap(s.LimitRegister, keyFn, s.handleRegister))
 
 	mux.HandleFunc("POST /heartbeat",
-		ratelimit.Wrap(s.LimitHeartbeat, ratelimit.ClientIPKey, s.handleHeartbeat))
+		ratelimit.Wrap(s.LimitHeartbeat, keyFn, s.handleHeartbeat))
 
 	mux.HandleFunc("GET /streams",
-		ratelimit.Wrap(s.LimitList, ratelimit.ClientIPKey, s.handleListStreams))
+		ratelimit.Wrap(s.LimitList, keyFn, s.handleListStreams))
 
 	mux.HandleFunc("GET /streams/{id}",
-		ratelimit.Wrap(s.LimitList, ratelimit.ClientIPKey, s.handleGetStream))
+		ratelimit.Wrap(s.LimitList, keyFn, s.handleGetStream))
 
 	mux.HandleFunc("PATCH /streams/{id}",
-		ratelimit.Wrap(s.LimitPatch, ratelimit.ClientIPKey, s.handlePatchStream))
+		ratelimit.Wrap(s.LimitPatch, keyFn, s.handlePatchStream))
 
 	// DELETE is intentionally unlimited per the spec — the owner
 	// token gates abuse, and we want disconnect to always succeed.
 	mux.HandleFunc("DELETE /streams/{id}", s.handleDeleteStream)
 
 	mux.HandleFunc("POST /streams/{id}/report",
-		ratelimit.Wrap(s.LimitReport, ratelimit.ClientIPKey, s.handleReportStream))
+		ratelimit.Wrap(s.LimitReport, keyFn, s.handleReportStream))
 
 	return s.withRequestLogging(mux)
 }
@@ -115,7 +128,7 @@ func (s *Server) withRequestLogging(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", rw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
-			"remote", clientIP(r),
+			"remote", s.clientIP(r),
 		)
 	})
 }
@@ -174,7 +187,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Cloudflare's egress, not from where the stream lives).
 	finalEndpoint := req.Endpoint
 	if req.EndpointMode == "direct" {
-		if rewritten, ok := rewriteEndpointHost(req.Endpoint, clientIP(r)); ok {
+		if rewritten, ok := rewriteEndpointHost(req.Endpoint, s.clientIP(r)); ok {
 			finalEndpoint = rewritten
 		}
 	}
@@ -193,7 +206,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Endpoint:         finalEndpoint,
 		EndpointMode:     req.EndpointMode,
 		ClientCount:      0,
-		PublicIP:         clientIP(r),
+		PublicIP:         s.clientIP(r),
 		Version:          req.Version,
 		RegisteredAt:     now,
 		LastHeartbeatAt:  now,
@@ -409,17 +422,37 @@ func (s *Server) handleReportStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Store.InsertReport(r.Context(), streamID, clientIP(r), req.Reason, req.ReporterContact); err != nil {
+	if err := s.Store.InsertReport(r.Context(), streamID, s.clientIP(r), req.Reason, req.ReporterContact); err != nil {
 		s.Logger.Error("report_failed", "err", err, "stream_id", streamID)
 		writeError(w, http.StatusInternalServerError, CodeInternal, "failed to record report")
 		return
 	}
+	// Receipt ID handed back to the user so they have a reference to
+	// quote if they ever need to follow up with the maintainer. Short
+	// hex + R- prefix so it's recognisable as a report id and not
+	// confused with a tunnel id or any other UUID floating around.
+	// Logged at info so the maintainer can grep the log for a given
+	// receipt and find the original row.
+	reportID, _ := newReceiptID()
 	s.Logger.Info("report_received",
 		"stream_id", streamID,
-		"reporter_ip", clientIP(r),
+		"reporter_ip", s.clientIP(r),
 		"reason_len", len(req.Reason),
+		"report_id", reportID,
 	)
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, ReportResponse{ReportID: reportID})
+}
+
+// newReceiptID returns a short user-facing identifier of the form
+// R-XXXXXXXX (8 hex chars after the prefix). 32 bits of entropy is
+// more than enough — collisions don't matter for human reference,
+// the canonical record is the stream_reports row keyed by db PK.
+func newReceiptID() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "R-" + strings.ToUpper(hex.EncodeToString(b[:])), nil
 }
 
 // --- validation ---
@@ -633,12 +666,38 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// clientIP extracts the request's source IP without the port. Falls
-// back to the raw RemoteAddr if the host:port split fails. We do NOT
-// honour X-Forwarded-For at this layer — the cloudflared / reverse
-// proxy in front of the directory is responsible for the source IP
-// it presents to us.
-func clientIP(r *http.Request) string {
+// clientIP extracts the request's source IP. When TrustProxyHeaders
+// is on (the typical deployment with FRP/Cloudflare in front), it
+// looks at Cf-Connecting-Ip / True-Client-Ip / X-Real-Ip /
+// X-Forwarded-For first and falls back to the TCP RemoteAddr. When
+// off (the service is exposed directly), it uses RemoteAddr only —
+// which is the correct, spoofing-resistant choice in that case.
+//
+// X-Forwarded-For can be a comma-separated chain (proxy1, proxy2,
+// real-client); we take the FIRST entry which is the original
+// client. Note: in trust-proxy mode a malicious client connecting
+// *direct* to the directory could forge these headers and obscure
+// their real IP. That's an accepted tradeoff — the same IP appears
+// in `publicIp` on the listing anyway, which is the audit signal
+// for moderation.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.TrustProxyHeaders {
+		for _, h := range []string{"Cf-Connecting-Ip", "True-Client-Ip", "X-Real-Ip"} {
+			if v := strings.TrimSpace(r.Header.Get(h)); v != "" {
+				return v
+			}
+		}
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			// Pick the left-most entry — the original client. Anything
+			// to the right is a proxy hop appended along the way.
+			if comma := strings.Index(v, ","); comma >= 0 {
+				v = v[:comma]
+			}
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -130,3 +130,12 @@ type ReportRequest struct {
 	Reason          string `json:"reason"`
 	ReporterContact string `json:"reporterContact"`
 }
+
+// ReportResponse is what POST /streams/{id}/report returns on success.
+// The reportId is a short human-readable receipt the user can quote if
+// they later need to reference the report when contacting the
+// maintainer. The same id is logged on the service side, so the
+// maintainer can grep the log to find the original report.
+type ReportResponse struct {
+	ReportID string `json:"reportId"`
+}

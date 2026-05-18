@@ -86,5 +86,6 @@ private:
     mutable std::mutex   m_reportMu;
     ReportStatus         m_reportStatus = ReportStatus::Idle;
     std::string          m_reportError;          // set when Failed
+    std::string          m_reportReceiptId;      // set when Success, echoed from /report response
     std::atomic<bool>    m_reportInFlight{false};
 };

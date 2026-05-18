@@ -299,6 +299,7 @@ void UIDirectoryBrowser::renderTable()
                     std::lock_guard<std::mutex> lock(m_reportMu);
                     m_reportStatus = ReportStatus::Idle;
                     m_reportError.clear();
+                    m_reportReceiptId.clear();
                 }
                 m_showReportModal = true;
             }
@@ -379,7 +380,8 @@ void UIDirectoryBrowser::renderReportModal()
                 m_reportStreamName.empty() ? "(unnamed)" : m_reportStreamName.c_str());
     ImGui::Spacing();
     ImGui::TextWrapped(
-        "Flag this stream for the maintainer to review. There's no "
+        "This report goes to the directory maintainer, not to the "
+        "host of the stream and not to Cloudflare. There's no "
         "automated takedown — the maintainer drains the report log "
         "manually.");
     ImGui::Spacing();
@@ -396,16 +398,33 @@ void UIDirectoryBrowser::renderReportModal()
     ImGui::Spacing();
     ReportStatus statusSnap;
     std::string  errSnap;
+    std::string  receiptSnap;
     {
         std::lock_guard<std::mutex> lock(m_reportMu);
-        statusSnap = m_reportStatus;
-        errSnap    = m_reportError;
+        statusSnap  = m_reportStatus;
+        errSnap     = m_reportError;
+        receiptSnap = m_reportReceiptId;
     }
 
     if (statusSnap == ReportStatus::Success)
     {
         ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f),
                            "Thanks — the maintainer will review this.");
+        if (!receiptSnap.empty())
+        {
+            ImGui::Spacing();
+            ImGui::Text("Reference:");
+            ImGui::SameLine();
+            // Read-only InputText so the receipt is copy-pasteable
+            // without us having to ship a clipboard helper. Small
+            // enough to fit on one line.
+            char receiptBuf[64];
+            std::snprintf(receiptBuf, sizeof(receiptBuf), "%s", receiptSnap.c_str());
+            ImGui::SetNextItemWidth(180);
+            ImGui::InputText("##receipt", receiptBuf, sizeof(receiptBuf),
+                             ImGuiInputTextFlags_ReadOnly);
+            ImGui::TextDisabled("Quote this if you contact the maintainer about it.");
+        }
         ImGui::Spacing();
         if (ImGui::Button("Close", ImVec2(120, 0)))
         {
@@ -492,6 +511,30 @@ void UIDirectoryBrowser::renderReportModal()
             if (resp.ok && resp.statusCode >= 200 && resp.statusCode < 300)
             {
                 m_reportStatus = ReportStatus::Success;
+                // Parse the reportId out of the response. Tiny ad-hoc
+                // parser to avoid pulling nlohmann::json into this TU
+                // for one field; the response shape is fixed at
+                // {"reportId":"R-XXXXXXXX"}.
+                m_reportReceiptId.clear();
+                const std::string &b = resp.body;
+                const std::string key = "\"reportId\"";
+                size_t k = b.find(key);
+                if (k != std::string::npos)
+                {
+                    size_t colon = b.find(':', k + key.size());
+                    if (colon != std::string::npos)
+                    {
+                        size_t q1 = b.find('"', colon + 1);
+                        if (q1 != std::string::npos)
+                        {
+                            size_t q2 = b.find('"', q1 + 1);
+                            if (q2 != std::string::npos && q2 > q1 + 1)
+                            {
+                                m_reportReceiptId = b.substr(q1 + 1, q2 - q1 - 1);
+                            }
+                        }
+                    }
+                }
             }
             else
             {

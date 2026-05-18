@@ -31,6 +31,12 @@ services:
       DIRECTORY_DB_PATH: "/data/directory.db"
       DIRECTORY_LOG_LEVEL: "debug"
       DIRECTORY_TTL_SECONDS: "120"
+      # When the directory is deployed behind a reverse proxy (FRP,
+      # nginx, Cloudflare), set this to "true" so the recorded
+      # publicIp / reporter_ip is the real client, not the proxy.
+      # Off by default in the compose example because plain
+      # `docker compose up` exposes 8081 directly on the host.
+      DIRECTORY_TRUST_PROXY_HEADERS: "false"
     restart: unless-stopped
     # No container-side healthcheck: the runtime image is FROM scratch
     # and has no shell / curl to probe with. Liveness is the
