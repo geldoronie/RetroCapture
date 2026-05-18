@@ -264,6 +264,17 @@ public:
     void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
     const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
     void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
+    // tunnelMode is "quick" (default) or "named". When "named", the
+    // tunnel id + hostname identify which existing tunnel cloudflared
+    // should run, and the directory entry's URL points at the user's
+    // own hostname instead of a fresh trycloudflare.com one.
+    const std::string &getDirectoryTunnelMode() const { return m_directoryTunnelMode; }
+    void setDirectoryTunnelMode(const std::string &v) { m_directoryTunnelMode = v; }
+    const std::string &getDirectoryNamedTunnelId() const { return m_directoryNamedTunnelId; }
+    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryNamedTunnelId = v; }
+    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryNamedTunnelHostname; }
+    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryNamedTunnelHostname = v; }
     bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
     void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
     const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
@@ -919,8 +930,12 @@ private:
     std::string m_directoryStreamName     = "";
     std::string m_directoryHostNickname   = "";
     std::string m_directoryPassword       = "";       // optional; empty = no password
-    std::string m_directoryEndpointMode   = "direct"; // "direct" | "custom" (Phase 2.5 will add "tunnel-cloudflare")
+    std::string m_directoryEndpointMode   = "direct"; // "direct" | "tunnel-cloudflare" | "custom"
     std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
+    // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
+    std::string m_directoryTunnelMode           = "quick"; // "quick" | "named"
+    std::string m_directoryNamedTunnelId        = "";       // cloudflared tunnel uuid
+    std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
 

@@ -1,8 +1,11 @@
 #include "CloudflaredManager.h"
 
 #include "CloudflaredDownloader.h"
+#include "../utils/FilesystemCompat.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 
+#include <cstdio>
 #include <cstring>
 #include <regex>
 
@@ -15,6 +18,48 @@
   #include <unistd.h>
   #include <cerrno>
 #endif
+
+namespace
+{
+    // Cloudflared's `tunnel run` reads ingress + credentials from a
+    // YAML config file. We generate one per-run inside the user-data
+    // cloudflared cache so each tunnel id has its own minimal config
+    // pointing at the local stream port. The user's ~/.cloudflared
+    // credentials JSON (written by `cloudflared tunnel login`) is
+    // referenced by absolute path so we don't duplicate it.
+    std::string writeNamedTunnelConfig(const std::string &tunnelId,
+                                       uint16_t           localPort)
+    {
+        fs::path dir = fs::path(Paths::getUserDataDir()) / "cloudflared";
+        try { fs::create_directories(dir); } catch (...) {}
+        fs::path cfgPath = dir / (tunnelId + ".yml");
+
+        // The credentials file is at ~/.cloudflared/<id>.json on both
+        // platforms after `cloudflared tunnel login` + create. We
+        // hand its path verbatim — quote it to survive spaces in the
+        // user's home directory (typical on Windows).
+        std::string credentialsPath;
+#ifdef _WIN32
+        const char *userProfile = ::getenv("USERPROFILE");
+        if (userProfile) credentialsPath = std::string(userProfile) + "\\.cloudflared\\" + tunnelId + ".json";
+#else
+        const char *home = ::getenv("HOME");
+        if (home) credentialsPath = std::string(home) + "/.cloudflared/" + tunnelId + ".json";
+#endif
+
+        std::string yaml;
+        yaml += "tunnel: " + tunnelId + "\n";
+        yaml += "credentials-file: \"" + credentialsPath + "\"\n";
+        yaml += "ingress:\n";
+        yaml += "  - service: http://localhost:" + std::to_string(localPort) + "\n";
+
+        FILE *fp = ::fopen(cfgPath.string().c_str(), "wb");
+        if (!fp) return {};
+        ::fwrite(yaml.data(), 1, yaml.size(), fp);
+        ::fclose(fp);
+        return cfgPath.string();
+    }
+}
 
 namespace
 {
@@ -52,6 +97,15 @@ std::string CloudflaredManager::getLastError() const
 
 bool CloudflaredManager::start(uint16_t localPort)
 {
+    // Backwards-compat wrapper for the original Quick-only call site.
+    TunnelConfig cfg;
+    cfg.mode      = Mode::Quick;
+    cfg.localPort = localPort;
+    return start(cfg);
+}
+
+bool CloudflaredManager::start(const TunnelConfig &cfg)
+{
     if (m_state.load() != State::Idle)
     {
         // Already running; caller should stop() first to reconfigure.
@@ -60,13 +114,42 @@ bool CloudflaredManager::start(uint16_t localPort)
 
     {
         std::lock_guard<std::mutex> lock(m_mu);
-        m_url.clear();
+        // For Named mode the public URL is known up front — pre-fill
+        // it so getUrl() works before cloudflared has even printed a
+        // line. The state stays Spawning until the child actually
+        // launches; the regex parse in readerLoop is a no-op in this
+        // mode since trycloudflare.com never appears in named-tunnel
+        // logs.
+        m_url = (cfg.mode == Mode::Named) ? cfg.publicUrl : std::string();
         m_lastError.clear();
     }
     m_stopRequested.store(false);
 
-    const std::string portStr = std::to_string(localPort);
+    const std::string portStr  = std::to_string(cfg.localPort);
     const std::string localUrl = "http://localhost:" + portStr;
+
+    // Named mode needs a per-tunnel YAML at <user-data>/cloudflared/<id>.yml
+    // that points the tunnel id at our local stream port. Quick mode
+    // doesn't use --config at all (the --url flag carries that info).
+    std::string namedConfigPath;
+    if (cfg.mode == Mode::Named)
+    {
+        if (cfg.tunnelId.empty())
+        {
+            std::lock_guard<std::mutex> lock(m_mu);
+            m_lastError = "Named tunnel requested but tunnel id is empty";
+            m_state.store(State::NotFound);
+            return false;
+        }
+        namedConfigPath = writeNamedTunnelConfig(cfg.tunnelId, cfg.localPort);
+        if (namedConfigPath.empty())
+        {
+            std::lock_guard<std::mutex> lock(m_mu);
+            m_lastError = "Failed to write cloudflared config for tunnel " + cfg.tunnelId;
+            m_state.store(State::NotFound);
+            return false;
+        }
+    }
 
     // Resolve which cloudflared binary to invoke. Falls back through
     // CLI override → user-data-dir cache → system PATH; empty means
@@ -113,8 +196,19 @@ bool CloudflaredManager::start(uint16_t localPort)
     // CreateProcess wants a mutable cmdline buffer. argv[0] is
     // double-quoted so a binaryPath with spaces (typical on Windows:
     // C:\Users\<name>\AppData\Roaming\RetroCapture\…) parses
-    // correctly.
-    std::string cmd = "\"" + binaryPath + "\" tunnel --url " + localUrl;
+    // correctly. cmdline shape diverges by mode:
+    //   Quick:  <bin> tunnel --url http://localhost:<port>
+    //   Named:  <bin> tunnel run --config "<path>.yml" <tunnelId>
+    std::string cmd;
+    if (cfg.mode == Mode::Named)
+    {
+        cmd = "\"" + binaryPath + "\" tunnel run --config \"" +
+              namedConfigPath + "\" " + cfg.tunnelId;
+    }
+    else
+    {
+        cmd = "\"" + binaryPath + "\" tunnel --url " + localUrl;
+    }
     std::vector<char> mutableCmd(cmd.begin(), cmd.end());
     mutableCmd.push_back('\0');
 
@@ -180,17 +274,30 @@ bool CloudflaredManager::start(uint16_t localPort)
         }
 
         // exec by absolute path — binaryPath came from
-        // resolveBinaryPath() which already knows where the binary is
-        // (cache, CLI override, or a PATH lookup we did ourselves), so
-        // there's no reason to ask the kernel to search again. argv[0]
-        // by convention is the binary's name; using the full path also
-        // works and matches what shell-launched processes see.
+        // resolveBinaryPath() which already knows where the binary
+        // is (cache, CLI override, or a PATH lookup we did
+        // ourselves). argv shape diverges by mode:
+        //   Quick:  <bin> tunnel --url http://localhost:<port>
+        //   Named:  <bin> tunnel run --config <path>.yml <tunnelId>
         std::string p0 = binaryPath;
         std::string p1 = "tunnel";
-        std::string p2 = "--url";
-        std::string p3 = localUrl;
-        char *argv[] = { p0.data(), p1.data(), p2.data(), p3.data(), nullptr };
-        ::execv(binaryPath.c_str(), argv);
+        if (cfg.mode == Mode::Named)
+        {
+            std::string p2 = "run";
+            std::string p3 = "--config";
+            std::string p4 = namedConfigPath;
+            std::string p5 = cfg.tunnelId;
+            char *argv[] = { p0.data(), p1.data(), p2.data(),
+                             p3.data(), p4.data(), p5.data(), nullptr };
+            ::execv(binaryPath.c_str(), argv);
+        }
+        else
+        {
+            std::string p2 = "--url";
+            std::string p3 = localUrl;
+            char *argv[] = { p0.data(), p1.data(), p2.data(), p3.data(), nullptr };
+            ::execv(binaryPath.c_str(), argv);
+        }
         // If we got here, execv failed. _exit so destructors don't run.
         _exit(127);
     }
@@ -201,9 +308,24 @@ bool CloudflaredManager::start(uint16_t localPort)
     m_stdoutFd = pipeFds[0];
 #endif
 
-    m_state.store(State::Spawning);
+    // Quick mode waits on stdout for the trycloudflare URL → state
+    // stays Spawning until that line lands. Named mode already has
+    // the URL (caller pre-set it from the configured hostname), so
+    // it's effectively Active the moment the child launches —
+    // readerLoop still runs to detect crashes but it has nothing to
+    // parse.
+    if (cfg.mode == Mode::Named)
+    {
+        m_state.store(State::Active);
+    }
+    else
+    {
+        m_state.store(State::Spawning);
+    }
     m_thread = std::thread([this] { readerLoop(); });
-    LOG_INFO("CloudflaredManager: started cloudflared for " + localUrl);
+    LOG_INFO(std::string("CloudflaredManager: started cloudflared (") +
+             (cfg.mode == Mode::Named ? "named, " + cfg.tunnelId : "quick") +
+             ") for " + localUrl);
     return true;
 }
 

@@ -51,6 +51,36 @@ public:
         Crashed,     // child exited without us asking it to
     };
 
+    /**
+     * Quick vs Named tunnel mode (#60).
+     *
+     *   Quick: `cloudflared tunnel --url http://localhost:<port>`.
+     *          Cloudflare assigns a new trycloudflare.com URL each
+     *          run; we parse it from stdout.
+     *   Named: `cloudflared tunnel run --config <path> <id>`.
+     *          The URL is fixed to the user's own hostname (already
+     *          DNS-routed against the tunnel id), so there's nothing
+     *          to parse from stdout — the URL is set up front by
+     *          the caller via TunnelConfig::publicUrl.
+     */
+    enum class Mode
+    {
+        Quick,
+        Named,
+    };
+
+    /**
+     * Caller-supplied parameters for start(). Backwards-compat
+     * convenience overload below preserves the old (port-only) API.
+     */
+    struct TunnelConfig
+    {
+        Mode        mode      = Mode::Quick;
+        uint16_t    localPort = 0;
+        std::string tunnelId;   // Named only — cloudflared tunnel id
+        std::string publicUrl;  // Named only — pre-known hostname
+    };
+
     CloudflaredManager();
     ~CloudflaredManager();
 
@@ -58,12 +88,25 @@ public:
     CloudflaredManager &operator=(const CloudflaredManager &) = delete;
 
     /**
-     * @brief Spawn `cloudflared tunnel --url http://localhost:<port>`.
-     *        Returns false synchronously if the binary couldn't be
-     *        invoked at all; on platform-level success, the state
-     *        machine takes over and the URL becomes available
-     *        asynchronously.
+     * @brief Spawn cloudflared in the requested mode.
+     *
+     * For Quick mode this is `cloudflared tunnel --url http://localhost:<port>`
+     * and the URL appears asynchronously once cloudflared finishes
+     * negotiating with the Cloudflare edge.
+     *
+     * For Named mode this is `cloudflared tunnel run --config <generated>.yml <id>`
+     * where the generated YAML points the tunnel at localhost:<port>.
+     * The URL is set on start (already known — it's the user's
+     * configured hostname), so getUrl() returns it immediately.
+     *
+     * Returns false synchronously if the binary couldn't be invoked
+     * at all (NotFound state); on platform-level success the state
+     * machine takes over.
      */
+    bool start(const TunnelConfig &cfg);
+
+    /// Backwards-compat overload for the Quick-only call site that
+    /// existed before #60. Equivalent to start({Quick, port}).
     bool start(uint16_t localPort);
 
     /**

@@ -2347,6 +2347,9 @@ void UIManager::loadConfig()
                 if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
                 if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
                 if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
+                if (dir.contains("tunnelMode"))           m_directoryTunnelMode           = dir["tunnelMode"].get<std::string>();
+                if (dir.contains("namedTunnelId"))        m_directoryNamedTunnelId        = dir["namedTunnelId"].get<std::string>();
+                if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
                 if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
             }
         }
@@ -2714,8 +2717,11 @@ void UIManager::saveConfig()
                 {"streamName",     m_directoryStreamName},
                 {"hostNickname",   m_directoryHostNickname},
                 {"password",       m_directoryPassword},
-                {"endpointMode",   m_directoryEndpointMode},
-                {"customEndpoint", m_directoryCustomEndpoint},
+                {"endpointMode",        m_directoryEndpointMode},
+                {"customEndpoint",      m_directoryCustomEndpoint},
+                {"tunnelMode",          m_directoryTunnelMode},
+                {"namedTunnelId",       m_directoryNamedTunnelId},
+                {"namedTunnelHostname", m_directoryNamedTunnelHostname},
                 {"privacyAcked",   m_directoryPrivacyAcked},
             }}};
 

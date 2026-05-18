@@ -5474,7 +5474,36 @@ void Application::syncDirectoryClient()
         auto cfState = m_cloudflaredManager->getState();
         if (cfState == CloudflaredManager::State::Idle)
         {
-            m_cloudflaredManager->start(m_ui->getStreamingPort());
+            // Phase 2.5c (#60): pick Quick vs Named based on the user's
+            // sub-mode. Quick keeps the old 'localPort only' shape;
+            // Named also needs a configured tunnel id + hostname.
+            const std::string tunnelMode = m_ui->getDirectoryTunnelMode();
+            CloudflaredManager::TunnelConfig cfg;
+            cfg.localPort = m_ui->getStreamingPort();
+            if (tunnelMode == "named")
+            {
+                const std::string id   = m_ui->getDirectoryNamedTunnelId();
+                const std::string host = m_ui->getDirectoryNamedTunnelHostname();
+                if (id.empty() || host.empty())
+                {
+                    // Defer the start — the UI is responsible for
+                    // collecting these fields. syncDirectoryClient
+                    // shows the waiting message a few lines below.
+                    m_ui->setDirectoryStatusText("Named tunnel needs id + hostname");
+                }
+                else
+                {
+                    cfg.mode      = CloudflaredManager::Mode::Named;
+                    cfg.tunnelId  = id;
+                    cfg.publicUrl = "https://" + host;
+                    m_cloudflaredManager->start(cfg);
+                }
+            }
+            else
+            {
+                cfg.mode = CloudflaredManager::Mode::Quick;
+                m_cloudflaredManager->start(cfg);
+            }
         }
     }
     else if (m_cloudflaredManager &&
