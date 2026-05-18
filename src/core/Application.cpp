@@ -2676,6 +2676,24 @@ void Application::handleKeyInput()
         {
             f12Pressed = false;
         }
+
+        // F11 toggles fullscreen. Edge-triggered like F12 so holding
+        // the key down doesn't oscillate the window state.
+        static bool f11Pressed = false;
+        bool f11Now = sdlWindow->isKeyPressed(SDLK_F11);
+        if (f11Now && !f11Pressed)
+        {
+            m_fullscreen = !m_fullscreen;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            if (m_ui) m_ui->setFullscreen(m_fullscreen);
+            LOG_INFO(std::string("Fullscreen toggled: ") +
+                     (m_fullscreen ? "ON" : "OFF"));
+            f11Pressed = true;
+        }
+        else if (!f11Now)
+        {
+            f11Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2696,6 +2714,25 @@ void Application::handleKeyInput()
     else
     {
         f12Pressed = false;
+    }
+
+    // F11 toggles fullscreen.
+    static bool f11Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS)
+    {
+        if (!f11Pressed)
+        {
+            m_fullscreen = !m_fullscreen;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            if (m_ui) m_ui->setFullscreen(m_fullscreen);
+            LOG_INFO(std::string("Fullscreen toggled: ") +
+                     (m_fullscreen ? "ON" : "OFF"));
+            f11Pressed = true;
+        }
+    }
+    else
+    {
+        f11Pressed = false;
     }
 #endif // USE_SDL2
 }
