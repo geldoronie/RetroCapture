@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <shared_mutex>
 
 struct pa_simple;
 
@@ -30,7 +31,13 @@ public:
 
     bool open(uint32_t sampleRate, uint32_t channels) override;
     void close() override;
-    bool isOpen() const override { return m_stream != nullptr; }
+    bool isOpen() const override
+    {
+        // Synchronizes with the unique-locked open/close so callers
+        // can't observe a half-torn-down m_stream.
+        std::shared_lock<std::shared_mutex> lock(m_streamMutex);
+        return m_stream != nullptr;
+    }
 
     size_t submit(const float *interleaved,
                   size_t sampleCount,
@@ -49,6 +56,21 @@ private:
     mutable std::mutex m_clockMutex;
     int64_t            m_lastSubmittedPtsUs = 0;
     bool               m_anySubmitted       = false;
+
+    // Guards m_stream lifetime against concurrent pa_simple_* calls.
+    // The video render thread queries getClockUs() while the decode
+    // thread can be inside submit()/flush() — and on a TLS hiccup the
+    // same decode thread tears down via close(). Without serializing,
+    // close() invokes pa_simple_free while another thread is mid-call,
+    // and PulseAudio's pa_threaded_mainloop aborts on the still-held
+    // internal mutex.
+    //
+    // open()/close()  → exclusive (writers)
+    // submit()/flush()/getClockUs()/isOpen() → shared (readers)
+    //
+    // pa_simple_* is internally serialized by the mainloop lock, so
+    // concurrent shared holders won't race inside libpulse-simple.
+    mutable std::shared_mutex m_streamMutex;
 };
 
 #endif // __linux__

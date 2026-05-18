@@ -16,10 +16,14 @@ AudioPlaybackPulse::~AudioPlaybackPulse()
 
 bool AudioPlaybackPulse::open(uint32_t sampleRate, uint32_t channels)
 {
+    // close() takes the exclusive lock itself, so release before
+    // calling it to avoid self-deadlock, then re-acquire for the
+    // open path.
     if (m_stream)
     {
         close();
     }
+    std::unique_lock<std::shared_mutex> lock(m_streamMutex);
     if (sampleRate == 0 || channels == 0 || channels > 8)
     {
         LOG_ERROR("AudioPlaybackPulse::open — invalid format");
@@ -73,6 +77,11 @@ bool AudioPlaybackPulse::open(uint32_t sampleRate, uint32_t channels)
 
 void AudioPlaybackPulse::close()
 {
+    // Exclusive: wait for any in-flight pa_simple_* (submit / flush /
+    // getClockUs / isOpen) to return before we destroy the stream.
+    // Without this, pa_simple_free races with libpulse-simple's
+    // internal mainloop mutex and aborts.
+    std::unique_lock<std::shared_mutex> lock(m_streamMutex);
     if (m_stream)
     {
         // Best-effort drain so the user doesn't hear a click on
@@ -84,7 +93,7 @@ void AudioPlaybackPulse::close()
     }
     m_sampleRate = 0;
     m_channels   = 0;
-    std::lock_guard<std::mutex> lock(m_clockMutex);
+    std::lock_guard<std::mutex> clockLock(m_clockMutex);
     m_lastSubmittedPtsUs = 0;
     m_anySubmitted       = false;
 }
@@ -93,7 +102,10 @@ size_t AudioPlaybackPulse::submit(const float *interleaved,
                                   size_t sampleCount,
                                   int64_t firstPtsUs)
 {
-    if (!m_stream || !interleaved || sampleCount == 0) return 0;
+    if (!interleaved || sampleCount == 0) return 0;
+
+    std::shared_lock<std::shared_mutex> streamLock(m_streamMutex);
+    if (!m_stream) return 0;
 
     const size_t bytes = sampleCount * m_channels * sizeof(float);
     int err = 0;
@@ -123,6 +135,7 @@ size_t AudioPlaybackPulse::submit(const float *interleaved,
 
 int64_t AudioPlaybackPulse::getClockUs() const
 {
+    std::shared_lock<std::shared_mutex> streamLock(m_streamMutex);
     if (!m_stream) return 0;
     std::lock_guard<std::mutex> lock(m_clockMutex);
     if (!m_anySubmitted) return 0;
@@ -140,6 +153,7 @@ int64_t AudioPlaybackPulse::getClockUs() const
 
 void AudioPlaybackPulse::flush()
 {
+    std::shared_lock<std::shared_mutex> streamLock(m_streamMutex);
     if (!m_stream) return;
     int err = 0;
     pa_simple_flush(m_stream, &err);
