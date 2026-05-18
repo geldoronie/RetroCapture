@@ -258,8 +258,20 @@ Request body:
 { "reason": "explicit name", "reporterContact": "optional email or @handle" }
 ```
 
-Response `202 Accepted`. The directory logs the report and the
-moderator decides what to do with it. **No automatic takedown.**
+Response `202`:
+
+```json
+{ "data": { "reportId": "R-AB12CD34" }, "error": null }
+```
+
+`reportId` is a short human-readable receipt the reporter can quote if
+they later need to reference the report when contacting the
+maintainer (`R-` + 8 uppercase hex chars). The same id is persisted
+on the moderation row and logged at info level on the service so the
+maintainer can pivot from a quoted receipt back to the original row.
+
+The directory logs the report and the moderator decides what to do
+with it. **No automatic takedown.**
 
 Rate-limited per source IP to prevent griefing.
 
