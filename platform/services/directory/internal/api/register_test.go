@@ -95,6 +95,18 @@ func TestRegister_Validation(t *testing.T) {
 		{"fps absurd", func(r *RegisterRequest) { r.FPS = 100_000 }},
 		{"bad codec", func(r *RegisterRequest) { r.Codec = "av1" }},
 		{"bad endpoint mode", func(r *RegisterRequest) { r.EndpointMode = "bogus" }},
+		// #56 — defence-in-depth URL validation. The client already
+		// blocks publish on these in UIConfigurationStreaming, but
+		// the service rejects them too so a hand-rolled curl can't
+		// poison the listing.
+		{"endpoint typo scheme", func(r *RegisterRequest) { r.Endpoint = "htts://foo.com" }},
+		{"endpoint missing colon", func(r *RegisterRequest) { r.Endpoint = "https//foo.com" }},
+		{"endpoint plain text", func(r *RegisterRequest) { r.Endpoint = "not-a-url" }},
+		{"endpoint scheme only", func(r *RegisterRequest) { r.Endpoint = "https://" }},
+		{"endpoint port too high", func(r *RegisterRequest) { r.Endpoint = "http://foo.com:99999" }},
+		{"endpoint port zero", func(r *RegisterRequest) { r.Endpoint = "http://foo.com:0" }},
+		{"endpoint port non-numeric", func(r *RegisterRequest) { r.Endpoint = "http://foo.com:abc" }},
+		{"endpoint host punct only", func(r *RegisterRequest) { r.Endpoint = "http://..." }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -4,8 +4,97 @@
 #include "../encoding/MediaEncoder.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <thread>
+
+namespace
+{
+    // #56 — minimal URL validation for the "Custom" endpoint mode.
+    // Catches the typo class that used to leak into the directory
+    // ("htts://foo", "https//foo.com", missing port number etc.) and
+    // makes the receiving service look broken to anyone browsing.
+    // The companion guard on the service side rejects malformed
+    // endpoints with 400, but the inline UI check catches the typo
+    // before the user toggles Publish on at all.
+    bool validateCustomEndpoint(const std::string &url, std::string &errOut)
+    {
+        errOut.clear();
+        if (url.empty())
+        {
+            errOut = "URL is empty";
+            return false;
+        }
+        size_t schemeEnd;
+        if (url.rfind("http://", 0) == 0)       schemeEnd = 7;
+        else if (url.rfind("https://", 0) == 0) schemeEnd = 8;
+        else
+        {
+            errOut = "URL must start with http:// or https://";
+            return false;
+        }
+        size_t i         = schemeEnd;
+        size_t hostStart = i;
+        while (i < url.size() && url[i] != ':' && url[i] != '/') ++i;
+        const std::string host = url.substr(hostStart, i - hostStart);
+        if (host.empty())
+        {
+            errOut = "Host is empty";
+            return false;
+        }
+        for (char c : host)
+        {
+            if (!(std::isalnum(static_cast<unsigned char>(c)) ||
+                  c == '.' || c == '-'))
+            {
+                errOut = "Invalid character in host";
+                return false;
+            }
+        }
+        // Host must contain at least one alphanumeric (eg. "..." or
+        // "---" alone is meaningless).
+        bool anyAlnum = false;
+        for (char c : host)
+        {
+            if (std::isalnum(static_cast<unsigned char>(c))) { anyAlnum = true; break; }
+        }
+        if (!anyAlnum)
+        {
+            errOut = "Host must contain a letter or digit";
+            return false;
+        }
+        if (i < url.size() && url[i] == ':')
+        {
+            ++i;
+            const size_t portStart = i;
+            while (i < url.size() && url[i] != '/') ++i;
+            const std::string portStr = url.substr(portStart, i - portStart);
+            if (portStr.empty())
+            {
+                errOut = "Port is empty";
+                return false;
+            }
+            long port = 0;
+            try { port = std::stol(portStr); }
+            catch (...) { errOut = "Invalid port"; return false; }
+            for (char c : portStr)
+            {
+                if (!std::isdigit(static_cast<unsigned char>(c)))
+                {
+                    errOut = "Invalid port";
+                    return false;
+                }
+            }
+            if (port < 1 || port > 65535)
+            {
+                errOut = "Port out of range (1..65535)";
+                return false;
+            }
+        }
+        // Anything after the host[:port] is the path — accepted as-is.
+        return true;
+    }
+}
 
 UIConfigurationStreaming::UIConfigurationStreaming(UIManager *uiManager)
     : m_uiManager(uiManager)
@@ -932,6 +1021,19 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             ImGui::SetTooltip("Paste the public URL you've already set up\n"
                               "(FRP, Tailscale Funnel, ngrok, your own domain…).");
         }
+        // Inline validation — shown only when the user has typed
+        // *something*, so an empty field doesn't shout at them
+        // before they've had a chance to fill it in. The 'fill it in'
+        // case is handled by the publish-toggle gate below.
+        {
+            const std::string current = m_uiManager->getDirectoryCustomEndpoint();
+            std::string err;
+            if (!current.empty() && !validateCustomEndpoint(current, err))
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                                   "Invalid URL: %s", err.c_str());
+            }
+        }
     }
     else if (endpointMode == "tunnel-cloudflare")
     {
@@ -1048,6 +1150,15 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     else if (mode == "custom" && trimmedCustom.empty())
     {
         blockedReason = "Fill in the custom endpoint URL to enable publishing.";
+    }
+    else if (mode == "custom")
+    {
+        std::string customErr;
+        if (!validateCustomEndpoint(trimmedCustom, customErr))
+        {
+            blockedReason = "Custom endpoint URL is invalid (" + customErr +
+                            "). Fix it to enable publishing.";
+        }
     }
     const bool canToggle = blockedReason.empty();
 

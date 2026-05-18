@@ -455,6 +455,9 @@ func validateRegister(req *RegisterRequest) error {
 	if len(req.Endpoint) > maxEndpointLen {
 		return fmt.Errorf("endpoint too long (max %d)", maxEndpointLen)
 	}
+	if err := isValidEndpointURL(req.Endpoint); err != nil {
+		return fmt.Errorf("endpoint is invalid: %v", err)
+	}
 	if !isValidEndpointMode(req.EndpointMode) {
 		return fmt.Errorf("endpointMode must be direct, tunnel-cloudflare or custom")
 	}
@@ -492,6 +495,9 @@ func validatePatch(req *PatchRequest) error {
 		if v == "" || len(v) > maxEndpointLen {
 			return fmt.Errorf("endpoint must be 1..%d chars", maxEndpointLen)
 		}
+		if err := isValidEndpointURL(v); err != nil {
+			return fmt.Errorf("endpoint is invalid: %v", err)
+		}
 		*req.Endpoint = v
 	}
 	if req.EndpointMode != nil && !isValidEndpointMode(*req.EndpointMode) {
@@ -506,6 +512,51 @@ func isValidEndpointMode(m string) bool {
 		return true
 	}
 	return false
+}
+
+// isValidEndpointURL rejects the typo class that used to land in the
+// directory and rot — htts://foo, https//foo (missing colon), schemes
+// other than http(s), ports outside 1..65535, hostless URLs. Matches
+// the client-side check in UIConfigurationStreaming.cpp so a request
+// that the UI would have blocked is also blocked here as defence in
+// depth (#56).
+func isValidEndpointURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("malformed URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme must be http or https")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("host is empty")
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("host is empty")
+	}
+	// Host must contain at least one alphanumeric char — catches "...",
+	// "---", literal "localhost" excluded? no, "localhost" matches.
+	hasAlnum := false
+	for _, c := range hostname {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			hasAlnum = true
+			break
+		}
+	}
+	if !hasAlnum {
+		return fmt.Errorf("host must contain a letter or digit")
+	}
+	if portStr := u.Port(); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("invalid port")
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("port out of range (1..65535)")
+		}
+	}
+	return nil
 }
 
 // --- helpers ---
