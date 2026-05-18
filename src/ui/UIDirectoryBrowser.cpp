@@ -191,7 +191,7 @@ void UIDirectoryBrowser::renderTable()
                                      | ImGuiTableFlags_BordersInnerH
                                      | ImGuiTableFlags_ScrollY
                                      | ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable("##dirTable", 8, tableFlags, ImVec2(0, -ImGui::GetFrameHeightWithSpacing())))
+    if (ImGui::BeginTable("##dirTable", 10, tableFlags, ImVec2(0, -ImGui::GetFrameHeightWithSpacing())))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 3.0f);
@@ -205,6 +205,13 @@ void UIDirectoryBrowser::renderTable()
         ImGui::TableSetupColumn("Codec",    ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("Clients (\xe2\x89\x88)", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("Mode",     ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        // Explicit action buttons per row. Previously the user clicked
+        // the row to connect and right-clicked for Report; the context
+        // menu wasn't discoverable and click-anywhere-to-connect was
+        // easy to trigger accidentally. Both actions are now their
+        // own column.
+        ImGui::TableSetupColumn("##connect", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("##report",  ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableHeadersRow();
 
         if (entries.empty())
@@ -225,38 +232,22 @@ void UIDirectoryBrowser::renderTable()
             const bool versionMismatch = !e.version.empty() &&
                                          e.version != std::string(RETROCAPTURE_VERSION);
 
-            std::string label;
-            if (versionMismatch) label += "\xe2\x9a\xa0 ";
-            label += e.name;
-            const bool clicked = ImGui::Selectable(label.c_str(), false,
-                                                   ImGuiSelectableFlags_SpanAllColumns);
-            if (versionMismatch && ImGui::IsItemHovered())
+            // Name cell: plain text with optional ⚠ prefix when the
+            // host announces a different protocol version.
+            if (versionMismatch)
             {
-                ImGui::SetTooltip(
-                    "Host version: %s\nThis client: %s\n"
-                    "Wire protocol may differ — connection may fail or behave oddly.",
-                    e.version.c_str(), RETROCAPTURE_VERSION);
-            }
-            // #57 — right-click → flag this stream for the maintainer
-            // to review. Service endpoint POST /streams/<id>/report
-            // already exists; this is the UI half.
-            if (ImGui::BeginPopupContextItem("##rowctx"))
-            {
-                if (ImGui::Selectable("Report this stream..."))
+                ImGui::TextUnformatted("\xe2\x9a\xa0");
+                if (ImGui::IsItemHovered())
                 {
-                    m_reportStreamId   = e.streamId;
-                    m_reportStreamName = e.name;
-                    m_reportReason[0]  = '\0';
-                    m_reportContact[0] = '\0';
-                    {
-                        std::lock_guard<std::mutex> lock(m_reportMu);
-                        m_reportStatus = ReportStatus::Idle;
-                        m_reportError.clear();
-                    }
-                    m_showReportModal = true;
+                    ImGui::SetTooltip(
+                        "Host version: %s\nThis client: %s\n"
+                        "Wire protocol may differ — connection may fail or behave oddly.",
+                        e.version.c_str(), RETROCAPTURE_VERSION);
                 }
-                ImGui::EndPopup();
+                ImGui::SameLine();
             }
+            ImGui::TextUnformatted(e.name.c_str());
+
             ImGui::TableNextColumn();
             if (e.passwordRequired)
             {
@@ -276,7 +267,11 @@ void UIDirectoryBrowser::renderTable()
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", endpointModeIcon(e.endpointMode));
 
-            if (clicked)
+            // Connect button — column 9. Stretches to fill the
+            // 80-px column so the click target is generous. Triggers
+            // the password modal first when the stream is gated.
+            ImGui::TableNextColumn();
+            if (ImGui::Button("Connect", ImVec2(-1, 0)))
             {
                 if (e.passwordRequired)
                 {
@@ -290,6 +285,28 @@ void UIDirectoryBrowser::renderTable()
                     m_remoteWindow->triggerConnect(e.endpoint);
                 }
             }
+
+            // Report button — column 10. Opens the same modal the
+            // old right-click context menu used.
+            ImGui::TableNextColumn();
+            if (ImGui::Button("Report", ImVec2(-1, 0)))
+            {
+                m_reportStreamId   = e.streamId;
+                m_reportStreamName = e.name;
+                m_reportReason[0]  = '\0';
+                m_reportContact[0] = '\0';
+                {
+                    std::lock_guard<std::mutex> lock(m_reportMu);
+                    m_reportStatus = ReportStatus::Idle;
+                    m_reportError.clear();
+                }
+                m_showReportModal = true;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Flag this stream for the maintainer to review.");
+            }
+
             ImGui::PopID();
         }
         ImGui::EndTable();
