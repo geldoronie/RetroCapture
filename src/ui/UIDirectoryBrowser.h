@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <string>
 
 class UIManager;
@@ -45,6 +47,7 @@ public:
 private:
     void renderTable();
     void renderPasswordModal();
+    void renderReportModal();
 
     UIManager          *m_uiManager     = nullptr;
     DirectoryBrowser   *m_browser       = nullptr;
@@ -62,4 +65,26 @@ private:
     bool         m_showPasswordModal = false;
     char         m_passwordBuffer[128] = {};
     std::string  m_pendingProtectedUrl;
+
+    // Report-this-stream state (#57). When the user right-clicks a
+    // row and picks "Report this stream..." the modal opens with
+    // these fields. Submission runs on a detached thread and updates
+    // m_reportStatus under m_reportMu so the UI thread sees the
+    // result on the next frame.
+    bool         m_showReportModal = false;
+    std::string  m_reportStreamId;
+    std::string  m_reportStreamName;     // shown in the modal header
+    char         m_reportReason[256]  = {};
+    char         m_reportContact[96]  = {};
+    enum class ReportStatus
+    {
+        Idle,        // modal just opened
+        Sending,     // POST in flight
+        Success,
+        Failed,
+    };
+    mutable std::mutex   m_reportMu;
+    ReportStatus         m_reportStatus = ReportStatus::Idle;
+    std::string          m_reportError;          // set when Failed
+    std::atomic<bool>    m_reportInFlight{false};
 };

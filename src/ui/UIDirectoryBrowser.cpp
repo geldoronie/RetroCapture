@@ -2,6 +2,7 @@
 #include "UIManager.h"
 #include "UIRemoteConnection.h"
 #include "../streaming/DirectoryBrowser.h"
+#include "../utils/HttpClient.h"
 #include "../utils/PasswordHash.h"
 
 #include <imgui.h>
@@ -10,6 +11,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 #ifndef RETROCAPTURE_VERSION
 #define RETROCAPTURE_VERSION "0.0.0-dev"
@@ -95,6 +97,7 @@ void UIDirectoryBrowser::render()
     // is on screen; rendering it here keeps it visible even if the
     // main window scrolls away.
     renderPasswordModal();
+    renderReportModal();
 }
 
 void UIDirectoryBrowser::renderTable()
@@ -234,6 +237,26 @@ void UIDirectoryBrowser::renderTable()
                     "Wire protocol may differ — connection may fail or behave oddly.",
                     e.version.c_str(), RETROCAPTURE_VERSION);
             }
+            // #57 — right-click → flag this stream for the maintainer
+            // to review. Service endpoint POST /streams/<id>/report
+            // already exists; this is the UI half.
+            if (ImGui::BeginPopupContextItem("##rowctx"))
+            {
+                if (ImGui::Selectable("Report this stream..."))
+                {
+                    m_reportStreamId   = e.streamId;
+                    m_reportStreamName = e.name;
+                    m_reportReason[0]  = '\0';
+                    m_reportContact[0] = '\0';
+                    {
+                        std::lock_guard<std::mutex> lock(m_reportMu);
+                        m_reportStatus = ReportStatus::Idle;
+                        m_reportError.clear();
+                    }
+                    m_showReportModal = true;
+                }
+                ImGui::EndPopup();
+            }
             ImGui::TableNextColumn();
             if (e.passwordRequired)
             {
@@ -314,4 +337,194 @@ void UIDirectoryBrowser::renderPasswordModal()
         }
         ImGui::EndPopup();
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Report-this-stream modal (#57)
+//
+// User opens it from the row context menu. Reason is required; contact
+// is optional. POST /streams/<id>/report is rate-limited at 30/hour
+// per source IP server-side, so the modal surfaces 429s clearly.
+// There's deliberately no feedback about what the maintainer did with
+// the report — the spec is firm that this is a one-way flag, not a
+// community-moderation system.
+// ─────────────────────────────────────────────────────────────────────
+void UIDirectoryBrowser::renderReportModal()
+{
+    if (m_showReportModal) ImGui::OpenPopup("Report Stream");
+    if (!ImGui::BeginPopupModal("Report Stream", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::Text("Stream: %s",
+                m_reportStreamName.empty() ? "(unnamed)" : m_reportStreamName.c_str());
+    ImGui::Spacing();
+    ImGui::TextWrapped(
+        "Flag this stream for the maintainer to review. There's no "
+        "automated takedown — the maintainer drains the report log "
+        "manually.");
+    ImGui::Spacing();
+    ImGui::Text("Reason (required):");
+    ImGui::SetNextItemWidth(420);
+    ImGui::InputTextMultiline("##reportReason", m_reportReason,
+                              sizeof(m_reportReason),
+                              ImVec2(420, 80));
+    ImGui::Spacing();
+    ImGui::Text("Your contact (optional — email or @handle):");
+    ImGui::SetNextItemWidth(420);
+    ImGui::InputText("##reportContact", m_reportContact, sizeof(m_reportContact));
+
+    ImGui::Spacing();
+    ReportStatus statusSnap;
+    std::string  errSnap;
+    {
+        std::lock_guard<std::mutex> lock(m_reportMu);
+        statusSnap = m_reportStatus;
+        errSnap    = m_reportError;
+    }
+
+    if (statusSnap == ReportStatus::Success)
+    {
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f),
+                           "Thanks — the maintainer will review this.");
+        ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(120, 0)))
+        {
+            m_showReportModal = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+        return;
+    }
+
+    if (statusSnap == ReportStatus::Failed)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                           "Submit failed:");
+        ImGui::TextWrapped("%s", errSnap.c_str());
+        ImGui::Spacing();
+    }
+
+    const bool busy        = (statusSnap == ReportStatus::Sending);
+    const bool reasonOk    = (std::strlen(m_reportReason) > 0 &&
+                              std::strlen(m_reportReason) <= 200);
+
+    ImGui::BeginDisabled(busy || !reasonOk || m_reportStreamId.empty());
+    if (ImGui::Button(busy ? "Sending..." : "Submit", ImVec2(120, 0)))
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_reportMu);
+            m_reportStatus = ReportStatus::Sending;
+            m_reportError.clear();
+        }
+        m_reportInFlight.store(true);
+        // Snapshot the fields before kicking off the thread — the
+        // user can still close the modal while the POST is in flight.
+        const std::string directoryUrl = m_uiManager
+            ? m_uiManager->getDirectoryUrl() : std::string();
+        const std::string streamId = m_reportStreamId;
+        std::string reason  = m_reportReason;
+        std::string contact = m_reportContact;
+        std::thread([this, directoryUrl, streamId, reason, contact]() {
+            // Trim trailing slash from the directory URL so we don't
+            // produce //streams/<id>/report.
+            std::string base = directoryUrl;
+            while (!base.empty() && base.back() == '/') base.pop_back();
+            const std::string url = base + "/streams/" + streamId + "/report";
+
+            // Build the JSON body. nlohmann::json is already pulled in
+            // by DirectoryClient; using string concat instead keeps
+            // this translation unit free of one more include.
+            auto escapeJson = [](const std::string &s) {
+                std::string out;
+                out.reserve(s.size() + 2);
+                for (char c : s)
+                {
+                    switch (c)
+                    {
+                        case '"':  out += "\\\""; break;
+                        case '\\': out += "\\\\"; break;
+                        case '\n': out += "\\n";  break;
+                        case '\r': out += "\\r";  break;
+                        case '\t': out += "\\t";  break;
+                        default:
+                            if (static_cast<unsigned char>(c) < 0x20)
+                            {
+                                char buf[8];
+                                std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                                out += buf;
+                            }
+                            else out += c;
+                    }
+                }
+                return out;
+            };
+            std::string body = "{\"reason\":\"" + escapeJson(reason) + "\"";
+            if (!contact.empty())
+            {
+                body += ",\"reporterContact\":\"" + escapeJson(contact) + "\"";
+            }
+            body += "}";
+
+            HttpClient::Response resp = HttpClient::send(
+                HttpClient::Method::POST, url, body, /*timeoutMs=*/5000);
+
+            std::lock_guard<std::mutex> lock(m_reportMu);
+            if (resp.ok && resp.statusCode >= 200 && resp.statusCode < 300)
+            {
+                m_reportStatus = ReportStatus::Success;
+            }
+            else
+            {
+                m_reportStatus = ReportStatus::Failed;
+                if (resp.statusCode == 429)
+                {
+                    m_reportError = "Too many reports from this network — "
+                                    "try again later.";
+                    if (!resp.retryAfter.empty())
+                    {
+                        m_reportError += " (Retry-After: " + resp.retryAfter + " s)";
+                    }
+                }
+                else if (resp.statusCode > 0)
+                {
+                    m_reportError = "Directory returned HTTP " +
+                                    std::to_string(resp.statusCode);
+                    if (!resp.body.empty())
+                    {
+                        // First line of the body — usually the JSON
+                        // error message — is enough context.
+                        size_t nl = resp.body.find('\n');
+                        m_reportError += ": " +
+                            resp.body.substr(0, nl == std::string::npos
+                                                    ? resp.body.size() : nl);
+                    }
+                }
+                else
+                {
+                    m_reportError = resp.error.empty()
+                        ? "Couldn't reach the directory service."
+                        : resp.error;
+                }
+            }
+            m_reportInFlight.store(false);
+        }).detach();
+    }
+    ImGui::EndDisabled();
+    if (!reasonOk && std::strlen(m_reportReason) == 0)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(reason can't be empty)");
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+    {
+        m_showReportModal = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::EndPopup();
 }
