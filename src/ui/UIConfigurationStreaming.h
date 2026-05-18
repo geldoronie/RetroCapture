@@ -1,7 +1,11 @@
 #pragma once
 
-#include <string>
+#include "../streaming/CloudflaredDownloader.h"
+
+#include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <string>
 #include <vector>
 
 // Forward declarations
@@ -46,6 +50,17 @@ private:
 
     // Directory-publish UI state (#49 Phase 2)
     bool m_dirShowPrivacyModal = false;       // true while privacy popup is open
+
+    // Cloudflared auto-download UI state (#53 / Phase 2.5b).
+    //
+    // The download worker runs on a detached thread and updates these
+    // fields from there; render reads them under m_cfMu so we don't
+    // tear a half-written std::string between the writer and the UI
+    // sampler.
+    void renderCloudflaredDownload();
+    mutable std::mutex             m_cfMu;
+    CloudflaredDownloader::Progress m_cfProgress{};
+    bool                            m_cfStartedThisRun = false; // suppress modal re-trigger after Ready
 
     void refreshProfiles();
 };

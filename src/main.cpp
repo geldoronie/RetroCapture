@@ -1,4 +1,5 @@
 #include "core/Application.h"
+#include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
@@ -27,6 +28,9 @@ void printUsage(const char *programName)
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
     std::cout << "  --directory-url <url>  Override the directory service URL (default http://localhost:8081).\n";
     std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
+    std::cout << "  --cloudflared-binary <path>\n";
+    std::cout << "                         Use the given cloudflared binary verbatim (skip download + sha256 check).\n";
+    std::cout << "                         For air-gapped setups where GitHub releases aren't reachable.\n";
     std::cout << "  --width <value>        Capture width (default: 1920)\n";
     std::cout << "  --height <value>       Capture height (default: 1080)\n";
     std::cout << "  --fps <value>          Capture framerate (default: 60)\n";
@@ -240,6 +244,14 @@ int main(int argc, char *argv[])
             // Overrides the URL --browse-directory queries (and the
             // default the app uses internally when launched normally).
             browseDirectoryUrl = argv[++i];
+        }
+        else if (arg == "--cloudflared-binary" && i + 1 < argc)
+        {
+            // Phase 2.5b (#53): air-gapped escape hatch. The path
+            // becomes the only thing resolveBinaryPath() returns —
+            // download + sha256 are skipped because the user took
+            // responsibility for the binary by handing it to us.
+            CloudflaredDownloader::setCliOverride(argv[++i]);
         }
         else if (arg == "--v4l2-device" && i + 1 < argc)
         {

@@ -116,9 +116,14 @@ bool UIManager::init(void *window)
     // ImGui (it holds the pointer verbatim), so we keep it on the
     // UIManager instance.
     {
-        std::error_code ec;
+        // FilesystemCompat.h on MinGW < 8 (current MXE toolchain runs
+        // GCC 5.5) doesn't ship the std::error_code overload of
+        // create_directories — it has only the single-arg signature
+        // that throws on failure. Wrap in try/catch so a missing dir
+        // (typically because the parent was just created by another
+        // run) doesn't take down the UI init.
         fs::path userDir = fs::path(Paths::getUserDataDir());
-        fs::create_directories(userDir, ec);
+        try { fs::create_directories(userDir); } catch (...) { /* best effort */ }
         m_iniPath = (userDir / "imgui.ini").string();
         io.IniFilename = m_iniPath.c_str();
         LOG_INFO("ImGui ini path: " + m_iniPath);
