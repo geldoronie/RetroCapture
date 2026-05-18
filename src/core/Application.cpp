@@ -5474,7 +5474,37 @@ void Application::syncDirectoryClient()
         auto cfState = m_cloudflaredManager->getState();
         if (cfState == CloudflaredManager::State::Idle)
         {
-            m_cloudflaredManager->start(m_ui->getStreamingPort());
+            // Phase 2.5c (#60): pick Quick vs Named based on the user's
+            // sub-mode. Quick keeps the old 'localPort only' shape;
+            // Named also needs a configured tunnel id + hostname.
+            const std::string tunnelMode = m_ui->getDirectoryTunnelMode();
+            CloudflaredManager::TunnelConfig cfg;
+            cfg.localPort = m_ui->getStreamingPort();
+            if (tunnelMode == "named")
+            {
+                const std::string id   = m_ui->getDirectoryNamedTunnelId();
+                const std::string host = m_ui->getDirectoryNamedTunnelHostname();
+                if (id.empty() || host.empty())
+                {
+                    // Defer the start — the UI is responsible for
+                    // collecting these fields. syncDirectoryClient
+                    // shows the waiting message a few lines below.
+                    m_ui->setDirectoryStatusText("Named tunnel needs id + hostname");
+                }
+                else
+                {
+                    cfg.mode      = CloudflaredManager::Mode::Named;
+                    cfg.tunnelId  = id;
+                    cfg.hostname  = host;
+                    cfg.publicUrl = "https://" + host;
+                    m_cloudflaredManager->start(cfg);
+                }
+            }
+            else
+            {
+                cfg.mode = CloudflaredManager::Mode::Quick;
+                m_cloudflaredManager->start(cfg);
+            }
         }
     }
     else if (m_cloudflaredManager &&
@@ -5540,8 +5570,21 @@ void Application::syncDirectoryClient()
                 return;
             case CloudflaredManager::State::NotFound:
                 if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
-                m_ui->setDirectoryStatusText(
-                    "Error: cloudflared not installed — install from cloudflare.com/products/tunnel");
+                {
+                    // NotFound covers both "binary missing" and any
+                    // pre-flight rejection (missing credentials,
+                    // invalid config, etc.). Surface the manager's
+                    // own error text when it has one — it knows what
+                    // actually failed. Fall back to the generic
+                    // install hint only when there's nothing to say.
+                    std::string err = m_cloudflaredManager->getLastError();
+                    if (err.empty())
+                    {
+                        err = "cloudflared not installed — install from "
+                              "cloudflare.com/products/tunnel";
+                    }
+                    m_ui->setDirectoryStatusText("Error: " + err);
+                }
                 return;
             case CloudflaredManager::State::Crashed:
                 if (state != DirectoryClient::State::Idle) m_directoryClient->stop();

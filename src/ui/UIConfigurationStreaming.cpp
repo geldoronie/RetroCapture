@@ -4,6 +4,8 @@
 #include "../encoding/MediaEncoder.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cstring>
+#include <thread>
 
 UIConfigurationStreaming::UIConfigurationStreaming(UIManager *uiManager)
     : m_uiManager(uiManager)
@@ -933,12 +935,75 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     }
     else if (endpointMode == "tunnel-cloudflare")
     {
-        ImGui::TextDisabled(
-            "RetroCapture will run `cloudflared` to expose your stream via\n"
-            "a Cloudflare Quick Tunnel. No Cloudflare account needed; the\n"
-            "URL is randomized each run. Public IP is never exposed.");
+        // Tunnel sub-mode radio. Quick is the zero-friction default
+        // (random trycloudflare.com URL per run, no account). Named
+        // requires a Cloudflare account + a domain on Cloudflare but
+        // gives a persistent shareable URL.
+        std::string tunnelMode = m_uiManager->getDirectoryTunnelMode();
+        if (tunnelMode != "quick" && tunnelMode != "named")
+        {
+            tunnelMode = "quick";
+            m_uiManager->setDirectoryTunnelMode(tunnelMode);
+            m_uiManager->saveConfig();
+        }
+        ImGui::Text("Tunnel type:");
+        bool isQuick = (tunnelMode == "quick");
+        if (ImGui::RadioButton("Quick (random URL each run)", isQuick))
+        {
+            if (!isQuick)
+            {
+                m_uiManager->setDirectoryTunnelMode("quick");
+                m_uiManager->saveConfig();
+                tunnelMode = "quick";
+            }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("No Cloudflare account needed. The URL "
+                              "changes every time you publish.");
+        }
+        ImGui::SameLine();
+        bool isNamed = (tunnelMode == "named");
+        if (ImGui::RadioButton("Named (persistent URL)", isNamed))
+        {
+            if (!isNamed)
+            {
+                m_uiManager->setDirectoryTunnelMode("named");
+                m_uiManager->saveConfig();
+                tunnelMode = "named";
+            }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Requires a Cloudflare account and a "
+                              "domain registered/proxied on Cloudflare. "
+                              "Gives you a stable URL you can share.");
+        }
+        ImGui::Spacing();
+
+        if (tunnelMode == "named")
+        {
+            ImGui::TextDisabled(
+                "RetroCapture will run `cloudflared tunnel run` against your\n"
+                "named tunnel. The directory entry advertises your hostname\n"
+                "instead of a random trycloudflare.com URL.");
+        }
+        else
+        {
+            ImGui::TextDisabled(
+                "RetroCapture will run `cloudflared` to expose your stream via\n"
+                "a Cloudflare Quick Tunnel. No Cloudflare account needed; the\n"
+                "URL is randomized each run. Public IP is never exposed.");
+        }
         ImGui::Spacing();
         renderCloudflaredDownload();
+        if (tunnelMode == "named")
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            renderCloudflaredNamedTunnelSetup();
+        }
     }
     else
     {
@@ -1045,6 +1110,28 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     else
     {
         ImGui::TextDisabled("%s", status.c_str());
+    }
+
+    // Cloudflare Quick Tunnel URLs come from a fresh wildcard DNS entry
+    // that Cloudflare's resolver needs a moment to publish globally.
+    // Empirically anywhere from a few seconds to a couple of minutes,
+    // depending on which resolver the client side hits. Surface this
+    // up front so a user who clicks Publish and immediately tries to
+    // connect from another machine doesn't conclude the tunnel is
+    // broken when really it just hasn't propagated yet. Named tunnels
+    // skip this — those use the user's own zone where TTLs are
+    // typically tight.
+    {
+        const bool isCfTunnel = (m_uiManager->getDirectoryEndpointMode() == "tunnel-cloudflare");
+        const bool isQuick    = (m_uiManager->getDirectoryTunnelMode() == "quick");
+        if (isCfTunnel && isQuick && status.rfind("Active", 0) == 0)
+        {
+            ImGui::TextDisabled(
+                "Note: the trycloudflare.com URL can take up to ~2 minutes\n"
+                "to resolve from other networks (DNS propagation). Browsers\n"
+                "and clients trying to connect immediately may see 'host not\n"
+                "found' — that clears on its own once DNS catches up.");
+        }
     }
 
     // Per-session telemetry (#49 Phase 5). Hidden behind a tree node
@@ -1209,4 +1296,345 @@ void UIConfigurationStreaming::renderCloudflaredDownload()
     {
         ImGui::SetTooltip("No upstream cloudflared binary for this architecture.");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Named Cloudflare Tunnel setup UI (#60 / Phase 2.5c)
+//
+// Renders below renderCloudflaredDownload() when the user has picked
+// Named as the tunnel sub-mode. Three concerns layered top to bottom:
+//
+//   1. Authentication. Spawn `cloudflared tunnel login`, surface the
+//      OAuth URL it prints so a headless / SSH user can copy-paste
+//      it. Stage updates fire from the worker thread; we sample
+//      under m_cfNamedMu.
+//
+//   2. Tunnel selection. Once cert.pem is on disk, list the user's
+//      existing tunnels and offer a "Create new..." modal. Selection
+//      writes into UIManager (persisted), so the next run picks the
+//      same one.
+//
+//   3. Hostname + DNS route. User types a hostname under a domain
+//      they already own on Cloudflare, hits "Apply DNS route", we
+//      shell out to `cloudflared tunnel route dns`. Result text
+//      sticks around until they retry.
+//
+// Heavy operations (login, list, create, route) all run on detached
+// threads so the UI stays responsive — listTunnels can take ~10 s,
+// login can take minutes waiting for the user to OAuth.
+// ─────────────────────────────────────────────────────────────────────
+void UIConfigurationStreaming::renderCloudflaredNamedTunnelSetup()
+{
+    using LoginStage = CloudflaredAccount::LoginProgress::Stage;
+
+    // We need a usable binary before any of this works. The download
+    // section above already handles the unhappy path; here we just
+    // gate the named-tunnel UI on it so the buttons aren't dead
+    // links.
+    if (CloudflaredDownloader::resolveBinaryPath().empty())
+    {
+        ImGui::TextDisabled("cloudflared isn't available yet — finish the "
+                            "download above before setting up a named tunnel.");
+        return;
+    }
+
+    // Scope all the ImGui IDs in this section under "namedTunnel" so
+    // generic button labels ("Refresh", "Cancel", "Create") don't
+    // collide with identically-named buttons rendered elsewhere in
+    // the same window (the streaming profiles block has its own
+    // "Refresh"). Without this ImGui pops up the "2 visible items
+    // with conflicting ID" debug overlay.
+    ImGui::PushID("namedTunnel");
+
+    ImGui::Text("Named Cloudflare Tunnel");
+    ImGui::Spacing();
+
+    // ── 1. Authentication ──────────────────────────────────────
+    const bool hasCreds = CloudflaredAccount::hasCredentials();
+
+    CloudflaredAccount::LoginProgress loginSnap;
+    bool loginActive;
+    {
+        std::lock_guard<std::mutex> lock(m_cfNamedMu);
+        loginSnap   = m_loginProgress;
+        loginActive = m_loginStartedThisRun &&
+                      (loginSnap.stage == LoginStage::Starting ||
+                       loginSnap.stage == LoginStage::AwaitingAuth);
+    }
+
+    if (!hasCreds || loginActive)
+    {
+        if (loginActive)
+        {
+            if (loginSnap.stage == LoginStage::AwaitingAuth && !loginSnap.oauthUrl.empty())
+            {
+                ImGui::TextWrapped(
+                    "Waiting for Cloudflare authentication. If a browser didn't "
+                    "open automatically, copy this URL into one:");
+                ImGui::Spacing();
+                // Show the URL in a wide read-only input so the user can
+                // select-all + copy on any platform.
+                char urlBuf[1024];
+                std::snprintf(urlBuf, sizeof(urlBuf), "%s", loginSnap.oauthUrl.c_str());
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputText("##oauthUrl", urlBuf, sizeof(urlBuf),
+                                 ImGuiInputTextFlags_ReadOnly);
+            }
+            else
+            {
+                ImGui::TextDisabled("Starting Cloudflare sign-in...");
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("Cancel sign-in", ImVec2(160, 0)))
+            {
+                CloudflaredAccount::cancelLogin();
+            }
+        }
+        else
+        {
+            ImGui::TextWrapped(
+                "You'll be redirected to Cloudflare to authenticate. After "
+                "logging in, Cloudflare writes a credentials file locally; "
+                "RetroCapture uses it to talk to your account.");
+            ImGui::Spacing();
+            if (ImGui::Button("Sign in to Cloudflare...", ImVec2(220, 0)))
+            {
+                {
+                    std::lock_guard<std::mutex> lock(m_cfNamedMu);
+                    m_loginProgress       = {};
+                    m_loginProgress.stage = LoginStage::Starting;
+                    m_loginStartedThisRun = true;
+                }
+                CloudflaredAccount::beginLoginAsync(
+                    [this](const CloudflaredAccount::LoginProgress &p) {
+                        std::lock_guard<std::mutex> lock(m_cfNamedMu);
+                        m_loginProgress = p;
+                    });
+            }
+            if (loginSnap.stage == LoginStage::Failed && m_loginStartedThisRun)
+            {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                                   "Sign-in failed:");
+                ImGui::TextWrapped("%s", loginSnap.error.c_str());
+            }
+            else if (loginSnap.stage == LoginStage::Cancelled && m_loginStartedThisRun)
+            {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 1.0f),
+                                   "Sign-in cancelled. Click again to retry.");
+            }
+        }
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f),
+                       "Signed in to Cloudflare.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(credentials in ~/.cloudflared/)");
+    ImGui::Spacing();
+
+    // ── 2. Tunnel selection ─────────────────────────────────────
+    // Cached list state under lock; refresh button triggers an async
+    // refetch. First render of this section also kicks off a refresh
+    // if we don't have one cached yet.
+    std::vector<CloudflaredAccount::TunnelInfo> tunnels;
+    std::string tunnelsError;
+    bool        loaded;
+    {
+        std::lock_guard<std::mutex> lock(m_cfNamedMu);
+        tunnels      = m_namedTunnels;
+        tunnelsError = m_namedTunnelsError;
+        loaded       = m_namedTunnelsLoaded;
+    }
+
+    auto kickOffRefresh = [this]() {
+        if (m_namedTunnelsRefreshing.exchange(true)) return;
+        std::thread([this]() {
+            std::string err;
+            auto fresh = CloudflaredAccount::listTunnels(err);
+            std::lock_guard<std::mutex> lock(m_cfNamedMu);
+            m_namedTunnels       = std::move(fresh);
+            m_namedTunnelsError  = std::move(err);
+            m_namedTunnelsLoaded = true;
+            m_namedTunnelsRefreshing.store(false);
+        }).detach();
+    };
+    if (!loaded && !m_namedTunnelsRefreshing.load())
+    {
+        kickOffRefresh();
+    }
+
+    const std::string currentTunnelId = m_uiManager->getDirectoryNamedTunnelId();
+    std::string currentLabel = currentTunnelId.empty()
+        ? "(no tunnel selected)"
+        : currentTunnelId; // overridden below if we find a name match
+    for (const auto &t : tunnels)
+    {
+        if (t.id == currentTunnelId)
+        {
+            currentLabel = t.name + " (" + t.id.substr(0, 8) + "…)";
+            break;
+        }
+    }
+    ImGui::Text("Tunnel:");
+    ImGui::SetNextItemWidth(-120);
+    if (ImGui::BeginCombo("##namedTunnel", currentLabel.c_str()))
+    {
+        for (const auto &t : tunnels)
+        {
+            bool selected = (t.id == currentTunnelId);
+            std::string lbl = t.name + " (" + t.id.substr(0, 8) + "…)";
+            if (ImGui::Selectable(lbl.c_str(), selected))
+            {
+                m_uiManager->setDirectoryNamedTunnelId(t.id);
+                m_uiManager->saveConfig();
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::Separator();
+        if (ImGui::Selectable("Create new tunnel..."))
+        {
+            std::memset(m_newTunnelName, 0, sizeof(m_newTunnelName));
+            m_createTunnelError.clear();
+            m_showCreateTunnelModal = true;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (m_namedTunnelsRefreshing.load())
+    {
+        ImGui::BeginDisabled(); ImGui::Button("Refreshing...", ImVec2(110, 0)); ImGui::EndDisabled();
+    }
+    else if (ImGui::Button("Refresh", ImVec2(110, 0)))
+    {
+        kickOffRefresh();
+    }
+    if (!tunnelsError.empty())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                           "Tunnel list error: %s", tunnelsError.c_str());
+    }
+
+    // Create-new modal
+    if (m_showCreateTunnelModal) ImGui::OpenPopup("Create Tunnel");
+    if (ImGui::BeginPopupModal("Create Tunnel", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Tunnel name (will be visible in your Cloudflare dashboard):");
+        ImGui::SetNextItemWidth(280);
+        ImGui::InputText("##newTunnelName", m_newTunnelName, sizeof(m_newTunnelName));
+        if (!m_createTunnelError.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "%s",
+                               m_createTunnelError.c_str());
+        }
+        const bool busy = m_createTunnelInFlight.load();
+        ImGui::BeginDisabled(busy || std::strlen(m_newTunnelName) == 0);
+        if (ImGui::Button(busy ? "Creating..." : "Create", ImVec2(120, 0)))
+        {
+            m_createTunnelInFlight.store(true);
+            m_createTunnelError.clear();
+            std::string name = m_newTunnelName;
+            std::thread([this, name]() {
+                std::string err;
+                std::string id = CloudflaredAccount::createTunnel(name, err);
+                if (!id.empty())
+                {
+                    m_uiManager->setDirectoryNamedTunnelId(id);
+                    m_uiManager->saveConfig();
+                    // Re-fetch so the new entry shows up immediately.
+                    std::string listErr;
+                    auto fresh = CloudflaredAccount::listTunnels(listErr);
+                    {
+                        std::lock_guard<std::mutex> lock(m_cfNamedMu);
+                        m_namedTunnels      = std::move(fresh);
+                        m_namedTunnelsError = std::move(listErr);
+                        m_namedTunnelsLoaded = true;
+                        m_showCreateTunnelModal = false;
+                    }
+                }
+                else
+                {
+                    std::lock_guard<std::mutex> lock(m_cfNamedMu);
+                    m_createTunnelError = err.empty()
+                        ? "Unknown error creating tunnel"
+                        : err;
+                }
+                m_createTunnelInFlight.store(false);
+            }).detach();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(busy);
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            m_showCreateTunnelModal = false;
+        }
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
+
+    ImGui::Spacing();
+
+    // ── 3. Hostname + DNS route ─────────────────────────────────
+    ImGui::Text("Hostname:");
+    char hostBuf[256];
+    std::snprintf(hostBuf, sizeof(hostBuf), "%s",
+                  m_uiManager->getDirectoryNamedTunnelHostname().c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##namedHost", hostBuf, sizeof(hostBuf)))
+    {
+        m_uiManager->setDirectoryNamedTunnelHostname(hostBuf);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("e.g. stream.example.com — must be on a domain you\n"
+                          "already control on Cloudflare. RetroCapture asks\n"
+                          "cloudflared to register the DNS record under your\n"
+                          "zone; if the apex isn't on Cloudflare the route\n"
+                          "command will fail with a clear message below.");
+    }
+
+    const bool routeBusy = m_routeInFlight.load();
+    ImGui::BeginDisabled(routeBusy ||
+                         currentTunnelId.empty() ||
+                         std::strlen(hostBuf) == 0);
+    if (ImGui::Button(routeBusy ? "Applying..." : "Apply DNS route",
+                      ImVec2(180, 0)))
+    {
+        m_routeInFlight.store(true);
+        std::string id  = currentTunnelId;
+        std::string h   = hostBuf;
+        std::thread([this, id, h]() {
+            std::string err;
+            bool ok = CloudflaredAccount::routeDns(id, h, err);
+            std::lock_guard<std::mutex> lock(m_cfNamedMu);
+            m_lastRouteOk     = ok;
+            m_lastRouteResult = ok
+                ? "DNS route applied — " + h + " now points at this tunnel."
+                : (err.empty() ? "DNS route failed (unknown error)" : err);
+            m_routeInFlight.store(false);
+        }).detach();
+    }
+    ImGui::EndDisabled();
+    if (currentTunnelId.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(select a tunnel first)");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_cfNamedMu);
+        if (!m_lastRouteResult.empty())
+        {
+            ImVec4 col = m_lastRouteOk
+                ? ImVec4(0.40f, 0.80f, 0.40f, 1.0f)
+                : ImVec4(1.0f, 0.45f, 0.40f, 1.0f);
+            ImGui::Spacing();
+            ImGui::TextColored(col, "%s", m_lastRouteResult.c_str());
+        }
+    }
+
+    ImGui::PopID();
 }

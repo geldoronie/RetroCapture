@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../streaming/CloudflaredAccount.h"
 #include "../streaming/CloudflaredDownloader.h"
 
 #include <atomic>
@@ -61,6 +62,32 @@ private:
     mutable std::mutex             m_cfMu;
     CloudflaredDownloader::Progress m_cfProgress{};
     bool                            m_cfStartedThisRun = false; // suppress modal re-trigger after Ready
+
+    // Cloudflared Named-tunnel UI state (#60 / Phase 2.5c).
+    //
+    // Three async operations share this block: login (long-running
+    // OAuth wait), tunnel-list refresh (10s `cloudflared tunnel list`),
+    // and route-dns / create (10–30s each). All run on detached
+    // threads and update fields under m_cfNamedMu; render samples
+    // under the same lock.
+    void renderCloudflaredNamedTunnelSetup();
+
+    mutable std::mutex                          m_cfNamedMu;
+    CloudflaredAccount::LoginProgress           m_loginProgress{};
+    bool                                        m_loginStartedThisRun = false;
+    std::vector<CloudflaredAccount::TunnelInfo> m_namedTunnels;
+    std::string                                 m_namedTunnelsError;
+    bool                                        m_namedTunnelsLoaded   = false;
+    std::atomic<bool>                           m_namedTunnelsRefreshing{false};
+    // Create-new-tunnel modal state
+    bool                                        m_showCreateTunnelModal = false;
+    char                                        m_newTunnelName[64]     = {};
+    std::string                                 m_createTunnelError;
+    std::atomic<bool>                           m_createTunnelInFlight{false};
+    // DNS route result + busy flag
+    std::string                                 m_lastRouteResult;
+    bool                                        m_lastRouteOk          = false;
+    std::atomic<bool>                           m_routeInFlight{false};
 
     void refreshProfiles();
 };
