@@ -5570,8 +5570,21 @@ void Application::syncDirectoryClient()
                 return;
             case CloudflaredManager::State::NotFound:
                 if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
-                m_ui->setDirectoryStatusText(
-                    "Error: cloudflared not installed — install from cloudflare.com/products/tunnel");
+                {
+                    // NotFound covers both "binary missing" and any
+                    // pre-flight rejection (missing credentials,
+                    // invalid config, etc.). Surface the manager's
+                    // own error text when it has one — it knows what
+                    // actually failed. Fall back to the generic
+                    // install hint only when there's nothing to say.
+                    std::string err = m_cloudflaredManager->getLastError();
+                    if (err.empty())
+                    {
+                        err = "cloudflared not installed — install from "
+                              "cloudflare.com/products/tunnel";
+                    }
+                    m_ui->setDirectoryStatusText("Error: " + err);
+                }
                 return;
             case CloudflaredManager::State::Crashed:
                 if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
