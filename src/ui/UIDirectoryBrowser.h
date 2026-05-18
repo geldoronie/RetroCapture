@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <mutex>
 #include <string>
 
@@ -88,9 +87,5 @@ private:
     ReportStatus         m_reportStatus = ReportStatus::Idle;
     std::string          m_reportError;          // set when Failed
     std::string          m_reportReceiptId;      // set when Success, echoed from /report response
-    // Timestamp of the transition into Success state. Used to drive
-    // the auto-close countdown so the user reads the receipt without
-    // having to dismiss the modal manually.
-    std::chrono::steady_clock::time_point m_reportSuccessAt{};
     std::atomic<bool>    m_reportInFlight{false};
 };

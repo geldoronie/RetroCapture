@@ -408,54 +408,26 @@ void UIDirectoryBrowser::renderReportModal()
 
     if (statusSnap == ReportStatus::Success)
     {
-        // Auto-close after a short window so the user doesn't have to
-        // dismiss anything manually, but long enough to read + copy
-        // the receipt id. 8 s landed after a few self-test reads:
-        // shorter than 6 felt rushed when the receipt was the thing
-        // the user wanted to save, longer than 10 felt like the modal
-        // was stuck.
-        constexpr int kAutoCloseSeconds = 8;
-        const auto now = std::chrono::steady_clock::now();
-        const int elapsedSec = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::seconds>(now - m_reportSuccessAt).count());
-        const int remaining  = kAutoCloseSeconds - elapsedSec;
-
-        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f),
-                           "Thanks — the maintainer will review this.");
+        // One screen, full message, single button. The protocol
+        // number is the only thing the user might want to copy, so
+        // it sits in a read-only InputText right after the line that
+        // names it.
+        ImGui::TextWrapped(
+            "Thanks for reporting. The Directory owner will review it.");
+        ImGui::Spacing();
         if (!receiptSnap.empty())
         {
-            ImGui::Spacing();
             ImGui::Text("Protocol number:");
             ImGui::SameLine();
-            // Read-only InputText so the receipt is copy-pasteable
-            // without us having to ship a clipboard helper. Small
-            // enough to fit on one line.
             char receiptBuf[64];
             std::snprintf(receiptBuf, sizeof(receiptBuf), "%s", receiptSnap.c_str());
             ImGui::SetNextItemWidth(180);
             ImGui::InputText("##receipt", receiptBuf, sizeof(receiptBuf),
                              ImGuiInputTextFlags_ReadOnly);
-            ImGui::TextDisabled("Save this number — quote it if you contact the maintainer\n"
-                                "about this report.");
         }
         ImGui::Spacing();
-        if (remaining > 0)
+        if (ImGui::Button("Close", ImVec2(120, 0)))
         {
-            // Manual override stays available — the user who already
-            // copied the receipt can dismiss early.
-            char btnLbl[40];
-            std::snprintf(btnLbl, sizeof(btnLbl), "Close (auto in %ds)", remaining);
-            if (ImGui::Button(btnLbl, ImVec2(180, 0)))
-            {
-                m_showReportModal = false;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        else
-        {
-            // Time's up — close ourselves. CloseCurrentPopup must be
-            // called from within the BeginPopupModal block, which is
-            // why this happens here rather than from the worker thread.
             m_showReportModal = false;
             ImGui::CloseCurrentPopup();
         }
@@ -538,8 +510,7 @@ void UIDirectoryBrowser::renderReportModal()
             std::lock_guard<std::mutex> lock(m_reportMu);
             if (resp.ok && resp.statusCode >= 200 && resp.statusCode < 300)
             {
-                m_reportStatus    = ReportStatus::Success;
-                m_reportSuccessAt = std::chrono::steady_clock::now();
+                m_reportStatus = ReportStatus::Success;
                 // Parse the reportId out of the response. Tiny ad-hoc
                 // parser to avoid pulling nlohmann::json into this TU
                 // for one field; the response shape is fixed at
