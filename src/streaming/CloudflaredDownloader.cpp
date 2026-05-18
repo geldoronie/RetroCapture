@@ -8,6 +8,7 @@ extern "C" {
 #include <libavformat/avio.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
+#include <libavutil/error.h>
 #include <libavutil/sha.h>
 #include <libavutil/mem.h>
 }
@@ -284,7 +285,12 @@ namespace
         for (;;)
         {
             int n = avio_read(io, buf.data(), static_cast<int>(buf.size()));
-            if (n == 0) break;            // EOF
+            // avio_read signals end-of-stream either as 0 (older FFmpeg
+            // semantics) or AVERROR_EOF (newer FFmpeg, current Ubuntu
+            // 24.04 libavformat). Both are clean completions, not
+            // errors — only a different negative code means the
+            // connection actually dropped mid-transfer.
+            if (n == 0 || n == AVERROR_EOF) break;
             if (n < 0)
             {
                 char errbuf[256] = {};
