@@ -48,6 +48,7 @@ private:
     void renderTable();
     void renderPasswordModal();
     void renderReportModal();
+    void renderReportFeedbackModal();
 
     UIManager          *m_uiManager     = nullptr;
     DirectoryBrowser   *m_browser       = nullptr;
@@ -88,4 +89,13 @@ private:
     std::string          m_reportError;          // set when Failed
     std::string          m_reportReceiptId;      // set when Success, echoed from /report response
     std::atomic<bool>    m_reportInFlight{false};
+
+    // Feedback-modal state. After a successful submit the input
+    // modal closes and this one opens, single-purpose: confirm the
+    // report landed + hand the user the protocol number. Decoupled
+    // from m_reportStatus so a later "I want to report something
+    // else" cycle doesn't lose the receipt the user is still
+    // looking at.
+    bool         m_showReportFeedbackModal = false;
+    std::string  m_reportFeedbackReceiptId;
 };

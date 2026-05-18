@@ -98,6 +98,7 @@ void UIDirectoryBrowser::render()
     // main window scrolls away.
     renderPasswordModal();
     renderReportModal();
+    renderReportFeedbackModal();
 }
 
 void UIDirectoryBrowser::renderTable()
@@ -408,29 +409,19 @@ void UIDirectoryBrowser::renderReportModal()
 
     if (statusSnap == ReportStatus::Success)
     {
-        // One screen, full message, single button. The protocol
-        // number is the only thing the user might want to copy, so
-        // it sits in a read-only InputText right after the line that
-        // names it.
-        ImGui::TextWrapped(
-            "Thanks for reporting. The Directory owner will review it.");
-        ImGui::Spacing();
-        if (!receiptSnap.empty())
+        // Hand off to the dedicated feedback modal. We dismiss this
+        // input modal in the same frame and open the feedback one,
+        // which renders the confirmation message + protocol number.
+        // Reset status so a later "Report another stream" cycle
+        // doesn't replay this branch on the input modal.
         {
-            ImGui::Text("Protocol number:");
-            ImGui::SameLine();
-            char receiptBuf[64];
-            std::snprintf(receiptBuf, sizeof(receiptBuf), "%s", receiptSnap.c_str());
-            ImGui::SetNextItemWidth(180);
-            ImGui::InputText("##receipt", receiptBuf, sizeof(receiptBuf),
-                             ImGuiInputTextFlags_ReadOnly);
+            std::lock_guard<std::mutex> lock(m_reportMu);
+            m_reportFeedbackReceiptId = receiptSnap;
+            m_reportStatus = ReportStatus::Idle;
         }
-        ImGui::Spacing();
-        if (ImGui::Button("Close", ImVec2(120, 0)))
-        {
-            m_showReportModal = false;
-            ImGui::CloseCurrentPopup();
-        }
+        m_showReportFeedbackModal = true;
+        m_showReportModal         = false;
+        ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return;
     }
@@ -586,5 +577,60 @@ void UIDirectoryBrowser::renderReportModal()
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
+    ImGui::EndPopup();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Report-feedback modal (#57 follow-up)
+//
+// Opened by renderReportModal() the moment a submit succeeds. The
+// input modal closes; this modal opens fresh. Single concern: tell
+// the user their report landed and give them the protocol number to
+// quote. Independent state from the input modal so the user can
+// dismiss this one without re-arming the report form.
+// ─────────────────────────────────────────────────────────────────────
+void UIDirectoryBrowser::renderReportFeedbackModal()
+{
+    if (m_showReportFeedbackModal) ImGui::OpenPopup("Report Sent");
+    if (!ImGui::BeginPopupModal("Report Sent", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Thanks for reporting. The Directory owner will review it.");
+    ImGui::Spacing();
+
+    if (!m_reportFeedbackReceiptId.empty())
+    {
+        ImGui::Text("Protocol number:");
+        ImGui::SameLine();
+        char receiptBuf[64];
+        std::snprintf(receiptBuf, sizeof(receiptBuf), "%s",
+                      m_reportFeedbackReceiptId.c_str());
+        ImGui::SetNextItemWidth(200);
+        ImGui::InputText("##feedbackReceipt", receiptBuf, sizeof(receiptBuf),
+                         ImGuiInputTextFlags_ReadOnly);
+        ImGui::TextDisabled("Quote this if you contact the maintainer.");
+    }
+    else
+    {
+        // Service didn't echo a reportId (older deploy, or transport
+        // dropped the body). The report still landed — the 2xx we
+        // got back is the signal — but there's no number to hand
+        // over. Be honest about it.
+        ImGui::TextDisabled(
+            "The directory service did not return a protocol number\n"
+            "for this report. The report itself was accepted.");
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Close", ImVec2(120, 0)))
+    {
+        m_showReportFeedbackModal = false;
+        m_reportFeedbackReceiptId.clear();
+        ImGui::CloseCurrentPopup();
+    }
     ImGui::EndPopup();
 }
