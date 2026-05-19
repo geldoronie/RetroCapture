@@ -33,19 +33,32 @@ void UIRemoteConnection::triggerConnect(const std::string &url)
     if (clean.empty()) return;
 
     // Mirror into the URL input so the user sees what they just
-    // committed to, plus arm the existing state machine. Pop the
-    // window open so the connection feedback is visible — the user
-    // may have arrived here from the Browse window.
+    // committed to, plus arm the existing state machine. We
+    // intentionally do NOT flip m_visible here — when the user
+    // clicked Connect on a Browse-window row they're already in a
+    // window that gives them context, and popping the
+    // Connect-to-Remote window on top is noise. Status surfaces via
+    // the directory status text + the Info tab's Connection block
+    // anyway. The user can still open this window manually from the
+    // Remote menu if they want the focused view.
     std::strncpy(m_urlBuffer, clean.c_str(), sizeof(m_urlBuffer) - 1);
     m_urlBuffer[sizeof(m_urlBuffer) - 1] = '\0';
     m_pendingUrl = clean;
     m_pending    = PendingAction::ConnectShowStatus;
-    m_visible    = true;
 }
 
 void UIRemoteConnection::render()
 {
-    if (!m_visible || !m_uiManager) return;
+    if (!m_uiManager) return;
+
+    // The state machine must advance every frame regardless of
+    // whether this window is visible — when a Browse-window
+    // 'Connect' arms a ConnectShowStatus / ConnectExecute step,
+    // it needs to progress even with the Connect-to-Remote window
+    // hidden. Drive the state first, then render the window only
+    // if the user actually opened it.
+    advanceStateMachine();
+    if (!m_visible) return;
 
     // Source-aware: getCurrentDevice() returns whatever the active capture
     // path needs as its "device" — for V4L2/DS that's a filesystem path
@@ -100,10 +113,6 @@ void UIRemoteConnection::render()
         renderStatusFooter(connected);
     }
     ImGui::End();
-
-    // Always advance the state machine even if the window is now
-    // covered — connect/disconnect MUST progress once initiated.
-    advanceStateMachine();
 }
 
 // ─────────────────────────────────────────────────────────────────────
