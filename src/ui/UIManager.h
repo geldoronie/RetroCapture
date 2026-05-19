@@ -431,6 +431,12 @@ public:
     // flag. Default false in host mode (#58).
     bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
     void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
+    // 'Are we decoding frames right now' — distinct from
+    // captureWidth > 0, which stays at the last seen value after
+    // the stream drops. Mirrored by Application from
+    // VideoCaptureRemote::isReceivingFrames() every frame.
+    bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
+    void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -859,6 +865,7 @@ private:
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
     bool     m_remoteHostLikelyOffline = false;
+    bool     m_remoteReceivingFrames   = false;
     // Connection-overlay frame-to-frame tracking. We detect
     // transitions (e.g. currentDevice just became empty -> show
     // "Disconnecting...") by comparing this frame's state with last

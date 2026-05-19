@@ -5460,18 +5460,31 @@ void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
 
-    // Mirror the remote capture's reconnect-backoff flag onto
-    // UIManager so the Info panel and other UI surfaces can read it
-    // without holding the VideoCaptureRemote pointer themselves. In
-    // host mode m_capture isn't a VideoCaptureRemote and the
-    // dynamic_cast falls through to false (#58 follow-up).
+    // Mirror the remote capture's reconnect-backoff flag and the
+    // "currently decoding frames" flag onto UIManager so the Info
+    // panel and the connection overlay can read them without holding
+    // the VideoCaptureRemote pointer themselves. In host mode
+    // m_capture isn't a VideoCaptureRemote and the dynamic_cast
+    // falls through to defaults (offline=false, receivingFrames=
+    // whatever the base class reports — which is isOpen() for local
+    // backends).
     {
-        bool offline = false;
-        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        bool offline   = false;
+        bool receiving = false;
+        if (m_capture)
         {
-            offline = remote->isHostLikelyOffline();
+            if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+            {
+                offline   = remote->isHostLikelyOffline();
+                receiving = remote->isReceivingFrames();
+            }
+            else
+            {
+                receiving = m_capture->isReceivingFrames();
+            }
         }
         m_ui->setRemoteHostLikelyOffline(offline);
+        m_ui->setRemoteReceivingFrames(receiving);
     }
 
     // #49 Phase 3 — keep the server-side password gate in sync with

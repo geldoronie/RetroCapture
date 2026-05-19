@@ -3592,7 +3592,14 @@ void UIManager::renderConnectionOverlay()
 
     const double now      = ImGui::GetTime();
     const std::string dev = m_currentDevice;
-    const bool hasFrames  = (m_captureWidth > 0 && m_captureHeight > 0);
+    // 'Has frames' means decoding right NOW — not 'has ever had
+    // frames'. captureWidth/Height stay at the last seen value
+    // forever after the stream drops, so they're a "we know the
+    // resolution" signal, not a liveness one. Use the mirrored
+    // VideoCaptureRemote::isReceivingFrames() flag instead, which
+    // flips back to false the moment the decode loop loses the
+    // connection.
+    const bool hasFrames  = m_remoteReceivingFrames;
     const bool offline    = m_remoteHostLikelyOffline;
 
     // Detect 'device just became empty' — that's the disconnect

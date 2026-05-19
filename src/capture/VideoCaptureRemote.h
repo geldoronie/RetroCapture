@@ -250,6 +250,11 @@ public:
      * Cleared as soon as any reconnect succeeds.
      */
     bool isHostLikelyOffline() const override { return m_hostLikelyOffline.load(); }
+    // m_streamAnchored is set true on the first decoded frame and
+    // reset to false in cleanupDecoder() / on av_read_frame failure
+    // — exactly the "are we actively decoding right now" signal the
+    // UI overlay needs.
+    bool isReceivingFrames() const override { return m_streamAnchored.load(); }
 
 private:
     // Capped exponential backoff state. The table is consulted with
