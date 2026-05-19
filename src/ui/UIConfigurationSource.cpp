@@ -54,7 +54,7 @@ void UIConfigurationSource::render()
     }
     else if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
     }
 #elif defined(_WIN32)
     if (sourceType == UIManager::SourceType::DS)
@@ -63,12 +63,12 @@ void UIConfigurationSource::render()
     }
     else if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
     }
 #else
     if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("Nenhuma fonte selecionada.");
+        ImGui::TextWrapped("No source selected.");
     }
 #endif
 }
@@ -127,7 +127,7 @@ void UIConfigurationSource::renderV4L2Controls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("Nenhum dispositivo V4L2 conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::TextWrapped("No V4L2 device connected. Select a device below to start capture.");
         ImGui::Separator();
     }
 
@@ -266,7 +266,7 @@ void UIConfigurationSource::renderDSControls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("Nenhum dispositivo DirectShow conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::TextWrapped("No DirectShow device connected. Select a device below to start capture.");
         ImGui::Separator();
     }
 
@@ -378,7 +378,7 @@ void UIConfigurationSource::renderDSDeviceSelection()
     // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
     if (currentDevices.empty())
     {
-        ImGui::TextWrapped("Nenhum dispositivo DirectShow encontrado. Clique em Refresh para atualizar.");
+        ImGui::TextWrapped("No DirectShow devices found. Click Refresh to update.");
         ImGui::Spacing();
     }
     int         selectedIndex = -1;

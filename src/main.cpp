@@ -3,6 +3,10 @@
 #include "ui/UIManager.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 #include <nlohmann/json.hpp>
 #include <iomanip>
 #include <iostream>
@@ -68,28 +72,28 @@ void printUsage(const char *programName)
     std::cout << "  --ds-gamma <value>         DirectShow gamma (100 to 300, default: don't set)\n";
     std::cout << "  --ds-whitebalance <value>   DirectShow white balance (2800 to 6500, default: don't set)\n";
 #endif
-    std::cout << "\nOpções de Streaming:\n";
-    std::cout << "  --stream-enable              Habilitar streaming HTTP MPEG-TS (áudio + vídeo)\n";
-    std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
-    std::cout << "  --stream-width <largura>    Largura do stream (padrão: 640, 0 = captura)\n";
-    std::cout << "  --stream-height <altura>    Altura do stream (padrão: 480, 0 = captura)\n";
-    std::cout << "  --stream-fps <fps>          FPS do stream (padrão: 60, 0 = captura)\n";
-    std::cout << "  --stream-bitrate <kbps>      Bitrate de vídeo em kbps (padrão: 8000)\n";
-    std::cout << "  --stream-audio-bitrate <kbps> Bitrate de áudio em kbps (padrão: 256)\n";
-    std::cout << "  --stream-video-codec <codec> Codec de vídeo: h264, h265, vp8, vp9 (padrão: h264)\n";
-    std::cout << "  --stream-audio-codec <codec> Codec de áudio: aac, mp3, opus (padrão: aac)\n";
-    std::cout << "\nOpções de Web Portal:\n";
-    std::cout << "  --web-portal-enable              Habilitar web portal (padrão: habilitado)\n";
-    std::cout << "  --web-portal-disable             Desabilitar web portal\n";
-    std::cout << "  --web-portal-start               Iniciar web portal automaticamente na inicialização\n";
-    std::cout << "  --web-portal-port <porta>       Porta do web portal (padrão: 8080, mesma do streaming)\n";
-    std::cout << "  --web-portal-https               Habilitar HTTPS no web portal\n";
-    std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
-    std::cout << "  --web-portal-ssl-key <caminho>    Caminho da chave SSL (padrão: ssl/server.key)\n";
-    std::cout << "\nOutras:\n";
+    std::cout << "\nStreaming Options:\n";
+    std::cout << "  --stream-enable              Enable HTTP MPEG-TS streaming (audio + video)\n";
+    std::cout << "  --stream-port <port>         Streaming port (default: 8080)\n";
+    std::cout << "  --stream-width <width>       Stream width (default: 640, 0 = capture)\n";
+    std::cout << "  --stream-height <height>     Stream height (default: 480, 0 = capture)\n";
+    std::cout << "  --stream-fps <fps>           Stream FPS (default: 60, 0 = capture)\n";
+    std::cout << "  --stream-bitrate <kbps>      Video bitrate in kbps (default: 8000)\n";
+    std::cout << "  --stream-audio-bitrate <kbps> Audio bitrate in kbps (default: 256)\n";
+    std::cout << "  --stream-video-codec <codec> Video codec: h264, h265, vp8, vp9 (default: h264)\n";
+    std::cout << "  --stream-audio-codec <codec> Audio codec: aac, mp3, opus (default: aac)\n";
+    std::cout << "\nWeb Portal Options:\n";
+    std::cout << "  --web-portal-enable              Enable web portal (default: enabled)\n";
+    std::cout << "  --web-portal-disable             Disable web portal\n";
+    std::cout << "  --web-portal-start               Start the web portal automatically on launch\n";
+    std::cout << "  --web-portal-port <port>         Web portal port (default: 8080, shared with streaming)\n";
+    std::cout << "  --web-portal-https               Enable HTTPS on the web portal\n";
+    std::cout << "  --web-portal-ssl-cert <path>     Path to the SSL certificate (default: ssl/server.crt)\n";
+    std::cout << "  --web-portal-ssl-key <path>      Path to the SSL key (default: ssl/server.key)\n";
+    std::cout << "\nOther:\n";
     std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
-    std::cout << "  --help, -h             Mostrar esta ajuda\n";
-    std::cout << "\nExemplos:\n";
+    std::cout << "  --help, -h             Show this help\n";
+    std::cout << "\nExamples:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video1 --width 3840 --height 2160 --fps 60\n";
@@ -104,7 +108,7 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
-    LOG_INFO("RetroCapture v0.5.0");
+    LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 
     std::string shaderPath;
     std::string presetPath;
@@ -566,7 +570,7 @@ int main(int argc, char *argv[])
             streamingPort = std::stoi(argv[++i]);
             if (streamingPort < 1024 || streamingPort > 65535)
             {
-                LOG_ERROR("Porta de streaming inválida. Use um valor entre 1024 e 65535");
+                LOG_ERROR("Invalid streaming port. Use a value between 1024 and 65535");
                 return 1;
             }
         }
@@ -575,7 +579,7 @@ int main(int argc, char *argv[])
             streamWidth = std::stoi(argv[++i]);
             if (streamWidth < 1 || streamWidth > 7680)
             {
-                LOG_ERROR("Largura do stream inválida. Use um valor entre 1 e 7680");
+                LOG_ERROR("Invalid stream width. Use a value between 1 and 7680");
                 return 1;
             }
         }
@@ -584,7 +588,7 @@ int main(int argc, char *argv[])
             streamHeight = std::stoi(argv[++i]);
             if (streamHeight < 1 || streamHeight > 4320)
             {
-                LOG_ERROR("Altura do stream inválida. Use um valor entre 1 e 4320");
+                LOG_ERROR("Invalid stream height. Use a value between 1 and 4320");
                 return 1;
             }
         }
@@ -593,7 +597,7 @@ int main(int argc, char *argv[])
             streamFps = std::stoi(argv[++i]);
             if (streamFps < 1 || streamFps > 120)
             {
-                LOG_ERROR("FPS do stream inválido. Use um valor entre 1 e 120");
+                LOG_ERROR("Invalid stream FPS. Use a value between 1 and 120");
                 return 1;
             }
         }
@@ -602,7 +606,7 @@ int main(int argc, char *argv[])
             streamBitrate = std::stoi(argv[++i]);
             if (streamBitrate < 100 || streamBitrate > 50000)
             {
-                LOG_ERROR("Bitrate do stream inválido. Use um valor entre 100 e 50000 kbps");
+                LOG_ERROR("Invalid stream bitrate. Use a value between 100 and 50000 kbps");
                 return 1;
             }
         }
@@ -611,7 +615,7 @@ int main(int argc, char *argv[])
             streamAudioBitrate = std::stoi(argv[++i]);
             if (streamAudioBitrate < 32 || streamAudioBitrate > 320)
             {
-                LOG_ERROR("Bitrate de áudio inválido. Use um valor entre 32 e 320 kbps");
+                LOG_ERROR("Invalid audio bitrate. Use a value between 32 and 320 kbps");
                 return 1;
             }
         }

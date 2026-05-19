@@ -152,9 +152,9 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Linear: blend prev+next por refresh — fluido, leve fantasma em movimento rápido.\n"
-                          "Nearest: frame mais próximo no tempo — limpo, com 3:2 pulldown em ratio não-inteiro.\n"
-                          "Off: estritamente espera o PTS — comportamento simples, sem ghosting nem suavização.");
+        ImGui::SetTooltip("Linear: blend prev+next per refresh — smooth, light ghosting on fast motion.\n"
+                          "Nearest: closest frame in time — clean, with 3:2 pulldown on non-integer ratios.\n"
+                          "Off: strict PTS wait — simple behaviour, no ghosting, no smoothing.");
     }
 
     ImGui::Spacing();

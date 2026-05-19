@@ -3,6 +3,10 @@
 #include "../utils/Logger.h"
 #include <imgui.h>
 
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+
 #ifdef PLATFORM_LINUX
 #include <cstdlib>
 #elif defined(_WIN32)
@@ -33,7 +37,7 @@ void UICredits::render()
     ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Credits", &m_visible))
     {
-        ImGui::TextWrapped("RetroCapture v0.5.0");
+        ImGui::TextWrapped("RetroCapture %s", RETROCAPTURE_VERSION);
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();

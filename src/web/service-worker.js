@@ -105,7 +105,7 @@ self.addEventListener('fetch', (event) => {
             }
             // Se não há cache, retornar resposta offline genérica
             return new Response(
-              JSON.stringify({ error: 'Offline', message: 'Sem conexão com o servidor' }),
+              JSON.stringify({ error: 'Offline', message: 'No connection to the server' }),
               {
                 status: 503,
                 statusText: 'Service Unavailable',

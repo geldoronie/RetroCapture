@@ -148,12 +148,12 @@ void UIConfigurationStreaming::render()
 
 void UIConfigurationStreaming::renderStreamingStatus()
 {
-    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
+    ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
     ImGui::Separator();
 
     // Status
     bool active = m_uiManager->getStreamingActive();
-    ImGui::Text("Status: %s", active ? "Ativo" : "Inativo");
+    ImGui::Text("Status: %s", active ? "Active" : "Inactive");
     if (active)
     {
         ImGui::SameLine();
@@ -311,12 +311,12 @@ void UIConfigurationStreaming::renderProfiles()
 
 void UIConfigurationStreaming::renderBasicSettings()
 {
-    ImGui::Text("Configurações Básicas");
+    ImGui::Text("Basic Settings");
     ImGui::Separator();
 
     // Porta
     int port = static_cast<int>(m_uiManager->getStreamingPort());
-    if (ImGui::InputInt("Porta", &port, 1, 100))
+    if (ImGui::InputInt("Port", &port, 1, 100))
     {
         if (port >= 1024 && port <= 65535)
         {
@@ -351,7 +351,7 @@ void UIConfigurationStreaming::renderBasicSettings()
         }
     }
 
-    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10))
+    if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
     {
         m_uiManager->triggerStreamingWidthChange(resolutionWidths[currentResIndex]);
         m_uiManager->triggerStreamingHeightChange(resolutionHeights[currentResIndex]);
@@ -396,7 +396,7 @@ void UIConfigurationStreaming::renderCodecSettings()
         }
     }
 
-    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4))
+    if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_uiManager->triggerStreamingVideoCodecChange(videoCodecs[currentVideoCodecIndex]);
     }
@@ -431,15 +431,15 @@ void UIConfigurationStreaming::renderCodecSettings()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Auto = tenta hardware (NVENC/VAAPI/QSV/AMF) e cai pra software se falhar.\n"
-                              "Software = libx264 garantido em qualquer máquina.\n"
-                              "Backends de hardware só aparecem se o ffmpeg foi compilado com suporte e\n"
-                              "podem falhar em runtime se driver/permissão estiverem ausentes — caso\n"
-                              "isso aconteça, o stream volta a libx264 automaticamente.");
+            ImGui::SetTooltip("Auto = try hardware (NVENC/VAAPI/QSV/AMF), fall back to software on failure.\n"
+                              "Software = libx264 guaranteed on any machine.\n"
+                              "Hardware backends only show up when ffmpeg was built with support and\n"
+                              "may fail at runtime if the driver/permission is missing — in that\n"
+                              "case the stream falls back to libx264 automatically.");
         }
 
         // Backend-specific quality / rate-control combo. libx264 keeps
-        // its existing "Qualidade H.264" dropdown rendered below;
+        // its existing "H.264 Quality" dropdown rendered below;
         // hardware backends each expose the parameter that matters most
         // for them. Auto is treated as software-fallback for UX purposes
         // — the actual backend is resolved at codec-open time anyway.
@@ -467,36 +467,36 @@ void UIConfigurationStreaming::renderCodecSettings()
         if (activeHw == MediaEncoder::HardwareEncoder::NVENC)
         {
             static const char *items[] = {"p1", "p2", "p3", "p4", "p5", "p6", "p7"};
-            renderEnumCombo("Preset NVENC", items, 7, m_uiManager->getStreamingNvencPreset(),
+            renderEnumCombo("NVENC Preset", items, 7, m_uiManager->getStreamingNvencPreset(),
                             [this](const std::string &v) { m_uiManager->triggerStreamingNvencPresetChange(v); },
-                            "p1 = fastest (qualidade mais baixa) ... p7 = slowest (melhor qualidade).\n"
-                            "p4 é o equilíbrio recomendado para streaming em tempo real.");
+                            "p1 = fastest (lowest quality) ... p7 = slowest (highest quality).\n"
+                            "p4 is the recommended balance for real-time streaming.");
         }
         else if (activeHw == MediaEncoder::HardwareEncoder::VAAPI)
         {
             static const char *items[] = {"CBR", "VBR", "CQP"};
-            renderEnumCombo("Rate Control VAAPI", items, 3, m_uiManager->getStreamingVaapiRcMode(),
+            renderEnumCombo("VAAPI Rate Control", items, 3, m_uiManager->getStreamingVaapiRcMode(),
                             [this](const std::string &v) { m_uiManager->triggerStreamingVaapiRcModeChange(v); },
-                            "CBR = bitrate constante (recomendado para streaming).\n"
-                            "VBR = bitrate variável (melhor pra gravação).\n"
-                            "CQP = qualidade fixa (ignora bitrate, qualidade constante).");
+                            "CBR = constant bitrate (recommended for streaming).\n"
+                            "VBR = variable bitrate (better for recording).\n"
+                            "CQP = constant quality (ignores bitrate).");
         }
         else if (activeHw == MediaEncoder::HardwareEncoder::QSV)
         {
             static const char *items[] = {"veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"};
-            renderEnumCombo("Preset QSV", items, 7, m_uiManager->getStreamingQsvPreset(),
+            renderEnumCombo("QSV Preset", items, 7, m_uiManager->getStreamingQsvPreset(),
                             [this](const std::string &v) { m_uiManager->triggerStreamingQsvPresetChange(v); },
-                            "Presets do Intel Quick Sync. Mais rápido = menos qualidade.\n"
-                            "veryfast/faster são recomendados pra tempo real.");
+                            "Intel Quick Sync presets. Faster = lower quality.\n"
+                            "veryfast/faster are recommended for real-time.");
         }
         else if (activeHw == MediaEncoder::HardwareEncoder::AMF)
         {
             static const char *items[] = {"speed", "balanced", "quality"};
-            renderEnumCombo("Qualidade AMF", items, 3, m_uiManager->getStreamingAmfQuality(),
+            renderEnumCombo("AMF Quality", items, 3, m_uiManager->getStreamingAmfQuality(),
                             [this](const std::string &v) { m_uiManager->triggerStreamingAmfQualityChange(v); },
-                            "speed = mínima latência, qualidade básica.\n"
-                            "balanced = meio termo.\n"
-                            "quality = melhor visual, latência maior.");
+                            "speed = minimum latency, basic quality.\n"
+                            "balanced = middle ground.\n"
+                            "quality = best visual, higher latency.");
         }
     }
 
@@ -566,16 +566,16 @@ void UIConfigurationStreaming::renderH264Settings()
         }
     }
 
-    if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9))
+    if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
     {
         m_uiManager->triggerStreamingH264PresetChange(h264Presets[currentPresetIndex]);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Preset do encoder H.264:\n"
-                          "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                          "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                          "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        ImGui::SetTooltip("H.264 encoder preset:\n"
+                          "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                          "fast/medium: balance between speed and quality\n"
+                          "slow/slower/veryslow: maximum quality, lower speed");
     }
 }
 
@@ -602,16 +602,16 @@ void UIConfigurationStreaming::renderH265Settings()
         }
     }
 
-    if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9))
+    if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
     {
         m_uiManager->triggerStreamingH265PresetChange(h265Presets[currentPresetIndex]);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Preset do encoder H.265:\n"
-                          "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                          "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                          "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+        ImGui::SetTooltip("H.265 encoder preset:\n"
+                          "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                          "fast/medium: balance between speed and quality\n"
+                          "slow/slower/veryslow: maximum quality, lower speed");
     }
 
     // Profile H.265
@@ -627,15 +627,15 @@ void UIConfigurationStreaming::renderH265Settings()
         }
     }
 
-    if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2))
+    if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
     {
         m_uiManager->triggerStreamingH265ProfileChange(h265Profiles[currentProfileIndex]);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Profile do encoder H.265:\n"
-                          "main: 8-bit, máxima compatibilidade\n"
-                          "main10: 10-bit, melhor qualidade, suporte HDR");
+        ImGui::SetTooltip("H.265 encoder profile:\n"
+                          "main: 8-bit, maximum compatibility\n"
+                          "main10: 10-bit, better quality, HDR support");
     }
 
     // Level H.265
@@ -653,48 +653,48 @@ void UIConfigurationStreaming::renderH265Settings()
         }
     }
 
-    if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14))
+    if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
     {
         m_uiManager->triggerStreamingH265LevelChange(h265Levels[currentLevelIndex]);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Level do encoder H.265:\n"
-                          "auto: Detecção automática (recomendado)\n"
-                          "1-6.2: Níveis específicos para compatibilidade\n"
-                          "Níveis mais altos suportam resoluções/bitrates maiores");
+        ImGui::SetTooltip("H.265 encoder level:\n"
+                          "auto: automatic detection (recommended)\n"
+                          "1-6.2: specific levels for compatibility\n"
+                          "Higher levels support larger resolutions/bitrates");
     }
 }
 
 void UIConfigurationStreaming::renderVP8Settings()
 {
     int currentSpeed = m_uiManager->getStreamingVP8Speed();
-    if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16))
+    if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
     {
         m_uiManager->triggerStreamingVP8SpeedChange(currentSpeed);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Speed do encoder VP8:\n"
-                          "0: Melhor qualidade, mais lento\n"
-                          "16: Mais rápido, menor qualidade\n"
-                          "12: Bom equilíbrio para streaming");
+        ImGui::SetTooltip("VP8 encoder speed:\n"
+                          "0: best quality, slower\n"
+                          "16: faster, lower quality\n"
+                          "12: good balance for streaming");
     }
 }
 
 void UIConfigurationStreaming::renderVP9Settings()
 {
     int currentSpeed = m_uiManager->getStreamingVP9Speed();
-    if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9))
+    if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
     {
         m_uiManager->triggerStreamingVP9SpeedChange(currentSpeed);
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Speed do encoder VP9:\n"
-                          "0: Melhor qualidade, mais lento\n"
-                          "9: Mais rápido, menor qualidade\n"
-                          "6: Bom equilíbrio para streaming");
+        ImGui::SetTooltip("VP9 encoder speed:\n"
+                          "0: best quality, slower\n"
+                          "9: faster, lower quality\n"
+                          "6: good balance for streaming");
     }
 }
 
@@ -705,7 +705,7 @@ void UIConfigurationStreaming::renderBitrateSettings()
 
     // Bitrate de vídeo
     int bitrate = static_cast<int>(m_uiManager->getStreamingBitrate());
-    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000))
+    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
@@ -715,15 +715,15 @@ void UIConfigurationStreaming::renderBitrateSettings()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de vídeo em kbps.\n"
-                          "0 = automático (baseado na resolução/FPS)\n"
-                          "100-100000 kbps: valores válidos\n"
-                          "Recomendado: 2000-8000 kbps para streaming");
+        ImGui::SetTooltip("Video bitrate in kbps.\n"
+                          "0 = automatic (based on resolution/FPS)\n"
+                          "100-100000 kbps: valid range\n"
+                          "Recommended: 2000-8000 kbps for streaming");
     }
 
     // Bitrate de áudio
     int audioBitrate = static_cast<int>(m_uiManager->getStreamingAudioBitrate());
-    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32))
+    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
@@ -733,57 +733,57 @@ void UIConfigurationStreaming::renderBitrateSettings()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de áudio em kbps.\n"
-                          "64-320 kbps: valores válidos\n"
-                          "Recomendado: 128-256 kbps para boa qualidade");
+        ImGui::SetTooltip("Audio bitrate in kbps.\n"
+                          "64-320 kbps: valid range\n"
+                          "Recommended: 128-256 kbps for good quality");
     }
 }
 
 void UIConfigurationStreaming::renderAdvancedBufferSettings()
 {
-    ImGui::Text("Buffer (Avançado)");
+    ImGui::Text("Buffer (Advanced)");
     ImGui::Separator();
 
     // Max Video Buffer Size
     int maxVideoBuffer = static_cast<int>(m_uiManager->getStreamingMaxVideoBufferSize());
-    if (ImGui::SliderInt("Max Frames no Buffer", &maxVideoBuffer, 1, 50))
+    if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
     {
         m_uiManager->triggerStreamingMaxVideoBufferSizeChange(static_cast<size_t>(maxVideoBuffer));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de frames de vídeo no buffer.\n"
-                          "1-50 frames: valores válidos\n"
-                          "Padrão: 10 frames\n"
-                          "Valores maiores = mais memória, menos risco de perda de frames");
+        ImGui::SetTooltip("Max video frames in the buffer.\n"
+                          "1-50 frames: valid range\n"
+                          "Default: 10 frames\n"
+                          "Higher values = more memory, less risk of dropped frames");
     }
 
     // Max Audio Buffer Size
     int maxAudioBuffer = static_cast<int>(m_uiManager->getStreamingMaxAudioBufferSize());
-    if (ImGui::SliderInt("Max Chunks no Buffer", &maxAudioBuffer, 5, 100))
+    if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
     {
         m_uiManager->triggerStreamingMaxAudioBufferSizeChange(static_cast<size_t>(maxAudioBuffer));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de chunks de áudio no buffer.\n"
-                          "5-100 chunks: valores válidos\n"
-                          "Padrão: 20 chunks\n"
-                          "Valores maiores = mais memória, melhor sincronização");
+        ImGui::SetTooltip("Max audio chunks in the buffer.\n"
+                          "5-100 chunks: valid range\n"
+                          "Default: 20 chunks\n"
+                          "Higher values = more memory, better sync");
     }
 
     // Max Buffer Time
     int maxBufferTime = static_cast<int>(m_uiManager->getStreamingMaxBufferTimeSeconds());
-    if (ImGui::SliderInt("Max Tempo de Buffer (segundos)", &maxBufferTime, 1, 30))
+    if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
     {
         m_uiManager->triggerStreamingMaxBufferTimeSecondsChange(static_cast<int64_t>(maxBufferTime));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tempo máximo de buffer em segundos.\n"
-                          "1-30 segundos: valores válidos\n"
-                          "Padrão: 5 segundos\n"
-                          "Controla quanto tempo de vídeo/áudio pode ser armazenado antes de processar");
+        ImGui::SetTooltip("Max buffer time in seconds.\n"
+                          "1-30 seconds: valid range\n"
+                          "Default: 5 seconds\n"
+                          "Controls how much video/audio can be queued before processing");
     }
 
     // AVIO Buffer Size
@@ -794,10 +794,10 @@ void UIConfigurationStreaming::renderAdvancedBufferSettings()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tamanho do buffer AVIO do FFmpeg em KB.\n"
-                          "64-1024 KB: valores válidos\n"
-                          "Padrão: 256 KB\n"
-                          "Buffer interno do FFmpeg para I/O de streaming");
+        ImGui::SetTooltip("FFmpeg AVIO buffer size in KB.\n"
+                          "64-1024 KB: valid range\n"
+                          "Default: 256 KB\n"
+                          "FFmpeg internal buffer for streaming I/O");
     }
 }
 
@@ -828,7 +828,7 @@ void UIConfigurationStreaming::renderStartStopButton()
     }
     else if (active)
     {
-        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Streaming", ImVec2(-1, 0)))
         {
             m_uiManager->setStreamingProcessing(true); // Marcar como processando
             m_uiManager->triggerStreamingStartStop(false);
@@ -851,7 +851,7 @@ void UIConfigurationStreaming::renderStartStopButton()
         }
         else
         {
-            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+            if (ImGui::Button("Start Streaming", ImVec2(-1, 0)))
             {
                 m_uiManager->setStreamingProcessing(true); // Marcar como processando
                 m_uiManager->triggerStreamingStartStop(true);

@@ -1075,17 +1075,17 @@ private:
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
     std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
     std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Informações do Stream";
-    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextStreamInfo = "Stream Information";
+    std::string m_webPortalTextQuickActions = "Quick Actions";
     std::string m_webPortalTextCompatibility = "Compatibilidade";
     std::string m_webPortalTextStatus = "Status";
     std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextResolution = "Resolution";
     std::string m_webPortalTextStreamUrl = "URL do Stream";
     std::string m_webPortalTextCopyUrl = "Copiar URL";
     std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";

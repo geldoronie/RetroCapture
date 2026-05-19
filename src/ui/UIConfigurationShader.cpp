@@ -188,13 +188,13 @@ void UIConfigurationShader::renderShaderParameters()
 
     if (!m_shaderEngine)
     {
-        ImGui::TextDisabled("Shader engine não disponível");
+        ImGui::TextDisabled("Shader engine unavailable");
         return;
     }
 
     if (!m_shaderEngine->isShaderActive())
     {
-        ImGui::TextDisabled("Nenhum shader ativo");
+        ImGui::TextDisabled("No active shader");
         return;
     }
 
@@ -207,7 +207,7 @@ void UIConfigurationShader::renderShaderParameters()
         ImGui::TextDisabled("No parameters available");
         if (m_shaderEngine->isShaderActive())
         {
-            ImGui::TextDisabled("(Shader ativo mas sem parâmetros)");
+            ImGui::TextDisabled("(Shader active but exposes no parameters)");
         }
     }
     else
@@ -219,7 +219,7 @@ void UIConfigurationShader::renderShaderParameters()
         {
             lastShaderPath = currentShaderPath;
             // Não temos acesso direto ao Logger aqui, mas podemos mostrar na UI
-            ImGui::Text("Encontrados %zu parâmetro(s)", params.size());
+            ImGui::Text("Found %zu parameter(s)", params.size());
         }
 
         for (auto &param : params)

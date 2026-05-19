@@ -2644,7 +2644,7 @@ bool Application::initUI()
             if (preset.saveAs(path, customParams)) {
                 LOG_INFO("Preset saved as: " + path);
             } else {
-                LOG_ERROR("Falha ao salvar preset como: " + path);
+                LOG_ERROR("Failed to salvar preset como: " + path);
             }
         } });
     }

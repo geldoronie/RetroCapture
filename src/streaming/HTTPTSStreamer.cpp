@@ -373,7 +373,7 @@ bool HTTPTSStreamer::start()
     }
     else if (m_webPortalEnabled && m_enableHTTPS)
     {
-        LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+        LOG_WARN("HTTPS enabled but certificates not configured. Falling back to HTTP.");
         LOG_WARN("Cert path: " + m_sslCertPath + ", Key path: " + m_sslKeyPath);
         m_enableHTTPS = false;
     }
@@ -427,7 +427,7 @@ bool HTTPTSStreamer::startWebPortalServer()
 
     if (m_active)
     {
-        LOG_WARN("Servidor HTTP já está ativo");
+        LOG_WARN("HTTP server already active");
         return true;
     }
 
@@ -531,7 +531,7 @@ bool HTTPTSStreamer::startWebPortalServer()
 
         if (foundCertPath.empty() || foundKeyPath.empty())
         {
-            LOG_WARN("HTTPS habilitado mas certificados não configurados. Usando HTTP.");
+            LOG_WARN("HTTPS enabled but certificates not configured. Falling back to HTTP.");
             m_enableHTTPS = false;
         }
         else
@@ -2566,7 +2566,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
     else if (m_desyncFrameCount > 0)
     {
         forceKeyframe = true;
-        LOG_WARN("Forçando keyframe devido a dessincronização detectada (" +
+        LOG_WARN("Forcing keyframe because of detected desync (" +
                  std::to_string(m_desyncFrameCount) + " frames)");
         m_desyncFrameCount = 0; // Reset após forçar keyframe
     }
@@ -2805,7 +2805,7 @@ bool HTTPTSStreamer::encodeVideoFrame(const uint8_t *rgbData, uint32_t width, ui
             {
                 // Forçar próximo frame como keyframe para permitir recuperação
                 // Isso será aplicado no próximo encodeVideoFrame
-                LOG_WARN("Desincronização detectada (" + std::to_string(m_desyncFrameCount) +
+                LOG_WARN("Desync detected (" + std::to_string(m_desyncFrameCount) +
                          " frames), próximo frame será keyframe para recuperação");
                 m_desyncFrameCount = 0; // Reset após detectar
             }

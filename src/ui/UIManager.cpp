@@ -775,7 +775,7 @@ void UIManager::renderSourcePanel()
     }
     else if (m_sourceType == SourceType::None)
     {
-        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
     }
 }
 
@@ -785,7 +785,7 @@ void UIManager::renderV4L2Controls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("Nenhum dispositivo V4L2 conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::TextWrapped("No V4L2 device connected. Select a device below to start capture.");
         ImGui::Separator();
     }
 
@@ -1306,11 +1306,11 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
 
 void UIManager::renderStreamingPanel()
 {
-    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
+    ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
     ImGui::Separator();
 
     // Status
-    ImGui::Text("Status: %s", m_streamingActive ? "Ativo" : "Inativo");
+    ImGui::Text("Status: %s", m_streamingActive ? "Active" : "Inactive");
     if (m_streamingActive)
     {
         ImGui::SameLine();
@@ -1329,12 +1329,12 @@ void UIManager::renderStreamingPanel()
     }
 
     ImGui::Separator();
-    ImGui::Text("Configurações Básicas");
+    ImGui::Text("Basic Settings");
     ImGui::Separator();
 
     // Controles básicos
     int port = static_cast<int>(m_streamingPort);
-    if (ImGui::InputInt("Porta", &port, 1, 100))
+    if (ImGui::InputInt("Port", &port, 1, 100))
     {
         // Validation is done in setStreamingPort/triggerStreamingPortChange
         if (port >= 1024 && port <= 65535)
@@ -1368,7 +1368,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10))
+    if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
     {
         m_streamingWidth = resolutionWidths[currentResIndex];
         m_streamingHeight = resolutionHeights[currentResIndex];
@@ -1423,7 +1423,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4))
+    if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
         if (m_onStreamingVideoCodecChanged)
@@ -1478,7 +1478,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9))
+        if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
         {
             m_streamingH264Preset = h264Presets[currentPresetIndex];
             if (m_onStreamingH264PresetChanged)
@@ -1489,10 +1489,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Preset do encoder H.264:\n"
-                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+            ImGui::SetTooltip("H.264 encoder preset:\n"
+                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                              "fast/medium: balance between speed and quality\n"
+                              "slow/slower/veryslow: maximum quality, lower speed");
         }
     }
 
@@ -1519,7 +1519,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9))
+        if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
         {
             m_streamingH265Preset = h265Presets[currentPresetIndex];
             if (m_onStreamingH265PresetChanged)
@@ -1530,10 +1530,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Preset do encoder H.265:\n"
-                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+            ImGui::SetTooltip("H.265 encoder preset:\n"
+                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                              "fast/medium: balance between speed and quality\n"
+                              "slow/slower/veryslow: maximum quality, lower speed");
         }
 
         // Profile H.265
@@ -1548,7 +1548,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2))
+        if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
         {
             m_streamingH265Profile = h265Profiles[currentProfileIndex];
             if (m_onStreamingH265ProfileChanged)
@@ -1559,9 +1559,9 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Profile do encoder H.265:\n"
-                              "main: 8-bit, máxima compatibilidade\n"
-                              "main10: 10-bit, melhor qualidade, suporte HDR");
+            ImGui::SetTooltip("H.265 encoder profile:\n"
+                              "main: 8-bit, maximum compatibility\n"
+                              "main10: 10-bit, better quality, HDR support");
         }
 
         // Level H.265
@@ -1578,7 +1578,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14))
+        if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
         {
             m_streamingH265Level = h265Levels[currentLevelIndex];
             if (m_onStreamingH265LevelChanged)
@@ -1589,10 +1589,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Level do encoder H.265:\n"
-                              "auto: Detecção automática (recomendado)\n"
-                              "1-6.2: Níveis específicos para compatibilidade\n"
-                              "Níveis mais altos suportam resoluções/bitrates maiores");
+            ImGui::SetTooltip("H.265 encoder level:\n"
+                              "auto: automatic detection (recommended)\n"
+                              "1-6.2: specific levels for compatibility\n"
+                              "Higher levels support larger resolutions/bitrates");
         }
     }
 
@@ -1600,7 +1600,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp8")
     {
         int currentSpeed = m_streamingVP8Speed;
-        if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16))
+        if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
         {
             m_streamingVP8Speed = currentSpeed;
             if (m_onStreamingVP8SpeedChanged)
@@ -1611,10 +1611,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Speed do encoder VP8:\n"
-                              "0: Melhor qualidade, mais lento\n"
-                              "16: Mais rápido, menor qualidade\n"
-                              "12: Bom equilíbrio para streaming");
+            ImGui::SetTooltip("VP8 encoder speed:\n"
+                              "0: best quality, slower\n"
+                              "16: faster, lower quality\n"
+                              "12: good balance for streaming");
         }
     }
 
@@ -1622,7 +1622,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp9")
     {
         int currentSpeed = m_streamingVP9Speed;
-        if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9))
+        if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
         {
             m_streamingVP9Speed = currentSpeed;
             if (m_onStreamingVP9SpeedChanged)
@@ -1633,10 +1633,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Speed do encoder VP9:\n"
-                              "0: Melhor qualidade, mais lento\n"
-                              "9: Mais rápido, menor qualidade\n"
-                              "6: Bom equilíbrio para streaming");
+            ImGui::SetTooltip("VP9 encoder speed:\n"
+                              "0: best quality, slower\n"
+                              "9: faster, lower quality\n"
+                              "6: good balance for streaming");
         }
     }
 
@@ -1646,7 +1646,7 @@ void UIManager::renderStreamingPanel()
 
     // Bitrate de vídeo
     int bitrate = static_cast<int>(m_streamingBitrate);
-    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000))
+    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
@@ -1661,15 +1661,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de vídeo em kbps.\n"
-                          "0 = automático (baseado na resolução/FPS)\n"
-                          "100-100000 kbps: valores válidos\n"
-                          "Recomendado: 2000-8000 kbps para streaming");
+        ImGui::SetTooltip("Video bitrate in kbps.\n"
+                          "0 = automatic (based on resolution/FPS)\n"
+                          "100-100000 kbps: valid range\n"
+                          "Recommended: 2000-8000 kbps for streaming");
     }
 
     // Bitrate de áudio
     int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
-    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32))
+    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
@@ -1684,18 +1684,18 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de áudio em kbps.\n"
-                          "64-320 kbps: valores válidos\n"
-                          "Recomendado: 128-256 kbps para boa qualidade");
+        ImGui::SetTooltip("Audio bitrate in kbps.\n"
+                          "64-320 kbps: valid range\n"
+                          "Recommended: 128-256 kbps for good quality");
     }
 
     ImGui::Separator();
-    ImGui::Text("Buffer (Avançado)");
+    ImGui::Text("Buffer (Advanced)");
     ImGui::Separator();
 
     // Max Video Buffer Size
     int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
-    if (ImGui::SliderInt("Max Frames no Buffer", &maxVideoBuffer, 1, 50))
+    if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
     {
         m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
         if (m_onStreamingMaxVideoBufferSizeChanged)
@@ -1706,15 +1706,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de frames de vídeo no buffer.\n"
-                          "1-50 frames: valores válidos\n"
-                          "Padrão: 10 frames\n"
-                          "Valores maiores = mais memória, menos risco de perda de frames");
+        ImGui::SetTooltip("Max video frames in the buffer.\n"
+                          "1-50 frames: valid range\n"
+                          "Default: 10 frames\n"
+                          "Higher values = more memory, less risk of dropped frames");
     }
 
     // Max Audio Buffer Size
     int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
-    if (ImGui::SliderInt("Max Chunks no Buffer", &maxAudioBuffer, 5, 100))
+    if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
     {
         m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
         if (m_onStreamingMaxAudioBufferSizeChanged)
@@ -1725,15 +1725,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de chunks de áudio no buffer.\n"
-                          "5-100 chunks: valores válidos\n"
-                          "Padrão: 20 chunks\n"
-                          "Valores maiores = mais memória, melhor sincronização");
+        ImGui::SetTooltip("Max audio chunks in the buffer.\n"
+                          "5-100 chunks: valid range\n"
+                          "Default: 20 chunks\n"
+                          "Higher values = more memory, better sync");
     }
 
     // Max Buffer Time
     int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
-    if (ImGui::SliderInt("Max Tempo de Buffer (segundos)", &maxBufferTime, 1, 30))
+    if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
     {
         m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
         if (m_onStreamingMaxBufferTimeSecondsChanged)
@@ -1744,10 +1744,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tempo máximo de buffer em segundos.\n"
-                          "1-30 segundos: valores válidos\n"
-                          "Padrão: 5 segundos\n"
-                          "Controla quanto tempo de vídeo/áudio pode ser armazenado antes de processar");
+        ImGui::SetTooltip("Max buffer time in seconds.\n"
+                          "1-30 seconds: valid range\n"
+                          "Default: 5 seconds\n"
+                          "Controls how much video/audio can be queued before processing");
     }
 
     // AVIO Buffer Size
@@ -1763,10 +1763,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tamanho do buffer AVIO do FFmpeg em KB.\n"
-                          "64-1024 KB: valores válidos\n"
-                          "Padrão: 256 KB\n"
-                          "Buffer interno do FFmpeg para I/O de streaming");
+        ImGui::SetTooltip("FFmpeg AVIO buffer size in KB.\n"
+                          "64-1024 KB: valid range\n"
+                          "Default: 256 KB\n"
+                          "FFmpeg internal buffer for streaming I/O");
     }
 
     ImGui::Separator();
@@ -1792,7 +1792,7 @@ void UIManager::renderStreamingPanel()
     }
     else if (m_streamingActive)
     {
-        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Streaming", ImVec2(-1, 0)))
         {
             if (m_onStreamingStartStop)
             {
@@ -1818,7 +1818,7 @@ void UIManager::renderStreamingPanel()
         }
         else
         {
-            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+            if (ImGui::Button("Start Streaming", ImVec2(-1, 0)))
             {
                 if (m_onStreamingStartStop)
                 {
@@ -2279,7 +2279,7 @@ void UIManager::loadConfig()
         std::ifstream file(configPath);
         if (!file.is_open())
         {
-            LOG_WARN("Não foi possível abrir arquivo de configuração: " + configPath);
+            LOG_WARN("Could not open config file: " + configPath);
             return;
         }
 
@@ -2834,7 +2834,7 @@ void UIManager::renderWebPortalPanel()
 
     // Web Portal Enable/Disable (configuração)
     bool portalEnabled = m_webPortalEnabled;
-    if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
+    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
     {
         m_webPortalEnabled = portalEnabled;
         if (!portalEnabled && m_webPortalHTTPSEnabled)
@@ -2867,7 +2867,7 @@ void UIManager::renderWebPortalPanel()
     // Botão Start/Stop do Portal Web (independente do streaming)
     if (m_webPortalActive)
     {
-        if (ImGui::Button("Parar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Web Portal", ImVec2(-1, 0)))
         {
             m_webPortalActive = false;
             if (m_onWebPortalStartStop)
@@ -2883,7 +2883,7 @@ void UIManager::renderWebPortalPanel()
     }
     else
     {
-        if (ImGui::Button("Iniciar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Start Web Portal", ImVec2(-1, 0)))
         {
             m_webPortalActive = true;
             if (m_onWebPortalStartStop)
@@ -2901,7 +2901,7 @@ void UIManager::renderWebPortalPanel()
 
     // HTTPS Enable/Disable
     bool httpsEnabled = m_webPortalHTTPSEnabled;
-    if (ImGui::Checkbox("Habilitar HTTPS", &httpsEnabled))
+    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
         m_webPortalHTTPSEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
@@ -2922,12 +2922,12 @@ void UIManager::renderWebPortalPanel()
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificado não encontrado");
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificate not found");
         }
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Configuração de Certificado"))
+        if (ImGui::CollapsingHeader("Certificate Settings"))
         {
             char certPathBuffer[512];
             strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
@@ -2966,7 +2966,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Personalização
-    ImGui::Text("Personalização");
+    ImGui::Text("Customization");
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -2974,7 +2974,7 @@ void UIManager::renderWebPortalPanel()
     char titleBuffer[256];
     strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-    ImGui::Text("Título:");
+    ImGui::Text("Title:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
         m_webPortalTitle = std::string(titleBuffer);
@@ -2991,7 +2991,7 @@ void UIManager::renderWebPortalPanel()
     char subtitleBuffer[256];
     strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-    ImGui::Text("Subtítulo:");
+    ImGui::Text("Subtitle:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
         m_webPortalSubtitle = std::string(subtitleBuffer);
@@ -3007,7 +3007,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Configurações avançadas (colapsável)
-    if (ImGui::CollapsingHeader("Avançado"))
+    if (ImGui::CollapsingHeader("Advanced"))
     {
         ImGui::Spacing();
 
@@ -3046,32 +3046,32 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secundária", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secundária Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cabeçalho", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Header", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -3113,7 +3113,7 @@ void UIManager::renderWebPortalPanel()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Restaurar Cores Padrão"))
+        if (ImGui::Button("Reset to Default Colors"))
         {
             // Restaurar valores padrão do styleguide RetroCapture
             // Dark Background #1D1F21

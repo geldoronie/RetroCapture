@@ -60,7 +60,7 @@ void UIConfigurationWebPortal::renderWebPortalEnable()
 {
     // Web Portal Enable/Disable (configuração)
     bool portalEnabled = m_uiManager->getWebPortalEnabled();
-    if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
+    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
     {
         m_uiManager->triggerWebPortalEnabledChange(portalEnabled);
     }
@@ -72,7 +72,7 @@ void UIConfigurationWebPortal::renderStartStopButton()
     bool active = m_uiManager->getWebPortalActive();
     if (active)
     {
-        if (ImGui::Button("Parar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Web Portal", ImVec2(-1, 0)))
         {
             m_uiManager->triggerWebPortalStartStop(false);
         }
@@ -84,7 +84,7 @@ void UIConfigurationWebPortal::renderStartStopButton()
     }
     else
     {
-        if (ImGui::Button("Iniciar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Start Web Portal", ImVec2(-1, 0)))
         {
             m_uiManager->triggerWebPortalStartStop(true);
         }
@@ -97,7 +97,7 @@ void UIConfigurationWebPortal::renderHTTPSSettings()
 {
     // HTTPS Enable/Disable
     bool httpsEnabled = m_uiManager->getWebPortalHTTPSEnabled();
-    if (ImGui::Checkbox("Habilitar HTTPS", &httpsEnabled))
+    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
         m_uiManager->triggerWebPortalHTTPSChange(httpsEnabled);
     }
@@ -114,12 +114,12 @@ void UIConfigurationWebPortal::renderHTTPSSettings()
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificado não encontrado");
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificate not found");
         }
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Configuração de Certificado"))
+        if (ImGui::CollapsingHeader("Certificate Settings"))
         {
             char certPathBuffer[512];
             strncpy(certPathBuffer, m_uiManager->getWebPortalSSLCertPath().c_str(), sizeof(certPathBuffer) - 1);
@@ -145,7 +145,7 @@ void UIConfigurationWebPortal::renderHTTPSSettings()
 void UIConfigurationWebPortal::renderCustomization()
 {
     // Personalização
-    ImGui::Text("Personalização");
+    ImGui::Text("Customization");
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -153,7 +153,7 @@ void UIConfigurationWebPortal::renderCustomization()
     char titleBuffer[256];
     strncpy(titleBuffer, m_uiManager->getWebPortalTitle().c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-    ImGui::Text("Título:");
+    ImGui::Text("Title:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
         m_uiManager->triggerWebPortalTitleChange(std::string(titleBuffer));
@@ -165,7 +165,7 @@ void UIConfigurationWebPortal::renderCustomization()
     char subtitleBuffer[256];
     strncpy(subtitleBuffer, m_uiManager->getWebPortalSubtitle().c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-    ImGui::Text("Subtítulo:");
+    ImGui::Text("Subtitle:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
         m_uiManager->triggerWebPortalSubtitleChange(std::string(subtitleBuffer));
@@ -176,7 +176,7 @@ void UIConfigurationWebPortal::renderCustomization()
     ImGui::Spacing();
 
     // Configurações avançadas (colapsável)
-    if (ImGui::CollapsingHeader("Avançado"))
+    if (ImGui::CollapsingHeader("Advanced"))
     {
         ImGui::Spacing();
 
@@ -213,37 +213,37 @@ void UIConfigurationWebPortal::renderCustomization()
         }
 
         float *primaryColor = m_uiManager->getWebPortalColorPrimaryEditable();
-        if (ImGui::ColorEdit4("Primária", primaryColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary", primaryColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
         float *primaryLightColor = m_uiManager->getWebPortalColorPrimaryLightEditable();
-        if (ImGui::ColorEdit4("Primária Light", primaryLightColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Light", primaryLightColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
         float *primaryDarkColor = m_uiManager->getWebPortalColorPrimaryDarkEditable();
-        if (ImGui::ColorEdit4("Primária Dark", primaryDarkColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Dark", primaryDarkColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
         float *secondaryColor = m_uiManager->getWebPortalColorSecondaryEditable();
-        if (ImGui::ColorEdit4("Secundária", secondaryColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary", secondaryColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
         float *secondaryHighlightColor = m_uiManager->getWebPortalColorSecondaryHighlightEditable();
-        if (ImGui::ColorEdit4("Secundária Highlight", secondaryHighlightColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary Highlight", secondaryHighlightColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
         float *cardHeaderColor = m_uiManager->getWebPortalColorCardHeaderEditable();
-        if (ImGui::ColorEdit4("Cabeçalho", cardHeaderColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Header", cardHeaderColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -286,7 +286,7 @@ void UIConfigurationWebPortal::renderCustomization()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Restaurar Cores Padrão"))
+        if (ImGui::Button("Reset to Default Colors"))
         {
             // Restaurar valores padrão do styleguide RetroCapture
             float *bg = m_uiManager->getWebPortalColorBackgroundEditable();

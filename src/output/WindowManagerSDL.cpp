@@ -39,7 +39,7 @@ void WindowManagerSDL::configureSDL2ForDirectFB()
     } else if (display) {
         // Temos DISPLAY (X11 disponível) - usar X11
         SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
-        LOG_INFO("SDL2: Usando X11 (DISPLAY disponível)");
+        LOG_INFO("SDL2: using X11 (DISPLAY available)");
     } else {
         // Sem DISPLAY - priorizar DirectFB em sistemas ARM
         if (isARM) {
@@ -91,11 +91,11 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
                         LOG_INFO("SDL2: Framebuffer inicializado com sucesso");
                     } else {
-                        LOG_ERROR("SDL2: Framebuffer também falhou: " + std::string(SDL_GetError()));
+                        LOG_ERROR("SDL2: framebuffer also failed: " + std::string(SDL_GetError()));
                         LOG_ERROR("SDL2: Dicas para sistemas ARM:");
                         LOG_ERROR("  1. Instale DirectFB: sudo apt-get install libdirectfb-dev directfb");
                         LOG_ERROR("  2. Verifique framebuffer: ls -l /dev/fb*");
-                        LOG_ERROR("  3. Verifique permissões: sudo chmod 666 /dev/fb0");
+                        LOG_ERROR("  3. Check permissions: sudo chmod 666 /dev/fb0");
                         LOG_ERROR("  4. Use X11: export DISPLAY=:0");
                         LOG_ERROR("  5. Para compilar com SDL2: cmake .. -DBUILD_WITH_SDL2=ON");
                         return false;
@@ -111,7 +111,7 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                 }
             } else {
                 // Tem DISPLAY mas falhou - tentar X11 explicitamente
-                LOG_WARN("SDL2: Driver padrão falhou: " + error);
+                LOG_WARN("SDL2: default driver failed: " + error);
                 LOG_INFO("SDL2: Tentando X11 explicitamente...");
                 SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
                 SDL_Quit(); // Limpar tentativa anterior
@@ -119,8 +119,8 @@ bool WindowManagerSDL::init(const WindowConfig &config)
                 if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
                     LOG_INFO("SDL2: X11 inicializado com sucesso");
                 } else {
-                    LOG_ERROR("SDL2: X11 também falhou: " + std::string(SDL_GetError()));
-                    LOG_ERROR("SDL2: Verifique se X11 está funcionando: echo $DISPLAY");
+                    LOG_ERROR("SDL2: X11 also failed: " + std::string(SDL_GetError()));
+                    LOG_ERROR("SDL2: check that X11 is working: echo $DISPLAY");
                     return false;
                 }
             }
@@ -129,16 +129,16 @@ bool WindowManagerSDL::init(const WindowConfig &config)
             LOG_ERROR("SDL2: Driver '" + std::string(video_driver) + "' falhou: " + error);
             
             if (std::string(video_driver) == "directfb") {
-                LOG_ERROR("SDL2: DirectFB não está disponível ou não foi compilado no SDL2");
+                LOG_ERROR("SDL2: DirectFB not available or not compiled into SDL2");
                 LOG_ERROR("SDL2: Dicas para sistemas ARM:");
                 LOG_ERROR("  1. Instale DirectFB: sudo apt-get install libdirectfb-dev directfb");
                 LOG_ERROR("  2. Verifique se SDL2 foi compilado com suporte a DirectFB");
                 LOG_ERROR("  3. Tente framebuffer: export SDL_VIDEODRIVER=fbcon");
                 LOG_ERROR("  4. Para compilar com SDL2: cmake .. -DBUILD_WITH_SDL2=ON");
             } else if (std::string(video_driver) == "fbcon") {
-                LOG_ERROR("SDL2: Framebuffer não está disponível");
+                LOG_ERROR("SDL2: framebuffer not available");
                 LOG_ERROR("SDL2: Verifique: ls -l /dev/fb*");
-                LOG_ERROR("SDL2: Pode precisar de permissões: sudo chmod 666 /dev/fb0");
+                LOG_ERROR("SDL2: may need permissions: sudo chmod 666 /dev/fb0");
                 LOG_ERROR("SDL2: Ou tente DirectFB: export SDL_VIDEODRIVER=directfb");
             }
             return false;
@@ -322,7 +322,7 @@ bool WindowManagerSDL::init(const WindowConfig &config)
     if (!m_glContext)
     {
         LOG_ERROR("Failed to create any OpenGL context");
-        LOG_ERROR("SDL2: Dica: Verifique se há drivers OpenGL instalados");
+        LOG_ERROR("SDL2: hint: check that OpenGL drivers are installed");
         LOG_ERROR("SDL2: Para X11: sudo apt-get install mesa-utils libgl1-mesa-dev");
         if (m_window) {
             SDL_DestroyWindow(m_window);
@@ -350,7 +350,7 @@ bool WindowManagerSDL::init(const WindowConfig &config)
     const char* current_driver = SDL_GetHint(SDL_HINT_VIDEODRIVER);
     std::string driver_name = current_driver ? current_driver : "unknown";
     
-    LOG_INFO("SDL2: Resolução da janela: " + 
+    LOG_INFO("SDL2: window resolution: " + 
              std::to_string(w) + "x" + std::to_string(h) + 
              " (driver: " + driver_name + ")");
     

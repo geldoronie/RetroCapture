@@ -38,7 +38,7 @@ bool ShaderPreset::load(const std::string &presetPath)
     std::ifstream file(presetPath);
     if (!file.is_open())
     {
-        LOG_ERROR("Falha ao abrir preset: " + presetPath);
+        LOG_ERROR("Failed to abrir preset: " + presetPath);
         return false;
     }
 
@@ -533,7 +533,7 @@ std::string ShaderPreset::resolvePath(const std::string &path)
     }
 
     // Retornar o caminho resolvido mesmo que não exista (para mostrar erro mais claro)
-    LOG_WARN("Shader não encontrado: " + path + " (tentou: " + resolved.string() + ")");
+    LOG_WARN("Shader not found: " + path + " (tentou: " + resolved.string() + ")");
     return resolved.string();
 }
 
@@ -566,7 +566,7 @@ bool ShaderPreset::saveAs(const std::string &presetPath, const std::unordered_ma
     std::ifstream inputFile(m_presetPath);
     if (!inputFile.is_open())
     {
-        LOG_ERROR("Falha ao abrir preset original para leitura: " + m_presetPath);
+        LOG_ERROR("Failed to abrir preset original para leitura: " + m_presetPath);
         return false;
     }
 
@@ -590,7 +590,7 @@ bool ShaderPreset::saveAs(const std::string &presetPath, const std::unordered_ma
     std::ofstream outputFile(presetPath);
     if (!outputFile.is_open())
     {
-        LOG_ERROR("Falha ao criar arquivo de preset: " + presetPath);
+        LOG_ERROR("Failed to criar arquivo de preset: " + presetPath);
         return false;
     }
 

@@ -48,7 +48,7 @@ AudioCaptureWASAPI::AudioCaptureWASAPI()
 {
     if (!initializeCOM())
     {
-        LOG_ERROR("Falha ao inicializar COM");
+        LOG_ERROR("Failed to inicializar COM");
     }
 }
 
@@ -63,7 +63,7 @@ bool AudioCaptureWASAPI::initializeCOM()
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
     {
-        LOG_ERROR("Falha ao inicializar COM");
+        LOG_ERROR("Failed to inicializar COM");
         return false;
     }
     return true;
@@ -83,7 +83,7 @@ bool AudioCaptureWASAPI::createDeviceEnumerator()
         __uuidof(IMMDeviceEnumerator),
         (void **)&m_deviceEnumerator);
 
-    CHECK_HR(hr, "Falha ao criar Device Enumerator");
+    CHECK_HR(hr, "Failed to criar Device Enumerator");
     return true;
 }
 
@@ -111,14 +111,14 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
                 eRender, // Renderização (output) para loopback
                 eConsole,
                 &m_device);
-            CHECK_HR(hr, "Falha ao obter dispositivo de renderização padrão para loopback");
+            CHECK_HR(hr, "Failed to obter dispositivo de renderização padrão para loopback");
             return true;
         }
         // TODO: Implementar seleção de dispositivo de renderização específico para loopback
         // Por enquanto, apenas dispositivo padrão
-        LOG_WARN("Seleção de dispositivo específico para loopback não implementada, usando padrão");
+        LOG_WARN("Specific device selection for loopback not implemented, using default");
         hr = m_deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &m_device);
-        CHECK_HR(hr, "Falha ao obter dispositivo de renderização padrão");
+        CHECK_HR(hr, "Failed to obter dispositivo de renderização padrão");
         return true;
     }
     else
@@ -131,7 +131,7 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
                 eCapture, // Captura (input/microfone)
                 eConsole,
                 &m_device);
-            CHECK_HR(hr, "Falha ao obter dispositivo padrão");
+            CHECK_HR(hr, "Failed to obter dispositivo padrão");
             return true;
         }
     }
@@ -139,11 +139,11 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
     // Enumerate devices and find matching one
     IMMDeviceCollection *deviceCollection = nullptr;
     hr = m_deviceEnumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &deviceCollection);
-    CHECK_HR(hr, "Falha ao enumerar dispositivos");
+    CHECK_HR(hr, "Failed to enumerar dispositivos");
 
     UINT deviceCount = 0;
     hr = deviceCollection->GetCount(&deviceCount);
-    CHECK_HR(hr, "Falha ao obter contagem de dispositivos");
+    CHECK_HR(hr, "Failed to obter contagem de dispositivos");
 
     bool found = false;
     for (UINT i = 0; i < deviceCount; i++)
@@ -205,9 +205,9 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
 
     if (!found)
     {
-        LOG_WARN("Dispositivo não encontrado: " + deviceName + ", usando dispositivo padrão");
+        LOG_WARN("Device not found: " + deviceName + ", usando dispositivo padrão");
         hr = m_deviceEnumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &m_device);
-        CHECK_HR(hr, "Falha ao obter dispositivo padrão");
+        CHECK_HR(hr, "Failed to obter dispositivo padrão");
     }
 
     return true;
@@ -217,7 +217,7 @@ bool AudioCaptureWASAPI::initializeAudioClient()
 {
     if (!m_device)
     {
-        LOG_ERROR("Dispositivo não está disponível");
+        LOG_ERROR("Device not available");
         return false;
     }
 
@@ -229,11 +229,11 @@ bool AudioCaptureWASAPI::initializeAudioClient()
         CLSCTX_ALL,
         nullptr,
         (void **)&m_audioClient);
-    CHECK_HR(hr, "Falha ao ativar Audio Client");
+    CHECK_HR(hr, "Failed to ativar Audio Client");
 
     // Get mix format
     hr = m_audioClient->GetMixFormat(&m_waveFormat);
-    CHECK_HR(hr, "Falha ao obter formato de mix");
+    CHECK_HR(hr, "Failed to obter formato de mix");
 
     // Update format info
     m_sampleRate = m_waveFormat->nSamplesPerSec;
@@ -254,13 +254,13 @@ bool AudioCaptureWASAPI::initializeAudioClient()
         0,           // Period (0 = default)
         m_waveFormat,
         nullptr);
-    CHECK_HR(hr, "Falha ao inicializar Audio Client");
+    CHECK_HR(hr, "Failed to inicializar Audio Client");
 
     // Get capture client
     hr = m_audioClient->GetService(
         __uuidof(IAudioCaptureClient),
         (void **)&m_captureClient);
-    CHECK_HR(hr, "Falha ao obter Capture Client");
+    CHECK_HR(hr, "Failed to obter Capture Client");
 
     LOG_INFO("Audio Client inicializado: " + std::to_string(m_sampleRate) + "Hz, " +
              std::to_string(m_channels) + " canais, " +
@@ -273,7 +273,7 @@ bool AudioCaptureWASAPI::open(const std::string &deviceName)
 {
     if (m_isOpen)
     {
-        LOG_WARN("AudioCapture já está aberto");
+        LOG_WARN("AudioCapture already open");
         return true;
     }
 
@@ -337,7 +337,7 @@ bool AudioCaptureWASAPI::startCapture()
 {
     if (!m_isOpen)
     {
-        LOG_ERROR("AudioCapture não está aberto");
+        LOG_ERROR("AudioCapture not open");
         return false;
     }
 
@@ -348,12 +348,12 @@ bool AudioCaptureWASAPI::startCapture()
 
     if (!m_audioClient)
     {
-        LOG_ERROR("Audio Client não está disponível");
+        LOG_ERROR("Audio Client unavailable");
         return false;
     }
 
     HRESULT hr = m_audioClient->Start();
-    CHECK_HR(hr, "Falha ao iniciar captura");
+    CHECK_HR(hr, "Failed to iniciar captura");
 
     m_isCapturing = true;
 
