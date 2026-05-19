@@ -31,6 +31,17 @@ type Config struct {
 	RatePatchPerHour     int
 	RateListPerHour      int
 	RateReportPerHour    int
+
+	// When true, the service reads the source IP from
+	// Cf-Connecting-Ip / True-Client-Ip / X-Real-Ip / X-Forwarded-For
+	// before falling back to the TCP RemoteAddr. Required when the
+	// directory is deployed behind a reverse proxy (FRP, nginx,
+	// Cloudflare) that doesn't rewrite RemoteAddr but does forward
+	// the real client IP via these headers. Without this the
+	// publicIp on every entry and the reporter_ip on every report
+	// would be the proxy's IP, and per-IP rate limits would treat
+	// the whole internet as one bucket.
+	TrustProxyHeaders bool
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -47,6 +58,10 @@ func Load() (Config, error) {
 		RatePatchPerHour:     60,
 		RateListPerHour:      600,
 		RateReportPerHour:    30,
+		// Default OFF so a fresh deployment exposed directly is
+		// spoofing-resistant by default. Operators behind a proxy
+		// flip DIRECTORY_TRUST_PROXY_HEADERS=true to opt in.
+		TrustProxyHeaders: false,
 	}
 
 	parsePositiveInt := func(name string, dst *int) error {
@@ -100,6 +115,17 @@ func Load() (Config, error) {
 	if err := parsePositiveInt("DIRECTORY_RATE_PATCH_PER_HOUR",     &cfg.RatePatchPerHour);     err != nil { return cfg, err }
 	if err := parsePositiveInt("DIRECTORY_RATE_LIST_PER_HOUR",      &cfg.RateListPerHour);      err != nil { return cfg, err }
 	if err := parsePositiveInt("DIRECTORY_RATE_REPORT_PER_HOUR",    &cfg.RateReportPerHour);    err != nil { return cfg, err }
+
+	if v := os.Getenv("DIRECTORY_TRUST_PROXY_HEADERS"); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			cfg.TrustProxyHeaders = true
+		case "0", "false", "no", "off":
+			cfg.TrustProxyHeaders = false
+		default:
+			return cfg, fmt.Errorf("DIRECTORY_TRUST_PROXY_HEADERS must be true/false, got %q", v)
+		}
+	}
 
 	return cfg, nil
 }

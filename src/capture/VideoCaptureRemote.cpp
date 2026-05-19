@@ -658,9 +658,43 @@ void VideoCaptureRemote::decodeLoop()
             cleanupDecoder(); // belt-and-braces: drop any half-init state
             if (!initDecoder())
             {
-                LOG_WARN("VideoCaptureRemote: reconnect to " + m_url + " failed, retrying in 2 s");
+                // #58 — capped exponential backoff. A host that's
+                // briefly hiccuping (Cloudflare blip, TLS glitch,
+                // app restart) reconnects within the first 2 s slot.
+                // A host that's offline for the night used to mean
+                // the client re-shook hands every 2 s indefinitely;
+                // that's a TLS handshake per try, which is rude on
+                // laptops and visible on the host's tunnel logs when
+                // it comes back. Step the delay up to a 60 s ceiling
+                // after a handful of failures so a long outage costs
+                // ~1 retry per minute instead of 30.
+                static const int kBackoffSecs[] = { 2, 2, 5, 5, 15, 30, 60 };
+                static const size_t kBackoffN   = sizeof(kBackoffSecs) / sizeof(kBackoffSecs[0]);
+                const uint32_t failures = m_consecutiveReconnectFailures.fetch_add(1) + 1;
+                const int      slot     = static_cast<int>(std::min<size_t>(failures - 1, kBackoffN - 1));
+                const int      delaySec = kBackoffSecs[slot];
+
+                // After ~30 consecutive failures (~15 min at the
+                // ceiling) flip the UI hint so the user understands
+                // we're still trying but the host doesn't look like
+                // it's coming back on its own. We don't auto-disconnect
+                // — the URL stays armed and a brief recovery still
+                // grabs the next slot.
+                if (failures >= 30 && !m_hostLikelyOffline.load())
+                {
+                    m_hostLikelyOffline.store(true);
+                    LOG_WARN("VideoCaptureRemote: " + std::to_string(failures) +
+                             " consecutive reconnect failures — host appears offline");
+                }
+
+                LOG_WARN("VideoCaptureRemote: reconnect to " + m_url + " failed (" +
+                         std::to_string(failures) + " in a row), retrying in " +
+                         std::to_string(delaySec) + " s");
                 cleanupDecoder();
-                for (int i = 0; i < 20 && m_decodeRunning.load(); ++i)
+                // Sleep in 100 ms slices so a stopCapture() call lands
+                // within ~100 ms even if we're 60 s into the wait.
+                const int slices = delaySec * 10;
+                for (int i = 0; i < slices && m_decodeRunning.load(); ++i)
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
@@ -679,6 +713,10 @@ void VideoCaptureRemote::decodeLoop()
                 m_frameQueue.clear();
             }
             rgbW = 0; rgbH = 0; rgbBuf.clear();
+            // Reconnect succeeded — drop backoff state so the next
+            // hiccup starts from the 2 s slot again.
+            m_consecutiveReconnectFailures.store(0);
+            m_hostLikelyOffline.store(false);
             LOG_INFO("VideoCaptureRemote: reconnected to " + m_url);
         }
 
@@ -835,6 +873,10 @@ void VideoCaptureRemote::decodeLoop()
             const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch()).count();
             int64_t targetWallUs = nowWallUs;
+            // Record arrival time of every decoded frame so the UI
+            // overlay can tell a live stream from a stalled one
+            // even when m_streamAnchored hasn't been reset yet.
+            m_lastFrameAtSteadyUs.store(nowWallUs);
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

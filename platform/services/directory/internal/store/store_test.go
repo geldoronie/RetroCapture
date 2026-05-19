@@ -290,7 +290,7 @@ func TestDeleteExpired(t *testing.T) {
 
 func TestInsertReport(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.InsertReport(context.Background(), "anyid", "9.9.9.9", "spam", "alice@example"); err != nil {
+	if err := s.InsertReport(context.Background(), "anyid", "R-AB12CD34", "9.9.9.9", "spam", "alice@example"); err != nil {
 		t.Fatalf("insert report: %v", err)
 	}
 }

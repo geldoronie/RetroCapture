@@ -68,14 +68,15 @@ func run() error {
 	limReport := ratelimit.New(ratelimit.PerHour(cfg.RateReportPerHour))
 
 	server := &api.Server{
-		Logger:         logger,
-		Store:          st,
-		TTL:            cfg.TTL,
-		LimitRegister:  limRegister,
-		LimitHeartbeat: limHeartbeat,
-		LimitPatch:     limPatch,
-		LimitList:      limList,
-		LimitReport:    limReport,
+		Logger:            logger,
+		Store:             st,
+		TTL:               cfg.TTL,
+		LimitRegister:     limRegister,
+		LimitHeartbeat:    limHeartbeat,
+		LimitPatch:        limPatch,
+		LimitList:         limList,
+		LimitReport:       limReport,
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

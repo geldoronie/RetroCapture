@@ -42,6 +42,13 @@ public:
 
     void render();
 
+    /// Always-on-top corner overlay that surfaces remote-connection
+    /// state transitions (Connecting / Reconnecting / Disconnecting
+    /// / Connected). Rendered before render()'s F12-visibility gate
+    /// so the user sees connection feedback even with the rest of
+    /// the IMGUI surface hidden.
+    void renderConnectionOverlay();
+
     // Callbacks para interação
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
     void setCurrentShader(const std::string &shader)
@@ -415,6 +422,21 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getActualCaptureWidth() const { return m_actualCaptureWidth; }
     uint32_t getActualCaptureHeight() const { return m_actualCaptureHeight; }
+
+    // Mirror of VideoCaptureRemote::isHostLikelyOffline() pushed by
+    // Application every frame. Lives here because in Remote mode the
+    // UIManager's m_capture pointer is null (Application passes
+    // nullptr to setCaptureControls to suppress the V4L2/DS hardware
+    // controls) so the Info panel can't dynamic-cast its way to the
+    // flag. Default false in host mode (#58).
+    bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
+    void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
+    // 'Are we decoding frames right now' — distinct from
+    // captureWidth > 0, which stays at the last seen value after
+    // the stream drops. Mirrored by Application from
+    // VideoCaptureRemote::isReceivingFrames() every frame.
+    bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
+    void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -842,6 +864,17 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
+    bool     m_remoteHostLikelyOffline = false;
+    bool     m_remoteReceivingFrames   = false;
+    // Connection-overlay frame-to-frame tracking. We detect
+    // transitions (e.g. currentDevice just became empty -> show
+    // "Disconnecting...") by comparing this frame's state with last
+    // frame's. Held in member fields rather than statics so the data
+    // is reset alongside UIManager.
+    std::string m_overlayLastDevice;
+    bool        m_overlayLastHadFrames = false;
+    double      m_overlayConnectedSince = 0.0;     // ImGui::GetTime()
+    double      m_overlayDisconnectingUntil = 0.0; // disconnect feedback decays at this time
     // Overscan: crop % das bordas do source antes do downscale.
     // X horizontal, Y vertical. Locked espelha um no outro.
     float m_sourceOverscanPercentX = 0.0f;

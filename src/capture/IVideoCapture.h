@@ -51,5 +51,26 @@ public:
     virtual uint32_t getWidth() const = 0;
     virtual uint32_t getHeight() const = 0;
     virtual uint32_t getPixelFormat() const = 0;
+
+    /**
+     * Hint for the UI that a remote capture has been failing to
+     * reconnect for long enough that the host is probably down (not
+     * just hiccupping). Local capture backends always return false.
+     * See VideoCaptureRemote for the threshold (#58).
+     */
+    virtual bool isHostLikelyOffline() const { return false; }
+
+    /**
+     * True iff this capture is actively producing frames right now.
+     * Distinct from isOpen() — a remote capture stays open across
+     * reconnects (URL is still armed) but isReceivingFrames() flips
+     * to false while the decode loop is mid-handshake. The overlay
+     * uses this to drive "Connecting / Reconnecting" feedback that
+     * the cached captureWidth/Height can't supply (those stay at
+     * the last value forever after the stream drops).
+     * Local backends return true whenever isOpen() is true — they
+     * never hold a "reconnect" state.
+     */
+    virtual bool isReceivingFrames() const { return isOpen(); }
 };
 

@@ -263,16 +263,15 @@ void UIManager::endFrame()
         return;
     }
 
-    if (m_uiVisible)
-    {
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    }
-    else
-    {
-        // Quando oculta, ainda precisamos finalizar o frame para manter o estado correto
-        ImGui::EndFrame();
-    }
+    // Always paint the frame, even when the main UI is hidden.
+    // renderConnectionOverlay() runs before render()'s m_uiVisible
+    // gate, so when F12 hides the rest of the UI the draw list still
+    // has the overlay in it. Calling EndFrame instead of Render
+    // discarded that, leaving the user with a frozen-looking stream
+    // during reconnects. With nothing added to the draw list this is
+    // effectively a no-op anyway.
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     
     // Keep ImGui mouse disabled when UI is hidden
     // This prevents ImGui from interfering with cursor visibility
@@ -301,7 +300,16 @@ void UIManager::setVisible(bool visible)
 
 void UIManager::render()
 {
-    if (!m_initialized || !m_uiVisible)
+    if (!m_initialized) return;
+
+    // Connection overlay runs before the visibility gate so the user
+    // sees Connecting / Reconnecting / Disconnecting / Connected
+    // feedback even with the full UI hidden via F12. Otherwise the
+    // screen looks frozen during a reconnect with no hint that the
+    // client is still working in the background.
+    renderConnectionOverlay();
+
+    if (!m_uiVisible)
     {
         return;
     }
@@ -3548,4 +3556,142 @@ bool UIManager::loadStreamingProfile(const std::string &name)
     triggerStreamingMaxBufferTimeSecondsChange(s.maxBufferTimeSeconds);
     triggerStreamingAVIOBufferSizeChange(s.avioBufferSize);
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Always-on-top connection state overlay.
+//
+// Reads the same signals UIInfoPanel does (source type, current
+// device, capture dims, host-likely-offline mirror) and renders a
+// small fixed window in the bottom-right corner whenever the user
+// needs to know something is happening:
+//
+//   Connecting...   — Remote source armed, no frames yet, fresh URL
+//   Reconnecting... — Remote source armed, frames stopped or host-likely-offline
+//   Disconnecting...— transient ~1.5s after currentDevice clears
+//   Connected       — flashes for ~3 s on the first frame
+//
+// Renders BEFORE UIManager::render()'s m_uiVisible gate so the user
+// sees state changes with the full UI hidden too. The window itself
+// uses NoInputs so it never steals clicks from the underlying stream
+// view.
+// ─────────────────────────────────────────────────────────────────────
+void UIManager::renderConnectionOverlay()
+{
+    if (m_sourceType != SourceType::Remote)
+    {
+        // Not in client mode — nothing to surface. Also clear the
+        // tracking state so a later mode switch starts fresh.
+        m_overlayLastDevice.clear();
+        m_overlayLastHadFrames = false;
+        m_overlayConnectedSince     = 0.0;
+        m_overlayDisconnectingUntil = 0.0;
+        return;
+    }
+
+    const double now      = ImGui::GetTime();
+    const std::string dev = m_currentDevice;
+    // 'Has frames' means decoding right NOW — not 'has ever had
+    // frames'. captureWidth/Height stay at the last seen value
+    // forever after the stream drops, so they're a "we know the
+    // resolution" signal, not a liveness one. Use the mirrored
+    // VideoCaptureRemote::isReceivingFrames() flag instead, which
+    // flips back to false the moment the decode loop loses the
+    // connection.
+    const bool hasFrames  = m_remoteReceivingFrames;
+    const bool offline    = m_remoteHostLikelyOffline;
+
+    // Detect 'device just became empty' — that's the disconnect
+    // transition. We arm a short window so the overlay can render
+    // "Disconnecting..." while the detached teardown runs.
+    if (!m_overlayLastDevice.empty() && dev.empty())
+    {
+        m_overlayDisconnectingUntil = now + 1.5;
+    }
+
+    // Track first-frame-arrived to drive the "Connected" flash.
+    if (!m_overlayLastHadFrames && hasFrames && !dev.empty())
+    {
+        m_overlayConnectedSince = now;
+    }
+    if (!hasFrames)
+    {
+        m_overlayConnectedSince = 0.0;
+    }
+
+    // Decide what to render.
+    const char *label    = nullptr;
+    ImVec4      color    = ImVec4(0.95f, 0.7f, 0.3f, 1.0f); // orange default
+    bool        spinning = false;
+
+    if (now < m_overlayDisconnectingUntil)
+    {
+        label    = "Disconnecting...";
+        spinning = true;
+    }
+    else if (dev.empty())
+    {
+        // No URL armed and we're past the disconnect tail — nothing
+        // to say.
+    }
+    else if (offline)
+    {
+        label    = "Host appears offline";
+        spinning = true;
+    }
+    else if (!hasFrames)
+    {
+        // No first frame yet. If we just came from a connected
+        // state (had frames, now don't) it's a reconnect; if we
+        // never had frames it's the first connect. Same visual
+        // either way.
+        label    = m_overlayLastHadFrames ? "Reconnecting..." : "Connecting...";
+        spinning = true;
+    }
+    else if (m_overlayConnectedSince > 0.0 && now - m_overlayConnectedSince < 3.0)
+    {
+        label    = "Connected";
+        color    = ImVec4(0.40f, 0.80f, 0.40f, 1.0f);
+        spinning = false;
+    }
+
+    // Always update the tracking BEFORE the early-return so transitions
+    // we detect this frame land in next frame's state.
+    m_overlayLastDevice    = dev;
+    m_overlayLastHadFrames = hasFrames;
+
+    if (!label) return;
+
+    // Bottom-right anchor. SetNextWindowPos with pivot (1,1) puts
+    // the window's bottom-right corner at the screen point we pass.
+    // Padding of 16 px so it doesn't kiss the screen edges.
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    const ImVec2 anchor(vp->WorkPos.x + vp->WorkSize.x - 16.0f,
+                        vp->WorkPos.y + vp->WorkSize.y - 16.0f);
+    ImGui::SetNextWindowPos(anchor, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration       | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings    | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav              | ImGuiWindowFlags_NoMove;
+
+    if (ImGui::Begin("##connOverlay", nullptr, flags))
+    {
+        if (spinning)
+        {
+            // Simple ASCII spinner — 4-frame cycle, ~6 fps. ImGui
+            // doesn't ship a spinner widget but a one-char rotation
+            // is enough to signal "working" without pulling extra
+            // primitives.
+            static const char *spin = "|/-\\";
+            const int idx = static_cast<int>(now * 6.0) & 0x3;
+            ImGui::TextColored(color, "%c %s", spin[idx], label);
+        }
+        else
+        {
+            ImGui::TextColored(color, "%s", label);
+        }
+    }
+    ImGui::End();
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <string>
 
 class UIManager;
@@ -45,6 +47,8 @@ public:
 private:
     void renderTable();
     void renderPasswordModal();
+    void renderReportModal();
+    void renderReportFeedbackModal();
 
     UIManager          *m_uiManager     = nullptr;
     DirectoryBrowser   *m_browser       = nullptr;
@@ -62,4 +66,36 @@ private:
     bool         m_showPasswordModal = false;
     char         m_passwordBuffer[128] = {};
     std::string  m_pendingProtectedUrl;
+
+    // Report-this-stream state (#57). When the user right-clicks a
+    // row and picks "Report this stream..." the modal opens with
+    // these fields. Submission runs on a detached thread and updates
+    // m_reportStatus under m_reportMu so the UI thread sees the
+    // result on the next frame.
+    bool         m_showReportModal = false;
+    std::string  m_reportStreamId;
+    std::string  m_reportStreamName;     // shown in the modal header
+    char         m_reportReason[256]  = {};
+    char         m_reportContact[96]  = {};
+    enum class ReportStatus
+    {
+        Idle,        // modal just opened
+        Sending,     // POST in flight
+        Success,
+        Failed,
+    };
+    mutable std::mutex   m_reportMu;
+    ReportStatus         m_reportStatus = ReportStatus::Idle;
+    std::string          m_reportError;          // set when Failed
+    std::string          m_reportReceiptId;      // set when Success, echoed from /report response
+    std::atomic<bool>    m_reportInFlight{false};
+
+    // Feedback-modal state. After a successful submit the input
+    // modal closes and this one opens, single-purpose: confirm the
+    // report landed + hand the user the protocol number. Decoupled
+    // from m_reportStatus so a later "I want to report something
+    // else" cycle doesn't lose the receipt the user is still
+    // looking at.
+    bool         m_showReportFeedbackModal = false;
+    std::string  m_reportFeedbackReceiptId;
 };

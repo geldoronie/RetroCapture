@@ -22,5 +22,6 @@ private:
 
     void renderCaptureInfo();
     void renderStreamingInfo();
+    void renderRemoteInfo();   // shown in place of capture+streaming when in client mode
     void renderSystemInfo();
 };

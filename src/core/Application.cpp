@@ -2676,6 +2676,24 @@ void Application::handleKeyInput()
         {
             f12Pressed = false;
         }
+
+        // F11 toggles fullscreen. Edge-triggered like F12 so holding
+        // the key down doesn't oscillate the window state.
+        static bool f11Pressed = false;
+        bool f11Now = sdlWindow->isKeyPressed(SDLK_F11);
+        if (f11Now && !f11Pressed)
+        {
+            m_fullscreen = !m_fullscreen;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            if (m_ui) m_ui->setFullscreen(m_fullscreen);
+            LOG_INFO(std::string("Fullscreen toggled: ") +
+                     (m_fullscreen ? "ON" : "OFF"));
+            f11Pressed = true;
+        }
+        else if (!f11Now)
+        {
+            f11Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2696,6 +2714,25 @@ void Application::handleKeyInput()
     else
     {
         f12Pressed = false;
+    }
+
+    // F11 toggles fullscreen.
+    static bool f11Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS)
+    {
+        if (!f11Pressed)
+        {
+            m_fullscreen = !m_fullscreen;
+            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
+            if (m_ui) m_ui->setFullscreen(m_fullscreen);
+            LOG_INFO(std::string("Fullscreen toggled: ") +
+                     (m_fullscreen ? "ON" : "OFF"));
+            f11Pressed = true;
+        }
+    }
+    else
+    {
+        f11Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -5422,6 +5459,33 @@ void Application::applyPendingRemoteMeta()
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
+
+    // Mirror the remote capture's reconnect-backoff flag and the
+    // "currently decoding frames" flag onto UIManager so the Info
+    // panel and the connection overlay can read them without holding
+    // the VideoCaptureRemote pointer themselves. In host mode
+    // m_capture isn't a VideoCaptureRemote and the dynamic_cast
+    // falls through to defaults (offline=false, receivingFrames=
+    // whatever the base class reports — which is isOpen() for local
+    // backends).
+    {
+        bool offline   = false;
+        bool receiving = false;
+        if (m_capture)
+        {
+            if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+            {
+                offline   = remote->isHostLikelyOffline();
+                receiving = remote->isReceivingFrames();
+            }
+            else
+            {
+                receiving = m_capture->isReceivingFrames();
+            }
+        }
+        m_ui->setRemoteHostLikelyOffline(offline);
+        m_ui->setRemoteReceivingFrames(receiving);
+    }
 
     // #49 Phase 3 — keep the server-side password gate in sync with
     // whatever the user typed in the publish UI. We hash on every
