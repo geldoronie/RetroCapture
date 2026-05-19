@@ -194,7 +194,13 @@ bool UIManager::init(void *window)
     // the TranslationManager so T(...) calls in subsequent UI
     // construction return translated strings from the start. Switch
     // via UIPreferences calls setLanguage() at runtime.
-    TranslationManager::instance().init(Paths::getReadOnlyAssetsDir(), m_language);
+    // Paths::getReadOnlyAssetsDir() returns the install/dev root that
+    // contains `assets/`, `shaders/`, `web/` side by side — not the
+    // `assets/` directory itself. The i18n bundles live under
+    // `assets/i18n/`, so explicitly join the `assets` segment here.
+    TranslationManager::instance().init(
+        (fs::path(Paths::getReadOnlyAssetsDir()) / "assets").string(),
+        m_language);
 
     // Standalone configuration windows (Fase A of #45) — each used to
     // be a tab inside the unified "RetroCapture Controls" window;
