@@ -3,10 +3,13 @@
  * Gerencia cache e funcionalidade offline
  */
 
-// Bumped to v3 with the home/config split — landing page is now the
-// live player at "/" and the previous tabbed UI moved to /config.html.
-const CACHE_NAME = 'retrocapture-v3';
-const RUNTIME_CACHE = 'retrocapture-runtime-v3';
+// Bumped to v4 with the portal i18n layer — every HTML / JS in the
+// portal now ships translation hooks, and the new i18n.js module
+// must be precached too. Existing v3 clients still hold stale copies
+// of home.js / config.html under the old cache name, so the bump is
+// what triggers the cleanup-on-activate path that wipes them.
+const CACHE_NAME = 'retrocapture-v4';
+const RUNTIME_CACHE = 'retrocapture-runtime-v4';
 
 // Resources to precache on install
 const PRECACHE_URLS = [
@@ -18,6 +21,7 @@ const PRECACHE_URLS = [
   '/home.js',
   '/control.js',
   '/api.js',
+  '/i18n.js',
   '/manifest.json',
   // Vendored libraries — bundled in /vendor so the PWA install works
   // fully offline without depending on a CDN at first load.
