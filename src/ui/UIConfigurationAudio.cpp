@@ -1,4 +1,5 @@
 #include "UIConfigurationAudio.h"
+#include "../utils/TranslationManager.h"
 #include "UIManager.h"
 #include "../audio/IAudioCapture.h"
 #ifdef __linux__
@@ -25,7 +26,7 @@ void UIConfigurationAudio::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Audio", &m_visible))
+    if (!ImGui::Begin(T("audio.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;
@@ -35,7 +36,7 @@ void UIConfigurationAudio::render()
 
     if (!m_audioCapture)
     {
-        ImGui::TextWrapped("Audio capture not available. Audio is required for streaming and recording.");
+        ImGui::TextWrapped("%s", T("audio.unavailable").c_str());
         ImGui::End();
         return;
     }

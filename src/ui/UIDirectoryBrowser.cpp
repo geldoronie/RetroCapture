@@ -4,6 +4,7 @@
 #include "../streaming/DirectoryBrowser.h"
 #include "../utils/HttpClient.h"
 #include "../utils/PasswordHash.h"
+#include "../utils/TranslationManager.h"
 
 #include <imgui.h>
 
@@ -86,7 +87,7 @@ void UIDirectoryBrowser::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(720, 480), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Browse public directory", &m_visible))
+    if (ImGui::Begin(T("browse.title").c_str(), &m_visible))
     {
         renderTable();
     }
@@ -109,17 +110,13 @@ void UIDirectoryBrowser::renderTable()
         return;
     }
 
-    ImGui::TextWrapped(
-        "Live list of streams published to the public directory. "
-        "Click a row to connect. Auto-refresh every 30 s.");
+    ImGui::TextWrapped("%s", T("browse.intro").c_str());
     ImGui::Spacing();
 
-    // Directory URL — shared with the publish side via UIManager so
-    // changing one updates the other.
     {
         char urlBuf[256];
         std::snprintf(urlBuf, sizeof(urlBuf), "%s", m_uiManager->getDirectoryUrl().c_str());
-        ImGui::Text("Directory");
+        ImGui::Text("%s", T("browse.directory").c_str());
         ImGui::SetNextItemWidth(-120);
         if (ImGui::InputText("##dirUrl", urlBuf, sizeof(urlBuf)))
         {
@@ -127,20 +124,22 @@ void UIDirectoryBrowser::renderTable()
             m_uiManager->saveConfig();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Refresh", ImVec2(112, 0)))
+        if (ImGui::Button(T("browse.refresh").c_str(), ImVec2(112, 0)))
         {
             m_browser->refreshNow();
         }
     }
 
-    // Sort + search.
     {
-        const char *sortLabels[] = { "Most viewers", "Recently active", "Name (A-Z)" };
+        const std::string lblViewers = T("browse.sort.viewers");
+        const std::string lblRecent  = T("browse.sort.recent");
+        const std::string lblName    = T("browse.sort.name");
+        const char *sortLabels[] = { lblViewers.c_str(), lblRecent.c_str(), lblName.c_str() };
         ImGui::SetNextItemWidth(180);
-        ImGui::Combo("Sort", &m_sortIndex, sortLabels, 3);
+        ImGui::Combo(T("browse.sort").c_str(), &m_sortIndex, sortLabels, 3);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##browseSearch", "Search name / nickname",
+        ImGui::InputTextWithHint("##browseSearch", T("browse.search_hint").c_str(),
                                  m_search, sizeof(m_search));
     }
 
@@ -185,7 +184,7 @@ void UIDirectoryBrowser::renderTable()
     if (!snap.lastError.empty())
     {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
-                           "Last fetch error: %s", snap.lastError.c_str());
+                           "%s: %s", T("browse.last_fetch_error").c_str(), snap.lastError.c_str());
     }
 
     const ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg
@@ -195,17 +194,17 @@ void UIDirectoryBrowser::renderTable()
     if (ImGui::BeginTable("##dirTable", 10, tableFlags, ImVec2(0, -ImGui::GetFrameHeightWithSpacing())))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        ImGui::TableSetupColumn(T("browse.col.name").c_str(),     ImGuiTableColumnFlags_WidthStretch, 3.0f);
         // Tiny status column for the password padlock. Header is short
         // text since the default ImGui font can't render U+1F512; the
         // padlock glyph in each cell is drawn via ImDrawList primitives.
-        ImGui::TableSetupColumn("Pwd", ImGuiTableColumnFlags_WidthFixed, 28.0f);
-        ImGui::TableSetupColumn("Host",     ImGuiTableColumnFlags_WidthStretch, 2.0f);
-        ImGui::TableSetupColumn("Shader",   ImGuiTableColumnFlags_WidthStretch, 2.5f);
+        ImGui::TableSetupColumn(T("browse.col.pwd").c_str(), ImGuiTableColumnFlags_WidthFixed, 28.0f);
+        ImGui::TableSetupColumn(T("browse.col.host").c_str(),     ImGuiTableColumnFlags_WidthStretch, 2.0f);
+        ImGui::TableSetupColumn(T("browse.col.shader").c_str(),   ImGuiTableColumnFlags_WidthStretch, 2.5f);
         ImGui::TableSetupColumn("Res\xc3\x97""FPS",  ImGuiTableColumnFlags_WidthFixed, 95.0f);
-        ImGui::TableSetupColumn("Codec",    ImGuiTableColumnFlags_WidthFixed, 45.0f);
-        ImGui::TableSetupColumn("Clients (\xe2\x89\x88)", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Mode",     ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn(T("browse.col.codec").c_str(),    ImGuiTableColumnFlags_WidthFixed, 45.0f);
+        ImGui::TableSetupColumn(T("browse.col.clients").c_str(), ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn(T("browse.col.mode").c_str(),     ImGuiTableColumnFlags_WidthFixed, 80.0f);
         // Explicit action buttons per row. Previously the user clicked
         // the row to connect and right-clicked for Report; the context
         // menu wasn't discoverable and click-anywhere-to-connect was
@@ -219,9 +218,10 @@ void UIDirectoryBrowser::renderTable()
         {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextDisabled("%s", snap.totalCount == 0
-                                          ? "No public streams right now."
-                                          : "No matches for the current filter.");
+            const std::string emptyMsg = snap.totalCount == 0
+                                             ? T("browse.no_streams")
+                                             : T("browse.no_matches");
+            ImGui::TextDisabled("%s", emptyMsg.c_str());
         }
 
         for (const auto &e : entries)
@@ -240,10 +240,8 @@ void UIDirectoryBrowser::renderTable()
                 ImGui::TextUnformatted("\xe2\x9a\xa0");
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip(
-                        "Host version: %s\nThis client: %s\n"
-                        "Wire protocol may differ — connection may fail or behave oddly.",
-                        e.version.c_str(), RETROCAPTURE_VERSION);
+                    ImGui::SetTooltip(T("browse.version_mismatch.tip").c_str(),
+                                      e.version.c_str(), RETROCAPTURE_VERSION);
                 }
                 ImGui::SameLine();
             }
@@ -253,7 +251,7 @@ void UIDirectoryBrowser::renderTable()
             if (e.passwordRequired)
             {
                 drawPadlockIcon();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Password required");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("browse.pwd.required").c_str());
             }
             ImGui::TableNextColumn();
             ImGui::Text("%s", e.hostNickname.empty() ? "\xe2\x80\x94" : e.hostNickname.c_str());
@@ -272,7 +270,7 @@ void UIDirectoryBrowser::renderTable()
             // 80-px column so the click target is generous. Triggers
             // the password modal first when the stream is gated.
             ImGui::TableNextColumn();
-            if (ImGui::Button("Connect", ImVec2(-1, 0)))
+            if (ImGui::Button(T("browse.col.connect").c_str(), ImVec2(-1, 0)))
             {
                 if (e.passwordRequired)
                 {
@@ -290,7 +288,7 @@ void UIDirectoryBrowser::renderTable()
             // Report button — column 10. Opens the same modal the
             // old right-click context menu used.
             ImGui::TableNextColumn();
-            if (ImGui::Button("Report", ImVec2(-1, 0)))
+            if (ImGui::Button(T("browse.col.report").c_str(), ImVec2(-1, 0)))
             {
                 m_reportStreamId   = e.streamId;
                 m_reportStreamName = e.name;
@@ -306,7 +304,7 @@ void UIDirectoryBrowser::renderTable()
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip("Flag this stream for the maintainer to review.");
+                ImGui::SetTooltip("%s", T("browse.report.tooltip").c_str());
             }
 
             ImGui::PopID();
@@ -314,29 +312,31 @@ void UIDirectoryBrowser::renderTable()
         ImGui::EndTable();
     }
 
-    ImGui::TextDisabled("Showing %zu of %d total stream(s).", entries.size(), snap.totalCount);
+    ImGui::TextDisabled(T("browse.showing").c_str(), entries.size(), snap.totalCount);
 }
 
 void UIDirectoryBrowser::renderPasswordModal()
 {
+    // The popup ID must match between OpenPopup and BeginPopupModal,
+    // so use a fixed ID and a translated title via the ###id trick.
+    const std::string pwTitle = T("browse.password.title") + "###StreamPasswordPopup";
     if (m_showPasswordModal)
     {
-        ImGui::OpenPopup("Stream password");
+        ImGui::OpenPopup("###StreamPasswordPopup");
         m_showPasswordModal = false;
     }
-    if (ImGui::BeginPopupModal("Stream password", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal(pwTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextWrapped("This stream is password-protected. Enter the password "
-                           "the host configured to connect.");
+        ImGui::TextWrapped("%s", T("browse.password.intro").c_str());
         ImGui::Spacing();
         ImGui::SetNextItemWidth(280);
         bool submitted = ImGui::InputText("##pw", m_passwordBuffer, sizeof(m_passwordBuffer),
                                           ImGuiInputTextFlags_Password |
                                           ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::Spacing();
-        const bool accept = ImGui::Button("Connect", ImVec2(120, 0)) || submitted;
+        const bool accept = ImGui::Button(T("browse.password.connect").c_str(), ImVec2(120, 0)) || submitted;
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        if (ImGui::Button(T("browse.password.cancel").c_str(), ImVec2(120, 0)))
         {
             m_pendingProtectedUrl.clear();
             std::memset(m_passwordBuffer, 0, sizeof(m_passwordBuffer));
@@ -370,29 +370,26 @@ void UIDirectoryBrowser::renderPasswordModal()
 // ─────────────────────────────────────────────────────────────────────
 void UIDirectoryBrowser::renderReportModal()
 {
-    if (m_showReportModal) ImGui::OpenPopup("Report Stream");
-    if (!ImGui::BeginPopupModal("Report Stream", nullptr,
+    const std::string rpTitle = T("browse.report.title") + "###ReportStreamPopup";
+    if (m_showReportModal) ImGui::OpenPopup("###ReportStreamPopup");
+    if (!ImGui::BeginPopupModal(rpTitle.c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
     {
         return;
     }
 
-    ImGui::Text("Stream: %s",
+    ImGui::Text("%s: %s", T("browse.report.stream").c_str(),
                 m_reportStreamName.empty() ? "(unnamed)" : m_reportStreamName.c_str());
     ImGui::Spacing();
-    ImGui::TextWrapped(
-        "This report goes to the directory maintainer, not to the "
-        "host of the stream and not to Cloudflare. There's no "
-        "automated takedown — the maintainer drains the report log "
-        "manually.");
+    ImGui::TextWrapped("%s", T("browse.report.intro").c_str());
     ImGui::Spacing();
-    ImGui::Text("Reason (required):");
+    ImGui::Text("%s", T("browse.report.reason").c_str());
     ImGui::SetNextItemWidth(420);
     ImGui::InputTextMultiline("##reportReason", m_reportReason,
                               sizeof(m_reportReason),
                               ImVec2(420, 80));
     ImGui::Spacing();
-    ImGui::Text("Your contact (optional — email or @handle):");
+    ImGui::Text("%s", T("browse.report.contact").c_str());
     ImGui::SetNextItemWidth(420);
     ImGui::InputText("##reportContact", m_reportContact, sizeof(m_reportContact));
 
@@ -429,7 +426,7 @@ void UIDirectoryBrowser::renderReportModal()
     if (statusSnap == ReportStatus::Failed)
     {
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
-                           "Submit failed:");
+                           "%s", T("browse.report.submit_failed").c_str());
         ImGui::TextWrapped("%s", errSnap.c_str());
         ImGui::Spacing();
     }
@@ -439,7 +436,8 @@ void UIDirectoryBrowser::renderReportModal()
                               std::strlen(m_reportReason) <= 200);
 
     ImGui::BeginDisabled(busy || !reasonOk || m_reportStreamId.empty());
-    if (ImGui::Button(busy ? "Sending..." : "Submit", ImVec2(120, 0)))
+    const std::string submitLabel = busy ? T("browse.report.sending") : T("browse.report.submit");
+    if (ImGui::Button(submitLabel.c_str(), ImVec2(120, 0)))
     {
         {
             std::lock_guard<std::mutex> lock(m_reportMu);
@@ -532,8 +530,7 @@ void UIDirectoryBrowser::renderReportModal()
                 m_reportStatus = ReportStatus::Failed;
                 if (resp.statusCode == 429)
                 {
-                    m_reportError = "Too many reports from this network — "
-                                    "try again later.";
+                    m_reportError = T("browse.report.rate_limited");
                     if (!resp.retryAfter.empty())
                     {
                         m_reportError += " (Retry-After: " + resp.retryAfter + " s)";
@@ -545,8 +542,6 @@ void UIDirectoryBrowser::renderReportModal()
                                     std::to_string(resp.statusCode);
                     if (!resp.body.empty())
                     {
-                        // First line of the body — usually the JSON
-                        // error message — is enough context.
                         size_t nl = resp.body.find('\n');
                         m_reportError += ": " +
                             resp.body.substr(0, nl == std::string::npos
@@ -556,7 +551,7 @@ void UIDirectoryBrowser::renderReportModal()
                 else
                 {
                     m_reportError = resp.error.empty()
-                        ? "Couldn't reach the directory service."
+                        ? T("browse.report.couldnt_reach")
                         : resp.error;
                 }
             }
@@ -567,11 +562,11 @@ void UIDirectoryBrowser::renderReportModal()
     if (!reasonOk && std::strlen(m_reportReason) == 0)
     {
         ImGui::SameLine();
-        ImGui::TextDisabled("(reason can't be empty)");
+        ImGui::TextDisabled("%s", T("browse.report.reason_required").c_str());
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(busy);
-    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+    if (ImGui::Button(T("browse.report.cancel").c_str(), ImVec2(120, 0)))
     {
         m_showReportModal = false;
         ImGui::CloseCurrentPopup();
@@ -591,20 +586,20 @@ void UIDirectoryBrowser::renderReportModal()
 // ─────────────────────────────────────────────────────────────────────
 void UIDirectoryBrowser::renderReportFeedbackModal()
 {
-    if (m_showReportFeedbackModal) ImGui::OpenPopup("Report Sent");
-    if (!ImGui::BeginPopupModal("Report Sent", nullptr,
+    const std::string fbTitle = T("browse.report_sent.title") + "###ReportSentPopup";
+    if (m_showReportFeedbackModal) ImGui::OpenPopup("###ReportSentPopup");
+    if (!ImGui::BeginPopupModal(fbTitle.c_str(), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
     {
         return;
     }
 
-    ImGui::TextWrapped(
-        "Thanks for reporting. The Directory owner will review it.");
+    ImGui::TextWrapped("%s", T("browse.report_sent.thanks").c_str());
     ImGui::Spacing();
 
     if (!m_reportFeedbackReceiptId.empty())
     {
-        ImGui::Text("Protocol number:");
+        ImGui::Text("%s", T("browse.report_sent.protocol").c_str());
         ImGui::SameLine();
         char receiptBuf[64];
         std::snprintf(receiptBuf, sizeof(receiptBuf), "%s",
@@ -612,7 +607,7 @@ void UIDirectoryBrowser::renderReportFeedbackModal()
         ImGui::SetNextItemWidth(200);
         ImGui::InputText("##feedbackReceipt", receiptBuf, sizeof(receiptBuf),
                          ImGuiInputTextFlags_ReadOnly);
-        ImGui::TextDisabled("Quote this if you contact the maintainer.");
+        ImGui::TextDisabled("%s", T("browse.report_sent.quote_hint").c_str());
     }
     else
     {
@@ -620,13 +615,11 @@ void UIDirectoryBrowser::renderReportFeedbackModal()
         // dropped the body). The report still landed — the 2xx we
         // got back is the signal — but there's no number to hand
         // over. Be honest about it.
-        ImGui::TextDisabled(
-            "The directory service did not return a protocol number\n"
-            "for this report. The report itself was accepted.");
+        ImGui::TextDisabled("%s", T("browse.report_sent.no_protocol").c_str());
     }
 
     ImGui::Spacing();
-    if (ImGui::Button("Close", ImVec2(120, 0)))
+    if (ImGui::Button(T("browse.report_sent.close").c_str(), ImVec2(120, 0)))
     {
         m_showReportFeedbackModal = false;
         m_reportFeedbackReceiptId.clear();

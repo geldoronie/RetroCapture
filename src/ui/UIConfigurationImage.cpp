@@ -1,5 +1,6 @@
 #include "UIConfigurationImage.h"
 #include "UIManager.h"
+#include "../utils/TranslationManager.h"
 #include <imgui.h>
 
 UIConfigurationImage::UIConfigurationImage(UIManager *uiManager)
@@ -16,13 +17,13 @@ void UIConfigurationImage::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(520, 460), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Image", &m_visible))
+    if (!ImGui::Begin(T("image.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;
     }
 
-    ImGui::Text("Image Adjustments");
+    ImGui::Text("%s", T("image.adjustments").c_str());
     ImGui::Separator();
 
     renderBrightnessContrast();

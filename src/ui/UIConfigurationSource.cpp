@@ -1,5 +1,6 @@
 #include "UIConfigurationSource.h"
 #include "UIManager.h"
+#include "../utils/TranslationManager.h"
 #include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <algorithm>
@@ -26,7 +27,7 @@ void UIConfigurationSource::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(620, 540), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Source", &m_visible))
+    if (!ImGui::Begin(T("source.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;

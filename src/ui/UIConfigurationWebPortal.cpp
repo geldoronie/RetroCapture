@@ -1,4 +1,5 @@
 #include "UIConfigurationWebPortal.h"
+#include "../utils/TranslationManager.h"
 #include "UIManager.h"
 #include <imgui.h>
 #include <cstring>
@@ -17,13 +18,13 @@ void UIConfigurationWebPortal::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(620, 620), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Web Portal", &m_visible))
+    if (!ImGui::Begin(T("webportal.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;
     }
 
-    ImGui::Text("Web Portal");
+    ImGui::Text("%s", T("webportal.title").c_str());
     ImGui::Separator();
     ImGui::Spacing();
 

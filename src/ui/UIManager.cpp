@@ -3724,13 +3724,13 @@ void UIManager::renderConnectionOverlay()
     }
 
     // Decide what to render.
-    const char *label    = nullptr;
+    std::string label;
     ImVec4      color    = ImVec4(0.95f, 0.7f, 0.3f, 1.0f); // orange default
     bool        spinning = false;
 
     if (now < m_overlayDisconnectingUntil)
     {
-        label    = "Disconnecting...";
+        label    = T("overlay.disconnecting");
         spinning = true;
     }
     else if (dev.empty())
@@ -3740,21 +3740,18 @@ void UIManager::renderConnectionOverlay()
     }
     else if (offline)
     {
-        label    = "Host appears offline";
+        label    = T("overlay.host_offline");
         spinning = true;
     }
     else if (!hasFrames)
     {
-        // No first frame yet. If we just came from a connected
-        // state (had frames, now don't) it's a reconnect; if we
-        // never had frames it's the first connect. Same visual
-        // either way.
-        label    = m_overlayLastHadFrames ? "Reconnecting..." : "Connecting...";
+        label    = m_overlayLastHadFrames ? T("overlay.reconnecting")
+                                          : T("overlay.connecting");
         spinning = true;
     }
     else if (m_overlayConnectedSince > 0.0 && now - m_overlayConnectedSince < 3.0)
     {
-        label    = "Connected";
+        label    = T("overlay.connected");
         color    = ImVec4(0.40f, 0.80f, 0.40f, 1.0f);
         spinning = false;
     }
@@ -3764,7 +3761,7 @@ void UIManager::renderConnectionOverlay()
     m_overlayLastDevice    = dev;
     m_overlayLastHadFrames = hasFrames;
 
-    if (!label) return;
+    if (label.empty()) return;
 
     // Bottom-right anchor. SetNextWindowPos with pivot (1,1) puts
     // the window's bottom-right corner at the screen point we pass.
@@ -3790,11 +3787,11 @@ void UIManager::renderConnectionOverlay()
             // primitives.
             static const char *spin = "|/-\\";
             const int idx = static_cast<int>(now * 6.0) & 0x3;
-            ImGui::TextColored(color, "%c %s", spin[idx], label);
+            ImGui::TextColored(color, "%c %s", spin[idx], label.c_str());
         }
         else
         {
-            ImGui::TextColored(color, "%s", label);
+            ImGui::TextColored(color, "%s", label.c_str());
         }
     }
     ImGui::End();

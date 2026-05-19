@@ -1,4 +1,5 @@
 #include "UIConfigurationRecording.h"
+#include "../utils/TranslationManager.h"
 #include "UIManager.h"
 #include "../utils/Logger.h"
 #include <imgui.h>
@@ -20,7 +21,7 @@ void UIConfigurationRecording::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(640, 660), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Recording", &m_visible))
+    if (!ImGui::Begin(T("recording.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;

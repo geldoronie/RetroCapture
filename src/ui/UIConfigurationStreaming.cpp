@@ -1,6 +1,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
 #include "../utils/Logger.h"
+#include "../utils/TranslationManager.h"
 #include "../encoding/MediaEncoder.h"
 #include <imgui.h>
 #include <algorithm>
@@ -110,7 +111,7 @@ void UIConfigurationStreaming::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(680, 720), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Streaming", &m_visible))
+    if (!ImGui::Begin(T("streaming.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;
