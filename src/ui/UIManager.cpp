@@ -2769,6 +2769,16 @@ void UIManager::loadConfig()
                 m_recordingIncludeAudio = recording["includeAudio"];
             if (recording.contains("applyShader"))
                 m_recordingApplyShader = recording["applyShader"].get<bool>();
+            if (recording.contains("hardwareEncoder"))
+                m_recordingHardwareEncoder = recording["hardwareEncoder"].get<int>();
+            if (recording.contains("nvencPreset"))
+                m_recordingNvencPreset = recording["nvencPreset"].get<std::string>();
+            if (recording.contains("vaapiRcMode"))
+                m_recordingVaapiRcMode = recording["vaapiRcMode"].get<std::string>();
+            if (recording.contains("qsvPreset"))
+                m_recordingQsvPreset = recording["qsvPreset"].get<std::string>();
+            if (recording.contains("amfQuality"))
+                m_recordingAmfQuality = recording["amfQuality"].get<std::string>();
         }
 
         if (config.contains("streaming"))
@@ -2915,7 +2925,12 @@ void UIManager::saveConfig()
             {"outputPath", m_recordingOutputPath},
             {"filenameTemplate", m_recordingFilenameTemplate},
             {"includeAudio", m_recordingIncludeAudio},
-            {"applyShader", m_recordingApplyShader}};
+            {"applyShader", m_recordingApplyShader},
+            {"hardwareEncoder", m_recordingHardwareEncoder},
+            {"nvencPreset", m_recordingNvencPreset},
+            {"vaapiRcMode", m_recordingVaapiRcMode},
+            {"qsvPreset", m_recordingQsvPreset},
+            {"amfQuality", m_recordingAmfQuality}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -3481,6 +3496,41 @@ void UIManager::triggerRecordingIncludeAudioChange(bool include)
     saveConfig();
 }
 
+void UIManager::triggerRecordingHardwareEncoderChange(int v)
+{
+    m_recordingHardwareEncoder = v;
+    if (m_onRecordingHardwareEncoderChanged) m_onRecordingHardwareEncoderChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerRecordingNvencPresetChange(const std::string &v)
+{
+    m_recordingNvencPreset = v;
+    if (m_onRecordingNvencPresetChanged) m_onRecordingNvencPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerRecordingVaapiRcModeChange(const std::string &v)
+{
+    m_recordingVaapiRcMode = v;
+    if (m_onRecordingVaapiRcModeChanged) m_onRecordingVaapiRcModeChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerRecordingQsvPresetChange(const std::string &v)
+{
+    m_recordingQsvPreset = v;
+    if (m_onRecordingQsvPresetChanged) m_onRecordingQsvPresetChanged(v);
+    saveConfig();
+}
+
+void UIManager::triggerRecordingAmfQualityChange(const std::string &v)
+{
+    m_recordingAmfQuality = v;
+    if (m_onRecordingAmfQualityChanged) m_onRecordingAmfQualityChanged(v);
+    saveConfig();
+}
+
 void UIManager::triggerRecordingStartStop(bool start)
 {
     if (m_onRecordingStartStop)
@@ -3516,6 +3566,15 @@ RecordingSettings collectRecordingSettings(const UIManager &ui)
     s.outputPath = ui.getRecordingOutputPath();
     s.filenameTemplate = ui.getRecordingFilenameTemplate();
     s.includeAudio = ui.getRecordingIncludeAudio();
+    s.hardwareEncoder = ui.getRecordingHardwareEncoder();
+    switch (s.hardwareEncoder)
+    {
+        case 2: s.hwPreset = ui.getRecordingNvencPreset(); break;
+        case 3: s.hwPreset = ui.getRecordingVaapiRcMode(); break;
+        case 4: s.hwPreset = ui.getRecordingQsvPreset();   break;
+        case 5: s.hwPreset = ui.getRecordingAmfQuality();  break;
+        default: s.hwPreset.clear(); break;
+    }
     return s;
 }
 
@@ -3578,6 +3637,17 @@ bool UIManager::loadRecordingProfile(const std::string &name)
     triggerRecordingOutputPathChange(s.outputPath);
     triggerRecordingFilenameTemplateChange(s.filenameTemplate);
     triggerRecordingIncludeAudioChange(s.includeAudio);
+    triggerRecordingHardwareEncoderChange(s.hardwareEncoder);
+    // Route the backend-specific preset string to the right per-backend
+    // field — same dispatch as the streaming side does.
+    switch (s.hardwareEncoder)
+    {
+        case 2: triggerRecordingNvencPresetChange(s.hwPreset); break;
+        case 3: triggerRecordingVaapiRcModeChange(s.hwPreset); break;
+        case 4: triggerRecordingQsvPresetChange  (s.hwPreset); break;
+        case 5: triggerRecordingAmfQualityChange (s.hwPreset); break;
+        default: break;
+    }
     return true;
 }
 

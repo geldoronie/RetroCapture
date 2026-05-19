@@ -186,6 +186,15 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     videoConfig.h265Level = settings.h265Level;
     videoConfig.vp8Speed = settings.vp8Speed;
     videoConfig.vp9Speed = settings.vp9Speed;
+    // Hardware encoder selection (#59). The MediaEncoder enum
+    // matches the int values stored on RecordingSettings, so the
+    // cast is safe; out-of-range values fall back to Auto.
+    if (settings.hardwareEncoder >= 0 && settings.hardwareEncoder <= 5)
+    {
+        videoConfig.hardwareEncoder =
+            static_cast<MediaEncoder::HardwareEncoder>(settings.hardwareEncoder);
+    }
+    videoConfig.hwPreset = settings.hwPreset;
 
     MediaEncoder::AudioConfig audioConfig;
     // Use default values if audio format not set (when streaming/audio not enabled)

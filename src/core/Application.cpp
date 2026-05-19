@@ -1183,6 +1183,19 @@ bool Application::initUI()
         settings.outputPath = m_ui->getRecordingOutputPath();
         settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
         settings.includeAudio = m_ui->getRecordingIncludeAudio();
+        // Hardware encoder + backend-specific preset (#59) — resolved
+        // from the UI's per-backend preset fields based on the user's
+        // selected backend. Auto/Software leave hwPreset empty so
+        // MediaEncoder uses its compiled-in default.
+        settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
+        switch (settings.hardwareEncoder)
+        {
+            case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break; // NVENC
+            case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break; // VAAPI
+            case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break; // QSV
+            case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break; // AMF
+            default: settings.hwPreset.clear(); break;                          // Auto / Software
+        }
         m_recordingManager->setRecordingSettings(settings);
     }
 
@@ -1703,7 +1716,16 @@ bool Application::initUI()
                 settings.outputPath = m_ui->getRecordingOutputPath();
                 settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
                 settings.includeAudio = m_ui->getRecordingIncludeAudio();
-                
+                settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
+                switch (settings.hardwareEncoder)
+                {
+                    case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break;
+                    case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break;
+                    case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break;
+                    case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break;
+                    default: settings.hwPreset.clear(); break;
+                }
+
                 if (!m_recordingManager) {
                     LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
                     m_ui->setRecordingActive(false);

@@ -103,6 +103,11 @@ bool RecordingProfileManager::save(const std::string &name, const RecordingSetti
         {"h265Level", s.h265Level},
         {"vp8Speed", s.vp8Speed},
         {"vp9Speed", s.vp9Speed},
+        // #59 — hardware encoder selection. Stored as raw int matching
+        // MediaEncoder::HardwareEncoder so profiles survive enum
+        // additions; backend-specific tuning travels with it.
+        {"hardwareEncoder", s.hardwareEncoder},
+        {"hwPreset", s.hwPreset},
     };
     j["audio"] = {
         {"bitrate", s.audioBitrate},
@@ -174,6 +179,8 @@ bool RecordingProfileManager::load(const std::string &name, RecordingSettings &s
             if (v.contains("h265Level")) s.h265Level = v["h265Level"].get<std::string>();
             if (v.contains("vp8Speed")) s.vp8Speed = v["vp8Speed"].get<int>();
             if (v.contains("vp9Speed")) s.vp9Speed = v["vp9Speed"].get<int>();
+            if (v.contains("hardwareEncoder")) s.hardwareEncoder = v["hardwareEncoder"].get<int>();
+            if (v.contains("hwPreset"))        s.hwPreset        = v["hwPreset"].get<std::string>();
         }
         if (j.contains("audio"))
         {

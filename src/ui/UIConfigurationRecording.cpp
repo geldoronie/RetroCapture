@@ -2,11 +2,14 @@
 #include "../utils/TranslationManager.h"
 #include "UIManager.h"
 #include "UISectionHeader.h"
+#include "../encoding/MediaEncoder.h"
 #include "../utils/Logger.h"
 #include <imgui.h>
 #include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 UIConfigurationRecording::UIConfigurationRecording(UIManager *uiManager)
     : m_uiManager(uiManager)
@@ -335,6 +338,99 @@ void UIConfigurationRecording::renderCodecSettings()
                           "      but slower to encode and not all players\n"
                           "      handle it (DaVinci/older Premiere can).\n"
                           "vp8/vp9: WebM-friendly, mkv container only.");
+    }
+
+    // Hardware encoder selector + backend-specific preset (#59).
+    // Mirror of UIConfigurationStreaming — same options, same Auto
+    // fallback, defaults are tuned for files (NVENC p4, VAAPI VBR,
+    // AMF quality) instead of streaming. Only shown for H.264/HEVC;
+    // VP8/VP9 have no hardware backends we support.
+    if (currentVideoCodec == "h264" || currentVideoCodec == "h265" || currentVideoCodec == "hevc")
+    {
+        std::vector<MediaEncoder::HardwareEncoder> available = MediaEncoder::detectAvailableEncoders();
+        std::vector<MediaEncoder::HardwareEncoder> options;
+        options.push_back(MediaEncoder::HardwareEncoder::Auto);
+        for (auto h : available) options.push_back(h);
+
+        std::vector<const char *> labels;
+        labels.reserve(options.size());
+        for (auto h : options) labels.push_back(MediaEncoder::hardwareEncoderName(h));
+
+        const int current = m_uiManager->getRecordingHardwareEncoder();
+        int currentIndex = 0;
+        for (size_t i = 0; i < options.size(); ++i)
+        {
+            if (static_cast<int>(options[i]) == current) { currentIndex = static_cast<int>(i); break; }
+        }
+        if (ImGui::Combo("Encoder", &currentIndex, labels.data(), static_cast<int>(labels.size())))
+        {
+            m_uiManager->triggerRecordingHardwareEncoderChange(static_cast<int>(options[currentIndex]));
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Auto = try hardware (NVENC/VAAPI/QSV/AMF), fall back to software on failure.\n"
+                              "Software = libx264 guaranteed on any machine.\n"
+                              "Hardware backends only show up when ffmpeg was built with support and\n"
+                              "may fail at runtime if the driver/permission is missing — in that\n"
+                              "case the recording falls back to libx264 automatically.");
+        }
+
+        const MediaEncoder::HardwareEncoder activeHw = options[currentIndex];
+        auto renderEnumCombo = [&](const char *label, const char *const *items, int itemCount,
+                                   const std::string &currentValue,
+                                   std::function<void(const std::string &)> onChange,
+                                   const char *tooltip)
+        {
+            int idx = 0;
+            for (int i = 0; i < itemCount; ++i)
+            {
+                if (currentValue == items[i]) { idx = i; break; }
+            }
+            if (ImGui::Combo(label, &idx, items, itemCount))
+            {
+                onChange(items[idx]);
+            }
+            if (tooltip && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", tooltip);
+            }
+        };
+
+        if (activeHw == MediaEncoder::HardwareEncoder::NVENC)
+        {
+            static const char *items[] = {"p1", "p2", "p3", "p4", "p5", "p6", "p7"};
+            renderEnumCombo("NVENC Preset", items, 7, m_uiManager->getRecordingNvencPreset(),
+                            [this](const std::string &v) { m_uiManager->triggerRecordingNvencPresetChange(v); },
+                            "p1 = fastest (lowest quality) ... p7 = slowest (highest quality).\n"
+                            "p4 is the recommended balance; p5–p6 are fine for files where\n"
+                            "you can afford extra encoder latency.");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::VAAPI)
+        {
+            static const char *items[] = {"CBR", "VBR", "CQP"};
+            renderEnumCombo("VAAPI Rate Control", items, 3, m_uiManager->getRecordingVaapiRcMode(),
+                            [this](const std::string &v) { m_uiManager->triggerRecordingVaapiRcModeChange(v); },
+                            "CBR = constant bitrate.\n"
+                            "VBR = variable bitrate (recommended for files — sharper highlights).\n"
+                            "CQP = constant quality (ignores bitrate slider).");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::QSV)
+        {
+            static const char *items[] = {"veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"};
+            renderEnumCombo("QSV Preset", items, 7, m_uiManager->getRecordingQsvPreset(),
+                            [this](const std::string &v) { m_uiManager->triggerRecordingQsvPresetChange(v); },
+                            "Intel Quick Sync presets. Faster = lower quality.\n"
+                            "For files, medium / slow is a reasonable balance.");
+        }
+        else if (activeHw == MediaEncoder::HardwareEncoder::AMF)
+        {
+            static const char *items[] = {"speed", "balanced", "quality"};
+            renderEnumCombo("AMF Quality", items, 3, m_uiManager->getRecordingAmfQuality(),
+                            [this](const std::string &v) { m_uiManager->triggerRecordingAmfQualityChange(v); },
+                            "speed = minimum latency, basic quality.\n"
+                            "balanced = middle ground.\n"
+                            "quality = best visual, higher latency (recommended for files).");
+        }
     }
 
     // Audio codec selection
