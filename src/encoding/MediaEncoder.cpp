@@ -347,13 +347,19 @@ bool MediaEncoder::initializeVideoCodec()
         {
             // HTTP-TS streaming: tight vbv caps bitrate variation.
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
-            av_dict_set_int(&opts, "repeat-headers", 1, 0);
         }
         else
         {
             // Gravação em arquivo: vbv largo pra rate-control flexível.
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate * 2, 0);
         }
+        // Inline SPS/PPS in front of every IDR for both modes (#59).
+        // Streaming needs it for mid-stream join; file recording needs
+        // it so thumbnailers in DaVinci / kdenlive / Premiere that
+        // seek to a random byte offset can decode the next keyframe
+        // immediately instead of waiting for the muxer's extradata,
+        // which some tools skip when scrubbing.
+        av_dict_set_int(&opts, "repeat-headers", 1, 0);
     }
     else if (codec->id == AV_CODEC_ID_HEVC)
     {
@@ -373,17 +379,25 @@ bool MediaEncoder::initializeVideoCodec()
         if (m_forStreaming)
         {
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
-            // Inline VPS/SPS/PPS at every keyframe — libx265 equivalent
-            // of libx264's repeat-headers. Without this, a client that
-            // joins the MPEG-TS stream after the first keyframe never
-            // receives the parameter sets and reads NAL data as random
-            // bytes ('Invalid NAL unit 35', 'Truncating likely oversized
-            // VPS', 'PCM bit depth out of range').
+            // Streaming uses Annex B byte-stream framing inside the
+            // MPEG-TS PES payload; repeat-headers=1 emits VPS/SPS/PPS
+            // ahead of every IDR so mid-stream MPEG-TS clients can
+            // decode immediately. Without this the client sees
+            // 'Invalid NAL unit 35', 'Truncating likely oversized VPS',
+            // 'PCM bit depth out of range'.
             av_dict_set(&opts, "x265-params", "repeat-headers=1:annexb=1", 0);
         }
         else
         {
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate * 2, 0);
+            // File recording (#59): repeat-headers=1 also benefits
+            // mid-file scrubbing in DaVinci / kdenlive / Premiere
+            // thumbnail strips, which seek to arbitrary byte offsets
+            // and decode forward — they get a clean VPS/SPS/PPS at
+            // the very next IDR instead of relying on hvcC extradata,
+            // which some scrubbers skip when reading sequentially.
+            // No annexb=1: MP4 carries HEVC in length-prefix format.
+            av_dict_set(&opts, "x265-params", "repeat-headers=1", 0);
         }
     }
     else if (codec->id == AV_CODEC_ID_VP8)
