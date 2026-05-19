@@ -263,16 +263,15 @@ void UIManager::endFrame()
         return;
     }
 
-    if (m_uiVisible)
-    {
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    }
-    else
-    {
-        // Quando oculta, ainda precisamos finalizar o frame para manter o estado correto
-        ImGui::EndFrame();
-    }
+    // Always paint the frame, even when the main UI is hidden.
+    // renderConnectionOverlay() runs before render()'s m_uiVisible
+    // gate, so when F12 hides the rest of the UI the draw list still
+    // has the overlay in it. Calling EndFrame instead of Render
+    // discarded that, leaving the user with a frozen-looking stream
+    // during reconnects. With nothing added to the draw list this is
+    // effectively a no-op anyway.
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     
     // Keep ImGui mouse disabled when UI is hidden
     // This prevents ImGui from interfering with cursor visibility

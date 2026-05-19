@@ -873,6 +873,10 @@ void VideoCaptureRemote::decodeLoop()
             const int64_t nowWallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch()).count();
             int64_t targetWallUs = nowWallUs;
+            // Record arrival time of every decoded frame so the UI
+            // overlay can tell a live stream from a stalled one
+            // even when m_streamAnchored hasn't been reset yet.
+            m_lastFrameAtSteadyUs.store(nowWallUs);
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

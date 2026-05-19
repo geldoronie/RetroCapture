@@ -217,6 +217,11 @@ private:
     // judder we get when network/decoder bursts let us poll multiple
     // new frames in quick succession.
     std::atomic<bool> m_streamAnchored{false};
+    // Steady-clock microseconds of the most recently decoded frame.
+    // Read by isReceivingFrames() to detect a stalled stream that
+    // m_streamAnchored hasn't reset yet (TCP read still blocking
+    // post host-disappear). Updated on every decoded video frame.
+    std::atomic<int64_t> m_lastFrameAtSteadyUs{0};
     int64_t m_streamStartWallUs  = 0;
     int64_t m_firstPtsTicks      = 0;
     // PTS of the first video frame in microseconds. Lets the audio
@@ -250,11 +255,26 @@ public:
      * Cleared as soon as any reconnect succeeds.
      */
     bool isHostLikelyOffline() const override { return m_hostLikelyOffline.load(); }
-    // m_streamAnchored is set true on the first decoded frame and
-    // reset to false in cleanupDecoder() / on av_read_frame failure
-    // — exactly the "are we actively decoding right now" signal the
-    // UI overlay needs.
-    bool isReceivingFrames() const override { return m_streamAnchored.load(); }
+    // 'Are we actively decoding right now?' — combines the
+    // m_streamAnchored handshake bit (true once the first frame
+    // decoded, reset in cleanupDecoder() / av_read_frame failure)
+    // with a 'last frame seen recently' staleness check. The
+    // staleness check matters because when the host disappears the
+    // TCP/TLS read can block for up to ~10 s before av_read_frame
+    // surfaces an error — without the staleness fallback the
+    // overlay would think we're still connected the whole time.
+    bool isReceivingFrames() const override
+    {
+        if (!m_streamAnchored.load()) return false;
+        const int64_t lastUs = m_lastFrameAtSteadyUs.load();
+        if (lastUs == 0) return false;
+        const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+        // 2 s without a frame on a 60 fps stream = ~120 frames gap.
+        // Plenty of headroom for a hiccup but tight enough that a
+        // killed host is reflected in the overlay quickly.
+        return (nowUs - lastUs) < 2'000'000;
+    }
 
 private:
     // Capped exponential backoff state. The table is consulted with
