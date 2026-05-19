@@ -22,21 +22,27 @@ UIConfigurationAudio::~UIConfigurationAudio()
 
 void UIConfigurationAudio::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Audio", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
-    // Update reference to audio capture if needed
     m_audioCapture = m_uiManager->getAudioCapture();
 
     if (!m_audioCapture)
     {
         ImGui::TextWrapped("Audio capture not available. Audio is required for streaming and recording.");
+        ImGui::End();
         return;
     }
 
     renderInputSourceSelection();
+
+    ImGui::End();
 }
 
 void UIConfigurationAudio::refreshInputSources()

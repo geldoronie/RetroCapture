@@ -21,12 +21,15 @@ UIConfigurationShader::~UIConfigurationShader()
 
 void UIConfigurationShader::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(560, 520), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Shaders", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
-    // Atualizar referência ao shader engine se necessário
     m_shaderEngine = m_uiManager->getShaderEngine();
 
     {
@@ -49,6 +52,8 @@ void UIConfigurationShader::render()
     renderSavePreset();
     ImGui::Separator();
     renderShaderParameters();
+
+    ImGui::End();
 }
 
 void UIConfigurationShader::renderShaderSelection()

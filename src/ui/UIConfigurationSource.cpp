@@ -23,28 +23,29 @@ UIConfigurationSource::~UIConfigurationSource()
 
 void UIConfigurationSource::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(620, 540), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Source", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
     // Atualizar referência ao capture se necessário
     m_capture = m_uiManager->getCapture();
-    
-    // Não atualizar a lista aqui - será atualizada apenas quando necessário em renderDSDeviceSelection
-    // Isso evita chamar refreshDSDevices() a cada frame
 
     renderSourceTypeSelection();
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Renderizar controles específicos da fonte selecionada
     UIManager::SourceType sourceType = m_uiManager->getSourceType();
 
     if (sourceType == UIManager::SourceType::Remote)
     {
         renderRemoteControls();
+        ImGui::End();
         return;
     }
 #ifdef __linux__
@@ -71,6 +72,8 @@ void UIConfigurationSource::render()
         ImGui::TextWrapped("No source selected.");
     }
 #endif
+
+    ImGui::End();
 }
 
 void UIConfigurationSource::renderSourceTypeSelection()

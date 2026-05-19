@@ -13,8 +13,12 @@ UIConfigurationImage::~UIConfigurationImage()
 
 void UIConfigurationImage::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Image", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
@@ -29,6 +33,8 @@ void UIConfigurationImage::render()
     renderFullscreen();
     ImGui::Separator();
     renderMonitorSelection();
+
+    ImGui::End();
 }
 
 void UIConfigurationImage::renderBrightnessContrast()

@@ -107,8 +107,12 @@ UIConfigurationStreaming::~UIConfigurationStreaming()
 
 void UIConfigurationStreaming::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(680, 720), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Streaming", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
@@ -144,6 +148,8 @@ void UIConfigurationStreaming::render()
     // is not surfaced in the UI anymore — defaults work for the vast
     // majority of cases. Power users can still override via config.json.
     renderStartStopButton();
+
+    ImGui::End();
 }
 
 void UIConfigurationStreaming::renderStreamingStatus()

@@ -1,5 +1,15 @@
 #include "UIManager.h"
-#include "UIConfiguration.h"
+#include "UIConfigurationSource.h"
+#include "UIConfigurationShader.h"
+#include "UIConfigurationImage.h"
+#include "UIConfigurationStreaming.h"
+#include "UIConfigurationRecording.h"
+#include "UIConfigurationWebPortal.h"
+#ifdef __linux__
+#  include "UIConfigurationAudio.h"
+#endif
+#include "UIInfoPanel.h"
+#include "UIPreferences.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -43,14 +53,24 @@
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
-    : m_configWindow(nullptr), m_creditsWindow(nullptr)
+    : m_creditsWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
     // Destruir janelas antes de shutdown
-    m_configWindow.reset();
+    m_sourceWindow.reset();
+    m_shaderWindow.reset();
+    m_imageWindow.reset();
+    m_streamingWindow.reset();
+    m_recordingWindow.reset();
+    m_webPortalWindow.reset();
+#ifdef __linux__
+    m_audioWindow.reset();
+#endif
+    m_infoWindow.reset();
+    m_preferencesWindow.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
     m_recordingsWindow.reset();
@@ -168,7 +188,22 @@ bool UIManager::init(void *window)
 
     loadConfig();
 
-    m_configWindow = std::make_unique<UIConfiguration>(this);
+    // Standalone configuration windows (Fase A of #45) — each used to
+    // be a tab inside the unified "RetroCapture Controls" window;
+    // they're now separate ImGui windows opened from
+    // Configurations / View / File menus.
+    m_sourceWindow      = std::make_unique<UIConfigurationSource>(this);
+    m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
+    m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
+    m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
+    m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
+    m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
+#ifdef __linux__
+    m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
+#endif
+    m_infoWindow        = std::make_unique<UIInfoPanel>(this);
+    m_preferencesWindow = std::make_unique<UIPreferences>(this);
+
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
@@ -177,8 +212,11 @@ bool UIManager::init(void *window)
     m_directoryBrowserWindow->setRemoteConnectionWindow(m_remoteConnectionWindow.get());
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
-    m_configWindow->setVisible(true);
-    m_configWindow->setJustOpened(true);
+
+    // Open the most useful window on first launch so the user sees
+    // something rather than a bare menu bar. Same role the old
+    // "RetroCapture Controls" tab window had.
+    if (m_sourceWindow) m_sourceWindow->setVisible(true);
 
     m_initialized = true;
     LOG_INFO("UIManager initialized");
@@ -318,8 +356,15 @@ void UIManager::render()
     {
         if (ImGui::BeginMenu("File"))
         {
-            // 'Rescan Shaders' moved next to the Shader dropdown in the
-            // Shaders tab — that's where the list it refreshes lives.
+            if (m_preferencesWindow)
+            {
+                bool visible = m_preferencesWindow->isVisible();
+                if (ImGui::MenuItem("Preferences...", nullptr, visible))
+                {
+                    m_preferencesWindow->setVisible(!visible);
+                }
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Esc"))
             {
                 if (m_window)
@@ -334,6 +379,38 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+
+        // Configurations menu — each entry toggles one of the
+        // ex-tab windows. Producer-only windows hide entirely in
+        // client mode so the user can't accidentally try to
+        // configure things that don't apply to the inbound stream.
+        const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+        if (ImGui::BeginMenu("Configurations"))
+        {
+            auto toggleItem = [](const char *label, auto *window) {
+                if (!window) return;
+                bool vis = window->isVisible();
+                if (ImGui::MenuItem(label, nullptr, vis)) window->setVisible(!vis);
+            };
+            // Shader + Image stay visible in client mode — shader
+            // params and brightness/contrast/aspect ratio make
+            // sense for a viewer to override.
+            toggleItem("Shaders",  m_shaderWindow.get());
+            toggleItem("Image",    m_imageWindow.get());
+            if (!clientMode)
+            {
+                ImGui::Separator();
+                toggleItem("Source",     m_sourceWindow.get());
+                toggleItem("Streaming",  m_streamingWindow.get());
+                toggleItem("Recording",  m_recordingWindow.get());
+                toggleItem("Web Portal", m_webPortalWindow.get());
+#ifdef __linux__
+                toggleItem("Audio",      m_audioWindow.get());
+#endif
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("View"))
         {
             if (ImGui::MenuItem("Toggle UI", "F12"))
@@ -341,12 +418,12 @@ void UIManager::render()
                 setVisible(!m_uiVisible);
             }
             ImGui::Separator();
-            if (m_configWindow)
+            if (m_infoWindow)
             {
-                bool visible = m_configWindow->isVisible();
-                if (ImGui::MenuItem("Configuration", nullptr, visible))
+                bool visible = m_infoWindow->isVisible();
+                if (ImGui::MenuItem("Info", nullptr, visible))
                 {
-                    m_configWindow->setVisible(!visible);
+                    m_infoWindow->setVisible(!visible);
                 }
             }
             // Capture Presets and Recordings are producer-side windows;
@@ -355,7 +432,6 @@ void UIManager::render()
             // in remote viewer mode so the user can't accidentally try to
             // apply a preset that would be a no-op or open a recordings
             // browser that's listing the wrong machine's files.
-            const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
             if (!clientMode)
             {
                 if (m_capturePresetsWindow)
@@ -445,13 +521,32 @@ void UIManager::render()
     {
         if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
         if (m_recordingsWindow)     m_recordingsWindow->setVisible(false);
+        // Producer-only configuration windows also force-shut in
+        // client mode — Source/Streaming/Recording/Web Portal/Audio
+        // operate on the local pipeline that isn't running when
+        // we're a remote viewer.
+        if (m_sourceWindow)    m_sourceWindow->setVisible(false);
+        if (m_streamingWindow) m_streamingWindow->setVisible(false);
+        if (m_recordingWindow) m_recordingWindow->setVisible(false);
+        if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
+#ifdef __linux__
+        if (m_audioWindow)     m_audioWindow->setVisible(false);
+#endif
     }
 
-    // Renderizar janela de configuração
-    if (m_configWindow)
-    {
-        m_configWindow->render();
-    }
+    // Render the seven configuration windows + Preferences + Info.
+    // Each is a no-op when its own m_visible is false.
+    if (m_sourceWindow)      m_sourceWindow->render();
+    if (m_shaderWindow)      m_shaderWindow->render();
+    if (m_imageWindow)       m_imageWindow->render();
+    if (m_streamingWindow)   m_streamingWindow->render();
+    if (m_recordingWindow)   m_recordingWindow->render();
+    if (m_webPortalWindow)   m_webPortalWindow->render();
+#ifdef __linux__
+    if (m_audioWindow)       m_audioWindow->render();
+#endif
+    if (m_infoWindow)        m_infoWindow->render();
+    if (m_preferencesWindow) m_preferencesWindow->render();
 
     // Renderizar janela de créditos
     if (m_creditsWindow)
@@ -2362,6 +2457,14 @@ void UIManager::loadConfig()
             }
         }
 
+        // Preferences (#45 placeholder + window restructure)
+        if (config.contains("preferences"))
+        {
+            auto &prefs = config["preferences"];
+            if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
+            if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
+        }
+
         // Carregar configurações de captura
         if (config.contains("capture"))
         {
@@ -2732,6 +2835,12 @@ void UIManager::saveConfig()
                 {"namedTunnelHostname", m_directoryNamedTunnelHostname},
                 {"privacyAcked",   m_directoryPrivacyAcked},
             }}};
+
+        // Preferences (#45 placeholder + window restructure)
+        config["preferences"] = {
+            {"language",        m_language},
+            {"startFullscreen", m_startFullscreen},
+        };
 
         // Salvar configurações de imagem
         config["image"] = {

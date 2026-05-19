@@ -18,8 +18,12 @@ UIInfoPanel::~UIInfoPanel()
 
 void UIInfoPanel::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Info", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
@@ -41,6 +45,8 @@ void UIInfoPanel::render()
     }
     ImGui::Separator();
     renderSystemInfo();
+
+    ImGui::End();
 }
 
 void UIInfoPanel::renderCaptureInfo()

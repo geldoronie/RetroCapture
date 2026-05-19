@@ -14,8 +14,12 @@ UIConfigurationWebPortal::~UIConfigurationWebPortal()
 
 void UIConfigurationWebPortal::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(620, 620), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Web Portal", &m_visible))
     {
+        ImGui::End();
         return;
     }
 
@@ -30,7 +34,8 @@ void UIConfigurationWebPortal::render()
     {
         ImGui::Spacing();
         std::string streamUrl = "http://localhost:" + std::to_string(m_uiManager->getStreamingPort()) + "/stream";
-        ImGui::Text("Stream direto: %s", streamUrl.c_str());
+        ImGui::Text("Direct stream: %s", streamUrl.c_str());
+        ImGui::End();
         return;
     }
 
@@ -54,6 +59,8 @@ void UIConfigurationWebPortal::render()
     ImGui::Spacing();
 
     renderPortalURL();
+
+    ImGui::End();
 }
 
 void UIConfigurationWebPortal::renderWebPortalEnable()
