@@ -1707,12 +1707,18 @@ bool Application::initUI()
                 if (!m_recordingManager) {
                     LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
                     m_ui->setRecordingActive(false);
-                } else if (m_recordingManager->startRecording(settings)) {
-                    LOG_INFO("Application: Recording started successfully");
-                    m_ui->setRecordingActive(true);
                 } else {
-                    LOG_ERROR("Application: Failed to start recording. Check logs for details.");
-                    m_ui->setRecordingActive(false);
+                    // Snapshot the shader/source state at click time so
+                    // the recording's embedded metadata reflects exactly
+                    // what was active when the session started (#59).
+                    populateRecordingContext();
+                    if (m_recordingManager->startRecording(settings)) {
+                        LOG_INFO("Application: Recording started successfully");
+                        m_ui->setRecordingActive(true);
+                    } else {
+                        LOG_ERROR("Application: Failed to start recording. Check logs for details.");
+                        m_ui->setRecordingActive(false);
+                    }
                 }
             }
         } else {
@@ -5768,10 +5774,41 @@ bool Application::startRecording()
 {
     if (m_recordingManager)
     {
+        populateRecordingContext();
         RecordingSettings settings = m_recordingManager->getRecordingSettings();
         return m_recordingManager->startRecording(settings);
     }
     return false;
+}
+
+void Application::populateRecordingContext()
+{
+    if (!m_recordingManager) return;
+
+    RecordingManager::Context ctx;
+    if (m_ui)
+    {
+        const std::string shader = m_ui->getCurrentShader();
+        ctx.shaderName  = shader.empty() ? "(none)" : shader;
+        ctx.hostNickname = m_ui->getDirectoryHostNickname();
+        ctx.sourceWidth  = m_ui->getCaptureWidth();
+        ctx.sourceHeight = m_ui->getCaptureHeight();
+        ctx.sourceFps    = m_ui->getCaptureFps();
+        switch (m_ui->getSourceType())
+        {
+            case UIManager::SourceType::V4L2:   ctx.sourceType = "v4l2";       break;
+            case UIManager::SourceType::DS:     ctx.sourceType = "directshow"; break;
+            case UIManager::SourceType::Remote: ctx.sourceType = "remote";     break;
+            default:                            ctx.sourceType = "none";       break;
+        }
+    }
+#ifdef RETROCAPTURE_VERSION
+    ctx.applicationVersion = RETROCAPTURE_VERSION;
+#endif
+    // Single-output today — when dual recording lands in #59 phase C
+    // we'll override 'kind' from the raw-side path.
+    ctx.kind = "single";
+    m_recordingManager->setRecordingContext(ctx);
 }
 
 void Application::stopRecording()

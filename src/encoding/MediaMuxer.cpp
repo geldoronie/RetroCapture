@@ -64,6 +64,13 @@ MediaMuxer::~MediaMuxer()
     // cleanup();
 }
 
+void MediaMuxer::setMetadata(const std::map<std::string, std::string> &metadata)
+{
+    // Stage only — actually applied to formatCtx->metadata just
+    // before avformat_write_header inside initializeStreams.
+    m_userMetadata = metadata;
+}
+
 bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
                             const MediaEncoder::AudioConfig &audioConfig,
                             void *videoCodecContext,
@@ -438,6 +445,20 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
                  ", extradata_size: " + std::to_string(audioStream->codecpar->extradata_size));
     }
     
+    // Apply container-level user metadata staged via setMetadata().
+    // For MP4 the well-known keys (title, comment, encoder, ...) land
+    // in the 'ilst' / standard atoms; anything else is written as a
+    // freeform 'udta' atom. MKV stores everything as Tags entries.
+    // MPEG-TS doesn't carry per-program metadata, so on streaming
+    // muxers this is a no-op even though we still call it.
+    for (const auto &kv : m_userMetadata)
+    {
+        if (!kv.first.empty())
+        {
+            av_dict_set(&formatCtx->metadata, kv.first.c_str(), kv.second.c_str(), 0);
+        }
+    }
+
     AVDictionary *optsPtr = static_cast<AVDictionary *>(m_formatOptions);
     int headerRet = avformat_write_header(formatCtx, &optsPtr);
     if (headerRet < 0)

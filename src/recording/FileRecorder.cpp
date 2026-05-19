@@ -82,6 +82,11 @@ int FileRecorder::writeToFile(const uint8_t* data, size_t size)
     }
 }
 
+void FileRecorder::setMetadata(const std::map<std::string, std::string> &metadata)
+{
+    m_muxer.setMetadata(metadata);
+}
+
 bool FileRecorder::initialize(const MediaEncoder::VideoConfig& videoConfig,
                                const MediaEncoder::AudioConfig& audioConfig,
                                void* videoCodecContext,
