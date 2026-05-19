@@ -20,6 +20,7 @@
 #include "../streaming/StreamingProfileManager.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
+#include "../utils/TranslationManager.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
@@ -188,6 +189,13 @@ bool UIManager::init(void *window)
 
     loadConfig();
 
+    // i18n bootstrap (#45 Fase B). loadConfig() above already set
+    // m_language from config.json (default "en"); now hand it to
+    // the TranslationManager so T(...) calls in subsequent UI
+    // construction return translated strings from the start. Switch
+    // via UIPreferences calls setLanguage() at runtime.
+    TranslationManager::instance().init(Paths::getReadOnlyAssetsDir(), m_language);
+
     // Standalone configuration windows (Fase A of #45) — each used to
     // be a tab inside the unified "RetroCapture Controls" window;
     // they're now separate ImGui windows opened from
@@ -354,18 +362,18 @@ void UIManager::render()
 
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu("File"))
+        if (ImGui::BeginMenu(T("menu.file").c_str()))
         {
             if (m_preferencesWindow)
             {
                 bool visible = m_preferencesWindow->isVisible();
-                if (ImGui::MenuItem("Preferences...", nullptr, visible))
+                if (ImGui::MenuItem(T("menu.file.preferences").c_str(), nullptr, visible))
                 {
                     m_preferencesWindow->setVisible(!visible);
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Exit", "Esc"))
+            if (ImGui::MenuItem(T("menu.file.exit").c_str(), "Esc"))
             {
                 if (m_window)
                 {
@@ -385,35 +393,35 @@ void UIManager::render()
         // client mode so the user can't accidentally try to
         // configure things that don't apply to the inbound stream.
         const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-        if (ImGui::BeginMenu("Configurations"))
+        if (ImGui::BeginMenu(T("menu.configurations").c_str()))
         {
-            auto toggleItem = [](const char *label, auto *window) {
+            auto toggleItem = [](const std::string &label, auto *window) {
                 if (!window) return;
                 bool vis = window->isVisible();
-                if (ImGui::MenuItem(label, nullptr, vis)) window->setVisible(!vis);
+                if (ImGui::MenuItem(label.c_str(), nullptr, vis)) window->setVisible(!vis);
             };
             // Shader + Image stay visible in client mode — shader
             // params and brightness/contrast/aspect ratio make
             // sense for a viewer to override.
-            toggleItem("Shaders",  m_shaderWindow.get());
-            toggleItem("Image",    m_imageWindow.get());
+            toggleItem(T("menu.configurations.shaders"),  m_shaderWindow.get());
+            toggleItem(T("menu.configurations.image"),    m_imageWindow.get());
             if (!clientMode)
             {
                 ImGui::Separator();
-                toggleItem("Source",     m_sourceWindow.get());
-                toggleItem("Streaming",  m_streamingWindow.get());
-                toggleItem("Recording",  m_recordingWindow.get());
-                toggleItem("Web Portal", m_webPortalWindow.get());
+                toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
+                toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
+                toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
+                toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
 #ifdef __linux__
-                toggleItem("Audio",      m_audioWindow.get());
+                toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
 #endif
             }
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("View"))
+        if (ImGui::BeginMenu(T("menu.view").c_str()))
         {
-            if (ImGui::MenuItem("Toggle UI", "F12"))
+            if (ImGui::MenuItem(T("menu.view.toggleui").c_str(), "F12"))
             {
                 setVisible(!m_uiVisible);
             }
@@ -421,23 +429,17 @@ void UIManager::render()
             if (m_infoWindow)
             {
                 bool visible = m_infoWindow->isVisible();
-                if (ImGui::MenuItem("Info", nullptr, visible))
+                if (ImGui::MenuItem(T("menu.view.info").c_str(), nullptr, visible))
                 {
                     m_infoWindow->setVisible(!visible);
                 }
             }
-            // Capture Presets and Recordings are producer-side windows;
-            // they operate on the local capture device, not on a stream
-            // received from a remote host. Hide them while the client is
-            // in remote viewer mode so the user can't accidentally try to
-            // apply a preset that would be a no-op or open a recordings
-            // browser that's listing the wrong machine's files.
             if (!clientMode)
             {
                 if (m_capturePresetsWindow)
                 {
                     bool visible = m_capturePresetsWindow->isVisible();
-                    if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                    if (ImGui::MenuItem(T("menu.view.capturepresets").c_str(), nullptr, visible))
                     {
                         m_capturePresetsWindow->setVisible(!visible);
                     }
@@ -445,7 +447,7 @@ void UIManager::render()
                 if (m_recordingsWindow)
                 {
                     bool visible = m_recordingsWindow->isVisible();
-                    if (ImGui::MenuItem("Recordings", nullptr, visible))
+                    if (ImGui::MenuItem(T("menu.view.recordings").c_str(), nullptr, visible))
                     {
                         m_recordingsWindow->setVisible(!visible);
                     }
@@ -453,23 +455,17 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Remote"))
+        if (ImGui::BeginMenu(T("menu.remote").c_str()))
         {
-            // While the host is actively streaming we hide the client
-            // entry points — receiving someone else's stream while
-            // publishing our own is a configuration mistake (the local
-            // capture source would compete with the inbound remote feed
-            // for the same display path). The menu items go grey, the
-            // open windows are closed below.
             const bool clientEntryAllowed = !m_streamingActive;
-            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, clientEntryAllowed))
+            if (ImGui::MenuItem(T("menu.remote.connect").c_str(), nullptr, false, clientEntryAllowed))
             {
                 if (m_remoteConnectionWindow)
                 {
                     m_remoteConnectionWindow->setVisible(true);
                 }
             }
-            if (ImGui::MenuItem("Browse public directory...", nullptr, false, clientEntryAllowed))
+            if (ImGui::MenuItem(T("menu.remote.browse").c_str(), nullptr, false, clientEntryAllowed))
             {
                 if (m_directoryBrowserWindow)
                 {
@@ -478,22 +474,21 @@ void UIManager::render()
             }
             if (m_streamingActive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
-                ImGui::SetTooltip("Disabled while streaming as host.");
+                ImGui::SetTooltip("%s", T("menu.remote.disabled_streaming_tip").c_str());
             }
-            // Quick Disconnect shortcut — only shown when relevant.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-            if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
+            if (ImGui::MenuItem(T("menu.remote.disconnect").c_str(), nullptr, false, connected))
             {
                 setCurrentDevice("");
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Help"))
+        if (ImGui::BeginMenu(T("menu.help").c_str()))
         {
             if (m_creditsWindow)
             {
                 bool visible = m_creditsWindow->isVisible();
-                if (ImGui::MenuItem("Credits", nullptr, visible))
+                if (ImGui::MenuItem(T("menu.help.credits").c_str(), nullptr, visible))
                 {
                     m_creditsWindow->setVisible(!visible);
                 }

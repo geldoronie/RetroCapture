@@ -1,6 +1,7 @@
 #include "UIInfoPanel.h"
 #include "UIManager.h"
 #include "../capture/IVideoCapture.h"
+#include "../utils/TranslationManager.h"
 #include <imgui.h>
 
 #ifndef RETROCAPTURE_VERSION
@@ -21,7 +22,7 @@ void UIInfoPanel::render()
     if (!m_visible || !m_uiManager) return;
 
     ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Info", &m_visible))
+    if (!ImGui::Begin(T("info.title").c_str(), &m_visible))
     {
         ImGui::End();
         return;
@@ -51,104 +52,96 @@ void UIInfoPanel::render()
 
 void UIInfoPanel::renderCaptureInfo()
 {
-    ImGui::Text("Capture");
+    ImGui::Text("%s", T("info.capture").c_str());
     ImGui::Separator();
 
     const std::string device = m_uiManager->getCaptureDevice();
-    ImGui::Text("Device: %s", device.empty() ? "(none)" : device.c_str());
-    ImGui::Text("Resolution: %ux%u",
+    ImGui::Text("%s: %s", T("info.capture.device").c_str(),
+                device.empty() ? "(none)" : device.c_str());
+    ImGui::Text("%s: %ux%u", T("info.capture.resolution").c_str(),
                 m_uiManager->getCaptureWidth(),
                 m_uiManager->getCaptureHeight());
-    ImGui::Text("FPS: %u", m_uiManager->getCaptureFps());
+    ImGui::Text("%s: %u", T("info.capture.fps").c_str(),
+                m_uiManager->getCaptureFps());
 }
 
 void UIInfoPanel::renderStreamingInfo()
 {
-    ImGui::Text("Streaming");
+    ImGui::Text("%s", T("info.streaming").c_str());
     ImGui::Separator();
 
     bool active = m_uiManager->getStreamingActive();
-    ImGui::Text("Status:");
+    ImGui::Text("%s:", T("info.streaming.status").c_str());
     ImGui::SameLine();
     if (active)
     {
-        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "active");
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "%s",
+                           T("info.streaming.active").c_str());
         std::string url = m_uiManager->getStreamUrl();
         if (!url.empty())
         {
-            ImGui::Text("URL: %s", url.c_str());
+            ImGui::Text("%s: %s", T("info.streaming.url").c_str(), url.c_str());
         }
-        ImGui::Text("Connected clients: %u", m_uiManager->getStreamClientCount());
+        ImGui::Text("%s: %u", T("info.streaming.clients").c_str(),
+                    m_uiManager->getStreamClientCount());
     }
     else
     {
-        ImGui::TextDisabled("inactive");
+        ImGui::TextDisabled("%s", T("info.streaming.inactive").c_str());
     }
 }
 
 void UIInfoPanel::renderRemoteInfo()
 {
-    ImGui::Text("Remote Stream");
+    ImGui::Text("%s", T("info.remote_stream").c_str());
     ImGui::Separator();
 
-    ImGui::Text("Host URL: %s", m_uiManager->getCurrentDevice().c_str());
+    ImGui::Text("%s: %s", T("info.remote.host_url").c_str(),
+                m_uiManager->getCurrentDevice().c_str());
     const uint32_t w = m_uiManager->getCaptureWidth();
     const uint32_t h = m_uiManager->getCaptureHeight();
     if (w > 0 && h > 0)
     {
-        ImGui::Text("Incoming resolution: %ux%u", w, h);
+        ImGui::Text("%s: %ux%u", T("info.remote.incoming").c_str(), w, h);
     }
     else
     {
-        ImGui::TextDisabled("Incoming resolution: (negotiating)");
+        ImGui::TextDisabled("%s: %s", T("info.remote.incoming").c_str(),
+                            T("info.remote.negotiating").c_str());
     }
     const std::string interp = m_uiManager->getRemoteInterpolation();
-    ImGui::Text("Display interpolation: %s",
+    ImGui::Text("%s: %s", T("info.remote.interp").c_str(),
                 interp.empty() ? "linear" : interp.c_str());
 
     ImGui::Spacing();
-    ImGui::Text("Connection");
+    ImGui::Text("%s", T("info.connection").c_str());
     ImGui::Separator();
 
-    // UIManager::getCapture() is null in Remote mode (Application
-    // passes nullptr to setCaptureControls so the V4L2/DS-specific
-    // hardware controls UI hides itself). So we can't reach the
-    // VideoCaptureRemote through that path — Application mirrors the
-    // offline flag onto UIManager every frame instead.
-    //
-    // 'Connected' here means we've received at least one frame, which
-    // is what getCaptureWidth/Height > 0 already signals (it's the
-    // same heuristic UIRemoteConnection's footer uses). 'Reconnecting'
-    // means we're armed but haven't decoded a frame yet. 'Host likely
-    // offline' is the long-failure hint from #58 — it can fire while
-    // Connected if a previously-good stream just dropped, so it takes
-    // priority over the connected indicator.
     const bool hasFrames = (w > 0 && h > 0);
     if (m_uiManager->getRemoteHostLikelyOffline())
     {
-        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "Host likely offline");
-        ImGui::TextWrapped("The client is still retrying in the background. "
-                           "Disconnect and reconnect from the Remote menu "
-                           "to retry immediately.");
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "%s",
+                           T("info.connection.offline").c_str());
+        ImGui::TextWrapped("%s", T("info.connection.offline.hint").c_str());
     }
     else if (hasFrames)
     {
-        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Connected");
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "%s",
+                           T("info.connection.connected").c_str());
     }
     else
     {
-        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "Reconnecting...");
-        ImGui::TextWrapped("Waiting for the host's first frame. "
-                           "Reconnect attempts back off up to 60 s "
-                           "between tries.");
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "%s",
+                           T("info.connection.reconnecting").c_str());
+        ImGui::TextWrapped("%s", T("info.connection.reconnecting.hint").c_str());
     }
 }
 
 void UIInfoPanel::renderSystemInfo()
 {
-    ImGui::Text("Application");
+    ImGui::Text("%s", T("info.application").c_str());
     ImGui::Separator();
 
-    ImGui::Text("RetroCapture: %s", RETROCAPTURE_VERSION);
+    ImGui::Text("%s: %s", T("info.application.version").c_str(), RETROCAPTURE_VERSION);
     ImGui::Text("Dear ImGui: %s", ImGui::GetVersion());
 }
