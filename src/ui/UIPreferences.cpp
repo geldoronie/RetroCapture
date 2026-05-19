@@ -1,5 +1,6 @@
 #include "UIPreferences.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include <imgui.h>
 
@@ -22,15 +23,11 @@ void UIPreferences::render()
     }
 
     ImGui::TextWrapped("%s", T("preferences.intro").c_str());
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
 
-    // ── Language ──────────────────────────────────────────────────
     // Changing this calls TranslationManager::setLanguage, which
     // reloads the overlay bundle in-place; the next frame's T()
     // lookups already render in the new language.
-    ImGui::Text("%s", T("preferences.language").c_str());
+    ui_section_header(T("preferences.language").c_str());
     const char *langLabels[] = { "English", "Português (Brasil)" };
     const char *langKeys[]   = { "en",      "pt" };
     const std::string currentLang = m_uiManager->getLanguage();
@@ -49,12 +46,7 @@ void UIPreferences::render()
     }
     ImGui::TextDisabled("%s", T("preferences.language.hint").c_str());
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // ── Window behaviour ──────────────────────────────────────────
-    ImGui::Text("%s", T("preferences.window").c_str());
+    ui_section_header(T("preferences.window").c_str());
     bool startFullscreen = m_uiManager->getStartFullscreen();
     if (ImGui::Checkbox(T("preferences.start_fullscreen").c_str(), &startFullscreen))
     {

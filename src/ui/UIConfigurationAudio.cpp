@@ -1,6 +1,7 @@
 #include "UIConfigurationAudio.h"
 #include "../utils/TranslationManager.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../audio/IAudioCapture.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
@@ -109,9 +110,10 @@ void UIConfigurationAudio::refreshInputSources()
 
 void UIConfigurationAudio::renderInputSourceSelection()
 {
-    ImGui::Text("Audio Input Source");
-    ImGui::Separator();
-    ImGui::TextWrapped("Select the audio source to capture. This audio will be recorded and streamed.");
+    ui_section_header("Audio input",
+                      "Pick the audio source captured alongside video. "
+                      "The selection is shared between streaming and "
+                      "recording.");
 
     if (!m_audioCapture)
     {

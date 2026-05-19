@@ -1,5 +1,6 @@
 #include "UIConfigurationSource.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include "../capture/IVideoCapture.h"
 #include <imgui.h>
@@ -79,9 +80,9 @@ void UIConfigurationSource::render()
 
 void UIConfigurationSource::renderSourceTypeSelection()
 {
-    ImGui::Text("Source Type:");
-    ImGui::Separator();
-    ImGui::Spacing();
+    ui_section_header("Source",
+                      "Which physical capture device to read frames "
+                      "from. Switching here re-initialises the pipeline.");
 
     // Dropdown for selecting the local capture source type.
     // 'Remote' no longer lives here — it now has its own top-level menu
@@ -142,11 +143,10 @@ void UIConfigurationSource::renderV4L2Controls()
     renderQuickResolutions();
     ImGui::Separator();
     renderQuickFPS();
-    ImGui::Separator();
 
-    // V4L2 Hardware Controls
-    ImGui::Text("V4L2 Hardware Controls");
-    ImGui::Separator();
+    ui_section_header("V4L2 Hardware Controls",
+                      "Driver-exposed knobs (brightness, hue, exposure, "
+                      "etc.) — set is device-specific.");
 
     // Renderizar controles dinâmicos (discovered from device)
     const auto &controls = m_uiManager->getV4L2Controls();
@@ -281,11 +281,10 @@ void UIConfigurationSource::renderDSControls()
     renderQuickResolutions();
     ImGui::Separator();
     renderQuickFPS();
-    ImGui::Separator();
 
-    // DirectShow Hardware Controls
-    ImGui::Text("DirectShow Hardware Controls");
-    ImGui::Separator();
+    ui_section_header("DirectShow Hardware Controls",
+                      "Filter-exposed knobs from the DirectShow driver. "
+                      "Set is device-specific.");
 
     // Helper function para renderizar controle com range do dispositivo ou padrão
     auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
@@ -465,8 +464,9 @@ void UIConfigurationSource::renderDSDeviceSelection()
 
 void UIConfigurationSource::renderCaptureSettings()
 {
-    ImGui::Text("Capture Resolution & Framerate");
-    ImGui::Separator();
+    ui_section_header("Capture Resolution & Framerate",
+                      "What the source streams at — separate from the "
+                      "Streaming / Recording target settings.");
 
     // Controles de resolução
     ImGui::Text("Resolution:");

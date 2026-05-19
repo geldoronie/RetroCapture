@@ -1,5 +1,6 @@
 #include "UIConfigurationShader.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../shader/ShaderEngine.h"
 #include "../utils/FilesystemCompat.h"
 #include "../utils/Paths.h"
@@ -34,6 +35,9 @@ void UIConfigurationShader::render()
     m_shaderEngine = m_uiManager->getShaderEngine();
 
     {
+        ui_section_header("Pipeline",
+                          "Toggle the shader chain on or off without "
+                          "losing the selected preset or its tuning.");
         bool enabled = m_uiManager->getShaderPipelineEnabled();
         if (ImGui::Checkbox(T("shader.apply_pipeline").c_str(), &enabled))
         {
@@ -44,13 +48,10 @@ void UIConfigurationShader::render()
         {
             ImGui::SetTooltip("%s", T("shader.apply_pipeline.tip").c_str());
         }
-        ImGui::Separator();
     }
 
     renderShaderSelection();
-    ImGui::Separator();
     renderSavePreset();
-    ImGui::Separator();
     renderShaderParameters();
 
     ImGui::End();
@@ -58,7 +59,9 @@ void UIConfigurationShader::render()
 
 void UIConfigurationShader::renderShaderSelection()
 {
-    ImGui::Text("%s", T("shader.preset").c_str());
+    ui_section_header("Preset",
+                      "Pick a .glslp shader preset from the scan path. "
+                      "Click Rescan to pick up newly dropped files.");
 
     std::string currentShader = m_uiManager->getCurrentShader();
     const std::string rescanLabel = T("shader.rescan");
@@ -99,8 +102,7 @@ void UIConfigurationShader::renderShaderSelection()
         ImGui::SetTooltip("%s", T("shader.rescan.tip").c_str());
     }
 
-    ImGui::Separator();
-    ImGui::Text("%s: %zu", T("shader.shaders_found").c_str(), m_uiManager->getScannedShaders().size());
+    ImGui::TextDisabled("%s: %zu", T("shader.shaders_found").c_str(), m_uiManager->getScannedShaders().size());
 }
 
 void UIConfigurationShader::renderSavePreset()
@@ -110,7 +112,9 @@ void UIConfigurationShader::renderSavePreset()
         return;
     }
 
-    ImGui::Text("%s", T("shader.save_preset").c_str());
+    ui_section_header("Save preset",
+                      "Overwrite the loaded .glslp with current "
+                      "parameters, or write a new one alongside it.");
 
     std::string currentPreset = m_shaderEngine->getPresetPath();
     if (!currentPreset.empty())
@@ -196,7 +200,9 @@ void UIConfigurationShader::renderShaderParameters()
         return;
     }
 
-    ImGui::Text("%s", T("shader.parameters").c_str());
+    ui_section_header("Parameters",
+                      "Knobs the active preset exposes — values persist "
+                      "when you Save the preset.");
 
     auto params = m_shaderEngine->getShaderParameters();
 

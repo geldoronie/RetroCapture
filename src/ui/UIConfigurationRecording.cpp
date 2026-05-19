@@ -1,6 +1,7 @@
 #include "UIConfigurationRecording.h"
 #include "../utils/TranslationManager.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/Logger.h"
 #include <imgui.h>
 #include <algorithm>
@@ -20,7 +21,9 @@ void UIConfigurationRecording::render()
 {
     if (!m_visible || !m_uiManager) return;
 
-    ImGui::SetNextWindowSize(ImVec2(640, 660), ImGuiCond_FirstUseEver);
+    // Same window dims as Configuration → Streaming so the two feel
+    // like the same family of dialog.
+    ImGui::SetNextWindowSize(ImVec2(680, 720), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(T("recording.title").c_str(), &m_visible))
     {
         ImGui::End();
@@ -28,10 +31,11 @@ void UIConfigurationRecording::render()
     }
 
     renderRecordingStatus();
-    ImGui::Separator();
     renderProfiles();
-    ImGui::Separator();
     {
+        ui_section_header("Pipeline",
+                          "Choose which feed lands on disk: the raw "
+                          "source, or the post-shader output.");
         bool apply = m_uiManager->getRecordingApplyShader();
         if (ImGui::Checkbox("Apply shader to recording", &apply))
         {
@@ -45,18 +49,15 @@ void UIConfigurationRecording::render()
                               "Useful to archive a clean master while keeping the CRT\n"
                               "look on screen / on stream.");
         }
-        ImGui::Separator();
     }
     renderBasicSettings();
-    ImGui::Separator();
     renderCodecSettings();
-    ImGui::Separator();
     renderBitrateSettings();
-    ImGui::Separator();
     renderContainerSettings();
-    ImGui::Separator();
     renderOutputSettings();
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
     renderStartStopButton();
 
     ImGui::End();
@@ -64,46 +65,30 @@ void UIConfigurationRecording::render()
 
 void UIConfigurationRecording::renderRecordingStatus()
 {
-    ImGui::Text("Video Recording");
-    ImGui::Separator();
-
-    // Status
-    bool active = m_uiManager->getRecordingActive();
-    ImGui::Text("Status: %s", active ? "Recording" : "Stopped");
-    if (active)
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
-    }
-    else
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "●");
-    }
+    ui_section_header("Video Recording");
+    const bool active = m_uiManager->getRecordingActive();
+    ui_status_indicator(active, "Recording", "Stopped");
 
     if (active)
     {
-        // Duration
-        uint64_t durationUs = m_uiManager->getRecordingDurationUs();
+        const uint64_t durationUs = m_uiManager->getRecordingDurationUs();
         uint64_t seconds = durationUs / 1000000;
         uint64_t minutes = seconds / 60;
         seconds %= 60;
-        uint64_t hours = minutes / 60;
+        const uint64_t hours = minutes / 60;
         minutes %= 60;
-        
+
         std::stringstream ss;
         ss << std::setfill('0') << std::setw(2) << hours << ":"
            << std::setw(2) << minutes << ":"
            << std::setw(2) << seconds;
         ImGui::Text("Duration: %s", ss.str().c_str());
 
-        // File size
-        uint64_t fileSize = m_uiManager->getRecordingFileSize();
-        double sizeMB = static_cast<double>(fileSize) / (1024.0 * 1024.0);
+        const uint64_t fileSize = m_uiManager->getRecordingFileSize();
+        const double   sizeMB   = static_cast<double>(fileSize) / (1024.0 * 1024.0);
         ImGui::Text("File Size: %.2f MB", sizeMB);
 
-        // Filename
-        std::string filename = m_uiManager->getRecordingFilename();
+        const std::string filename = m_uiManager->getRecordingFilename();
         if (!filename.empty())
         {
             ImGui::Text("File: %s", filename.c_str());
@@ -125,8 +110,9 @@ void UIConfigurationRecording::renderProfiles()
 {
     if (m_profilesDirty) refreshProfiles();
 
-    ImGui::Text("Profiles");
-    ImGui::Separator();
+    ui_section_header("Profiles",
+                      "Saved encoder + container configurations you can "
+                      "swap between.");
 
     const char *currentLabel = (m_selectedProfileIndex >= 0 &&
                                 m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
@@ -248,8 +234,9 @@ void UIConfigurationRecording::renderProfiles()
 
 void UIConfigurationRecording::renderBasicSettings()
 {
-    ImGui::Text("Basic Settings");
-    ImGui::Separator();
+    ui_section_header("Video",
+                      "Output resolution and frame rate. \"Capture\" "
+                      "keeps whatever the source delivers.");
 
     // Resolution - Dropdown
     const char *resolutions[] = {
@@ -283,6 +270,13 @@ void UIConfigurationRecording::renderBasicSettings()
         m_uiManager->triggerRecordingWidthChange(resolutionWidths[currentResIndex]);
         m_uiManager->triggerRecordingHeightChange(resolutionHeights[currentResIndex]);
     }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Output resolution written to the file.\n"
+                          "\"Capture\" leaves it at whatever the source\n"
+                          "produces (recommended for retro consoles to\n"
+                          "preserve native resolution).");
+    }
 
     // FPS - Dropdown
     const char *fpsOptions[] = {"Capture (0)", "15", "24", "30", "60", "120"};
@@ -303,12 +297,19 @@ void UIConfigurationRecording::renderBasicSettings()
     {
         m_uiManager->triggerRecordingFpsChange(fpsValues[currentFpsIndex]);
     }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Output frame rate. \"Capture\" matches the source.\n"
+                          "Higher than source upscales temporally and wastes bits;\n"
+                          "lower than source drops frames.");
+    }
 }
 
 void UIConfigurationRecording::renderCodecSettings()
 {
-    ImGui::Text("Codecs");
-    ImGui::Separator();
+    ui_section_header("Codecs",
+                      "What encodes the video and audio. Codec-specific "
+                      "tuning appears below the dropdown.");
 
     // Video codec selection
     const char *videoCodecs[] = {"h264", "h265", "vp8", "vp9"};
@@ -326,6 +327,14 @@ void UIConfigurationRecording::renderCodecSettings()
     if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_uiManager->triggerRecordingVideoCodecChange(videoCodecs[currentVideoCodecIndex]);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("h264: universal compatibility, default.\n"
+                          "h265: ~30%% smaller files at the same quality,\n"
+                          "      but slower to encode and not all players\n"
+                          "      handle it (DaVinci/older Premiere can).\n"
+                          "vp8/vp9: WebM-friendly, mkv container only.");
     }
 
     // Audio codec selection
@@ -345,12 +354,24 @@ void UIConfigurationRecording::renderCodecSettings()
     {
         m_uiManager->triggerRecordingAudioCodecChange(audioCodecs[currentAudioCodecIndex]);
     }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("aac: best compatibility, default for mp4.\n"
+                          "mp3: legacy, lossy at very low bitrates.\n"
+                          "opus: highest quality per bit, mkv/webm only.");
+    }
 
     // Include audio checkbox
     bool includeAudio = m_uiManager->getRecordingIncludeAudio();
     if (ImGui::Checkbox("Include Audio", &includeAudio))
     {
         m_uiManager->triggerRecordingIncludeAudioChange(includeAudio);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Off = silent recording. The capture pipeline still\n"
+                          "samples audio for the stream, but the muxer skips\n"
+                          "the audio track entirely on disk.");
     }
 
     // Codec-specific settings
@@ -508,8 +529,10 @@ void UIConfigurationRecording::renderVP9Settings()
 
 void UIConfigurationRecording::renderBitrateSettings()
 {
-    ImGui::Text("Bitrate Settings");
-    ImGui::Separator();
+    ui_section_header("Bitrate",
+                      "How aggressively the encoder spends bits. Higher "
+                      "= better quality, larger files; lower = smaller "
+                      "files, visible compression artefacts.");
 
     // Video bitrate (in Mbps)
     uint32_t bitrate = m_uiManager->getRecordingBitrate();
@@ -517,6 +540,14 @@ void UIConfigurationRecording::renderBitrateSettings()
     if (ImGui::SliderFloat("Video Bitrate (Mbps)", &bitrateMbps, 1.0f, 50.0f, "%.1f"))
     {
         m_uiManager->triggerRecordingBitrateChange(static_cast<uint32_t>(bitrateMbps * 1000000));
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Recommended starting points:\n"
+                          " ~3 Mbps  — 720p archival\n"
+                          " ~6 Mbps  — 1080p archival\n"
+                          " ~12 Mbps — 1080p HEVC at zero-compromise\n"
+                          " ~25 Mbps — 4K archival");
     }
 
     // Audio bitrate (in kbps)
@@ -526,12 +557,18 @@ void UIConfigurationRecording::renderBitrateSettings()
     {
         m_uiManager->triggerRecordingAudioBitrateChange(static_cast<uint32_t>(audioBitrateKbps * 1000));
     }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("128 kbps is transparent for AAC; 256 kbps is\n"
+                          "the safe default. Opus reaches the same\n"
+                          "quality around 96 kbps.");
+    }
 }
 
 void UIConfigurationRecording::renderContainerSettings()
 {
-    ImGui::Text("Container Format");
-    ImGui::Separator();
+    ui_section_header("Container",
+                      "The file format that wraps the encoded streams.");
 
     const char *containers[] = {"mp4", "mkv", "avi"};
     std::string currentContainer = m_uiManager->getRecordingContainer();
@@ -560,8 +597,9 @@ void UIConfigurationRecording::renderContainerSettings()
 
 void UIConfigurationRecording::renderOutputSettings()
 {
-    ImGui::Text("Output Settings");
-    ImGui::Separator();
+    ui_section_header("Output",
+                      "Where files land and how they're named. Template "
+                      "uses strftime tokens — see the field tooltip.");
 
     // Output path
     std::string outputPath = m_uiManager->getRecordingOutputPath();
@@ -572,6 +610,12 @@ void UIConfigurationRecording::renderOutputSettings()
     if (ImGui::InputText("Output Directory", pathBuffer, sizeof(pathBuffer)))
     {
         m_uiManager->triggerRecordingOutputPathChange(std::string(pathBuffer));
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Created automatically on first record. Relative\n"
+                          "paths resolve against the application working\n"
+                          "directory; absolute paths are honoured as-is.");
     }
 
     // Filename template
@@ -594,35 +638,23 @@ void UIConfigurationRecording::renderOutputSettings()
 
 void UIConfigurationRecording::renderStartStopButton()
 {
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    bool isRecording = m_uiManager->getRecordingActive();
-    
+    // Same `ImVec2(-1, 0)` full-width default-height button used by
+    // UIConfigurationStreaming::renderStartStopButton — no colour
+    // push, no oversized height. The two windows look like the same
+    // dialog from across the room.
+    const bool isRecording = m_uiManager->getRecordingActive();
     if (isRecording)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
-        
-        if (ImGui::Button("Stop Recording", ImVec2(-1, 40)))
+        if (ImGui::Button("Stop Recording", ImVec2(-1, 0)))
         {
             m_uiManager->triggerRecordingStartStop(false);
         }
-        
-        ImGui::PopStyleColor(3);
     }
     else
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.9f, 0.0f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.5f, 0.0f, 1.0f));
-        
-        if (ImGui::Button("Start Recording", ImVec2(-1, 40)))
+        if (ImGui::Button("Start Recording", ImVec2(-1, 0)))
         {
             m_uiManager->triggerRecordingStartStop(true);
         }
-        
-        ImGui::PopStyleColor(3);
     }
 }

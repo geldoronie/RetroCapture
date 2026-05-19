@@ -1,5 +1,6 @@
 #include "UIRemoteConnection.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../capture/IVideoCapture.h"
 #include "../streaming/DirectoryBrowser.h"
 #include "../utils/PasswordHash.h"
@@ -98,17 +99,12 @@ void UIRemoteConnection::render()
     ImGui::SetNextWindowSize(ImVec2(520, 320), ImGuiCond_FirstUseEver);
     if (ImGui::Begin(T("remote.title").c_str(), &m_visible))
     {
-        ImGui::TextWrapped("%s", T("remote.intro").c_str());
-        ImGui::Spacing();
+        ui_section_header(T("remote.title").c_str(), T("remote.intro").c_str());
         ImGui::TextDisabled("%s", T("remote.tip").c_str());
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
         renderManualTab(sourceIsRemote, currentDevice, connected);
 
-        ImGui::Spacing();
-        ImGui::Separator();
+        ui_section_header("Status");
         renderStatusFooter(connected);
     }
     ImGui::End();
@@ -121,8 +117,7 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
                                          const std::string &currentDevice,
                                          bool connected)
 {
-    ImGui::Spacing();
-    ImGui::Text("%s", T("remote.base_url").c_str());
+    ui_section_header(T("remote.base_url").c_str());
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##remoteUrl", m_urlBuffer, sizeof(m_urlBuffer));
 
@@ -143,7 +138,7 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     {
         if (currentMode == modes[i]) { currentModeIndex = i; break; }
     }
-    ImGui::Text("%s", T("remote.display_interp").c_str());
+    ui_section_header(T("remote.display_interp").c_str());
     ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
     {
@@ -154,8 +149,6 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
         ImGui::SetTooltip("%s", T("remote.interp.tip").c_str());
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
     ImGui::Spacing();
 
     // Two-frame state machine: button click sets *ShowStatus, the

@@ -1,5 +1,6 @@
 #include "UIConfigurationImage.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include <imgui.h>
 
@@ -23,16 +24,15 @@ void UIConfigurationImage::render()
         return;
     }
 
-    ImGui::Text("%s", T("image.adjustments").c_str());
-    ImGui::Separator();
+    ui_section_header("Image adjustments",
+                      "Post-shader, pre-output transforms that only "
+                      "affect what you see locally — they're not "
+                      "embedded in the stream or recording.");
 
     renderBrightnessContrast();
-    ImGui::Separator();
     renderOutputResolution();
-    ImGui::Separator();
     renderAspectRatio();
     renderFullscreen();
-    ImGui::Separator();
     renderMonitorSelection();
 
     ImGui::End();
@@ -89,9 +89,9 @@ void UIConfigurationImage::renderFullscreen()
 
 void UIConfigurationImage::renderOutputResolution()
 {
-    ImGui::Text("Output Resolution");
-    ImGui::TextDisabled("(Applied after shader, before stretching to window)");
-    ImGui::TextDisabled("(0 = automatic, use source resolution)");
+    ui_section_header("Output resolution",
+                      "Applied after the shader, before stretching to "
+                      "the window. 0 = automatic (use source).");
     
     int outputWidth = static_cast<int>(m_uiManager->getOutputWidth());
     int outputHeight = static_cast<int>(m_uiManager->getOutputHeight());
@@ -148,7 +148,8 @@ void UIConfigurationImage::renderOutputResolution()
 
 void UIConfigurationImage::renderMonitorSelection()
 {
-    ImGui::Text("Monitor Index:");
+    ui_section_header("Monitor",
+                      "Which display fullscreen mode targets.");
     bool fullscreen = m_uiManager->getFullscreen();
     if (!fullscreen)
     {
