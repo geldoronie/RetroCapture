@@ -920,56 +920,28 @@
     </script>
     
     <!-- PWA Service Worker Registration -->
+    <script src="/sw-register.js"></script>
+
     <script>
-        // Registrar Service Worker para PWA
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js')
-                    .then((registration) => {
-                        console.log('Service Worker registrado com sucesso:', registration.scope);
-                        
-                        // Verificar atualizações periodicamente
-                        setInterval(() => {
-                            registration.update();
-                        }, 60000); // Verificar a cada minuto
-                    })
-                    .catch((error) => {
-                        console.log('Falha ao registrar Service Worker:', error);
-                    });
-                
-                // Listener para quando o Service Worker estiver pronto
-                navigator.serviceWorker.ready.then((registration) => {
-                    console.log('Service Worker pronto');
-                });
-            });
-        }
-        
-        // Detectar quando o app é instalado
+        // beforeinstallprompt / appinstalled hooks for the
+        // Add-to-Home-Screen flow. Kept inline since this is the only
+        // page that surfaces them — the home and recordings pages
+        // intentionally don't.
         let deferredPrompt;
         window.addEventListener('beforeinstallprompt', (e) => {
-            // Prevenir o prompt automático
             e.preventDefault();
             deferredPrompt = e;
-            
-            // Mostrar botão de instalação customizado (opcional)
-            console.log('PWA pode ser instalado');
-            // Você pode adicionar um botão na UI aqui se quiser
         });
-        
-        // Detectar quando o app foi instalado
         window.addEventListener('appinstalled', () => {
-            console.log('PWA instalado com sucesso!');
             deferredPrompt = null;
         });
 
-        // Detectar quando a página é carregada do cache do histórico (back/forward cache)
-        // e forçar reload se necessário para evitar mostrar conteúdo antigo
+        // bfcache guard — if the user lands here via back/forward
+        // with the wrong title cached, force a reload so the page's
+        // own data layer rebuilds.
         window.addEventListener('pageshow', (event) => {
-            // Se a página foi carregada do cache do histórico (back/forward cache)
             if (event.persisted) {
-                // Se estamos na raiz ou index.html, recarregar para garantir conteúdo correto
                 if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
-                    // Verificar se o título está correto (não deve ser "Recordings")
                     if (document.title.includes('Recordings')) {
                         window.location.reload();
                     }

@@ -1,40 +1,43 @@
 /**
- * RetroCapture PWA Service Worker
+ * RetroCapture PWA Service Worker.
  *
- * Strategy split is *deliberate* and was rewritten in v5 after the
- * v3/v4 "cache-first for everything" policy caused two real problems:
+ * Strategy split by sensitivity — the v3/v4 "cache-first for
+ * everything" policy caused real bugs (stale /config.html bypassing
+ * the server's LAN gate, language switches that didn't take because
+ * cached home.js trailed the server), so v5 onward draws a hard line:
  *
- *   1. Stale HTML/JS hung around for days after a release, so new
- *      features (e.g. the i18n dropdown wiring on home.js) silently
- *      didn't work for returning visitors.
- *   2. /config.html is server-side gated to LAN clients only. A cached
- *      copy bypasses the gate — once a LAN user loaded it once, every
- *      subsequent visit from the same browser served the cached
- *      response without re-asking the server. That was a security hole
- *      dressed as a perf optimization. Now configurable HTML always
- *      goes through the network so the server's LAN check runs every
- *      time.
+ *   - HTML / JS / i18n bundles  → network-first, fall back to cache
+ *                                  only when offline. Anything that
+ *                                  carries auth, code, or strings
+ *                                  *must* match the server's view.
+ *   - CSS / fonts / icons / images / manifest
+ *                               → stale-while-revalidate. One stale
+ *                                 render is acceptable; the
+ *                                 background refresh fixes it on the
+ *                                 next visit.
+ *   - /api/*                    → network-only, with a synthetic
+ *                                  offline JSON for graceful degrade.
+ *   - /stream and /recordings/.../file
+ *                               → pass-through (Range + cache don't
+ *                                 mix).
  *
- * Current rules:
- *   - /api/*                         → network-only with offline JSON.
- *   - /assets/i18n/*.json            → network-first (translations
- *                                       must never drift behind code).
- *   - /stream and /recordings/*/file → pass-through (large/streamed).
- *   - HTML (/, *.html) and JS        → network-first, cache fallback
- *                                       only when offline.
- *   - CSS / fonts / icons / images   → stale-while-revalidate: serve
- *                                       from cache instantly, refresh
- *                                       in the background.
+ * Lifecycle: install precaches the minimal viable shell, then
+ * skipWaiting + clients.claim let a freshly-pushed SW take over the
+ * page on the very next navigation. Index.html ships a tiny
+ * controllerchange listener that reloads the page when a new SW
+ * activates mid-session — that, plus a cache-name bump per release,
+ * is what keeps users out of stale-cache hell.
  *
- * Cache name bumps wipe the previous generation on activate. Bump
- * whenever the precache list or any cache-first asset changes.
+ * Bump CACHE_NAME and RUNTIME_CACHE in lockstep on any portal
+ * release that touches static assets — that's what trips the
+ * activate-time cleanup of older caches.
  */
 
-const CACHE_NAME = 'retrocapture-v5';
-const RUNTIME_CACHE = 'retrocapture-runtime-v5';
+const CACHE_NAME = 'retrocapture-v6';
+const RUNTIME_CACHE = 'retrocapture-runtime-v6';
 
-// Resources to precache on install. Keep this list small — every
-// entry has to download successfully or the install fails.
+// Resources to precache so the PWA shell works offline. Keep small
+// — every entry has to fetch successfully or install fails.
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -70,6 +73,41 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// ─── strategy helpers ────────────────────────────────────────────
+
+function networkFirst(event, cacheName) {
+  event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(cacheName).then((c) => c.put(event.request, clone));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
+  );
+}
+
+function staleWhileRevalidate(event, cacheName) {
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      const networkFetch = fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(cacheName).then((c) => c.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => cached);
+      return cached || networkFetch;
+    })
+  );
+}
+
+// ─── classifiers ─────────────────────────────────────────────────
+
 function isHTML(url) {
   return url.pathname === '/' || url.pathname.endsWith('.html');
 }
@@ -96,44 +134,7 @@ function isStaticAsset(url) {
   );
 }
 
-// Network-first: try the network, fall back to whatever's in the
-// cache when offline. Successful network responses refresh the cache
-// silently for next time.
-function networkFirst(event, cacheName) {
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const clone = response.clone();
-          caches.open(cacheName).then((c) => c.put(event.request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request))
-  );
-}
-
-// Stale-while-revalidate: ship the cached copy immediately and kick
-// off a background fetch to refresh it for next time. Fast + always
-// eventually fresh, at the cost of one stale render after each push.
-// Only suitable for assets where one stale render doesn't break
-// correctness (CSS, fonts, icons, images).
-function staleWhileRevalidate(event, cacheName) {
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
-        .then((response) => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(cacheName).then((c) => c.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
-  );
-}
+// ─── router ──────────────────────────────────────────────────────
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -141,15 +142,9 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // Pass-through: streams and large recording downloads must never
-  // be intercepted by the SW (Range requests + cache don't mix).
   if (url.pathname === '/stream' || url.pathname.startsWith('/stream/')) return;
   if (url.pathname.includes('/recordings/') && url.pathname.endsWith('/file')) return;
 
-  // APIs — network-only with a synthesized offline JSON fallback for
-  // GETs. We deliberately do NOT cache /api responses; the few
-  // mutations in the portal don't need offline-replay support and
-  // stale GET responses caused confused-state bugs in the past.
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(request).catch(() =>
@@ -166,29 +161,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Translation bundles — network-first so a freshly-edited bundle
-  // reaches users on the next request without a cache bump.
-  if (isI18nBundle(url)) {
-    networkFirst(event, RUNTIME_CACHE);
+  if (isI18nBundle(url) || isHTML(url) || isScript(url)) {
+    networkFirst(event, isI18nBundle(url) ? RUNTIME_CACHE : CACHE_NAME);
     return;
   }
 
-  // HTML + JS — network-first. HTML carries the LAN-only gate for
-  // /config.html on the server side, and JS has to match the HTML
-  // it shipped with. Both must always reflect the server's view.
-  if (isHTML(url) || isScript(url)) {
-    networkFirst(event, CACHE_NAME);
-    return;
-  }
-
-  // CSS, fonts, icons, images — these change rarely and are safe to
-  // serve stale for one render while refreshing in the background.
   if (isStaticAsset(url)) {
     staleWhileRevalidate(event, CACHE_NAME);
     return;
   }
 
-  // Anything else: network-first into the runtime cache.
   networkFirst(event, RUNTIME_CACHE);
 });
 
