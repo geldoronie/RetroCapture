@@ -40,6 +40,16 @@
     const _readyCallbacks = [];
     let _ready = false;
 
+    // Hide the body until translations are applied so users don't see
+    // a flash of the raw English literals before the overlay lands.
+    // The matching CSS rule lives in style.css. We also arm a safety
+    // timeout — if init() ever crashes or hangs, we unhide anyway so
+    // the page never stays invisible.
+    try { document.documentElement.classList.add('i18n-loading'); } catch (e) { /* ignore */ }
+    setTimeout(function () {
+        try { document.documentElement.classList.remove('i18n-loading'); } catch (e) { /* ignore */ }
+    }, 3000);
+
     function detectInitialLang(hostLang) {
         try {
             const override = localStorage.getItem(STORAGE_KEY);
@@ -151,19 +161,41 @@
     }
 
     async function init() {
-        // English is always the fallback layer.
-        _fallback = await fetchBundle(FALLBACK_LANG);
-        const hostLang = await fetchHostLanguage();
-        const lang = detectInitialLang(hostLang);
-        _currentLang = lang;
-        if (lang !== FALLBACK_LANG) {
-            _overlay = await fetchBundle(lang);
+        try {
+            // If the user already picked a language in this browser, skip
+            // the /api/v1/preferences round-trip and go straight to that
+            // bundle. Cuts one fetch from the critical-path on every page
+            // load and removes a flicker source when the API call is slow.
+            let stored = null;
+            try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+
+            // Fallback (English) is always loaded so missing-key paths
+            // never return raw keys to the UI.
+            _fallback = await fetchBundle(FALLBACK_LANG);
+
+            let lang;
+            if (stored && SUPPORTED.indexOf(stored) >= 0) {
+                lang = stored;
+            } else {
+                const hostLang = await fetchHostLanguage();
+                lang = detectInitialLang(hostLang);
+            }
+            _currentLang = lang;
+            if (lang !== FALLBACK_LANG) {
+                _overlay = await fetchBundle(lang);
+            }
+            applyTranslations(document);
+        } catch (err) {
+            console.warn('i18n init failed', err);
+        } finally {
+            // Unhide the body whether init succeeded or failed — better
+            // to show untranslated content than nothing at all.
+            try { document.documentElement.classList.remove('i18n-loading'); } catch (e) { /* ignore */ }
+            _ready = true;
+            _readyCallbacks.splice(0).forEach(function (cb) {
+                try { cb(); } catch (e) { console.warn('i18n onReady cb threw', e); }
+            });
         }
-        applyTranslations(document);
-        _ready = true;
-        _readyCallbacks.splice(0).forEach(function (cb) {
-            try { cb(); } catch (e) { console.warn('i18n onReady cb threw', e); }
-        });
     }
 
     global.t = t;

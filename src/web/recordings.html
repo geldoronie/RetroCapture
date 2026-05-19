@@ -17,7 +17,11 @@
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css">
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/style.css">
-    
+    <!-- i18n loader: must run before body renders so the
+         'i18n-loading' class is set in time to hide the raw English
+         literals while translations are fetched. -->
+    <script src="/i18n.js"></script>
+
     <style>
         .recordings-container {
             max-width: 1400px;
@@ -240,7 +244,6 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/i18n.js"></script>
     <script src="/vendor/bootstrap.bundle.min.js"></script>
     <script src="/api.js"></script>
     <script>
