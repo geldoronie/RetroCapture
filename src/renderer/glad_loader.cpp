@@ -72,7 +72,7 @@ bool loadOpenGLFunctions()
     // SDL2: Verificar se SDL foi inicializado
     if (SDL_WasInit(SDL_INIT_VIDEO) == 0)
     {
-        LOG_ERROR("SDL2 não foi inicializado - não é possível carregar funções OpenGL");
+        LOG_ERROR("SDL2 not initialized — cannot load OpenGL functions");
         return false;
     }
 
@@ -81,7 +81,7 @@ bool loadOpenGLFunctions()
     name = reinterpret_cast<decltype(name)>(SDL_GL_GetProcAddress(#name)); \
     if (!name)                                                          \
     {                                                                   \
-        LOG_ERROR("Falha ao carregar função OpenGL: " #name);           \
+        LOG_ERROR("Failed to load OpenGL function: " #name);           \
         return false;                                                   \
     }
 #else
@@ -91,7 +91,7 @@ bool loadOpenGLFunctions()
     // Verificar se o contexto OpenGL está ativo
     if (!glfwGetCurrentContext())
     {
-        LOG_ERROR("Contexto OpenGL não está ativo - não é possível carregar funções OpenGL");
+        LOG_ERROR("OpenGL context not active — cannot load OpenGL functions");
         return false;
     }
 
@@ -99,7 +99,7 @@ bool loadOpenGLFunctions()
     name = reinterpret_cast<decltype(name)>(glfwGetProcAddress(#name)); \
     if (!name)                                                          \
     {                                                                   \
-        LOG_ERROR("Falha ao carregar função OpenGL: " #name);           \
+        LOG_ERROR("Failed to load OpenGL function: " #name);           \
         return false;                                                   \
     }
 #endif
@@ -171,11 +171,11 @@ bool loadOpenGLFunctions()
     // Verificar se as funções críticas foram carregadas
     if (!glGenVertexArrays || !glGenBuffers || !glCreateShader || !glCreateProgram)
     {
-        LOG_ERROR("Funções OpenGL críticas não foram carregadas");
+        LOG_ERROR("Critical OpenGL functions failed to load");
         return false;
     }
 
-    LOG_INFO("Funções OpenGL carregadas com sucesso");
+    LOG_INFO("OpenGL functions loaded");
     return true;
 }
 
@@ -279,11 +279,11 @@ std::string getGLSLVersionString()
     
     // Se não conseguimos detectar, usar fallback seguro
     if (major == 0) {
-        LOG_WARN("Não foi possível detectar versão OpenGL, usando GLSL 1.20 como fallback");
+        LOG_WARN("Could not detect OpenGL version, falling back to GLSL 1.20");
         return "#version 120";
     }
     
-    LOG_INFO("OpenGL versão detectada: " + std::to_string(major) + (isES ? " (ES)" : " (Desktop)"));
+    LOG_INFO("OpenGL version detected: " + std::to_string(major) + (isES ? " (ES)" : " (Desktop)"));
     
     if (isES) {
         // OpenGL ES

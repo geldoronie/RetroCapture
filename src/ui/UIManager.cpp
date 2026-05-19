@@ -1,5 +1,15 @@
 #include "UIManager.h"
-#include "UIConfiguration.h"
+#include "UIConfigurationSource.h"
+#include "UIConfigurationShader.h"
+#include "UIConfigurationImage.h"
+#include "UIConfigurationStreaming.h"
+#include "UIConfigurationRecording.h"
+#include "UIConfigurationWebPortal.h"
+#ifdef __linux__
+#  include "UIConfigurationAudio.h"
+#endif
+#include "UIInfoPanel.h"
+#include "UIPreferences.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -10,6 +20,7 @@
 #include "../streaming/StreamingProfileManager.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
+#include "../utils/TranslationManager.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
@@ -43,14 +54,24 @@
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
-    : m_configWindow(nullptr), m_creditsWindow(nullptr)
+    : m_creditsWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
     // Destruir janelas antes de shutdown
-    m_configWindow.reset();
+    m_sourceWindow.reset();
+    m_shaderWindow.reset();
+    m_imageWindow.reset();
+    m_streamingWindow.reset();
+    m_recordingWindow.reset();
+    m_webPortalWindow.reset();
+#ifdef __linux__
+    m_audioWindow.reset();
+#endif
+    m_infoWindow.reset();
+    m_preferencesWindow.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
     m_recordingsWindow.reset();
@@ -168,7 +189,29 @@ bool UIManager::init(void *window)
 
     loadConfig();
 
-    m_configWindow = std::make_unique<UIConfiguration>(this);
+    // i18n bootstrap (#45 Fase B). loadConfig() above already set
+    // m_language from config.json (default "en"); now hand it to
+    // the TranslationManager so T(...) calls in subsequent UI
+    // construction return translated strings from the start. Switch
+    // via UIPreferences calls setLanguage() at runtime.
+    TranslationManager::instance().init(Paths::getReadOnlyAssetsDir(), m_language);
+
+    // Standalone configuration windows (Fase A of #45) — each used to
+    // be a tab inside the unified "RetroCapture Controls" window;
+    // they're now separate ImGui windows opened from
+    // Configurations / View / File menus.
+    m_sourceWindow      = std::make_unique<UIConfigurationSource>(this);
+    m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
+    m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
+    m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
+    m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
+    m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
+#ifdef __linux__
+    m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
+#endif
+    m_infoWindow        = std::make_unique<UIInfoPanel>(this);
+    m_preferencesWindow = std::make_unique<UIPreferences>(this);
+
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
@@ -177,8 +220,11 @@ bool UIManager::init(void *window)
     m_directoryBrowserWindow->setRemoteConnectionWindow(m_remoteConnectionWindow.get());
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
-    m_configWindow->setVisible(true);
-    m_configWindow->setJustOpened(true);
+
+    // Open the most useful window on first launch so the user sees
+    // something rather than a bare menu bar. Same role the old
+    // "RetroCapture Controls" tab window had.
+    if (m_sourceWindow) m_sourceWindow->setVisible(true);
 
     m_initialized = true;
     LOG_INFO("UIManager initialized");
@@ -316,11 +362,18 @@ void UIManager::render()
 
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu("File"))
+        if (ImGui::BeginMenu(T("menu.file").c_str()))
         {
-            // 'Rescan Shaders' moved next to the Shader dropdown in the
-            // Shaders tab — that's where the list it refreshes lives.
-            if (ImGui::MenuItem("Exit", "Esc"))
+            if (m_preferencesWindow)
+            {
+                bool visible = m_preferencesWindow->isVisible();
+                if (ImGui::MenuItem(T("menu.file.preferences").c_str(), nullptr, visible))
+                {
+                    m_preferencesWindow->setVisible(!visible);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(T("menu.file.exit").c_str(), "Esc"))
             {
                 if (m_window)
                 {
@@ -334,34 +387,59 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("View"))
+
+        // Configurations menu — each entry toggles one of the
+        // ex-tab windows. Producer-only windows hide entirely in
+        // client mode so the user can't accidentally try to
+        // configure things that don't apply to the inbound stream.
+        const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
+        if (ImGui::BeginMenu(T("menu.configurations").c_str()))
         {
-            if (ImGui::MenuItem("Toggle UI", "F12"))
+            auto toggleItem = [](const std::string &label, auto *window) {
+                if (!window) return;
+                bool vis = window->isVisible();
+                if (ImGui::MenuItem(label.c_str(), nullptr, vis)) window->setVisible(!vis);
+            };
+            // Shader + Image stay visible in client mode — shader
+            // params and brightness/contrast/aspect ratio make
+            // sense for a viewer to override.
+            toggleItem(T("menu.configurations.shaders"),  m_shaderWindow.get());
+            toggleItem(T("menu.configurations.image"),    m_imageWindow.get());
+            if (!clientMode)
+            {
+                ImGui::Separator();
+                toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
+                toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
+                toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
+                toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
+#ifdef __linux__
+                toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
+#endif
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu(T("menu.view").c_str()))
+        {
+            if (ImGui::MenuItem(T("menu.view.toggleui").c_str(), "F12"))
             {
                 setVisible(!m_uiVisible);
             }
             ImGui::Separator();
-            if (m_configWindow)
+            if (m_infoWindow)
             {
-                bool visible = m_configWindow->isVisible();
-                if (ImGui::MenuItem("Configuration", nullptr, visible))
+                bool visible = m_infoWindow->isVisible();
+                if (ImGui::MenuItem(T("menu.view.info").c_str(), nullptr, visible))
                 {
-                    m_configWindow->setVisible(!visible);
+                    m_infoWindow->setVisible(!visible);
                 }
             }
-            // Capture Presets and Recordings are producer-side windows;
-            // they operate on the local capture device, not on a stream
-            // received from a remote host. Hide them while the client is
-            // in remote viewer mode so the user can't accidentally try to
-            // apply a preset that would be a no-op or open a recordings
-            // browser that's listing the wrong machine's files.
-            const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
             if (!clientMode)
             {
                 if (m_capturePresetsWindow)
                 {
                     bool visible = m_capturePresetsWindow->isVisible();
-                    if (ImGui::MenuItem("Capture Presets", nullptr, visible))
+                    if (ImGui::MenuItem(T("menu.view.capturepresets").c_str(), nullptr, visible))
                     {
                         m_capturePresetsWindow->setVisible(!visible);
                     }
@@ -369,7 +447,7 @@ void UIManager::render()
                 if (m_recordingsWindow)
                 {
                     bool visible = m_recordingsWindow->isVisible();
-                    if (ImGui::MenuItem("Recordings", nullptr, visible))
+                    if (ImGui::MenuItem(T("menu.view.recordings").c_str(), nullptr, visible))
                     {
                         m_recordingsWindow->setVisible(!visible);
                     }
@@ -377,23 +455,17 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Remote"))
+        if (ImGui::BeginMenu(T("menu.remote").c_str()))
         {
-            // While the host is actively streaming we hide the client
-            // entry points — receiving someone else's stream while
-            // publishing our own is a configuration mistake (the local
-            // capture source would compete with the inbound remote feed
-            // for the same display path). The menu items go grey, the
-            // open windows are closed below.
             const bool clientEntryAllowed = !m_streamingActive;
-            if (ImGui::MenuItem("Connect to Remote...", nullptr, false, clientEntryAllowed))
+            if (ImGui::MenuItem(T("menu.remote.connect").c_str(), nullptr, false, clientEntryAllowed))
             {
                 if (m_remoteConnectionWindow)
                 {
                     m_remoteConnectionWindow->setVisible(true);
                 }
             }
-            if (ImGui::MenuItem("Browse public directory...", nullptr, false, clientEntryAllowed))
+            if (ImGui::MenuItem(T("menu.remote.browse").c_str(), nullptr, false, clientEntryAllowed))
             {
                 if (m_directoryBrowserWindow)
                 {
@@ -402,22 +474,21 @@ void UIManager::render()
             }
             if (m_streamingActive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
-                ImGui::SetTooltip("Disabled while streaming as host.");
+                ImGui::SetTooltip("%s", T("menu.remote.disabled_streaming_tip").c_str());
             }
-            // Quick Disconnect shortcut — only shown when relevant.
             const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-            if (ImGui::MenuItem("Disconnect", nullptr, false, connected))
+            if (ImGui::MenuItem(T("menu.remote.disconnect").c_str(), nullptr, false, connected))
             {
                 setCurrentDevice("");
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Help"))
+        if (ImGui::BeginMenu(T("menu.help").c_str()))
         {
             if (m_creditsWindow)
             {
                 bool visible = m_creditsWindow->isVisible();
-                if (ImGui::MenuItem("Credits", nullptr, visible))
+                if (ImGui::MenuItem(T("menu.help.credits").c_str(), nullptr, visible))
                 {
                     m_creditsWindow->setVisible(!visible);
                 }
@@ -445,13 +516,32 @@ void UIManager::render()
     {
         if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
         if (m_recordingsWindow)     m_recordingsWindow->setVisible(false);
+        // Producer-only configuration windows also force-shut in
+        // client mode — Source/Streaming/Recording/Web Portal/Audio
+        // operate on the local pipeline that isn't running when
+        // we're a remote viewer.
+        if (m_sourceWindow)    m_sourceWindow->setVisible(false);
+        if (m_streamingWindow) m_streamingWindow->setVisible(false);
+        if (m_recordingWindow) m_recordingWindow->setVisible(false);
+        if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
+#ifdef __linux__
+        if (m_audioWindow)     m_audioWindow->setVisible(false);
+#endif
     }
 
-    // Renderizar janela de configuração
-    if (m_configWindow)
-    {
-        m_configWindow->render();
-    }
+    // Render the seven configuration windows + Preferences + Info.
+    // Each is a no-op when its own m_visible is false.
+    if (m_sourceWindow)      m_sourceWindow->render();
+    if (m_shaderWindow)      m_shaderWindow->render();
+    if (m_imageWindow)       m_imageWindow->render();
+    if (m_streamingWindow)   m_streamingWindow->render();
+    if (m_recordingWindow)   m_recordingWindow->render();
+    if (m_webPortalWindow)   m_webPortalWindow->render();
+#ifdef __linux__
+    if (m_audioWindow)       m_audioWindow->render();
+#endif
+    if (m_infoWindow)        m_infoWindow->render();
+    if (m_preferencesWindow) m_preferencesWindow->render();
 
     // Renderizar janela de créditos
     if (m_creditsWindow)
@@ -775,7 +865,7 @@ void UIManager::renderSourcePanel()
     }
     else if (m_sourceType == SourceType::None)
     {
-        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
     }
 }
 
@@ -785,7 +875,7 @@ void UIManager::renderV4L2Controls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("Nenhum dispositivo V4L2 conectado. Selecione um dispositivo abaixo para iniciar a captura.");
+        ImGui::TextWrapped("No V4L2 device connected. Select a device below to start capture.");
         ImGui::Separator();
     }
 
@@ -1306,11 +1396,11 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
 
 void UIManager::renderStreamingPanel()
 {
-    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
+    ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
     ImGui::Separator();
 
     // Status
-    ImGui::Text("Status: %s", m_streamingActive ? "Ativo" : "Inativo");
+    ImGui::Text("Status: %s", m_streamingActive ? "Active" : "Inactive");
     if (m_streamingActive)
     {
         ImGui::SameLine();
@@ -1329,12 +1419,12 @@ void UIManager::renderStreamingPanel()
     }
 
     ImGui::Separator();
-    ImGui::Text("Configurações Básicas");
+    ImGui::Text("Basic Settings");
     ImGui::Separator();
 
     // Controles básicos
     int port = static_cast<int>(m_streamingPort);
-    if (ImGui::InputInt("Porta", &port, 1, 100))
+    if (ImGui::InputInt("Port", &port, 1, 100))
     {
         // Validation is done in setStreamingPort/triggerStreamingPortChange
         if (port >= 1024 && port <= 65535)
@@ -1368,7 +1458,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10))
+    if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
     {
         m_streamingWidth = resolutionWidths[currentResIndex];
         m_streamingHeight = resolutionHeights[currentResIndex];
@@ -1423,7 +1513,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4))
+    if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
         if (m_onStreamingVideoCodecChanged)
@@ -1478,7 +1568,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9))
+        if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
         {
             m_streamingH264Preset = h264Presets[currentPresetIndex];
             if (m_onStreamingH264PresetChanged)
@@ -1489,10 +1579,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Preset do encoder H.264:\n"
-                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+            ImGui::SetTooltip("H.264 encoder preset:\n"
+                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                              "fast/medium: balance between speed and quality\n"
+                              "slow/slower/veryslow: maximum quality, lower speed");
         }
     }
 
@@ -1519,7 +1609,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9))
+        if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
         {
             m_streamingH265Preset = h265Presets[currentPresetIndex];
             if (m_onStreamingH265PresetChanged)
@@ -1530,10 +1620,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Preset do encoder H.265:\n"
-                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
-                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
-                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
+            ImGui::SetTooltip("H.265 encoder preset:\n"
+                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
+                              "fast/medium: balance between speed and quality\n"
+                              "slow/slower/veryslow: maximum quality, lower speed");
         }
 
         // Profile H.265
@@ -1548,7 +1638,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2))
+        if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
         {
             m_streamingH265Profile = h265Profiles[currentProfileIndex];
             if (m_onStreamingH265ProfileChanged)
@@ -1559,9 +1649,9 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Profile do encoder H.265:\n"
-                              "main: 8-bit, máxima compatibilidade\n"
-                              "main10: 10-bit, melhor qualidade, suporte HDR");
+            ImGui::SetTooltip("H.265 encoder profile:\n"
+                              "main: 8-bit, maximum compatibility\n"
+                              "main10: 10-bit, better quality, HDR support");
         }
 
         // Level H.265
@@ -1578,7 +1668,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14))
+        if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
         {
             m_streamingH265Level = h265Levels[currentLevelIndex];
             if (m_onStreamingH265LevelChanged)
@@ -1589,10 +1679,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Level do encoder H.265:\n"
-                              "auto: Detecção automática (recomendado)\n"
-                              "1-6.2: Níveis específicos para compatibilidade\n"
-                              "Níveis mais altos suportam resoluções/bitrates maiores");
+            ImGui::SetTooltip("H.265 encoder level:\n"
+                              "auto: automatic detection (recommended)\n"
+                              "1-6.2: specific levels for compatibility\n"
+                              "Higher levels support larger resolutions/bitrates");
         }
     }
 
@@ -1600,7 +1690,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp8")
     {
         int currentSpeed = m_streamingVP8Speed;
-        if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16))
+        if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
         {
             m_streamingVP8Speed = currentSpeed;
             if (m_onStreamingVP8SpeedChanged)
@@ -1611,10 +1701,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Speed do encoder VP8:\n"
-                              "0: Melhor qualidade, mais lento\n"
-                              "16: Mais rápido, menor qualidade\n"
-                              "12: Bom equilíbrio para streaming");
+            ImGui::SetTooltip("VP8 encoder speed:\n"
+                              "0: best quality, slower\n"
+                              "16: faster, lower quality\n"
+                              "12: good balance for streaming");
         }
     }
 
@@ -1622,7 +1712,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp9")
     {
         int currentSpeed = m_streamingVP9Speed;
-        if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9))
+        if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
         {
             m_streamingVP9Speed = currentSpeed;
             if (m_onStreamingVP9SpeedChanged)
@@ -1633,10 +1723,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Speed do encoder VP9:\n"
-                              "0: Melhor qualidade, mais lento\n"
-                              "9: Mais rápido, menor qualidade\n"
-                              "6: Bom equilíbrio para streaming");
+            ImGui::SetTooltip("VP9 encoder speed:\n"
+                              "0: best quality, slower\n"
+                              "9: faster, lower quality\n"
+                              "6: good balance for streaming");
         }
     }
 
@@ -1646,7 +1736,7 @@ void UIManager::renderStreamingPanel()
 
     // Bitrate de vídeo
     int bitrate = static_cast<int>(m_streamingBitrate);
-    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000))
+    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
@@ -1661,15 +1751,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de vídeo em kbps.\n"
-                          "0 = automático (baseado na resolução/FPS)\n"
-                          "100-100000 kbps: valores válidos\n"
-                          "Recomendado: 2000-8000 kbps para streaming");
+        ImGui::SetTooltip("Video bitrate in kbps.\n"
+                          "0 = automatic (based on resolution/FPS)\n"
+                          "100-100000 kbps: valid range\n"
+                          "Recommended: 2000-8000 kbps for streaming");
     }
 
     // Bitrate de áudio
     int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
-    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32))
+    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
@@ -1684,18 +1774,18 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Bitrate de áudio em kbps.\n"
-                          "64-320 kbps: valores válidos\n"
-                          "Recomendado: 128-256 kbps para boa qualidade");
+        ImGui::SetTooltip("Audio bitrate in kbps.\n"
+                          "64-320 kbps: valid range\n"
+                          "Recommended: 128-256 kbps for good quality");
     }
 
     ImGui::Separator();
-    ImGui::Text("Buffer (Avançado)");
+    ImGui::Text("Buffer (Advanced)");
     ImGui::Separator();
 
     // Max Video Buffer Size
     int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
-    if (ImGui::SliderInt("Max Frames no Buffer", &maxVideoBuffer, 1, 50))
+    if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
     {
         m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
         if (m_onStreamingMaxVideoBufferSizeChanged)
@@ -1706,15 +1796,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de frames de vídeo no buffer.\n"
-                          "1-50 frames: valores válidos\n"
-                          "Padrão: 10 frames\n"
-                          "Valores maiores = mais memória, menos risco de perda de frames");
+        ImGui::SetTooltip("Max video frames in the buffer.\n"
+                          "1-50 frames: valid range\n"
+                          "Default: 10 frames\n"
+                          "Higher values = more memory, less risk of dropped frames");
     }
 
     // Max Audio Buffer Size
     int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
-    if (ImGui::SliderInt("Max Chunks no Buffer", &maxAudioBuffer, 5, 100))
+    if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
     {
         m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
         if (m_onStreamingMaxAudioBufferSizeChanged)
@@ -1725,15 +1815,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Máximo de chunks de áudio no buffer.\n"
-                          "5-100 chunks: valores válidos\n"
-                          "Padrão: 20 chunks\n"
-                          "Valores maiores = mais memória, melhor sincronização");
+        ImGui::SetTooltip("Max audio chunks in the buffer.\n"
+                          "5-100 chunks: valid range\n"
+                          "Default: 20 chunks\n"
+                          "Higher values = more memory, better sync");
     }
 
     // Max Buffer Time
     int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
-    if (ImGui::SliderInt("Max Tempo de Buffer (segundos)", &maxBufferTime, 1, 30))
+    if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
     {
         m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
         if (m_onStreamingMaxBufferTimeSecondsChanged)
@@ -1744,10 +1834,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tempo máximo de buffer em segundos.\n"
-                          "1-30 segundos: valores válidos\n"
-                          "Padrão: 5 segundos\n"
-                          "Controla quanto tempo de vídeo/áudio pode ser armazenado antes de processar");
+        ImGui::SetTooltip("Max buffer time in seconds.\n"
+                          "1-30 seconds: valid range\n"
+                          "Default: 5 seconds\n"
+                          "Controls how much video/audio can be queued before processing");
     }
 
     // AVIO Buffer Size
@@ -1763,10 +1853,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Tamanho do buffer AVIO do FFmpeg em KB.\n"
-                          "64-1024 KB: valores válidos\n"
-                          "Padrão: 256 KB\n"
-                          "Buffer interno do FFmpeg para I/O de streaming");
+        ImGui::SetTooltip("FFmpeg AVIO buffer size in KB.\n"
+                          "64-1024 KB: valid range\n"
+                          "Default: 256 KB\n"
+                          "FFmpeg internal buffer for streaming I/O");
     }
 
     ImGui::Separator();
@@ -1792,7 +1882,7 @@ void UIManager::renderStreamingPanel()
     }
     else if (m_streamingActive)
     {
-        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Streaming", ImVec2(-1, 0)))
         {
             if (m_onStreamingStartStop)
             {
@@ -1818,7 +1908,7 @@ void UIManager::renderStreamingPanel()
         }
         else
         {
-            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
+            if (ImGui::Button("Start Streaming", ImVec2(-1, 0)))
             {
                 if (m_onStreamingStartStop)
                 {
@@ -2279,7 +2369,7 @@ void UIManager::loadConfig()
         std::ifstream file(configPath);
         if (!file.is_open())
         {
-            LOG_WARN("Não foi possível abrir arquivo de configuração: " + configPath);
+            LOG_WARN("Could not open config file: " + configPath);
             return;
         }
 
@@ -2360,6 +2450,14 @@ void UIManager::loadConfig()
                 if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
                 if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
             }
+        }
+
+        // Preferences (#45 placeholder + window restructure)
+        if (config.contains("preferences"))
+        {
+            auto &prefs = config["preferences"];
+            if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
+            if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2733,6 +2831,12 @@ void UIManager::saveConfig()
                 {"privacyAcked",   m_directoryPrivacyAcked},
             }}};
 
+        // Preferences (#45 placeholder + window restructure)
+        config["preferences"] = {
+            {"language",        m_language},
+            {"startFullscreen", m_startFullscreen},
+        };
+
         // Salvar configurações de imagem
         config["image"] = {
             {"brightness", m_brightness},
@@ -2834,7 +2938,7 @@ void UIManager::renderWebPortalPanel()
 
     // Web Portal Enable/Disable (configuração)
     bool portalEnabled = m_webPortalEnabled;
-    if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
+    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
     {
         m_webPortalEnabled = portalEnabled;
         if (!portalEnabled && m_webPortalHTTPSEnabled)
@@ -2867,7 +2971,7 @@ void UIManager::renderWebPortalPanel()
     // Botão Start/Stop do Portal Web (independente do streaming)
     if (m_webPortalActive)
     {
-        if (ImGui::Button("Parar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Stop Web Portal", ImVec2(-1, 0)))
         {
             m_webPortalActive = false;
             if (m_onWebPortalStartStop)
@@ -2883,7 +2987,7 @@ void UIManager::renderWebPortalPanel()
     }
     else
     {
-        if (ImGui::Button("Iniciar Portal Web", ImVec2(-1, 0)))
+        if (ImGui::Button("Start Web Portal", ImVec2(-1, 0)))
         {
             m_webPortalActive = true;
             if (m_onWebPortalStartStop)
@@ -2901,7 +3005,7 @@ void UIManager::renderWebPortalPanel()
 
     // HTTPS Enable/Disable
     bool httpsEnabled = m_webPortalHTTPSEnabled;
-    if (ImGui::Checkbox("Habilitar HTTPS", &httpsEnabled))
+    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
         m_webPortalHTTPSEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
@@ -2922,12 +3026,12 @@ void UIManager::renderWebPortalPanel()
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificado não encontrado");
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificate not found");
         }
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Configuração de Certificado"))
+        if (ImGui::CollapsingHeader("Certificate Settings"))
         {
             char certPathBuffer[512];
             strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
@@ -2966,7 +3070,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Personalização
-    ImGui::Text("Personalização");
+    ImGui::Text("Customization");
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -2974,7 +3078,7 @@ void UIManager::renderWebPortalPanel()
     char titleBuffer[256];
     strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-    ImGui::Text("Título:");
+    ImGui::Text("Title:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
         m_webPortalTitle = std::string(titleBuffer);
@@ -2991,7 +3095,7 @@ void UIManager::renderWebPortalPanel()
     char subtitleBuffer[256];
     strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-    ImGui::Text("Subtítulo:");
+    ImGui::Text("Subtitle:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
         m_webPortalSubtitle = std::string(subtitleBuffer);
@@ -3007,7 +3111,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Configurações avançadas (colapsável)
-    if (ImGui::CollapsingHeader("Avançado"))
+    if (ImGui::CollapsingHeader("Advanced"))
     {
         ImGui::Spacing();
 
@@ -3046,32 +3150,32 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primária Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primary Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secundária", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secundária Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secondary Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Cabeçalho", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Header", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -3113,7 +3217,7 @@ void UIManager::renderWebPortalPanel()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Restaurar Cores Padrão"))
+        if (ImGui::Button("Reset to Default Colors"))
         {
             // Restaurar valores padrão do styleguide RetroCapture
             // Dark Background #1D1F21
@@ -3620,13 +3724,13 @@ void UIManager::renderConnectionOverlay()
     }
 
     // Decide what to render.
-    const char *label    = nullptr;
+    std::string label;
     ImVec4      color    = ImVec4(0.95f, 0.7f, 0.3f, 1.0f); // orange default
     bool        spinning = false;
 
     if (now < m_overlayDisconnectingUntil)
     {
-        label    = "Disconnecting...";
+        label    = T("overlay.disconnecting");
         spinning = true;
     }
     else if (dev.empty())
@@ -3636,21 +3740,18 @@ void UIManager::renderConnectionOverlay()
     }
     else if (offline)
     {
-        label    = "Host appears offline";
+        label    = T("overlay.host_offline");
         spinning = true;
     }
     else if (!hasFrames)
     {
-        // No first frame yet. If we just came from a connected
-        // state (had frames, now don't) it's a reconnect; if we
-        // never had frames it's the first connect. Same visual
-        // either way.
-        label    = m_overlayLastHadFrames ? "Reconnecting..." : "Connecting...";
+        label    = m_overlayLastHadFrames ? T("overlay.reconnecting")
+                                          : T("overlay.connecting");
         spinning = true;
     }
     else if (m_overlayConnectedSince > 0.0 && now - m_overlayConnectedSince < 3.0)
     {
-        label    = "Connected";
+        label    = T("overlay.connected");
         color    = ImVec4(0.40f, 0.80f, 0.40f, 1.0f);
         spinning = false;
     }
@@ -3660,7 +3761,7 @@ void UIManager::renderConnectionOverlay()
     m_overlayLastDevice    = dev;
     m_overlayLastHadFrames = hasFrames;
 
-    if (!label) return;
+    if (label.empty()) return;
 
     // Bottom-right anchor. SetNextWindowPos with pivot (1,1) puts
     // the window's bottom-right corner at the screen point we pass.
@@ -3686,11 +3787,11 @@ void UIManager::renderConnectionOverlay()
             // primitives.
             static const char *spin = "|/-\\";
             const int idx = static_cast<int>(now * 6.0) & 0x3;
-            ImGui::TextColored(color, "%c %s", spin[idx], label);
+            ImGui::TextColored(color, "%c %s", spin[idx], label.c_str());
         }
         else
         {
-            ImGui::TextColored(color, "%s", label);
+            ImGui::TextColored(color, "%s", label.c_str());
         }
     }
     ImGui::End();

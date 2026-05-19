@@ -22,8 +22,11 @@ public:
     ~UIConfigurationStreaming();
 
     void render();
+    void setVisible(bool visible) { m_visible = visible; }
+    bool isVisible() const        { return m_visible; }
 
 private:
+    bool m_visible = false;
     UIManager *m_uiManager = nullptr;
 
     void renderStreamingStatus();

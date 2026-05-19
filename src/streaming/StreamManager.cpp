@@ -24,7 +24,7 @@ bool StreamManager::initialize(uint16_t port, uint32_t width, uint32_t height, u
 {
     if (m_initialized)
     {
-        LOG_WARN("StreamManager já inicializado");
+        LOG_WARN("StreamManager already initialized");
         return true;
     }
 
@@ -36,7 +36,7 @@ bool StreamManager::initialize(uint16_t port, uint32_t width, uint32_t height, u
     {
         if (!streamer->initialize(port, width, height, fps))
         {
-            LOG_ERROR("Falha ao inicializar streamer: " + streamer->getType());
+            LOG_ERROR("Failed to inicializar streamer: " + streamer->getType());
             allInitialized = false;
         }
     }
@@ -49,13 +49,13 @@ bool StreamManager::start()
 {
     if (!m_initialized)
     {
-        LOG_ERROR("StreamManager não inicializado");
+        LOG_ERROR("StreamManager not initialized");
         return false;
     }
 
     if (m_active)
     {
-        LOG_WARN("StreamManager já está ativo");
+        LOG_WARN("StreamManager is already active");
         return true;
     }
 
@@ -64,7 +64,7 @@ bool StreamManager::start()
     {
         if (!streamer->start())
         {
-            LOG_ERROR("Falha ao iniciar streamer: " + streamer->getType());
+            LOG_ERROR("Failed to iniciar streamer: " + streamer->getType());
             allStarted = false;
         }
     }
@@ -315,7 +315,7 @@ void StreamManager::setWebPortalTitle(const std::string &title)
         if (tsStreamer)
         {
             tsStreamer->setWebPortalTitle(title);
-            LOG_INFO("Título do Web Portal atualizado: " + title);
+            LOG_INFO("Web Portal title updated: " + title);
         }
     }
 }
@@ -329,7 +329,7 @@ void StreamManager::setWebPortalSubtitle(const std::string &subtitle)
         if (tsStreamer)
         {
             tsStreamer->setWebPortalSubtitle(subtitle);
-            LOG_INFO("Subtítulo do Web Portal atualizado: " + subtitle);
+            LOG_INFO("Web Portal subtitle updated: " + subtitle);
         }
     }
 }

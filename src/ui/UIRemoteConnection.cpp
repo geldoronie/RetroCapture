@@ -3,6 +3,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../streaming/DirectoryBrowser.h"
 #include "../utils/PasswordHash.h"
+#include "../utils/TranslationManager.h"
 
 #include <imgui.h>
 
@@ -95,13 +96,11 @@ void UIRemoteConnection::render()
     const bool connected = sourceIsRemote && !currentDevice.empty();
 
     ImGui::SetNextWindowSize(ImVec2(520, 320), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Connect to Remote", &m_visible))
+    if (ImGui::Begin(T("remote.title").c_str(), &m_visible))
     {
-        ImGui::TextWrapped(
-            "Consume a remote RetroCapture stream. The client decodes the "
-            "host's /raw feed and mirrors its shader pipeline via /meta.");
+        ImGui::TextWrapped("%s", T("remote.intro").c_str());
         ImGui::Spacing();
-        ImGui::TextDisabled("Tip: Remote → Browse public directory… to pick from the public list.");
+        ImGui::TextDisabled("%s", T("remote.tip").c_str());
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -123,7 +122,7 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
                                          bool connected)
 {
     ImGui::Spacing();
-    ImGui::Text("Remote base URL");
+    ImGui::Text("%s", T("remote.base_url").c_str());
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##remoteUrl", m_urlBuffer, sizeof(m_urlBuffer));
 
@@ -144,7 +143,7 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     {
         if (currentMode == modes[i]) { currentModeIndex = i; break; }
     }
-    ImGui::Text("Display interpolation");
+    ImGui::Text("%s", T("remote.display_interp").c_str());
     ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
     {
@@ -152,9 +151,7 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Linear: blend prev+next por refresh — fluido, leve fantasma em movimento rápido.\n"
-                          "Nearest: frame mais próximo no tempo — limpo, com 3:2 pulldown em ratio não-inteiro.\n"
-                          "Off: estritamente espera o PTS — comportamento simples, sem ghosting nem suavização.");
+        ImGui::SetTooltip("%s", T("remote.interp.tip").c_str());
     }
 
     ImGui::Spacing();
@@ -170,11 +167,9 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     if (!connected)
     {
         ImGui::BeginDisabled(inProgress);
-        if (ImGui::Button("Connect", ImVec2(120, 0)))
+        if (ImGui::Button(T("remote.connect").c_str(), ImVec2(120, 0)))
         {
             std::string url(m_urlBuffer);
-            // Strip a trailing slash so the appended /raw and /meta land
-            // cleanly down in VideoCaptureRemote / RemoteMetaSync.
             while (!url.empty() && url.back() == '/') url.pop_back();
             if (!url.empty())
             {
@@ -187,17 +182,17 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
         if (m_pending == PendingAction::ConnectShowStatus ||
             m_pending == PendingAction::ConnectExecute)
         {
-            ImGui::TextDisabled("connecting...");
+            ImGui::TextDisabled("%s", T("remote.connecting").c_str());
         }
         else
         {
-            ImGui::TextDisabled("not connected");
+            ImGui::TextDisabled("%s", T("remote.not_connected").c_str());
         }
     }
     else
     {
         ImGui::BeginDisabled(inProgress);
-        if (ImGui::Button("Disconnect", ImVec2(120, 0)))
+        if (ImGui::Button(T("remote.disconnect").c_str(), ImVec2(120, 0)))
         {
             m_pending = PendingAction::DisconnectShowStatus;
         }
@@ -206,11 +201,11 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
         if (m_pending == PendingAction::DisconnectShowStatus ||
             m_pending == PendingAction::DisconnectExecute)
         {
-            ImGui::TextDisabled("disconnecting...");
+            ImGui::TextDisabled("%s", T("remote.disconnecting").c_str());
         }
         else
         {
-            ImGui::TextDisabled("connected to %s", currentDevice.c_str());
+            ImGui::TextDisabled("%s %s", T("remote.connected_to").c_str(), currentDevice.c_str());
         }
     }
 }
@@ -220,22 +215,22 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
 // ─────────────────────────────────────────────────────────────────────
 void UIRemoteConnection::renderStatusFooter(bool connected)
 {
-    ImGui::TextDisabled("Status");
+    ImGui::TextDisabled("%s", T("remote.status").c_str());
     if (connected)
     {
         const uint32_t w = m_uiManager->getCaptureWidth();
         const uint32_t h = m_uiManager->getCaptureHeight();
-        if (w > 0 && h > 0) ImGui::Text("Stream: %ux%u", w, h);
-        else                ImGui::Text("Connecting...");
+        if (w > 0 && h > 0) ImGui::Text("%s %ux%u", T("remote.stream_dims").c_str(), w, h);
+        else                ImGui::Text("%s", T("remote.connecting").c_str());
     }
     else if (m_pending == PendingAction::ConnectShowStatus ||
              m_pending == PendingAction::ConnectExecute)
     {
-        ImGui::Text("Connecting…");
+        ImGui::Text("%s", T("remote.connecting").c_str());
     }
     else
     {
-        ImGui::Text("Idle.");
+        ImGui::Text("%s", T("remote.idle").c_str());
     }
 
     // #58 — surface the prolonged-reconnect-failure hint. Visible on
@@ -253,10 +248,8 @@ void UIRemoteConnection::renderStatusFooter(bool connected)
     {
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
-                           "Host appears offline.");
-        ImGui::TextWrapped("RetroCapture is still retrying in the background "
-                           "but the host hasn't answered for a while. "
-                           "Disconnect and reconnect to retry immediately.");
+                           "%s", T("remote.host_offline").c_str());
+        ImGui::TextWrapped("%s", T("remote.host_offline.hint").c_str());
     }
 }
 

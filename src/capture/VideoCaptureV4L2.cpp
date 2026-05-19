@@ -29,14 +29,14 @@ bool VideoCaptureV4L2::open(const std::string &device)
 {
     if (m_fd >= 0)
     {
-        LOG_WARN("Dispositivo já aberto, fechando primeiro");
+        LOG_WARN("Device already open, closing first");
         close();
     }
 
     // Verificar se o arquivo do dispositivo existe antes de tentar abrir
     if (!std::filesystem::exists(device))
     {
-        LOG_ERROR("Dispositivo não existe: " + device);
+        LOG_ERROR("Device does not exist: " + device);
         return false;
     }
 
@@ -44,7 +44,7 @@ bool VideoCaptureV4L2::open(const std::string &device)
     if (m_fd < 0)
     {
         int err = errno;
-        LOG_ERROR("Falha ao abrir dispositivo: " + device + " (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to abrir dispositivo: " + device + " (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -104,7 +104,7 @@ bool VideoCaptureV4L2::handleDeviceDisconnection(int err, const std::string &ope
             size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
             m_dummyFrameBuffer.resize(frameSize, 0);
             m_streaming = true;
-            LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+            LOG_INFO("Dummy mode activated automatically after device disconnect");
         }
         
         return true; // Device was disconnected
@@ -132,7 +132,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -146,7 +146,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
         {
             return false;
         }
-        LOG_ERROR("Falha ao obter formato atual (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to obter formato atual (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -184,7 +184,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
 
         if (yuyvSupported)
         {
-            LOG_INFO("YUYV é suportado, usando YUYV como formato padrão");
+            LOG_INFO("YUYV supported, using YUYV as default format");
             pixelFormat = V4L2_PIX_FMT_YUYV;
         }
         else
@@ -196,7 +196,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
                 // Se ainda não temos formato, tentar MJPG como último recurso
                 if (mjpegSupported)
                 {
-                    LOG_WARN("YUYV não suportado, usando MJPG (não totalmente suportado ainda)");
+                    LOG_WARN("YUYV not supported, falling back to MJPG (not fully supported yet)");
                     pixelFormat = V4L2_PIX_FMT_MJPEG;
                 }
                 else
@@ -207,7 +207,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
             }
             else if (pixelFormat == V4L2_PIX_FMT_MJPEG)
             {
-                LOG_WARN("Dispositivo está usando MJPG mas YUYV não está disponível. MJPG não é totalmente suportado.");
+                LOG_WARN("Device is using MJPG but YUYV is unavailable. MJPG is not fully supported.");
             }
         }
     }
@@ -224,7 +224,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
         {
             return false;
         }
-        LOG_ERROR("Falha ao definir formato (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to definir formato (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -253,7 +253,7 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
         // Se foi solicitado YUYV mas retornou MJPG, tentar forçar novamente
         if (pixelFormat == V4L2_PIX_FMT_YUYV && m_pixelFormat == V4L2_PIX_FMT_MJPEG)
         {
-            LOG_ERROR("Dispositivo não aceitou YUYV e retornou MJPG. YUYV pode não ser suportado.");
+            LOG_ERROR("Device did not accept YUYV and returned MJPG. YUYV may not be supported.");
             return false;
         }
     }
@@ -281,7 +281,7 @@ bool VideoCaptureV4L2::setFramerate(uint32_t fps)
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não está aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -296,14 +296,14 @@ bool VideoCaptureV4L2::setFramerate(uint32_t fps)
         {
             return false;
         }
-        LOG_WARN("Não foi possível obter parâmetros de streaming (errno: " + 
+        LOG_WARN("Could not get streaming parameters (errno: " + 
                  std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
     if (!(parm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME))
     {
-        LOG_WARN("Dispositivo não suporta configuração de framerate");
+        LOG_WARN("Device does not support framerate configuration");
         return false;
     }
 
@@ -317,7 +317,7 @@ bool VideoCaptureV4L2::setFramerate(uint32_t fps)
         {
             return false;
         }
-        LOG_WARN("Falha ao configurar framerate (errno: " + 
+        LOG_WARN("Failed to configurar framerate (errno: " + 
                  std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
@@ -390,14 +390,14 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
                 m_dummyFrameBuffer.resize(frameSize, 0);
                 m_streaming = true;
-                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+                LOG_INFO("Dummy mode activated automatically after device disconnect");
             }
             
             return false;
         }
         
         // Outros erros
-        LOG_ERROR("Erro ao capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -406,7 +406,7 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
         !m_buffers[buf.index].start || 
         m_buffers[buf.index].start == MAP_FAILED)
     {
-        LOG_ERROR("Buffer inválido no índice " + std::to_string(buf.index));
+        LOG_ERROR("Invalid buffer at index " + std::to_string(buf.index));
         // Tentar reenfileirar para não perder sincronização (mas pode falhar se dispositivo foi desconectado)
         if (m_fd >= 0)
         {
@@ -454,12 +454,12 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
                 m_dummyFrameBuffer.resize(frameSize, 0);
                 m_streaming = true;
-                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
+                LOG_INFO("Dummy mode activated automatically after device disconnect");
             }
         }
         else
         {
-            LOG_ERROR("Falha ao reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+            LOG_ERROR("Failed to reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         }
         return false;
     }
@@ -472,7 +472,7 @@ bool VideoCaptureV4L2::setControl(const std::string &controlName, int32_t value)
     uint32_t controlId = getControlIdFromName(controlName);
     if (controlId == 0)
     {
-        LOG_WARN("Controle não encontrado: " + controlName);
+        LOG_WARN("Control not found: " + controlName);
         return false;
     }
     return setControl(controlId, value);
@@ -483,7 +483,7 @@ bool VideoCaptureV4L2::getControl(const std::string &controlName, int32_t &value
     uint32_t controlId = getControlIdFromName(controlName);
     if (controlId == 0)
     {
-        LOG_WARN("Controle não encontrado: " + controlName);
+        LOG_WARN("Control not found: " + controlName);
         return false;
     }
     return getControl(controlId, value);
@@ -596,7 +596,7 @@ bool VideoCaptureV4L2::setControl(uint32_t controlId, int32_t value)
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não está aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -611,7 +611,7 @@ bool VideoCaptureV4L2::setControl(uint32_t controlId, int32_t value)
         {
             return false;
         }
-        LOG_WARN("Falha ao definir controle V4L2 (ID: " + std::to_string(controlId) +
+        LOG_WARN("Failed to definir controle V4L2 (ID: " + std::to_string(controlId) +
                  ", valor: " + std::to_string(value) + ") (errno: " + std::to_string(err) + 
                  " - " + strerror(err) + ")");
         return false;
@@ -624,7 +624,7 @@ bool VideoCaptureV4L2::getControl(uint32_t controlId, int32_t &value)
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não está aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -646,7 +646,7 @@ bool VideoCaptureV4L2::getControl(uint32_t controlId, int32_t &value, int32_t &m
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não está aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -756,7 +756,7 @@ bool VideoCaptureV4L2::startCapture()
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Dispositivo não aberto");
+        LOG_ERROR("Device not open");
         return false;
     }
 
@@ -787,7 +787,7 @@ bool VideoCaptureV4L2::startCapture()
             {
                 return false;
             }
-            LOG_ERROR("Falha ao enfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+            LOG_ERROR("Failed to enfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
             stopCapture();
             return false;
         }
@@ -801,7 +801,7 @@ bool VideoCaptureV4L2::startCapture()
         {
             return false;
         }
-        LOG_ERROR("Falha ao iniciar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to iniciar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -833,7 +833,7 @@ void VideoCaptureV4L2::stopCapture()
             // Don't activate dummy mode here - device is being stopped intentionally
             if (err != EBADF && err != ENODEV && err != EIO)
             {
-                LOG_WARN("Falha ao parar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+                LOG_WARN("Failed to parar streaming (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
             }
         }
     }
@@ -923,13 +923,13 @@ bool VideoCaptureV4L2::initMemoryMapping()
         {
             return false;
         }
-        LOG_ERROR("Falha ao solicitar buffers (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Failed to solicitar buffers (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
     if (req.count < 2)
     {
-        LOG_ERROR("Memória insuficiente");
+        LOG_ERROR("Out of memory");
         return false;
     }
 
@@ -949,7 +949,7 @@ bool VideoCaptureV4L2::initMemoryMapping()
             {
                 return false;
             }
-            LOG_ERROR("Falha ao consultar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+            LOG_ERROR("Failed to consultar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
             cleanupBuffers();
             return false;
         }
@@ -962,7 +962,7 @@ bool VideoCaptureV4L2::initMemoryMapping()
 
         if (m_buffers[i].start == MAP_FAILED)
         {
-            LOG_ERROR("Falha ao mapear buffer");
+            LOG_ERROR("Failed to mapear buffer");
             cleanupBuffers();
             return false;
         }

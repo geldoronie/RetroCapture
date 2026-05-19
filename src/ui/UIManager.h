@@ -19,7 +19,15 @@ class ShaderEngine;
 class IAudioCapture;
 
 // Forward declarations
-class UIConfiguration;
+class UIConfigurationSource;
+class UIConfigurationShader;
+class UIConfigurationImage;
+class UIConfigurationStreaming;
+class UIConfigurationRecording;
+class UIConfigurationWebPortal;
+class UIConfigurationAudio;
+class UIInfoPanel;
+class UIPreferences;
 class UICredits;
 class UIRemoteConnection;
 class UIDirectoryBrowser;
@@ -261,6 +269,13 @@ public:
     void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
     const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
     void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
+    // Preferences (#45 placeholder + window restructure). Persisted
+    // today; the TranslationManager that consumes the language code
+    // lands in Fase B.
+    const std::string &getLanguage() const           { return m_language; }
+    void setLanguage(const std::string &v)           { m_language = v; }
+    bool getStartFullscreen() const                  { return m_startFullscreen; }
+    void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
     const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
     const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
@@ -780,8 +795,22 @@ private:
     bool m_initialized = false;
     bool m_uiVisible = true;
 
-    // UI Configuration window (refatorado)
-    std::unique_ptr<class UIConfiguration> m_configWindow;
+    // Standalone configuration windows. Previously hosted as tabs
+    // inside the unified "RetroCapture Controls" window; split out
+    // for clarity (Fase A of #45 + window restructure). Each one
+    // owns its own m_visible and ImGui::Begin/End.
+    std::unique_ptr<class UIConfigurationSource>    m_sourceWindow;
+    std::unique_ptr<class UIConfigurationShader>    m_shaderWindow;
+    std::unique_ptr<class UIConfigurationImage>     m_imageWindow;
+    std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
+    std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
+    std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
+#ifdef __linux__
+    std::unique_ptr<class UIConfigurationAudio>     m_audioWindow;
+#endif
+    std::unique_ptr<class UIInfoPanel>              m_infoWindow;
+    std::unique_ptr<class UIPreferences>            m_preferencesWindow;
+
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
@@ -960,6 +989,9 @@ private:
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
     std::string m_directoryUrl            = "http://directory.retrocapture.com";
+    // Preferences (#45 placeholder + window restructure)
+    std::string m_language                = "en";    // "en" | "pt"
+    bool        m_startFullscreen         = false;
     std::string m_directoryStreamName     = "";
     std::string m_directoryHostNickname   = "";
     std::string m_directoryPassword       = "";       // optional; empty = no password
@@ -1075,17 +1107,17 @@ private:
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
     std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
     std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Informações do Stream";
-    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextStreamInfo = "Stream Information";
+    std::string m_webPortalTextQuickActions = "Quick Actions";
     std::string m_webPortalTextCompatibility = "Compatibilidade";
     std::string m_webPortalTextStatus = "Status";
     std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextResolution = "Resolution";
     std::string m_webPortalTextStreamUrl = "URL do Stream";
     std::string m_webPortalTextCopyUrl = "Copiar URL";
     std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";

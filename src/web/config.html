@@ -73,7 +73,7 @@
                                         </div>
                                         <div class="stat-content">
                                             <div class="stat-label">Streaming</div>
-                                            <div class="stat-value" id="streamStatus">Desconhecido</div>
+                                            <div class="stat-value" id="streamStatus">Unknown</div>
                                         </div>
                                     </div>
                                 </div>
@@ -105,7 +105,7 @@
                                             <i class="bi bi-camera-video"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Resolução</div>
+                                            <div class="stat-label">Resolution</div>
                                             <div class="stat-value" id="captureResolution">-</div>
                                         </div>
                                     </div>
@@ -240,7 +240,7 @@
                                                 <hr>
                                                 <h6>Capture Resolution & Framerate</h6>
                                                 
-                                                <!-- Resolução Manual -->
+                                                <!-- Manual Resolution -->
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-4">
                                                         <label class="form-label">Width</label>
@@ -341,7 +341,7 @@
                                                 <hr>
                                                 <h6>Capture Resolution & Framerate</h6>
                                                 
-                                                <!-- Resolução Manual -->
+                                                <!-- Manual Resolution -->
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-4">
                                                         <label class="form-label">Width</label>
@@ -437,18 +437,18 @@
                                             <div class="form-text">Bypass the shader chain without losing the selected preset / parameters — useful to A/B compare the effect.</div>
                                         </div>
                                         <div class="col-md-12">
-                                            <label class="form-label">Shader Atual</label>
+                                            <label class="form-label">Current Shader</label>
                                             <input type="text" class="form-control" id="currentShader" readonly>
                                         </div>
                                         <div class="col-md-12">
-                                            <label class="form-label">Selecionar Shader</label>
+                                            <label class="form-label">Select Shader</label>
                                             <select class="form-select" id="shaderSelect">
                                                 <option value="">Carregando shaders...</option>
                                             </select>
                                         </div>
                                         <div class="col-12">
                                             <button class="btn btn-secondary btn-sm" onclick="loadShaderList()">
-                                                <i class="bi bi-arrow-clockwise me-2"></i>Atualizar Lista
+                                                <i class="bi bi-arrow-clockwise me-2"></i>Refresh List
                                             </button>
                                         </div>
                                         <div class="col-12">
@@ -492,7 +492,7 @@
                                         </div>
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Resolução de Saída</h6>
+                                            <h6>Output Resolution</h6>
                                             <p class="text-muted small">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</p>
                                         </div>
                                         <div class="col-md-6">
@@ -571,7 +571,7 @@
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label">Porta</label>
+                                            <label class="form-label">Port</label>
                                             <input type="number" class="form-control" id="streamingPort" min="1" max="65535">
                                         </div>
                                         <div class="col-md-6">
@@ -615,7 +615,7 @@
                                         <div class="col-12">
                                             <hr>
                                             <button type="button" class="btn btn-primary btn-lg w-100" id="streamingStartStopBtn" onclick="toggleStreaming()">
-                                                <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i>Iniciar Streaming</span>
+                                                <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i>Start Streaming</span>
                                             </button>
                                         </div>
                                     </div>
