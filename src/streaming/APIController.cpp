@@ -387,6 +387,10 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETSource(clientFd);
     }
+    else if (path == "/api/v1/preferences")
+    {
+        return handleGETPreferences(clientFd);
+    }
     else if (path == "/api/v1/shader")
     {
         return handleGETShader(clientFd);
@@ -691,6 +695,22 @@ bool APIController::handleGETSource(int clientFd)
     std::ostringstream json;
     json << "{\"type\": " << static_cast<int>(m_uiManager->getSourceType())
          << ", \"device\": " << jsonString(m_uiManager->getCurrentDevice()) << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleGETPreferences(int clientFd)
+{
+    // Only the language is exposed for now. Other prefs (start
+    // fullscreen, etc.) are intentionally NOT surfaced — they're
+    // app-launch settings that don't change runtime behaviour the
+    // portal can reflect.
+    std::string lang = "en";
+    if (m_uiManager) lang = m_uiManager->getLanguage();
+    if (lang.empty()) lang = "en";
+
+    std::ostringstream json;
+    json << "{\"language\": " << jsonString(lang) << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
