@@ -702,39 +702,38 @@ void UIConfigurationStreaming::renderBitrateSettings()
                       "How many bits per second the encoder spends on "
                       "video and audio.");
 
-    // Bitrate de vídeo
-    int bitrate = static_cast<int>(m_uiManager->getStreamingBitrate());
-    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
+    // Same SliderFloat presentation as UIConfigurationRecording — the
+    // two windows share visual idiom AND interaction grammar so the
+    // user doesn't have to type numbers in one place and drag in the
+    // other. Storage on the streaming side is in kbps (not bps like
+    // Recording), so the Mbps↔kbps conversion just uses a factor of
+    // 1000 instead of 1_000_000.
+    uint32_t bitrate = m_uiManager->getStreamingBitrate();             // kbps
+    float bitrateMbps = static_cast<float>(bitrate) / 1000.0f;
+    if (ImGui::SliderFloat("Video Bitrate (Mbps)", &bitrateMbps, 1.0f, 50.0f, "%.1f"))
     {
-        // Limites: 0 (auto) ou 100-100000 kbps
-        if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
-        {
-            m_uiManager->triggerStreamingBitrateChange(static_cast<uint32_t>(bitrate));
-        }
+        m_uiManager->triggerStreamingBitrateChange(static_cast<uint32_t>(bitrateMbps * 1000.0f));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Video bitrate in kbps.\n"
-                          "0 = automatic (based on resolution/FPS)\n"
-                          "100-100000 kbps: valid range\n"
-                          "Recommended: 2000-8000 kbps for streaming");
+        ImGui::SetTooltip("Recommended starting points:\n"
+                          " ~3 Mbps  — 720p\n"
+                          " ~6 Mbps  — 1080p\n"
+                          " ~12 Mbps — 1080p HEVC at zero-compromise\n"
+                          " ~25 Mbps — 4K");
     }
 
-    // Bitrate de áudio
-    int audioBitrate = static_cast<int>(m_uiManager->getStreamingAudioBitrate());
-    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
+    uint32_t audioBitrate = m_uiManager->getStreamingAudioBitrate();  // already kbps
+    float audioBitrateKbps = static_cast<float>(audioBitrate);
+    if (ImGui::SliderFloat("Audio Bitrate (kbps)", &audioBitrateKbps, 64.0f, 320.0f, "%.0f"))
     {
-        // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
-        if (audioBitrate >= 64 && audioBitrate <= 320)
-        {
-            m_uiManager->triggerStreamingAudioBitrateChange(static_cast<uint32_t>(audioBitrate));
-        }
+        m_uiManager->triggerStreamingAudioBitrateChange(static_cast<uint32_t>(audioBitrateKbps));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Audio bitrate in kbps.\n"
-                          "64-320 kbps: valid range\n"
-                          "Recommended: 128-256 kbps for good quality");
+        ImGui::SetTooltip("128 kbps is transparent for AAC; 256 kbps is\n"
+                          "the safe default. Opus reaches the same\n"
+                          "quality around 96 kbps.");
     }
 }
 
