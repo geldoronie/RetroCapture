@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <vector>
 #include <functional>
+#include <map>
 #include <mutex>
+#include <string>
 
 /**
  * MediaMuxer - Classe responsável por muxing de pacotes codificados em container MPEG-TS
@@ -21,6 +23,17 @@ public:
 
     MediaMuxer();
     ~MediaMuxer();
+
+    // Container-level metadata to embed in the output file (MP4 'udta',
+     // MKV tags). Call BEFORE initialize() — these keys are applied
+     // just before avformat_write_header so the muxer writes them into
+     // the format header. Common keys: "title", "comment", "encoder",
+     // plus any custom key (MP4 stores unknown keys as freeform
+     // 'udta' atoms; MKV stores them as `Tags` entries). #59 uses this
+     // to embed shader / source-resolution / codec / nickname so a
+     // recording can be identified after the fact via
+     // `ffprobe -show_format <file>` without parsing the filename.
+    void setMetadata(const std::map<std::string, std::string> &metadata);
 
     // Inicializar muxer com configurações, codec contexts e callback OU arquivo
     // Os codec contexts são necessários para configurar os streams corretamente
@@ -107,4 +120,8 @@ private:
 
     // Mutex para proteger av_interleaved_write_frame (não é thread-safe)
     mutable std::mutex m_muxMutex;
+
+    // Container-level metadata staged via setMetadata() and applied
+    // to formatCtx->metadata just before avformat_write_header.
+    std::map<std::string, std::string> m_userMetadata;
 };

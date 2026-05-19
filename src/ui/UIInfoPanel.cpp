@@ -1,5 +1,6 @@
 #include "UIInfoPanel.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../capture/IVideoCapture.h"
 #include "../utils/TranslationManager.h"
 #include <imgui.h>
@@ -41,10 +42,8 @@ void UIInfoPanel::render()
     else
     {
         renderCaptureInfo();
-        ImGui::Separator();
         renderStreamingInfo();
     }
-    ImGui::Separator();
     renderSystemInfo();
 
     ImGui::End();
@@ -52,8 +51,7 @@ void UIInfoPanel::render()
 
 void UIInfoPanel::renderCaptureInfo()
 {
-    ImGui::Text("%s", T("info.capture").c_str());
-    ImGui::Separator();
+    ui_section_header(T("info.capture").c_str());
 
     const std::string device = m_uiManager->getCaptureDevice();
     ImGui::Text("%s: %s", T("info.capture.device").c_str(),
@@ -67,8 +65,7 @@ void UIInfoPanel::renderCaptureInfo()
 
 void UIInfoPanel::renderStreamingInfo()
 {
-    ImGui::Text("%s", T("info.streaming").c_str());
-    ImGui::Separator();
+    ui_section_header(T("info.streaming").c_str());
 
     bool active = m_uiManager->getStreamingActive();
     ImGui::Text("%s:", T("info.streaming.status").c_str());
@@ -93,8 +90,7 @@ void UIInfoPanel::renderStreamingInfo()
 
 void UIInfoPanel::renderRemoteInfo()
 {
-    ImGui::Text("%s", T("info.remote_stream").c_str());
-    ImGui::Separator();
+    ui_section_header(T("info.remote_stream").c_str());
 
     ImGui::Text("%s: %s", T("info.remote.host_url").c_str(),
                 m_uiManager->getCurrentDevice().c_str());
@@ -113,9 +109,7 @@ void UIInfoPanel::renderRemoteInfo()
     ImGui::Text("%s: %s", T("info.remote.interp").c_str(),
                 interp.empty() ? "linear" : interp.c_str());
 
-    ImGui::Spacing();
-    ImGui::Text("%s", T("info.connection").c_str());
-    ImGui::Separator();
+    ui_section_header(T("info.connection").c_str());
 
     const bool hasFrames = (w > 0 && h > 0);
     if (m_uiManager->getRemoteHostLikelyOffline())
@@ -139,8 +133,7 @@ void UIInfoPanel::renderRemoteInfo()
 
 void UIInfoPanel::renderSystemInfo()
 {
-    ImGui::Text("%s", T("info.application").c_str());
-    ImGui::Separator();
+    ui_section_header(T("info.application").c_str());
 
     ImGui::Text("%s: %s", T("info.application.version").c_str(), RETROCAPTURE_VERSION);
     ImGui::Text("Dear ImGui: %s", ImGui::GetVersion());

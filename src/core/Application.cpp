@@ -1183,6 +1183,19 @@ bool Application::initUI()
         settings.outputPath = m_ui->getRecordingOutputPath();
         settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
         settings.includeAudio = m_ui->getRecordingIncludeAudio();
+        // Hardware encoder + backend-specific preset (#59) — resolved
+        // from the UI's per-backend preset fields based on the user's
+        // selected backend. Auto/Software leave hwPreset empty so
+        // MediaEncoder uses its compiled-in default.
+        settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
+        switch (settings.hardwareEncoder)
+        {
+            case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break; // NVENC
+            case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break; // VAAPI
+            case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break; // QSV
+            case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break; // AMF
+            default: settings.hwPreset.clear(); break;                          // Auto / Software
+        }
         m_recordingManager->setRecordingSettings(settings);
     }
 
@@ -1703,16 +1716,31 @@ bool Application::initUI()
                 settings.outputPath = m_ui->getRecordingOutputPath();
                 settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
                 settings.includeAudio = m_ui->getRecordingIncludeAudio();
-                
+                settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
+                switch (settings.hardwareEncoder)
+                {
+                    case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break;
+                    case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break;
+                    case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break;
+                    case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break;
+                    default: settings.hwPreset.clear(); break;
+                }
+
                 if (!m_recordingManager) {
                     LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
                     m_ui->setRecordingActive(false);
-                } else if (m_recordingManager->startRecording(settings)) {
-                    LOG_INFO("Application: Recording started successfully");
-                    m_ui->setRecordingActive(true);
                 } else {
-                    LOG_ERROR("Application: Failed to start recording. Check logs for details.");
-                    m_ui->setRecordingActive(false);
+                    // Snapshot the shader/source state at click time so
+                    // the recording's embedded metadata reflects exactly
+                    // what was active when the session started (#59).
+                    populateRecordingContext();
+                    if (m_recordingManager->startRecording(settings)) {
+                        LOG_INFO("Application: Recording started successfully");
+                        m_ui->setRecordingActive(true);
+                    } else {
+                        LOG_ERROR("Application: Failed to start recording. Check logs for details.");
+                        m_ui->setRecordingActive(false);
+                    }
                 }
             }
         } else {
@@ -5768,10 +5796,41 @@ bool Application::startRecording()
 {
     if (m_recordingManager)
     {
+        populateRecordingContext();
         RecordingSettings settings = m_recordingManager->getRecordingSettings();
         return m_recordingManager->startRecording(settings);
     }
     return false;
+}
+
+void Application::populateRecordingContext()
+{
+    if (!m_recordingManager) return;
+
+    RecordingManager::Context ctx;
+    if (m_ui)
+    {
+        const std::string shader = m_ui->getCurrentShader();
+        ctx.shaderName  = shader.empty() ? "(none)" : shader;
+        ctx.hostNickname = m_ui->getDirectoryHostNickname();
+        ctx.sourceWidth  = m_ui->getCaptureWidth();
+        ctx.sourceHeight = m_ui->getCaptureHeight();
+        ctx.sourceFps    = m_ui->getCaptureFps();
+        switch (m_ui->getSourceType())
+        {
+            case UIManager::SourceType::V4L2:   ctx.sourceType = "v4l2";       break;
+            case UIManager::SourceType::DS:     ctx.sourceType = "directshow"; break;
+            case UIManager::SourceType::Remote: ctx.sourceType = "remote";     break;
+            default:                            ctx.sourceType = "none";       break;
+        }
+    }
+#ifdef RETROCAPTURE_VERSION
+    ctx.applicationVersion = RETROCAPTURE_VERSION;
+#endif
+    // Single-output today — when dual recording lands in #59 phase C
+    // we'll override 'kind' from the raw-side path.
+    ctx.kind = "single";
+    m_recordingManager->setRecordingContext(ctx);
 }
 
 void Application::stopRecording()

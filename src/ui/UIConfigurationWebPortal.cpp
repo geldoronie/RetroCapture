@@ -1,6 +1,7 @@
 #include "UIConfigurationWebPortal.h"
 #include "../utils/TranslationManager.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include <imgui.h>
 #include <cstring>
 
@@ -24,9 +25,9 @@ void UIConfigurationWebPortal::render()
         return;
     }
 
-    ImGui::Text("%s", T("webportal.title").c_str());
-    ImGui::Separator();
-    ImGui::Spacing();
+    ui_section_header("Web Portal",
+                      "Browser-based dashboard with live preview, "
+                      "configuration, and recordings library.");
 
     renderWebPortalEnable();
 
@@ -41,24 +42,9 @@ void UIConfigurationWebPortal::render()
     }
 
     ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     renderStartStopButton();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     renderHTTPSSettings();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     renderCustomization();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     renderPortalURL();
 
     ImGui::End();
@@ -103,7 +89,9 @@ void UIConfigurationWebPortal::renderStartStopButton()
 
 void UIConfigurationWebPortal::renderHTTPSSettings()
 {
-    // HTTPS Enable/Disable
+    ui_section_header("HTTPS",
+                      "Serve the portal over TLS. Requires a certificate "
+                      "and matching private key on disk.");
     bool httpsEnabled = m_uiManager->getWebPortalHTTPSEnabled();
     if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
@@ -152,10 +140,8 @@ void UIConfigurationWebPortal::renderHTTPSSettings()
 
 void UIConfigurationWebPortal::renderCustomization()
 {
-    // Personalização
-    ImGui::Text("Customization");
-    ImGui::Separator();
-    ImGui::Spacing();
+    ui_section_header("Customization",
+                      "Branding shown to visitors of the portal.");
 
     // Título
     char titleBuffer[256];

@@ -1,6 +1,7 @@
 #include "UIDirectoryBrowser.h"
 #include "UIManager.h"
 #include "UIRemoteConnection.h"
+#include "UISectionHeader.h"
 #include "../streaming/DirectoryBrowser.h"
 #include "../utils/HttpClient.h"
 #include "../utils/PasswordHash.h"
@@ -110,8 +111,7 @@ void UIDirectoryBrowser::renderTable()
         return;
     }
 
-    ImGui::TextWrapped("%s", T("browse.intro").c_str());
-    ImGui::Spacing();
+    ui_section_header(T("browse.title").c_str(), T("browse.intro").c_str());
 
     {
         char urlBuf[256];

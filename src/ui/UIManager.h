@@ -550,6 +550,18 @@ public:
     void setRecordingFilenameTemplate(const std::string& template_) { m_recordingFilenameTemplate = template_; }
     void setRecordingIncludeAudio(bool include) { m_recordingIncludeAudio = include; }
 
+    // Hardware encoder selection for recording (#59). Same int-based
+    // encoding as the streaming side so we don't have to pull
+    // MediaEncoder.h into the UI layer (0=Auto, 1=Software,
+    // 2=NVENC, 3=VAAPI, 4=QSV, 5=AMF). Backend-specific preset
+    // strings live in separate fields per backend, mirroring the
+    // streaming layout exactly so the same UI block can render both.
+    void setRecordingHardwareEncoder(int v)           { m_recordingHardwareEncoder = v; }
+    void setRecordingNvencPreset(const std::string &v){ m_recordingNvencPreset = v; }
+    void setRecordingVaapiRcMode(const std::string &v){ m_recordingVaapiRcMode = v; }
+    void setRecordingQsvPreset(const std::string &v)  { m_recordingQsvPreset = v; }
+    void setRecordingAmfQuality(const std::string &v) { m_recordingAmfQuality = v; }
+
     // Recording info getters (public)
     bool getRecordingActive() const { return m_recordingActive; }
     uint64_t getRecordingDurationUs() const { return m_recordingDurationUs; }
@@ -572,6 +584,11 @@ public:
     std::string getRecordingOutputPath() const { return m_recordingOutputPath; }
     std::string getRecordingFilenameTemplate() const { return m_recordingFilenameTemplate; }
     bool getRecordingIncludeAudio() const { return m_recordingIncludeAudio; }
+    int  getRecordingHardwareEncoder() const         { return m_recordingHardwareEncoder; }
+    std::string getRecordingNvencPreset() const      { return m_recordingNvencPreset; }
+    std::string getRecordingVaapiRcMode() const      { return m_recordingVaapiRcMode; }
+    std::string getRecordingQsvPreset()   const      { return m_recordingQsvPreset; }
+    std::string getRecordingAmfQuality()  const      { return m_recordingAmfQuality; }
 
     // Recording setters with callbacks
     void triggerRecordingWidthChange(uint32_t width);
@@ -591,6 +608,11 @@ public:
     void triggerRecordingOutputPathChange(const std::string& path);
     void triggerRecordingFilenameTemplateChange(const std::string& template_);
     void triggerRecordingIncludeAudioChange(bool include);
+    void triggerRecordingHardwareEncoderChange(int v);
+    void triggerRecordingNvencPresetChange(const std::string &v);
+    void triggerRecordingVaapiRcModeChange(const std::string &v);
+    void triggerRecordingQsvPresetChange(const std::string &v);
+    void triggerRecordingAmfQualityChange(const std::string &v);
     void triggerRecordingStartStop(bool start);
 
     // Recording profiles — save/load/list/delete the full recording
@@ -630,6 +652,11 @@ public:
     void setOnRecordingOutputPathChanged(std::function<void(const std::string&)> callback) { m_onRecordingOutputPathChanged = callback; }
     void setOnRecordingFilenameTemplateChanged(std::function<void(const std::string&)> callback) { m_onRecordingFilenameTemplateChanged = callback; }
     void setOnRecordingIncludeAudioChanged(std::function<void(bool)> callback) { m_onRecordingIncludeAudioChanged = callback; }
+    void setOnRecordingHardwareEncoderChanged(std::function<void(int)> cb)             { m_onRecordingHardwareEncoderChanged = cb; }
+    void setOnRecordingNvencPresetChanged(std::function<void(const std::string &)> cb) { m_onRecordingNvencPresetChanged = cb; }
+    void setOnRecordingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onRecordingVaapiRcModeChanged = cb; }
+    void setOnRecordingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onRecordingQsvPresetChanged = cb; }
+    void setOnRecordingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onRecordingAmfQualityChanged = cb; }
 
     // Web Portal settings
     void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
@@ -1078,6 +1105,14 @@ private:
     std::string m_recordingOutputPath = "recordings/";
     std::string m_recordingFilenameTemplate = "recording_%Y%m%d_%H%M%S";
     bool m_recordingIncludeAudio = true;
+    // Mirrors the streaming side (#59). 0=Auto (try hardware,
+    // fall back to libx264), 1=Software, 2=NVENC, 3=VAAPI, 4=QSV,
+    // 5=AMF. Backend-specific presets live in separate fields.
+    int         m_recordingHardwareEncoder = 0;
+    std::string m_recordingNvencPreset = "p4";
+    std::string m_recordingVaapiRcMode = "VBR"; // VBR is the better default for files
+    std::string m_recordingQsvPreset   = "medium";
+    std::string m_recordingAmfQuality  = "quality"; // recordings can afford the latency for visual quality
 
     // Recording callbacks
     std::function<void(bool)> m_onRecordingStartStop;
@@ -1098,6 +1133,11 @@ private:
     std::function<void(const std::string&)> m_onRecordingOutputPathChanged;
     std::function<void(const std::string&)> m_onRecordingFilenameTemplateChanged;
     std::function<void(bool)> m_onRecordingIncludeAudioChanged;
+    std::function<void(int)> m_onRecordingHardwareEncoderChanged;
+    std::function<void(const std::string &)> m_onRecordingNvencPresetChanged;
+    std::function<void(const std::string &)> m_onRecordingVaapiRcModeChanged;
+    std::function<void(const std::string &)> m_onRecordingQsvPresetChanged;
+    std::function<void(const std::string &)> m_onRecordingAmfQualityChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão

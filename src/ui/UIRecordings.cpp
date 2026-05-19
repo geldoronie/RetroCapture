@@ -1,5 +1,6 @@
 #include "UIRecordings.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../core/Application.h"
 #include "../utils/Logger.h"
 #include "../utils/FilesystemCompat.h"
@@ -237,8 +238,7 @@ void UIRecordings::renderRecordingDetails()
 
     const auto& recording = *it;
 
-    ImGui::Separator();
-    ImGui::Text("Details:");
+    ui_section_header("Details");
     ImGui::BeginChild("details", ImVec2(0, 150.0f), true);
     
     ImGui::Text("ID: %s", recording.id.c_str());

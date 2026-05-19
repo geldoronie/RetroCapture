@@ -1,5 +1,6 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/Logger.h"
 #include "../utils/TranslationManager.h"
 #include "../encoding/MediaEncoder.h"
@@ -118,10 +119,11 @@ void UIConfigurationStreaming::render()
     }
 
     renderStreamingStatus();
-    ImGui::Separator();
     renderProfiles();
-    ImGui::Separator();
     {
+        ui_section_header("Pipeline",
+                          "Choose which feed goes on the wire: the raw "
+                          "source, or the post-shader output.");
         bool apply = m_uiManager->getStreamingApplyShader();
         if (ImGui::Checkbox("Apply shader to stream", &apply))
         {
@@ -135,19 +137,17 @@ void UIConfigurationStreaming::render()
                               "Useful to broadcast a clean feed while keeping the CRT\n"
                               "look on screen.");
         }
-        ImGui::Separator();
     }
     renderBasicSettings();
-    ImGui::Separator();
     renderCodecSettings();
-    ImGui::Separator();
     renderBitrateSettings();
-    ImGui::Separator();
     renderDirectoryPublish();      // #49 Phase 2
-    ImGui::Separator();
     // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
     // is not surfaced in the UI anymore — defaults work for the vast
     // majority of cases. Power users can still override via config.json.
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
     renderStartStopButton();
 
     ImGui::End();
@@ -155,22 +155,9 @@ void UIConfigurationStreaming::render()
 
 void UIConfigurationStreaming::renderStreamingStatus()
 {
-    ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
-    ImGui::Separator();
-
-    // Status
+    ui_section_header("HTTP MPEG-TS Streaming (audio + video)");
     bool active = m_uiManager->getStreamingActive();
-    ImGui::Text("Status: %s", active ? "Active" : "Inactive");
-    if (active)
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
-    }
-    else
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
-    }
+    ui_status_indicator(active, "Active", "Inactive");
 
     if (active)
     {
@@ -197,8 +184,9 @@ void UIConfigurationStreaming::renderProfiles()
 {
     if (m_profilesDirty) refreshProfiles();
 
-    ImGui::Text("Profiles");
-    ImGui::Separator();
+    ui_section_header("Profiles",
+                      "Saved encoder configurations you can swap "
+                      "between.");
 
     const char *currentLabel = (m_selectedProfileIndex >= 0 &&
                                 m_selectedProfileIndex < static_cast<int>(m_profileNames.size()))
@@ -318,8 +306,10 @@ void UIConfigurationStreaming::renderProfiles()
 
 void UIConfigurationStreaming::renderBasicSettings()
 {
-    ImGui::Text("Basic Settings");
-    ImGui::Separator();
+    ui_section_header("Video",
+                      "Output resolution and frame rate sent on the "
+                      "wire. \"Capture\" forwards whatever the source "
+                      "delivers.");
 
     // Porta
     int port = static_cast<int>(m_uiManager->getStreamingPort());
@@ -387,8 +377,9 @@ void UIConfigurationStreaming::renderBasicSettings()
 
 void UIConfigurationStreaming::renderCodecSettings()
 {
-    ImGui::Text("Codecs");
-    ImGui::Separator();
+    ui_section_header("Codecs",
+                      "What encodes the video and audio. Codec-specific "
+                      "tuning appears below the dropdown.");
 
     // Seleção de codec de vídeo
     const char *videoCodecs[] = {"h264", "h265", "vp8", "vp9"};
@@ -707,49 +698,51 @@ void UIConfigurationStreaming::renderVP9Settings()
 
 void UIConfigurationStreaming::renderBitrateSettings()
 {
-    ImGui::Text("Bitrates");
-    ImGui::Separator();
+    ui_section_header("Bitrate",
+                      "How many bits per second the encoder spends on "
+                      "video and audio.");
 
-    // Bitrate de vídeo
-    int bitrate = static_cast<int>(m_uiManager->getStreamingBitrate());
-    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
+    // Same SliderFloat presentation as UIConfigurationRecording — the
+    // two windows share visual idiom AND interaction grammar so the
+    // user doesn't have to type numbers in one place and drag in the
+    // other. Storage on the streaming side is in kbps (not bps like
+    // Recording), so the Mbps↔kbps conversion just uses a factor of
+    // 1000 instead of 1_000_000.
+    uint32_t bitrate = m_uiManager->getStreamingBitrate();             // kbps
+    float bitrateMbps = static_cast<float>(bitrate) / 1000.0f;
+    if (ImGui::SliderFloat("Video Bitrate (Mbps)", &bitrateMbps, 1.0f, 50.0f, "%.1f"))
     {
-        // Limites: 0 (auto) ou 100-100000 kbps
-        if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
-        {
-            m_uiManager->triggerStreamingBitrateChange(static_cast<uint32_t>(bitrate));
-        }
+        m_uiManager->triggerStreamingBitrateChange(static_cast<uint32_t>(bitrateMbps * 1000.0f));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Video bitrate in kbps.\n"
-                          "0 = automatic (based on resolution/FPS)\n"
-                          "100-100000 kbps: valid range\n"
-                          "Recommended: 2000-8000 kbps for streaming");
+        ImGui::SetTooltip("Recommended starting points:\n"
+                          " ~3 Mbps  — 720p\n"
+                          " ~6 Mbps  — 1080p\n"
+                          " ~12 Mbps — 1080p HEVC at zero-compromise\n"
+                          " ~25 Mbps — 4K");
     }
 
-    // Bitrate de áudio
-    int audioBitrate = static_cast<int>(m_uiManager->getStreamingAudioBitrate());
-    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
+    uint32_t audioBitrate = m_uiManager->getStreamingAudioBitrate();  // already kbps
+    float audioBitrateKbps = static_cast<float>(audioBitrate);
+    if (ImGui::SliderFloat("Audio Bitrate (kbps)", &audioBitrateKbps, 64.0f, 320.0f, "%.0f"))
     {
-        // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
-        if (audioBitrate >= 64 && audioBitrate <= 320)
-        {
-            m_uiManager->triggerStreamingAudioBitrateChange(static_cast<uint32_t>(audioBitrate));
-        }
+        m_uiManager->triggerStreamingAudioBitrateChange(static_cast<uint32_t>(audioBitrateKbps));
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Audio bitrate in kbps.\n"
-                          "64-320 kbps: valid range\n"
-                          "Recommended: 128-256 kbps for good quality");
+        ImGui::SetTooltip("128 kbps is transparent for AAC; 256 kbps is\n"
+                          "the safe default. Opus reaches the same\n"
+                          "quality around 96 kbps.");
     }
 }
 
 void UIConfigurationStreaming::renderAdvancedBufferSettings()
 {
-    ImGui::Text("Buffer (Advanced)");
-    ImGui::Separator();
+    ui_section_header("Buffer (Advanced)",
+                      "Lower-level synchronizer tunables. Defaults work "
+                      "for nearly every setup — only touch if you know "
+                      "exactly which timing issue you're chasing.");
 
     // Max Video Buffer Size
     int maxVideoBuffer = static_cast<int>(m_uiManager->getStreamingMaxVideoBufferSize());
@@ -879,12 +872,10 @@ void UIConfigurationStreaming::renderStartStopButton()
 // ─────────────────────────────────────────────────────────────────────
 void UIConfigurationStreaming::renderDirectoryPublish()
 {
-    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Public directory");
-    ImGui::TextWrapped(
-        "Optionally list this stream in a public directory so other "
-        "RetroCapture clients can find it without you sharing the URL "
-        "out of band.");
-    ImGui::Spacing();
+    ui_section_header("Public directory",
+                      "Optionally list this stream in a public directory "
+                      "so other RetroCapture clients can find it without "
+                      "you sharing the URL out of band.");
 
     // ── Privacy modal: shown the first time the user flips the toggle
     // on. Once accepted, the ack flag sticks and we never show it

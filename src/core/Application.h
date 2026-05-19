@@ -116,6 +116,13 @@ public:
     struct RecordingSettings getRecordingSettings() const;
     bool startRecording();
     void stopRecording();
+
+private:
+    // Build the metadata context for a recording session (#59): pulls
+    // shader / source / nickname / version off the UI and capture
+    // pipeline so RecordingManager can embed it as MP4/MKV metadata.
+    void populateRecordingContext();
+public:
     bool isRecording() const;
     uint64_t getRecordingDurationUs();
     uint64_t getRecordingFileSize();
