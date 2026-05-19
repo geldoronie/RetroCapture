@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Controle remoto do RetroCapture - Capture e stream de vídeo retro">
+    <meta name="description" content="RetroCapture remote control — capture and stream retro video">
     <meta name="theme-color" content="#0A7A83">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="RetroCapture">
-    
-    <title>Configuration · RetroCapture</title>
+
+    <title data-i18n="web.config.title">Configuration · RetroCapture</title>
     
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json">
@@ -35,18 +35,22 @@
             <div class="d-flex align-items-center justify-content-between">
                 <a href="/" class="portal-brand text-decoration-none d-flex align-items-center">
                     <i class="bi bi-controller fs-3 me-2"></i>
-                    <span class="fw-semibold">RetroCapture</span>
+                    <span class="fw-semibold" data-i18n="web.nav.brand">RetroCapture</span>
                 </a>
                 <nav class="portal-nav-links d-flex">
-                    <a href="/" class="portal-nav-link"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline">Live</span></a>
-                    <a href="/recordings.html" class="portal-nav-link"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline">Recordings</span></a>
-                    <a href="/config.html" class="portal-nav-link active"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline">Configuration</span></a>
+                    <a href="/" class="portal-nav-link"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.live">Live</span></a>
+                    <a href="/recordings.html" class="portal-nav-link"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.recordings">Recordings</span></a>
+                    <a href="/config.html" class="portal-nav-link active"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.configuration">Configuration</span></a>
                 </nav>
                 <div class="d-flex align-items-center gap-1">
-                    <button class="btn btn-sm btn-outline-light" onclick="copyStreamUrl()" title="Copy stream URL">
+                    <select id="langSelect" class="form-select form-select-sm bg-dark text-light border-secondary" style="width: auto;" data-i18n-attr="aria-label:web.lang.label">
+                        <option value="en" data-i18n="web.lang.en">English</option>
+                        <option value="pt" data-i18n="web.lang.pt">Português (Brasil)</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-light" onclick="copyStreamUrl()" data-i18n-title="web.nav.copy_stream" title="Copy stream URL">
                         <i class="bi bi-clipboard"></i>
                     </button>
-                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-sm btn-outline-light" title="Open stream in new tab">
+                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-sm btn-outline-light" data-i18n-title="web.nav.open_stream" title="Open stream in new tab">
                         <i class="bi bi-box-arrow-up-right"></i>
                     </a>
                 </div>
@@ -72,8 +76,8 @@
                                             <i class="bi bi-broadcast" id="streamStatusIcon"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Streaming</div>
-                                            <div class="stat-value" id="streamStatus">Unknown</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.streaming">Streaming</div>
+                                            <div class="stat-value" id="streamStatus" data-i18n="web.config.unknown">Unknown</div>
                                         </div>
                                     </div>
                                 </div>
@@ -83,7 +87,7 @@
                                             <i class="bi bi-record-circle" id="recordStatusIcon"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Recording</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.recording">Recording</div>
                                             <div class="stat-value" id="recordStatus">-</div>
                                         </div>
                                     </div>
@@ -94,7 +98,7 @@
                                             <i class="bi bi-people"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Clientes</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.clients">Clients</div>
                                             <div class="stat-value" id="clientCount">0</div>
                                         </div>
                                     </div>
@@ -105,7 +109,7 @@
                                             <i class="bi bi-camera-video"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Resolution</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.resolution">Resolution</div>
                                             <div class="stat-value" id="captureResolution">-</div>
                                         </div>
                                     </div>
@@ -116,7 +120,7 @@
                                             <i class="bi bi-speedometer2"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">FPS</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.fps">FPS</div>
                                             <div class="stat-value" id="captureFPS">-</div>
                                         </div>
                                     </div>
@@ -127,7 +131,7 @@
                                             <i class="bi bi-cpu"></i>
                                         </div>
                                         <div class="stat-content">
-                                            <div class="stat-label">Source</div>
+                                            <div class="stat-label" data-i18n="web.config.stat.source">Source</div>
                                             <div class="stat-value" id="sourceStatus">-</div>
                                         </div>
                                     </div>
@@ -146,37 +150,37 @@
                             <ul class="nav nav-tabs card-header-tabs" id="controlTabs" role="tablist">
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link active" id="source-tab" data-bs-toggle="tab" data-bs-target="#source" type="button" role="tab">
-                                        <i class="bi bi-hdd me-2"></i>Source
+                                        <i class="bi bi-hdd me-2"></i><span data-i18n="web.config.tab.source">Source</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="shader-tab" data-bs-toggle="tab" data-bs-target="#shader" type="button" role="tab">
-                                        <i class="bi bi-palette me-2"></i>Shader
+                                        <i class="bi bi-palette me-2"></i><span data-i18n="web.config.tab.shader">Shader</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="image-tab" data-bs-toggle="tab" data-bs-target="#image" type="button" role="tab">
-                                        <i class="bi bi-image me-2"></i>Image
+                                        <i class="bi bi-image me-2"></i><span data-i18n="web.config.tab.image">Image</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="streaming-tab" data-bs-toggle="tab" data-bs-target="#streaming" type="button" role="tab">
-                                        <i class="bi bi-broadcast me-2"></i>Streaming
+                                        <i class="bi bi-broadcast me-2"></i><span data-i18n="web.config.tab.streaming">Streaming</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="recording-tab" data-bs-toggle="tab" data-bs-target="#recording" type="button" role="tab">
-                                        <i class="bi bi-record-circle me-2"></i>Recording
+                                        <i class="bi bi-record-circle me-2"></i><span data-i18n="web.config.tab.recording">Recording</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio" type="button" role="tab">
-                                        <i class="bi bi-speaker me-2"></i>Audio
+                                        <i class="bi bi-speaker me-2"></i><span data-i18n="web.config.tab.audio">Audio</span>
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="presets-tab" data-bs-toggle="tab" data-bs-target="#presets" type="button" role="tab">
-                                        <i class="bi bi-bookmark me-2"></i>Presets
+                                        <i class="bi bi-bookmark me-2"></i><span data-i18n="web.config.tab.presets">Presets</span>
                                     </button>
                                 </li>
                             </ul>
@@ -187,11 +191,11 @@
                                 <div class="tab-pane fade show active" id="source" role="tabpanel">
                                     <div class="row g-3">
                                         <div class="col-12">
-                                            <h6>Source Type</h6>
+                                            <h6 data-i18n="web.config.source.type">Source Type</h6>
                                             <select class="form-select" id="sourceType">
-                                                <option value="0">Carregando...</option>
+                                                <option value="0" data-i18n="web.config.source.loading">Loading...</option>
                                             </select>
-                                            <small class="form-text text-muted mt-1">A mudança é aplicada automaticamente ao selecionar</small>
+                                            <small class="form-text text-muted mt-1" data-i18n="web.config.source.auto_apply_hint">Changes are applied automatically on selection.</small>
                                         </div>
 
                                         <!-- Source Overscan -->
@@ -199,23 +203,23 @@
                                             <div class="card">
                                                 <div class="card-body">
                                                     <div class="d-flex justify-content-between align-items-baseline mb-2">
-                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i>Source overscan</h6>
+                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i><span data-i18n="web.config.source.overscan">Source overscan</span></h6>
                                                         <div class="form-check form-switch">
                                                             <input class="form-check-input" type="checkbox" id="overscanLocked">
-                                                            <label class="form-check-label small" for="overscanLocked">Lock X / Y</label>
+                                                            <label class="form-check-label small" for="overscanLocked" data-i18n="web.config.source.lock_xy">Lock X / Y</label>
                                                         </div>
                                                     </div>
                                                     <div class="row g-2">
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanX">Horizontal: <span id="overscanXValue">0.0%</span></label>
+                                                            <label class="form-label small mb-1" for="overscanX"><span data-i18n="web.config.source.horizontal">Horizontal:</span> <span id="overscanXValue">0.0%</span></label>
                                                             <input type="range" class="form-range" id="overscanX" min="0" max="30" step="0.5" value="0">
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanY">Vertical: <span id="overscanYValue">0.0%</span></label>
+                                                            <label class="form-label small mb-1" for="overscanY"><span data-i18n="web.config.source.vertical">Vertical:</span> <span id="overscanYValue">0.0%</span></label>
                                                             <input type="range" class="form-range" id="overscanY" min="0" max="30" step="0.5" value="0">
                                                         </div>
                                                     </div>
-                                                    <div class="form-text small">Crops a percentage of the source borders before downscaling — useful to remove letterbox or mimic CRT bezels.</div>
+                                                    <div class="form-text small" data-i18n="web.config.source.overscan_hint">Crops a percentage of the source borders before downscaling — useful to remove letterbox or mimic CRT bezels.</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -225,40 +229,40 @@
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">V4L2 Device</h6>
+                                                    <h6 class="mb-0" data-i18n="web.config.source.v4l2_device">V4L2 Device</h6>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshV4L2Devices()">
-                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                        <i class="bi bi-arrow-clockwise me-1"></i><span data-i18n="web.config.source.refresh">Refresh</span>
                                                     </button>
                                                 </div>
                                                 <select class="form-select" id="v4l2Device">
-                                                    <option value="">Carregando...</option>
+                                                    <option value="" data-i18n="web.config.source.loading">Loading...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo V4L2 ou "None (No device)" para desabilitar</small>
+                                                <small class="form-text text-muted mt-1" data-i18n="web.config.source.pick_v4l2_hint">Pick a V4L2 device or "None (No device)" to disable.</small>
                                             </div>
                                             
                                             <div class="col-12" id="v4l2CaptureInfo" style="display: none;">
                                                 <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
-                                                
+                                                <h6 data-i18n="web.config.source.resfps">Capture resolution & framerate</h6>
+
                                                 <!-- Manual Resolution -->
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-4">
-                                                        <label class="form-label">Width</label>
+                                                        <label class="form-label" data-i18n="web.config.source.width">Width</label>
                                                         <input type="number" class="form-control" id="v4l2CaptureWidth" min="1" max="7680">
                                                     </div>
                                                     <div class="col-md-4">
-                                                        <label class="form-label">Height</label>
+                                                        <label class="form-label" data-i18n="web.config.source.height">Height</label>
                                                         <input type="number" class="form-control" id="v4l2CaptureHeight" min="1" max="4320">
                                                     </div>
                                                     <div class="col-md-4">
-                                                        <label class="form-label">FPS</label>
+                                                        <label class="form-label" data-i18n="web.config.source.fps">FPS</label>
                                                         <input type="number" class="form-control" id="v4l2CaptureFPS" min="1" max="240">
                                                     </div>
                                                 </div>
-                                                
+
                                                 <!-- Quick FPS -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">Quick FPS:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.quick_fps">Quick FPS:</label>
                                                     <div class="btn-group" role="group">
                                                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
                                                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
@@ -268,7 +272,7 @@
                                                 
                                                 <!-- Retro Consoles -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">Retro Consoles:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.retro">Retro consoles:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(160, 144)">160x144 GB</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(240, 160)">240x160 GBA</button>
@@ -288,7 +292,7 @@
 
                                                 <!-- Resoluções 4:3 -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">4:3 Resolutions:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.res_4_3">4:3 resolutions:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
@@ -302,7 +306,7 @@
 
                                                 <!-- Resoluções 16:9 -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">16:9 Resolutions:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.res_16_9">16:9 resolutions:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
@@ -314,9 +318,9 @@
 
                                             <div class="col-12">
                                                 <hr>
-                                                <h6>V4L2 Controls</h6>
+                                                <h6 data-i18n="web.config.source.v4l2_controls">V4L2 controls</h6>
                                                 <div id="v4l2ControlsInSource" class="row g-3">
-                                                    <div class="col-12 text-muted">Nenhum dispositivo conectado. Selecione um dispositivo acima para ver os controles.</div>
+                                                    <div class="col-12 text-muted" data-i18n="web.config.source.no_device">No device connected. Pick one above to see the controls.</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -326,40 +330,40 @@
                                             <div class="col-12">
                                                 <hr>
                                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                                    <h6 class="mb-0">DirectShow Device</h6>
+                                                    <h6 class="mb-0" data-i18n="web.config.source.ds_device">DirectShow Device</h6>
                                                     <button class="btn btn-sm btn-secondary" onclick="refreshDSDevices()">
-                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                        <i class="bi bi-arrow-clockwise me-1"></i><span data-i18n="web.config.source.refresh">Refresh</span>
                                                     </button>
                                                 </div>
                                                 <select class="form-select" id="dsDevice">
-                                                    <option value="">Carregando...</option>
+                                                    <option value="" data-i18n="web.config.source.loading">Loading...</option>
                                                 </select>
-                                                <small class="form-text text-muted mt-1">Selecione um dispositivo DirectShow ou "None (No device)" para desabilitar</small>
+                                                <small class="form-text text-muted mt-1" data-i18n="web.config.source.pick_ds_hint">Pick a DirectShow device or "None (No device)" to disable.</small>
                                             </div>
                                             
                                             <div class="col-12" id="dsCaptureInfo" style="display: none;">
                                                 <hr>
-                                                <h6>Capture Resolution & Framerate</h6>
-                                                
+                                                <h6 data-i18n="web.config.source.resfps">Capture resolution & framerate</h6>
+
                                                 <!-- Manual Resolution -->
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-4">
-                                                        <label class="form-label">Width</label>
+                                                        <label class="form-label" data-i18n="web.config.source.width">Width</label>
                                                         <input type="number" class="form-control" id="dsCaptureWidth" min="1" max="7680">
                                                     </div>
                                                     <div class="col-md-4">
-                                                        <label class="form-label">Height</label>
+                                                        <label class="form-label" data-i18n="web.config.source.height">Height</label>
                                                         <input type="number" class="form-control" id="dsCaptureHeight" min="1" max="4320">
                                                     </div>
                                                     <div class="col-md-4">
-                                                        <label class="form-label">FPS</label>
+                                                        <label class="form-label" data-i18n="web.config.source.fps">FPS</label>
                                                         <input type="number" class="form-control" id="dsCaptureFPS" min="1" max="240">
                                                     </div>
                                                 </div>
-                                                
+
                                                 <!-- Quick FPS -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">Quick FPS:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.quick_fps">Quick FPS:</label>
                                                     <div class="btn-group" role="group">
                                                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(30)">30</button>
                                                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="setQuickFPS(60)">60</button>
@@ -369,7 +373,7 @@
                                                 
                                                 <!-- Retro Consoles -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">Retro Consoles:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.retro">Retro consoles:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(160, 144)">160x144 GB</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(240, 160)">240x160 GBA</button>
@@ -389,7 +393,7 @@
 
                                                 <!-- Resoluções 4:3 -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">4:3 Resolutions:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.res_4_3">4:3 resolutions:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(640, 480)">640x480</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(800, 600)">800x600</button>
@@ -403,7 +407,7 @@
                                                 
                                                 <!-- Resoluções 16:9 -->
                                                 <div class="mb-3">
-                                                    <label class="form-label">16:9 Resolutions:</label>
+                                                    <label class="form-label" data-i18n="web.config.source.res_16_9">16:9 resolutions:</label>
                                                     <div class="d-flex flex-wrap gap-2">
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1280, 720)">1280x720</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setQuickResolution(1920, 1080)">1920x1080</button>
@@ -418,7 +422,7 @@
                                         <div id="noneSourceMessage" class="col-12">
                                             <div class="alert alert-info">
                                                 <i class="bi bi-info-circle me-2"></i>
-                                                Nenhuma fonte selecionada. Selecione um tipo de fonte acima.
+                                                <span data-i18n="web.config.source.none_msg">No source selected. Pick a source type above.</span>
                                             </div>
                                         </div>
                                     </div>
@@ -430,32 +434,32 @@
                                         <div class="col-md-12">
                                             <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="shaderPipelineEnabled" checked>
-                                                <label class="form-check-label" for="shaderPipelineEnabled">
+                                                <label class="form-check-label" for="shaderPipelineEnabled" data-i18n="web.config.shader.enable">
                                                     Apply shader pipeline
                                                 </label>
                                             </div>
-                                            <div class="form-text">Bypass the shader chain without losing the selected preset / parameters — useful to A/B compare the effect.</div>
+                                            <div class="form-text" data-i18n="web.config.shader.enable_hint">Bypass the shader chain without losing the selected preset / parameters — useful to A/B compare the effect.</div>
                                         </div>
                                         <div class="col-md-12">
-                                            <label class="form-label">Current Shader</label>
+                                            <label class="form-label" data-i18n="web.config.shader.current">Current shader</label>
                                             <input type="text" class="form-control" id="currentShader" readonly>
                                         </div>
                                         <div class="col-md-12">
-                                            <label class="form-label">Select Shader</label>
+                                            <label class="form-label" data-i18n="web.config.shader.select">Select shader</label>
                                             <select class="form-select" id="shaderSelect">
-                                                <option value="">Carregando shaders...</option>
+                                                <option value="" data-i18n="web.config.shader.loading">Loading shaders...</option>
                                             </select>
                                         </div>
                                         <div class="col-12">
                                             <button class="btn btn-secondary btn-sm" onclick="loadShaderList()">
-                                                <i class="bi bi-arrow-clockwise me-2"></i>Refresh List
+                                                <i class="bi bi-arrow-clockwise me-2"></i><span data-i18n="web.config.shader.refresh">Refresh list</span>
                                             </button>
                                         </div>
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Parâmetros do Shader</h6>
+                                            <h6 data-i18n="web.config.shader.params">Shader parameters</h6>
                                             <div id="shaderParameters" class="row g-3">
-                                                <div class="col-12 text-muted">Nenhum shader ativo ou sem parâmetros</div>
+                                                <div class="col-12 text-muted" data-i18n="web.config.shader.no_params">No active shader or no parameters available.</div>
                                             </div>
                                         </div>
                                     </div>
@@ -466,14 +470,14 @@
                                     <div class="row g-3">
                                         <div class="col-md-6">
                                             <label class="form-label">
-                                                Brilho
+                                                <span data-i18n="web.config.image.brightness">Brightness</span>
                                                 <span id="brightnessValue" class="badge bg-primary ms-2">0.0</span>
                                             </label>
                                             <input type="range" class="form-range" id="brightness" min="-1.0" max="1.0" step="0.01" value="0.0">
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
-                                                Contraste
+                                                <span data-i18n="web.config.image.contrast">Contrast</span>
                                                 <span id="contrastValue" class="badge bg-primary ms-2">1.0</span>
                                             </label>
                                             <input type="range" class="form-range" id="contrast" min="0.0" max="2.0" step="0.01" value="1.0">
@@ -481,30 +485,30 @@
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
                                                 <input class="form-check-input" type="checkbox" id="maintainAspect">
-                                                <label class="form-check-label" for="maintainAspect">Manter Proporção</label>
+                                                <label class="form-check-label" for="maintainAspect" data-i18n="web.config.image.maintain_aspect">Maintain aspect ratio</label>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
                                                 <input class="form-check-input" type="checkbox" id="fullscreen">
-                                                <label class="form-check-label" for="fullscreen">Tela Cheia</label>
+                                                <label class="form-check-label" for="fullscreen" data-i18n="web.config.image.fullscreen">Fullscreen</label>
                                             </div>
                                         </div>
                                         <div class="col-12">
                                             <hr>
-                                            <h6>Output Resolution</h6>
-                                            <p class="text-muted small">Aplicada após shader, antes de esticar para janela. 0 = automático (usar resolução do source).</p>
+                                            <h6 data-i18n="web.config.image.output_res">Output resolution</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.output_res_hint">Applied after the shader, before stretching to the window. 0 = auto (use source resolution).</p>
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
-                                                Largura
+                                                <span data-i18n="web.config.image.width">Width</span>
                                                 <span id="outputWidthValue" class="badge bg-primary ms-2">0</span>
                                             </label>
                                             <input type="number" class="form-control" id="outputWidth" min="0" max="7680" step="32" value="0">
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
-                                                Altura
+                                                <span data-i18n="web.config.image.height">Height</span>
                                                 <span id="outputHeightValue" class="badge bg-primary ms-2">0</span>
                                             </label>
                                             <input type="number" class="form-control" id="outputHeight" min="0" max="4320" step="32" value="0">
@@ -513,13 +517,13 @@
                                             <div class="btn-group" role="group">
                                                 <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1280, 720)">1280x720</button>
                                                 <button type="button" class="btn btn-sm btn-outline-primary" onclick="setOutputResolution(1920, 1080)">1920x1080</button>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setOutputResolution(0, 0)">Automático</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setOutputResolution(0, 0)" data-i18n="web.config.image.auto">Auto</button>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label">Índice do Monitor</label>
+                                            <label class="form-label" data-i18n="web.config.image.monitor">Monitor index</label>
                                             <input type="number" class="form-control" id="monitorIndex" min="-1" value="-1">
-                                            <small class="form-text text-muted">-1 = Monitor primário, 0+ = Monitor específico</small>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.monitor_hint">-1 = primary monitor, 0+ = specific monitor.</small>
                                         </div>
                                     </div>
                                 </div>
@@ -532,14 +536,14 @@
                                             <div class="card">
                                                 <div class="card-body">
                                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                                        <h6 class="card-title mb-0"><i class="bi bi-broadcast me-1"></i>Live preview</h6>
+                                                        <h6 class="card-title mb-0"><i class="bi bi-broadcast me-1"></i><span data-i18n="web.config.streaming.live_preview">Live preview</span></h6>
                                                         <div class="d-flex gap-2">
-                                                            <button type="button" class="btn btn-sm btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill"></i> Play</button>
-                                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill"></i> Stop</button>
+                                                            <button type="button" class="btn btn-sm btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill"></i> <span data-i18n="web.config.streaming.play">Play</span></button>
+                                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill"></i> <span data-i18n="web.config.streaming.stop">Stop</span></button>
                                                         </div>
                                                     </div>
                                                     <video id="livePlayer" controls muted playsinline style="width: 100%; max-height: 360px; background: #000; border-radius: 4px;"></video>
-                                                    <div class="form-text" id="livePlayerStatus">Click Play to start watching the live stream.</div>
+                                                    <div class="form-text" id="livePlayerStatus" data-i18n="web.config.streaming.player_hint">Click Play to start watching the live stream.</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -548,14 +552,14 @@
                                         <div class="col-12">
                                             <div class="card">
                                                 <div class="card-body">
-                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i>Profiles</h6>
+                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i><span data-i18n="web.config.streaming.profiles">Profiles</span></h6>
                                                     <div class="d-flex flex-wrap gap-2 align-items-center">
                                                         <select class="form-select form-select-sm" id="streamingProfileSelect" style="max-width: 240px;">
-                                                            <option value="">(no profiles saved)</option>
+                                                            <option value="" data-i18n="web.config.streaming.no_profiles_saved">(no profiles saved)</option>
                                                         </select>
-                                                        <button type="button" class="btn btn-sm btn-primary" id="streamingProfileApplyBtn" disabled>Apply</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="streamingProfileDeleteBtn" disabled>Delete</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-success" id="streamingProfileSaveBtn">Save as…</button>
+                                                        <button type="button" class="btn btn-sm btn-primary" id="streamingProfileApplyBtn" disabled data-i18n="web.config.streaming.apply">Apply</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="streamingProfileDeleteBtn" disabled data-i18n="web.config.streaming.delete">Delete</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-success" id="streamingProfileSaveBtn" data-i18n="web.config.streaming.save_as">Save as…</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" id="streamingProfileRefreshBtn"><i class="bi bi-arrow-clockwise"></i></button>
                                                     </div>
                                                 </div>
@@ -565,37 +569,37 @@
                                         <div class="col-12">
                                             <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="streamingApplyShader" checked>
-                                                <label class="form-check-label" for="streamingApplyShader">Apply shader to stream</label>
+                                                <label class="form-check-label" for="streamingApplyShader" data-i18n="web.config.streaming.apply_shader">Apply shader to stream</label>
                                             </div>
-                                            <div class="form-text">When off, the stream pushes the raw pre-shader source even though the live preview shows the shader. Lets you broadcast a clean feed while keeping the look on screen.</div>
+                                            <div class="form-text" data-i18n="web.config.streaming.apply_shader_hint">When off, the stream pushes the raw pre-shader source even though the live preview shows the shader. Lets you broadcast a clean feed while keeping the look on screen.</div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label">Port</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.port">Port</label>
                                             <input type="number" class="form-control" id="streamingPort" min="1" max="65535">
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label">Bitrate de Vídeo (bps)</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.video_bitrate">Video bitrate (bps)</label>
                                             <input type="number" class="form-control" id="streamingBitrate" min="1000" step="1000">
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label">Bitrate de Áudio (bps)</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.audio_bitrate">Audio bitrate (bps)</label>
                                             <input type="number" class="form-control" id="streamingAudioBitrate" min="1000" step="1000">
                                         </div>
                                         <div class="col-md-4">
-                                            <label class="form-label">Largura</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.width">Width</label>
                                             <input type="number" class="form-control" id="streamingWidth" min="1">
                                         </div>
                                         <div class="col-md-4">
-                                            <label class="form-label">Altura</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.height">Height</label>
                                             <input type="number" class="form-control" id="streamingHeight" min="1">
                                         </div>
                                         <div class="col-md-4">
-                                            <label class="form-label">FPS</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.fps">FPS</label>
                                             <input type="number" class="form-control" id="streamingFPS" min="1" max="120">
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label">Codec de Vídeo</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.video_codec">Video codec</label>
                                             <select class="form-select" id="streamingVideoCodec">
                                                 <option value="h264">H.264</option>
                                                 <option value="h265">H.265</option>
@@ -615,7 +619,7 @@
                                         <div class="col-12">
                                             <hr>
                                             <button type="button" class="btn btn-primary btn-lg w-100" id="streamingStartStopBtn" onclick="toggleStreaming()">
-                                                <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i>Start Streaming</span>
+                                                <span id="streamingStartStopText"><i class="bi bi-broadcast me-2"></i><span data-i18n="web.config.streaming.start">Start streaming</span></span>
                                             </button>
                                         </div>
                                     </div>
@@ -641,14 +645,14 @@
                                         <div class="col-12">
                                             <div class="card">
                                                 <div class="card-body">
-                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i>Profiles</h6>
+                                                    <h6 class="card-title mb-2"><i class="bi bi-bookmark-fill me-1"></i><span data-i18n="web.config.recording.profiles">Profiles</span></h6>
                                                     <div class="d-flex flex-wrap gap-2 align-items-center">
                                                         <select class="form-select form-select-sm" id="recordingProfileSelect" style="max-width: 240px;">
-                                                            <option value="">(no profiles saved)</option>
+                                                            <option value="" data-i18n="web.config.streaming.no_profiles_saved">(no profiles saved)</option>
                                                         </select>
-                                                        <button type="button" class="btn btn-sm btn-primary" id="recordingProfileApplyBtn" disabled>Apply</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="recordingProfileDeleteBtn" disabled>Delete</button>
-                                                        <button type="button" class="btn btn-sm btn-outline-success" id="recordingProfileSaveBtn">Save as…</button>
+                                                        <button type="button" class="btn btn-sm btn-primary" id="recordingProfileApplyBtn" disabled data-i18n="web.config.streaming.apply">Apply</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-danger" id="recordingProfileDeleteBtn" disabled data-i18n="web.config.streaming.delete">Delete</button>
+                                                        <button type="button" class="btn btn-sm btn-outline-success" id="recordingProfileSaveBtn" data-i18n="web.config.streaming.save_as">Save as…</button>
                                                         <button type="button" class="btn btn-sm btn-outline-secondary" id="recordingProfileRefreshBtn"><i class="bi bi-arrow-clockwise"></i></button>
                                                     </div>
                                                 </div>
@@ -658,21 +662,21 @@
                                         <div class="col-12">
                                             <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="recordingApplyShader" checked>
-                                                <label class="form-check-label" for="recordingApplyShader">Apply shader to recording</label>
+                                                <label class="form-check-label" for="recordingApplyShader" data-i18n="web.config.recording.apply_shader">Apply shader to recording</label>
                                             </div>
                                             <div class="form-text">When off, the recording captures the raw pre-shader source even though the live preview shows the shader. Useful to archive a clean master.</div>
                                         </div>
 
                                         <div class="col-md-4">
-                                            <label class="form-label">Width</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.width">Width</label>
                                             <input type="number" class="form-control" id="recordingWidth" min="1">
                                         </div>
                                         <div class="col-md-4">
-                                            <label class="form-label">Height</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.height">Height</label>
                                             <input type="number" class="form-control" id="recordingHeight" min="1">
                                         </div>
                                         <div class="col-md-4">
-                                            <label class="form-label">FPS</label>
+                                            <label class="form-label" data-i18n="web.config.streaming.fps">FPS</label>
                                             <input type="number" class="form-control" id="recordingFPS" min="1" max="120">
                                         </div>
                                         
@@ -682,7 +686,7 @@
                                             <h6>Quick Resolution Presets</h6>
                                             
                                             <div class="mb-3">
-                                                <label class="form-label">4:3 Resolutions:</label>
+                                                <label class="form-label" data-i18n="web.config.source.res_4_3">4:3 resolutions:</label>
                                                 <div class="d-flex flex-wrap gap-2">
                                                     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(320, 240)">320x240</button>
                                                     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(640, 480)">640x480</button>
@@ -696,7 +700,7 @@
                                             </div>
                                             
                                             <div class="mb-3">
-                                                <label class="form-label">16:9 Resolutions:</label>
+                                                <label class="form-label" data-i18n="web.config.source.res_16_9">16:9 resolutions:</label>
                                                 <div class="d-flex flex-wrap gap-2">
                                                     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1280, 720)">1280x720</button>
                                                     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setRecordingResolution(1920, 1080)">1920x1080</button>
@@ -761,7 +765,7 @@
                                         <div class="col-12">
                                             <hr>
                                             <button type="button" class="btn btn-danger btn-lg w-100" id="recordingStartStopBtn" onclick="toggleRecording()">
-                                                <span id="recordingStartStopText"><i class="bi bi-record-circle me-2"></i>Start Recording</span>
+                                                <span id="recordingStartStopText"><i class="bi bi-record-circle me-2"></i><span data-i18n="web.config.recording.start">Start recording</span></span>
                                             </button>
                                         </div>
                                     </div>
@@ -788,7 +792,7 @@
                                             <div class="card">
                                                 <div class="card-header">
                                                     <h6 class="mb-0">
-                                                        <i class="bi bi-mic me-2"></i>Audio Input Source
+                                                        <i class="bi bi-mic me-2"></i><span data-i18n="web.config.audio.title">Audio input</span>
                                                     </h6>
                                                 </div>
                                                 <div class="card-body">
@@ -896,10 +900,22 @@
     <script src="/vendor/bootstrap.bundle.min.js"></script>
     <!-- mpegts.js for live HTTP-TS playback in Chrome/Firefox/Edge (Safari plays TS natively). -->
     <script src="/vendor/mpegts.min.js"></script>
+    <!-- i18n loader (must run before control.js so t() is available) -->
+    <script src="/i18n.js"></script>
     <!-- API Client -->
     <script src="/api.js"></script>
     <!-- Main Script -->
     <script src="/control.js"></script>
+
+    <!-- Language dropdown wiring -->
+    <script>
+        (function () {
+            const sel = document.getElementById('langSelect');
+            if (!sel || !window.i18n) return;
+            window.i18n.onReady(() => { sel.value = window.i18n.getLanguage(); });
+            sel.addEventListener('change', () => { window.i18n.setLanguage(sel.value); });
+        })();
+    </script>
     
     <!-- PWA Service Worker Registration -->
     <script>

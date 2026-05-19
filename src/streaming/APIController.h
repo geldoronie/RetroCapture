@@ -151,6 +151,14 @@ private:
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETSourceOverscan(int clientFd);
+    /**
+     * GET /api/v1/preferences — exposes the host application's current
+     * UI language so the portal can default to it on first load.
+     * Read-only; the portal user overrides via header dropdown
+     * (persisted in localStorage on the client only — does not affect
+     * the host's setting).
+     */
+    bool handleGETPreferences(int clientFd);
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
