@@ -42,6 +42,13 @@ public:
 
     void render();
 
+    /// Always-on-top corner overlay that surfaces remote-connection
+    /// state transitions (Connecting / Reconnecting / Disconnecting
+    /// / Connected). Rendered before render()'s F12-visibility gate
+    /// so the user sees connection feedback even with the rest of
+    /// the IMGUI surface hidden.
+    void renderConnectionOverlay();
+
     // Callbacks para interação
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
     void setCurrentShader(const std::string &shader)
@@ -852,6 +859,15 @@ private:
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
     bool     m_remoteHostLikelyOffline = false;
+    // Connection-overlay frame-to-frame tracking. We detect
+    // transitions (e.g. currentDevice just became empty -> show
+    // "Disconnecting...") by comparing this frame's state with last
+    // frame's. Held in member fields rather than statics so the data
+    // is reset alongside UIManager.
+    std::string m_overlayLastDevice;
+    bool        m_overlayLastHadFrames = false;
+    double      m_overlayConnectedSince = 0.0;     // ImGui::GetTime()
+    double      m_overlayDisconnectingUntil = 0.0; // disconnect feedback decays at this time
     // Overscan: crop % das bordas do source antes do downscale.
     // X horizontal, Y vertical. Locked espelha um no outro.
     float m_sourceOverscanPercentX = 0.0f;
