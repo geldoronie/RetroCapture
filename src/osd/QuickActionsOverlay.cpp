@@ -107,24 +107,24 @@ void QuickActionsOverlay::render()
         ImGui::Separator();
     }
 
-    // Client-mode controls (#68 follow-up). When we're consuming a
-    // remote /raw, the broadcasting controls don't apply — the user
-    // either wants to disconnect or jump back to the directory to
-    // pick a different stream. Render those as the primary actions
-    // before the recording button (which stays available — see
-    // below).
+    // Browse directory — always available so users can discover other
+    // streams without going through the Remote menu, regardless of
+    // whether they're broadcasting (host) or consuming (client).
+    if (UIDirectoryBrowser *browser = m_uiManager->getDirectoryBrowserWindow())
+    {
+        if (ImGui::Button(T("quickactions.browse").c_str(), ImVec2(-1, 0)))
+        {
+            browser->setVisible(true);
+        }
+    }
+
+    // Disconnect — client mode only (no remote URL armed → nothing to
+    // disconnect from).
     if (clientMode)
     {
         if (ImGui::Button(T("quickactions.disconnect").c_str(), ImVec2(-1, 0)))
         {
             m_uiManager->setCurrentDevice("");
-        }
-        if (UIDirectoryBrowser *browser = m_uiManager->getDirectoryBrowserWindow())
-        {
-            if (ImGui::Button(T("quickactions.browse").c_str(), ImVec2(-1, 0)))
-            {
-                browser->setVisible(true);
-            }
         }
     }
 
