@@ -55,6 +55,11 @@ public:
         bool                         imageMaintainAspect = true;
         uint32_t                     imageOutputWidth    = 0;
         uint32_t                     imageOutputHeight   = 0;
+        // streaming block — for the OSD quick-actions widget (#68) to
+        // surface "you're watching with N other viewers" in client
+        // mode. Optional; older hosts that don't send this field
+        // leave it at 0.
+        uint32_t                     upstreamClientCount = 0;
     };
 
     using SnapshotCallback = std::function<void(const Snapshot &)>;
@@ -131,4 +136,5 @@ private:
     uint32_t            m_lastSourceWidth  = 0;
     uint32_t            m_lastSourceHeight = 0;
     uint32_t            m_lastSourceFps    = 0;
+    uint32_t            m_lastUpstreamClientCount = 0;
 };

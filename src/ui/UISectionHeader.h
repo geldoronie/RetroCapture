@@ -48,10 +48,41 @@ inline void ui_section_header(const char *title, const char *blurb = nullptr)
 }
 
 /**
- * Inline status indicator used inside renderXxxStatus() blocks. A
- * coloured filled bullet next to a "Status: ..." line at the top of
- * the window. Same colour conventions everywhere: green = active /
- * healthy, red = stopped / inactive, grey = unavailable / disabled.
+ * Coloured status bullet drawn via ImDrawList primitives.
+ *
+ * Why not a text glyph: Dear ImGui's built-in Proggy Clean font
+ * ships only ASCII + Latin-1 glyph data, so `●` (U+25CF) renders
+ * as the missing-glyph fallback ('?') even if we extend the font's
+ * glyph range. Drawing a filled circle directly through the
+ * window draw list sidesteps the font question entirely and gives
+ * us colour control besides.
+ *
+ * Reserves layout space equal to one text line tall, so callers
+ * can `SameLine()` after it just like they would after a real
+ * `ImGui::Text("●")`.
+ */
+inline void ui_status_bullet(const ImVec4 &color)
+{
+    const float lineH  = ImGui::GetTextLineHeight();
+    const float radius = lineH * 0.32f;
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    const ImVec2 center(cursor.x + radius, cursor.y + lineH * 0.5f);
+
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled(center, radius,
+                        ImGui::ColorConvertFloat4ToU32(color), 16);
+
+    // Reserve layout space — diameter wide, one line tall. The
+    // tiny extra padding on the right (4 px) prevents the next
+    // SameLine'd widget from touching the circle.
+    ImGui::Dummy(ImVec2(radius * 2.0f + 4.0f, lineH));
+}
+
+/**
+ * Inline status indicator used inside renderXxxStatus() blocks.
+ * Renders as `Status: <label> <bullet>` where the bullet's colour
+ * follows the active flag. Green = active / healthy, red = stopped
+ * / inactive — same convention as the connection-status overlay.
  *
  * Usage:
  *   ui_section_header("Video Recording");
@@ -61,12 +92,6 @@ inline void ui_status_indicator(bool active, const char *activeLabel, const char
 {
     ImGui::Text("Status: %s", active ? activeLabel : inactiveLabel);
     ImGui::SameLine();
-    if (active)
-    {
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
-    }
-    else
-    {
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
-    }
+    ui_status_bullet(active ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
+                            : ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 }

@@ -1108,8 +1108,13 @@ std::string APIController::buildMetaSnapshotJSON()
          <<   "\"outputHeight\": "   << jsonNumber(m_uiManager->getOutputHeight())
          << "}, "
          << "\"streaming\": {"
-         <<   "\"active\": " << jsonBool(m_uiManager->getStreamingActive()) << ", "
-         <<   "\"url\": "    << jsonString(m_uiManager->getStreamUrl())
+         <<   "\"active\": "      << jsonBool(m_uiManager->getStreamingActive())     << ", "
+         <<   "\"url\": "         << jsonString(m_uiManager->getStreamUrl())         << ", "
+         // #68 — expose the host's viewer count so a remote client
+         // can render "you're watching with N other viewers" in the
+         // OSD quick-actions widget. No security concern since
+         // browsing the directory already exposes per-stream counts.
+         <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
          << "}"
          << "}";
 

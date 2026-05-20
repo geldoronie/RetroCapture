@@ -12,6 +12,8 @@
   "menu.configurations.audio":      "Áudio",
   "menu.view":              "Visualizar",
   "menu.view.toggleui":     "Mostrar/Ocultar UI",
+  "menu.view.quickactions": "Ações rápidas",
+  "menu.view.shortcuts":    "Atalhos do teclado",
   "menu.view.info":         "Informações",
   "menu.view.capturepresets": "Presets de Captura",
   "menu.view.recordings":   "Gravações",
@@ -230,6 +232,17 @@
   "browse.report_sent.quote_hint": "Mencione este número se entrar em contato com o mantenedor.",
   "browse.report_sent.no_protocol": "O serviço de diretório não retornou um número de protocolo para este report. O report em si foi aceito.",
   "browse.report_sent.close": "Fechar",
+
+  "quickactions.title":    "Ações rápidas",
+  "quickactions.viewers":  "espectadores",
+  "quickactions.disconnect": "Desconectar",
+  "quickactions.browse":   "Navegar diretório",
+  "quickactions.record_client.tip": "Grava o que está na tela (vídeo pós-decode).\nO áudio vem do dispositivo de entrada local, NÃO\ndo stream remoto — sem loopback do sistema a gravação\nficará muda. Configure uma fonte loopback no OS\npara capturar o áudio do stream também.",
+
+  "shortcuts.title":       "Atalhos do teclado",
+  "shortcuts.f11":         "Alternar tela cheia",
+  "shortcuts.f12":         "Mostrar/Ocultar UI",
+  "shortcuts.dismiss_hint": "Oculte em Visualizar → Atalhos do teclado",
 
   "overlay.connecting":    "Conectando...",
   "overlay.reconnecting":  "Reconectando...",

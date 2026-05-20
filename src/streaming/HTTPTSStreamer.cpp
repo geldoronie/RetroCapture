@@ -707,7 +707,13 @@ std::string HTTPTSStreamer::getStreamUrl() const
 
 uint32_t HTTPTSStreamer::getClientCount() const
 {
-    return m_clientCount.load();
+    // Combine /stream subscribers (web portal viewers consuming
+    // MPEG-TS) and /raw subscribers (remote RetroCapture desktop
+    // clients consuming the shader-bypassed feed). Both are "people
+    // watching the host's broadcast" — surfacing only one of them
+    // makes the count under-report whenever the audience splits
+    // between the portal and remote-client viewers (#68).
+    return m_clientCount.load() + m_rawClientCount.load();
 }
 
 void HTTPTSStreamer::cleanup()

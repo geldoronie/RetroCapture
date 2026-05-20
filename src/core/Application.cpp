@@ -20,6 +20,7 @@
 #endif
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
+#include "../osd/QuickActionsOverlay.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -189,10 +190,17 @@ bool Application::init()
 
 void Application::updateCursorVisibility()
 {
-    // Simple method to sync cursor visibility with UI visibility
+    // Keep the OS cursor visible whenever ANY interactive surface is on
+    // screen — the full UI OR an interactive OSD (#68). Hiding it while
+    // the quick-actions widget is showing would let the user click the
+    // buttons but with no visible pointer, which feels broken even when
+    // the underlying clicks register.
     if (m_ui && m_window)
     {
-        m_window->setCursorVisible(m_ui->isVisible());
+        const bool osdInteractive =
+            m_ui->getQuickActionsOverlay() &&
+            m_ui->getQuickActionsOverlay()->isVisible();
+        m_window->setCursorVisible(m_ui->isVisible() || osdInteractive);
     }
 }
 
@@ -650,6 +658,12 @@ bool Application::initCapture()
                 // most).
                 if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
                 m_hasPendingRemoteMeta.store(true);
+                // Push the host's viewer count straight onto UIManager
+                // (#68) — the OSD quick-actions widget reads it every
+                // frame to render "watching with N others" in client
+                // mode. Bypasses the pending-snapshot apply path
+                // because there's no GL state involved.
+                if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
             });
     }
 
@@ -2492,6 +2506,12 @@ bool Application::initUI()
                         }
                         if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
                         m_hasPendingRemoteMeta.store(true);
+                        // #68 — same upstream-client-count push the
+                        // initCapture-side callback does. Without this
+                        // copy, switching to Remote mid-session via
+                        // Browse leaves the OSD's "watching with N
+                        // others" stuck at 0 forever.
+                        if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
                     });
             }
             else
@@ -3194,6 +3214,14 @@ void Application::run()
         // transition is needed (just compares two booleans and a few
         // strings).
         syncDirectoryClient();
+        // Cursor visibility tracks BOTH UIManager::isVisible() and the
+        // OSD overlay (#68). The setOnVisibilityChanged callback only
+        // fires on F12 toggles — toggling the quick-actions widget via
+        // View doesn't, and the desktop client mode flip doesn't either.
+        // Running this every frame keeps cursor state in sync; the
+        // window manager's own internal cache makes redundant calls
+        // free.
+        updateCursorVisibility();
 
         m_window->pollEvents();
         
