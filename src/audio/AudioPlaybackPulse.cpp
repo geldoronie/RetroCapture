@@ -84,10 +84,18 @@ void AudioPlaybackPulse::close()
     std::unique_lock<std::shared_mutex> lock(m_streamMutex);
     if (m_stream)
     {
-        // Best-effort drain so the user doesn't hear a click on
-        // disconnect. Ignored on error — we're tearing down anyway.
+        // Flush, don't drain. The earlier code used pa_simple_drain()
+        // "so the user doesn't hear a click on disconnect" — but drain
+        // blocks until every queued sample is played out, and during
+        // a reconnect storm the queue can carry multiple seconds of
+        // pending audio. The user heard the disconnected stream
+        // continue playing for that whole interval (#67 — "depois q
+        // me desconecto o audio continua rodando"). A flush discards
+        // the buffer immediately at the cost of a brief click on a
+        // graceful disconnect, which is the lesser evil by a wide
+        // margin.
         int err = 0;
-        pa_simple_drain(m_stream, &err);
+        pa_simple_flush(m_stream, &err);
         pa_simple_free(m_stream);
         m_stream = nullptr;
     }
