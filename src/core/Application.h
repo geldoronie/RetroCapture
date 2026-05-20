@@ -180,6 +180,10 @@ private:
     std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
     std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
     std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
+    // #69 — Cache the URL each subsystem was started against so a
+    // runtime edit in the UI reconfigures both immediately instead of
+    // waiting for an app restart.
+    std::string m_publishedDirectoryUrl;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

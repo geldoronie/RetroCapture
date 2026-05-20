@@ -3415,10 +3415,11 @@ void Application::run()
                         m_directoryBrowser = std::make_unique<DirectoryBrowser>();
                     }
                     browseWin->setDirectoryBrowser(m_directoryBrowser.get());
-                    if (!m_directoryBrowser->isRunning())
-                    {
-                        m_directoryBrowser->start(m_ui->getDirectoryUrl());
-                    }
+                    // start() is idempotent on the same URL and
+                    // tears-down/restarts on a different URL, so calling
+                    // every tick lets a runtime URL edit take effect
+                    // immediately. The no-op case has no cost.
+                    m_directoryBrowser->start(m_ui->getDirectoryUrl());
                 }
                 else if (m_directoryBrowser && m_directoryBrowser->isRunning())
                 {
@@ -5641,6 +5642,23 @@ void Application::syncDirectoryClient()
 
     auto state = m_directoryClient->getState();
 
+    // #69 — If the user edited the Directory URL while we're already
+    // registered/registering against the old host, drop the session so
+    // the Idle branch below re-registers against the new URL on this
+    // very tick. Without this, URL edits only take effect on app
+    // restart, which silently surprises users.
+    {
+        const std::string currentUrl = m_ui->getDirectoryUrl();
+        if (state != DirectoryClient::State::Idle &&
+            !m_publishedDirectoryUrl.empty() &&
+            m_publishedDirectoryUrl != currentUrl)
+        {
+            m_directoryClient->stop();
+            state = DirectoryClient::State::Idle;
+        }
+        m_publishedDirectoryUrl = currentUrl;
+    }
+
     if (!shouldPublish)
     {
         if (state != DirectoryClient::State::Idle)
@@ -5731,6 +5749,7 @@ void Application::syncDirectoryClient()
         cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
         cfg.endpointMode     = mode;
         cfg.version          = RETROCAPTURE_VERSION;
+        cfg.insecureSkipVerify = m_ui->getDirectoryInsecureSkipVerify();
 
         if (cfg.endpointMode == "tunnel-cloudflare")
         {

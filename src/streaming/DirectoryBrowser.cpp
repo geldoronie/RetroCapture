@@ -25,7 +25,9 @@ DirectoryBrowser::~DirectoryBrowser()
 
 bool DirectoryBrowser::start(const std::string &directoryUrl)
 {
-    if (directoryUrl.empty() || directoryUrl.rfind("http://", 0) != 0)
+    if (directoryUrl.empty() ||
+        (directoryUrl.rfind("http://", 0) != 0 &&
+         directoryUrl.rfind("https://", 0) != 0))
     {
         LOG_WARN("DirectoryBrowser::start — invalid URL: " + directoryUrl);
         return false;

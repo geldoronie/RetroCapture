@@ -23,8 +23,9 @@ namespace
 std::string DirectoryClient::Config::validate() const
 {
     if (directoryUrl.empty()) return "directory URL is required";
-    if (directoryUrl.rfind("http://", 0) != 0)
-        return "directory URL must start with http://";
+    if (directoryUrl.rfind("http://", 0) != 0 &&
+        directoryUrl.rfind("https://", 0) != 0)
+        return "directory URL must start with http:// or https://";
     if (name.empty())          return "stream name is required";
     if (name.size() > 120)     return "stream name too long (max 120)";
     if (hostNickname.size() > 40) return "nickname too long (max 40)";
@@ -284,9 +285,12 @@ bool DirectoryClient::doRegister()
         {"version",          cfg.version},
     };
 
+    HttpClient::Options opts;
+    opts.insecureSkipVerify = cfg.insecureSkipVerify;
     auto resp = HttpClient::send(HttpClient::Method::POST,
                                  cfg.directoryUrl + "/register",
-                                 body.dump());
+                                 body.dump(),
+                                 opts);
     if (!resp.ok)
     {
         setError("register transport failure: " + resp.error);
@@ -328,13 +332,15 @@ bool DirectoryClient::doRegister()
 bool DirectoryClient::doHeartbeat()
 {
     std::string baseUrl, streamId, ownerToken;
+    bool        insecureSkipVerify;
     int cc;
     {
         std::lock_guard<std::mutex> lock(m_mu);
-        baseUrl    = m_cfg.directoryUrl;
-        streamId   = m_streamId;
-        ownerToken = m_ownerToken;
-        cc         = m_currentClientCount;
+        baseUrl            = m_cfg.directoryUrl;
+        streamId           = m_streamId;
+        ownerToken         = m_ownerToken;
+        insecureSkipVerify = m_cfg.insecureSkipVerify;
+        cc                 = m_currentClientCount;
     }
     if (streamId.empty() || ownerToken.empty()) return false;
 
@@ -343,9 +349,12 @@ bool DirectoryClient::doHeartbeat()
         {"ownerToken",  ownerToken},
         {"clientCount", cc},
     };
+    HttpClient::Options opts;
+    opts.insecureSkipVerify = insecureSkipVerify;
     auto resp = HttpClient::send(HttpClient::Method::POST,
                                  baseUrl + "/heartbeat",
-                                 body.dump());
+                                 body.dump(),
+                                 opts);
     if (!resp.ok)
     {
         setError("heartbeat transport: " + resp.error);
@@ -386,15 +395,17 @@ bool DirectoryClient::doPatchIfPending()
 {
     Patch p;
     std::string baseUrl, streamId, ownerToken;
+    bool        insecureSkipVerify;
     {
         std::lock_guard<std::mutex> lock(m_mu);
         if (!m_hasPendingPatch) return true;
         p = m_pendingPatch;
         m_pendingPatch = Patch{};
         m_hasPendingPatch = false;
-        baseUrl    = m_cfg.directoryUrl;
-        streamId   = m_streamId;
-        ownerToken = m_ownerToken;
+        baseUrl            = m_cfg.directoryUrl;
+        streamId           = m_streamId;
+        ownerToken         = m_ownerToken;
+        insecureSkipVerify = m_cfg.insecureSkipVerify;
     }
     if (streamId.empty() || ownerToken.empty()) return false;
 
@@ -410,9 +421,12 @@ bool DirectoryClient::doPatchIfPending()
     if (!p.endpoint.empty())     body["endpoint"]     = p.endpoint;
     if (!p.endpointMode.empty()) body["endpointMode"] = p.endpointMode;
 
+    HttpClient::Options opts;
+    opts.insecureSkipVerify = insecureSkipVerify;
     auto resp = HttpClient::send(HttpClient::Method::PATCH,
                                  baseUrl + "/streams/" + streamId,
-                                 body.dump());
+                                 body.dump(),
+                                 opts);
     if (!resp.ok)
     {
         setError("patch transport: " + resp.error);
@@ -433,11 +447,13 @@ bool DirectoryClient::doPatchIfPending()
 bool DirectoryClient::doDelete()
 {
     std::string baseUrl, streamId, ownerToken;
+    bool        insecureSkipVerify;
     {
         std::lock_guard<std::mutex> lock(m_mu);
-        baseUrl    = m_cfg.directoryUrl;
-        streamId   = m_streamId;
-        ownerToken = m_ownerToken;
+        baseUrl            = m_cfg.directoryUrl;
+        streamId           = m_streamId;
+        ownerToken         = m_ownerToken;
+        insecureSkipVerify = m_cfg.insecureSkipVerify;
     }
     if (streamId.empty() || ownerToken.empty())
     {
@@ -446,9 +462,12 @@ bool DirectoryClient::doDelete()
     }
 
     json body = {{"ownerToken", ownerToken}};
+    HttpClient::Options opts;
+    opts.insecureSkipVerify = insecureSkipVerify;
     auto resp = HttpClient::send(HttpClient::Method::DELETE_,
                                  baseUrl + "/streams/" + streamId,
-                                 body.dump());
+                                 body.dump(),
+                                 opts);
     if (!resp.ok)
     {
         LOG_WARN("DirectoryClient::doDelete — transport: " + resp.error);

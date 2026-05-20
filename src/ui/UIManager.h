@@ -271,6 +271,8 @@ public:
     void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
     const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
     void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
+    bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
+    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -1037,7 +1039,11 @@ private:
     // actually talks to the directory service and mirrors the toggle
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
-    std::string m_directoryUrl            = "http://directory.retrocapture.com";
+    std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // Dev-only: skip TLS peer-certificate verification when talking to
+    // the directory. Off by default; toggled from Streaming → Public
+    // Directory → Advanced. Never persisted as ON for the public host.
+    bool        m_directoryInsecureSkipVerify = false;
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;

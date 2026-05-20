@@ -30,7 +30,7 @@ void printUsage(const char *programName)
     std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
     std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
-    std::cout << "  --directory-url <url>  Override the directory service URL (default http://localhost:8081).\n";
+    std::cout << "  --directory-url <url>  Override the directory service URL (default https://directory.retrocapture.com).\n";
     std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
     std::cout << "  --cloudflared-binary <path>\n";
     std::cout << "                         Use the given cloudflared binary verbatim (skip download + sha256 check).\n";
@@ -114,7 +114,7 @@ int main(int argc, char *argv[])
     std::string presetPath;
     std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
     bool        browseDirectory = false;     // #49 Phase 4: --browse-directory
-    std::string browseDirectoryUrl;          // optional, defaults to http://localhost:8081
+    std::string browseDirectoryUrl;          // optional, defaults to https://directory.retrocapture.com
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
@@ -680,7 +680,7 @@ int main(int argc, char *argv[])
     if (browseDirectory)
     {
         const std::string url = browseDirectoryUrl.empty()
-                                    ? std::string("http://directory.retrocapture.com")
+                                    ? std::string("https://directory.retrocapture.com")
                                     : browseDirectoryUrl;
         auto resp = HttpClient::send(HttpClient::Method::GET, url + "/streams");
         if (!resp.ok)

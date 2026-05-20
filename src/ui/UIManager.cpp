@@ -2504,6 +2504,7 @@ void UIManager::loadConfig()
                 auto &dir = streaming["directory"];
                 if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
                 if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
+                if (dir.contains("insecureSkipVerify")) m_directoryInsecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
                 if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
                 if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
                 if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
@@ -2902,6 +2903,7 @@ void UIManager::saveConfig()
             {"directory", {
                 {"publishEnabled", m_directoryPublishEnabled},
                 {"url",            m_directoryUrl},
+                {"insecureSkipVerify", m_directoryInsecureSkipVerify},
                 {"streamName",     m_directoryStreamName},
                 {"hostNickname",   m_directoryHostNickname},
                 {"password",       m_directoryPassword},

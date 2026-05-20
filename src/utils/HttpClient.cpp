@@ -1,98 +1,21 @@
 #include "HttpClient.h"
+#include "HttpClientTls.h"
 
 #include <cctype>
 #include <cstring>
 
-#ifdef _WIN32
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  using socket_t = SOCKET;
-  static constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
-  static int closeSocket(socket_t s) { return ::closesocket(s); }
-#else
-  #include <sys/socket.h>
-  #include <netdb.h>
-  #include <netinet/in.h>
-  #include <arpa/inet.h>
-  #include <unistd.h>
-  using socket_t = int;
-  static constexpr socket_t INVALID_SOCK = -1;
-  static int closeSocket(socket_t s) { return ::close(s); }
+using httpinternal::Connection;
+using httpinternal::INVALID_SOCK;
+using httpinternal::parseHttpUrl;
+using httpinternal::setRecvTimeout;
+using httpinternal::UrlParts;
+#ifdef ENABLE_HTTPS
+using httpinternal::establishTls;
 #endif
+using httpinternal::connectTcp;
 
 namespace
 {
-    struct UrlParts
-    {
-        std::string host;
-        std::string port;
-        std::string path;
-    };
-
-    // Minimal http:// parser, mirrors the one in RemoteMetaSync.cpp.
-    // No urlencoding, no userinfo, no fragment — strictly enough URL
-    // to address our directory service.
-    bool parseHttpUrl(const std::string &url, UrlParts &out)
-    {
-        constexpr const char *prefix = "http://";
-        if (url.compare(0, 7, prefix) != 0) return false;
-
-        std::string rest = url.substr(7);
-        size_t pathStart = rest.find('/');
-        std::string hostPort = (pathStart == std::string::npos) ? rest : rest.substr(0, pathStart);
-        out.path = (pathStart == std::string::npos) ? "/" : rest.substr(pathStart);
-
-        size_t colon = hostPort.find(':');
-        if (colon == std::string::npos)
-        {
-            out.host = hostPort;
-            out.port = "80";
-        }
-        else
-        {
-            out.host = hostPort.substr(0, colon);
-            out.port = hostPort.substr(colon + 1);
-        }
-        return !out.host.empty();
-    }
-
-    socket_t connectTcp(const UrlParts &u)
-    {
-        addrinfo hints{};
-        hints.ai_family   = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo *res = nullptr;
-        if (getaddrinfo(u.host.c_str(), u.port.c_str(), &hints, &res) != 0 || !res)
-        {
-            return INVALID_SOCK;
-        }
-        socket_t sock = INVALID_SOCK;
-        for (addrinfo *p = res; p != nullptr; p = p->ai_next)
-        {
-            sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-            if (sock == INVALID_SOCK) continue;
-            if (::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) break;
-            closeSocket(sock);
-            sock = INVALID_SOCK;
-        }
-        freeaddrinfo(res);
-        return sock;
-    }
-
-    void setRecvTimeout(socket_t sock, int ms)
-    {
-#ifdef _WIN32
-        DWORD tv = static_cast<DWORD>(ms);
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
-                     reinterpret_cast<const char *>(&tv), sizeof(tv));
-#else
-        timeval tv{};
-        tv.tv_sec  = ms / 1000;
-        tv.tv_usec = (ms % 1000) * 1000;
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
-    }
-
     // Case-insensitive find of a header field in the raw response.
     // Returns the trimmed value or empty when missing.
     std::string getHeaderValue(const std::string &response, const std::string &fieldName)
@@ -114,10 +37,8 @@ namespace
         if (valEnd == std::string::npos) return {};
 
         std::string value = response.substr(valStart, valEnd - valStart);
-        // Trim leading whitespace.
         size_t i = 0;
         while (i < value.size() && (value[i] == ' ' || value[i] == '\t')) ++i;
-        // Trim trailing whitespace.
         size_t j = value.size();
         while (j > i && (value[j - 1] == ' ' || value[j - 1] == '\t' || value[j - 1] == '\r' || value[j - 1] == '\n')) --j;
         return value.substr(i, j - i);
@@ -139,24 +60,46 @@ const char *HttpClient::methodName(Method m)
 HttpClient::Response HttpClient::send(Method method,
                                       const std::string &url,
                                       const std::string &jsonBody,
-                                      int recvTimeoutMs)
+                                      const Options &options)
 {
     Response resp;
 
     UrlParts u;
     if (!parseHttpUrl(url, u))
     {
-        resp.error = "malformed URL (expected http://host[:port][/path]): " + url;
+        resp.error = "malformed URL (expected http(s)://host[:port][/path]): " + url;
         return resp;
     }
 
-    socket_t sock = connectTcp(u);
-    if (sock == INVALID_SOCK)
+#ifndef ENABLE_HTTPS
+    if (u.tls)
+    {
+        resp.error = "https not supported in this build (rebuild with OpenSSL)";
+        return resp;
+    }
+#endif
+
+    Connection c;
+    c.sock = connectTcp(u);
+    if (c.sock == INVALID_SOCK)
     {
         resp.error = "connect to " + u.host + ":" + u.port + " failed";
         return resp;
     }
-    setRecvTimeout(sock, recvTimeoutMs);
+    setRecvTimeout(c.sock, options.recvTimeoutMs);
+
+#ifdef ENABLE_HTTPS
+    if (u.tls)
+    {
+        std::string tlsErr;
+        if (!establishTls(c.sock, u.host, options.insecureSkipVerify, c.ssl, tlsErr))
+        {
+            c.close();
+            resp.error = tlsErr;
+            return resp;
+        }
+    }
+#endif
 
     // Build request.
     std::string req;
@@ -166,7 +109,7 @@ HttpClient::Response HttpClient::send(Method method,
     req += u.path;
     req += " HTTP/1.1\r\nHost: ";
     req += u.host;
-    if (u.port != "80")
+    if ((u.tls && u.port != "443") || (!u.tls && u.port != "80"))
     {
         req += ':';
         req += u.port;
@@ -182,29 +125,27 @@ HttpClient::Response HttpClient::send(Method method,
     req += "\r\n";
     if (!jsonBody.empty()) req += jsonBody;
 
-    if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)
+    if (c.sendAll(req.data(), req.size()) < 0)
     {
-        closeSocket(sock);
+        c.close();
         resp.error = "send failed";
         return resp;
     }
 
     // Read until close or sanity cap. Directory responses are tiny
-    // (a few hundred bytes at most), so 256 KB is far more than
-    // enough.
+    // (a few hundred bytes at most), so 256 KB is far more than enough.
     std::string response;
     response.reserve(4096);
     char buf[2048];
     for (;;)
     {
-        int n = ::recv(sock, buf, sizeof(buf), 0);
+        int n = c.recvSome(buf, sizeof(buf));
         if (n <= 0) break;
         response.append(buf, static_cast<size_t>(n));
         if (response.size() > 256 * 1024) break;
     }
-    closeSocket(sock);
+    c.close();
 
-    // Parse status line.
     size_t sep = response.find("\r\n\r\n");
     if (sep == std::string::npos)
     {
@@ -228,4 +169,14 @@ HttpClient::Response HttpClient::send(Method method,
     resp.body = response.substr(sep + 4);
     resp.retryAfter = getHeaderValue(response.substr(0, sep), "Retry-After");
     return resp;
+}
+
+HttpClient::Response HttpClient::send(Method method,
+                                      const std::string &url,
+                                      const std::string &jsonBody,
+                                      int recvTimeoutMs)
+{
+    Options opts;
+    opts.recvTimeoutMs = recvTimeoutMs;
+    return send(method, url, jsonBody, opts);
 }
