@@ -1037,7 +1037,7 @@ private:
     // actually talks to the directory service and mirrors the toggle
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
-    std::string m_directoryUrl            = "http://directory.retrocapture.com";
+    std::string m_directoryUrl            = "https://directory.retrocapture.com";
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;

@@ -23,8 +23,9 @@ namespace
 std::string DirectoryClient::Config::validate() const
 {
     if (directoryUrl.empty()) return "directory URL is required";
-    if (directoryUrl.rfind("http://", 0) != 0)
-        return "directory URL must start with http://";
+    if (directoryUrl.rfind("http://", 0) != 0 &&
+        directoryUrl.rfind("https://", 0) != 0)
+        return "directory URL must start with http:// or https://";
     if (name.empty())          return "stream name is required";
     if (name.size() > 120)     return "stream name too long (max 120)";
     if (hostNickname.size() > 40) return "nickname too long (max 40)";
