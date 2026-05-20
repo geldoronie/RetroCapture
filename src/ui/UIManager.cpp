@@ -10,6 +10,9 @@
 #endif
 #include "UIInfoPanel.h"
 #include "UIPreferences.h"
+#include "UISectionHeader.h"
+#include "../osd/QuickActionsOverlay.h"
+#include "../osd/ConnectionStatusOverlay.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -72,6 +75,8 @@ UIManager::~UIManager()
 #endif
     m_infoWindow.reset();
     m_preferencesWindow.reset();
+    m_connectionOverlay.reset();
+    m_quickActionsOverlay.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
     m_recordingsWindow.reset();
@@ -159,6 +164,15 @@ bool UIManager::init(void *window)
         }
     }
 
+    // We previously tried to extend the default font's glyph range
+    // to include geometric shapes (U+25A0..U+25FF) so the `●` / `○`
+    // status bullets would render. That doesn't work: Dear ImGui's
+    // built-in Proggy Clean has no glyph DATA for any of those
+    // codepoints, so ranging them in still gets the missing-glyph
+    // fallback. The bullets are now drawn via ImDrawList primitives
+    // through ui_status_bullet() in UISectionHeader.h — same
+    // technique UIDirectoryBrowser::drawPadlockIcon uses.
+
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
 
@@ -217,6 +231,13 @@ bool UIManager::init(void *window)
 #endif
     m_infoWindow        = std::make_unique<UIInfoPanel>(this);
     m_preferencesWindow = std::make_unique<UIPreferences>(this);
+    // OSD layer (#68). Lives in src/osd/ — visual elements pinned to
+    // viewport corners with no user-movable decoration, distinct from
+    // the UI layer (src/ui/) which owns interactive windows.
+    m_quickActionsOverlay = std::make_unique<QuickActionsOverlay>(this);
+    m_quickActionsOverlay->setVisible(m_quickActionsVisible);
+    m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
+        this, m_quickActionsOverlay.get());
 
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
@@ -269,13 +290,20 @@ void UIManager::beginFrame()
         return;
     }
 
-    // Disable ImGui mouse input BEFORE processing events when UI is hidden
-    // This prevents ImGui from processing mouse events and controlling cursor
+    // Mouse-input gating. NoMouse blocks ImGui from interpreting any
+    // pointer activity, used to keep the cursor / clicks from leaking
+    // into a hidden UI. But the OSD layer (#68) lives outside the
+    // m_uiVisible gate — its buttons must respond to clicks even
+    // with F12 hiding the rest of the UI. So gate NoMouse on
+    // (UI hidden AND no interactive OSD on screen) rather than on
+    // UI alone, and skip the mouse-position scrub that would prevent
+    // any widget from seeing hover at all.
+    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool blockMouse     = !m_uiVisible && !osdInteractive;
     ImGuiIO& io = ImGui::GetIO();
-    if (!m_uiVisible)
+    if (blockMouse)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-        // Also disable mouse buttons to prevent any mouse interaction
         io.MouseDown[0] = false;
         io.MouseDown[1] = false;
         io.MouseDown[2] = false;
@@ -286,7 +314,7 @@ void UIManager::beginFrame()
     {
         io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
-    
+
     // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
 #ifdef USE_SDL2
@@ -295,14 +323,13 @@ void UIManager::beginFrame()
     ImGui_ImplGlfw_NewFrame();
 #endif
     ImGui::NewFrame();
-    
-    // CRITICAL: Ensure mouse is disabled after NewFrame
-    // ImGui backends (ImGui_ImplGlfw_NewFrame/ImGui_ImplSDL2_NewFrame) may re-enable mouse input
-    // and restore cursor visibility, so we must disable it again
-    if (!m_uiVisible)
+
+    // ImGui backends (Glfw/SDL2 NewFrame) may flip the mouse flag and
+    // pull a fresh cursor position from the OS — re-apply our gating
+    // and scrub the position only when truly blocking input.
+    if (blockMouse)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-        // Also clear mouse position to prevent any mouse interaction
         io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
         io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
@@ -325,10 +352,16 @@ void UIManager::endFrame()
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     
-    // Keep ImGui mouse disabled when UI is hidden
-    // This prevents ImGui from interfering with cursor visibility
+    // Mouse input gating. NoMouse blocks ImGui from interpreting
+    // clicks, which keeps the cursor from being captured by hidden
+    // windows. But the OSD layer (#68) lives outside the m_uiVisible
+    // gate — when the quick-actions overlay is on screen, its
+    // buttons must respond to clicks even with the rest of the UI
+    // hidden via F12. So gate NoMouse on (UI hidden AND no
+    // interactive OSD visible) rather than UI alone.
+    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
     ImGuiIO& io = ImGui::GetIO();
-    if (!m_uiVisible)
+    if (!m_uiVisible && !osdInteractive)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
     }
@@ -354,11 +387,14 @@ void UIManager::render()
 {
     if (!m_initialized) return;
 
-    // Connection overlay runs before the visibility gate so the user
-    // sees Connecting / Reconnecting / Disconnecting / Connected
-    // feedback even with the full UI hidden via F12. Otherwise the
-    // screen looks frozen during a reconnect with no hint that the
-    // client is still working in the background.
+    // OSD layer renders BEFORE the m_uiVisible gate (#68). By
+    // definition an OSD shows up regardless of whether the rest of
+    // the UI is hidden — the user pressing F12 to clear the screen
+    // shouldn't make the quick-actions widget or the connection
+    // status indicator vanish too. Quick actions renders first so
+    // its rendered-height is up-to-date when the connection overlay
+    // queries it for anti-collision math.
+    if (m_quickActionsOverlay) m_quickActionsOverlay->render();
     renderConnectionOverlay();
 
     if (!m_uiVisible)
@@ -411,12 +447,17 @@ void UIManager::render()
             // sense for a viewer to override.
             toggleItem(T("menu.configurations.shaders"),  m_shaderWindow.get());
             toggleItem(T("menu.configurations.image"),    m_imageWindow.get());
+            // Recording is allowed in client mode (#68) — the
+            // pipeline is generic and captures whatever the
+            // framebuffer holds, which in client mode is the
+            // decoded remote /raw. Audio has a caveat (no local
+            // loopback by default) that the OSD tooltip surfaces.
+            toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
             if (!clientMode)
             {
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
-                toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
 #ifdef __linux__
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
@@ -432,6 +473,14 @@ void UIManager::render()
                 setVisible(!m_uiVisible);
             }
             ImGui::Separator();
+            if (m_quickActionsOverlay)
+            {
+                bool visible = m_quickActionsOverlay->isVisible();
+                if (ImGui::MenuItem(T("menu.view.quickactions").c_str(), nullptr, visible))
+                {
+                    m_quickActionsOverlay->setVisible(!visible);
+                }
+            }
             if (m_infoWindow)
             {
                 bool visible = m_infoWindow->isVisible();
@@ -528,7 +577,7 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
-        if (m_recordingWindow) m_recordingWindow->setVisible(false);
+        // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
 #ifdef __linux__
         if (m_audioWindow)     m_audioWindow->setVisible(false);
@@ -548,6 +597,7 @@ void UIManager::render()
 #endif
     if (m_infoWindow)        m_infoWindow->render();
     if (m_preferencesWindow) m_preferencesWindow->render();
+    // m_quickActionsOverlay rendered earlier, above the m_uiVisible gate.
 
     // Renderizar janela de créditos
     if (m_creditsWindow)
@@ -1405,18 +1455,11 @@ void UIManager::renderStreamingPanel()
     ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
     ImGui::Separator();
 
-    // Status
-    ImGui::Text("Status: %s", m_streamingActive ? "Active" : "Inactive");
-    if (m_streamingActive)
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
-    }
-    else
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
-    }
+    // Status — bullet drawn via ui_status_indicator() in
+    // UISectionHeader.h so it goes through ImDrawList primitives
+    // instead of an untyped Unicode glyph the default font can't
+    // render.
+    ui_status_indicator(m_streamingActive, "Active", "Inactive");
 
     if (m_streamingActive && !m_streamUrl.empty())
     {
@@ -2464,6 +2507,12 @@ void UIManager::loadConfig()
             auto &prefs = config["preferences"];
             if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
             if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
+            // #68 — Quick actions widget visibility persists. Default
+            // true so users discover the widget on first launch; once
+            // they toggle it off via View, the choice survives across
+            // runs.
+            if (prefs.contains("quickActionsVisible"))
+                m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2851,6 +2900,9 @@ void UIManager::saveConfig()
         config["preferences"] = {
             {"language",        m_language},
             {"startFullscreen", m_startFullscreen},
+            {"quickActionsVisible",
+             m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
+                                  : m_quickActionsVisible},
         };
 
         // Salvar configurações de imagem
@@ -3758,117 +3810,9 @@ bool UIManager::loadStreamingProfile(const std::string &name)
 // ─────────────────────────────────────────────────────────────────────
 void UIManager::renderConnectionOverlay()
 {
-    if (m_sourceType != SourceType::Remote)
-    {
-        // Not in client mode — nothing to surface. Also clear the
-        // tracking state so a later mode switch starts fresh.
-        m_overlayLastDevice.clear();
-        m_overlayLastHadFrames = false;
-        m_overlayConnectedSince     = 0.0;
-        m_overlayDisconnectingUntil = 0.0;
-        return;
-    }
-
-    const double now      = ImGui::GetTime();
-    const std::string dev = m_currentDevice;
-    // 'Has frames' means decoding right NOW — not 'has ever had
-    // frames'. captureWidth/Height stay at the last seen value
-    // forever after the stream drops, so they're a "we know the
-    // resolution" signal, not a liveness one. Use the mirrored
-    // VideoCaptureRemote::isReceivingFrames() flag instead, which
-    // flips back to false the moment the decode loop loses the
-    // connection.
-    const bool hasFrames  = m_remoteReceivingFrames;
-    const bool offline    = m_remoteHostLikelyOffline;
-
-    // Detect 'device just became empty' — that's the disconnect
-    // transition. We arm a short window so the overlay can render
-    // "Disconnecting..." while the detached teardown runs.
-    if (!m_overlayLastDevice.empty() && dev.empty())
-    {
-        m_overlayDisconnectingUntil = now + 1.5;
-    }
-
-    // Track first-frame-arrived to drive the "Connected" flash.
-    if (!m_overlayLastHadFrames && hasFrames && !dev.empty())
-    {
-        m_overlayConnectedSince = now;
-    }
-    if (!hasFrames)
-    {
-        m_overlayConnectedSince = 0.0;
-    }
-
-    // Decide what to render.
-    std::string label;
-    ImVec4      color    = ImVec4(0.95f, 0.7f, 0.3f, 1.0f); // orange default
-    bool        spinning = false;
-
-    if (now < m_overlayDisconnectingUntil)
-    {
-        label    = T("overlay.disconnecting");
-        spinning = true;
-    }
-    else if (dev.empty())
-    {
-        // No URL armed and we're past the disconnect tail — nothing
-        // to say.
-    }
-    else if (offline)
-    {
-        label    = T("overlay.host_offline");
-        spinning = true;
-    }
-    else if (!hasFrames)
-    {
-        label    = m_overlayLastHadFrames ? T("overlay.reconnecting")
-                                          : T("overlay.connecting");
-        spinning = true;
-    }
-    else if (m_overlayConnectedSince > 0.0 && now - m_overlayConnectedSince < 3.0)
-    {
-        label    = T("overlay.connected");
-        color    = ImVec4(0.40f, 0.80f, 0.40f, 1.0f);
-        spinning = false;
-    }
-
-    // Always update the tracking BEFORE the early-return so transitions
-    // we detect this frame land in next frame's state.
-    m_overlayLastDevice    = dev;
-    m_overlayLastHadFrames = hasFrames;
-
-    if (label.empty()) return;
-
-    // Bottom-right anchor. SetNextWindowPos with pivot (1,1) puts
-    // the window's bottom-right corner at the screen point we pass.
-    // Padding of 16 px so it doesn't kiss the screen edges.
-    const ImGuiViewport *vp = ImGui::GetMainViewport();
-    const ImVec2 anchor(vp->WorkPos.x + vp->WorkSize.x - 16.0f,
-                        vp->WorkPos.y + vp->WorkSize.y - 16.0f);
-    ImGui::SetNextWindowPos(anchor, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
-    ImGui::SetNextWindowBgAlpha(0.85f);
-
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration       | ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings    | ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav              | ImGuiWindowFlags_NoMove;
-
-    if (ImGui::Begin("##connOverlay", nullptr, flags))
-    {
-        if (spinning)
-        {
-            // Simple ASCII spinner — 4-frame cycle, ~6 fps. ImGui
-            // doesn't ship a spinner widget but a one-char rotation
-            // is enough to signal "working" without pulling extra
-            // primitives.
-            static const char *spin = "|/-\\";
-            const int idx = static_cast<int>(now * 6.0) & 0x3;
-            ImGui::TextColored(color, "%c %s", spin[idx], label.c_str());
-        }
-        else
-        {
-            ImGui::TextColored(color, "%s", label.c_str());
-        }
-    }
-    ImGui::End();
+    // Delegates to osd::ConnectionStatusOverlay since the OSD layer
+    // pass in #68. UIManager keeps this thin entry point so existing
+    // callers (Application's render path) don't need to learn about
+    // the new location.
+    if (m_connectionOverlay) m_connectionOverlay->render();
 }

@@ -27,6 +27,7 @@ class UIConfigurationRecording;
 class UIConfigurationWebPortal;
 class UIConfigurationAudio;
 class UIInfoPanel;
+class QuickActionsOverlay;
 class UIPreferences;
 class UICredits;
 class UIRemoteConnection;
@@ -54,7 +55,8 @@ public:
     /// state transitions (Connecting / Reconnecting / Disconnecting
     /// / Connected). Rendered before render()'s F12-visibility gate
     /// so the user sees connection feedback even with the rest of
-    /// the IMGUI surface hidden.
+    /// the IMGUI surface hidden. Delegates to
+    /// osd::ConnectionStatusOverlay since #68.
     void renderConnectionOverlay();
 
     // Callbacks para interação
@@ -452,6 +454,13 @@ public:
     // VideoCaptureRemote::isReceivingFrames() every frame.
     bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
     void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+
+    // Host's current viewer count, parsed from /meta when we're in
+    // client mode (#68). Application piggybacks the
+    // RemoteMetaSync::Snapshot callback to keep this fresh. 0 when
+    // we're not a client or the host's /meta predates this field.
+    uint32_t getRemoteUpstreamClientCount() const { return m_remoteUpstreamClientCount; }
+    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteUpstreamClientCount = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -522,6 +531,9 @@ public:
     // decide whether to show Connect or Disconnect.
     UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
     UIDirectoryBrowser *getDirectoryBrowserWindow() const { return m_directoryBrowserWindow.get(); }
+    // OSD layer accessor — Application needs it to gate cursor
+    // visibility on whether an interactive overlay is on screen (#68).
+    QuickActionsOverlay *getQuickActionsOverlay() const { return m_quickActionsOverlay.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -837,6 +849,16 @@ private:
 #endif
     std::unique_ptr<class UIInfoPanel>              m_infoWindow;
     std::unique_ptr<class UIPreferences>            m_preferencesWindow;
+    // OSD layer (#68) — lives in src/osd/, owned by UIManager since
+    // it has the only natural place to hand them lifetime + state
+    // accessors.
+    std::unique_ptr<class QuickActionsOverlay>      m_quickActionsOverlay;
+    std::unique_ptr<class ConnectionStatusOverlay>  m_connectionOverlay;
+    // Loaded from config.json before m_quickActionsOverlay exists,
+    // applied via setVisible() right after construction. Defaults to
+    // true so first-time users see the overlay; subsequent toggles
+    // round-trip through saveConfig().
+    bool m_quickActionsVisible = true;
 
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
@@ -922,15 +944,10 @@ private:
     uint32_t m_captureFps = 0;
     bool     m_remoteHostLikelyOffline = false;
     bool     m_remoteReceivingFrames   = false;
+    uint32_t m_remoteUpstreamClientCount = 0;
     // Connection-overlay frame-to-frame tracking. We detect
-    // transitions (e.g. currentDevice just became empty -> show
-    // "Disconnecting...") by comparing this frame's state with last
-    // frame's. Held in member fields rather than statics so the data
-    // is reset alongside UIManager.
-    std::string m_overlayLastDevice;
-    bool        m_overlayLastHadFrames = false;
-    double      m_overlayConnectedSince = 0.0;     // ImGui::GetTime()
-    double      m_overlayDisconnectingUntil = 0.0; // disconnect feedback decays at this time
+    // Connection-overlay transition tracking moved to
+    // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
     // Overscan: crop % das bordas do source antes do downscale.
     // X horizontal, Y vertical. Locked espelha um no outro.
     float m_sourceOverscanPercentX = 0.0f;
