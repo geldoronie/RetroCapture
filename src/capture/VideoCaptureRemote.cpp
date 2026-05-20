@@ -768,17 +768,28 @@ void VideoCaptureRemote::decodeLoop()
                     uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
                     const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
                                                      const_cast<const uint8_t **>(aFrame->data), nbIn);
-                    if (produced > 0)
+                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE)
                     {
                         // Convert the frame's PTS (stream-tb units)
-                        // to stream-origin-relative microseconds the
-                        // same way the video path does it — see the
-                        // anchor logic below. We can reuse the anchor
-                        // because both streams share the same /raw
-                        // demuxer.
-                        const int64_t aPts = (aFrame->pts != AV_NOPTS_VALUE) ? aFrame->pts : 0;
+                        // to absolute stream microseconds. The drift
+                        // check below subtracts the video anchor
+                        // (m_firstPtsUs) to bring this into the same
+                        // coordinate system the video frame
+                        // targetWallUs uses, so we keep it absolute
+                        // here and let the consumer rebase.
+                        //
+                        // IMPORTANT: skip submit when aFrame->pts is
+                        // AV_NOPTS_VALUE. Earlier code substituted 0,
+                        // which on a mid-join anchored the audio
+                        // clock at "stream-time 0" while video
+                        // anchored at the server's current uptime —
+                        // producing the multi-hundred-second drift
+                        // documented in #67. A few dropped frames
+                        // (~20 ms each at AAC 1024-sample boundaries)
+                        // is a much better failure mode than a
+                        // corrupted A/V clock.
                         const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
-                        const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aPts) * av_q2d(tb) * 1e6);
+                        const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aFrame->pts) * av_q2d(tb) * 1e6);
                         m_audioPlayback->submit(m_audioScratch.data(),
                                                 static_cast<size_t>(produced),
                                                 ptsUs);
