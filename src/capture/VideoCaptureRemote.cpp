@@ -106,13 +106,22 @@ bool VideoCaptureRemote::initDecoder()
     // the decode loop starts. Too generous a probe means the decoder
     // chews through that buffer at non-real-time rates ('decoded=83/s'
     // catch-up the user observed) and the queue fills before the
-    // wall-clock-driven consumer can drain it. 256 KB at ~3 Mbit/s
-    // is ~0.7 s of stream — plenty for the second audio packet (AAC
-    // packets arrive every ~23 ms) but small enough that the catch-up
-    // settles in a couple of frames.
+    // wall-clock-driven consumer can drain it.
+    //
+    // 512 KB / 2.5 s is the smallest window that reliably catches the
+    // AAC ADTS codec config on a mid-join (#67). The earlier 256 KB /
+    // 1 s budget was hitting the 'Audio: aac, 0 channels: unspecified
+    // sample format' probe race: when a fresh client lands inside an
+    // MPEG-TS pack that doesn't carry the next PMT inside the first
+    // ~700 ms of stream, avformat_find_stream_info gives up before
+    // seeing enough AAC frames to determine channels/format. The
+    // larger budget guarantees at least one full PAT/PMT cycle plus
+    // several AAC packets, which is enough to populate codecpar
+    // reliably; the extra ~1 s of catch-up is absorbed by the queue's
+    // drop-oldest policy already exercised on every reconnect.
     AVDictionary *opts = nullptr;
-    av_dict_set(&opts, "probesize",       "262144",  0); // 256 KB
-    av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1 s
+    av_dict_set(&opts, "probesize",       "524288",  0); // 512 KB
+    av_dict_set(&opts, "analyzeduration", "2500000", 0); // 2.5 s
     // Note: deliberately NOT setting "fflags: nobuffer" here — without
     // FFmpeg's internal packet buffer, av_read_frame returns whatever the
     // socket has *right now*, which on a bursty TCP stream means several
