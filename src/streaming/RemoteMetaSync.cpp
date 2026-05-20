@@ -281,6 +281,16 @@ namespace
                 out.imageOutputWidth    = im.value("outputWidth",  0u);
                 out.imageOutputHeight   = im.value("outputHeight", 0u);
             }
+            if (j.contains("streaming") && j["streaming"].is_object())
+            {
+                // Only field we need from the streaming block in client
+                // mode is the host's current viewer count (#68 — fed to
+                // the OSD quick-actions widget). Active / url describe
+                // the host's local state which the client doesn't
+                // surface anywhere.
+                const auto &st = j["streaming"];
+                out.upstreamClientCount = st.value("clientCount", 0u);
+            }
             return true;
         }
         catch (const std::exception &e)
@@ -374,17 +384,24 @@ void RemoteMetaSync::dispatchIfChanged(const Snapshot &snap)
     const bool sourceChanged  = (snap.sourceWidth      != m_lastSourceWidth)  ||
                                 (snap.sourceHeight     != m_lastSourceHeight) ||
                                 (snap.sourceFps        != m_lastSourceFps);
+    // #68 — upstream client count also participates in the delta
+    // check. Without this, a viewer joining or leaving the host's
+    // stream never wakes the callback up (preset/hash/source all
+    // unchanged), so the OSD quick-actions widget stays frozen at
+    // whatever count was active on first connect.
+    const bool viewersChanged = (snap.upstreamClientCount != m_lastUpstreamClientCount);
 
-    if (presetChanged || hashChanged || toggleChanged || paramsChanged || sourceChanged)
+    if (presetChanged || hashChanged || toggleChanged || paramsChanged || sourceChanged || viewersChanged)
     {
         if (m_cb) m_cb(snap);
-        m_lastPreset          = snap.preset;
-        m_lastPresetHash      = snap.presetHash;
-        m_lastPipelineEnabled = snap.pipelineEnabled;
-        m_lastParamValues     = std::move(currentValues);
-        m_lastSourceWidth     = snap.sourceWidth;
-        m_lastSourceHeight    = snap.sourceHeight;
-        m_lastSourceFps       = snap.sourceFps;
+        m_lastPreset                = snap.preset;
+        m_lastPresetHash            = snap.presetHash;
+        m_lastPipelineEnabled       = snap.pipelineEnabled;
+        m_lastParamValues           = std::move(currentValues);
+        m_lastSourceWidth           = snap.sourceWidth;
+        m_lastSourceHeight          = snap.sourceHeight;
+        m_lastSourceFps             = snap.sourceFps;
+        m_lastUpstreamClientCount   = snap.upstreamClientCount;
     }
 }
 
