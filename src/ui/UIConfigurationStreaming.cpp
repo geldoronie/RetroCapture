@@ -1113,7 +1113,7 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             "(port-forwarding) — won't work behind CGNAT.");
     }
 
-    // Advanced: directory URL override.
+    // Advanced: directory URL override + TLS dev toggle.
     if (ImGui::TreeNode("Advanced"))
     {
         char buf[256];
@@ -1122,6 +1122,23 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         {
             m_uiManager->setDirectoryUrl(buf);
             m_uiManager->saveConfig();
+        }
+        // Dev escape hatch — only meaningful for https:// URLs.
+        // Off by default. The label spells out "self-signed" because
+        // that's the only legitimate use; flipping it for the public
+        // directory hides cert-rotation problems.
+        bool skip = m_uiManager->getDirectoryInsecureSkipVerify();
+        if (ImGui::Checkbox("Allow self-signed TLS cert (dev only)", &skip))
+        {
+            m_uiManager->setDirectoryInsecureSkipVerify(skip);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Skip TLS peer-certificate verification when talking to\n"
+                "the directory service. Use ONLY against a self-signed\n"
+                "dev host — never the public directory.");
         }
         ImGui::TreePop();
     }

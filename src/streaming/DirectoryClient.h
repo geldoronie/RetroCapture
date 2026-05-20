@@ -65,6 +65,11 @@ public:
         std::string endpoint;             // the URL clients should connect to
         std::string endpointMode  = "direct";      // "direct" | "tunnel-cloudflare" | "custom"
         std::string version       = "0.7.0-alpha"; // app version / protocol version string
+        // Dev-only escape hatch: skip TLS peer-certificate verification
+        // when talking to the directory service. Surfaces in the UI as
+        // "Allow self-signed TLS cert" under Advanced. Never enable
+        // against the public directory.
+        bool        insecureSkipVerify = false;
 
         /// Validation called by start() — returns empty string on OK.
         std::string validate() const;

@@ -1,4 +1,5 @@
 #include "RemoteMetaSync.h"
+#include "../utils/HttpClientTls.h"
 #include "../utils/Logger.h"
 
 #include <nlohmann/json.hpp>
@@ -14,178 +15,17 @@ extern "C" {
 #include <chrono>
 #include <cstring>
 
-#ifdef _WIN32
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  using socket_t = SOCKET;
-  static constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
-  static int closeSocket(socket_t s) { return ::closesocket(s); }
-#else
-  #include <sys/socket.h>
-  #include <netdb.h>
-  #include <netinet/in.h>
-  #include <arpa/inet.h>
-  #include <unistd.h>
-  using socket_t = int;
-  static constexpr socket_t INVALID_SOCK = -1;
-  static int closeSocket(socket_t s) { return ::close(s); }
-#endif
-
 namespace
 {
-    struct UrlParts
-    {
-        std::string host;
-        std::string port;
-        std::string path;
-    };
-
-    // Minimal http:// parser — strict enough for /meta polling, not a
-    // general-purpose URL library. Recognises "http://<host>[:<port>][<path>]".
-    bool parseHttpUrl(const std::string &url, UrlParts &out)
-    {
-        constexpr const char *prefix = "http://";
-        if (url.compare(0, 7, prefix) != 0) return false;
-
-        std::string rest = url.substr(7);
-        size_t pathStart = rest.find('/');
-        std::string hostPort = (pathStart == std::string::npos) ? rest : rest.substr(0, pathStart);
-        out.path = (pathStart == std::string::npos) ? "/" : rest.substr(pathStart);
-
-        size_t colon = hostPort.find(':');
-        if (colon == std::string::npos)
-        {
-            out.host = hostPort;
-            out.port = "80";
-        }
-        else
-        {
-            out.host = hostPort.substr(0, colon);
-            out.port = hostPort.substr(colon + 1);
-        }
-        return !out.host.empty();
-    }
-
-    // Opens a TCP connection to host:port. Returns INVALID_SOCK on failure.
-    socket_t connectTcp(const UrlParts &u)
-    {
-        addrinfo hints{};
-        hints.ai_family   = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo *res = nullptr;
-        if (getaddrinfo(u.host.c_str(), u.port.c_str(), &hints, &res) != 0 || !res)
-        {
-            return INVALID_SOCK;
-        }
-        socket_t sock = INVALID_SOCK;
-        for (addrinfo *p = res; p != nullptr; p = p->ai_next)
-        {
-            sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-            if (sock == INVALID_SOCK) continue;
-            if (::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) break;
-            closeSocket(sock);
-            sock = INVALID_SOCK;
-        }
-        freeaddrinfo(res);
-        return sock;
-    }
-
-    // Synchronous HTTP/1.1 GET with a 5-second receive deadline. Returns
-    // the response body on 2xx, empty string otherwise. Logs errors but
-    // doesn't throw — callers treat empty as "skip this poll".
-    //
-    // authToken (#49 Phase 3) is the sha256 hex of the user's stream
-    // password; when non-empty it's sent as an Authorization: Bearer
-    // header. Empty token means "no auth", header omitted.
-    std::string httpGet(const std::string &fullUrl, const std::string &authToken = "")
-    {
-        UrlParts u;
-        if (!parseHttpUrl(fullUrl, u))
-        {
-            LOG_WARN("RemoteMetaSync: malformed URL: " + fullUrl);
-            return {};
-        }
-
-        socket_t sock = connectTcp(u);
-        if (sock == INVALID_SOCK) return {};
-
-        // 5-second receive timeout so a wedged remote doesn't stall the
-        // polling thread forever.
-#ifdef _WIN32
-        DWORD tv = 5000;
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
-#else
-        timeval tv{};
-        tv.tv_sec = 5;
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
-
-        std::string req;
-        req.reserve(256);
-        req += "GET ";
-        req += u.path;
-        req += " HTTP/1.1\r\nHost: ";
-        req += u.host;
-        if (u.port != "80")
-        {
-            req += ':';
-            req += u.port;
-        }
-        req += "\r\nConnection: close\r\nAccept: application/json\r\n";
-        if (!authToken.empty())
-        {
-            req += "Authorization: Bearer ";
-            req += authToken;
-            req += "\r\n";
-        }
-        req += "\r\n";
-
-        if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)
-        {
-            closeSocket(sock);
-            return {};
-        }
-
-        std::string response;
-        response.reserve(4096);
-        char buf[2048];
-        for (;;)
-        {
-            int n = ::recv(sock, buf, sizeof(buf), 0);
-            if (n <= 0) break;
-            response.append(buf, static_cast<size_t>(n));
-            if (response.size() > 256 * 1024) break; // sanity cap
-        }
-        closeSocket(sock);
-
-        // Header / body split.
-        size_t sep = response.find("\r\n\r\n");
-        if (sep == std::string::npos) return {};
-
-        // Reject non-2xx.
-        if (response.size() < 12) return {};
-        // "HTTP/1.1 200 ..."
-        const std::string statusLine = response.substr(0, response.find("\r\n"));
-        size_t firstSpace = statusLine.find(' ');
-        if (firstSpace == std::string::npos) return {};
-        int statusCode = std::atoi(statusLine.c_str() + firstSpace + 1);
-        if (statusCode < 200 || statusCode >= 300) return {};
-
-        return response.substr(sep + 4);
-    }
-
     // FFmpeg-avio-backed HTTP GET. Handles http:// and https:// equally
     // — the TLS stack FFmpeg was linked against (OpenSSL / GnuTLS /
-    // SChannel) does the heavy lifting, so we don't carry our own
-    // crypto. Used by the short-poll path (fetchOnce); the raw-socket
-    // httpGet above is kept around for the SSE handshake which
-    // doesn't need TLS yet (the SSE path is plaintext-only and falls
-    // back to short-poll automatically when the URL is https://).
+    // SChannel) does the heavy lifting. Used by the short-poll path
+    // (fetchOnce); the SSE long-poll uses a raw socket via
+    // HttpClientTls so it can stream events as they arrive.
     //
     // Returns the response body on 2xx; empty string on any failure.
     // FFmpeg's avio surfaces HTTP errors as negative avio_read results
-    // and we treat those as "skip this poll" — matching the original
-    // httpGet's contract.
+    // and we treat those as "skip this poll".
     std::string httpGetViaAvio(const std::string &fullUrl,
                                 const std::string &authToken,
                                 int recvTimeoutMs = 5000)
@@ -231,7 +71,7 @@ namespace
 
     // Parses the /meta JSON snapshot body into the Snapshot struct.
     // Returns false on parse error. Shared by both the short-poll
-    // (httpGet) and long-poll (SSE) paths.
+    // (httpGetViaAvio) and long-poll (SSE) paths.
     bool parseSnapshotJSON(const std::string &body, RemoteMetaSync::Snapshot &out)
     {
         try
@@ -351,11 +191,11 @@ void RemoteMetaSync::stop()
 
 bool RemoteMetaSync::fetchOnce(Snapshot &out)
 {
-    // Use FFmpeg's avio so http:// and https:// both work transparently.
-    // The host's tunnel URL (Cloudflare Quick Tunnel etc.) is HTTPS,
-    // and our hand-rolled httpGet only speaks plaintext — using avio
-    // here piggybacks on the TLS stack FFmpeg is already linked
-    // against (OpenSSL / GnuTLS / SChannel depending on the build).
+    // Short-poll path: one-shot GET via FFmpeg's avio so http:// and
+    // https:// both work transparently (TLS stack comes from whatever
+    // FFmpeg was linked against). The SSE long-poll path uses our own
+    // HttpClientTls::Connection so it can hold the socket open and
+    // stream events; here we just need a body so avio is fine.
     std::string body = httpGetViaAvio(m_baseUrl + "/meta", m_authToken);
     if (body.empty()) return false;
     return parseSnapshotJSON(body, out);
@@ -413,20 +253,31 @@ void RemoteMetaSync::dispatchIfChanged(const Snapshot &snap)
 // short-poll fetchOnce(). Old RetroCapture builds (Phases 1-5) that only
 // know HTTP GET on /meta will land in the false branch and the client
 // transparently degrades to 1 s polling.
+//
+// HTTPS-aware: parseHttpUrl + openConnection from HttpClientTls handle
+// both http:// and https://, so a TLS-fronted host gets a real SSE
+// long-poll instead of degrading to short-polling.
 bool RemoteMetaSync::runSSE()
 {
-    UrlParts u;
-    if (!parseHttpUrl(m_baseUrl + "/meta", u))
+    httpinternal::UrlParts u;
+    if (!httpinternal::parseHttpUrl(m_baseUrl + "/meta", u))
     {
         return false;
     }
 
-    socket_t sock = connectTcp(u);
-    if (sock == INVALID_SOCK) return false;
+    std::string                connErr;
+    httpinternal::Connection   conn = httpinternal::openConnection(u, /*skipVerify=*/false, connErr);
+    if (conn.sock == httpinternal::INVALID_SOCK)
+    {
+        // Either DNS / TCP failure or TLS handshake failure. Caller
+        // backs off and retries; logging here would spam on every
+        // reconnect attempt when the host is offline.
+        return false;
+    }
 
-    // No recv timeout for SSE — the connection is intentionally long-lived.
-    // We rely on send-failure detection on the server side (their keepalive
-    // comment + payload writes) to notice broken sockets.
+    // No recv timeout — SSE is intentionally long-lived. We rely on
+    // peer-side keepalive comments and OS-level RST/FIN to notice
+    // broken connections.
 
     std::string req;
     req.reserve(256);
@@ -434,7 +285,7 @@ bool RemoteMetaSync::runSSE()
     req += u.path;
     req += " HTTP/1.1\r\nHost: ";
     req += u.host;
-    if (u.port != "80")
+    if ((u.tls && u.port != "443") || (!u.tls && u.port != "80"))
     {
         req += ':';
         req += u.port;
@@ -448,9 +299,8 @@ bool RemoteMetaSync::runSSE()
     }
     req += "Connection: keep-alive\r\n\r\n";
 
-    if (::send(sock, req.data(), static_cast<int>(req.size()), 0) < 0)
+    if (conn.sendAll(req.data(), req.size()) < 0)
     {
-        closeSocket(sock);
         return false;
     }
 
@@ -460,26 +310,22 @@ bool RemoteMetaSync::runSSE()
     char chunk[2048];
     while (m_running.load())
     {
-        int n = ::recv(sock, chunk, sizeof(chunk), 0);
-        if (n <= 0)
-        {
-            closeSocket(sock);
-            return false;
-        }
+        int n = conn.recvSome(chunk, sizeof(chunk));
+        if (n <= 0) return false;
         buf.append(chunk, static_cast<size_t>(n));
         if (buf.find("\r\n\r\n") != std::string::npos) break;
-        if (buf.size() > 16 * 1024) { closeSocket(sock); return false; }
+        if (buf.size() > 16 * 1024) return false;
     }
-    if (!m_running.load()) { closeSocket(sock); return true; }
+    if (!m_running.load()) return true;
 
     size_t headerEnd = buf.find("\r\n\r\n");
     std::string headerSection = buf.substr(0, headerEnd);
     // Status line check — accept any 2xx.
     {
         size_t sp = headerSection.find(' ');
-        if (sp == std::string::npos) { closeSocket(sock); return false; }
+        if (sp == std::string::npos) return false;
         int code = std::atoi(headerSection.c_str() + sp + 1);
-        if (code < 200 || code >= 300) { closeSocket(sock); return false; }
+        if (code < 200 || code >= 300) return false;
     }
     // Content-Type check — must be text/event-stream for SSE.
     {
@@ -497,7 +343,6 @@ bool RemoteMetaSync::runSSE()
             {
                 dispatchIfChanged(snap);
             }
-            closeSocket(sock);
             return false;
         }
     }
@@ -552,7 +397,7 @@ bool RemoteMetaSync::runSSE()
 
     while (m_running.load())
     {
-        int n = ::recv(sock, chunk, sizeof(chunk), 0);
+        int n = conn.recvSome(chunk, sizeof(chunk));
         if (n <= 0) break;
         body.append(chunk, static_cast<size_t>(n));
         if (body.size() > 256 * 1024)
@@ -564,7 +409,6 @@ bool RemoteMetaSync::runSSE()
         processEvents(body);
     }
 
-    closeSocket(sock);
     return true;
 }
 

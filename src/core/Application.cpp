@@ -5731,6 +5731,7 @@ void Application::syncDirectoryClient()
         cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
         cfg.endpointMode     = mode;
         cfg.version          = RETROCAPTURE_VERSION;
+        cfg.insecureSkipVerify = m_ui->getDirectoryInsecureSkipVerify();
 
         if (cfg.endpointMode == "tunnel-cloudflare")
         {
