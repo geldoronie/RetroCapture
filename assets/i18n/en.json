@@ -13,6 +13,7 @@
   "menu.view":              "View",
   "menu.view.toggleui":     "Toggle UI",
   "menu.view.quickactions": "Quick actions",
+  "menu.view.shortcuts":    "Keyboard shortcuts",
   "menu.view.info":         "Info",
   "menu.view.capturepresets": "Capture Presets",
   "menu.view.recordings":   "Recordings",
@@ -237,6 +238,11 @@
   "quickactions.disconnect": "Disconnect",
   "quickactions.browse":   "Browse directory",
   "quickactions.record_client.tip": "Records what's on screen (post-decode video).\nAudio is captured from the local input device, NOT\nfrom the remote stream — without system loopback\nthe recording will be silent. Configure a loopback\nsource in your OS to capture stream audio too.",
+
+  "shortcuts.title":       "Keyboard shortcuts",
+  "shortcuts.f11":         "Toggle fullscreen",
+  "shortcuts.f12":         "Toggle UI",
+  "shortcuts.dismiss_hint": "Hide via View → Keyboard shortcuts",
 
   "overlay.connecting":    "Connecting...",
   "overlay.reconnecting":  "Reconnecting...",

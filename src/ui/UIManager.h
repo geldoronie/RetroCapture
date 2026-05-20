@@ -849,6 +849,7 @@ private:
 #endif
     std::unique_ptr<class UIInfoPanel>              m_infoWindow;
     std::unique_ptr<class UIPreferences>            m_preferencesWindow;
+    std::unique_ptr<class UIShortcutsHelp>          m_shortcutsHelpWindow;
     // OSD layer (#68) — lives in src/osd/, owned by UIManager since
     // it has the only natural place to hand them lifetime + state
     // accessors.
@@ -859,6 +860,10 @@ private:
     // true so first-time users see the overlay; subsequent toggles
     // round-trip through saveConfig().
     bool m_quickActionsVisible = true;
+    // Same persistence pattern for the shortcuts-help orientation
+    // widget (#68 follow-up). Default true so new users see the
+    // keyboard hints on first launch.
+    bool m_shortcutsHelpVisible = true;
 
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;

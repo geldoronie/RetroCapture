@@ -11,6 +11,7 @@
 #include "UIInfoPanel.h"
 #include "UIPreferences.h"
 #include "UISectionHeader.h"
+#include "UIShortcutsHelp.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
 #include "UICredits.h"
@@ -75,6 +76,7 @@ UIManager::~UIManager()
 #endif
     m_infoWindow.reset();
     m_preferencesWindow.reset();
+    m_shortcutsHelpWindow.reset();
     m_connectionOverlay.reset();
     m_quickActionsOverlay.reset();
     m_creditsWindow.reset();
@@ -238,6 +240,10 @@ bool UIManager::init(void *window)
     m_quickActionsOverlay->setVisible(m_quickActionsVisible);
     m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
         this, m_quickActionsOverlay.get());
+    // Shortcuts orientation widget — UI layer, top-right corner,
+    // F12-gated unlike the OSD.
+    m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
+    m_shortcutsHelpWindow->setVisible(m_shortcutsHelpVisible);
 
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
@@ -481,6 +487,14 @@ void UIManager::render()
                     m_quickActionsOverlay->setVisible(!visible);
                 }
             }
+            if (m_shortcutsHelpWindow)
+            {
+                bool visible = m_shortcutsHelpWindow->isVisible();
+                if (ImGui::MenuItem(T("menu.view.shortcuts").c_str(), nullptr, visible))
+                {
+                    m_shortcutsHelpWindow->setVisible(!visible);
+                }
+            }
             if (m_infoWindow)
             {
                 bool visible = m_infoWindow->isVisible();
@@ -597,6 +611,7 @@ void UIManager::render()
 #endif
     if (m_infoWindow)        m_infoWindow->render();
     if (m_preferencesWindow) m_preferencesWindow->render();
+    if (m_shortcutsHelpWindow) m_shortcutsHelpWindow->render();
     // m_quickActionsOverlay rendered earlier, above the m_uiVisible gate.
 
     // Renderizar janela de créditos
@@ -2513,6 +2528,8 @@ void UIManager::loadConfig()
             // runs.
             if (prefs.contains("quickActionsVisible"))
                 m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
+            if (prefs.contains("shortcutsHelpVisible"))
+                m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2903,6 +2920,9 @@ void UIManager::saveConfig()
             {"quickActionsVisible",
              m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
                                   : m_quickActionsVisible},
+            {"shortcutsHelpVisible",
+             m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
+                                   : m_shortcutsHelpVisible},
         };
 
         // Salvar configurações de imagem
