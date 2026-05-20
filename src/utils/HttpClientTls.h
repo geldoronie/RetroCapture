@@ -15,8 +15,21 @@
 // every shipping target.
 
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
+
+// MinGW-w64's <sys/stat.h> defines _S_IFREG/_S_IFDIR but not always the
+// POSIX S_ISREG/S_ISDIR macros — depends on which feature-test flags
+// the bundled headers ship with. Define them defensively so this
+// header is self-contained on every toolchain we cross-compile with.
+#ifndef S_ISREG
+  #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#endif
+#ifndef S_ISDIR
+  #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -146,6 +159,92 @@ namespace httpinternal
     // SSL_VERIFY_NONE on the SSL object — never on the shared CTX —
     // so an insecureSkipVerify=true call doesn't leak into the next
     // verified call.
+    // Returns true if `path` is an existing regular file.
+    inline bool fileExists(const char *path)
+    {
+        if (!path || !*path) return false;
+        struct stat st{};
+        return ::stat(path, &st) == 0 && S_ISREG(st.st_mode);
+    }
+
+    // Returns true if `path` is an existing directory.
+    inline bool dirExists(const char *path)
+    {
+        if (!path || !*path) return false;
+        struct stat st{};
+        return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    }
+
+    // Walks well-known CA bundle locations and loads the first one that
+    // exists. Returns true on success.
+    //
+    // Why this instead of SSL_CTX_set_default_verify_paths(): when the
+    // binary ships its own OpenSSL (AppImage, MXE/MinGW Windows build,
+    // some Docker layers) the compiled-in default path points to
+    // something that exists on the build host but not on the user's
+    // system. OpenSSL 3.x then bubbles up
+    //   error:16000069:STORE routines::unregistered scheme
+    // on connect. Loading an explicit path that we know exists side-
+    // steps the whole STORE-URI machinery.
+    //
+    // SSL_CERT_FILE / SSL_CERT_DIR env vars override the search — same
+    // contract curl / git follow, so users who already configured them
+    // don't need to change anything.
+    inline bool loadSystemCaBundle(SSL_CTX *ctx)
+    {
+        const char *envFile = std::getenv("SSL_CERT_FILE");
+        if (envFile && fileExists(envFile))
+        {
+            if (SSL_CTX_load_verify_locations(ctx, envFile, nullptr) == 1) return true;
+        }
+        const char *envDir = std::getenv("SSL_CERT_DIR");
+        if (envDir && dirExists(envDir))
+        {
+            if (SSL_CTX_load_verify_locations(ctx, nullptr, envDir) == 1) return true;
+        }
+
+        // Ordered by hit-rate across distros we ship for.
+        static const char *kCandidateFiles[] = {
+            "/etc/ssl/certs/ca-certificates.crt",                // Debian, Ubuntu, Arch, Alpine (when ca-certificates pkg installed)
+            "/etc/pki/tls/certs/ca-bundle.crt",                  // Fedora, RHEL, CentOS, AlmaLinux, Rocky
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // RHEL 7+ extracted bundle
+            "/etc/ssl/ca-bundle.pem",                            // openSUSE
+            "/etc/ssl/cert.pem",                                 // Alpine, macOS, OpenBSD
+            "/usr/local/etc/openssl/cert.pem",                   // Homebrew on macOS (Intel)
+            "/opt/homebrew/etc/openssl@3/cert.pem",              // Homebrew on macOS (Apple Silicon)
+            nullptr,
+        };
+        for (const char **p = kCandidateFiles; *p; ++p)
+        {
+            if (fileExists(*p) && SSL_CTX_load_verify_locations(ctx, *p, nullptr) == 1)
+            {
+                return true;
+            }
+        }
+
+        static const char *kCandidateDirs[] = {
+            "/etc/ssl/certs",
+            "/etc/pki/tls/certs",
+            "/etc/pki/ca-trust/extracted/pem",
+            nullptr,
+        };
+        for (const char **p = kCandidateDirs; *p; ++p)
+        {
+            if (dirExists(*p) && SSL_CTX_load_verify_locations(ctx, nullptr, *p) == 1)
+            {
+                return true;
+            }
+        }
+
+        // Last resort: ask OpenSSL for its compiled-in defaults. On
+        // most systems this is the same as one of the paths above; on
+        // AppImage it's what triggers the STORE error, but at that
+        // point we've already exhausted the explicit list so the
+        // failure mode is identical and the caller can fall back to
+        // skipVerify if they choose.
+        return SSL_CTX_set_default_verify_paths(ctx) == 1;
+    }
+
     inline SSL_CTX *getSharedClientSslCtx()
     {
         static std::once_flag once;
@@ -154,7 +253,7 @@ namespace httpinternal
             ctx = SSL_CTX_new(TLS_client_method());
             if (!ctx) return;
             SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-            SSL_CTX_set_default_verify_paths(ctx);
+            loadSystemCaBundle(ctx);
             SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
         });
         return ctx;
