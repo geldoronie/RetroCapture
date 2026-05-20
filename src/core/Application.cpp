@@ -4450,9 +4450,28 @@ void Application::run()
                                     // hasRawClients() gates this so the encoder idles when nothing
                                     // is listening — the CPU cost only shows up when a remote
                                     // client is actually consuming the raw feed.
-                                    if (sourceFrameReady && m_streamManager->hasRawClients())
+                                    //
+                                    // Two code paths because the pre-shader pixels live in
+                                    // different buffers depending on whether the shader chain
+                                    // is running this frame:
+                                    //   - shader active → m_captureSourceFrameData (an extra
+                                    //     readback from the FrameProcessor texture).
+                                    //   - shader off (master toggle disabled or no preset
+                                    //     loaded) → frameData IS already the pre-shader pixels,
+                                    //     so we feed /raw from there. Without this branch,
+                                    //     disabling the shader from the UI silently kills
+                                    //     /raw transmission (#67 — client log showed video
+                                    //     stop while audio kept flowing).
+                                    if (m_streamManager->hasRawClients())
                                     {
-                                        m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        if (sourceFrameReady)
+                                        {
+                                            m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        }
+                                        else if (!masterOn || !shaderActive)
+                                        {
+                                            m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
                                     }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())

@@ -175,6 +175,26 @@ bool VideoCaptureRemote::initDecoder()
     }
 
     AVCodecParameters *codecPar = m_formatCtx->streams[m_videoStreamIdx]->codecpar;
+    // Reject the open when probe didn't resolve video dimensions. The
+    // demuxer is allowed to surface a stream that's still being
+    // analyzed (the FFmpeg log line is 'Could not find codec
+    // parameters ... none: unspecified size'). If we proceed with
+    // width/height = 0, m_width/m_height are stuck at zero for the
+    // whole session and the consumer dead-locks at
+    //   decoded=N/s consumed=0/s drops=N queueDepth=20
+    // because nothing downstream can route 0x0 frames. Better to fail
+    // initDecoder and let the outer reconnect loop try again — by the
+    // time the next attempt fires, the upstream MPEG-TS is usually
+    // past the partial-PMT region that caused the first probe to
+    // give up.
+    if (codecPar->width <= 0 || codecPar->height <= 0)
+    {
+        LOG_WARN("VideoCaptureRemote: probe returned " +
+                 std::to_string(codecPar->width) + "x" +
+                 std::to_string(codecPar->height) +
+                 " for video stream — rejecting and forcing reconnect");
+        return false;
+    }
     const AVCodec *codec = avcodec_find_decoder(codecPar->codec_id);
     if (!codec)
     {
