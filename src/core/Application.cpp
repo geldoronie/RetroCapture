@@ -3901,10 +3901,21 @@ void Application::run()
                          ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
 
-            // IMPORTANT: Camera image comes inverted (Y inverted)
-            // Shaders also render inverted, so both need Y inversion
-            // flipY: true for both (camera and shader need to invert)
-            bool shouldFlipY = true;
+            // Camera image and shader output both need Y inversion in
+            // the general case — that's why flipY defaults to true.
+            //
+            // Exception: remote source consumed without a client-side
+            // shader. The /raw wire data goes through one fewer Y
+            // inversion than a locally-captured frame (no FrameProcessor
+            // upload→shader→sample chain on the client), so the
+            // renderer's implicit flip overshoots and the image lands
+            // upside-down. When the user disables the client-side
+            // shader pipeline on a Remote source, drop the flip so the
+            // picture stays right-side-up (#67).
+            const bool remoteWithoutShader =
+                (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote &&
+                 !isShaderTexture);
+            bool shouldFlipY = !remoteWithoutShader;
 
             // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
             uint32_t windowWidth = m_window->getWidth();
@@ -4450,9 +4461,28 @@ void Application::run()
                                     // hasRawClients() gates this so the encoder idles when nothing
                                     // is listening — the CPU cost only shows up when a remote
                                     // client is actually consuming the raw feed.
-                                    if (sourceFrameReady && m_streamManager->hasRawClients())
+                                    //
+                                    // Two code paths because the pre-shader pixels live in
+                                    // different buffers depending on whether the shader chain
+                                    // is running this frame:
+                                    //   - shader active → m_captureSourceFrameData (an extra
+                                    //     readback from the FrameProcessor texture).
+                                    //   - shader off (master toggle disabled or no preset
+                                    //     loaded) → frameData IS already the pre-shader pixels,
+                                    //     so we feed /raw from there. Without this branch,
+                                    //     disabling the shader from the UI silently kills
+                                    //     /raw transmission (#67 — client log showed video
+                                    //     stop while audio kept flowing).
+                                    if (m_streamManager->hasRawClients())
                                     {
-                                        m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        if (sourceFrameReady)
+                                        {
+                                            m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        }
+                                        else if (!masterOn || !shaderActive)
+                                        {
+                                            m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
                                     }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())

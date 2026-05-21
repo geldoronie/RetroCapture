@@ -106,13 +106,22 @@ bool VideoCaptureRemote::initDecoder()
     // the decode loop starts. Too generous a probe means the decoder
     // chews through that buffer at non-real-time rates ('decoded=83/s'
     // catch-up the user observed) and the queue fills before the
-    // wall-clock-driven consumer can drain it. 256 KB at ~3 Mbit/s
-    // is ~0.7 s of stream — plenty for the second audio packet (AAC
-    // packets arrive every ~23 ms) but small enough that the catch-up
-    // settles in a couple of frames.
+    // wall-clock-driven consumer can drain it.
+    //
+    // 512 KB / 2.5 s is the smallest window that reliably catches the
+    // AAC ADTS codec config on a mid-join (#67). The earlier 256 KB /
+    // 1 s budget was hitting the 'Audio: aac, 0 channels: unspecified
+    // sample format' probe race: when a fresh client lands inside an
+    // MPEG-TS pack that doesn't carry the next PMT inside the first
+    // ~700 ms of stream, avformat_find_stream_info gives up before
+    // seeing enough AAC frames to determine channels/format. The
+    // larger budget guarantees at least one full PAT/PMT cycle plus
+    // several AAC packets, which is enough to populate codecpar
+    // reliably; the extra ~1 s of catch-up is absorbed by the queue's
+    // drop-oldest policy already exercised on every reconnect.
     AVDictionary *opts = nullptr;
-    av_dict_set(&opts, "probesize",       "262144",  0); // 256 KB
-    av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1 s
+    av_dict_set(&opts, "probesize",       "524288",  0); // 512 KB
+    av_dict_set(&opts, "analyzeduration", "2500000", 0); // 2.5 s
     // Note: deliberately NOT setting "fflags: nobuffer" here — without
     // FFmpeg's internal packet buffer, av_read_frame returns whatever the
     // socket has *right now*, which on a bursty TCP stream means several
@@ -166,6 +175,26 @@ bool VideoCaptureRemote::initDecoder()
     }
 
     AVCodecParameters *codecPar = m_formatCtx->streams[m_videoStreamIdx]->codecpar;
+    // Reject the open when probe didn't resolve video dimensions. The
+    // demuxer is allowed to surface a stream that's still being
+    // analyzed (the FFmpeg log line is 'Could not find codec
+    // parameters ... none: unspecified size'). If we proceed with
+    // width/height = 0, m_width/m_height are stuck at zero for the
+    // whole session and the consumer dead-locks at
+    //   decoded=N/s consumed=0/s drops=N queueDepth=20
+    // because nothing downstream can route 0x0 frames. Better to fail
+    // initDecoder and let the outer reconnect loop try again — by the
+    // time the next attempt fires, the upstream MPEG-TS is usually
+    // past the partial-PMT region that caused the first probe to
+    // give up.
+    if (codecPar->width <= 0 || codecPar->height <= 0)
+    {
+        LOG_WARN("VideoCaptureRemote: probe returned " +
+                 std::to_string(codecPar->width) + "x" +
+                 std::to_string(codecPar->height) +
+                 " for video stream — rejecting and forcing reconnect");
+        return false;
+    }
     const AVCodec *codec = avcodec_find_decoder(codecPar->codec_id);
     if (!codec)
     {
@@ -768,17 +797,28 @@ void VideoCaptureRemote::decodeLoop()
                     uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
                     const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
                                                      const_cast<const uint8_t **>(aFrame->data), nbIn);
-                    if (produced > 0)
+                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE)
                     {
                         // Convert the frame's PTS (stream-tb units)
-                        // to stream-origin-relative microseconds the
-                        // same way the video path does it — see the
-                        // anchor logic below. We can reuse the anchor
-                        // because both streams share the same /raw
-                        // demuxer.
-                        const int64_t aPts = (aFrame->pts != AV_NOPTS_VALUE) ? aFrame->pts : 0;
+                        // to absolute stream microseconds. The drift
+                        // check below subtracts the video anchor
+                        // (m_firstPtsUs) to bring this into the same
+                        // coordinate system the video frame
+                        // targetWallUs uses, so we keep it absolute
+                        // here and let the consumer rebase.
+                        //
+                        // IMPORTANT: skip submit when aFrame->pts is
+                        // AV_NOPTS_VALUE. Earlier code substituted 0,
+                        // which on a mid-join anchored the audio
+                        // clock at "stream-time 0" while video
+                        // anchored at the server's current uptime —
+                        // producing the multi-hundred-second drift
+                        // documented in #67. A few dropped frames
+                        // (~20 ms each at AAC 1024-sample boundaries)
+                        // is a much better failure mode than a
+                        // corrupted A/V clock.
                         const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
-                        const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aPts) * av_q2d(tb) * 1e6);
+                        const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aFrame->pts) * av_q2d(tb) * 1e6);
                         m_audioPlayback->submit(m_audioScratch.data(),
                                                 static_cast<size_t>(produced),
                                                 ptsUs);
