@@ -420,10 +420,8 @@ under `tools/`:
 | Windows x86_64        | MXE MinGW-w64 docker   | `build-windows-x86_64/bin/retrocapture.exe` |
 
 All four ship with the same `src/web/`, `shaders/` and `assets/`
-trees. The instruction-set baselines and the `-march` selection are
-documented separately in
-[`CPU_COMPATIBILITY.md`](CPU_COMPATIBILITY.md); the on-disk layout
-that the binaries expect at runtime is in [`PATHS.md`](PATHS.md).
+trees. The on-disk layout the binaries expect at runtime is
+documented in [`PATHS.md`](PATHS.md).
 
 ---
 

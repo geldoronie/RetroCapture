@@ -120,8 +120,7 @@ A `SHA256SUMS` file is published alongside the binaries.
 
 > The Linux x86_64 build targets a portable instruction-set baseline
 > (no AVX/AVX2) so it runs on a wide range of CPUs including older
-> Sandy/Ivy Bridge, low-power and virtualized systems. See
-> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for details.
+> Sandy/Ivy Bridge, low-power and virtualized systems.
 
 To build from source instead, see [Building](#building) below.
 
@@ -252,7 +251,6 @@ See [`ssl/README.md`](ssl/README.md) for certificate generation.
 
 > Production builds use the Docker scripts, which default to a portable
 > instruction-set baseline. Native CMake builds default to `-march=native`.
-> See [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md).
 
 ### One-shot — build every release artifact
 
@@ -322,8 +320,6 @@ nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
   public stream directory protocol.
 - [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions
   and development process.
-- [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) —
-  instruction-set baselines per architecture, diagnostic workflow.
 
 ---
 
