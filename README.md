@@ -61,6 +61,8 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
 
 ### What's new in 0.7.0-alpha
 
+![0.7.0-alpha — native UI with the new side panels, Shortcuts helper top-right, and Quick Actions OSD bottom-right](docs/screenshots/new-version-full.png)
+
 - **Remote source mode (#47)** — connect a second RetroCapture to the
   first one as a video source and watch the same shader output remotely,
   with live parameter sync.
@@ -73,6 +75,8 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
   configuration UI layout.
 - **Quick Actions OSD + Shortcuts helper (#68)** — pinned overlay
   controls and an at-a-glance shortcut reference.
+
+  ![Quick Actions OSD](docs/screenshots/quickactions.png)
 - **Preferences pane + i18n (#45 / #46)** — language selection, default
   fullscreen, persisted Preferences window.
 - **Directory + Remote drift / probe / orientation / disconnect fixes
