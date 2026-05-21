@@ -889,23 +889,12 @@ void VideoCaptureRemote::decodeLoop()
                 rgbBuf.assign(static_cast<size_t>(dstW) * static_cast<size_t>(dstH) * 3, 0);
             }
 
-            // Top-down orientation matches what the rest of the capture
-            // pipeline produces:
-            //   - V4L2: FrameProcessor::convertYUYVtoRGB uses a positive
-            //     sws stride, so the local YUYV→RGB output is top-down.
-            //   - DirectShow: VideoCaptureDS emits RGB24 frames top-down.
-            //
-            // Earlier code here negated the dst stride to write the
-            // buffer bottom-up "to match V4L2", which was based on a
-            // wrong reading of the local path. The result was the
-            // /raw client showing the picture flipped vertically once
-            // the shader pipeline on the client was bypassed — the
-            // shader implicitly compensated, so the bug only surfaced
-            // after #67's "/raw works with shader off" fix exposed the
-            // no-shader rendering path on remote sources. See the user
-            // report on #67.
-            uint8_t *dstSlices[1] = { rgbBuf.data() };
-            int dstStrides[1]     = { static_cast<int>(dstW) * 3 };
+            // Write rows in reverse (bottom-up) so the resulting RGB buffer
+            // matches the orientation the rest of the capture pipeline
+            // expects from V4L2 / DirectShow sources — without this, the
+            // image renders upside-down on screen.
+            uint8_t *dstSlices[1] = { rgbBuf.data() + static_cast<size_t>(dstH - 1) * static_cast<size_t>(dstW) * 3 };
+            int dstStrides[1]     = { -(dstW * 3) };
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, srcH, dstSlices, dstStrides);
 
             // Capture the frame's PTS in stream timebase units BEFORE
