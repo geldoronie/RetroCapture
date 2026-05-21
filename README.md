@@ -310,6 +310,9 @@ nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
 - [`CHANGELOG.md`](CHANGELOG.md) — full version history.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture,
   components, data flow, threading model.
+- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns
+  used in the codebase, SOLID/DRY notes, contributor guide and the
+  "how to add a new subsystem" worked example.
 - [`docs/PATHS.md`](docs/PATHS.md) — on-disk layout (assets / config /
   data / cache / recordings) and the env-var overrides for each role.
 - [`docs/REMOTE_STREAM_PROTOCOL.md`](docs/REMOTE_STREAM_PROTOCOL.md) —
