@@ -3901,10 +3901,21 @@ void Application::run()
                          ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
 
-            // IMPORTANT: Camera image comes inverted (Y inverted)
-            // Shaders also render inverted, so both need Y inversion
-            // flipY: true for both (camera and shader need to invert)
-            bool shouldFlipY = true;
+            // Camera image and shader output both need Y inversion in
+            // the general case — that's why flipY defaults to true.
+            //
+            // Exception: remote source consumed without a client-side
+            // shader. The /raw wire data goes through one fewer Y
+            // inversion than a locally-captured frame (no FrameProcessor
+            // upload→shader→sample chain on the client), so the
+            // renderer's implicit flip overshoots and the image lands
+            // upside-down. When the user disables the client-side
+            // shader pipeline on a Remote source, drop the flip so the
+            // picture stays right-side-up (#67).
+            const bool remoteWithoutShader =
+                (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote &&
+                 !isShaderTexture);
+            bool shouldFlipY = !remoteWithoutShader;
 
             // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
             uint32_t windowWidth = m_window->getWidth();
