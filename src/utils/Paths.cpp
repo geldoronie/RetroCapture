@@ -169,21 +169,48 @@ std::string Paths::getReadOnlyAssetsDir()
     }
 
 #ifdef _WIN32
-    // Windows: assets ao lado do executável (instalação portátil ou
-    // Program Files). Se não tiver, fallback no Program Files genérico.
+    // Windows: cobrir os dois layouts:
+    //
+    //   - Portátil / dev (CMake copia em build): assets/, shaders/, web/,
+    //     ssl/ ficam ao lado do .exe. getReadOnlyAssetsDir() retorna o
+    //     próprio exeDir, e os callers compõem `<exeDir>/shaders/...`,
+    //     `<exeDir>/web/...`.
+    //   - Instalado via NSIS / CPack: o .exe vai em `<install>/bin/` e o
+    //     resto em `<install>/share/retrocapture/{shaders,assets,web,ssl}`.
+    //     A função então tem que retornar `<install>/share/retrocapture`.
+    //
+    // Sondamos pelo subdir `shaders/shaders_glsl` que existe nos dois
+    // layouts, exatamente como na detecção de dev tree por CWD acima.
     fs::path exeDir(getExecutableDir());
-    if (fs::exists(exeDir / "assets")) return (exeDir / "assets").string();
+
+    if (fs::exists(exeDir / "shaders" / "shaders_glsl"))
+    {
+        return exeDir.string();
+    }
+
+    fs::path installRoot   = exeDir.parent_path();             // <install>
+    fs::path installShared = installRoot / "share" / "retrocapture";
+    if (fs::exists(installShared / "shaders" / "shaders_glsl"))
+    {
+        return installShared.string();
+    }
 
     {
         std::string pf = getShellFolder(CSIDL_PROGRAM_FILES);
         if (!pf.empty())
         {
-            fs::path candidate = fs::path(pf) / "RetroCapture" / "assets";
-            if (fs::exists(candidate)) return candidate.string();
+            fs::path candidate = fs::path(pf) / "RetroCapture" /
+                                 "share" / "retrocapture";
+            if (fs::exists(candidate / "shaders" / "shaders_glsl"))
+            {
+                return candidate.string();
+            }
         }
     }
 
-    return (exeDir / "assets").string(); // último recurso, mesmo que não exista
+    // Último recurso: assume layout NSIS relativo ao .exe mesmo que os
+    // arquivos não estejam lá ainda — alguns callers gravam por baixo.
+    return installShared.string();
 #else
     // Linux: $XDG_DATA_DIRS é uma lista separada por ':'. Procura por
     // retrocapture/ em cada uma. Fallback /usr/local/share, /usr/share,

@@ -232,6 +232,20 @@ actions overlay, plus a wave of client-side UX fixes.
   PR #75) — the renderer's default `flipY=true` overshoots when
   the shader chain isn't there to implicitly compensate. Now
   conditionally dropped for `Remote && !isShaderTexture`.
+- **Windows installer: "shaders not found" at startup** —
+  `Paths::getReadOnlyAssetsDir()` was only probing
+  `<exeDir>/assets` and `Program Files/RetroCapture/assets`, both
+  assuming a layout where every asset bucket lives inside an
+  `assets/` subfolder of the .exe. The NSIS / CPack installer
+  actually puts the .exe in `<install>/bin/` and shaders / web /
+  ssl / assets in `<install>/share/retrocapture/`, so the lookup
+  missed every bucket and the app started with no shaders, no web
+  portal and no TLS cert. Rewritten to probe by `shaders/
+  shaders_glsl` presence in the build-tree layout, then the
+  installer's `share/retrocapture/` layout, then `Program Files`.
+  Affects only the Windows shipped binary; Linux uses the
+  XDG_DATA_DIRS resolution path which already covered both
+  layouts.
 
 ### Deferred
 
