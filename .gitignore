@@ -64,7 +64,3 @@ build-windows-x86_64/
 *.pdb
 *.exp
 mxe/
-
-# Planning docs (local only)t
-issues-draft/
-docs/PATHS.md

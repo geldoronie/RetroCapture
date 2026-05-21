@@ -309,13 +309,18 @@ nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
 
 - [`CHANGELOG.md`](CHANGELOG.md) — full version history.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture,
-  components, data flow.
-- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns, SOLID
-  notes, contributor guidance.
-- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions and
-  development process.
-- [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) — instruction-set
-  baselines per architecture, diagnostic workflow.
+  components, data flow, threading model.
+- [`docs/PATHS.md`](docs/PATHS.md) — on-disk layout (assets / config /
+  data / cache / recordings) and the env-var overrides for each role.
+- [`docs/REMOTE_STREAM_PROTOCOL.md`](docs/REMOTE_STREAM_PROTOCOL.md) —
+  wire format of `/stream`, `/raw`, `/meta` and the Remote source
+  client.
+- [`docs/DIRECTORY_PROTOCOL.md`](docs/DIRECTORY_PROTOCOL.md) — opt-in
+  public stream directory protocol.
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions
+  and development process.
+- [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) —
+  instruction-set baselines per architecture, diagnostic workflow.
 
 ---
 
