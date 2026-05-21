@@ -4371,8 +4371,27 @@ void Application::run()
                                 // /raw client also triggers the source-frame capture below.
                                 const bool rawWantsSource = m_streamManager && m_streamManager->isActive() &&
                                                             m_streamManager->hasRawClients();
-                                const bool needSourceCapture = masterOn && shaderActive &&
-                                                               (streamWantsSource || recordWantsSource || rawWantsSource);
+                                // Always capture source pixels when /raw has clients,
+                                // even with the shader pipeline off. /raw is by
+                                // contract pre-shader and must produce frames in a
+                                // single, stable orientation on the wire (top-down,
+                                // matching what the for-loop below converts to from
+                                // glReadPixels' bottom-up output). Without this, the
+                                // shader-off branch fed `frameData` directly — which
+                                // is bottom-up — and a remote viewer saw the image
+                                // upside-down whenever their own client-side shader
+                                // was also off, while the shader-on case stayed
+                                // correct because the shader was implicitly the
+                                // missing flip (#67 — user follow-up "com shader e
+                                // sem shader no client tem q esta no sentido
+                                // correto"). /stream and /recording still gate on
+                                // masterOn && shaderActive — they're consumers, not
+                                // wire-format producers, and they only need the
+                                // source when the user explicitly opts in.
+                                const bool needSourceCapture =
+                                    rawWantsSource ||
+                                    (masterOn && shaderActive &&
+                                     (streamWantsSource || recordWantsSource));
 
                                 bool sourceFrameReady = false;
                                 uint32_t sourceFrameW = 0, sourceFrameH = 0;
@@ -4451,27 +4470,14 @@ void Application::run()
                                     // is listening — the CPU cost only shows up when a remote
                                     // client is actually consuming the raw feed.
                                     //
-                                    // Two code paths because the pre-shader pixels live in
-                                    // different buffers depending on whether the shader chain
-                                    // is running this frame:
-                                    //   - shader active → m_captureSourceFrameData (an extra
-                                    //     readback from the FrameProcessor texture).
-                                    //   - shader off (master toggle disabled or no preset
-                                    //     loaded) → frameData IS already the pre-shader pixels,
-                                    //     so we feed /raw from there. Without this branch,
-                                    //     disabling the shader from the UI silently kills
-                                    //     /raw transmission (#67 — client log showed video
-                                    //     stop while audio kept flowing).
-                                    if (m_streamManager->hasRawClients())
+                                    // needSourceCapture was widened above to fire whenever /raw
+                                    // has clients, regardless of shader state, so the buffer is
+                                    // always present and always top-down (the for-loop above
+                                    // does the flip). One push site, one orientation on the
+                                    // wire.
+                                    if (sourceFrameReady && m_streamManager->hasRawClients())
                                     {
-                                        if (sourceFrameReady)
-                                        {
-                                            m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
-                                        }
-                                        else if (!masterOn || !shaderActive)
-                                        {
-                                            m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                        }
+                                        m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
                                     }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())
