@@ -12,25 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WebRTC streaming support (#52)
 - Shader bundle fetch so a client without the host's preset still
   reproduces the host's look (#54)
-- Recording pipeline parity with the streaming pipeline overhaul
-  (#59)
-- Multi-language UI (#45) — now that strings are normalized to
-  English under #46, translation is a separate, mechanical pass.
+- Long-session A/V drift validation (#67 follow-up) — the
+  catastrophic mid-join drift is fixed; the 30 min / 4 h offset
+  targets in #67's original acceptance still want a long-session
+  measurement pass.
 
 ---
 
-## [0.7.0-alpha] - 2026-05-18
+## [0.7.0-alpha] - 2026-05-21
 
-Twelfth alpha release. Two large features and a long polish tail
-focused on making the alpha shippable to people other than the
-maintainer.
+Twelfth alpha release. Two large product surfaces (shader-preserving
+distributed playback and the public stream directory) plus the
+recording / UI shell / networking polish that made the alpha
+shippable to people other than the maintainer.
 
-**Compared to 0.6.0-alpha**: 9 PRs · directory service, named
-Cloudflare tunnel, full English-language pass, plus a wave of
-client-side UX fixes.
+**Compared to 0.6.0-alpha**: 12 PRs · shader-preserving distributed
+playback, public stream directory + Cloudflare tunnels, HTTPS / TLS
+everywhere, bilingual UI, unified recording UI idiom, on-screen quick
+actions overlay, plus a wave of client-side UX fixes.
 
 ### Added
 
+- **Shader-preserving distributed playback** (#47, PR #50) — a
+  RetroCapture instance can now consume another's `/raw` MPEG-TS
+  feed as a video source. The host also exposes a `/meta` side
+  channel carrying the current preset, parameter values, brightness
+  / contrast and source dimensions; the client mirrors all of it
+  through `RemoteMetaSync` so the picture renders with the same
+  shader output on both machines. SSE long-poll for `/meta` keeps
+  parameter edits live; PTS-anchored playback timing absorbs network
+  jitter. Wire format documented in
+  `docs/REMOTE_STREAM_PROTOCOL.md`.
 - **Public stream directory** (#49, PR #55) — opt-in listing of
   live streams so a client can browse + connect without out-of-band
   URL sharing. New `platform/services/directory/` Go service
@@ -90,6 +102,51 @@ client-side UX fixes.
   inline note under the directory status text warning that
   `trycloudflare.com` URLs can take ~2 min to resolve from other
   networks after publish.
+- **Bilingual UI: English + Portuguese** (#45, PR #64 / #65) —
+  runtime language switch from Preferences, full per-string
+  translation table for the native UI, the web portal and CLI
+  `--help`. The startup-language preference persists across runs.
+- **Preferences pane** (parts of #45 / #46, PR #64 / #65) —
+  dedicated Preferences window with language and default-fullscreen
+  toggles, separated from the per-area Configuration tabs.
+- **Recording pipeline parity + unified UI idiom** (#59, PR #66) —
+  recording and streaming now share `MediaSynchronizer` semantics
+  (overlap-gated A/V sync, 50 ms tolerance) so they no longer
+  diverge under load. Every Configuration tab adopts a single layout
+  idiom: section header → controls → status footer. Output
+  resolution, codec, bitrate and profile widgets normalised across
+  both pipelines.
+- **Quick Actions OSD** (#68, PR #72) — bottom-right floating
+  overlay with Stream / Record / Browse / Disconnect buttons that
+  stays reachable when the main UI is hidden. Adapts to whether the
+  app is currently host or client.
+- **Shortcuts helper widget** (#68, PR #72) — top-right
+  always-visible reference of the active keyboard shortcuts.
+- **OSD layer split** (#68, PR #72) — `src/osd/` is now a separate
+  source root for pinned overlays, distinct from the interactive
+  `src/ui/` windows.
+- **Combined `/stream` + `/raw` client count** (#68, PR #72) — the
+  `/meta` payload now exposes a single `streaming.clientCount`
+  that reflects the union of both endpoints, surfaced in the
+  Quick Actions widget and the Connection Status overlay.
+- **TLS / HTTPS support in HttpClient** (#69, PR #73 / #74) —
+  OpenSSL-backed TLS with hostname verification + SNI. Directory
+  publish, directory browse, `/raw` consumption and `/meta`
+  long-poll all default to `https://`. New `HttpClientTls.h`
+  shared header so SSE goes over TLS too. Process-wide CA-bundle
+  probe (env, well-known paths, then OpenSSL defaults) keeps
+  AppImage builds working without `error:16000069:STORE routines::
+  unregistered scheme`.
+- **`directory.retrocapture.com` over HTTPS** — defaults flipped
+  throughout (CLI help, `--directory-url` default, the publish
+  Advanced field).
+- **Allow self-signed TLS cert toggle** (#69, PR #74) — Advanced
+  dev option for testing against self-signed directory hosts;
+  off by default and never persisted as on for the public host.
+- **Directory URL hot-reload** (#69, PR #74) — changing the
+  Directory URL in the UI re-registers the publish and restarts
+  the browser worker immediately instead of waiting for an app
+  restart.
 
 ### Changed
 
@@ -97,10 +154,11 @@ client-side UX fixes.
   portal HTML/JS, ImGui labels and tooltips, `--help` text, and
   user-visible `LOG_*` messages were all standardized to English.
   Pre-existing Portuguese strings remained from earlier alphas;
-  cleaned up now that #45 (i18n) is on the roadmap. Stale
-  `RetroCapture v0.5.0` literal in the Credits window and main
-  startup log replaced with the `RETROCAPTURE_VERSION` macro
-  CMake propagates from `project()`.
+  cleaned up alongside #45's runtime language switch so the
+  default-English path and the PT-BR translation pull from the
+  same canonical key table. Stale `RetroCapture v0.5.0` literal
+  in the Credits window and main startup log replaced with the
+  `RETROCAPTURE_VERSION` macro CMake propagates from `project()`.
 - **TrustProxyHeaders flag on the directory service** — when the
   service is deployed behind FRP / Cloudflare / nginx, set
   `DIRECTORY_TRUST_PROXY_HEADERS=true` so the recorded
@@ -144,6 +202,36 @@ client-side UX fixes.
   rendered `http://localhost:8080` as if a webcam was at that
   address. Now falls back to "None (No device)" when the stored
   value isn't a DS or V4L2 device (PR #55).
+- **`AV_NOPTS_VALUE` poisoning the audio clock on mid-join** (#67,
+  PR #75) — `VideoCaptureRemote` substituted `0` for an unset audio
+  PTS, anchoring the audio clock at "stream-time 0" while video
+  sat at the server's current uptime. Produced multi-hundred-second
+  drift warnings (`audio clock drift=-221_887_834us — falling back
+  to wall clock for A/V sync`) on every mid-join.
+- **AAC probe race on mid-join** (#67, PR #75) —
+  `avformat_find_stream_info` was giving up before seeing enough
+  AAC packets, resulting in `Audio: aac, 0 channels: unspecified
+  sample format` and `AudioPlaybackPulse::open — invalid format`
+  whenever the client landed mid-PMT cycle. Probe budget bumped
+  from 256 KB / 1 s to 512 KB / 2.5 s.
+- **`0x0` video probe accepted then dead-locked** (#67, PR #75) —
+  on an unstable TLS reconnect the demuxer occasionally returned
+  the video stream with `0x0` dimensions. `initDecoder` now
+  rejects those and forces another reconnect, so the consumer no
+  longer hangs at `decoded=60/s consumed=0/s drops=60`.
+- **`/raw` stopped transmitting when the host shader was off**
+  (#67, PR #75) — the source-frame capture gate required
+  `masterOn && shaderActive`, silently killing `/raw` video while
+  audio kept flowing. Widened to fire whenever `/raw` has clients.
+- **Ghost audio after Disconnect** (#67, PR #75) —
+  `AudioPlaybackPulse::close()` swaps `pa_simple_drain` for
+  `pa_simple_flush` so the queued samples are discarded
+  immediately on disconnect instead of playing out for several
+  seconds.
+- **Remote source upside-down without a client-side shader** (#67,
+  PR #75) — the renderer's default `flipY=true` overshoots when
+  the shader chain isn't there to implicitly compensate. Now
+  conditionally dropped for `Remote && !isShaderTexture`.
 
 ### Deferred
 
