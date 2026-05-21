@@ -190,7 +190,7 @@ bool OpenGLRenderer::init() {
     
     // Carregar funções OpenGL
     if (!loadOpenGLFunctions()) {
-        LOG_ERROR("Falha ao carregar funções OpenGL");
+        LOG_ERROR("Failed to load OpenGL functions");
         return false;
     }
     
@@ -246,7 +246,7 @@ bool OpenGLRenderer::createShaderProgram() {
     if (!success) {
         char infoLog[512];
         glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
-        LOG_ERROR("Erro ao compilar vertex shader: " + std::string(infoLog));
+        LOG_ERROR("Failed to compilar vertex shader: " + std::string(infoLog));
         glDeleteShader(vertexShader);
         return false;
     }
@@ -260,7 +260,7 @@ bool OpenGLRenderer::createShaderProgram() {
     if (!success) {
         char infoLog[512];
         glGetShaderInfoLog(fragmentShader, 512, nullptr, infoLog);
-        LOG_ERROR("Erro ao compilar fragment shader: " + std::string(infoLog));
+        LOG_ERROR("Failed to compilar fragment shader: " + std::string(infoLog));
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);
         return false;
@@ -276,7 +276,7 @@ bool OpenGLRenderer::createShaderProgram() {
     if (!success) {
         char infoLog[512];
         glGetProgramInfoLog(m_shaderProgram, 512, nullptr, infoLog);
-        LOG_ERROR("Erro ao linkar shader program: " + std::string(infoLog));
+        LOG_ERROR("Failed to linkar shader program: " + std::string(infoLog));
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);
         glDeleteProgram(m_shaderProgram);
@@ -389,7 +389,7 @@ void OpenGLRenderer::updateTexture(GLuint texture, const uint8_t* data, uint32_t
 void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight, bool flipY, bool enableBlend, float brightness, float contrast, bool maintainAspect, uint32_t textureWidth, uint32_t textureHeight, bool preserveViewport) {
     // Verificar se a textura é válida
     if (texture == 0) {
-        LOG_ERROR("Tentativa de renderizar textura inválida (0)");
+        LOG_ERROR("Attempt to render invalid texture (0)");
         return;
     }
     

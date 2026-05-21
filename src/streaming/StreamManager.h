@@ -53,6 +53,21 @@ public:
     void pushAudio(const int16_t *samples, size_t sampleCount);
 
     /**
+     * Push a pre-shader frame to the /raw output of every MPEG-TS streamer
+     * that has at least one connected /raw client. Used by Phase 2 of the
+     * shader-preserving distributed playback work (#47). Frames pushed here
+     * MUST be pre-shader; /raw's contract is shader-free by definition.
+     */
+    void pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height);
+
+    /**
+     * True if at least one MPEG-TS streamer has a connected /raw client.
+     * Application uses this to gate pushRawFrame calls (lazy encoding —
+     * no need to push pre-shader frames if nothing is listening).
+     */
+    bool hasRawClients() const;
+
+    /**
      * Get all stream URLs
      */
     std::vector<std::string> getStreamUrls() const;
@@ -89,6 +104,14 @@ public:
      * This can be called while streaming is active
      */
     void setWebPortalEnabled(bool enabled);
+
+    /**
+     * #49 Phase 3 — propagate the configured stream-password hash
+     * (sha256 hex) to every HTTPTSStreamer currently registered.
+     * Empty string disables auth. Application calls this every
+     * frame so a toggle in the UI takes effect on the next request.
+     */
+    void setStreamPasswordHash(const std::string &sha256Hex);
 
     /**
      * Enable/disable HTTPS in HTTPTSStreamer (if available)

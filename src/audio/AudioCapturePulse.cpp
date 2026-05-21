@@ -32,7 +32,7 @@ bool AudioCapturePulse::initializePulseAudio()
     m_mainloop = pa_mainloop_new();
     if (!m_mainloop)
     {
-        LOG_ERROR("Falha ao criar PulseAudio mainloop");
+        LOG_ERROR("Failed to criar PulseAudio mainloop");
         return false;
     }
 
@@ -41,7 +41,7 @@ bool AudioCapturePulse::initializePulseAudio()
 
     if (!m_context)
     {
-        LOG_ERROR("Falha ao criar PulseAudio context");
+        LOG_ERROR("Failed to criar PulseAudio context");
         cleanupPulseAudio();
         return false;
     }
@@ -51,7 +51,7 @@ bool AudioCapturePulse::initializePulseAudio()
     pa_context_flags_t flags = PA_CONTEXT_NOFLAGS;
     if (pa_context_connect(m_context, nullptr, flags, nullptr) < 0)
     {
-        LOG_ERROR("Falha ao conectar ao PulseAudio: " + std::string(pa_strerror(pa_context_errno(m_context))));
+        LOG_ERROR("Failed to conectar ao PulseAudio: " + std::string(pa_strerror(pa_context_errno(m_context))));
         cleanupPulseAudio();
         return false;
     }
@@ -191,7 +191,7 @@ void AudioCapturePulse::streamRead(size_t length)
 
     if (pa_stream_peek(m_stream, &data, &bytes) < 0)
     {
-        LOG_ERROR("Falha ao ler dados do stream PulseAudio");
+        LOG_ERROR("Failed to ler dados do stream PulseAudio");
         return;
     }
 
@@ -227,7 +227,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
 {
     if (m_isOpen)
     {
-        LOG_WARN("AudioCapture já está aberto");
+        LOG_WARN("AudioCapture already open");
         return true;
     }
 
@@ -253,7 +253,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
         }
         else if (state == PA_CONTEXT_FAILED || state == PA_CONTEXT_TERMINATED)
         {
-            LOG_ERROR("Falha ao conectar ao PulseAudio");
+            LOG_ERROR("Failed to conectar ao PulseAudio");
             return false;
         }
 
@@ -274,7 +274,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
     {
         if (!createVirtualSink())
         {
-            LOG_ERROR("Falha ao criar sink virtual");
+            LOG_ERROR("Failed to criar sink virtual");
             return false;
         }
     }
@@ -296,7 +296,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
 
     if (!m_stream)
     {
-        LOG_ERROR("Falha ao criar PulseAudio stream");
+        LOG_ERROR("Failed to criar PulseAudio stream");
         removeVirtualSink();
         return false;
     }
@@ -321,7 +321,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
 
     if (pa_stream_connect_record(m_stream, device, &bufferAttr, flags) < 0)
     {
-        LOG_ERROR("Falha ao conectar stream de captura: " +
+        LOG_ERROR("Failed to conectar stream de captura: " +
                   std::string(pa_strerror(pa_context_errno(m_context))));
         pa_stream_unref(m_stream);
         m_stream = nullptr;
@@ -341,7 +341,7 @@ bool AudioCapturePulse::open(const std::string &deviceName)
         }
         else if (state == PA_STREAM_FAILED || state == PA_STREAM_TERMINATED)
         {
-            LOG_ERROR("Falha ao criar stream de captura");
+            LOG_ERROR("Failed to criar stream de captura");
             pa_stream_unref(m_stream);
             m_stream = nullptr;
             removeVirtualSink();
@@ -413,7 +413,7 @@ bool AudioCapturePulse::startCapture()
 {
     if (!m_isOpen)
     {
-        LOG_ERROR("AudioCapture não está aberto");
+        LOG_ERROR("AudioCapture not open");
         return false;
     }
 
@@ -424,7 +424,7 @@ bool AudioCapturePulse::startCapture()
 
     if (!m_stream)
     {
-        LOG_ERROR("Stream não está disponível");
+        LOG_ERROR("Stream unavailable");
         return false;
     }
 
@@ -764,14 +764,14 @@ bool AudioCapturePulse::createVirtualSink()
 
     if (pa_context_get_state(m_context) != PA_CONTEXT_READY)
     {
-        LOG_ERROR("Context PulseAudio não está pronto");
+        LOG_ERROR("PulseAudio context not ready");
         return false;
     }
 
     g_sinkOperationSuccess = false;
     g_sinkIndex = PA_INVALID_INDEX;
 
-    LOG_INFO("Verificando se sink virtual 'RetroCapture' já existe...");
+    LOG_INFO("Checking whether virtual sink 'RetroCapture' already exists...");
     pa_operation *op = pa_context_get_sink_info_by_name(m_context, "RetroCapture", sinkInfoCallback, this);
     if (op)
     {
@@ -795,23 +795,23 @@ bool AudioCapturePulse::createVirtualSink()
         {
             m_virtualSinkIndex = g_sinkIndex;
             m_moduleIndex = PA_INVALID_INDEX;
-            LOG_INFO("Sink virtual 'RetroCapture' já existe (índice: " + std::to_string(m_virtualSinkIndex) + ")");
+            LOG_INFO("Virtual sink 'RetroCapture' already exists (index: " + std::to_string(m_virtualSinkIndex) + ")");
             return true;
         }
     }
 
-    LOG_INFO("Sink virtual 'RetroCapture' não encontrado, criando novo...");
+    LOG_INFO("Virtual sink 'RetroCapture' not found, creating it...");
 
     g_sinkOperationSuccess = false;
     g_moduleIndex = PA_INVALID_INDEX;
 
-    LOG_INFO("Carregando módulo module-null-sink...");
+    LOG_INFO("Loading module-null-sink...");
     const char *args = "sink_name=RetroCapture sink_properties='device.description=\"RetroCapture Audio Input\"'";
     op = pa_context_load_module(m_context, "module-null-sink", args, operationCallback, this);
 
     if (!op)
     {
-        LOG_ERROR("Falha ao criar operação para carregar module-null-sink: " +
+        LOG_ERROR("Failed to create operation for loading module-null-sink: " +
                   std::string(pa_strerror(pa_context_errno(m_context))));
         return false;
     }
@@ -826,7 +826,7 @@ bool AudioCapturePulse::createVirtualSink()
         if (g_sinkOperationSuccess && g_moduleIndex != PA_INVALID_INDEX)
         {
             m_moduleIndex = g_moduleIndex;
-            LOG_INFO("Módulo module-null-sink carregado com sucesso (índice: " + std::to_string(g_moduleIndex) + ")");
+            LOG_INFO("module-null-sink loaded (index: " + std::to_string(g_moduleIndex) + ")");
             break;
         }
         usleep(10000);
@@ -837,13 +837,13 @@ bool AudioCapturePulse::createVirtualSink()
 
     if (!g_sinkOperationSuccess || g_moduleIndex == PA_INVALID_INDEX)
     {
-        LOG_ERROR("Falha ao criar sink virtual");
+        LOG_ERROR("Failed to criar sink virtual");
         return false;
     }
 
     usleep(100000); // 100ms
 
-    LOG_INFO("Buscando índice do sink virtual 'RetroCapture' criado...");
+    LOG_INFO("Looking up index of the new 'RetroCapture' virtual sink...");
     g_sinkIndex = PA_INVALID_INDEX;
     g_sinkOperationSuccess = false;
     op = pa_context_get_sink_info_by_name(m_context, "RetroCapture", sinkInfoCallback, this);
@@ -865,13 +865,13 @@ bool AudioCapturePulse::createVirtualSink()
 
     if (g_sinkIndex == PA_INVALID_INDEX)
     {
-        LOG_WARN("Falha ao obter índice do sink virtual criado");
+        LOG_WARN("Failed to get the new virtual sink index");
         m_virtualSinkIndex = 0;
         return true;
     }
 
     m_virtualSinkIndex = g_sinkIndex;
-    LOG_INFO("Sink virtual 'RetroCapture' criado com sucesso (índice: " + std::to_string(m_virtualSinkIndex) + ")");
+    LOG_INFO("Virtual sink 'RetroCapture' created (index: " + std::to_string(m_virtualSinkIndex) + ")");
     return true;
 }
 
@@ -963,7 +963,7 @@ void AudioCapturePulse::removeVirtualSink()
         return;
     }
 
-    LOG_INFO("Removendo sink virtual 'RetroCapture' (módulo: " + std::to_string(moduleIndexToRemove) + ")");
+    LOG_INFO("Removing virtual sink 'RetroCapture' (module: " + std::to_string(moduleIndexToRemove) + ")");
     g_sinkOperationSuccess = false;
     pa_operation *op = pa_context_unload_module(m_context, moduleIndexToRemove, unloadModuleCallback, this);
     if (op)

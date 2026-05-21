@@ -3,6 +3,7 @@
 #include "../ui/UIManager.h"
 #include "../shader/ShaderEngine.h"
 #include "HTTPServer.h"
+#include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
 #include "../utils/PresetManager.h"
 #include "../recording/RecordingSettings.h"
@@ -13,13 +14,22 @@
 #endif
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <iomanip>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 #include <fstream>
 #include <cstdint>
 #include <climits>
 #include "../utils/FilesystemCompat.h"
+
+// Falls back when the CMake compile flag isn't set (e.g. when a tool
+// processes this file without going through the project's build system).
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 
 // Simple JSON helper functions
 namespace
@@ -96,6 +106,23 @@ namespace
     {
         return value ? "true" : "false";
     }
+
+    // FNV-1a 64-bit content hash. Not cryptographic — sufficient for the
+    // remote-client cache-invalidation use case in /meta.
+    std::string fnv1a64Hex(const std::string &content)
+    {
+        const uint64_t FNV_OFFSET = 0xcbf29ce484222325ULL;
+        const uint64_t FNV_PRIME  = 0x100000001b3ULL;
+        uint64_t h = FNV_OFFSET;
+        for (unsigned char c : content)
+        {
+            h ^= c;
+            h *= FNV_PRIME;
+        }
+        std::ostringstream oss;
+        oss << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0') << h;
+        return oss.str();
+    }
 }
 
 APIController::APIController()
@@ -104,7 +131,16 @@ APIController::APIController()
 
 bool APIController::isAPIRequest(const std::string &request) const
 {
-    return request.find("/api/") != std::string::npos;
+    // Routes handled by this controller: /api/v1/* (the REST surface) and
+    // the top-level /meta endpoint used by the remote-stream client protocol.
+    return request.find("/api/") != std::string::npos ||
+           request.find(" /meta") != std::string::npos;
+}
+
+void APIController::setStreamPasswordHash(const std::string &sha256Hex)
+{
+    std::lock_guard<std::mutex> lock(m_passwordMu);
+    m_streamPasswordHash = sha256Hex;
 }
 
 bool APIController::handleRequest(int clientFd, const std::string &request)
@@ -209,6 +245,11 @@ std::string APIController::extractMethod(const std::string &request) const
 std::string APIController::extractPath(const std::string &request) const
 {
     size_t start = request.find(" /api/");
+    if (start == std::string::npos)
+    {
+        // Fall back to top-level routes owned by this controller.
+        start = request.find(" /meta");
+    }
     if (start == std::string::npos)
         return "";
 
@@ -338,9 +379,17 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
 
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
-    if (path == "/api/v1/source")
+    if (path == "/meta")
+    {
+        return handleGETMeta(clientFd, request);
+    }
+    else if (path == "/api/v1/source")
     {
         return handleGETSource(clientFd);
+    }
+    else if (path == "/api/v1/preferences")
+    {
+        return handleGETPreferences(clientFd);
     }
     else if (path == "/api/v1/shader")
     {
@@ -646,6 +695,22 @@ bool APIController::handleGETSource(int clientFd)
     std::ostringstream json;
     json << "{\"type\": " << static_cast<int>(m_uiManager->getSourceType())
          << ", \"device\": " << jsonString(m_uiManager->getCurrentDevice()) << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+bool APIController::handleGETPreferences(int clientFd)
+{
+    // Only the language is exposed for now. Other prefs (start
+    // fullscreen, etc.) are intentionally NOT surfaced — they're
+    // app-launch settings that don't change runtime behaviour the
+    // portal can reflect.
+    std::string lang = "en";
+    if (m_uiManager) lang = m_uiManager->getLanguage();
+    if (lang.empty()) lang = "en";
+
+    std::ostringstream json;
+    json << "{\"language\": " << jsonString(lang) << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
@@ -976,6 +1041,240 @@ bool APIController::handleGETStatus(int clientFd)
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
+}
+
+// Builds the /meta JSON snapshot from current application state. Pure
+// helper — no I/O, no side effects — so the SSE push loop in
+// handleGETMetaSSE can call it cheaply on every tick.
+std::string APIController::buildMetaSnapshotJSON()
+{
+    if (!m_application || !m_uiManager)
+    {
+        return "{}";
+    }
+
+    ShaderEngine *shaderEngine = m_application->getShaderEngine();
+    bool shaderActive = shaderEngine && shaderEngine->isShaderActive();
+    std::string presetName = m_uiManager->getCurrentShader();
+    std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
+    std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
+
+    std::ostringstream json;
+    json << "{"
+         << "\"protocolVersion\": 1, "
+         << "\"serverVersion\": " << jsonString(RETROCAPTURE_VERSION) << ", "
+         << "\"shader\": {"
+         <<   "\"active\": "          << jsonBool(shaderActive)                          << ", "
+         <<   "\"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled()) << ", "
+         <<   "\"preset\": "          << jsonString(presetName)                          << ", "
+         <<   "\"presetHash\": "      << jsonString(presetHash)                          << ", "
+         <<   "\"parameters\": [";
+
+    if (shaderActive)
+    {
+        auto params = shaderEngine->getShaderParameters();
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            if (i > 0) json << ", ";
+            const auto &p = params[i];
+            json << "{"
+                 << "\"name\": "         << jsonString(p.name)         << ", "
+                 << "\"value\": "        << jsonNumber(p.value)        << ", "
+                 << "\"defaultValue\": " << jsonNumber(p.defaultValue) << ", "
+                 << "\"min\": "          << jsonNumber(p.min)          << ", "
+                 << "\"max\": "          << jsonNumber(p.max)          << ", "
+                 << "\"step\": "         << jsonNumber(p.step)
+                 << "}";
+        }
+    }
+
+    json <<   "]"
+         << "}, "
+         << "\"source\": {"
+         <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
+         <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
+         <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
+         <<   "\"overscan\": {"
+         <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+         <<     "\"y\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+         <<     "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+         <<   "}"
+         << "}, "
+         << "\"image\": {"
+         <<   "\"brightness\": "     << jsonNumber(m_uiManager->getBrightness())     << ", "
+         <<   "\"contrast\": "       << jsonNumber(m_uiManager->getContrast())       << ", "
+         <<   "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect())   << ", "
+         <<   "\"outputWidth\": "    << jsonNumber(m_uiManager->getOutputWidth())    << ", "
+         <<   "\"outputHeight\": "   << jsonNumber(m_uiManager->getOutputHeight())
+         << "}, "
+         << "\"streaming\": {"
+         <<   "\"active\": "      << jsonBool(m_uiManager->getStreamingActive())     << ", "
+         <<   "\"url\": "         << jsonString(m_uiManager->getStreamUrl())         << ", "
+         // #68 — expose the host's viewer count so a remote client
+         // can render "you're watching with N other viewers" in the
+         // OSD quick-actions widget. No security concern since
+         // browsing the directory already exposes per-stream counts.
+         <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
+         << "}"
+         << "}";
+
+    return json.str();
+}
+
+// GET /meta — full snapshot of the active shader pipeline + source state, used
+// by a remote RetroCapture client to mirror the server's configuration when
+// consuming /raw. Schema is versioned via "protocolVersion"; see
+// docs/REMOTE_STREAM_PROTOCOL.md.
+//
+// Two transports on the same path (Phase 6 of #47):
+//   - regular HTTP GET → returns a one-shot JSON snapshot (Phase 1)
+//   - Accept: text/event-stream → upgrades to Server-Sent Events and
+//     pushes deltas until the client disconnects
+bool APIController::handleGETMeta(int clientFd, const std::string &request)
+{
+    if (!m_application || !m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "Application or UIManager not available");
+        return true;
+    }
+
+    // #49 Phase 3 — password gate. Same wire contract as /raw:
+    // Authorization: Bearer <sha256(password)>, or ?token=... query
+    // fallback. Empty configured hash means no auth required.
+    {
+        std::string pwHash;
+        {
+            std::lock_guard<std::mutex> lock(m_passwordMu);
+            pwHash = m_streamPasswordHash;
+        }
+        if (!HttpAuth::authorized(request, pwHash))
+        {
+            const char *response = "HTTP/1.1 401 Unauthorized\r\n"
+                                   "WWW-Authenticate: Bearer realm=\"retrocapture-meta\"\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "This stream's metadata is password-protected. "
+                                   "Send Authorization: Bearer <sha256(password)>.";
+            if (m_httpServer)
+            {
+                m_httpServer->sendData(clientFd, response, strlen(response));
+            }
+            return true;
+        }
+    }
+
+    // Sniff for an SSE-flavoured request. Case-insensitive on the header
+    // name but not the value — text/event-stream is the canonical token.
+    auto headerHasSSE = [](const std::string &req) -> bool
+    {
+        size_t pos = 0;
+        while (pos < req.size())
+        {
+            size_t eol = req.find("\r\n", pos);
+            if (eol == std::string::npos) break;
+            std::string line = req.substr(pos, eol - pos);
+            if (line.size() >= 7)
+            {
+                std::string head = line.substr(0, 7);
+                for (auto &c : head) c = static_cast<char>(::tolower(c));
+                if (head == "accept:")
+                {
+                    if (line.find("text/event-stream") != std::string::npos)
+                    {
+                        return true;
+                    }
+                }
+            }
+            pos = eol + 2;
+            if (line.empty()) break; // end of headers
+        }
+        return false;
+    };
+
+    if (headerHasSSE(request))
+    {
+        return handleGETMetaSSE(clientFd);
+    }
+
+    sendJSONResponse(clientFd, 200, buildMetaSnapshotJSON());
+    return true;
+}
+
+bool APIController::handleGETMetaSSE(int clientFd)
+{
+    // Send SSE response headers. X-Accel-Buffering: no asks reverse
+    // proxies (notably nginx) not to buffer the stream — without it the
+    // client wouldn't see deltas until a buffer flushed.
+    const std::string headers =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: keep-alive\r\n"
+        "X-Accel-Buffering: no\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "\r\n";
+
+    if (sendData(clientFd, headers.data(), headers.size()) < 0)
+    {
+        return true;
+    }
+
+    auto sendEvent = [&](const std::string &json) -> bool
+    {
+        std::string msg;
+        msg.reserve(json.size() + 16);
+        msg += "data: ";
+        msg += json;
+        msg += "\n\n";
+        return sendData(clientFd, msg.data(), msg.size()) >= 0;
+    };
+
+    std::string lastSnapshot = buildMetaSnapshotJSON();
+    if (!sendEvent(lastSnapshot))
+    {
+        return true;
+    }
+
+    auto lastKeepalive = std::chrono::steady_clock::now();
+
+    while (true)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+        std::string snap = buildMetaSnapshotJSON();
+        if (snap != lastSnapshot)
+        {
+            if (!sendEvent(snap)) break;
+            lastSnapshot = std::move(snap);
+            lastKeepalive = std::chrono::steady_clock::now();
+            continue;
+        }
+
+        // Send a comment-line keepalive every 30 s so idle TCP doesn't
+        // get reaped by NAT / proxies.
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastKeepalive).count() >= 30)
+        {
+            static const char *kKeepalive = ": keepalive\n\n";
+            if (sendData(clientFd, kKeepalive, std::strlen(kKeepalive)) < 0) break;
+            lastKeepalive = now;
+        }
+    }
+
+    return true;
+}
+
+std::string APIController::computePresetHash(const std::string &presetPath) const
+{
+    std::ifstream file(presetPath, std::ios::binary);
+    if (!file.is_open())
+    {
+        return "";
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return fnv1a64Hex(buffer.str());
 }
 
 bool APIController::handleGETPlatform(int clientFd)

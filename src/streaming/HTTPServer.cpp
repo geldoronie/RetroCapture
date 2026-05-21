@@ -518,6 +518,45 @@ void HTTPServer::closeClient(int clientFd)
         }
     }
 #endif
+
+    // Graceful close: FIN-first, then drain any pipelined data the
+    // peer queued before we finished, then close. Without the
+    // shutdown+drain step Linux sends RST instead of FIN whenever
+    // there are unread bytes in the receive buffer (which IS the
+    // common case behind a reverse proxy: Cloudflare pipelines the
+    // next asset request immediately after the GET / for the page,
+    // both arrive while we're still serving the first, and close()
+    // tears the connection down hard). The browser sees the RST as
+    // an abort and stalls indefinitely on the pipelined sub-resource.
+    //
+    // shutdown(SHUT_WR) sends FIN now so the peer stops pipelining,
+    // then we drain whatever is already buffered (cap the loop —
+    // we're not going to act on it, just keep the kernel from
+    // resorting to RST), then close() emits the normal FIN/ACK
+    // exchange.
+#ifdef PLATFORM_LINUX
+    ::shutdown(clientFd, SHUT_WR);
+    char drain[1024];
+    int spins = 0;
+    while (spins++ < 64)
+    {
+        ssize_t n = ::recv(clientFd, drain, sizeof(drain), MSG_DONTWAIT);
+        if (n <= 0) break;
+    }
+#elif defined(_WIN32)
+    ::shutdown(clientFd, SD_SEND);
+    {
+        u_long nonblock = 1;
+        ::ioctlsocket(clientFd, FIONBIO, &nonblock);
+    }
+    char drain[1024];
+    int spins = 0;
+    while (spins++ < 64)
+    {
+        int n = ::recv(clientFd, drain, sizeof(drain), 0);
+        if (n <= 0) break;
+    }
+#endif
     close(clientFd);
 }
 

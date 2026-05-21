@@ -17,6 +17,33 @@
 class MediaEncoder
 {
 public:
+    // Hardware encoder backend selection. Auto picks the best available
+    // at runtime (hardware > software); Software forces libx264. The
+    // specific hardware backends are matched against what ffmpeg can
+    // actually open on this host — detectAvailableEncoders() returns the
+    // ones that opened cleanly at startup.
+    enum class HardwareEncoder
+    {
+        Auto,      // detect — prefer hardware if available
+        Software,  // libx264
+        NVENC,     // h264_nvenc — NVIDIA dedicated encoder block
+        VAAPI,     // h264_vaapi — Linux Intel/AMD via libva
+        QSV,       // h264_qsv  — Intel Quick Sync Video
+        AMF        // h264_amf  — AMD on Windows (Advanced Media Framework)
+    };
+
+    static const char *hardwareEncoderName(HardwareEncoder h);   // display label
+    // Returns the ffmpeg codec name for the given backend, choosing
+    // h264_* or hevc_* based on `isHEVC`. The other codecs in the
+    // project (vp8/vp9) don't have hardware equivalents we support.
+    static const char *hardwareEncoderCodec(HardwareEncoder h, bool isHEVC = false);
+    // Returns the subset of HardwareEncoder values whose ffmpeg codec
+    // can actually be opened on this machine. Always includes Software.
+    // Probes both the H.264 and HEVC builds — a backend is reported as
+    // available if either codec is compiled in. First call may probe;
+    // subsequent calls return cached results.
+    static std::vector<HardwareEncoder> detectAvailableEncoders();
+
     // Configuração de vídeo
     struct VideoConfig
     {
@@ -31,6 +58,15 @@ public:
         std::string h265Level = "auto";   // Para H.265
         int vp8Speed = 12;                // 0-16
         int vp9Speed = 6;                 // 0-9
+        HardwareEncoder hardwareEncoder = HardwareEncoder::Auto;
+        // Free-form quality / preset value whose interpretation depends
+        // on the active hardware backend:
+        //   NVENC: "p1".."p7"
+        //   VAAPI: "CBR" / "VBR" / "CQP"
+        //   QSV:   "veryfast".."veryslow"
+        //   AMF:   "speed" / "balanced" / "quality"
+        // Empty string falls back to the backend's hardcoded default.
+        std::string hwPreset;
     };
 
     // Configuração de áudio
@@ -128,14 +164,24 @@ private:
     // FFmpeg conversion contexts
     void *m_swsContext = nullptr; // SwsContext* (RGB to YUV)
     void *m_swrContext = nullptr; // SwrContext* (int16 to float planar)
-    void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo)
+    void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo — software pixel buffer)
+    void *m_hwVideoFrame = nullptr; // AVFrame* (hw surface destination, when using a HW encoder)
     void *m_audioFrame = nullptr; // AVFrame* (para encoding de áudio)
+
+    // Hardware encoder runtime state. Empty when running software libx264.
+    void *m_hwDeviceCtx = nullptr; // AVBufferRef* (AV_HWDEVICE_TYPE_*)
+    void *m_hwFramesCtx = nullptr; // AVBufferRef* (AVHWFramesContext)
+    HardwareEncoder m_activeHardwareEncoder = HardwareEncoder::Software;
+    // Helpers used by initializeVideoCodec when a HW backend is selected.
+    bool initializeHardwareVideoCodec(HardwareEncoder backend);
+    bool createHardwareContext(HardwareEncoder backend);
 
     // Cache para dimensões do SwsContext
     uint32_t m_swsSrcWidth = 0;
     uint32_t m_swsSrcHeight = 0;
     uint32_t m_swsDstWidth = 0;
     uint32_t m_swsDstHeight = 0;
+    int m_swsDstFormat = 0; // AVPixelFormat — invalidate sws ctx when destination format changes too
 
     // Timestamps de referência (primeiro frame/chunk) - apenas para referência
     int64_t m_firstVideoTimestampUs = 0;

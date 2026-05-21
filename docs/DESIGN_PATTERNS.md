@@ -324,9 +324,15 @@ class Application {
 
 ### DRY (Don't Repeat Yourself)
 
-- YUYV→RGB conversion centralized in `Application::convertYUYVtoRGB()`
+- YUYV→RGB conversion centralized in `FrameProcessor::convertYUYVtoRGB()`
 - OpenGL resource creation centralized in specific classes
 - Shader parsing centralized in `ShaderPreset`
+- A/V sync (overlap-gated, 50 ms tolerance) lives once in
+  `MediaSynchronizer` and is reused by both the streaming and
+  recording paths.
+- HTTP / HTTPS plumbing lives once in `HttpClient` + the shared
+  internal header `HttpClientTls.h`, used by `DirectoryClient`,
+  `DirectoryBrowser`, `RemoteMetaSync`'s SSE long-poll, etc.
 
 ### KISS (Keep It Simple, Stupid)
 
@@ -363,36 +369,43 @@ class Application {
    - Comment why you chose a pattern
    - Document trade-offs
 
-### Example: Adding New Output Type
+### Example: how the recording path was added
 
 ```cpp
-// 1. Create new class following existing pattern
-class VideoRecorder {
+// 1. A focused class with a single responsibility, following the
+//    same shape as the other manager-style components.
+class RecordingManager {
 public:
-    bool init();
-    void shutdown();
-    bool recordFrame(GLuint texture, uint32_t width, uint32_t height);
+    bool initialize();
+    void cleanup();
+    void pushFrame(const uint8_t *rgb, uint32_t width, uint32_t height);
+    bool startRecording(const RecordingSettings &);
+    bool stopRecording();
+    bool isRecording() const;
 };
 
-// 2. Integrate into Application using Facade pattern
+// 2. Application owns it as a unique_ptr alongside the other
+//    subsystems and feeds it from the main loop. No raw new.
 class Application {
-    VideoRecorder* m_recorder = nullptr;
-    
-    bool initRecorder() {
-        m_recorder = new VideoRecorder();
-        return m_recorder->init();
-    }
+    std::unique_ptr<RecordingManager> m_recordingManager;
 };
 
-// 3. Use callbacks for control (Observer pattern)
-m_ui->setOnRecordChanged([this](bool recording) {
-    if (recording) {
-        m_recorder->start();
-    } else {
-        m_recorder->stop();
-    }
-});
+// 3. The UI drives state changes through getters/setters on
+//    UIManager; Application reads them each tick and forwards to
+//    the manager. No callback wiring needed — the per-tick read
+//    is the observer.
+if (m_recordingManager && m_recordingManager->isRecording())
+{
+    m_recordingManager->pushFrame(rgb, w, h);
+}
 ```
+
+The same shape is used by `StreamManager`, `DirectoryClient`,
+`CloudflaredManager`, `RemoteMetaSync`, etc. New subsystems should
+follow it: one `unique_ptr<>` owned by `Application`, an
+`initialize` / `cleanup` pair, idempotent `start` / `stop`, and a
+per-tick read of `UIManager` state instead of bespoke callback
+chains.
 
 ### Pull Request Checklist
 

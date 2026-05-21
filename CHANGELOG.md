@@ -9,10 +9,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 
-- WebRTC streaming support
-- RTSP streaming support
-- Additional codec options and configurations
-- Stream authentication and access control
+- WebRTC streaming support (#52)
+- Shader bundle fetch so a client without the host's preset still
+  reproduces the host's look (#54)
+- Recording pipeline parity with the streaming pipeline overhaul
+  (#59)
+- Multi-language UI (#45) — now that strings are normalized to
+  English under #46, translation is a separate, mechanical pass.
+
+---
+
+## [0.7.0-alpha] - 2026-05-18
+
+Twelfth alpha release. Two large features and a long polish tail
+focused on making the alpha shippable to people other than the
+maintainer.
+
+**Compared to 0.6.0-alpha**: 9 PRs · directory service, named
+Cloudflare tunnel, full English-language pass, plus a wave of
+client-side UX fixes.
+
+### Added
+
+- **Public stream directory** (#49, PR #55) — opt-in listing of
+  live streams so a client can browse + connect without out-of-band
+  URL sharing. New `platform/services/directory/` Go service
+  (SQLite, embedded migrations, token-bucket rate limits, reaper),
+  host-side `DirectoryClient` lifecycle, dedicated Browse window
+  under **Remote → Browse public directory…**, `--browse-directory`
+  CLI flag. Live at `http://directory.retrocapture.com`.
+- **Integrated Cloudflare Quick Tunnel** (#49 Phase 2.5, PR #55) —
+  `cloudflared` spawned + supervised by the host; the random
+  `trycloudflare.com` URL is auto-registered with the directory.
+  Lets users behind NAT/CGNAT publish without port forwarding or
+  buying a domain.
+- **Auto-download of `cloudflared`** (#53, PR #61) — first-time use
+  of the tunnel option downloads the pinned binary (`2026.5.0`) from
+  GitHub releases, verifies sha256, caches under
+  `<user-data-dir>/cloudflared/`. No manual install. ARM32 hidden
+  because there's no upstream binary there. CLI escape hatch
+  `--cloudflared-binary <path>` for air-gapped setups.
+- **Named Cloudflare Tunnel** (#60, PR #62) — persistent
+  shareable URL tied to the user's own domain. Sign-in to
+  Cloudflare from inside the app via `cloudflared tunnel login`
+  (the OAuth URL is rendered in a copy-pasteable read-only
+  InputText for headless / SSH users); tunnel selection /
+  creation / DNS routing all from the same screen.
+- **Stream password gate** (#49 Phase 3, PR #55) — host's entire
+  HTTP surface (web portal HTML, vendor assets, PWA, `/stream`,
+  `/raw`, `/meta`) now sits behind a single password when
+  configured. Two accepted schemes: Basic (browsers) and
+  Bearer-sha256 (native client). Documented in
+  `docs/DIRECTORY_PROTOCOL.md`.
+- **Report a stream** (#57, PR #63) — right-click → Report on any
+  row in Browse opens an input modal; submit fires
+  `POST /streams/<id>/report` and a feedback modal returns the
+  protocol number `R-XXXXXXXX` for the user to quote later. Receipt
+  persisted in `stream_reports.report_id` (migration 002) so the
+  maintainer can pivot from a quoted receipt back to the row.
+- **Capped exponential backoff on remote reconnect** (#58, PR #63) —
+  `VideoCaptureRemote::decodeLoop` retries follow
+  `[2, 2, 5, 5, 15, 30, 60]` seconds with the 60 s slot held for
+  prolonged failures. After ~15 minutes of failed retries the UI
+  surfaces "Host appears offline" alongside an OSD overlay (see
+  below); URL stays armed.
+- **Always-on-top connection state overlay** (PR #63) — bottom-right
+  corner shows Connecting / Reconnecting / Disconnecting / Connected
+  transitions, visible even with the rest of the UI hidden via F12.
+- **F11 toggles fullscreen** (PR #63).
+- **Mode-aware Info tab** (PR #63) — host mode keeps Capture +
+  Streaming sections; client mode renders dedicated Remote Stream +
+  Connection blocks instead of mislabelling the remote URL as a
+  "Device".
+- **Client URL validation** (#56, PR #63) — Custom endpoint URL
+  field rejects malformed inputs (scheme, host, port) inline before
+  the publish toggle goes green. Same validation on the service in
+  `validateRegister` / `validatePatch`. 8 new Go tests cover the
+  rejection cases.
+- **Cloudflare Quick Tunnel DNS propagation hint** (PR #63) —
+  inline note under the directory status text warning that
+  `trycloudflare.com` URLs can take ~2 min to resolve from other
+  networks after publish.
+
+### Changed
+
+- **Repo-wide English string normalization** (#46) — the web
+  portal HTML/JS, ImGui labels and tooltips, `--help` text, and
+  user-visible `LOG_*` messages were all standardized to English.
+  Pre-existing Portuguese strings remained from earlier alphas;
+  cleaned up now that #45 (i18n) is on the roadmap. Stale
+  `RetroCapture v0.5.0` literal in the Credits window and main
+  startup log replaced with the `RETROCAPTURE_VERSION` macro
+  CMake propagates from `project()`.
+- **TrustProxyHeaders flag on the directory service** — when the
+  service is deployed behind FRP / Cloudflare / nginx, set
+  `DIRECTORY_TRUST_PROXY_HEADERS=true` so the recorded
+  `publicIp` / `reporter_ip` is the real client, not the proxy.
+  Off by default for direct-exposure deployments (spoofing-
+  resistant). Same lookup feeds the rate limiter so one proxy IP
+  doesn't burn the bucket for everyone behind it.
+
+### Fixed
+
+- **Web portal stuck loading vendored assets via Cloudflare** —
+  `/stream` was substring-matching `Referer: https://stream.retrocapture.com/`
+  and serving MPEG-TS bytes for every asset (PR #55).
+- **HTTP/1.1 RST instead of FIN on connection close** —
+  `shutdown(SHUT_WR)` + bounded drain before `close()` (PR #55).
+- **Partial sends silently truncated the MPEG-TS stream**, making
+  mpegts.js lose the SourceBuffer permanently after minutes of
+  viewing through a tunnel. Per-client tail buffer preserves byte
+  order; client closed cleanly past a 4 MB backlog cap (PR #55).
+- **`SO_RCVTIMEO` leaking into the stream-serve phase** caused MSE
+  `onSourceEnded` after 5 s (PR #55).
+- **Configuration tab leaking externally behind FRP** — peer-IP
+  detection augmented with a header-based `cameFromInternetProxy()`
+  sniff (PR #55).
+- **`RemoteMetaSync` failing over HTTPS tunnels** — routed through
+  FFmpeg `avio_open2` so libavformat handles TLS (PR #55).
+- **PulseAudio `pthread_mutex_destroy != 0` after hours of
+  uptime** — `std::shared_mutex` around `m_stream` in
+  `AudioPlaybackPulse` so `close()` can't race with
+  `submit()` / `getClockUs()` (PR #55).
+- **`stream` overlay shown only when UI was visible** —
+  `UIManager::endFrame` now always calls `ImGui::Render` so the
+  overlay paints even with F12 hiding the main UI (PR #63).
+- **OSD overlay missed killed hosts** — added an
+  `isReceivingFrames()` heuristic on `VideoCaptureRemote` that
+  combines `m_streamAnchored` with a `m_lastFrameAtSteadyUs`
+  staleness check (2 s threshold) — killed host shows up in the
+  overlay within ~2 s instead of waiting on the TCP timeout (PR #63).
+- **DirectShow device dropdown leaked the remote URL** — when the
+  user switched source from Remote to DirectShow the dropdown
+  rendered `http://localhost:8080` as if a webcam was at that
+  address. Now falls back to "None (No device)" when the stored
+  value isn't a DS or V4L2 device (PR #55).
+
+### Deferred
+
+- **Phase 2.5b** — Named Tunnel persistent-URL flow shipped as
+  #60 / PR #62, separate from the auto-download work in #53.
+- **Phase 4b** — shader bundle fetch (#54) is the next-step
+  follow-up that closes the loop "client picks a stream from the
+  directory → reproduces the host's look fully". The maintainer
+  judged that bundled standard shaders cover the common case for
+  this alpha and decided to defer.
 
 ---
 

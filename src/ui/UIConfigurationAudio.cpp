@@ -1,5 +1,7 @@
 #include "UIConfigurationAudio.h"
+#include "../utils/TranslationManager.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../audio/IAudioCapture.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
@@ -22,21 +24,27 @@ UIConfigurationAudio::~UIConfigurationAudio()
 
 void UIConfigurationAudio::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(T("audio.title").c_str(), &m_visible))
     {
+        ImGui::End();
         return;
     }
 
-    // Update reference to audio capture if needed
     m_audioCapture = m_uiManager->getAudioCapture();
 
     if (!m_audioCapture)
     {
-        ImGui::TextWrapped("Audio capture not available. Audio is required for streaming and recording.");
+        ImGui::TextWrapped("%s", T("audio.unavailable").c_str());
+        ImGui::End();
         return;
     }
 
     renderInputSourceSelection();
+
+    ImGui::End();
 }
 
 void UIConfigurationAudio::refreshInputSources()
@@ -102,9 +110,10 @@ void UIConfigurationAudio::refreshInputSources()
 
 void UIConfigurationAudio::renderInputSourceSelection()
 {
-    ImGui::Text("Audio Input Source");
-    ImGui::Separator();
-    ImGui::TextWrapped("Select the audio source to capture. This audio will be recorded and streamed.");
+    ui_section_header("Audio input",
+                      "Pick the audio source captured alongside video. "
+                      "The selection is shared between streaming and "
+                      "recording.");
 
     if (!m_audioCapture)
     {

@@ -231,6 +231,7 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
             }
             presetJson["streaming"]["vp8Speed"] = data.streamingVP8Speed;
             presetJson["streaming"]["vp9Speed"] = data.streamingVP9Speed;
+            presetJson["streaming"]["hardwareEncoder"] = data.streamingHardwareEncoder;
         }
 
         // V4L2 controls (if any)
@@ -436,6 +437,10 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (streaming.contains("vp9Speed"))
             {
                 data.streamingVP9Speed = streaming["vp9Speed"].get<int>();
+            }
+            if (streaming.contains("hardwareEncoder"))
+            {
+                data.streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
             }
         }
 

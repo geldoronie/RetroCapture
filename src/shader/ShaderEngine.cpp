@@ -53,12 +53,12 @@ void ShaderEngine::setMaxShaderResolution(uint32_t maxWidth, uint32_t maxHeight)
     m_maxShaderHeight = maxHeight;
     if (maxWidth > 0 && maxHeight > 0)
     {
-        LOG_INFO("Limite de resolução de shader configurado: " + 
+        LOG_INFO("Shader resolution limit set: " + 
                  std::to_string(maxWidth) + "x" + std::to_string(maxHeight));
     }
     else
     {
-        LOG_INFO("Limite de resolução de shader desabilitado");
+        LOG_INFO("Shader resolution limit disabled");
     }
 }
 
@@ -150,7 +150,7 @@ bool ShaderEngine::loadShader(const std::string &shaderPath)
 {
     if (!m_initialized)
     {
-        LOG_ERROR("ShaderEngine não inicializado");
+        LOG_ERROR("ShaderEngine not initialized");
         return false;
     }
 
@@ -229,7 +229,7 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
 {
     if (!m_initialized)
     {
-        LOG_ERROR("ShaderEngine não inicializado");
+        LOG_ERROR("ShaderEngine not initialized");
         return false;
     }
 

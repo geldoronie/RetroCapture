@@ -97,7 +97,8 @@ public:
      * @param basePrefix Prefixo base para URLs (ex: "/retrocapture")
      * @return true se servido com sucesso, false caso contrário
      */
-    bool serveWebPage(int clientFd, const std::string &basePrefix = "") const;
+    bool serveWebPage(int clientFd, const std::string &request,
+                      const std::string &basePrefix = "") const;
 
     /**
      * Serve um arquivo estático (CSS, JS, etc.)
@@ -189,12 +190,37 @@ private:
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
     /**
+     * Like sendData() but loops on partial sends until the whole
+     * buffer has gone out (or an unrecoverable error). HTTPServer's
+     * underlying send is non-blocking (MSG_DONTWAIT) and may return a
+     * smaller count for external clients whose path MTU / TCP window
+     * can't absorb the full response in one syscall. Without this
+     * loop a 150 KB bootstrap.min.css gets a partial send and the
+     * client waits forever for the Content-Length-promised rest.
+     *
+     * Returns total bytes sent (== size) on success, or -1 on a hard
+     * error. EAGAIN / EWOULDBLOCK signals (sendData returns 0) are
+     * retried with a tiny sleep, capped at ~10 s total so a wedged
+     * client doesn't hang the request thread forever.
+     */
+    ssize_t sendAll(int clientFd, const void *data, size_t size) const;
+
+    /**
      * Substitui texto no HTML de forma segura
      * @param html HTML onde substituir (modificado in-place)
      * @param oldText Texto antigo a ser substituído
      * @param newText Novo texto
      */
     void replaceTextInHTML(std::string &html, const std::string &oldText, const std::string &newText) const;
+
+    /**
+     * Removes the "Configuration" navigation link from the served HTML
+     * when the requester is not on the local network. Called by every
+     * HTML-serving path (index.html, recordings.html) right before
+     * the response goes out. Belt-and-suspenders complement to the
+     * route-level 403 already enforced at the top of handleRequest.
+     */
+    void stripConfigNavLink(std::string &html) const;
 
     HTTPServer *m_httpServer = nullptr;
     std::string m_title = "RetroCapture Stream";                 // Título da página web

@@ -1,5 +1,7 @@
 #include "UIConfigurationImage.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
+#include "../utils/TranslationManager.h"
 #include <imgui.h>
 
 UIConfigurationImage::UIConfigurationImage(UIManager *uiManager)
@@ -13,22 +15,27 @@ UIConfigurationImage::~UIConfigurationImage()
 
 void UIConfigurationImage::render()
 {
-    if (!m_uiManager)
+    if (!m_visible || !m_uiManager) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(T("image.title").c_str(), &m_visible))
     {
+        ImGui::End();
         return;
     }
 
-    ImGui::Text("Image Adjustments");
-    ImGui::Separator();
+    ui_section_header("Image adjustments",
+                      "Post-shader, pre-output transforms that only "
+                      "affect what you see locally — they're not "
+                      "embedded in the stream or recording.");
 
     renderBrightnessContrast();
-    ImGui::Separator();
     renderOutputResolution();
-    ImGui::Separator();
     renderAspectRatio();
     renderFullscreen();
-    ImGui::Separator();
     renderMonitorSelection();
+
+    ImGui::End();
 }
 
 void UIConfigurationImage::renderBrightnessContrast()
@@ -82,9 +89,9 @@ void UIConfigurationImage::renderFullscreen()
 
 void UIConfigurationImage::renderOutputResolution()
 {
-    ImGui::Text("Output Resolution");
-    ImGui::TextDisabled("(Applied after shader, before stretching to window)");
-    ImGui::TextDisabled("(0 = automatic, use source resolution)");
+    ui_section_header("Output resolution",
+                      "Applied after the shader, before stretching to "
+                      "the window. 0 = automatic (use source).");
     
     int outputWidth = static_cast<int>(m_uiManager->getOutputWidth());
     int outputHeight = static_cast<int>(m_uiManager->getOutputHeight());
@@ -141,7 +148,8 @@ void UIConfigurationImage::renderOutputResolution()
 
 void UIConfigurationImage::renderMonitorSelection()
 {
-    ImGui::Text("Monitor Index:");
+    ui_section_header("Monitor",
+                      "Which display fullscreen mode targets.");
     bool fullscreen = m_uiManager->getFullscreen();
     if (!fullscreen)
     {

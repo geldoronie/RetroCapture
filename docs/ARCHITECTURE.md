@@ -1,1062 +1,438 @@
 # RetroCapture Architecture
 
-## Overview
+This document describes the runtime architecture of RetroCapture as of
+**0.7.0-alpha** — the components, how they fit together, and where each
+responsibility lives in the source tree. It is intended as the
+orientation tour for new contributors and the reference point when
+reviewing changes that cut across subsystems.
 
-RetroCapture is a real-time video capture application for Linux and Windows that applies RetroArch shaders (GLSL) to video feeds from capture cards, streams the processed output over HTTP, and records video to local files. The architecture was designed to be modular, efficient, and low-latency, with support for multiple video codecs (H.264, H.265, VP8, VP9) and real-time audio/video synchronization. The application uses a cross-platform architecture with platform-specific implementations for video and audio capture.
+For wire-level details of the streaming endpoints and the public
+directory service, see the companion protocol docs:
 
-## Architecture Diagram
+- [`REMOTE_STREAM_PROTOCOL.md`](REMOTE_STREAM_PROTOCOL.md) — `/stream`,
+  `/raw`, `/meta` and the desktop client's Remote source.
+- [`DIRECTORY_PROTOCOL.md`](DIRECTORY_PROTOCOL.md) — opt-in public
+  stream directory (`/register`, `/heartbeat`, `/streams`, …).
+- [`PATHS.md`](PATHS.md) — on-disk layout (assets / config / data /
+  cache / recordings) and the env-var overrides for each role.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Application                             │
-│                    (Main Orchestrator)                          │
-│                  (uses std::unique_ptr)                         │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ VideoCapture │    │ WindowManager│    │ ShaderEngine │
-│ (V4L2/DS)    │    │   (GLFW)     │    │  (OpenGL)    │
-└──────────────┘    └──────────────┘    └──────────────┘
-        │                     │                       │
-        │                     ▼                       │
-        │            ┌──────────────┐                 │
-        │            │ OpenGLRenderer│                │
-        │            │   (OpenGL)    │                │
-        │            └──────────────┘                 │
-        │                     ▲                       │
-        │                     │                       │
-        ▼                     │                       │
-┌──────────────┐              │                       │
-│FrameProcessor│──────────────┘                       │
-│  (YUYV→RGB)  │                                      │
-│  (Textures)  │                                      │
-└──────────────┘                                      │
-        │                                             │
-        └─────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ AudioCapture │    │StreamManager │    │  UIManager   │
-│(Pulse/WASAPI)│    │  (Orchestr.) │    │   (ImGui)    │
-└──────────────┘    └──────────────┘    └──────────────┘
-        │                     │
-        │                     ▼
-        │            ┌──────────────┐
-        │            │HTTPTSStreamer│
-        │            │  (FFmpeg)    │
-        │            └──────────────┘
-        │                     │
-        └─────────────────────┘
-                    │
-                    ▼
-            HTTP MPEG-TS Stream
-            (H.264/H.265/VP8/VP9 + AAC)
+---
 
-        ┌─────────────────────┐
-        │  RecordingManager   │
-        │   (Orchestrator)    │
-        └─────────────────────┘
-                    │
-        ┌───────────┼───────────┐
-        │           │           │
-        ▼           ▼           ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│FileRecorder  │ │MediaEncoder  │ │MediaSync     │
-│  (File I/O)  │ │  (FFmpeg)    │ │ (A/V Sync)   │
-└──────────────┘ └──────────────┘ └──────────────┘
-        │
-        ▼
-    Local Files
-    (MP4/MKV/AVI)
+## Big picture
 
-Utility Classes:
-├── ShaderPreprocessor (shader preprocessing)
-├── V4L2ControlMapper (control name→ID mapping)
-├── ShaderScanner (shader discovery)
-└── V4L2DeviceScanner (device discovery)
-```
+RetroCapture is a single native binary that captures video and audio
+from a local device, optionally pushes the video through a GLSL shader
+chain, and then routes the result to four downstream consumers:
 
-## Main Components
+1. The **on-screen window** (interactive use).
+2. A **local recording** to disk (`MP4` / `MKV` / `AVI`).
+3. An **HTTP MPEG-TS stream** served on a local port (`/stream`) for
+   browser / VLC / ffplay viewers.
+4. A **raw, pre-shader feed** on the same port (`/raw`) plus a `/meta`
+   side channel, consumed by another RetroCapture running in **Remote
+   source** mode (shader-preserving distributed playback, see #47).
 
-### 1. Application (`src/core/Application.h/cpp`)
-
-**Responsibility**: Orchestration of all components and application lifecycle management.
-
-**Main Features**:
-
-- Initialization and shutdown of all components
-- Main rendering loop
-- Coordination between capture, shaders, and rendering
-- Event handling (keyboard input, window events)
-
-**Dependencies**:
-
-- `VideoCapture`: Frame capture
-- `WindowManager`: Window management
-- `OpenGLRenderer`: OpenGL rendering
-- `FrameProcessor`: Frame processing and texture management
-- `ShaderEngine`: Shader processing
-- `AudioCapture`: Audio capture from PulseAudio (Linux) or WASAPI (Windows)
-- `StreamManager`: Streaming orchestration
-- `RecordingManager`: Video recording orchestration
-- `UIManager`: Graphical interface
-
-**Memory Management**:
-
-- Uses `std::unique_ptr` for automatic memory management
-- All components are owned by `Application` and automatically cleaned up
-
-**Data Flow**:
+The same binary also hosts the **web portal** (configuration UI, live
+stream, recordings browser, PWA) and an opt-in **public stream
+directory client** that lets other RetroCapture instances discover the
+stream over the internet through Cloudflare tunnels.
 
 ```
-VideoCapture (V4L2/DS) → FrameProcessor (YUYV→RGB, Texture) → ShaderEngine → OpenGLRenderer → Window
-                                                                              ↓
-                                                                    StreamManager → HTTPTSStreamer → HTTP Stream
-                                                                              ↓
-                                                                    RecordingManager → FileRecorder → Local Files
-AudioCapture (Pulse/WASAPI) → StreamManager → HTTPTSStreamer → HTTP Stream
-                                                              ↓
-                                                          RecordingManager → FileRecorder → Local Files
+                          ┌────────────────────────┐
+                          │       Application      │
+                          │   (src/core/, main)    │
+                          └───────────┬────────────┘
+                                      │ owns + ticks
+        ┌───────────────┬─────────────┼─────────────┬────────────┐
+        ▼               ▼             ▼             ▼            ▼
+┌───────────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌──────────┐
+│  Capture      │ │ Audio     │ │ Window +  │ │  UI       │ │  OSD     │
+│ (V4L2/DS/     │ │ (Pulse/   │ │ Renderer  │ │ (ImGui)   │ │ overlays │
+│  Remote)      │ │  WASAPI)  │ │ (OpenGL)  │ │           │ │          │
+└─────┬─────────┘ └────┬──────┘ └─────┬─────┘ └─────┬─────┘ └────┬─────┘
+      │                │              │             │            │
+      ▼                │              │             │            │
+┌───────────────┐      │              │             │            │
+│ FrameProcessor│      │              │             │            │
+│ (YUYV→RGB,    │      │              │             │            │
+│  upload tex)  │      │              │             │            │
+└─────┬─────────┘      │              │             │            │
+      │                │              │             │            │
+      ▼                │              │             │            │
+┌───────────────┐      │              │             │            │
+│ ShaderEngine  │      │              │             │            │
+│ (.slangp /    │      │              │             │            │
+│  .glslp)      │      │              │             │            │
+└─────┬─────────┘      │              │             │            │
+      │                │              │             │            │
+      ├────────────────┼──────────────┘             │            │
+      │                │                            │            │
+      ▼                ▼                            │            │
+┌──────────────────────────────┐       ┌────────────┴────────────┴───────┐
+│ RecordingManager             │       │  WebPortal + APIController       │
+│ ├─ MediaSynchronizer (A/V)   │       │  (live stream <iframe>, configs, │
+│ ├─ MediaEncoder (FFmpeg)     │       │   recordings, profiles, PWA)     │
+│ └─ FileRecorder              │       └──────────────────────────────────┘
+└──────────────────────────────┘                       ▲
+                                                       │  HTTP
+┌─────────────────────────────────────────────┐       │
+│ StreamManager → HTTPTSStreamer + IStreamer  │───────┤
+│ ├─ MediaSynchronizer (per-endpoint)         │       │
+│ ├─ MediaEncoder (post-shader → /stream)     │       │
+│ └─ RawMediaEncoder (pre-shader → /raw)      │───────┘
+└─────────────────────────────────────────────┘
+              │                       │
+              ▼                       ▼
+        HTTP MPEG-TS            /raw + /meta
+        (browsers, VLC,       (RetroCapture in
+         ffplay)               Remote source mode)
+                                       │
+                                       ▼
+                             ┌─────────────────────────┐
+                             │ VideoCaptureRemote +    │
+                             │ RemoteMetaSync          │
+                             │ (decodes upstream feed, │
+                             │  mirrors host's shader/ │
+                             │  preset/params)         │
+                             └─────────────────────────┘
+
+                 ┌───────────────────────────────────────────┐
+                 │ DirectoryClient / DirectoryBrowser (#49)  │
+                 │ CloudflaredManager  (Quick / Named, #53)  │
+                 │ → directory.retrocapture.com (HTTPS)      │
+                 └───────────────────────────────────────────┘
 ```
 
-### 2. VideoCapture (`src/capture/IVideoCapture.h` and implementations)
-
-**Responsibility**: Cross-platform video capture abstraction.
-
-**Architecture**:
-
-- **Interface**: `IVideoCapture` provides abstract interface for video capture
-- **Linux Implementation**: `VideoCaptureV4L2` uses V4L2 (Video4Linux2)
-- **Windows Implementation**: `VideoCaptureDS` uses DirectShow
-- **Factory Pattern**: `VideoCaptureFactory` creates platform-specific instances
-
-**Main Features**:
-
-- Opening/closing capture devices
-- Format configuration (resolution, pixel format, framerate)
-- Hardware controls (brightness, contrast, saturation, etc.)
-- Frame capture
-- Device enumeration
-- Dummy mode for testing without capture device
-
-**Main API**:
-
-```cpp
-bool open(const std::string& device);
-bool setFormat(uint32_t width, uint32_t height, uint32_t pixelFormat);
-bool setFramerate(uint32_t fps);
-bool captureFrame(Frame& frame);
-bool setControl(const std::string& controlName, int32_t value);
-std::vector<DeviceInfo> listDevices();
-void setDummyMode(bool enabled);
-```
-
-**Frame Format**:
-
-```cpp
-struct Frame {
-    uint8_t* data;      // Frame data
-    size_t size;        // Size in bytes
-    uint32_t width;     // Width
-    uint32_t height;    // Height
-    uint32_t format;    // Platform-specific format (V4L2_PIX_FMT_YUYV on Linux)
-};
-```
-
-**Platform-Specific Details**:
-
-- **Linux (V4L2)**: Uses memory mapping (mmap) for efficient frame capture, supports V4L2 controls
-- **Windows (DirectShow)**: Uses DirectShow COM interfaces, supports DirectShow camera controls
-
-### 3. WindowManager (`src/output/WindowManager.h/cpp`)
-
-**Responsibility**: Window and OpenGL context management via GLFW.
-
-**Main Features**:
-
-- Window creation/destruction
-- OpenGL context management
-- Fullscreen and multi-monitor support
-- Event callbacks (resize, etc.)
-- VSync
-- **Linux**: WM_CLASS setting for proper window manager identification
-
-**Main API**:
-
-```cpp
-bool init(const WindowConfig& config);
-void setFullscreen(bool fullscreen, int monitorIndex = -1);
-void setResizeCallback(std::function<void(int, int)> callback);
-void swapBuffers();
-void pollEvents();
-```
-
-**Platform-Specific Features**:
-
-- **Linux**: Sets WM_CLASS property using X11 to ensure proper application identification in taskbar/launcher
-- **Windows**: Uses native window properties for proper taskbar integration
-
-### 4. OpenGLRenderer (`src/renderer/OpenGLRenderer.h/cpp`)
-
-**Responsibility**: Low-level OpenGL rendering.
-
-**Main Features**:
-
-- OpenGL texture creation and updates
-- Quad rendering with texture
-- Aspect ratio support (letterboxing/pillarboxing)
-- Brightness and contrast controls
-- V4L2 to OpenGL format conversion
-
-**Main API**:
-
-```cpp
-GLuint createTextureFromFrame(const uint8_t* data, uint32_t width, uint32_t height, uint32_t format);
-void updateTexture(GLuint texture, const uint8_t* data, uint32_t width, uint32_t height, uint32_t format);
-void renderTexture(GLuint texture, uint32_t windowWidth, uint32_t windowHeight,
-                   bool flipY = true, bool enableBlend = false,
-                   float brightness = 1.0f, float contrast = 1.0f,
-                   bool maintainAspect = false, uint32_t textureWidth = 0, uint32_t textureHeight = 0);
-```
-
-### 5. FrameProcessor (`src/processing/FrameProcessor.h/cpp`)
-
-**Responsibility**: Processing video frames from V4L2 capture and converting them to OpenGL textures.
-
-**Main Features**:
-
-- Frame capture from `VideoCapture`
-- YUYV to RGB conversion
-- OpenGL texture creation and management
-- Texture updates (reuses textures when possible)
-- Handles texture resizing when capture resolution changes
-
-**Main API**:
-
-```cpp
-bool processFrame(VideoCapture* capture);
-GLuint getTexture() const;
-uint32_t getTextureWidth() const;
-uint32_t getTextureHeight() const;
-bool hasValidFrame() const;
-void deleteTexture();
-```
-
-### 6. ShaderEngine (`src/shader/ShaderEngine.h/cpp`)
-
-**Responsibility**: Loading, compilation, and application of RetroArch shaders.
-
-**Main Features**:
-
-- Loading RetroArch presets (`.glslp`)
-- Multiple pass management
-- RetroArch uniform injection (`OutputSize`, `InputSize`, `FrameCount`, etc.)
-- Intermediate framebuffer management
-- Reference texture loading (LUTs, etc.)
-- Support for configurable parameters (`#pragma parameter`)
-
-**Note**: Shader preprocessing (includes, parameter extraction, OutputSize correction) is handled by `ShaderPreprocessor`.
-
-**Main API**:
-
-```cpp
-bool loadPreset(const std::string& presetPath);
-GLuint applyShader(GLuint inputTexture, uint32_t inputWidth, uint32_t inputHeight);
-void setViewport(uint32_t width, uint32_t height);
-std::vector<ShaderParameter> getShaderParameters() const;
-bool setShaderParameter(const std::string& name, float value);
-```
-
-**Pass Structure**:
-
-```cpp
-struct ShaderPassData {
-    GLuint program;              // Compiled shader program
-    GLuint vertexShader;         // Vertex shader
-    GLuint fragmentShader;       // Fragment shader
-    GLuint framebuffer;          // Framebuffer for output
-    GLuint texture;              // Output texture
-    uint32_t width;              // Pass width
-    uint32_t height;             // Pass height
-    bool floatFramebuffer;       // Uses float framebuffer?
-    ShaderPass passInfo;         // Preset information
-    std::map<std::string, float> extractedParameters; // Shader parameters
-};
-```
-
-**Supported RetroArch Uniforms**:
-
-- `SourceSize`, `InputSize`, `OutputSize`: Sizes (vec2)
-- `FrameCount`: Frame counter (int or float)
-- `TextureSize`: Current texture size (vec2)
-- `MVPMatrix`: Model-View-Projection matrix (mat4)
-- `FrameDirection`: Frame direction (int)
-- `Texture`, `Source`, `Input`: Input texture
-- `PassPrev#Texture`: Previous pass textures
-- `PassOutputSize#`, `PassInputSize#`: Pass sizes
-- Custom parameters via `#pragma parameter`
-
-### 7. ShaderPreset (`src/shader/ShaderPreset.h/cpp`)
-
-**Responsibility**: Parsing and management of RetroArch preset files (`.glslp`).
-
-**Main Features**:
-
-- Parsing `.glslp` files
-- Resolving relative shader paths
-- Reference texture loading
-- Preset parameter management
-- Saving modified presets
-
-**Preset Format**:
-
-```
-shader0 = "path/to/shader.glsl"
-scale_type0 = "source"
-scale0 = 1.0
-filter_linear0 = "true"
-wrap_mode0 = "clamp_to_edge"
-...
-```
-
-### 8. ShaderPreprocessor (`src/shader/ShaderPreprocessor.h/cpp`)
-
-**Responsibility**: Preprocessing GLSL shader source code.
-
-**Main Features**:
-
-- Processing `#include` directives (recursive)
-- Extracting `#pragma parameter` directives
-- Correcting `OutputSize` uniform type based on usage
-- Building final shader source with version, extensions, and defines
-- Injecting compatibility code for specific shaders (interlacing, box-center, etc.)
-
-**Main API**:
-
-```cpp
-static PreprocessResult preprocess(
-    const std::string& shaderSource,
-    const std::string& shaderPath,
-    size_t passIndex,
-    uint32_t outputWidth, uint32_t outputHeight,
-    uint32_t inputWidth, uint32_t inputHeight,
-    const std::vector<ShaderPass>& presetPasses);
-static std::string processIncludes(const std::string& source, const std::string& basePath);
-```
-
-**Preprocessing Approach**:
-
-- Uses the same source code for both vertex and fragment shaders
-- Adds `#define VERTEX` or `#define FRAGMENT` before the code
-- Lets the GLSL preprocessor handle conditional blocks (`#if defined(VERTEX)` / `#elif defined(FRAGMENT)`)
-
-### 9. UIManager (`src/ui/UIManager.h/cpp`)
-
-**Responsibility**: Graphical interface using ImGui.
-
-**Main Features**:
-
-- Shader selection interface
-- Brightness and contrast controls
-- V4L2 controls (brightness, contrast, saturation, etc.)
-- Resolution and framerate configuration
-- V4L2 device selection
-- Shader parameter editing
-- Saving modified presets
-
-**Interface Tabs**:
-
-- **Shaders**: Shader list, editable parameters, save preset
-- **Image**: Brightness, contrast, maintain aspect ratio, fullscreen, monitor
-- **V4L2**: Hardware controls, resolution, framerate, device
-- **Stream**: Streaming configuration (codec, resolution, FPS, bitrate, quality presets)
-- **Info**: Capture and application information
-
-**Utility Classes Used**:
-
-- `ShaderScanner`: Scans for shader presets in directories
-- `V4L2DeviceScanner`: Scans for V4L2 capture devices
-- `V4L2ControlMapper`: Maps control names to V4L2 control IDs
-
-**Configuration Persistence**:
-
-- Settings are automatically saved to `config.json` on changes
-- Settings are loaded on application startup
-- Includes streaming configuration, shader parameters, and UI preferences
-
-### 10. AudioCapture (`src/audio/IAudioCapture.h` and implementations)
-
-**Responsibility**: Cross-platform audio capture abstraction.
-
-**Architecture**:
-
-- **Interface**: `IAudioCapture` provides abstract interface for audio capture
-- **Linux Implementation**: `AudioCapturePulse` uses PulseAudio
-- **Windows Implementation**: `AudioCaptureWASAPI` uses WASAPI (Windows Audio Session API)
-- **Factory Pattern**: `AudioCaptureFactory` creates platform-specific instances
-
-**Main Features**:
-
-- System audio capture
-- Device enumeration
-- 16-bit PCM audio capture
-- Configurable sample rate and channel count
-- Thread-safe audio buffer management
-- Callback-based audio delivery
-
-**Main API**:
-
-```cpp
-bool open(const std::string& deviceName = "");
-void close();
-bool startCapture();
-void stopCapture();
-size_t getSamples(int16_t* buffer, size_t maxSamples);
-std::vector<AudioDeviceInfo> listDevices();
-```
-
-**Audio Format**:
-
-- **Sample Format**: 16-bit signed little-endian PCM
-- **Default Sample Rate**: 44100 Hz
-- **Default Channels**: 2 (stereo)
-- **Buffer Size**: Platform-specific (100ms fragments on Linux)
-
-**Platform-Specific Details**:
-
-- **Linux (PulseAudio)**: Creates virtual sink named "RetroCapture" for routing system audio, visible in PulseAudio tools (e.g., `qpwgraph`)
-- **Windows (WASAPI)**: Uses WASAPI loopback capture for system audio, supports device enumeration via MMDevice API
-
-### 11. StreamManager (`src/streaming/StreamManager.h/cpp`)
-
-**Responsibility**: Orchestration and management of multiple streaming implementations.
-
-**Main Features**:
-
-- Manages multiple `IStreamer` instances
-- Distributes frames and audio to all active streamers
-- Coordinates initialization, start, and stop operations
-- Provides unified interface for streaming operations
-
-**Main API**:
-
-```cpp
-void addStreamer(std::unique_ptr<IStreamer> streamer);
-bool initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps);
-bool start();
-void stop();
-void pushFrame(const uint8_t* data, uint32_t width, uint32_t height);
-void pushAudio(const int16_t* samples, size_t sampleCount);
-std::vector<std::string> getStreamUrls() const;
-uint32_t getTotalClientCount() const;
-```
-
-**Architecture**:
-
-- Uses the `IStreamer` interface for abstraction
-- Supports multiple streamers simultaneously (e.g., HTTP MJPEG, HTTP MPEG-TS)
-- Thread-safe frame and audio distribution
-
-### 12. HTTPTSStreamer (`src/streaming/HTTPTSStreamer.h/cpp`)
-
-**Responsibility**: HTTP MPEG-TS streaming with FFmpeg encoding.
-
-**Main Features**:
-
-- Multi-codec support: H.264 (libx264), H.265 (libx265), VP8 (libvpx-vp8), VP9 (libvpx-vp9)
-- AAC audio encoding
-- MPEG-TS container muxing
-- HTTP server for client connections
-- Real-time audio/video synchronization
-- Dynamic resolution and FPS configuration
-- Configurable bitrates and quality presets
-- Keyframe management and periodic I-frames
-- Desynchronization detection and recovery
-- Frame skipping for buffer management
-
-**Main API**:
-
-```cpp
-bool initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps);
-bool start();
-void stop();
-bool pushFrame(const uint8_t* data, uint32_t width, uint32_t height);
-bool pushAudio(const int16_t* samples, size_t sampleCount);
-void setVideoCodec(const std::string& codecName);
-void setH264Preset(const std::string& preset);
-void setH265Preset(const std::string& preset);
-void setH265Profile(const std::string& profile);
-void setH265Level(const std::string& level);
-void setVP8Speed(int speed);
-void setVP9Speed(int speed);
-```
-
-**Threading Architecture**:
-
-- **Main Thread**: Receives frames and audio via `pushFrame()` and `pushAudio()`
-- **Server Thread** (`serverThread`): Accepts HTTP client connections
-- **Encoding Thread** (`encodingThread`): Encodes video/audio and muxes into MPEG-TS
-- **Client Threads** (`handleClient`): Detached threads for each connected client
-
-**Synchronization**:
-
-- **Timestamp-based**: Uses `CLOCK_MONOTONIC` for frame timestamps
-- **Master Clock**: Audio serves as master clock for synchronization
-- **Buffer Management**: Separate buffers for video and audio with timestamp ordering
-- **Sync Zone**: Calculates overlap zone between video and audio buffers for synchronized encoding
-- **Desynchronization Detection**: Monitors PTS/DTS jumps and forces keyframes when needed
-
-**Codec Configuration**:
-
-**H.264 (libx264)**:
-
-- Presets: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, `slow`, `slower`, `veryslow`
-- Tune: `zerolatency` for low latency
-- Keyframe interval: 1 second (configurable via `gop_size`)
-- Threads: 1 (disables lookahead for immediate packet generation)
-
-**H.265 (libx265)**:
-
-- Presets: Same as H.264
-- Profiles: `main`, `main10`
-- Levels: `auto`, `1`, `2`, `2.1`, `3`, `3.1`, `4`, `4.1`, `5`, `5.1`, `5.2`, `6`, `6.1`, `6.2`
-
-**VP8/VP9 (libvpx)**:
-
-- Speed: 0-16 (VP8), 0-9 (VP9) - lower = better quality, higher = faster encoding
-- Deadline: `realtime` for low latency
-- Keyframe interval: 1 second
-- Threads: 1
-
-**Frame Processing Pipeline**:
-
-```
-1. pushFrame() / pushAudio()
-   └─▶ Timestamp frame/audio with CLOCK_MONOTONIC
-       └─▶ Add to timestamped buffer (m_timestampedVideoBuffer / m_timestampedAudioBuffer)
-
-2. encodingThread
-   └─▶ Calculate sync zone (overlap between video and audio buffers)
-       └─▶ For each frame in sync zone:
-           ├─▶ encodeVideoFrame()
-           │   ├─▶ Convert RGB → YUV420p (SwsContext)
-           │   ├─▶ Resize to stream resolution (if needed)
-           │   ├─▶ Send frame to codec (avcodec_send_frame)
-           │   └─▶ Receive packets (avcodec_receive_packet)
-           │
-           └─▶ encodeAudioFrame()
-               ├─▶ Accumulate samples until frame size
-               ├─▶ Convert int16 → float planar (SwrContext)
-               ├─▶ Send frame to codec (avcodec_send_frame)
-               └─▶ Receive packets (avcodec_receive_packet)
-
-3. muxPacket()
-   └─▶ Set PTS/DTS (ensuring monotonicity)
-       └─▶ Mux packet into MPEG-TS (av_interleaved_write_frame)
-           └─▶ writeCallback() → writeToClients()
-               └─▶ Send to all connected clients via HTTP
-```
-
-**Buffer Management**:
-
-- **Video Buffer**: `std::deque<TimestampedFrame>` with max 200 frames (overflow protection)
-- **Audio Buffer**: `std::deque<TimestampedAudio>` with max 200 chunks
-- **Overflow Protection**: Old frames are discarded when buffer exceeds limits
-- **Desynchronization Recovery**: Aggressive frame skipping when desync detected
-
-**Graceful Shutdown**:
-
-- `m_stopRequest` flag signals all threads to exit gracefully
-- Threads check `m_stopRequest` in their main loops
-- `stop()` sets flags, closes sockets, waits for threads, then cleans up FFmpeg resources
-- Idempotent cleanup prevents double-free errors
-
-### 13. RecordingManager (`src/recording/RecordingManager.h/cpp`)
-
-**Responsibility**: Orchestrates video recording to local files.
-
-**Main Features**:
-
-- Recording lifecycle management (start/stop)
-- Coordinates MediaEncoder and FileRecorder
-- Manages recording metadata
-- Handles frame and audio input
-- Dedicated encoding thread for non-blocking recording
-- Recording list management (list, delete, rename)
-- Automatic thumbnail generation
-
-**Main API**:
-
-```cpp
-bool startRecording(const RecordingSettings& settings);
-void stopRecording();
-bool isRecording() const;
-void pushFrame(const uint8_t* data, uint32_t width, uint32_t height);
-void pushAudio(const int16_t* samples, size_t sampleCount);
-std::vector<RecordingMetadata> listRecordings();
-bool deleteRecording(const std::string& recordingId);
-bool renameRecording(const std::string& recordingId, const std::string& newName);
-```
-
-**Threading Architecture**:
-
-- **Main Thread**: Receives frames and audio via `pushFrame()` and `pushAudio()`
-- **Encoding Thread** (`encodingThread`): Encodes video/audio and writes to file
-
-**Synchronization**:
-
-- Uses `MediaSynchronizer` (shared with streaming) for audio/video synchronization
-- Timestamp-based synchronization using `CLOCK_MONOTONIC`
-- Same synchronization system as streaming for consistency
-
-**File Management**:
-
-- Generates filenames from templates (strftime format)
-- Creates output directories automatically
-- Tracks file size and duration
-- Generates thumbnails from first frame
-- Stores metadata in JSON format
-
-### 14. FileRecorder (`src/recording/FileRecorder.h/cpp`)
-
-**Responsibility**: Writes encoded video/audio data to local files.
-
-**Main Features**:
-
-- File I/O for recording files
-- Supports MP4, MKV, and AVI containers
-- Automatic directory creation
-- File size and duration tracking
-- Proper file finalization (moov atom for MP4)
-
-**Main API**:
-
-```cpp
-bool initialize(const MediaEncoder::VideoConfig& videoConfig,
-                const MediaEncoder::AudioConfig& audioConfig,
-                void* videoCodecContext, void* audioCodecContext,
-                const std::string& outputPath);
-bool startRecording();
-void stopRecording();
-bool muxPacket(const MediaEncoder::EncodedPacket& packet);
-void flush();
-```
-
-**Container Support**:
-
-- **MP4**: Full support with proper moov atom placement
-- **MKV**: Matroska container support
-- **AVI**: Legacy AVI format support
-
-### 15. RecordingSettings (`src/recording/RecordingSettings.h`)
-
-**Responsibility**: Configuration structure for recording parameters.
-
-**Main Features**:
-
-- Video settings (resolution, FPS, codec, bitrate, presets)
-- Audio settings (codec, bitrate, include audio flag)
-- Container format selection
-- Output path and filename template
-- Optional limits (max duration, max file size)
-
-**Configuration Structure**:
-
-```cpp
-struct RecordingSettings {
-    uint32_t width, height, fps;
-    uint32_t bitrate;
-    std::string codec; // h264, h265, vp8, vp9
-    std::string preset;
-    std::string container; // mp4, mkv, avi
-    std::string outputPath;
-    std::string filenameTemplate; // strftime format
-    bool includeAudio;
-    // ... codec-specific settings
-};
-```
-
-### 16. RecordingMetadata (`src/recording/RecordingMetadata.h/cpp`)
-
-**Responsibility**: Manages recording metadata and thumbnails.
-
-**Main Features**:
-
-- Recording information storage (name, path, duration, size, timestamp)
-- Thumbnail generation from video files
-- JSON-based metadata persistence
-- Recording list management
-
-### 17. IStreamer (`src/streaming/IStreamer.h`)
-
-**Responsibility**: Abstract interface for streaming implementations.
-
-**Main Features**:
-
-- Defines common streaming operations
-- Allows multiple streaming implementations (HTTP MJPEG, HTTP MPEG-TS, etc.)
-- Provides abstraction for `StreamManager`
-
-**Interface**:
-
-```cpp
-virtual bool initialize(uint16_t port, uint32_t width, uint32_t height, uint32_t fps) = 0;
-virtual bool start() = 0;
-virtual void stop() = 0;
-virtual bool pushFrame(const uint8_t* data, uint32_t width, uint32_t height) = 0;
-virtual bool pushAudio(const int16_t* samples, size_t sampleCount) = 0;
-virtual std::string getStreamUrl() const = 0;
-virtual uint32_t getClientCount() const = 0;
-```
-
-## Data Flow
-
-### Rendering Pipeline
-
-```
-1. VideoCapture::captureLatestFrame()
-   └─▶ Frame (YUYV) from capture device (V4L2 on Linux, DirectShow on Windows)
-
-2. FrameProcessor::processFrame()
-   └─▶ YUYV → RGB conversion
-       └─▶ OpenGL texture creation/update
-           └─▶ OpenGL Texture (GLuint)
-
-3. ShaderEngine::applyShader()
-   └─▶ For each preset pass:
-       ├─▶ Bind pass framebuffer
-       ├─▶ Setup uniforms (OutputSize, InputSize, etc.)
-       ├─▶ Bind textures (input, reference, previous passes)
-       ├─▶ Render quad with shader
-       └─▶ Output → next pass texture
-
-4. OpenGLRenderer::renderTexture()
-   └─▶ Render final texture to screen
-       └─▶ With aspect ratio, brightness, contrast support
-
-5. UIManager::render()
-   └─▶ Render ImGui interface over image
-```
-
-### Main Loop
-
-```cpp
-while (!window->shouldClose()) {
-    // 1. Process events
-    window->pollEvents();
-    handleKeyInput();
-
-    // 2. Capture and process frame
-    if (m_frameProcessor->processFrame(m_capture.get())) {
-        // 3. Apply shader (if any)
-        GLuint outputTexture = m_frameProcessor->getTexture();
-        if (m_shaderEngine && m_shaderEngine->isShaderActive()) {
-            outputTexture = m_shaderEngine->applyShader(
-                m_frameProcessor->getTexture(),
-                m_frameProcessor->getTextureWidth(),
-                m_frameProcessor->getTextureHeight()
-            );
-        }
-
-        // 4. Render to screen
-        m_renderer->renderTexture(outputTexture, windowWidth, windowHeight, ...);
-
-        // 5. Capture frame for streaming (if streaming is active)
-        if (m_streamManager && m_streamManager->isActive()) {
-            // Read rendered frame from OpenGL framebuffer
-            glReadPixels(0, 0, renderWidth, renderHeight, GL_RGB, GL_UNSIGNED_BYTE, frameBuffer);
-            m_streamManager->pushFrame(frameBuffer, renderWidth, renderHeight);
-        }
-    }
-
-    // 6. Capture audio for streaming (if streaming is active)
-    if (m_audioCapture && m_streamManager && m_streamManager->isActive()) {
-        int16_t audioBuffer[4096];
-        size_t samples = m_audioCapture->getSamples(audioBuffer, 4096);
-        if (samples > 0) {
-            m_streamManager->pushAudio(audioBuffer, samples);
-        }
-    }
-
-    // 7. Render UI
-    m_ui->beginFrame();
-    m_ui->render();
-    m_ui->endFrame();
-
-    // 8. Swap buffers
-    window->swapBuffers();
-}
-```
-
-### Streaming Pipeline
-
-```
-1. Main Thread (Application::run())
-   ├─▶ Capture video frame (VideoCapture - V4L2/DS)
-   ├─▶ Process frame (FrameProcessor: YUYV→RGB)
-   ├─▶ Apply shader (ShaderEngine)
-   ├─▶ Render to screen (OpenGLRenderer)
-   └─▶ Capture rendered frame (glReadPixels)
-       └─▶ StreamManager::pushFrame() → HTTPTSStreamer::pushFrame()
-           └─▶ Add to m_timestampedVideoBuffer with timestamp
-
-2. Audio Thread (PulseAudio callback on Linux, WASAPI thread on Windows)
-   └─▶ AudioCapture callback/thread
-       └─▶ StreamManager::pushAudio() → HTTPTSStreamer::pushAudio()
-           └─▶ Add to m_timestampedAudioBuffer with timestamp
-
-3. Encoding Thread (HTTPTSStreamer::encodingThread)
-   ├─▶ Calculate sync zone (overlap between video and audio buffers)
-   ├─▶ For each synchronized frame:
-   │   ├─▶ encodeVideoFrame()
-   │   │   ├─▶ Convert RGB → YUV420p (SwsContext)
-   │   │   ├─▶ Resize to stream resolution
-   │   │   ├─▶ Encode with FFmpeg codec
-   │   │   └─▶ Receive encoded packets
-   │   │
-   │   └─▶ encodeAudioFrame()
-   │       ├─▶ Accumulate samples
-   │       ├─▶ Convert int16 → float planar (SwrContext)
-   │       ├─▶ Encode with AAC codec
-   │       └─▶ Receive encoded packets
-   │
-   └─▶ muxPacket()
-       ├─▶ Set PTS/DTS (monotonic)
-       ├─▶ Mux into MPEG-TS (av_interleaved_write_frame)
-       └─▶ writeCallback() → writeToClients()
-           └─▶ Send to all HTTP clients
-
-4. Server Thread (HTTPTSStreamer::serverThread)
-   └─▶ Accept HTTP connections
-       └─▶ handleClient() (detached thread per client)
-           ├─▶ Send HTTP headers
-           ├─▶ Send MPEG-TS format header
-           └─▶ Forward stream packets to client
-```
-
-## Directory Structure
-
-```
-src/
-├── main.cpp                 # Entry point, CLI argument parsing
-├── core/
-│   ├── Application.h/cpp    # Main orchestrator
-├── capture/
-│   ├── IVideoCapture.h      # Video capture interface
-│   ├── VideoCaptureFactory.h/cpp # Factory for platform-specific implementations
-│   ├── VideoCaptureV4L2.h/cpp   # Linux V4L2 implementation
-│   ├── VideoCaptureDS.h/cpp     # Windows DirectShow implementation
-│   └── [DS helper classes]      # DirectShow helper classes
-├── audio/
-│   ├── IAudioCapture.h     # Audio capture interface
-│   ├── AudioCaptureFactory.h/cpp # Factory for platform-specific implementations
-│   ├── AudioCapturePulse.h/cpp  # Linux PulseAudio implementation
-│   └── AudioCaptureWASAPI.h/cpp # Windows WASAPI implementation
-├── output/
-│   ├── WindowManager.h/cpp  # Window management (GLFW)
-├── processing/
-│   ├── FrameProcessor.h/cpp # Frame processing (YUYV→RGB, textures)
-├── renderer/
-│   ├── OpenGLRenderer.h/cpp # OpenGL rendering
-│   └── glad_loader.h/cpp   # Dynamic OpenGL function loading
-├── shader/
-│   ├── ShaderEngine.h/cpp   # Shader engine
-│   ├── ShaderPreset.h/cpp  # Preset parser
-│   └── ShaderPreprocessor.h/cpp # Shader preprocessing
-├── streaming/
-│   ├── IStreamer.h          # Streaming interface
-│   ├── StreamManager.h/cpp  # Stream orchestrator
-│   ├── HTTPTSStreamer.h/cpp # HTTP MPEG-TS streamer (FFmpeg)
-│   ├── HTTPServer.h/cpp     # HTTP/HTTPS server implementation
-│   ├── WebPortal.h/cpp      # Web portal implementation
-│   └── APIController.h/cpp  # REST API controller
-├── ui/
-│   ├── UIManager.h/cpp     # Graphical interface (ImGui)
-│   ├── UIConfiguration*.h/cpp # Modular UI components
-│   ├── UIConfigurationRecording.h/cpp # Recording configuration UI
-│   └── UIRecordings.h/cpp  # Recording management UI
-├── utils/
-│   ├── Logger.h/cpp        # Logging system
-│   ├── ShaderScanner.h/cpp # Shader discovery
-│   ├── V4L2DeviceScanner.h/cpp # V4L2 device discovery (Linux only)
-│   └── FilesystemCompat.h  # Cross-platform filesystem utilities
-├── v4l2/
-│   └── V4L2ControlMapper.h/cpp # V4L2 control name→ID mapping (Linux only)
-└── web/
-    ├── index.html          # Web portal HTML
-    ├── style.css           # Web portal styles
-    ├── control.js          # Web portal JavaScript
-    ├── api.js              # API client library
-    ├── manifest.json       # PWA manifest
-    └── service-worker.js   # Service worker for PWA
-```
-
-## Dependencies
-
-### Main Libraries
-
-**Cross-Platform:**
-- **GLFW**: Window and OpenGL context management
-- **OpenGL 3.3+**: Rendering and shaders
-- **libpng**: Reference texture loading (LUTs)
-- **ImGui**: Graphical interface
-- **GLAD**: Dynamic OpenGL function loading
-- **FFmpeg** (libavcodec, libavformat, libavutil, libswscale, libswresample): Video/audio encoding and MPEG-TS muxing
-  - **libx264**: H.264 video encoding
-  - **libx265**: H.265/HEVC video encoding
-  - **libvpx**: VP8/VP9 video encoding
-  - **libfdk-aac** or **libavcodec AAC**: Audio encoding
-- **nlohmann/json**: Configuration persistence
-- **OpenSSL** (optional): HTTPS support
-
-**Linux-Specific:**
-- **libv4l2**: V4L2 API for video capture
-- **PulseAudio**: Audio capture from system
-- **X11**: Window manager integration (WM_CLASS)
-
-**Windows-Specific:**
-- **DirectShow**: Video capture (via COM interfaces)
-- **WASAPI**: Audio capture (Windows Audio Session API)
-- **Winsock2**: Network socket support
-
-### Build System
-
-- **CMake 3.10+**: Build system
-- **pkg-config**: Dependency detection (Linux)
-- **vcpkg** or **MXE**: Dependency management for Windows cross-compilation
-
-## Threading
-
-The application uses a **hybrid threading model**:
-
-### Main Thread
-
-- Video capture (V4L2 on Linux, DirectShow on Windows)
-- Frame processing (YUYV→RGB conversion)
-- Shader application
-- OpenGL rendering
-- UI rendering (ImGui)
-- Frame capture for streaming (`glReadPixels`)
-- Audio capture polling
-
-### Streaming Threads (HTTPTSStreamer)
-
-- **Server Thread** (`serverThread`): Accepts HTTP client connections
-- **Encoding Thread** (`encodingThread`): Encodes video/audio and muxes into MPEG-TS
-  - Runs independently from main thread
-  - Processes frames from timestamped buffers
-  - Handles synchronization between video and audio
-- **Client Threads** (`handleClient`): Detached threads, one per connected HTTP client
-  - Forwards stream packets to individual clients
-  - Automatically cleaned up when client disconnects
-
-### Audio Thread
-
-- **Linux (PulseAudio)**: PulseAudio callback thread for audio data
-- **Windows (WASAPI)**: WASAPI capture thread for audio data
-- Delivers audio samples to `AudioCapture` buffer
-- Thread-safe buffer management with mutexes
-
-### Thread Safety
-
-- **Mutexes**: Used for buffer access (`m_videoBufferMutex`, `m_audioBufferMutex`, `m_muxMutex`, etc.)
-- **Atomic Flags**: `m_running`, `m_active`, `m_stopRequest`, `m_cleanedUp` for thread coordination
-- **Graceful Shutdown**: `m_stopRequest` flag signals all threads to exit cleanly
-- **RAII**: Threads are properly joined in destructors
-
-## Memory Management
-
-- **RAII**: All resources are managed via constructors/destructors
-- **Smart Pointers**: `Application` uses `std::unique_ptr` for all main components
-  - Automatic cleanup on destruction
-  - Exception-safe memory management
-  - Clear ownership semantics
-- **OpenGL Resources**: Manually managed with `glDelete*` on shutdown
-- **V4L2 Buffers** (Linux): Use memory mapping (mmap) for efficiency
-- **DirectShow Buffers** (Windows): Use DirectShow sample grabber for frame capture
-
-## Utility Classes
-
-### ShaderPreprocessor (`src/shader/ShaderPreprocessor.h/cpp`)
-
-- Handles all shader source preprocessing
-- Extracted from `ShaderEngine` to improve separation of concerns
-
-### V4L2ControlMapper (`src/v4l2/V4L2ControlMapper.h/cpp`) - Linux only
-
-- Maps V4L2 control names to control IDs
-- Extracted from `Application` to improve modularity
-- Note: Windows uses DirectShow control interfaces (`IAMCameraControl`, `IAMVideoProcAmp`)
-
-### ShaderScanner (`src/utils/ShaderScanner.h/cpp`)
-
-- Scans directories for shader preset files (`.glslp`)
-- Extracted from `UIManager` to improve separation of concerns
-
-### V4L2DeviceScanner (`src/utils/V4L2DeviceScanner.h/cpp`) - Linux only
-
-- Scans for available V4L2 video capture devices
-- Extracted from `UIManager` to improve separation of concerns
-- Note: Windows uses DirectShow device enumeration integrated into `VideoCaptureDS`
-
-### FrameProcessor (`src/processing/FrameProcessor.h/cpp`)
-
-- Handles frame processing and texture management
-- Extracted from `Application` to improve separation of concerns
-
-## Extensibility
-
-The architecture was designed to be extensible:
-
-1. **New capture formats**: Implement `IVideoCapture` interface
-   - Current implementations: V4L2 (Linux), DirectShow (Windows)
-   - Future: macOS AVFoundation, etc.
-2. **New shader types**: Extend `ShaderEngine` to support other formats
-   - Current: RetroArch GLSL shaders
-   - Future: Slang shaders, custom formats
-3. **New streaming protocols**: Implement `IStreamer` interface
-   - Examples: WebRTC, RTSP, UDP streaming
-   - `StreamManager` automatically distributes frames to all streamers
-4. **New codecs**: Extend `HTTPTSStreamer` to support additional FFmpeg codecs
-   - Codec selection is configurable via UI
-   - Codec-specific parameters can be added to `HTTPTSStreamer` and `UIManager`
-5. **New outputs**: Add output classes (recording, file output, etc.)
-6. **Plugins**: Structure allows adding processing plugins
-7. **New processors**: Add processing classes similar to `FrameProcessor`
-8. **New audio sources**: Implement `IAudioCapture` interface
-   - Current implementations: PulseAudio (Linux), WASAPI (Windows)
-   - Future: ALSA (Linux), Core Audio (macOS), etc.
-
-## Performance Considerations
-
-1. **Memory Mapping**: V4L2 uses mmap to avoid unnecessary copies
-2. **Reusable Framebuffers**: ShaderEngine reuses framebuffers between frames
-3. **Persistent Textures**: Textures are updated, not recreated
-4. **VSync**: Enabled by default to avoid tearing
-5. **Frame Skipping**: Application discards old frames if it can't process in real-time
-6. **Separate Encoding Thread**: Video/audio encoding runs on dedicated thread, not blocking main rendering
-7. **Timestamped Buffers**: Frames and audio are buffered with timestamps for synchronization
-8. **Dynamic SwsContext**: RGB→YUV conversion context is recreated only when dimensions change
-9. **Buffer Overflow Protection**: Limits buffer sizes to prevent memory exhaustion
-10. **Desynchronization Recovery**: Aggressive frame skipping when stream falls behind
-11. **Keyframe Management**: Periodic I-frames ensure decoder recovery and stream stability
-12. **Low-Latency Codec Settings**: Codecs configured with `zerolatency`/`realtime` presets
-
-## Known Limitations
-
-1. **YUYV Format**: CPU conversion may be a bottleneck (can be optimized with shader)
-2. **Shader Compilation**: Shaders are compiled at runtime (can be cached)
-3. **Memory**: Intermediate framebuffers may consume a lot of memory at high resolutions
-4. **Streaming Codecs**: VP8/VP9 implementation has known issues (stream may appear as "Data: bin_data" in some players)
-5. **Audio Synchronization**: Complex timestamp management required for A/V sync; may drift under heavy load
-6. **Frame Capture**: `glReadPixels` is synchronous and may block the main thread at high resolutions
-7. **HTTP Streaming**: No authentication or access control (stream is publicly accessible)
-8. **Single Stream**: Only one active streamer type at a time (though architecture supports multiple)
-9. **Configuration**: Some codec-specific settings are not yet exposed in UI (e.g., VP8/VP9 advanced options)
-10. **Windows DirectShow Controls**: Hardware control mapping is partially implemented
-11. **Cross-Platform Testing**: Some features may behave differently across platforms
+---
+
+## Application lifecycle
+
+`main.cpp` parses CLI flags, then constructs the single `Application`
+object (`src/core/Application.{h,cpp}`). The Application owns every
+long-lived subsystem as a `std::unique_ptr` and drives them from one
+main loop. There is no service container, no DI framework — wiring is
+explicit.
+
+The loop, in order each tick:
+
+1. Poll window events (GLFW).
+2. **Capture**: pull the latest frame from whichever
+   `IVideoCapture` implementation is active (V4L2, DirectShow,
+   Remote).
+3. **Audio capture**: drain the audio ring buffer maintained by the
+   `IAudioCapture` worker.
+4. **Process**: `FrameProcessor` converts YUYV → RGB (if needed) and
+   uploads to the source texture; `ShaderEngine` applies the active
+   `.slangp` / `.glslp` preset to produce the rendered texture.
+5. **Render**: the rendered texture is drawn to the window, the OSD
+   overlays composite on top, and the ImGui frame is built.
+6. **Feed downstream consumers**:
+   - `StreamManager::pushFrame` → `MediaSynchronizer` →
+     `MediaEncoder` (post-shader, served as `/stream`).
+   - `StreamManager::pushRawFrame` → second encoder pair (pre-shader,
+     served as `/raw`). Gated on `hasRawClients()` so the second
+     encoder idles when no Remote viewer is connected.
+   - `RecordingManager::pushFrame` (when recording).
+7. **Tick out-of-loop subsystems** that don't ride the per-frame
+   timeline: `DirectoryClient` (publish heartbeat),
+   `CloudflaredManager` (tunnel supervision), `RemoteMetaSync`
+   (in Remote source mode, poll the upstream `/meta`).
+
+Subsystems shut down in LIFO order at scope exit — the
+`unique_ptr` destructors handle thread joins and resource release.
+
+---
+
+## Components
+
+Each component below corresponds to a top-level directory under
+`src/`. The bullet under each name lists the primary classes and the
+files they live in.
+
+### `src/core/` — Orchestration
+
+- **`Application`** — owns every subsystem, drives the main loop,
+  centralises config persistence and source-type switching (V4L2 /
+  DirectShow / Remote). All cross-subsystem wiring happens here, not
+  inside the subsystems themselves.
+
+### `src/capture/` — Video capture sources
+
+All concrete captures implement `IVideoCapture`. The `Frame` struct
+exposes a raw pixel buffer + width/height/format/timestamp.
+`VideoCaptureFactory` picks the implementation based on the
+`SourceType` selected in the UI.
+
+- **`VideoCaptureV4L2`** — Linux V4L2 mmap'd buffers, YUYV native.
+- **`VideoCaptureDS`** — Windows DirectShow filter graph (uses the
+  helper grabber in `DSFrameGrabber`/`DSPin`), RGB24 native.
+- **`VideoCaptureRemote`** — consumes an upstream RetroCapture's
+  `/raw` MPEG-TS stream over HTTP/HTTPS. Decodes via FFmpeg's avio
+  (TLS transparently handled), runs its own decode thread, exposes a
+  bounded queue with PTS-anchored playback timing and pluggable
+  interpolation modes.
+
+### `src/audio/` — Audio capture + playback
+
+- **`IAudioCapture`** + `AudioCapturePulse` / `AudioCaptureWASAPI` —
+  per-platform system-audio capture; on Linux this creates a
+  PulseAudio null-sink + monitor source so applications route through
+  us transparently.
+- **`IAudioPlayback`** + `AudioPlaybackPulse` / `AudioPlaybackWASAPI` —
+  used only in Remote source mode to play back the decoded audio from
+  the upstream stream. `getClockUs()` is the A/V master clock the
+  video consumer paces against.
+
+### `src/processing/` — Frame-data preparation
+
+- **`FrameProcessor`** — owns the source texture, runs YUYV→RGB via
+  `sws_scale` when needed, handles the texture upload to OpenGL, and
+  exposes the texture handle for the renderer / shader engine.
+
+### `src/shader/` — Shader pipeline
+
+- **`ShaderEngine`** — loads `.slangp` and `.glslp` presets, manages
+  the multi-pass FBO graph (including the `PassFeedback`,
+  `OriginalHistory`, `PassOutput` and history-alias chains documented
+  in `shaders/`'s README), and exposes `applyShader(inputTex, w, h) →
+  outputTex`. The preset describes one or more passes; the engine
+  compiles, links and dispatches them.
+- **`ShaderPreprocessor`** — slang→GLSL transpilation glue.
+- **`ShaderPreset`** — parsed representation of a `.glslp` /
+  `.slangp` file.
+
+### `src/renderer/` — OpenGL plumbing
+
+- **`OpenGLRenderer`** — the simple textured-quad renderer used to
+  draw the final texture to the window and to do format-conversion
+  passes (RGBA→RGB). Carries a `flipY` uniform; callers decide
+  whether the source needs a Y-flip on the way to the framebuffer.
+- **`PBOManager`** — pixel-pack-buffer manager used during
+  `glReadPixels` for streaming / recording capture to avoid stalls.
+- **`OpenGLStateTracker`** — minimal GL state cache.
+- **`glad_loader`** — function loading.
+
+### `src/output/` — Windowing
+
+- **`WindowManager`** (GLFW) / **`WindowManagerSDL`** — the
+  GLFW-based path is the default; the SDL path was a planned
+  alternative and is currently unused.
+
+### `src/recording/` — Local recording
+
+- **`RecordingManager`** — orchestrates one recording session.
+- **`MediaSynchronizer`** — the overlap-gated A/V sync state machine
+  (50 ms tolerance, configurable). Shared with the streaming path so
+  both wire formats use identical sync semantics.
+- **`MediaEncoder`** / **`MediaMuxer`** — FFmpeg encoder + muxer
+  wrapper used by both the recording and streaming paths.
+- **`FileRecorder`** — file-write target for the recording path.
+- **`RecordingProfileManager`** — named profiles (save / load /
+  delete).
+- **`RecordingMetadata`** — sidecar JSON written alongside each
+  recording (resolution, codec, shader, thumbnail path, …).
+
+### `src/streaming/` — Streaming + remote services
+
+Wide directory; grouped below by responsibility.
+
+**HTTP server + on-the-wire streaming**
+
+- **`HTTPServer`** — small thread-pool HTTP/1.1 server used for the
+  whole webby surface (portal, API, `/stream`, `/raw`, `/meta`,
+  thumbnails).
+- **`HTTPTSStreamer`** — implements `IStreamer`. Owns two encoder
+  pipelines (post-shader for `/stream`, pre-shader for `/raw`) plus
+  the synchronizers, manages the client lists, and inlines
+  HEVC VPS/SPS/PPS / AAC ADTS on mid-join so newly-connected viewers
+  can decode immediately.
+- **`StreamManager`** — thin coordinator: picks the streamer
+  implementation, owns its lifetime, fans `pushFrame`/`pushAudio`
+  out.
+- **`StreamingProfileManager`** — named streaming profiles.
+
+**Web portal**
+
+- **`WebPortal`** — serves the static portal files under `src/web/`
+  (HTML / CSS / JS / icons / Workbox PWA shell).
+- **`APIController`** — JSON API: `GET /api/status`, `/api/meta`,
+  `/api/profiles`, …; `POST /api/streaming/{start,stop}`,
+  `/api/shader`, `/api/profiles/save`, …; `WS /api/shader/preview`
+  for live updates.
+- **`HttpAuth`** / `PasswordHash` — stream password gating shared
+  between the portal, `/stream`, and `/raw`.
+
+**Remote source mode (#47)**
+
+- **`RemoteMetaSync`** — when the local source type is **Remote**,
+  this background worker polls (or long-polls via SSE when supported)
+  the upstream `/meta` endpoint and pushes the host's
+  shader/preset/parameter changes into the local UI so the client
+  mirrors the host's look.
+
+**Public directory (#49 + #53 + #60)**
+
+- **`DirectoryClient`** — opt-in publish flow. Registers a stream
+  entry against the public directory service, heartbeats every ~30 s,
+  patches on parameter changes, and deletes on stop.
+- **`DirectoryBrowser`** — opposite direction; lists what's currently
+  published so the user can connect from the UI.
+- **`CloudflaredManager`** — supervises a child `cloudflared`
+  process. Two modes: Quick (`trycloudflare.com` ephemeral URL) and
+  Named (user-owned hostname). Used so a publish behind CGNAT still
+  produces a reachable `/raw` URL without portforwarding.
+- **`CloudflaredDownloader`** — fetches the platform-appropriate
+  `cloudflared` binary on first need (sha256-checked).
+- **`CloudflaredAccount`** — Named-tunnel credential storage.
+
+### `src/osd/` — On-screen overlays
+
+- **`ConnectionStatusOverlay`** — pinned status badge for Remote
+  source mode (decoded/consumed FPS, queue depth, viewer count,
+  host nickname).
+- **`QuickActionsOverlay`** — bottom-right floating buttons (start /
+  stop stream and record, open browse window, disconnect remote)
+  that stay reachable when the main UI is hidden.
+
+### `src/ui/` — ImGui-driven UI
+
+`UIManager` owns the configuration model (the single source of truth
+the rest of the app reads from), wires shortcuts, and renders the
+per-area windows from `UIConfiguration*` and the auxiliary panels
+(`UIInfoPanel`, `UIRemoteConnection`, `UIDirectoryBrowser`,
+`UIRecordings`, `UICredits`, `UIPreferences`, `UIShortcutsHelp`,
+`UICapturePresets`). The web portal mirrors the same config model
+through `APIController`, so changes in either surface stay in sync.
+
+### `src/utils/` — Cross-cutting utilities
+
+- **`Paths`** — XDG / Known-Folders aware path resolution (see
+  [`PATHS.md`](PATHS.md)).
+- **`Logger`** — process-wide rate-limited logger (lock-free,
+  per-thread buffers).
+- **`HttpClient`** + **`HttpClientTls`** — small synchronous
+  HTTP/HTTPS client. OpenSSL-backed TLS with hostname verification
+  and SNI; probes well-known CA bundle paths at startup so AppImage
+  binaries don't hit OpenSSL's STORE/unregistered-scheme error
+  (see #69).
+- **`PresetManager`** / **`ShaderScanner`** — shader discovery and
+  thumbnailed preset gallery.
+- **`ThumbnailGenerator`** — offline render of preset thumbnails
+  used by the gallery and the web portal recordings list.
+- **`TranslationManager`** — i18n (EN / PT-BR; configurable, see
+  #45/#46).
+- **`V4L2DeviceScanner`** + **`v4l2/V4L2ControlMapper`** — V4L2
+  device enumeration and human-readable control names.
+- **`FilesystemCompat`** / **`FFmpegCompat`** — small compatibility
+  shims for older toolchains (notably MXE's MinGW-w64 GCC and
+  pre-5.1 FFmpeg).
+- **`LanCheck`** — does the local listener bind a routable
+  interface? Used by the directory publish flow's "your local port
+  isn't reachable from the internet" warning.
+
+### `src/web/` — Web portal static assets
+
+HTML + JS + CSS + PWA manifest + Workbox-based service worker.
+Loaded from disk at runtime by `WebPortal` (see [`PATHS.md`](PATHS.md)
+for where `src/web/` is installed on shipped builds).
+
+---
+
+## Data and threading model
+
+### Threads
+
+Per session, the following threads are alive (Linux numbers; Windows
+is similar):
+
+| Thread                                              | Origin                                       |
+|-----------------------------------------------------|----------------------------------------------|
+| Main loop (GL, ImGui, capture, push)                | `Application::run`                           |
+| V4L2 capture (mmap dequeue / requeue)               | `VideoCaptureV4L2::startCaptureThread`       |
+| Audio capture                                       | `AudioCapturePulse::startReadThread`         |
+| Two encoder threads (`/stream` + `/raw`)            | inside `HTTPTSStreamer`                      |
+| HTTP server worker pool                             | `HTTPServer`                                 |
+| `DirectoryClient` heartbeat                         | when publish is on                           |
+| `CloudflaredManager` supervisor                     | when tunnel mode is on                       |
+| `RemoteMetaSync`                                    | when source is Remote                        |
+| `VideoCaptureRemote::decodeLoop`                    | when source is Remote                        |
+| Audio playback ring                                 | when source is Remote                        |
+
+Most of these are cleanly joined on shutdown via the `unique_ptr`
+chain. The Remote-source worker threads have an explicit interrupt
+callback (`m_decodeAborted`) so a stuck FFmpeg `avio_read` doesn't
+block process exit beyond ~1.5 s.
+
+### Buffers and ownership
+
+- The video texture pipeline uses one OpenGL texture per role
+  (source, shader output, recording readback, streaming readback) —
+  no per-frame allocation in steady state.
+- The streaming and recording paths share `MediaSynchronizer`'s
+  bounded audio ring and bounded frame queue. Overlap-gated A/V sync
+  drops frames or pads audio when the gates open / close.
+- `VideoCaptureRemote` keeps a small frame queue (default 20) with a
+  drop-oldest policy under back-pressure; downstream texture upload
+  happens on the main thread so the decoder thread never touches GL.
+
+### Persistence
+
+- **User config** (`config.json`) is loaded once at startup and saved
+  on every `UIManager` change. Lives under `XDG_CONFIG_HOME` /
+  `%APPDATA%` (see `PATHS.md`).
+- **Capture presets**, **streaming profiles**, **recording profiles**
+  and **recording sidecar metadata** live under
+  `XDG_DATA_HOME` / `%APPDATA%\data\`.
+- **Logs** go to `XDG_CACHE_HOME` / `%LOCALAPPDATA%\Cache\` so
+  uninstall doesn't leave them behind.
+
+---
+
+## External interfaces
+
+| Endpoint                       | Served by                | Purpose                                    |
+|--------------------------------|--------------------------|--------------------------------------------|
+| `GET /`                        | `WebPortal`              | Portal landing page                        |
+| `GET /static/*`                | `WebPortal`              | Portal JS / CSS / icons                    |
+| `GET /stream` (HTTP MPEG-TS)   | `HTTPTSStreamer`         | Post-shader live stream (portal, VLC, …)   |
+| `GET /raw` (HTTP MPEG-TS)      | `HTTPTSStreamer`         | Pre-shader live stream for Remote clients  |
+| `GET /meta` (JSON or SSE)      | `APIController`          | Host's current shader/preset/params snapshot |
+| `GET /thumbnail/<id>.jpg`      | `WebPortal`              | Recording thumbnail                        |
+| `POST /api/streaming/start`    | `APIController`          | Programmatic stream control                |
+| `WS /api/shader/preview`       | `APIController`          | Live shader-parameter push                 |
+| Directory `POST /register`, … | `DirectoryClient` ↔ remote | Publish + heartbeat + patch + delete       |
+
+`REMOTE_STREAM_PROTOCOL.md` documents the wire format of `/raw` and
+`/meta` in detail; `DIRECTORY_PROTOCOL.md` covers the directory side.
+
+---
+
+## Build matrix
+
+Four targets are produced from the same source tree by the scripts
+under `tools/`:
+
+| Target                | Toolchain              | Output                                |
+|-----------------------|------------------------|---------------------------------------|
+| Linux x86_64          | host GCC               | `build-linux-x86_64/bin/retrocapture` |
+| Linux ARM64 (RPi 4/5) | Debian arm64v8 docker  | `build-linux-arm64v8/bin/retrocapture` |
+| Linux ARMv7 (RPi 2/3/Zero) | Debian arm32v7 docker | `build-linux-arm32v7/bin/retrocapture` |
+| Windows x86_64        | MXE MinGW-w64 docker   | `build-windows-x86_64/bin/retrocapture.exe` |
+
+All four ship with the same `src/web/`, `shaders/` and `assets/`
+trees. The on-disk layout the binaries expect at runtime is
+documented in [`PATHS.md`](PATHS.md).
+
+---
+
+## Where to start reading
+
+- New to the codebase → this file, then `src/core/Application.cpp`'s
+  main loop, then the subsystem of interest.
+- Touching streaming → [`REMOTE_STREAM_PROTOCOL.md`](REMOTE_STREAM_PROTOCOL.md)
+  and `src/streaming/HTTPTSStreamer.{h,cpp}`.
+- Touching directory publish → [`DIRECTORY_PROTOCOL.md`](DIRECTORY_PROTOCOL.md)
+  and `src/streaming/DirectoryClient.{h,cpp}`.
+- Touching shaders → `shaders/README.md` (preset format) and
+  `src/shader/ShaderEngine.{h,cpp}`.
+- Committing → [`CONTRIBUTING.md`](CONTRIBUTING.md).

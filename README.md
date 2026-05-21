@@ -5,7 +5,7 @@
 > Includes HTTP MPEG-TS streaming, local recording, and a full web portal
 > for remote control.
 
-![Version](https://img.shields.io/badge/version-0.6.0--alpha-orange)
+![Version](https://img.shields.io/badge/version-0.7.0--alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Raspberry%20Pi-lightgrey)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
@@ -16,7 +16,7 @@
      Target ~1600x900. Save as docs/screenshots/hero.png -->
 ![Hero](docs/screenshots/hero.png)
 
-**[⬇ Download 0.6.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+**[⬇ Download 0.7.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
 [Documentation](#documentation) ·
 [Issues](https://github.com/geldoronie/RetroCapture/issues) ·
 [Changelog](CHANGELOG.md)
@@ -32,16 +32,58 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
   presets, including `PassFeedback` and the `OriginalHistory` alias chain.
 - 📡 **HTTP MPEG-TS streaming** with H.264 / H.265 (VP8 / VP9 experimental)
   and PulseAudio / WASAPI system-audio capture.
+- 🔁 **Shader-preserving distributed playback** — connect another RetroCapture
+  in *Remote source* mode and it receives the host's pre-shader feed plus
+  the host's current preset/parameters, so the picture renders with the
+  exact same look on the remote machine. ([REMOTE_STREAM_PROTOCOL](docs/REMOTE_STREAM_PROTOCOL.md))
+- 🌎 **Public stream directory** (opt-in) — publish your stream to
+  `directory.retrocapture.com` with one click and let other RetroCaptures
+  discover and connect from the in-app browser. ([DIRECTORY_PROTOCOL](docs/DIRECTORY_PROTOCOL.md))
+- ☁️ **Cloudflare tunnels** — Quick (ephemeral `trycloudflare.com` URL) or
+  Named (your own hostname) modes so the publish works behind CGNAT and
+  on networks where you can't open ports.
+- 🔒 **HTTPS everywhere** — directory and `/raw` traffic go through TLS by
+  default; the bundled HTTP client probes well-known CA stores so
+  AppImage builds work out of the box.
 - ⏺️ **Local recording** to MP4 / MKV / AVI with AAC / MP3 / Opus audio,
   configurable resolution, FPS and bitrates.
 - 💾 **Named profiles** for both streaming and recording — save / load / delete
   full configs by name from either the native UI or the web portal.
 - 🌐 **Web portal**: live stream player on Home, recordings browser with
   thumbnails, full configuration UI, installable as a PWA.
+- ⚡ **Quick Actions OSD** — stream / record / browse / disconnect buttons
+  pinned on-screen and reachable even when the main UI is hidden.
+- 🌍 **Bilingual UI** — English and Portuguese, switchable from Preferences.
 - 🎛️ **Hardware controls** exposed directly (V4L2 / DirectShow brightness,
   contrast, saturation, hue, gain, exposure, gamma, white balance, …).
 - 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
   (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
+
+### What's new in 0.7.0-alpha
+
+![0.7.0-alpha — native UI with the new side panels, Shortcuts helper top-right, and Quick Actions OSD bottom-right](docs/screenshots/new-version-full.png)
+
+- **Remote source mode (#47)** — connect a second RetroCapture to the
+  first one as a video source and watch the same shader output remotely,
+  with live parameter sync.
+- **Public stream directory (#49)** with **Cloudflare Quick + Named
+  tunnels (#53 / #60)** so you can publish without port-forwarding.
+- **HTTPS / TLS in HttpClient (#69)** — directory and `/raw` connections
+  default to `https://`.
+- **Recording pipeline parity + unified UI idiom (#59)** — recording
+  and streaming now share `MediaSynchronizer` semantics and a single
+  configuration UI layout.
+- **Quick Actions OSD + Shortcuts helper (#68)** — pinned overlay
+  controls and an at-a-glance shortcut reference.
+
+  ![Quick Actions OSD](docs/screenshots/quickactions.png)
+- **Preferences pane + i18n (#45 / #46)** — language selection, default
+  fullscreen, persisted Preferences window.
+- **Directory + Remote drift / probe / orientation / disconnect fixes
+  (#67)** — A/V clock corruption on mid-join, AAC probe races, ghost
+  audio after disconnect and remote-source orientation all handled.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
 ---
 
@@ -106,22 +148,21 @@ shader:
 
 ## Download
 
-Pre-built binaries for **0.6.0-alpha** are attached to the
+Pre-built binaries for **0.7.0-alpha** are attached to the
 [latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
 
 | Platform | Artifact |
 | --- | --- |
-| Linux x86_64 | `RetroCapture-0.6.0-alpha-linux-x86_64.AppImage` |
-| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz` |
-| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.6.0-alpha-linux-arm32v7.tar.gz` |
-| Windows x86_64 | `RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe` |
+| Linux x86_64 | `RetroCapture-0.7.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.7.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
 > The Linux x86_64 build targets a portable instruction-set baseline
 > (no AVX/AVX2) so it runs on a wide range of CPUs including older
-> Sandy/Ivy Bridge, low-power and virtualized systems. See
-> [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) for details.
+> Sandy/Ivy Bridge, low-power and virtualized systems.
 
 To build from source instead, see [Building](#building) below.
 
@@ -141,8 +182,13 @@ edges are still being polished.
 | VP8 / VP9 streaming | ⚠️ Functional but may show as "Data: bin_data" in some players |
 | Local recording (MP4 / MKV / AVI) | ✅ Stable as of 0.6.0 (PTS fix landed) |
 | Web portal | ✅ Stable (full overhaul in 0.6.0) |
-| Profiles (streaming + recording) | ✅ New in 0.6.0 |
+| Profiles (streaming + recording) | ✅ Stable since 0.6.0 |
 | Raspberry Pi (ARM64 / ARM32) | ✅ Headless via SDL2 + DirectFB |
+| **Remote source mode (`/raw` + `/meta`)** | ✅ New in 0.7.0-alpha |
+| **Public stream directory + Cloudflare tunnels** | ✅ New in 0.7.0-alpha |
+| **HTTPS / TLS for directory and `/raw`** | ✅ New in 0.7.0-alpha |
+| **Bilingual UI (EN / PT-BR)** | ✅ New in 0.7.0-alpha |
+| **Quick Actions OSD + Shortcuts helper** | ✅ New in 0.7.0-alpha |
 
 **Shader compatibility note:** most CRT, NTSC, upscale (xBR, Super-xBR) and
 handheld presets work cleanly. A handful of complex multi-pass presets are
@@ -158,21 +204,21 @@ For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 # Download from Releases, then:
-chmod +x RetroCapture-0.6.0-alpha-linux-x86_64.AppImage
-./RetroCapture-0.6.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+chmod +x RetroCapture-0.7.0-alpha-linux-x86_64.AppImage
+./RetroCapture-0.7.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
 ```
 
 ### Windows
 
-Run the installer (`RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe`),
+Run the installer (`RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe`),
 then launch RetroCapture from the Start menu. DirectShow is the default
 capture source on Windows.
 
 ### Raspberry Pi
 
 ```bash
-tar -xzf RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz
-cd RetroCapture-0.6.0-alpha-linux-arm64v8
+tar -xzf RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.7.0-alpha-linux-arm64v8
 ./retrocapture --source v4l2 --v4l2-device /dev/video0
 ```
 
@@ -252,7 +298,6 @@ See [`ssl/README.md`](ssl/README.md) for certificate generation.
 
 > Production builds use the Docker scripts, which default to a portable
 > instruction-set baseline. Native CMake builds default to `-march=native`.
-> See [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md).
 
 ### One-shot — build every release artifact
 
@@ -309,13 +354,19 @@ nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
 
 - [`CHANGELOG.md`](CHANGELOG.md) — full version history.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture,
-  components, data flow.
-- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns, SOLID
-  notes, contributor guidance.
-- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions and
-  development process.
-- [`docs/CPU_COMPATIBILITY.md`](docs/CPU_COMPATIBILITY.md) — instruction-set
-  baselines per architecture, diagnostic workflow.
+  components, data flow, threading model.
+- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns
+  used in the codebase, SOLID/DRY notes, contributor guide and the
+  "how to add a new subsystem" worked example.
+- [`docs/PATHS.md`](docs/PATHS.md) — on-disk layout (assets / config /
+  data / cache / recordings) and the env-var overrides for each role.
+- [`docs/REMOTE_STREAM_PROTOCOL.md`](docs/REMOTE_STREAM_PROTOCOL.md) —
+  wire format of `/stream`, `/raw`, `/meta` and the Remote source
+  client.
+- [`docs/DIRECTORY_PROTOCOL.md`](docs/DIRECTORY_PROTOCOL.md) — opt-in
+  public stream directory protocol.
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions
+  and development process.
 
 ---
 

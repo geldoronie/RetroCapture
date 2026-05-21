@@ -1,7 +1,12 @@
 #include "UICredits.h"
 #include "UIManager.h"
+#include "UISectionHeader.h"
 #include "../utils/Logger.h"
 #include <imgui.h>
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
 
 #ifdef PLATFORM_LINUX
 #include <cstdlib>
@@ -33,12 +38,9 @@ void UICredits::render()
     ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Credits", &m_visible))
     {
-        ImGui::TextWrapped("RetroCapture v0.5.0");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+        ImGui::TextWrapped("RetroCapture %s", RETROCAPTURE_VERSION);
 
-        // Autor
+        ui_section_header("Project");
         ImGui::Text("Author:");
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Geldo Ronie");
@@ -70,22 +72,14 @@ void UICredits::render()
             #pragma GCC diagnostic pop
 #endif
         }
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // Agradecimentos
-        ImGui::Text("Special Thanks:");
-        ImGui::Spacing();
+        ui_section_header("Special thanks");
         ImGui::BulletText("RetroArch");
         ImGui::Indent();
         ImGui::TextWrapped("For the amazing shader system and GLSL shader presets that make this project possible.");
         ImGui::Unindent();
         ImGui::Spacing();
 
-        // Bibliotecas
-        ImGui::Text("Libraries Used:");
-        ImGui::Spacing();
+        ui_section_header("Libraries");
 
         ImGui::BulletText("ImGui");
         ImGui::Indent();
@@ -155,11 +149,7 @@ void UICredits::render()
         ImGui::Unindent();
         ImGui::Spacing();
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // Licença
+        ui_section_header("License");
         ImGui::Text("License:");
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "MIT License");

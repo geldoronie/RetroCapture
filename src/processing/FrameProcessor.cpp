@@ -38,7 +38,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
 {
     if (!capture)
     {
-        LOG_WARN("FrameProcessor: capture é nullptr");
+        LOG_WARN("FrameProcessor: capture is null");
         return false;
     }
 
@@ -62,7 +62,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // Validar dados do frame
     if (!frame.data || frame.size == 0 || frame.width == 0 || frame.height == 0)
     {
-        LOG_WARN("Frame inválido recebido (data: " + std::string(frame.data ? "ok" : "null") +
+        LOG_WARN("Invalid frame received (data: " + std::string(frame.data ? "ok" : "null") +
                  ", size: " + std::to_string(frame.size) +
                  ", dim: " + std::to_string(frame.width) + "x" + std::to_string(frame.height) + ")");
         return false;
@@ -108,7 +108,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // Verificar se é MJPG (não suportado ainda)
     if (frame.format == V4L2_PIX_FMT_MJPEG)
     {
-        LOG_ERROR("Formato MJPG detectado mas não suportado. O dispositivo deve ser configurado para YUYV.");
+        LOG_ERROR("MJPG format detected but not supported. The device must be configured for YUYV.");
         return false;
     }
 
@@ -213,7 +213,7 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
 {
     if (!yuyv || !rgb)
     {
-        LOG_ERROR("Ponteiros inválidos na conversão YUYV para RGB");
+        LOG_ERROR("Invalid pointers in YUYV-to-RGB conversion");
         return;
     }
 

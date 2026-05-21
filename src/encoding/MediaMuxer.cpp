@@ -64,6 +64,13 @@ MediaMuxer::~MediaMuxer()
     // cleanup();
 }
 
+void MediaMuxer::setMetadata(const std::map<std::string, std::string> &metadata)
+{
+    // Stage only — actually applied to formatCtx->metadata just
+    // before avformat_write_header inside initializeStreams.
+    m_userMetadata = metadata;
+}
+
 bool MediaMuxer::initialize(const MediaEncoder::VideoConfig &videoConfig,
                             const MediaEncoder::AudioConfig &audioConfig,
                             void *videoCodecContext,
@@ -438,6 +445,20 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
                  ", extradata_size: " + std::to_string(audioStream->codecpar->extradata_size));
     }
     
+    // Apply container-level user metadata staged via setMetadata().
+    // For MP4 the well-known keys (title, comment, encoder, ...) land
+    // in the 'ilst' / standard atoms; anything else is written as a
+    // freeform 'udta' atom. MKV stores everything as Tags entries.
+    // MPEG-TS doesn't carry per-program metadata, so on streaming
+    // muxers this is a no-op even though we still call it.
+    for (const auto &kv : m_userMetadata)
+    {
+        if (!kv.first.empty())
+        {
+            av_dict_set(&formatCtx->metadata, kv.first.c_str(), kv.second.c_str(), 0);
+        }
+    }
+
     AVDictionary *optsPtr = static_cast<AVDictionary *>(m_formatOptions);
     int headerRet = avformat_write_header(formatCtx, &optsPtr);
     if (headerRet < 0)
@@ -468,12 +489,33 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     }
     if (formatCtx->pb)
     {
-        LOG_INFO("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) + 
-                 ", bytes written: " + std::to_string(formatCtx->pb->pos));
-        
+        LOG_DEBUG("MediaMuxer: After header - pb position: " + std::to_string(formatCtx->pb->pos) +
+                  ", bytes written: " + std::to_string(formatCtx->pb->pos));
+
         // Flush buffer AVIO após escrever header para garantir que dados sejam escritos
         avio_flush(formatCtx->pb);
         LOG_INFO("MediaMuxer: Flushed AVIO buffer after header write");
+    }
+
+    // Mark the captured bytes as the complete server-side header NOW,
+    // instead of waiting for m_headerCaptureSize (64 KB) to fill. For
+    // streaming endpoints that idle until a client connects (like /raw),
+    // no media packets flow before connect — so the capture would never
+    // hit 64 KB and m_headerWritten stayed false, meaning the connecting
+    // client received zero bootstrap bytes and saw the stream mid-flow.
+    // What avformat_write_header itself wrote (PAT/PMT for MPEG-TS, plus
+    // any codec-extradata embedded by the format) is enough for the
+    // client demuxer to identify the streams and pick up parsing at the
+    // next inline keyframe — the rest of the "header" was just early
+    // media data that warmed the wire, not protocol bootstrap.
+    {
+        std::lock_guard<std::mutex> lock(m_headerMutex);
+        if (!m_headerWritten && !m_formatHeader.empty())
+        {
+            m_headerWritten = true;
+            LOG_DEBUG("MediaMuxer: Header marked complete with " +
+                      std::to_string(m_formatHeader.size()) + " captured bytes");
+        }
     }
     LOG_INFO("MediaMuxer: Format header written successfully");
 
@@ -664,11 +706,11 @@ bool MediaMuxer::muxPacket(const MediaEncoder::EncodedPacket &packet)
         }
     }
 
-    if (pkt->pts != AV_NOPTS_VALUE && pkt->dts > pkt->pts)
-    {
-        pkt->dts = pkt->pts;
-    }
-
+    // DTS > PTS is the defining property of a B-frame (decoded after
+    // the future P-frame it depends on, displayed earlier than it).
+    // We used to clamp DTS to PTS here, which broke B-frame ordering
+    // for any preset slower than ultrafast — fix removed alongside
+    // the matching clamp in ensureMonotonicPTS.
     ensureMonotonicPTS(pkt->pts, pkt->dts, packet.isVideo);
 
     {
@@ -749,50 +791,36 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
 
     if (isVideo)
     {
+        // PTS is in DISPLAY order; we do NOT force it monotonic here
+        // (would mangle B-frame display order). DTS still must be
+        // strictly monotonic for the muxer to accept packets in MPEG-TS.
+        // When the monotonic bump pushes DTS past the packet's PTS we
+        // pull PTS up to match: MPEG-TS rejects "pts < dts in stream"
+        // with Invalid argument and we lose the packet entirely, which
+        // is worse than a one-tick PTS shift.
+        if (dts != AV_NOPTS_VALUE_LOCAL)
+        {
+            if (m_lastVideoDTS >= 0 && dts <= m_lastVideoDTS)
+            {
+                dts = m_lastVideoDTS + 1;
+            }
+            m_lastVideoDTS = dts;
+        }
+        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && pts < dts)
+        {
+            pts = dts;
+        }
         if (pts != AV_NOPTS_VALUE_LOCAL)
         {
-            // CRITICAL: Only prevent retrocession (PTS going backwards)
-            // Don't force minimum increment - use PTS as calculated for correct speed
-            // This ensures video speed matches reality based on timestamps
-            if (m_lastVideoPTS >= 0 && pts <= m_lastVideoPTS)
-            {
-                // Log when we prevent retrocession
-                static int retroLogCounter = 0;
-                if (retroLogCounter++ < 5)
-                {
-                    LOG_WARN("MediaMuxer: Preventing PTS retrocession - last: " + std::to_string(m_lastVideoPTS) +
-                             ", calculated: " + std::to_string(pts) + ", adjusted to: " + std::to_string(m_lastVideoPTS + 1));
-                }
-                // PTS would go backwards - just increment by 1 to prevent retrocession
-                // But don't force a large increment that would slow down the video
-                pts = m_lastVideoPTS + 1;
-            }
-            // Otherwise, use PTS as-is for correct speed
-
-            // Log PTS progression occasionally
             static int muxLogCounter = 0;
             muxLogCounter++;
             if (muxLogCounter == 1 || muxLogCounter % 300 == 0)
             {
                 LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) +
                          ", last: " + std::to_string(m_lastVideoPTS) +
-                         ", increment: " + std::to_string(pts - m_lastVideoPTS));
+                         ", delta: " + std::to_string(pts - m_lastVideoPTS));
             }
-
             m_lastVideoPTS = pts;
-        }
-        if (dts != AV_NOPTS_VALUE_LOCAL)
-        {
-            if (m_lastVideoDTS >= 0 && dts < m_lastVideoDTS)
-            {
-                dts = m_lastVideoDTS + 1;
-            }
-            m_lastVideoDTS = dts;
-        }
-        if (pts != AV_NOPTS_VALUE_LOCAL && dts != AV_NOPTS_VALUE_LOCAL && dts > pts)
-        {
-            dts = pts;
-            m_lastVideoDTS = dts;
         }
     }
     else
