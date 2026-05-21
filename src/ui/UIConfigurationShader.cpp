@@ -1,10 +1,8 @@
 #include "UIConfigurationShader.h"
 #include "UIManager.h"
-#include "UISectionHeader.h"
 #include "../shader/ShaderEngine.h"
 #include "../utils/FilesystemCompat.h"
 #include "../utils/Paths.h"
-#include "../utils/TranslationManager.h"
 #include <imgui.h>
 #include <cstring>
 
@@ -23,54 +21,45 @@ UIConfigurationShader::~UIConfigurationShader()
 
 void UIConfigurationShader::render()
 {
-    if (!m_visible || !m_uiManager) return;
-
-    ImGui::SetNextWindowSize(ImVec2(560, 520), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin(T("shader.title").c_str(), &m_visible))
+    if (!m_uiManager)
     {
-        ImGui::End();
         return;
     }
 
+    // Atualizar referência ao shader engine se necessário
     m_shaderEngine = m_uiManager->getShaderEngine();
 
     {
-        ui_section_header("Pipeline",
-                          "Toggle the shader chain on or off without "
-                          "losing the selected preset or its tuning.");
         bool enabled = m_uiManager->getShaderPipelineEnabled();
-        if (ImGui::Checkbox(T("shader.apply_pipeline").c_str(), &enabled))
+        if (ImGui::Checkbox("Apply shader pipeline", &enabled))
         {
             m_uiManager->setShaderPipelineEnabled(enabled);
             m_uiManager->saveConfig();
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("%s", T("shader.apply_pipeline.tip").c_str());
+            ImGui::SetTooltip("Bypass the shader chain without losing the selected preset / parameters.\n"
+                              "Lets you A/B compare the effect on/off in real time.");
         }
+        ImGui::Separator();
     }
 
     renderShaderSelection();
+    ImGui::Separator();
     renderSavePreset();
+    ImGui::Separator();
     renderShaderParameters();
-
-    ImGui::End();
 }
 
 void UIConfigurationShader::renderShaderSelection()
 {
-    ui_section_header("Preset",
-                      "Pick a .glslp shader preset from the scan path. "
-                      "Click Rescan to pick up newly dropped files.");
+    ImGui::Text("Shader Preset:");
 
+    // Combo box for shader selection
     std::string currentShader = m_uiManager->getCurrentShader();
-    const std::string rescanLabel = T("shader.rescan");
-    float buttonWidth = ImGui::CalcTextSize(rescanLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
-    const std::string noneLabel = T("shader.none");
-    if (ImGui::BeginCombo("##shader", currentShader.empty() ? noneLabel.c_str() : currentShader.c_str()))
+    if (ImGui::BeginCombo("##shader", currentShader.empty() ? "None" : currentShader.c_str()))
     {
-        if (ImGui::Selectable(noneLabel.c_str(), currentShader.empty()))
+        if (ImGui::Selectable("None", currentShader.empty()))
         {
             m_uiManager->setCurrentShader("");
             m_uiManager->saveConfig();
@@ -92,17 +81,9 @@ void UIConfigurationShader::renderShaderSelection()
         }
         ImGui::EndCombo();
     }
-    ImGui::SameLine();
-    if (ImGui::Button(rescanLabel.c_str()))
-    {
-        m_uiManager->scanShaders("shaders/shaders_glsl");
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("%s", T("shader.rescan.tip").c_str());
-    }
 
-    ImGui::TextDisabled("%s: %zu", T("shader.shaders_found").c_str(), m_uiManager->getScannedShaders().size());
+    ImGui::Separator();
+    ImGui::Text("Shaders found: %zu", m_uiManager->getScannedShaders().size());
 }
 
 void UIConfigurationShader::renderSavePreset()
@@ -112,18 +93,18 @@ void UIConfigurationShader::renderSavePreset()
         return;
     }
 
-    ui_section_header("Save preset",
-                      "Overwrite the loaded .glslp with current "
-                      "parameters, or write a new one alongside it.");
+    ImGui::Text("Save Preset:");
 
     std::string currentPreset = m_shaderEngine->getPresetPath();
     if (!currentPreset.empty())
     {
+        // Extrair apenas o nome do arquivo
         fs::path presetPath(currentPreset);
         std::string fileName = presetPath.filename();
 
-        if (ImGui::Button(T("shader.save").c_str()))
+        if (ImGui::Button("Save"))
         {
+            // Salvar por cima do arquivo atual
             const auto &onSavePreset = m_uiManager->getOnSavePreset();
             if (onSavePreset)
             {
@@ -131,8 +112,9 @@ void UIConfigurationShader::renderSavePreset()
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button(T("shader.save_as").c_str()))
+        if (ImGui::Button("Save As..."))
         {
+            // Abrir dialog para salvar como novo arquivo
             strncpy(m_savePresetPath, fileName.c_str(), sizeof(m_savePresetPath) - 1);
             m_savePresetPath[sizeof(m_savePresetPath) - 1] = '\0';
             m_showSaveDialog = true;
@@ -140,21 +122,22 @@ void UIConfigurationShader::renderSavePreset()
     }
     else
     {
-        ImGui::TextDisabled("%s", T("shader.no_preset_loaded").c_str());
+        ImGui::TextDisabled("No preset loaded");
     }
 
+    // Dialog para "Save As"
     if (m_showSaveDialog)
     {
-        ImGui::OpenPopup(T("shader.save_as_dialog").c_str());
+        ImGui::OpenPopup("Save Preset As");
         m_showSaveDialog = false;
     }
 
-    if (ImGui::BeginPopupModal(T("shader.save_as_dialog").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal("Save Preset As", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("%s", T("shader.enter_filename").c_str());
+        ImGui::Text("Enter preset filename:");
         ImGui::InputText("##presetname", m_savePresetPath, sizeof(m_savePresetPath));
 
-        if (ImGui::Button(T("shader.save").c_str()))
+        if (ImGui::Button("Save"))
         {
             const auto &onSavePreset = m_uiManager->getOnSavePreset();
             if (onSavePreset && strlen(m_savePresetPath) > 0)
@@ -172,7 +155,7 @@ void UIConfigurationShader::renderSavePreset()
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button(T("shader.cancel").c_str()))
+        if (ImGui::Button("Cancel"))
         {
             ImGui::CloseCurrentPopup();
         }
@@ -190,28 +173,26 @@ void UIConfigurationShader::renderShaderParameters()
 
     if (!m_shaderEngine)
     {
-        ImGui::TextDisabled("%s", T("shader.engine_unavailable").c_str());
+        ImGui::TextDisabled("Shader engine não disponível");
         return;
     }
 
     if (!m_shaderEngine->isShaderActive())
     {
-        ImGui::TextDisabled("%s", T("shader.no_active").c_str());
+        ImGui::TextDisabled("Nenhum shader ativo");
         return;
     }
 
-    ui_section_header("Parameters",
-                      "Knobs the active preset exposes — values persist "
-                      "when you Save the preset.");
+    ImGui::Text("Shader Parameters:");
 
     auto params = m_shaderEngine->getShaderParameters();
 
     if (params.empty())
     {
-        ImGui::TextDisabled("%s", T("shader.no_parameters").c_str());
+        ImGui::TextDisabled("No parameters available");
         if (m_shaderEngine->isShaderActive())
         {
-            ImGui::TextDisabled("%s", T("shader.active_no_params").c_str());
+            ImGui::TextDisabled("(Shader ativo mas sem parâmetros)");
         }
     }
     else
@@ -223,7 +204,7 @@ void UIConfigurationShader::renderShaderParameters()
         {
             lastShaderPath = currentShaderPath;
             // Não temos acesso direto ao Logger aqui, mas podemos mostrar na UI
-            ImGui::Text("Found %zu parameter(s)", params.size());
+            ImGui::Text("Encontrados %zu parâmetro(s)", params.size());
         }
 
         for (auto &param : params)

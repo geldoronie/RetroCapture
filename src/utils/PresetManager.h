@@ -56,7 +56,6 @@ public:
         std::string streamingH265Level;
         int streamingVP8Speed = 0;
         int streamingVP9Speed = 0;
-        int streamingHardwareEncoder = 0; // 0 = Auto (MediaEncoder::HardwareEncoder enum value)
         
         // V4L2 controls (optional)
         std::map<std::string, int32_t> v4l2Controls;

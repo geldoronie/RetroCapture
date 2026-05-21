@@ -1,6 +1,5 @@
 #include "WebPortal.h"
 #include "HTTPServer.h"
-#include "../utils/LanCheck.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 #ifdef PLATFORM_LINUX
@@ -11,8 +10,6 @@
 #include <cstdlib>
 #include <sstream>
 #include <iomanip>
-#include <chrono>
-#include <thread>
 
 WebPortal::WebPortal()
 {
@@ -34,35 +31,13 @@ bool WebPortal::isWebPortalRequest(const std::string &request) const
     size_t requestPreview = request.length() < 200 ? request.length() : 200;
     LOG_INFO("WebPortal::isWebPortalRequest - Request preview: " + request.substr(0, requestPreview));
     
-    // NÃO capturar requisições de stream (deixar para HTTPTSStreamer
-    // processar). The original code searched the entire request blob
-    // for substrings; that false-matched when the host header or
-    // Referer happened to contain "/stream" (e.g. a deployment on
-    // stream.retrocapture.com sends `Referer: https://stream...`
-    // which contains "/stream" via the "//"). Now we parse the
-    // request-line path and match exactly.
+    // NÃO capturar requisições de stream (deixar para HTTPTSStreamer processar)
+    if (request.find("/stream") != std::string::npos ||
+        request.find("/segment_") != std::string::npos ||
+        request.find(".ts") != std::string::npos)
     {
-        size_t methodEnd = request.find(' ');
-        if (methodEnd != std::string::npos)
-        {
-            size_t pathEnd = request.find(' ', methodEnd + 1);
-            if (pathEnd != std::string::npos)
-            {
-                std::string path = request.substr(methodEnd + 1, pathEnd - methodEnd - 1);
-                size_t q = path.find('?');
-                if (q != std::string::npos) path = path.substr(0, q);
-                const bool isStream  = (path == "/stream" || path.rfind("/stream/", 0) == 0);
-                const bool isSegment = (path.rfind("/segment_", 0) == 0 ||
-                                        path.find("/segment_") != std::string::npos);
-                const bool isTsFile  = (path.size() >= 3 &&
-                                        path.substr(path.size() - 3) == ".ts");
-                if (isStream || isSegment || isTsFile)
-                {
-                    LOG_INFO("WebPortal::isWebPortalRequest - Rejected (stream request)");
-                    return false;
-                }
-            }
-        }
+        LOG_INFO("WebPortal::isWebPortalRequest - Rejected (stream request)");
+        return false;
     }
 
     // Verificar se é uma requisição para o portal web
@@ -120,40 +95,11 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     // Log da requisição completa para debug
     size_t requestPreview = request.length() < 500 ? request.length() : 500;
     LOG_INFO("WebPortal::handleRequest - Received request (first 500 chars): " + request.substr(0, requestPreview));
-
+    
     // Log específico para api.js e style.css
     if (request.find("api.js") != std::string::npos || request.find("style.css") != std::string::npos)
     {
         LOG_INFO("WebPortal::handleRequest - DETECTED api.js or style.css request!");
-    }
-
-    // Gate the Configuration page on LAN connectivity. The portal is
-    // serve-from-anywhere by design (so an external viewer can see
-    // the live stream), but mutating the host's settings is admin
-    // territory and should not be exposed beyond the local network.
-    // 403 here makes the link a no-op for someone who managed to
-    // memorise the URL even though we strip it from the nav for
-    // external viewers (see further down).
-    const bool configRequest = request.find("GET /config.html") != std::string::npos ||
-                               request.find("/config.html ") != std::string::npos ||
-                               request.find("/config.html?") != std::string::npos;
-    if (configRequest && !LanCheck::isLocalRequest(clientFd, request))
-    {
-        LOG_WARN("WebPortal::handleRequest - /config.html denied: requester not on LAN");
-        const char *response =
-            "HTTP/1.1 403 Forbidden\r\n"
-            "Content-Type: text/html; charset=utf-8\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "<!doctype html><meta charset=\"utf-8\"><title>403</title>"
-            "<body style=\"font-family:sans-serif;max-width:520px;margin:80px auto\">"
-            "<h1>403 — Configuration is local-only</h1>"
-            "<p>The configuration page is restricted to the host's local "
-            "network. If you're the host, open this URL from a device on "
-            "the same network as RetroCapture.</p>"
-            "</body>";
-        sendAll(clientFd, response, strlen(response));
-        return true;
     }
     
     // Ignorar favicon.ico
@@ -210,7 +156,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
                     response << content;
 
                     std::string responseStr = response.str();
-                    ssize_t sent = sendAll(clientFd, responseStr.c_str(), responseStr.length());
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
                     if (sent >= 0)
                     {
                         LOG_INFO("Portal image served successfully from: " + foundImagePath);
@@ -270,7 +216,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
                     response << content;
 
                     std::string responseStr = response.str();
-                    ssize_t sent = sendAll(clientFd, responseStr.c_str(), responseStr.length());
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
                     if (sent >= 0)
                     {
                         LOG_INFO("Portal background image served successfully from: " + foundBgPath);
@@ -333,7 +279,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
                     response << content;
                     
                     std::string responseStr = response.str();
-                    ssize_t sent = sendAll(clientFd, responseStr.c_str(), responseStr.length());
+                    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
                     if (sent >= 0)
                     {
                         LOG_INFO("Asset served successfully: " + foundAssetPath);
@@ -386,10 +332,6 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         std::string content = readFileContent(recordingsPath);
         if (!content.empty())
         {
-            if (!LanCheck::isLocalRequest(clientFd, request))
-            {
-                stripConfigNavLink(content);
-            }
             std::string contentType = getContentType("recordings.html");
             std::ostringstream response;
             response << "HTTP/1.1 200 OK\r\n";
@@ -401,7 +343,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
             response << "\r\n";
             response << content;
             std::string responseStr = response.str();
-            sendAll(clientFd, responseStr.c_str(), responseStr.length());
+            sendData(clientFd, responseStr.c_str(), responseStr.length());
             LOG_INFO("WebPortal::handleRequest - recordings.html served successfully");
             return true;
         }
@@ -423,7 +365,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
         request.find("/index.html") != std::string::npos)
     {
         LOG_INFO("WebPortal::handleRequest - Serving main web page (index.html)");
-        return serveWebPage(clientFd, request, basePrefix);
+        return serveWebPage(clientFd, basePrefix);
     }
 
     // Se chegou aqui e não foi um arquivo estático nem página principal, enviar 404
@@ -433,8 +375,7 @@ bool WebPortal::handleRequest(int clientFd, const std::string &request) const
     return true; // Retornar true para indicar que a requisição foi processada (mesmo que com 404)
 }
 
-bool WebPortal::serveWebPage(int clientFd, const std::string &request,
-                              const std::string &basePrefix) const
+bool WebPortal::serveWebPage(int clientFd, const std::string &basePrefix) const
 {
     std::string webDir = getWebDirectory();
     std::string indexPath = webDir + "/index.html";
@@ -639,11 +580,6 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &request,
         }
     }
 
-    if (!LanCheck::isLocalRequest(clientFd, request))
-    {
-        stripConfigNavLink(html);
-    }
-
     LOG_INFO("Serving web page (HTML size: " + std::to_string(html.length()) + " bytes)");
 
     std::ostringstream response;
@@ -656,7 +592,7 @@ bool WebPortal::serveWebPage(int clientFd, const std::string &request,
     response << html;
 
     std::string responseStr = response.str();
-    ssize_t sent = sendAll(clientFd, responseStr.c_str(), responseStr.length());
+    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
     if (sent < 0)
     {
         LOG_ERROR("Failed to send web page to client");
@@ -737,10 +673,10 @@ bool WebPortal::serveStaticFile(int clientFd, const std::string &filePath) const
     response << content;
 
     std::string responseStr = response.str();
-    ssize_t sent = sendAll(clientFd, responseStr.c_str(), responseStr.length());
+    ssize_t sent = sendData(clientFd, responseStr.c_str(), responseStr.length());
     if (sent < 0)
     {
-        LOG_ERROR("Failed to send static file to client: " + filePath);
+        LOG_ERROR("Failed to send static file to client");
         return false;
     }
     else
@@ -757,7 +693,7 @@ void WebPortal::send404(int clientFd) const
                            "Connection: close\r\n"
                            "\r\n"
                            "404 Not Found";
-    sendAll(clientFd, response, strlen(response));
+    sendData(clientFd, response, strlen(response));
 }
 
 ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
@@ -773,53 +709,6 @@ ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
     // Windows não tem MSG_NOSIGNAL, usar send() normal
     return send(clientFd, (const char*)data, size, 0);
     #endif
-}
-
-ssize_t WebPortal::sendAll(int clientFd, const void *data, size_t size) const
-{
-    const char *p = static_cast<const char *>(data);
-    size_t remaining = size;
-    // Cap the loop at ~10 s of EAGAIN retries (1000 iterations × 10 ms)
-    // so a wedged client doesn't hold the request thread forever.
-    int eagainRetries = 0;
-    int totalIterations = 0;
-    size_t totalSent = 0;
-    constexpr int kMaxEagainRetries = 1000;
-
-    while (remaining > 0)
-    {
-        ssize_t n = sendData(clientFd, p, remaining);
-        ++totalIterations;
-        if (n < 0)
-        {
-            LOG_WARN("WebPortal::sendAll — hard error after " + std::to_string(totalSent) +
-                     "/" + std::to_string(size) + " bytes (fd=" + std::to_string(clientFd) +
-                     ", iter=" + std::to_string(totalIterations) + ")");
-            return -1;
-        }
-
-        if (n == 0)
-        {
-            // EAGAIN / EWOULDBLOCK — kernel buffer momentarily full.
-            if (++eagainRetries > kMaxEagainRetries)
-            {
-                LOG_WARN("WebPortal::sendAll — gave up after 10 s EAGAIN, " +
-                         std::to_string(totalSent) + "/" + std::to_string(size) +
-                         " bytes (fd=" + std::to_string(clientFd) + ")");
-                return -1;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        eagainRetries = 0;
-        p         += n;
-        remaining -= static_cast<size_t>(n);
-        totalSent += static_cast<size_t>(n);
-    }
-    LOG_INFO("WebPortal::sendAll — sent " + std::to_string(size) +
-             " bytes in " + std::to_string(totalIterations) + " iter(s) (fd=" +
-             std::to_string(clientFd) + ")");
-    return static_cast<ssize_t>(size);
 }
 
 std::string WebPortal::findAssetFile(const std::string &relativePath) const
@@ -1206,26 +1095,6 @@ std::string WebPortal::generateCustomCSS(const std::string &basePrefix) const
     css << "}\n\n";
 
     return css.str();
-}
-
-void WebPortal::stripConfigNavLink(std::string &html) const
-{
-    // Anchors at the exact `<a href="/config.html" ...>` element used
-    // in both index.html and recordings.html. We match a bit
-    // generously (any class string, any inner span content) so a
-    // future tweak to the markup doesn't silently leak the link.
-    const std::string openTag = "<a href=\"/config.html\"";
-    size_t pos = 0;
-    while ((pos = html.find(openTag, pos)) != std::string::npos)
-    {
-        size_t end = html.find("</a>", pos);
-        if (end == std::string::npos) break;
-        end += 4; // include the closing tag
-        html.erase(pos, end - pos);
-        // Don't advance pos — the next iteration scans from the same
-        // spot in case the substring repeats (it doesn't in current
-        // templates, but the loop is cheap and bug-resistant).
-    }
 }
 
 void WebPortal::replaceTextInHTML(std::string &html, const std::string &oldText, const std::string &newText) const

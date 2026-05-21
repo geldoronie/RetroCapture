@@ -1,7 +1,0 @@
-data/
-*.db
-*.db-journal
-*.db-shm
-*.db-wal
-/directory
-/dist/

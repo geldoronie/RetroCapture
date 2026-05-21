@@ -1,6 +1,5 @@
 #include "UIRecordings.h"
 #include "UIManager.h"
-#include "UISectionHeader.h"
 #include "../core/Application.h"
 #include "../utils/Logger.h"
 #include "../utils/FilesystemCompat.h"
@@ -73,15 +72,14 @@ void UIRecordings::render()
         ImVec2 initialPos(workPos.x + 50.0f, workPos.y + menuBarHeight + 50.0f);
         ImVec2 initialSize(900.0f, 600.0f);
         
-        ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(initialSize, ImGuiCond_FirstUseEver);
-
+        ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
+        
         m_justOpened = false;
     }
 
-    // Main window. Position/size persisted via the ImGui ini file
-    // anchored in the user-data dir by UIManager.
-    ImGui::Begin("Recordings", &m_visible);
+    // Main window
+    ImGui::Begin("Recordings", &m_visible, ImGuiWindowFlags_NoSavedSettings);
 
     // Header with Refresh button and search
     if (ImGui::Button("Refresh"))
@@ -238,7 +236,8 @@ void UIRecordings::renderRecordingDetails()
 
     const auto& recording = *it;
 
-    ui_section_header("Details");
+    ImGui::Separator();
+    ImGui::Text("Details:");
     ImGui::BeginChild("details", ImVec2(0, 150.0f), true);
     
     ImGui::Text("ID: %s", recording.id.c_str());

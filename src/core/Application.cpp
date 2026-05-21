@@ -3,9 +3,6 @@
 #include "../utils/Paths.h"
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
-#include "../capture/VideoCaptureRemote.h"
-#include "../streaming/RemoteMetaSync.h"
-#include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
 #include "../v4l2/V4L2ControlMapper.h"
 #endif
@@ -20,21 +17,10 @@
 #endif
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
-#include "../osd/QuickActionsOverlay.h"
-#include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
 #include "../renderer/glad_loader.h"
 #include "../streaming/StreamManager.h"
-#include "../streaming/DirectoryClient.h"
-#include "../streaming/DirectoryBrowser.h"
-#include "../ui/UIDirectoryBrowser.h"
-#include "../streaming/CloudflaredManager.h"
-#include "../utils/PasswordHash.h"
-
-#ifndef RETROCAPTURE_VERSION
-#define RETROCAPTURE_VERSION "0.0.0-dev"
-#endif
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
@@ -175,32 +161,16 @@ bool Application::init()
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
 
-    // Apply the source-type-appropriate vsync mode on startup so a user
-    // who saved Remote as their source gets the display-refresh-aligned
-    // playback path immediately instead of only after the next source
-    // change. setOnSourceTypeChanged handles all subsequent transitions.
-    if (m_window && m_ui)
-    {
-        m_window->setVsync(m_ui->getSourceType() == UIManager::SourceType::Remote);
-    }
-
     LOG_INFO("Application initialized successfully");
     return true;
 }
 
 void Application::updateCursorVisibility()
 {
-    // Keep the OS cursor visible whenever ANY interactive surface is on
-    // screen — the full UI OR an interactive OSD (#68). Hiding it while
-    // the quick-actions widget is showing would let the user click the
-    // buttons but with no visible pointer, which feels broken even when
-    // the underlying clicks register.
+    // Simple method to sync cursor visibility with UI visibility
     if (m_ui && m_window)
     {
-        const bool osdInteractive =
-            m_ui->getQuickActionsOverlay() &&
-            m_ui->getQuickActionsOverlay()->isVisible();
-        m_window->setCursorVisible(m_ui->isVisible() || osdInteractive);
+        m_window->setCursorVisible(m_ui->isVisible());
     }
 }
 
@@ -369,24 +339,7 @@ bool Application::initRenderer()
 bool Application::initCapture()
 {
     LOG_INFO("Creating VideoCapture...");
-
-    // Phase 3 of #47: if the UIManager already has the source type set to
-    // Remote (CLI selected --source remote), build the remote capture
-    // instead of the platform-default V4L2 / DirectShow factory.
-    if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
-    {
-        LOG_INFO("Source is remote — creating VideoCaptureRemote");
-        auto remote = std::make_unique<VideoCaptureRemote>();
-        VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-        if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-        else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
-        remote->setInterpolationMode(imode);
-        m_capture = std::move(remote);
-    }
-    else
-    {
-        m_capture = VideoCaptureFactory::create();
-    }
+    m_capture = VideoCaptureFactory::create();
     if (!m_capture)
     {
         LOG_ERROR("Failed to create VideoCapture for this platform");
@@ -426,23 +379,6 @@ bool Application::initCapture()
     if (!m_capture->open(m_devicePath))
     {
         LOG_WARN("Failed to open capture device: " + (m_devicePath.empty() ? "(none)" : m_devicePath));
-
-        // Phase 5b/#47: Remote source has no "dummy fallback" — a remote
-        // stream is either reachable or not. Falling back to dummy here is
-        // what made a failed `--source remote` look like a silent green
-        // screen. Leave m_capture closed and surface the state via the UI;
-        // the user can re-enter a URL and click Connect, which fires the
-        // OnDeviceChanged handler and retries.
-        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
-        {
-            LOG_INFO("Remote source could not connect. Enter a base URL in the Source tab and click Connect.");
-            if (m_ui)
-            {
-                m_ui->setCaptureInfo(0, 0, 0, "Remote (not connected)");
-            }
-            return true; // Not a fatal initialization error.
-        }
-
         LOG_INFO("Activating dummy mode: generating black frames at specified resolution.");
 #ifdef __linux__
         LOG_INFO("Select a device in the V4L2 tab to use real capture.");
@@ -598,73 +534,6 @@ bool Application::initCapture()
         LOG_INFO("Capture initialized: " +
                  std::to_string(m_capture->getWidth()) + "x" +
                  std::to_string(m_capture->getHeight()));
-
-        // Sync m_captureWidth / m_captureHeight with what the device
-        // actually produces. For V4L2 / DS this is usually a no-op (we
-        // already asked for those dims via setFormat); for Remote the
-        // server picks the dimensions, and without this sync the render
-        // pipeline keeps using the local config defaults — leaving the
-        // image filling only a fraction of the window.
-        const uint32_t actualW = m_capture->getWidth();
-        const uint32_t actualH = m_capture->getHeight();
-        if (actualW > 0 && actualH > 0 && (actualW != m_captureWidth || actualH != m_captureHeight))
-        {
-            LOG_INFO("Adjusting capture dims to actual " +
-                     std::to_string(actualW) + "x" + std::to_string(actualH) +
-                     " (was " + std::to_string(m_captureWidth) + "x" + std::to_string(m_captureHeight) + ")");
-            m_captureWidth  = actualW;
-            m_captureHeight = actualH;
-        }
-    }
-
-    // Phase 4 of #47: when source is Remote, also poll the host's /meta to
-    // mirror the active shader + parameters locally. Snapshot deltas are
-    // staged on m_pendingRemote* and consumed on the GL thread inside the
-    // main loop (see applyPendingRemoteMeta()).
-    if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote && !m_devicePath.empty())
-    {
-        m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
-        m_remoteMetaSync->start(m_devicePath,
-            [this](const RemoteMetaSync::Snapshot &snap)
-            {
-                std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-                m_pendingRemotePreset          = snap.preset;
-                m_pendingRemotePresetHash      = snap.presetHash;
-                m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
-                m_pendingRemoteParams.clear();
-                m_pendingRemoteParams.reserve(snap.parameters.size());
-                for (const auto &p : snap.parameters)
-                {
-                    m_pendingRemoteParams.emplace_back(p.name, p.value);
-                }
-                m_pendingRemoteSourceWidth  = snap.sourceWidth;
-                m_pendingRemoteSourceHeight = snap.sourceHeight;
-                // Image-tab values: seed only once per connection — see
-                // applyPendingRemoteMeta for the gate. Stash the values
-                // from this snapshot; if it's the first one we'll apply
-                // them on the GL thread, otherwise the apply gate skips.
-                if (!m_remoteImageSeeded)
-                {
-                    m_pendingRemoteImageBrightness     = snap.imageBrightness;
-                    m_pendingRemoteImageContrast       = snap.imageContrast;
-                    m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
-                    m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
-                    m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
-                    m_hasPendingRemoteImageSeed        = true;
-                }
-                // Plain assignment — uint32_t is atomic on every platform
-                // we target, and a momentarily stale read in the main
-                // loop is harmless (just one extra render iteration at
-                // most).
-                if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
-                m_hasPendingRemoteMeta.store(true);
-                // Push the host's viewer count straight onto UIManager
-                // (#68) — the OSD quick-actions widget reads it every
-                // frame to render "watching with N others" in client
-                // mode. Bypasses the pending-snapshot apply path
-                // because there's no GL state involved.
-                if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
-            });
     }
 
     return true;
@@ -1159,12 +1028,6 @@ bool Application::initUI()
     m_streamingVideoCodec = m_ui->getStreamingVideoCodec();
     m_streamingAudioCodec = m_ui->getStreamingAudioCodec();
     m_streamingH264Preset = m_ui->getStreamingH264Preset();
-    m_streamingHardwareEncoder = m_ui->getStreamingHardwareEncoder();
-    m_streamingNvencPreset = m_ui->getStreamingNvencPreset();
-    m_streamingVaapiRcMode = m_ui->getStreamingVaapiRcMode();
-    m_streamingQsvPreset   = m_ui->getStreamingQsvPreset();
-    m_streamingAmfQuality  = m_ui->getStreamingAmfQuality();
-    m_remoteInterpolation  = m_ui->getRemoteInterpolation();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1197,19 +1060,6 @@ bool Application::initUI()
         settings.outputPath = m_ui->getRecordingOutputPath();
         settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
         settings.includeAudio = m_ui->getRecordingIncludeAudio();
-        // Hardware encoder + backend-specific preset (#59) — resolved
-        // from the UI's per-backend preset fields based on the user's
-        // selected backend. Auto/Software leave hwPreset empty so
-        // MediaEncoder uses its compiled-in default.
-        settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
-        switch (settings.hardwareEncoder)
-        {
-            case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break; // NVENC
-            case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break; // VAAPI
-            case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break; // QSV
-            case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break; // AMF
-            default: settings.hwPreset.clear(); break;                          // Auto / Software
-        }
         m_recordingManager->setRecordingSettings(settings);
     }
 
@@ -1464,39 +1314,14 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    // Resolution / FPS changes need the same restart-if-streaming policy
-    // as bitrate/preset — initStreaming() bakes width/height/fps into the
-    // MediaEncoder + MediaMuxer at construction time, so just storing the
-    // new value on the field has no effect on a live stream.
-    m_ui->setOnStreamingWidthChanged([this](uint32_t width) {
-        m_streamingWidth = width;
-        if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        }
-    });
+    m_ui->setOnStreamingWidthChanged([this](uint32_t width)
+                                     { m_streamingWidth = width; });
 
-    m_ui->setOnStreamingHeightChanged([this](uint32_t height) {
-        m_streamingHeight = height;
-        if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        }
-    });
+    m_ui->setOnStreamingHeightChanged([this](uint32_t height)
+                                      { m_streamingHeight = height; });
 
-    m_ui->setOnStreamingFpsChanged([this](uint32_t fps) {
-        m_streamingFps = fps;
-        if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        }
-    });
+    m_ui->setOnStreamingFpsChanged([this](uint32_t fps)
+                                   { m_streamingFps = fps; });
 
     m_ui->setOnStreamingBitrateChanged([this](uint32_t bitrate)
                                        {
@@ -1609,57 +1434,6 @@ bool Application::initUI()
             initStreaming();
         } });
 
-    m_ui->setOnStreamingHardwareEncoderChanged([this](int v)
-                                               {
-        m_streamingHardwareEncoder = v;
-        // Encoder backend is set at codec-init time inside MediaEncoder;
-        // a live stream needs a restart for the new selection to take
-        // effect (just like a preset / bitrate change does).
-        if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        } });
-
-    // Per-backend preset/quality strings — same restart-on-change
-    // policy as above, since these all end up in opts that are passed
-    // to avcodec_open2 at MediaEncoder::initializeHardwareVideoCodec.
-    auto restartIfStreaming = [this] {
-        if (m_streamingEnabled && m_streamManager) {
-            m_streamManager->stop();
-            m_streamManager->cleanup();
-            m_streamManager.reset();
-            initStreaming();
-        }
-    };
-    m_ui->setOnStreamingNvencPresetChanged([this, restartIfStreaming](const std::string &v) {
-        m_streamingNvencPreset = v; restartIfStreaming();
-    });
-    m_ui->setOnStreamingVaapiRcModeChanged([this, restartIfStreaming](const std::string &v) {
-        m_streamingVaapiRcMode = v; restartIfStreaming();
-    });
-    m_ui->setOnStreamingQsvPresetChanged([this, restartIfStreaming](const std::string &v) {
-        m_streamingQsvPreset = v; restartIfStreaming();
-    });
-    m_ui->setOnStreamingAmfQualityChanged([this, restartIfStreaming](const std::string &v) {
-        m_streamingAmfQuality = v; restartIfStreaming();
-    });
-
-    // Remote interpolation mode — applied immediately to the active
-    // VideoCaptureRemote (if any). No streaming restart required since
-    // it's a client-side display decision.
-    m_ui->setOnRemoteInterpolationChanged([this](const std::string &v) {
-        m_remoteInterpolation = v;
-        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
-        {
-            VideoCaptureRemote::InterpolationMode mode = VideoCaptureRemote::InterpolationMode::Linear;
-            if (v == "nearest") mode = VideoCaptureRemote::InterpolationMode::Nearest;
-            else if (v == "off") mode = VideoCaptureRemote::InterpolationMode::Off;
-            remote->setInterpolationMode(mode);
-        }
-    });
-
     // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
                                                   {
@@ -1730,31 +1504,16 @@ bool Application::initUI()
                 settings.outputPath = m_ui->getRecordingOutputPath();
                 settings.filenameTemplate = m_ui->getRecordingFilenameTemplate();
                 settings.includeAudio = m_ui->getRecordingIncludeAudio();
-                settings.hardwareEncoder = m_ui->getRecordingHardwareEncoder();
-                switch (settings.hardwareEncoder)
-                {
-                    case 2: settings.hwPreset = m_ui->getRecordingNvencPreset(); break;
-                    case 3: settings.hwPreset = m_ui->getRecordingVaapiRcMode(); break;
-                    case 4: settings.hwPreset = m_ui->getRecordingQsvPreset();   break;
-                    case 5: settings.hwPreset = m_ui->getRecordingAmfQuality();  break;
-                    default: settings.hwPreset.clear(); break;
-                }
-
+                
                 if (!m_recordingManager) {
                     LOG_ERROR("Application: RecordingManager not initialized. Cannot start recording.");
                     m_ui->setRecordingActive(false);
+                } else if (m_recordingManager->startRecording(settings)) {
+                    LOG_INFO("Application: Recording started successfully");
+                    m_ui->setRecordingActive(true);
                 } else {
-                    // Snapshot the shader/source state at click time so
-                    // the recording's embedded metadata reflects exactly
-                    // what was active when the session started (#59).
-                    populateRecordingContext();
-                    if (m_recordingManager->startRecording(settings)) {
-                        LOG_INFO("Application: Recording started successfully");
-                        m_ui->setRecordingActive(true);
-                    } else {
-                        LOG_ERROR("Application: Failed to start recording. Check logs for details.");
-                        m_ui->setRecordingActive(false);
-                    }
+                    LOG_ERROR("Application: Failed to start recording. Check logs for details.");
+                    m_ui->setRecordingActive(false);
                 }
             }
         } else {
@@ -2126,26 +1885,6 @@ bool Application::initUI()
                                  {
                                      LOG_INFO("Source type changed via UI");
 
-                                     // Remote-source playback wants vsync ON so frame
-                                     // changes land on display refresh boundaries — this
-                                     // is what eliminated the 'stuttering at 60 fps but
-                                     // smooth at 120 fps' artefact: without vsync our
-                                     // ~60 Hz pacing drifts relative to the panel's own
-                                     // 60 Hz refresh, dropping the occasional frame across
-                                     // a refresh boundary. With vsync the loop's effective
-                                     // rate IS the panel's rate, and the strict PTS gate
-                                     // hands the queue's current head out at exactly the
-                                     // next refresh.
-                                     //
-                                     // Local capture keeps vsync OFF — capture/encoder
-                                     // threads can't tolerate the main loop stalling when
-                                     // the window is minimized (compositors sometimes
-                                     // park vsync at 0 Hz for backgrounded windows).
-                                     if (m_window)
-                                     {
-                                         m_window->setVsync(sourceType == UIManager::SourceType::Remote);
-                                     }
-
                                      if (sourceType == UIManager::SourceType::None)
                                      {
                                          LOG_INFO("None source selected - activating dummy mode");
@@ -2311,40 +2050,6 @@ bool Application::initUI()
                                          }
                                      }
 #endif
-
-                                     // Phase 5b/#47: switching INTO Remote — close the
-                                     // current capture (V4L2/DS/None) and stand up an
-                                     // empty VideoCaptureRemote that waits for the
-                                     // user to type a URL + click Connect.
-                                     if (sourceType == UIManager::SourceType::Remote)
-                                     {
-                                         LOG_INFO("Remote source selected — close any active capture, await Connect");
-                                         if (m_remoteMetaSync)
-                                         {
-                                             m_remoteMetaSync->stop();
-                                             m_remoteMetaSync.reset();
-                                         }
-                                         if (m_capture)
-                                         {
-                                             m_capture->stopCapture();
-                                             m_capture->close();
-                                         }
-                                         {
-                                             auto remote = std::make_unique<VideoCaptureRemote>();
-                                             VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-                                             if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-                                             else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
-                                             remote->setInterpolationMode(imode);
-                                             m_capture = std::move(remote);
-                                         }
-                                         m_devicePath.clear();
-                                         if (m_ui)
-                                         {
-                                             m_ui->setCaptureInfo(0, 0, 0, "Remote (not connected)");
-                                             m_ui->setCurrentDevice("");
-                                             m_ui->setCaptureControls(nullptr);
-                                         }
-                                     }
                                  });
 
     m_ui->setOnDeviceChanged([this](const std::string &devicePath)
@@ -2355,185 +2060,7 @@ bool Application::initUI()
             return;
         }
         processingDeviceChange = true;
-
-        // Phase 5b/#47: when the active source is Remote, this callback
-        // carries the remote BASE URL — not a V4L2 / DirectShow device
-        // path. Spin up (or replace) the VideoCaptureRemote and
-        // RemoteMetaSync to point at the new host. Empty URL == disconnect.
-        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
-        {
-            LOG_INFO("Remote URL change: " + (devicePath.empty() ? "(disconnect)" : devicePath));
-
-            // Disconnect path optimisation: drop the on-screen frame
-            // BEFORE waiting on the decode thread's join. The texture
-            // upload happens on the main thread, so by the time we get
-            // here we own m_frameProcessor and can wipe it immediately;
-            // otherwise the user sees the last received frame frozen on
-            // screen for the full ~50-100 ms it can take stopCapture to
-            // unwind the interrupted I/O. Combined with the new
-            // 'Disconnecting...' status the window shows, the perceived
-            // freeze on Disconnect goes away.
-            if (devicePath.empty() && m_frameProcessor)
-            {
-                m_frameProcessor->deleteTexture();
-            }
-
-            // Tear down any existing remote pipeline on a background
-            // thread so the main loop doesn't stall while
-            // VideoCaptureRemote joins its decode thread (up to ~1.5 s
-            // with the interrupt callback). We move ownership of both
-            // objects into a detached worker; the main thread
-            // continues immediately to spin up the new capture.
-            //
-            // Switching from one remote URL straight to another used
-            // to freeze the UI for the full join duration; this is
-            // what made "click another stream while connected" feel
-            // unresponsive even though the new connection itself was
-            // already fast.
-            if (m_remoteMetaSync || m_capture)
-            {
-                auto deadCapture = std::move(m_capture);
-                auto deadMeta    = std::move(m_remoteMetaSync);
-                std::thread([cap = std::move(deadCapture),
-                             meta = std::move(deadMeta)]() mutable {
-                    if (meta)
-                    {
-                        meta->stop();
-                        meta.reset();
-                    }
-                    if (cap)
-                    {
-                        cap->stopCapture();
-                        cap->close();
-                        cap.reset();
-                    }
-                }).detach();
-            }
-
-            m_devicePath = devicePath;
-
-            if (devicePath.empty())
-            {
-                // Mark the UI as cleanly disconnected so the connection
-                // window stops showing 'Stream: WxH' from the last
-                // session.
-                if (m_ui)
-                {
-                    m_ui->setCaptureInfo(0, 0, 0, "");
-                }
-                // Re-arm the Image seed for the next connection — each
-                // session gets one seed from /meta, after which the user
-                // owns the values locally.
-                m_remoteImageSeeded = false;
-                processingDeviceChange = false;
-                return;
-            }
-
-            // #49 Phase 3 — pull the bearer token the connection UI
-            // (or password modal) stashed for this connect. Consumed
-            // exactly once: read here, cleared immediately so a
-            // subsequent unprotected connect doesn't accidentally
-            // inherit the previous stream's token.
-            std::string authToken;
-            if (m_ui)
-            {
-                authToken = m_ui->getRemoteAuthToken();
-                m_ui->setRemoteAuthToken("");
-            }
-
-            // Recreate the capture as Remote (the existing instance might be
-            // V4L2/DS if the user just flipped source type).
-            {
-                auto remote = std::make_unique<VideoCaptureRemote>();
-                VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-                if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-                else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
-                remote->setInterpolationMode(imode);
-                remote->setAuthToken(authToken);
-                m_capture = std::move(remote);
-            }
-            if (m_capture->open(devicePath))
-            {
-                m_capture->startCapture();
-
-                // Pull the actual stream dimensions from the freshly-opened
-                // decoder and sync the application's idea of capture size.
-                // Without this the rest of the render pipeline keeps using
-                // m_captureWidth / m_captureHeight from the local config
-                // (1920x1080 by default), producing the "image fills only
-                // half the window" symptom when the host streams smaller.
-                const uint32_t actualW = m_capture->getWidth();
-                const uint32_t actualH = m_capture->getHeight();
-                if (actualW > 0 && actualH > 0)
-                {
-                    m_captureWidth  = actualW;
-                    m_captureHeight = actualH;
-                    LOG_INFO("Remote stream dims: " + std::to_string(actualW) + "x" + std::to_string(actualH));
-                }
-
-                if (m_ui)
-                {
-                    m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
-                                         m_captureFps, devicePath);
-                }
-                // Re-start the /meta poller against the new host.
-                m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
-                m_remoteMetaSync->setAuthToken(authToken);
-                m_remoteMetaSync->start(devicePath,
-                    [this](const RemoteMetaSync::Snapshot &snap)
-                    {
-                        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-                        m_pendingRemotePreset          = snap.preset;
-                        m_pendingRemotePresetHash      = snap.presetHash;
-                        m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
-                        m_pendingRemoteParams.clear();
-                        m_pendingRemoteParams.reserve(snap.parameters.size());
-                        for (const auto &p : snap.parameters)
-                        {
-                            m_pendingRemoteParams.emplace_back(p.name, p.value);
-                        }
-                        m_pendingRemoteSourceWidth  = snap.sourceWidth;
-                        m_pendingRemoteSourceHeight = snap.sourceHeight;
-                        // Image-tab seed — first snapshot per connection only.
-                        if (!m_remoteImageSeeded)
-                        {
-                            m_pendingRemoteImageBrightness     = snap.imageBrightness;
-                            m_pendingRemoteImageContrast       = snap.imageContrast;
-                            m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
-                            m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
-                            m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
-                            m_hasPendingRemoteImageSeed        = true;
-                        }
-                        if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
-                        m_hasPendingRemoteMeta.store(true);
-                        // #68 — same upstream-client-count push the
-                        // initCapture-side callback does. Without this
-                        // copy, switching to Remote mid-session via
-                        // Browse leaves the OSD's "watching with N
-                        // others" stuck at 0 forever.
-                        if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
-                    });
-            }
-            else
-            {
-                LOG_WARN("Failed to connect to remote host " + devicePath);
-                if (m_ui)
-                {
-                    m_ui->setCaptureInfo(0, 0, 0, "Remote (failed)");
-                    // Clear the current device so the connection window
-                    // stops reporting 'connected'. Done via direct
-                    // assignment because setCurrentDevice("") would
-                    // re-enter this callback and we're still inside its
-                    // processingDeviceChange guard.
-                    m_ui->setCurrentDeviceSilent("");
-                }
-                m_devicePath.clear();
-            }
-
-            processingDeviceChange = false;
-            return;
-        }
-
+        
         // If devicePath is empty, it means "None" - activate dummy mode
         if (devicePath.empty())
         {
@@ -2692,7 +2219,7 @@ bool Application::initUI()
             if (preset.saveAs(path, customParams)) {
                 LOG_INFO("Preset saved as: " + path);
             } else {
-                LOG_ERROR("Failed to salvar preset como: " + path);
+                LOG_ERROR("Falha ao salvar preset como: " + path);
             }
         } });
     }
@@ -2724,24 +2251,6 @@ void Application::handleKeyInput()
         {
             f12Pressed = false;
         }
-
-        // F11 toggles fullscreen. Edge-triggered like F12 so holding
-        // the key down doesn't oscillate the window state.
-        static bool f11Pressed = false;
-        bool f11Now = sdlWindow->isKeyPressed(SDLK_F11);
-        if (f11Now && !f11Pressed)
-        {
-            m_fullscreen = !m_fullscreen;
-            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
-            if (m_ui) m_ui->setFullscreen(m_fullscreen);
-            LOG_INFO(std::string("Fullscreen toggled: ") +
-                     (m_fullscreen ? "ON" : "OFF"));
-            f11Pressed = true;
-        }
-        else if (!f11Now)
-        {
-            f11Pressed = false;
-        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2762,25 +2271,6 @@ void Application::handleKeyInput()
     else
     {
         f12Pressed = false;
-    }
-
-    // F11 toggles fullscreen.
-    static bool f11Pressed = false;
-    if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS)
-    {
-        if (!f11Pressed)
-        {
-            m_fullscreen = !m_fullscreen;
-            m_window->setFullscreen(m_fullscreen, m_monitorIndex);
-            if (m_ui) m_ui->setFullscreen(m_fullscreen);
-            LOG_INFO(std::string("Fullscreen toggled: ") +
-                     (m_fullscreen ? "ON" : "OFF"));
-            f11Pressed = true;
-        }
-    }
-    else
-    {
-        f11Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -2859,21 +2349,6 @@ bool Application::initStreaming()
     if (m_streamingVideoCodec == "h264")
     {
         tsStreamer->setH264Preset(m_streamingH264Preset);
-        auto hw = static_cast<MediaEncoder::HardwareEncoder>(m_streamingHardwareEncoder);
-        tsStreamer->setHardwareEncoder(hw);
-        // Pick the backend-specific preset string. For Auto we let
-        // MediaEncoder hardcode its default (empty string) since the
-        // actual backend isn't resolved until codec-open time.
-        std::string backendPreset;
-        switch (hw)
-        {
-            case MediaEncoder::HardwareEncoder::NVENC: backendPreset = m_streamingNvencPreset; break;
-            case MediaEncoder::HardwareEncoder::VAAPI: backendPreset = m_streamingVaapiRcMode; break;
-            case MediaEncoder::HardwareEncoder::QSV:   backendPreset = m_streamingQsvPreset;   break;
-            case MediaEncoder::HardwareEncoder::AMF:   backendPreset = m_streamingAmfQuality;  break;
-            default: backendPreset.clear(); break;
-        }
-        tsStreamer->setHardwareEncoderPreset(backendPreset);
     }
     // Configure H.265 preset, profile and level (if applicable)
     else if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
@@ -3204,25 +2679,7 @@ void Application::run()
             LOG_WARN("Window is invalid - exiting main loop");
             break;
         }
-
-        // Phase 4 of #47: drain pending remote /meta deltas onto this
-        // thread before any GL work. Cheap when nothing pending.
-        applyPendingRemoteMeta();
-
-        // Phase 2 of #49: reconcile the public-directory publish state
-        // with whatever the UI toggle currently says. Cheap when no
-        // transition is needed (just compares two booleans and a few
-        // strings).
-        syncDirectoryClient();
-        // Cursor visibility tracks BOTH UIManager::isVisible() and the
-        // OSD overlay (#68). The setOnVisibilityChanged callback only
-        // fires on F12 toggles — toggling the quick-actions widget via
-        // View doesn't, and the desktop client mode flip doesn't either.
-        // Running this every frame keeps cursor state in sync; the
-        // window manager's own internal cache makes redundant calls
-        // free.
-        updateCursorVisibility();
-
+        
         m_window->pollEvents();
         
         // Check again after polling events (window may have been invalidated)
@@ -3394,38 +2851,6 @@ void Application::run()
         if (m_ui)
         {
             m_ui->beginFrame();
-            // Keep the Remote connection window's capture pointer current.
-            // Cheap pointer swap each iteration; UIRemoteConnection only
-            // dereferences it inside its own render() guarded by m_visible.
-            if (auto *win = m_ui->getRemoteConnectionWindow())
-            {
-                win->setCapture(m_capture.get());
-            }
-
-            // #49 Phase 4: keep the directory browser running while
-            // the dedicated 'Browse public directory' window is open.
-            // Lazy-construct on first sighting so we don't pay for
-            // the worker thread when the user never opens the window.
-            if (auto *browseWin = m_ui->getDirectoryBrowserWindow())
-            {
-                if (browseWin->isVisible())
-                {
-                    if (!m_directoryBrowser)
-                    {
-                        m_directoryBrowser = std::make_unique<DirectoryBrowser>();
-                    }
-                    browseWin->setDirectoryBrowser(m_directoryBrowser.get());
-                    // start() is idempotent on the same URL and
-                    // tears-down/restarts on a different URL, so calling
-                    // every tick lets a runtime URL edit take effect
-                    // immediately. The no-op case has no cost.
-                    m_directoryBrowser->start(m_ui->getDirectoryUrl());
-                }
-                else if (m_directoryBrowser && m_directoryBrowser->isRunning())
-                {
-                    m_directoryBrowser->stop();
-                }
-            }
         }
 
         // Try to capture and process the latest frame (discarding old frames)
@@ -3901,21 +3326,10 @@ void Application::run()
                          ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
 
-            // Camera image and shader output both need Y inversion in
-            // the general case — that's why flipY defaults to true.
-            //
-            // Exception: remote source consumed without a client-side
-            // shader. The /raw wire data goes through one fewer Y
-            // inversion than a locally-captured frame (no FrameProcessor
-            // upload→shader→sample chain on the client), so the
-            // renderer's implicit flip overshoots and the image lands
-            // upside-down. When the user disables the client-side
-            // shader pipeline on a Remote source, drop the flip so the
-            // picture stays right-side-up (#67).
-            const bool remoteWithoutShader =
-                (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote &&
-                 !isShaderTexture);
-            bool shouldFlipY = !remoteWithoutShader;
+            // IMPORTANT: Camera image comes inverted (Y inverted)
+            // Shaders also render inverted, so both need Y inversion
+            // flipY: true for both (camera and shader need to invert)
+            bool shouldFlipY = true;
 
             // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
             uint32_t windowWidth = m_window->getWidth();
@@ -4140,16 +3554,6 @@ void Application::run()
                                     memcpy(dstPtr, srcPtr, readRowSizeUnpadded);
                                 }
 
-                                // Push every frame produced by this iteration. The main
-                                // loop is already paced (see the render-pace blocks at the
-                                // end of the loop), so the per-iteration rate matches the
-                                // configured streaming FPS. The earlier dedicated push
-                                // throttle here was meant to protect against an uncapped
-                                // main loop on a high-refresh display, but with main-loop
-                                // pacing in place it just rejected legitimate frames whose
-                                // arrival jittered slightly below 1/fps (observed as
-                                // "push throttle skips=20-24/s" while the encoder sat
-                                // idle waiting for input).
                                 if (m_streamManager && m_streamManager->isActive())
                                 {
                                     m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
@@ -4378,12 +3782,8 @@ void Application::run()
                                                                !m_ui->getStreamingApplyShader();
                                 const bool recordWantsSource = m_ui && m_recordingManager && m_recordingManager->isRecording() &&
                                                                !m_ui->getRecordingApplyShader();
-                                // Phase 2 of #47: /raw is by-contract pre-shader, so any connected
-                                // /raw client also triggers the source-frame capture below.
-                                const bool rawWantsSource = m_streamManager && m_streamManager->isActive() &&
-                                                            m_streamManager->hasRawClients();
                                 const bool needSourceCapture = masterOn && shaderActive &&
-                                                               (streamWantsSource || recordWantsSource || rawWantsSource);
+                                                               (streamWantsSource || recordWantsSource);
 
                                 bool sourceFrameReady = false;
                                 uint32_t sourceFrameW = 0, sourceFrameH = 0;
@@ -4426,16 +3826,6 @@ void Application::run()
 
                                 // Share frame data between streaming and recording.
                                 // Pula push se o PBO async ainda não tem dados do frame anterior.
-                                // Push every frame the FBO path produces. Main-loop pacing
-                                // (added in cd7b13a / 4b69c72) already caps the iteration rate
-                                // at the configured streaming FPS, so the per-frame interval
-                                // matches the target and there's no risk of overshooting the
-                                // way an uncapped 240 Hz refresh free-run did. An earlier
-                                // dedicated throttle here ended up rejecting ~30 % of
-                                // legitimate frames every second because per-iteration work
-                                // time jittered slightly below 1/fps — visible in the log as
-                                // "push throttle: pushes=37/s skips=24/s" while VAAPI sat idle
-                                // waiting for input.
                                 if (frameDataReady && m_streamManager && m_streamManager->isActive())
                                 {
                                     const bool useSource = streamWantsSource && sourceFrameReady;
@@ -4455,34 +3845,6 @@ void Application::run()
                                     else
                                     {
                                         m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                    }
-
-                                    // Phase 2 of #47: also feed the /raw output (pre-shader, always).
-                                    // hasRawClients() gates this so the encoder idles when nothing
-                                    // is listening — the CPU cost only shows up when a remote
-                                    // client is actually consuming the raw feed.
-                                    //
-                                    // Two code paths because the pre-shader pixels live in
-                                    // different buffers depending on whether the shader chain
-                                    // is running this frame:
-                                    //   - shader active → m_captureSourceFrameData (an extra
-                                    //     readback from the FrameProcessor texture).
-                                    //   - shader off (master toggle disabled or no preset
-                                    //     loaded) → frameData IS already the pre-shader pixels,
-                                    //     so we feed /raw from there. Without this branch,
-                                    //     disabling the shader from the UI silently kills
-                                    //     /raw transmission (#67 — client log showed video
-                                    //     stop while audio kept flowing).
-                                    if (m_streamManager->hasRawClients())
-                                    {
-                                        if (sourceFrameReady)
-                                        {
-                                            m_streamManager->pushRawFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
-                                        }
-                                        else if (!masterOn || !shaderActive)
-                                        {
-                                            m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
-                                        }
                                     }
                                 }
                                 if (frameDataReady && m_recordingManager && m_recordingManager->isRecording())
@@ -4597,64 +3959,6 @@ void Application::run()
             {
                 m_window->swapBuffers();
             }
-
-            // Pacing policy:
-            //  - Remote source: vsync drives the loop at the panel's
-            //    display refresh rate. Vsync is toggled on focus —
-            //    when the window is backgrounded a lot of compositors
-            //    park vsync at 0 Hz, so swapBuffers would block forever
-            //    and the main loop would stop draining the frame queue
-            //    (the user-observed "consumed=0 drops=60/s queueDepth=20"
-            //    stall). When unfocused we disable vsync and add a
-            //    small sleep to avoid burning CPU on hidden refreshes.
-            //  - Local source streaming: keep the existing software
-            //    pace at the configured streaming FPS so we don't
-            //    burn GPU + glReadPixels for frames the encoder will
-            //    just throttle.
-            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
-            {
-                const bool focused = m_window && m_window->isFocused();
-                if (m_window && focused != m_remoteWindowFocused)
-                {
-                    m_window->setVsync(focused);
-                    m_remoteWindowFocused = focused;
-                }
-                if (!focused)
-                {
-                    // Hidden / backgrounded — sleep a frame's worth so
-                    // captureLatestFrame still drains the queue at a
-                    // reasonable rate without spinning the CPU.
-#ifdef PLATFORM_LINUX
-                    usleep(16000);
-#else
-                    Sleep(16);
-#endif
-                }
-                // When focused, vsync does the pacing.
-            }
-            else
-            {
-                bool streamingActive = (m_streamManager && m_streamManager->isActive());
-                if (streamingActive && m_ui)
-                {
-                    const uint32_t targetFps = m_ui->getStreamingFps() > 0 ? m_ui->getStreamingFps() : 60;
-                    const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                              std::chrono::steady_clock::now().time_since_epoch()).count();
-                    const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(targetFps);
-                    if (m_lastFrameSwapUs == 0) m_lastFrameSwapUs = nowUs;
-                    const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
-                    if (elapsedUs < targetIntervalUs)
-                    {
-                        const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
-                        usleep(static_cast<useconds_t>(sleepUs));
-#else
-                        Sleep(static_cast<DWORD>(sleepUs / 1000));
-#endif
-                    }
-                    m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
-                }
-            }
         }
         else
         {
@@ -4694,81 +3998,12 @@ void Application::run()
                 m_window->swapBuffers();
             }
 
-            // Remote-source render pacing: when this client is consuming a
-            // remote /raw stream, there's no point iterating faster than
-            // the host's source FPS. Without this cap an idle 144 / 240 /
-            // 360 Hz display will spin the main loop at hundreds of fps,
-            // re-rendering the same decoded frame and re-running
-            // applyPendingRemoteMeta — wastes GPU and produces the
-            // 500-fps reading the user spotted in MangoHud. Sleep until
-            // the next host-frame deadline.
-            //
-            // Fall back to 60 fps when /meta hasn't arrived yet or reports
-            // fps=0 — anything's better than the 1 ms-sleep free-run that
-            // produced the 500 fps reading we're trying to fix.
-            if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote)
-            {
-                const uint32_t fps = m_remoteSourceFps > 0 ? m_remoteSourceFps : 60;
-                const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch()).count();
-                const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(fps);
-                if (m_lastFrameSwapUs == 0)
-                {
-                    m_lastFrameSwapUs = nowUs;
-                }
-                const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
-
-                if (elapsedUs < targetIntervalUs)
-                {
-                    const int64_t sleepUs = targetIntervalUs - elapsedUs;
+// Do a small sleep to not consume 100% CPU
 #ifdef PLATFORM_LINUX
-                    usleep(static_cast<useconds_t>(sleepUs));
+            usleep(1000); // 1ms
 #else
-                    Sleep(static_cast<DWORD>(sleepUs / 1000));
+            Sleep(1); // 1ms sleep
 #endif
-                }
-
-                m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
-            }
-            else
-            {
-                // Local-source path (V4L2 / DS / None / no remote source
-                // info yet). When streaming is active, pace the main loop
-                // to match the configured streaming FPS so we don't burn
-                // GPU + glReadPixels work re-rendering a frame the encoder
-                // throttle will discard anyway. When streaming is idle,
-                // fall back to the existing 1 ms sleep so the local
-                // preview stays responsive on whatever refresh rate the
-                // display happens to run at.
-                bool streamingActive = (m_streamManager && m_streamManager->isActive());
-                if (streamingActive && m_ui)
-                {
-                    const uint32_t targetFps = m_ui->getStreamingFps() > 0 ? m_ui->getStreamingFps() : 60;
-                    const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                              std::chrono::steady_clock::now().time_since_epoch()).count();
-                    const int64_t targetIntervalUs = 1000000LL / static_cast<int64_t>(targetFps);
-                    if (m_lastFrameSwapUs == 0) m_lastFrameSwapUs = nowUs;
-                    const int64_t elapsedUs = nowUs - m_lastFrameSwapUs;
-                    if (elapsedUs < targetIntervalUs)
-                    {
-                        const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
-                        usleep(static_cast<useconds_t>(sleepUs));
-#else
-                        Sleep(static_cast<DWORD>(sleepUs / 1000));
-#endif
-                    }
-                    m_lastFrameSwapUs = nowUs + std::max<int64_t>(0, targetIntervalUs - elapsedUs);
-                }
-                else
-                {
-#ifdef PLATFORM_LINUX
-                    usleep(1000);
-#else
-                    Sleep(1);
-#endif
-                }
-            }
         }
     }
 
@@ -5353,7 +4588,6 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.streamingH265Level = m_streamingH265Level;
         data.streamingVP8Speed = m_streamingVP8Speed;
         data.streamingVP9Speed = m_streamingVP9Speed;
-        data.streamingHardwareEncoder = m_streamingHardwareEncoder;
     }
 
     // Collect V4L2 controls (if applicable)
@@ -5405,452 +4639,6 @@ std::string Application::resolveShaderPath(const std::string &shaderPath) const
     return fullPath.string();
 }
 
-void Application::applyPendingRemoteMeta()
-{
-    if (!m_hasPendingRemoteMeta.load()) return;
-
-    // Snapshot the pending values out from under the polling thread.
-    std::string preset;
-    std::string presetHash;
-    bool pipelineEnabled = true;
-    std::vector<std::pair<std::string, float>> params;
-    uint32_t sourceW = 0, sourceH = 0;
-    bool seedImage = false;
-    float imgBrightness = 1.0f, imgContrast = 1.0f;
-    bool imgMaintainAspect = true;
-    uint32_t imgOutW = 0, imgOutH = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-        preset           = std::move(m_pendingRemotePreset);
-        presetHash       = std::move(m_pendingRemotePresetHash);
-        pipelineEnabled  = m_pendingRemotePipelineEnabled;
-        params           = std::move(m_pendingRemoteParams);
-        sourceW          = m_pendingRemoteSourceWidth;
-        sourceH          = m_pendingRemoteSourceHeight;
-        if (m_hasPendingRemoteImageSeed)
-        {
-            seedImage         = true;
-            imgBrightness     = m_pendingRemoteImageBrightness;
-            imgContrast       = m_pendingRemoteImageContrast;
-            imgMaintainAspect = m_pendingRemoteImageMaintainAspect;
-            imgOutW           = m_pendingRemoteImageOutputWidth;
-            imgOutH           = m_pendingRemoteImageOutputHeight;
-            m_hasPendingRemoteImageSeed = false;
-        }
-        m_hasPendingRemoteMeta.store(false);
-    }
-
-    // Seed the local Image tab from the host on the very first snapshot
-    // per connection. m_remoteImageSeeded flips true here and gates the
-    // callback so subsequent snapshots leave these values alone — the
-    // user is free to tweak the local Image controls after the initial
-    // sync.
-    if (seedImage && m_ui)
-    {
-        m_ui->setBrightness(imgBrightness);
-        m_ui->setContrast(imgContrast);
-        m_ui->setMaintainAspect(imgMaintainAspect);
-        m_ui->setOutputResolution(imgOutW, imgOutH);
-        m_remoteImageSeeded = true;
-        LOG_INFO("RemoteMetaSync: seeded local Image from host — brightness=" +
-                 std::to_string(imgBrightness) + " contrast=" +
-                 std::to_string(imgContrast) + " maintainAspect=" +
-                 std::to_string(imgMaintainAspect) + " output=" +
-                 std::to_string(imgOutW) + "x" + std::to_string(imgOutH));
-    }
-
-    // Tell the remote capture to rescale to the host's source dims (if the
-    // stream is encoded at a different size) and sync our render-size view
-    // so downstream FBO / viewport calculations use the right values.
-    if (sourceW > 0 && sourceH > 0)
-    {
-        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
-        {
-            remote->setTargetResolution(sourceW, sourceH);
-        }
-        if (sourceW != m_captureWidth || sourceH != m_captureHeight)
-        {
-            LOG_INFO("Remote source dims from /meta: " +
-                     std::to_string(sourceW) + "x" + std::to_string(sourceH) +
-                     " (was " + std::to_string(m_captureWidth) + "x" + std::to_string(m_captureHeight) + ")");
-            m_captureWidth  = sourceW;
-            m_captureHeight = sourceH;
-        }
-    }
-
-    if (!m_shaderEngine || !m_ui)
-    {
-        return;
-    }
-
-    // Phase 4 minimum: resolve preset by name in the local shader library.
-    // If the preset isn't there, log and keep whatever shader the client
-    // already has — Phase 4b will fetch the bundle from /meta/shader-bundle
-    // and cache it locally for these cases.
-    bool reloaded = false;
-    if (!preset.empty() && presetHash != m_appliedRemotePresetHash)
-    {
-        const std::string fullPath = resolveShaderPath(preset);
-        if (!fullPath.empty())
-        {
-            LOG_INFO("RemoteMetaSync: applying host preset '" + preset + "' (hash " + presetHash + ")");
-            if (m_shaderEngine->loadPreset(fullPath))
-            {
-                m_ui->setCurrentShader(preset);
-                m_appliedRemotePresetHash = presetHash;
-                reloaded = true;
-            }
-            else
-            {
-                LOG_WARN("RemoteMetaSync: failed to load preset locally — bundle fetch is a Phase 4b TODO");
-            }
-        }
-    }
-
-    // Master pipeline toggle: mirror the host's "Apply shader pipeline".
-    m_ui->setShaderPipelineEnabled(pipelineEnabled);
-
-    // Parameter overrides apply on top of whatever preset is now active.
-    // After a preset reload, the engine's parameters are at their preset
-    // defaults; layering the host's overrides on top reproduces the look.
-    if (!params.empty())
-    {
-        for (const auto &kv : params)
-        {
-            m_shaderEngine->setShaderParameter(kv.first, kv.second);
-        }
-        if (reloaded)
-        {
-            LOG_INFO("RemoteMetaSync: applied " + std::to_string(params.size()) +
-                     " parameter override(s)");
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// #49 Phase 2 — public directory publish lifecycle
-//
-// The UI owns the "publish on/off" toggle plus the user-visible
-// metadata fields. This method, called once per main-loop iteration,
-// reconciles those UI fields with the DirectoryClient instance that
-// actually talks HTTP to the directory service:
-//
-//   - toggle OFF → ensure DirectoryClient is stopped
-//   - toggle ON, client Idle → build a Config from UI state, start
-//   - toggle ON, client Active → no-op (changes are applied via
-//     PATCH on the next heartbeat tick if updateMetadata was called)
-//
-// Always cheap when there's no transition; just compares the toggle
-// against the current state.
-// ─────────────────────────────────────────────────────────────────────
-void Application::syncDirectoryClient()
-{
-    if (!m_ui) return;
-
-    // Mirror the remote capture's reconnect-backoff flag and the
-    // "currently decoding frames" flag onto UIManager so the Info
-    // panel and the connection overlay can read them without holding
-    // the VideoCaptureRemote pointer themselves. In host mode
-    // m_capture isn't a VideoCaptureRemote and the dynamic_cast
-    // falls through to defaults (offline=false, receivingFrames=
-    // whatever the base class reports — which is isOpen() for local
-    // backends).
-    {
-        bool offline   = false;
-        bool receiving = false;
-        if (m_capture)
-        {
-            if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
-            {
-                offline   = remote->isHostLikelyOffline();
-                receiving = remote->isReceivingFrames();
-            }
-            else
-            {
-                receiving = m_capture->isReceivingFrames();
-            }
-        }
-        m_ui->setRemoteHostLikelyOffline(offline);
-        m_ui->setRemoteReceivingFrames(receiving);
-    }
-
-    // #49 Phase 3 — keep the server-side password gate in sync with
-    // whatever the user typed in the publish UI. We hash on every
-    // call (cheap, sha256 of < 1 KB), but the StreamManager setter
-    // is a no-op when the value hasn't changed. Done outside the
-    // wantPublish gate below so the gate stays active even on
-    // streams the user doesn't publicly list (someone you handed the
-    // URL directly is still protected).
-    if (m_streamManager)
-    {
-        const std::string &raw = m_ui->getDirectoryPassword();
-        m_streamManager->setStreamPasswordHash(
-            raw.empty() ? std::string{} : PasswordHash::sha256Hex(raw));
-    }
-
-    // Publish only makes sense when there's actually a stream being
-    // served. Two scenarios where this gate matters:
-    //   1. User toggled publish on previously, the persisted config
-    //      flag stays true, and now they launch a second instance on
-    //      the same machine just to view (client mode). Without the
-    //      gate, that client instance would happily try to register
-    //      itself in the directory even though it has nothing to
-    //      advertise — duplicate-looking entries from the same IP.
-    //   2. User toggles publish on before pressing Start Streaming.
-    //      The entry would advertise an endpoint that 503s for any
-    //      client that tried to connect. Better to not list at all
-    //      until /raw is serving.
-    //
-    // 'Streaming active' is the right signal here — it's set by
-    // StreamManager once a streamer has bound its port and is
-    // accepting clients. Toggle stays on (persisted) so as soon as
-    // streaming actually starts, publish kicks in automatically.
-    const bool wantPublish    = m_ui->getDirectoryPublishEnabled();
-    const bool streamingLive  = m_ui->getStreamingActive();
-    const bool shouldPublish  = wantPublish && streamingLive;
-    const std::string mode    = m_ui->getDirectoryEndpointMode();
-
-    // #49 Phase 2.5 — manage the cloudflared child process whenever
-    // the user has tunnel-cloudflare selected. We tear it down on
-    // any of: publish toggle off, streaming offline, mode switched
-    // away. Lazy-construct on first need so plain direct/custom-mode
-    // users never spawn an extra thread.
-    const bool wantTunnel = shouldPublish && (mode == "tunnel-cloudflare");
-    if (wantTunnel)
-    {
-        if (!m_cloudflaredManager)
-        {
-            m_cloudflaredManager = std::make_unique<CloudflaredManager>();
-        }
-        auto cfState = m_cloudflaredManager->getState();
-        if (cfState == CloudflaredManager::State::Idle)
-        {
-            // Phase 2.5c (#60): pick Quick vs Named based on the user's
-            // sub-mode. Quick keeps the old 'localPort only' shape;
-            // Named also needs a configured tunnel id + hostname.
-            const std::string tunnelMode = m_ui->getDirectoryTunnelMode();
-            CloudflaredManager::TunnelConfig cfg;
-            cfg.localPort = m_ui->getStreamingPort();
-            if (tunnelMode == "named")
-            {
-                const std::string id   = m_ui->getDirectoryNamedTunnelId();
-                const std::string host = m_ui->getDirectoryNamedTunnelHostname();
-                if (id.empty() || host.empty())
-                {
-                    // Defer the start — the UI is responsible for
-                    // collecting these fields. syncDirectoryClient
-                    // shows the waiting message a few lines below.
-                    m_ui->setDirectoryStatusText("Named tunnel needs id + hostname");
-                }
-                else
-                {
-                    cfg.mode      = CloudflaredManager::Mode::Named;
-                    cfg.tunnelId  = id;
-                    cfg.hostname  = host;
-                    cfg.publicUrl = "https://" + host;
-                    m_cloudflaredManager->start(cfg);
-                }
-            }
-            else
-            {
-                cfg.mode = CloudflaredManager::Mode::Quick;
-                m_cloudflaredManager->start(cfg);
-            }
-        }
-    }
-    else if (m_cloudflaredManager &&
-             m_cloudflaredManager->getState() != CloudflaredManager::State::Idle)
-    {
-        m_cloudflaredManager->stop();
-    }
-
-    if (!shouldPublish && !m_directoryClient) return;
-    if (!m_directoryClient)
-    {
-        m_directoryClient = std::make_unique<DirectoryClient>();
-    }
-
-    auto state = m_directoryClient->getState();
-
-    // #69 — If the user edited the Directory URL while we're already
-    // registered/registering against the old host, drop the session so
-    // the Idle branch below re-registers against the new URL on this
-    // very tick. Without this, URL edits only take effect on app
-    // restart, which silently surprises users.
-    {
-        const std::string currentUrl = m_ui->getDirectoryUrl();
-        if (state != DirectoryClient::State::Idle &&
-            !m_publishedDirectoryUrl.empty() &&
-            m_publishedDirectoryUrl != currentUrl)
-        {
-            m_directoryClient->stop();
-            state = DirectoryClient::State::Idle;
-        }
-        m_publishedDirectoryUrl = currentUrl;
-    }
-
-    if (!shouldPublish)
-    {
-        if (state != DirectoryClient::State::Idle)
-        {
-            m_directoryClient->stop();
-            // Surface why we stopped so the user understands the
-            // toggle is still on but nothing is listed right now.
-            if (wantPublish && !streamingLive)
-            {
-                m_ui->setDirectoryStatusText("Waiting for streaming to start");
-            }
-            else
-            {
-                m_ui->setDirectoryStatusText("Idle");
-            }
-        }
-        else if (wantPublish && !streamingLive &&
-                 m_ui->getDirectoryStatusText() != "Waiting for streaming to start")
-        {
-            m_ui->setDirectoryStatusText("Waiting for streaming to start");
-        }
-        return;
-    }
-
-    // wantPublish == true beyond this point.
-
-    // For tunnel mode, gate the DirectoryClient on cloudflared having
-    // actually handed us a URL. Anything earlier would advertise a
-    // localhost endpoint that nobody outside this machine can reach.
-    std::string tunnelUrl;
-    if (mode == "tunnel-cloudflare")
-    {
-        if (!m_cloudflaredManager)
-        {
-            m_ui->setDirectoryStatusText("Tunnel unavailable");
-            return;
-        }
-        auto cfState = m_cloudflaredManager->getState();
-        switch (cfState)
-        {
-            case CloudflaredManager::State::Active:
-                tunnelUrl = m_cloudflaredManager->getUrl();
-                break;
-            case CloudflaredManager::State::Spawning:
-                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
-                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
-                return;
-            case CloudflaredManager::State::NotFound:
-                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
-                {
-                    // NotFound covers both "binary missing" and any
-                    // pre-flight rejection (missing credentials,
-                    // invalid config, etc.). Surface the manager's
-                    // own error text when it has one — it knows what
-                    // actually failed. Fall back to the generic
-                    // install hint only when there's nothing to say.
-                    std::string err = m_cloudflaredManager->getLastError();
-                    if (err.empty())
-                    {
-                        err = "cloudflared not installed — install from "
-                              "cloudflare.com/products/tunnel";
-                    }
-                    m_ui->setDirectoryStatusText("Error: " + err);
-                }
-                return;
-            case CloudflaredManager::State::Crashed:
-                if (state != DirectoryClient::State::Idle) m_directoryClient->stop();
-                m_ui->setDirectoryStatusText("Error: tunnel crashed — " + m_cloudflaredManager->getLastError());
-                return;
-            default:
-                m_ui->setDirectoryStatusText("Waiting for cloudflared tunnel…");
-                return;
-        }
-    }
-
-    if (state == DirectoryClient::State::Idle)
-    {
-        // Build Config from current UI + streaming state.
-        DirectoryClient::Config cfg;
-        cfg.directoryUrl     = m_ui->getDirectoryUrl();
-        cfg.name             = m_ui->getDirectoryStreamName();
-        cfg.hostNickname     = m_ui->getDirectoryHostNickname();
-        cfg.shader           = m_ui->getCurrentShader();
-        cfg.resolutionW      = m_ui->getCaptureWidth();
-        cfg.resolutionH      = m_ui->getCaptureHeight();
-        cfg.fps              = m_ui->getCaptureFps();
-        cfg.codec            = m_ui->getStreamingVideoCodec() == "h265" ? "h265" : "h264";
-        cfg.passwordRequired = !m_ui->getDirectoryPassword().empty();
-        cfg.endpointMode     = mode;
-        cfg.version          = RETROCAPTURE_VERSION;
-        cfg.insecureSkipVerify = m_ui->getDirectoryInsecureSkipVerify();
-
-        if (cfg.endpointMode == "tunnel-cloudflare")
-        {
-            cfg.endpoint = tunnelUrl;
-        }
-        else if (cfg.endpointMode == "custom")
-        {
-            cfg.endpoint = m_ui->getDirectoryCustomEndpoint();
-        }
-        else
-        {
-            // Direct mode: the directory's `endpoint` field is a
-            // BASE URL (http://host:port). The client appends /raw
-            // and /meta by convention; if we include them here they
-            // get appended again ('/raw/raw' → 404). The local stream
-            // URL ends in '/stream' which is wrong here for the same
-            // reason — never reuse it for the directory endpoint.
-            //
-            // Phase 2.5 (Cloudflare Tunnel) will replace this with
-            // the tunnel base URL.
-            cfg.endpoint = "http://localhost:" + std::to_string(m_ui->getStreamingPort());
-        }
-
-        if (m_directoryClient->start(cfg))
-        {
-            m_ui->setDirectoryStatusText("Registering…");
-        }
-        else
-        {
-            m_ui->setDirectoryStatusText("Error: " + m_directoryClient->getLastError());
-            // Roll the toggle back so the UI shows the actual state.
-            m_ui->setDirectoryPublishEnabled(false);
-        }
-        return;
-    }
-
-    // State display — translate enum to one-liner.
-    std::string status;
-    switch (state)
-    {
-        case DirectoryClient::State::Registering: status = "Registering…"; break;
-        case DirectoryClient::State::Active:
-        {
-            const auto id = m_directoryClient->getStreamId();
-            status = id.empty() ? "Active" : "Active — " + id;
-            break;
-        }
-        case DirectoryClient::State::Error:
-        {
-            const auto err = m_directoryClient->getLastError();
-            status = err.empty() ? "Error" : "Error: " + err;
-            break;
-        }
-        case DirectoryClient::State::Stopping: status = "Stopping…"; break;
-        case DirectoryClient::State::Idle:      status = "Idle"; break;
-    }
-    if (m_ui->getDirectoryStatusText() != status)
-    {
-        m_ui->setDirectoryStatusText(status);
-    }
-
-    // Mirror telemetry counters into UIManager every frame so the
-    // publish section can render them without holding a pointer to
-    // DirectoryClient.
-    const auto stats = m_directoryClient->getStats();
-    m_ui->setDirectoryStats(stats.registerOk, stats.registerFail,
-                            stats.heartbeatOk, stats.heartbeatFail,
-                            stats.patchOk, stats.patchFail,
-                            stats.secondsSinceLastHeartbeat);
-}
-
 // Recording methods
 void Application::setRecordingSettings(const RecordingSettings &settings)
 {
@@ -5873,41 +4661,10 @@ bool Application::startRecording()
 {
     if (m_recordingManager)
     {
-        populateRecordingContext();
         RecordingSettings settings = m_recordingManager->getRecordingSettings();
         return m_recordingManager->startRecording(settings);
     }
     return false;
-}
-
-void Application::populateRecordingContext()
-{
-    if (!m_recordingManager) return;
-
-    RecordingManager::Context ctx;
-    if (m_ui)
-    {
-        const std::string shader = m_ui->getCurrentShader();
-        ctx.shaderName  = shader.empty() ? "(none)" : shader;
-        ctx.hostNickname = m_ui->getDirectoryHostNickname();
-        ctx.sourceWidth  = m_ui->getCaptureWidth();
-        ctx.sourceHeight = m_ui->getCaptureHeight();
-        ctx.sourceFps    = m_ui->getCaptureFps();
-        switch (m_ui->getSourceType())
-        {
-            case UIManager::SourceType::V4L2:   ctx.sourceType = "v4l2";       break;
-            case UIManager::SourceType::DS:     ctx.sourceType = "directshow"; break;
-            case UIManager::SourceType::Remote: ctx.sourceType = "remote";     break;
-            default:                            ctx.sourceType = "none";       break;
-        }
-    }
-#ifdef RETROCAPTURE_VERSION
-    ctx.applicationVersion = RETROCAPTURE_VERSION;
-#endif
-    // Single-output today — when dual recording lands in #59 phase C
-    // we'll override 'kind' from the raw-side path.
-    ctx.kind = "single";
-    m_recordingManager->setRecordingContext(ctx);
 }
 
 void Application::stopRecording()

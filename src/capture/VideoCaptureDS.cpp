@@ -118,10 +118,10 @@ VideoCaptureDS::VideoCaptureDS()
     // Inicializar COM para DirectShow
     if (!initializeCOM())
     {
-        LOG_WARN("Failed to inicializar COM - usando modo dummy");
+        LOG_WARN("Falha ao inicializar COM - usando modo dummy");
         m_dummyMode = true;
     }
-    LOG_INFO("VideoCaptureDS: constructor done");
+    LOG_INFO("VideoCaptureDS: Construtor concluído");
 }
 
 VideoCaptureDS::~VideoCaptureDS()
@@ -136,7 +136,7 @@ bool VideoCaptureDS::initializeCOM()
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
     {
-        LOG_WARN("Failed to inicializar COM: " + std::to_string(hr));
+        LOG_WARN("Falha ao inicializar COM: " + std::to_string(hr));
         return false;
     }
     
@@ -160,7 +160,7 @@ bool VideoCaptureDS::open(const std::string &device)
     
     if (m_isOpen)
     {
-        LOG_WARN("Device already open, closing first");
+        LOG_WARN("Dispositivo já aberto, fechando primeiro");
         close();
     }
 
@@ -176,13 +176,13 @@ bool VideoCaptureDS::open(const std::string &device)
 
     if (!createCaptureGraph(device))
     {
-        LOG_ERROR("Failed to criar graph de captura para dispositivo: " + device);
+        LOG_ERROR("Falha ao criar graph de captura para dispositivo: " + device);
         return false;
     }
 
     if (!configureCaptureFormat())
     {
-        LOG_ERROR("Failed to configurar formato de captura");
+        LOG_ERROR("Falha ao configurar formato de captura");
         close();
         return false;
     }
@@ -251,7 +251,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                           IID_IGraphBuilder, (void**)&m_graphBuilder);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to criar Filter Graph: " + std::to_string(hr));
+        LOG_ERROR("Falha ao criar Filter Graph: " + std::to_string(hr));
         return false;
     }
     
@@ -260,7 +260,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                           IID_ICaptureGraphBuilder2, (void**)&m_captureGraphBuilder);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to criar Capture Graph Builder: " + std::to_string(hr));
+        LOG_ERROR("Falha ao criar Capture Graph Builder: " + std::to_string(hr));
         SafeRelease(&m_graphBuilder);
         return false;
     }
@@ -269,7 +269,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     hr = m_captureGraphBuilder->SetFiltergraph(m_graphBuilder);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to associar Filter Graph: " + std::to_string(hr));
+        LOG_ERROR("Falha ao associar Filter Graph: " + std::to_string(hr));
         SafeRelease(&m_captureGraphBuilder);
         SafeRelease(&m_graphBuilder);
         return false;
@@ -280,7 +280,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                           IID_ICreateDevEnum, (void**)&pDevEnum);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to criar Device Enumerator: " + std::to_string(hr));
+        LOG_ERROR("Falha ao criar Device Enumerator: " + std::to_string(hr));
         SafeRelease(&m_captureGraphBuilder);
         SafeRelease(&m_graphBuilder);
         return false;
@@ -290,7 +290,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     hr = pDevEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &pEnum, 0);
     if (FAILED(hr) || hr == S_FALSE || !pEnum)
     {
-        LOG_ERROR("Failed to create video device enumerator: " + std::to_string(hr));
+        LOG_ERROR("Falha ao criar enumerador de dispositivos de vídeo: " + std::to_string(hr));
         SafeRelease(&pDevEnum);
         SafeRelease(&m_captureGraphBuilder);
         SafeRelease(&m_graphBuilder);
@@ -307,7 +307,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
         }
         catch (...)
         {
-            LOG_WARN("Invalid device id: " + deviceId + ", using index 0");
+            LOG_WARN("ID de dispositivo inválido: " + deviceId + ", usando índice 0");
             deviceIndex = 0;
         }
     }
@@ -319,7 +319,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
         SafeRelease(&pMoniker);
         if (pEnum->Next(1, &pMoniker, nullptr) != S_OK)
         {
-            LOG_ERROR("Device not found at index: " + std::to_string(deviceIndex));
+            LOG_ERROR("Dispositivo não encontrado no índice: " + std::to_string(deviceIndex));
             SafeRelease(&pEnum);
             SafeRelease(&pDevEnum);
             SafeRelease(&m_captureGraphBuilder);
@@ -332,7 +332,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     hr = pMoniker->BindToObject(nullptr, nullptr, IID_IBaseFilter, (void**)&m_captureFilter);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to criar filtro de captura: " + std::to_string(hr));
+        LOG_ERROR("Falha ao criar filtro de captura: " + std::to_string(hr));
         SafeRelease(&pMoniker);
         SafeRelease(&pEnum);
         SafeRelease(&pDevEnum);
@@ -345,7 +345,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     hr = m_graphBuilder->AddFilter(m_captureFilter, L"Video Capture");
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to adicionar filtro ao graph: " + std::to_string(hr));
+        LOG_ERROR("Falha ao adicionar filtro ao graph: " + std::to_string(hr));
         SafeRelease(&m_captureFilter);
         SafeRelease(&pMoniker);
         SafeRelease(&pEnum);
@@ -359,13 +359,13 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     hr = m_graphBuilder->QueryInterface(IID_IMediaControl, (void**)&m_mediaControl);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to obter IMediaControl: " + std::to_string(hr));
+        LOG_ERROR("Falha ao obter IMediaControl: " + std::to_string(hr));
     }
     
     hr = m_graphBuilder->QueryInterface(IID_IMediaEventEx, (void**)&m_mediaEvent);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to obter IMediaEventEx: " + std::to_string(hr));
+        LOG_ERROR("Falha ao obter IMediaEventEx: " + std::to_string(hr));
     }
     
     // Obter IAMStreamConfig para configurar formato
@@ -373,20 +373,20 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                                               m_captureFilter, IID_IAMStreamConfig, (void**)&m_streamConfig);
     if (FAILED(hr))
     {
-        LOG_WARN("Failed to obter IAMStreamConfig: " + std::to_string(hr));
+        LOG_WARN("Falha ao obter IAMStreamConfig: " + std::to_string(hr));
     }
     
     // Obter interfaces de controle de vídeo
     hr = m_captureFilter->QueryInterface(IID_IAMVideoProcAmp, (void**)&m_videoProcAmp);
     if (FAILED(hr))
     {
-        LOG_WARN("Failed to obter IAMVideoProcAmp: " + std::to_string(hr));
+        LOG_WARN("Falha ao obter IAMVideoProcAmp: " + std::to_string(hr));
     }
     
     hr = m_captureFilter->QueryInterface(IID_IAMCameraControl, (void**)&m_cameraControl);
     if (FAILED(hr))
     {
-        LOG_WARN("Failed to obter IAMCameraControl: " + std::to_string(hr));
+        LOG_WARN("Falha ao obter IAMCameraControl: " + std::to_string(hr));
     }
     
     // Criar Sample Grabber para capturar frames
@@ -442,8 +442,8 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     }
     else
     {
-        LOG_WARN("Failed to criar Sample Grabber: " + std::to_string(hr));
-        LOG_WARN("Sample Grabber unavailable — trying Null Renderer directly");
+        LOG_WARN("Falha ao criar Sample Grabber: " + std::to_string(hr));
+        LOG_WARN("Sample Grabber não está disponível - tentando usar Null Renderer diretamente");
     }
     
     // Se Sample Grabber estiver disponível, usar para captura
@@ -494,7 +494,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                     hr = m_graphBuilder->Connect(pCapturePin, pGrabberInputPin);
                     if (FAILED(hr))
                     {
-                        LOG_ERROR("Failed to conectar pins: " + std::to_string(hr));
+                        LOG_ERROR("Falha ao conectar pins: " + std::to_string(hr));
                         SafeRelease(&pGrabberInputPin);
                         SafeRelease(&pCapturePin);
                         SafeRelease(&pSampleGrabberFilter);
@@ -529,7 +529,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                                 hr = m_graphBuilder->Disconnect(pPinOut);
                                 hr = m_graphBuilder->Disconnect(pConnected);
                                 SafeRelease(&pConnected);
-                                LOG_INFO("Sample Grabber output pin disconnected to avoid the preview window");
+                                LOG_INFO("Pin de saída do Sample Grabber desconectado para evitar janela");
                             }
                             SafeRelease(&pConnected);
                         }
@@ -542,13 +542,13 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
             }
             else
             {
-                LOG_WARN("Failed to find pins for manual connection");
+                LOG_WARN("Falha ao encontrar pins para conexão manual");
                 // Fallback: usar RenderStream (pode criar janela)
                 hr = m_captureGraphBuilder->RenderStream(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Video,
                                                          m_captureFilter, pSampleGrabberFilter, nullptr);
                 if (FAILED(hr))
                 {
-                    LOG_ERROR("Failed to renderizar stream de captura: " + std::to_string(hr));
+                    LOG_ERROR("Falha ao renderizar stream de captura: " + std::to_string(hr));
                     SafeRelease(&pGrabberInputPin);
                     SafeRelease(&pCapturePin);
                     SafeRelease(&pSampleGrabberFilter);
@@ -565,13 +565,13 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
         }
         else
         {
-            LOG_WARN("Failed to encontrar pin de captura: " + std::to_string(hr));
+            LOG_WARN("Falha ao encontrar pin de captura: " + std::to_string(hr));
             // Fallback: usar RenderStream
             hr = m_captureGraphBuilder->RenderStream(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Video,
                                                      m_captureFilter, pSampleGrabberFilter, nullptr);
             if (FAILED(hr))
             {
-                LOG_ERROR("Failed to renderizar stream de captura: " + std::to_string(hr));
+                LOG_ERROR("Falha ao renderizar stream de captura: " + std::to_string(hr));
                 SafeRelease(&pSampleGrabberFilter);
                 SafeRelease(&pMoniker);
                 SafeRelease(&pEnum);
@@ -584,7 +584,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
     {
         // Sample Grabber não disponível - conectar diretamente ao Null Renderer
         // Isso evita janela de preview, mas não permite captura de frames ainda
-        LOG_WARN("Sample Grabber unavailable — connecting to Null Renderer to avoid the preview window");
+        LOG_WARN("Sample Grabber não disponível - conectando ao Null Renderer para evitar janela");
         
         // Criar Null Renderer
         IBaseFilter *pNullRenderer = nullptr;
@@ -624,7 +624,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                                 }
                                 else
                                 {
-                                    LOG_WARN("Failed to conectar ao Null Renderer: " + std::to_string(hr));
+                                    LOG_WARN("Falha ao conectar ao Null Renderer: " + std::to_string(hr));
                                 }
                                 SafeRelease(&pPin);
                                 break;
@@ -640,13 +640,13 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
         }
         else
         {
-            LOG_WARN("Failed to criar Null Renderer: " + std::to_string(hr));
+            LOG_WARN("Falha ao criar Null Renderer: " + std::to_string(hr));
             // Ainda assim, permitir que o graph seja criado
             // O dispositivo pode ser configurado mesmo sem renderização
         }
         
         // Mesmo sem Sample Grabber, criar filtro customizado para capturar frames
-        LOG_WARN("Sample Grabber unavailable — creating custom filter for capture");
+        LOG_WARN("Sample Grabber não disponível - criando filtro customizado para captura");
         
         m_customGrabberFilter = new DSFrameGrabber();
         if (m_customGrabberFilter)
@@ -704,24 +704,24 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                                     }
                                     else
                                     {
-                                        LOG_WARN("All connection attempts failed: " + std::to_string(hr));
+                                        LOG_WARN("Todas as tentativas de conexão falharam: " + std::to_string(hr));
                                     }
                                 }
                                 else
                                 {
-                                    LOG_WARN("Pin does not accept media type (QueryAccept returned: " + std::to_string(acceptHr) + ")");
+                                    LOG_WARN("Pin não aceita tipo de mídia (QueryAccept retornou: " + std::to_string(acceptHr) + ")");
                                 }
                                 DeleteMediaType(pmt);
                             }
                             else
                             {
-                                LOG_WARN("Failed to get first media type from the capture pin (hr: " + std::to_string(hr) + ")");
+                                LOG_WARN("Falha ao obter primeiro tipo de mídia do pin de captura (hr: " + std::to_string(hr) + ")");
                             }
                             SafeRelease(&pEnumMediaTypes);
                         }
                         else
                         {
-                            LOG_WARN("Failed to enumerate media types on the capture pin (hr: " + std::to_string(hr) + ") — trying direct Connect");
+                            LOG_WARN("Falha ao enumerar tipos de mídia do pin de captura (hr: " + std::to_string(hr) + ") - tentando Connect direto");
                             // Se não conseguir enumerar tipos de mídia, tentar Connect normal
                             hr = m_graphBuilder->Connect(pCapturePin, pGrabberInputPin);
                             if (SUCCEEDED(hr))
@@ -730,25 +730,25 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                             }
                             else
                             {
-                                LOG_WARN("Failed to conectar filtro customizado manualmente: " + std::to_string(hr));
+                                LOG_WARN("Falha ao conectar filtro customizado manualmente: " + std::to_string(hr));
                             }
                         }
                         SafeRelease(&pGrabberInputPin);
                     }
                     else
                     {
-                        LOG_ERROR("Failed to encontrar pin de entrada do filtro customizado (hr: " + std::to_string(hr) + ")");
+                        LOG_ERROR("Falha ao encontrar pin de entrada do filtro customizado (hr: " + std::to_string(hr) + ")");
                     }
                     SafeRelease(&pCapturePin);
                 }
                 else
                 {
-                    LOG_ERROR("Failed to encontrar pin de captura: " + std::to_string(hr));
+                    LOG_ERROR("Falha ao encontrar pin de captura: " + std::to_string(hr));
                 }
             }
             else
             {
-                LOG_ERROR("Failed to adicionar filtro customizado ao graph: " + std::to_string(hr));
+                LOG_ERROR("Falha ao adicionar filtro customizado ao graph: " + std::to_string(hr));
                 if (m_customGrabberFilter)
                 {
                     m_customGrabberFilter->Release(); // Liberar referência COM
@@ -758,12 +758,12 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
         }
         else
         {
-            LOG_ERROR("Failed to criar filtro customizado");
+            LOG_ERROR("Falha ao criar filtro customizado");
         }
         
         if (!m_useAlternativeCapture)
         {
-            LOG_WARN("Graph built without Sample Grabber — frame capture will be unavailable");
+            LOG_WARN("Graph criado sem Sample Grabber - captura de frames não estará disponível");
         }
     }
     
@@ -799,7 +799,7 @@ bool VideoCaptureDS::createCaptureGraph(const std::string &deviceId)
                 {
                     if (IsEqualGUID(filterCLSID, *rendererCLSIDs[i]))
                     {
-                        LOG_INFO("Removing render filter from the graph to avoid the preview window");
+                        LOG_INFO("Removendo filtro de renderização do graph para evitar janela de preview");
                         // Desconectar todos os pins antes de remover
                         IEnumPins *pEnumPins = nullptr;
                         hr = pFilter->EnumPins(&pEnumPins);
@@ -838,7 +838,7 @@ bool VideoCaptureDS::configureCaptureFormat()
 {
     if (!m_streamConfig)
     {
-        LOG_WARN("IAMStreamConfig unavailable — using device default format");
+        LOG_WARN("IAMStreamConfig não disponível - usando formato padrão do dispositivo");
         return true; // Não é um erro fatal
     }
     
@@ -851,14 +851,14 @@ bool VideoCaptureDS::configureCaptureFormat()
     hr = m_streamConfig->GetFormat(&pmt);
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to obter formato atual: " + std::to_string(hr));
+        LOG_ERROR("Falha ao obter formato atual: " + std::to_string(hr));
         return false;
     }
     
     // Verificar se é vídeo
     if (pmt->majortype != MEDIATYPE_Video)
     {
-        LOG_ERROR("Not a video format");
+        LOG_ERROR("Formato não é vídeo");
         DeleteMediaType(pmt);
         return false;
     }
@@ -890,7 +890,7 @@ bool VideoCaptureDS::configureCaptureFormat()
         hr = m_streamConfig->SetFormat(pmt);
         if (FAILED(hr))
         {
-            LOG_WARN("Failed to set custom format, falling back to device default: " + std::to_string(hr));
+            LOG_WARN("Falha ao definir formato personalizado, usando formato padrão: " + std::to_string(hr));
             // Não é fatal - o dispositivo pode usar seu formato padrão
         }
         else
@@ -996,7 +996,7 @@ bool VideoCaptureDS::startCapture()
 
     if (!m_mediaControl)
     {
-        LOG_ERROR("Media Control unavailable");
+        LOG_ERROR("Media Control não está disponível");
         return false;
     }
 
@@ -1010,7 +1010,7 @@ bool VideoCaptureDS::startCapture()
     HRESULT hr = m_mediaControl->Run();
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to iniciar captura (Run falhou): " + std::to_string(hr));
+        LOG_ERROR("Falha ao iniciar captura (Run falhou): " + std::to_string(hr));
         
         // Tentar obter mais informações sobre o estado do graph
         OAFilterState state;
@@ -1027,13 +1027,13 @@ bool VideoCaptureDS::startCapture()
 
     m_streaming = true;
     m_hasFrame = false;
-    LOG_INFO("Capture started — graph is running (camera light should be on)");
+    LOG_INFO("Captura iniciada - graph está rodando (luz da câmera deve estar ligada)");
     
     // Verificar estado após iniciar
     OAFilterState state;
     if (SUCCEEDED(m_mediaControl->GetState(100, &state)))
     {
-        LOG_INFO("Graph state after Run: " + std::string(
+        LOG_INFO("Estado do graph após Run: " + std::string(
             state == State_Stopped ? "Stopped" :
             state == State_Paused ? "Paused" :
             state == State_Running ? "Running" : "Unknown"));
@@ -1099,8 +1099,8 @@ bool VideoCaptureDS::captureFrame(Frame &frame)
         static bool logged = false;
         if (!logged)
         {
-            LOG_ERROR("Frame capture unavailable: Sample Grabber is unavailable");
-            LOG_ERROR("Capture requires either a custom filter or the Sample Grabber");
+            LOG_ERROR("Captura de frames não disponível: Sample Grabber não está disponível");
+            LOG_ERROR("Para habilitar captura, é necessário implementar um filtro customizado ou usar Sample Grabber");
             logged = true;
         }
         return false;
@@ -1244,7 +1244,7 @@ void VideoCaptureDS::generateDummyFrame(Frame &frame)
 {
     if (m_dummyFrameBuffer.empty() || m_width == 0 || m_height == 0)
     {
-        LOG_WARN("generateDummyFrame: empty buffer or invalid dimensions (buffer: " + 
+        LOG_WARN("generateDummyFrame: Buffer vazio ou dimensões inválidas (buffer: " + 
                  std::to_string(m_dummyFrameBuffer.size()) + 
                  ", dim: " + std::to_string(m_width) + "x" + std::to_string(m_height) + ")");
         return;
@@ -1694,13 +1694,13 @@ static std::vector<DeviceInfo> EnumerateDevicesDirectShow(bool *pSuccess = nullp
     bool comInitializedHere = SUCCEEDED(hr);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
     {
-        LOG_ERROR("Failed to inicializar COM para DirectShow: " + std::to_string(hr) + " (0x" + 
+        LOG_ERROR("Falha ao inicializar COM para DirectShow: " + std::to_string(hr) + " (0x" + 
                   std::to_string(static_cast<unsigned int>(hr)) + ")");
         return devices;
     }
     if (hr == RPC_E_CHANGED_MODE)
     {
-        LOG_INFO("COM was already initialized for DirectShow — continuing...");
+        LOG_INFO("COM já estava inicializado para DirectShow - continuando...");
     }
     
     // Criar Device Enumerator
@@ -1713,10 +1713,10 @@ static std::vector<DeviceInfo> EnumerateDevicesDirectShow(bool *pSuccess = nullp
     #endif
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to criar Device Enumerator: " + std::to_string(hr) + " (0x" + 
+        LOG_ERROR("Falha ao criar Device Enumerator: " + std::to_string(hr) + " (0x" + 
                   std::to_string(static_cast<unsigned int>(hr)) + ")");
         _com_error err(hr);
-        LOG_ERROR("Error description: " + std::string(err.ErrorMessage()));
+        LOG_ERROR("Descrição do erro: " + std::string(err.ErrorMessage()));
         if (comInitializedHere)
         {
             CoUninitialize();
@@ -1728,13 +1728,13 @@ static std::vector<DeviceInfo> EnumerateDevicesDirectShow(bool *pSuccess = nullp
     
     // Criar enumerador para categoria de captura de vídeo
     // CreateClassEnumerator retorna S_FALSE (1) quando não há dispositivos, mas isso não é um erro
-    LOG_INFO("Creating enumerator for video input device category...");
+    LOG_INFO("Criando enumerador para categoria de dispositivos de vídeo...");
     hr = pDevEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &pEnum, 0);
     
     // S_FALSE (1) significa que não há dispositivos, mas não é um erro
     if (hr == S_FALSE)
     {
-        LOG_INFO("No video device found via DirectShow (S_FALSE)");
+        LOG_INFO("Nenhum dispositivo de vídeo encontrado via DirectShow (S_FALSE)");
         SafeRelease(&pDevEnum);
         if (comInitializedHere)
         {
@@ -1745,10 +1745,10 @@ static std::vector<DeviceInfo> EnumerateDevicesDirectShow(bool *pSuccess = nullp
     
     if (FAILED(hr))
     {
-        LOG_ERROR("Failed to create video device enumerator: " + std::to_string(hr) + " (0x" + 
+        LOG_ERROR("Falha ao criar enumerador de dispositivos de vídeo: " + std::to_string(hr) + " (0x" + 
                   std::to_string(static_cast<unsigned int>(hr)) + ")");
         _com_error err(hr);
-        LOG_ERROR("Error description: " + std::string(err.ErrorMessage()));
+        LOG_ERROR("Descrição do erro: " + std::string(err.ErrorMessage()));
         SafeRelease(&pDevEnum);
         if (comInitializedHere)
         {
@@ -1759,7 +1759,7 @@ static std::vector<DeviceInfo> EnumerateDevicesDirectShow(bool *pSuccess = nullp
     
     if (!pEnum)
     {
-        LOG_WARN("Enumerator created but pointer is null");
+        LOG_WARN("Enumerador criado mas ponteiro é nulo");
         SafeRelease(&pDevEnum);
         if (comInitializedHere)
         {
@@ -1839,11 +1839,11 @@ std::vector<DeviceInfo> VideoCaptureDS::listDevices()
     
     if (success)
     {
-        LOG_INFO("Device enumeration complete via DirectShow");
+        LOG_INFO("Enumeração de dispositivos concluída via DirectShow");
     }
     else
     {
-        LOG_WARN("Failed to enumerar dispositivos via DirectShow");
+        LOG_WARN("Falha ao enumerar dispositivos via DirectShow");
     }
     
     return devices;
@@ -1879,7 +1879,7 @@ std::vector<std::pair<uint32_t, uint32_t>> VideoCaptureDS::getSupportedResolutio
                           IID_IGraphBuilder, (void**)&pTempGraph);
     if (FAILED(hr))
     {
-        LOG_WARN("Failed to create temporary Filter Graph for resolution probe: " + std::to_string(hr));
+        LOG_WARN("Falha ao criar Filter Graph temporário para obter resoluções: " + std::to_string(hr));
         return resolutions;
     }
     

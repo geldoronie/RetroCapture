@@ -304,18 +304,18 @@ std::string ShaderPreprocessor::processIncludes(const std::string& source, const
                 // a estrutura do arquivo e evita pegar `// #include` de
                 // comentários, que regex_replace pegaria).
                 result.replace(includeLineStart, includeLineEnd - includeLineStart, includeContent);
-                LOG_INFO("Included file: " + fullPath);
+                LOG_INFO("Arquivo incluído: " + fullPath);
             }
             else
             {
-                LOG_WARN("Failed to open included file: " + fullPath);
+                LOG_WARN("Falha ao abrir arquivo incluído: " + fullPath);
                 // Remover o #include que falhou
                 result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
             }
         }
         else
         {
-            LOG_WARN("Included file not found: " + includePath);
+            LOG_WARN("Arquivo incluído não encontrado: " + includePath);
             // Remover o #include que falhou
             result.replace(includeLineStart, includeLineEnd - includeLineStart, "");
         }

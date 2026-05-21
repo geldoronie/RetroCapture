@@ -20,26 +20,10 @@ public:
     
     bool init(const WindowConfig& config);
     void shutdown();
-
+    
     bool shouldClose() const;
     void swapBuffers();
     void pollEvents();
-
-    // Runtime vsync toggle. Mirrors what config.vsync did at init but
-    // lets the rest of the app switch the swap interval mid-session —
-    // remote-source playback wants vsync ON so frames land on display
-    // refresh boundaries (no judder), while local capture/streaming
-    // wants vsync OFF so a backgrounded window doesn't stall the
-    // capture/encoder threads waiting on a refresh that never comes.
-    void setVsync(bool enabled);
-
-    // Whether the OS reports the window as focused (i.e. receiving
-    // input). The main loop uses this to disable vsync when the user
-    // alt-tabs away — most compositors park vsync at 0 Hz for
-    // backgrounded windows, which would otherwise block swapBuffers
-    // forever and stall the entire main loop (queue fills, drops
-    // pile up, no recovery until focus returns).
-    bool isFocused() const;
     
     void makeCurrent();
     

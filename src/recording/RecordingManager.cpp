@@ -5,7 +5,6 @@
 #include <fstream>
 #include <ctime>
 #include <iomanip>
-#include <map>
 #include <sstream>
 #include <algorithm>
 #include <cstdint>
@@ -186,15 +185,6 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     videoConfig.h265Level = settings.h265Level;
     videoConfig.vp8Speed = settings.vp8Speed;
     videoConfig.vp9Speed = settings.vp9Speed;
-    // Hardware encoder selection (#59). The MediaEncoder enum
-    // matches the int values stored on RecordingSettings, so the
-    // cast is safe; out-of-range values fall back to Auto.
-    if (settings.hardwareEncoder >= 0 && settings.hardwareEncoder <= 5)
-    {
-        videoConfig.hardwareEncoder =
-            static_cast<MediaEncoder::HardwareEncoder>(settings.hardwareEncoder);
-    }
-    videoConfig.hwPreset = settings.hwPreset;
 
     MediaEncoder::AudioConfig audioConfig;
     // Use default values if audio format not set (when streaming/audio not enabled)
@@ -214,58 +204,6 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     {
         LOG_ERROR("RecordingManager: Failed to initialize MediaEncoder");
         return false;
-    }
-
-    // Stage container metadata before initialize so it lands in the
-    // format header (#59). Mirrors what /meta exposes on the
-    // streaming side but persisted into the file so the artifact is
-    // self-describing. Standard MP4 keys (title / comment / encoder)
-    // get the human-readable summary; custom retrocapture.* keys are
-    // for programmatic readers — these land in MP4 udta atoms and
-    // MKV Tags entries, and ffprobe surfaces them under TAG: prefixes.
-    {
-        std::map<std::string, std::string> meta;
-        std::string title = m_currentMetadata.filename;
-        if (!title.empty()) meta["title"] = title;
-
-        std::ostringstream comment;
-        comment << "RetroCapture session";
-        if (!m_context.shaderName.empty()) {
-            comment << " — shader: " << m_context.shaderName;
-        }
-        if (m_context.sourceWidth && m_context.sourceHeight) {
-            comment << " — source: " << m_context.sourceWidth
-                    << "x" << m_context.sourceHeight;
-            if (m_context.sourceFps) comment << "@" << m_context.sourceFps;
-        }
-        if (!m_context.kind.empty()) comment << " — kind: " << m_context.kind;
-        meta["comment"] = comment.str();
-
-        if (!m_context.applicationVersion.empty()) {
-            meta["encoder"] = "RetroCapture " + m_context.applicationVersion;
-        } else {
-            meta["encoder"] = "RetroCapture";
-        }
-
-        if (!m_context.shaderName.empty())
-            meta["retrocapture.shader"]    = m_context.shaderName;
-        if (!m_context.hostNickname.empty())
-            meta["retrocapture.host"]      = m_context.hostNickname;
-        if (m_context.sourceWidth)
-            meta["retrocapture.source_width"]  = std::to_string(m_context.sourceWidth);
-        if (m_context.sourceHeight)
-            meta["retrocapture.source_height"] = std::to_string(m_context.sourceHeight);
-        if (m_context.sourceFps)
-            meta["retrocapture.source_fps"]    = std::to_string(m_context.sourceFps);
-        if (!m_context.sourceType.empty())
-            meta["retrocapture.source_type"]   = m_context.sourceType;
-        if (!m_context.applicationVersion.empty())
-            meta["retrocapture.version"]       = m_context.applicationVersion;
-        if (!m_context.kind.empty())
-            meta["retrocapture.kind"]          = m_context.kind;
-        meta["retrocapture.codec"] = settings.codec;
-
-        m_recorder.setMetadata(meta);
     }
 
     // Initialize FileRecorder

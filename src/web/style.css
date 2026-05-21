@@ -1,12 +1,5 @@
 /* RetroCapture Portal - Modern Design */
 
-/* Hide the body while i18n.js is fetching its bundles. The class is
-   set synchronously at the top of i18n.js and removed once
-   applyTranslations() has run, so users don't see the raw English
-   literals flash before the overlay lands. A 3 s safety timeout in
-   i18n.js removes the class even if init never completes. */
-html.i18n-loading body { visibility: hidden; }
-
 :root {
     --primary-color: #0A7A83;
     --primary: #0A7A83;

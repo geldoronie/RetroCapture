@@ -40,30 +40,6 @@ public:
     void setRecordingSettings(const RecordingSettings& settings) { m_settings = settings; }
     RecordingSettings getRecordingSettings() const { return m_settings; }
 
-    /**
-     * Runtime context describing what is being recorded, embedded as
-     * container metadata at session start (#59). Lets a recording be
-     * identified after the fact without parsing the filename — e.g.
-     * `ffprobe -show_format session.mp4` reveals shader, source
-     * resolution, and host nickname.
-     *
-     * Set via setRecordingContext() before startRecording(); fields
-     * are optional and empty ones are skipped.
-     */
-    struct Context
-    {
-        std::string shaderName;       // e.g. "crt-mattias.glslp" or "(none)"
-        std::string hostNickname;     // user's nickname when publishing
-        uint32_t    sourceWidth  = 0; // pre-shader / pre-scale source dims
-        uint32_t    sourceHeight = 0;
-        uint32_t    sourceFps    = 0;
-        std::string sourceType;       // "v4l2" / "directshow" / "remote"
-        std::string applicationVersion;
-        std::string kind;             // "shader" / "raw" — for future dual output
-    };
-    void setRecordingContext(const Context &ctx) { m_context = ctx; }
-    const Context &getRecordingContext() const   { return m_context; }
-
     // Status
     uint64_t getCurrentDurationUs();
     uint64_t getCurrentFileSize();
@@ -109,7 +85,6 @@ private:
     MediaSynchronizer m_synchronizer;
     
     RecordingSettings m_settings;
-    Context           m_context;
     RecordingMetadata m_currentMetadata;
     
     std::thread m_encodingThread;

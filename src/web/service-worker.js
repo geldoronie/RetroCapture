@@ -1,48 +1,26 @@
 /**
- * RetroCapture PWA Service Worker.
- *
- * Strategy split by sensitivity — the v3/v4 "cache-first for
- * everything" policy caused real bugs (stale /config.html bypassing
- * the server's LAN gate, language switches that didn't take because
- * cached home.js trailed the server), so v5 onward draws a hard line:
- *
- *   - HTML / JS / i18n bundles  → network-first, fall back to cache
- *                                  only when offline. Anything that
- *                                  carries auth, code, or strings
- *                                  *must* match the server's view.
- *   - CSS / fonts / icons / images / manifest
- *                               → stale-while-revalidate. One stale
- *                                 render is acceptable; the
- *                                 background refresh fixes it on the
- *                                 next visit.
- *   - /api/*                    → network-only, with a synthetic
- *                                  offline JSON for graceful degrade.
- *   - /stream and /recordings/.../file
- *                               → pass-through (Range + cache don't
- *                                 mix).
- *
- * Lifecycle: install precaches the minimal viable shell, then
- * skipWaiting + clients.claim let a freshly-pushed SW take over the
- * page on the very next navigation. Index.html ships a tiny
- * controllerchange listener that reloads the page when a new SW
- * activates mid-session — that, plus a cache-name bump per release,
- * is what keeps users out of stale-cache hell.
- *
- * Bump CACHE_NAME and RUNTIME_CACHE in lockstep on any portal
- * release that touches static assets — that's what trips the
- * activate-time cleanup of older caches.
+ * RetroCapture PWA Service Worker
+ * Gerencia cache e funcionalidade offline
  */
 
-const CACHE_NAME = 'retrocapture-v6';
-const RUNTIME_CACHE = 'retrocapture-runtime-v6';
+// Bumped to v3 with the home/config split — landing page is now the
+// live player at "/" and the previous tabbed UI moved to /config.html.
+const CACHE_NAME = 'retrocapture-v3';
+const RUNTIME_CACHE = 'retrocapture-runtime-v3';
 
-// Resources to precache so the PWA shell works offline. Keep small
-// — every entry has to fetch successfully or install fails.
+// Resources to precache on install
 const PRECACHE_URLS = [
   '/',
   '/index.html',
+  '/config.html',
+  '/recordings.html',
   '/style.css',
+  '/home.js',
+  '/control.js',
+  '/api.js',
   '/manifest.json',
+  // Vendored libraries — bundled in /vendor so the PWA install works
+  // fully offline without depending on a CDN at first load.
   '/vendor/bootstrap.min.css',
   '/vendor/bootstrap.bundle.min.js',
   '/vendor/bootstrap-icons.css',
@@ -51,129 +29,150 @@ const PRECACHE_URLS = [
   '/vendor/fonts/bootstrap-icons.woff2',
 ];
 
+// Instalar Service Worker e fazer precache
 self.addEventListener('install', (event) => {
+  console.log('[Service Worker] Installing...');
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
-      .then(() => self.skipWaiting())
+      .then((cache) => {
+        console.log('[Service Worker] Precaching static assets');
+        return cache.addAll(PRECACHE_URLS);
+      })
+      .then(() => self.skipWaiting()) // Ativar imediatamente
   );
 });
 
+// Ativar Service Worker e limpar caches antigos
 self.addEventListener('activate', (event) => {
+  console.log('[Service Worker] Activating...');
   event.waitUntil(
-    caches.keys()
-      .then((names) => Promise.all(
-        names.map((name) => {
-          if (name !== CACHE_NAME && name !== RUNTIME_CACHE) {
-            return caches.delete(name);
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE) {
+            console.log('[Service Worker] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
           }
         })
-      ))
-      .then(() => self.clients.claim())
+      );
+    }).then(() => self.clients.claim()) // Controlar todas as páginas imediatamente
   );
 });
 
-// ─── strategy helpers ────────────────────────────────────────────
+// Estratégia de cache: Network First com fallback para cache
+// Para APIs, sempre tentar rede primeiro (dados em tempo real)
+// Para recursos estáticos, usar cache primeiro
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
 
-function networkFirst(event, cacheName) {
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const clone = response.clone();
-          caches.open(cacheName).then((c) => c.put(event.request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request))
-  );
-}
+  // Ignorar requisições que não são GET
+  if (request.method !== 'GET') {
+    return;
+  }
 
-function staleWhileRevalidate(event, cacheName) {
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
+  // Ignorar requisições para arquivos de vídeo grandes (não devem ser cacheados)
+  // Essas requisições devem passar direto pela rede sem interceptação
+  if (url.pathname.includes('/recordings/') && url.pathname.endsWith('/file')) {
+    return; // Deixar passar direto, sem interceptação
+  }
+
+  // Ignorar requisições para stream de vídeo
+  if (url.pathname === '/stream' || url.pathname.startsWith('/stream/')) {
+    return; // Deixar passar direto, sem interceptação
+  }
+
+  // APIs sempre tentam rede primeiro (dados em tempo real)
+  if (url.pathname.startsWith('/api/')) {
+    event.respondWith(
+      fetch(request)
         .then((response) => {
+          // Se a rede funcionou, retornar resposta
           if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(cacheName).then((c) => c.put(event.request, clone));
+            // Cachear resposta para uso offline
+            const responseClone = response.clone();
+            caches.open(RUNTIME_CACHE).then((cache) => {
+              cache.put(request, responseClone);
+            });
           }
           return response;
         })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
-  );
-}
-
-// ─── classifiers ─────────────────────────────────────────────────
-
-function isHTML(url) {
-  return url.pathname === '/' || url.pathname.endsWith('.html');
-}
-
-function isScript(url) {
-  return url.pathname.endsWith('.js');
-}
-
-function isI18nBundle(url) {
-  return url.pathname.startsWith('/assets/i18n/');
-}
-
-function isStaticAsset(url) {
-  return (
-    url.pathname.endsWith('.css') ||
-    url.pathname.endsWith('.woff') ||
-    url.pathname.endsWith('.woff2') ||
-    url.pathname.endsWith('.png') ||
-    url.pathname.endsWith('.jpg') ||
-    url.pathname.endsWith('.jpeg') ||
-    url.pathname.endsWith('.svg') ||
-    url.pathname.endsWith('.ico') ||
-    url.pathname === '/manifest.json'
-  );
-}
-
-// ─── router ──────────────────────────────────────────────────────
-
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  if (request.method !== 'GET') return;
-
-  const url = new URL(request.url);
-
-  if (url.pathname === '/stream' || url.pathname.startsWith('/stream/')) return;
-  if (url.pathname.includes('/recordings/') && url.pathname.endsWith('/file')) return;
-
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request).catch(() =>
-        new Response(
-          JSON.stringify({ error: 'Offline', message: 'No connection to the server' }),
-          {
-            status: 503,
-            statusText: 'Service Unavailable',
-            headers: { 'Content-Type': 'application/json' },
-          }
-        )
-      )
+        .catch(() => {
+          // Se a rede falhou, tentar cache
+          return caches.match(request).then((cachedResponse) => {
+            if (cachedResponse) {
+              return cachedResponse;
+            }
+            // Se não há cache, retornar resposta offline genérica
+            return new Response(
+              JSON.stringify({ error: 'Offline', message: 'Sem conexão com o servidor' }),
+              {
+                status: 503,
+                statusText: 'Service Unavailable',
+                headers: { 'Content-Type': 'application/json' }
+              }
+            );
+          });
+        })
     );
     return;
   }
 
-  if (isI18nBundle(url) || isHTML(url) || isScript(url)) {
-    networkFirst(event, isI18nBundle(url) ? RUNTIME_CACHE : CACHE_NAME);
+  // Para recursos estáticos (HTML, CSS, JS, fontes), usar cache primeiro
+  if (url.pathname === '/' ||
+      url.pathname.endsWith('.html') ||
+      url.pathname.endsWith('.css') ||
+      url.pathname.endsWith('.js') ||
+      url.pathname.endsWith('.woff') ||
+      url.pathname.endsWith('.woff2')) {
+    event.respondWith(
+      caches.match(request)
+        .then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          // Se não está em cache, buscar da rede
+          return fetch(request)
+            .then((response) => {
+              // Cachear resposta para próxima vez
+              if (response && response.status === 200) {
+                const responseClone = response.clone();
+                caches.open(CACHE_NAME).then((cache) => {
+                  cache.put(request, responseClone);
+                });
+              }
+              return response;
+            });
+        })
+    );
     return;
   }
 
-  if (isStaticAsset(url)) {
-    staleWhileRevalidate(event, CACHE_NAME);
-    return;
-  }
-
-  networkFirst(event, RUNTIME_CACHE);
+  // Para outros recursos, tentar rede primeiro
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const responseClone = response.clone();
+          caches.open(RUNTIME_CACHE).then((cache) => {
+            cache.put(request, responseClone);
+          });
+        }
+        return response;
+      })
+      .catch(() => {
+        return caches.match(request);
+      })
+  );
 });
 
+// Notificações push (opcional, para futuras implementações)
+self.addEventListener('push', (event) => {
+  console.log('[Service Worker] Push notification received');
+  // Implementar notificações push no futuro se necessário
+});
+
+// Mensagens do cliente (para atualizar o service worker)
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();

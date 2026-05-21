@@ -17,7 +17,7 @@ std::vector<std::string> ShaderScanner::scan(const std::string &basePath)
 
     if (!fs::exists(path))
     {
-        LOG_WARN("Shaders directory not found: " + basePath);
+        LOG_WARN("Diretório de shaders não encontrado: " + basePath);
         return shaders;
     }
 

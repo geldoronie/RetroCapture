@@ -5,7 +5,7 @@
 > Includes HTTP MPEG-TS streaming, local recording, and a full web portal
 > for remote control.
 
-![Version](https://img.shields.io/badge/version-0.7.0--alpha-orange)
+![Version](https://img.shields.io/badge/version-0.6.0--alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Raspberry%20Pi-lightgrey)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
@@ -16,7 +16,7 @@
      Target ~1600x900. Save as docs/screenshots/hero.png -->
 ![Hero](docs/screenshots/hero.png)
 
-**[⬇ Download 0.7.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+**[⬇ Download 0.6.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
 [Documentation](#documentation) ·
 [Issues](https://github.com/geldoronie/RetroCapture/issues) ·
 [Changelog](CHANGELOG.md)
@@ -106,15 +106,15 @@ shader:
 
 ## Download
 
-Pre-built binaries for **0.7.0-alpha** are attached to the
+Pre-built binaries for **0.6.0-alpha** are attached to the
 [latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
 
 | Platform | Artifact |
 | --- | --- |
-| Linux x86_64 | `RetroCapture-0.7.0-alpha-linux-x86_64.AppImage` |
-| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz` |
-| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.7.0-alpha-linux-arm32v7.tar.gz` |
-| Windows x86_64 | `RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe` |
+| Linux x86_64 | `RetroCapture-0.6.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.6.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
@@ -158,21 +158,21 @@ For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 # Download from Releases, then:
-chmod +x RetroCapture-0.7.0-alpha-linux-x86_64.AppImage
-./RetroCapture-0.7.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+chmod +x RetroCapture-0.6.0-alpha-linux-x86_64.AppImage
+./RetroCapture-0.6.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
 ```
 
 ### Windows
 
-Run the installer (`RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe`),
+Run the installer (`RetroCapture-0.6.0-alpha-windows-x86_64-Setup.exe`),
 then launch RetroCapture from the Start menu. DirectShow is the default
 capture source on Windows.
 
 ### Raspberry Pi
 
 ```bash
-tar -xzf RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz
-cd RetroCapture-0.7.0-alpha-linux-arm64v8
+tar -xzf RetroCapture-0.6.0-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.6.0-alpha-linux-arm64v8
 ./retrocapture --source v4l2 --v4l2-device /dev/video0
 ```
 

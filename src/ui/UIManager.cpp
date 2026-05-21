@@ -1,22 +1,6 @@
 #include "UIManager.h"
-#include "UIConfigurationSource.h"
-#include "UIConfigurationShader.h"
-#include "UIConfigurationImage.h"
-#include "UIConfigurationStreaming.h"
-#include "UIConfigurationRecording.h"
-#include "UIConfigurationWebPortal.h"
-#ifdef __linux__
-#  include "UIConfigurationAudio.h"
-#endif
-#include "UIInfoPanel.h"
-#include "UIPreferences.h"
-#include "UISectionHeader.h"
-#include "UIShortcutsHelp.h"
-#include "../osd/QuickActionsOverlay.h"
-#include "../osd/ConnectionStatusOverlay.h"
+#include "UIConfiguration.h"
 #include "UICredits.h"
-#include "UIRemoteConnection.h"
-#include "UIDirectoryBrowser.h"
 #include "UICapturePresets.h"
 #include "UIRecordings.h"
 #include "../recording/RecordingProfileManager.h"
@@ -24,7 +8,6 @@
 #include "../streaming/StreamingProfileManager.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
-#include "../utils/TranslationManager.h"
 #include "../utils/ShaderScanner.h"
 #ifdef PLATFORM_LINUX
 #include "../utils/V4L2DeviceScanner.h"
@@ -58,27 +41,14 @@
 #include <nlohmann/json.hpp>
 
 UIManager::UIManager()
-    : m_creditsWindow(nullptr)
+    : m_configWindow(nullptr), m_creditsWindow(nullptr)
 {
 }
 
 UIManager::~UIManager()
 {
     // Destruir janelas antes de shutdown
-    m_sourceWindow.reset();
-    m_shaderWindow.reset();
-    m_imageWindow.reset();
-    m_streamingWindow.reset();
-    m_recordingWindow.reset();
-    m_webPortalWindow.reset();
-#ifdef __linux__
-    m_audioWindow.reset();
-#endif
-    m_infoWindow.reset();
-    m_preferencesWindow.reset();
-    m_shortcutsHelpWindow.reset();
-    m_connectionOverlay.reset();
-    m_quickActionsOverlay.reset();
+    m_configWindow.reset();
     m_creditsWindow.reset();
     m_capturePresetsWindow.reset();
     m_recordingsWindow.reset();
@@ -136,44 +106,13 @@ bool UIManager::init(void *window)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Anchor the ImGui ini to the user-data dir so window
-    // positions/sizes/collapse state survive across runs regardless
-    // of which directory the binary was launched from. CWD-relative
-    // worked while everyone ran from build/bin during dev but breaks
-    // for installed builds and Wine launches. m_iniPath has to outlive
-    // ImGui (it holds the pointer verbatim), so we keep it on the
-    // UIManager instance.
+    io.IniFilename = "RetroCapture.ini";
+    std::string oldIniPath = "imgui.ini";
+    if (fs::exists(oldIniPath))
     {
-        // FilesystemCompat.h on MinGW < 8 (current MXE toolchain runs
-        // GCC 5.5) doesn't ship the std::error_code overload of
-        // create_directories — it has only the single-arg signature
-        // that throws on failure. Wrap in try/catch so a missing dir
-        // (typically because the parent was just created by another
-        // run) doesn't take down the UI init.
-        fs::path userDir = fs::path(Paths::getUserDataDir());
-        try { fs::create_directories(userDir); } catch (...) { /* best effort */ }
-        m_iniPath = (userDir / "imgui.ini").string();
-        io.IniFilename = m_iniPath.c_str();
-        LOG_INFO("ImGui ini path: " + m_iniPath);
+        fs::remove(oldIniPath);
+        LOG_INFO("Old configuration file removed: " + oldIniPath);
     }
-    // Migrate the legacy CWD-anchored configs out of the way once.
-    for (const char *legacy : { "RetroCapture.ini", "imgui.ini" })
-    {
-        if (fs::exists(legacy))
-        {
-            fs::remove(legacy);
-            LOG_INFO(std::string("Removed legacy ini at CWD: ") + legacy);
-        }
-    }
-
-    // We previously tried to extend the default font's glyph range
-    // to include geometric shapes (U+25A0..U+25FF) so the `●` / `○`
-    // status bullets would render. That doesn't work: Dear ImGui's
-    // built-in Proggy Clean has no glyph DATA for any of those
-    // codepoints, so ranging them in still gets the missing-glyph
-    // fallback. The bullets are now drawn via ImDrawList primitives
-    // through ui_status_bullet() in UISectionHeader.h — same
-    // technique UIDirectoryBrowser::drawPadlockIcon uses.
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -205,59 +144,14 @@ bool UIManager::init(void *window)
 
     loadConfig();
 
-    // i18n bootstrap (#45 Fase B). loadConfig() above already set
-    // m_language from config.json (default "en"); now hand it to
-    // the TranslationManager so T(...) calls in subsequent UI
-    // construction return translated strings from the start. Switch
-    // via UIPreferences calls setLanguage() at runtime.
-    // Paths::getReadOnlyAssetsDir() returns the install/dev root that
-    // contains `assets/`, `shaders/`, `web/` side by side — not the
-    // `assets/` directory itself. The i18n bundles live under
-    // `assets/i18n/`, so explicitly join the `assets` segment here.
-    TranslationManager::instance().init(
-        (fs::path(Paths::getReadOnlyAssetsDir()) / "assets").string(),
-        m_language);
-
-    // Standalone configuration windows (Fase A of #45) — each used to
-    // be a tab inside the unified "RetroCapture Controls" window;
-    // they're now separate ImGui windows opened from
-    // Configurations / View / File menus.
-    m_sourceWindow      = std::make_unique<UIConfigurationSource>(this);
-    m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
-    m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
-    m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
-    m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
-    m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
-#ifdef __linux__
-    m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
-#endif
-    m_infoWindow        = std::make_unique<UIInfoPanel>(this);
-    m_preferencesWindow = std::make_unique<UIPreferences>(this);
-    // OSD layer (#68). Lives in src/osd/ — visual elements pinned to
-    // viewport corners with no user-movable decoration, distinct from
-    // the UI layer (src/ui/) which owns interactive windows.
-    m_quickActionsOverlay = std::make_unique<QuickActionsOverlay>(this);
-    m_quickActionsOverlay->setVisible(m_quickActionsVisible);
-    m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
-        this, m_quickActionsOverlay.get());
-    // Shortcuts orientation widget — UI layer, top-right corner,
-    // F12-gated unlike the OSD.
-    m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
-    m_shortcutsHelpWindow->setVisible(m_shortcutsHelpVisible);
-
+    m_configWindow = std::make_unique<UIConfiguration>(this);
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
     m_recordingsWindow = std::make_unique<UIRecordings>(this);
-    m_remoteConnectionWindow = std::make_unique<UIRemoteConnection>(this);
-    m_directoryBrowserWindow = std::make_unique<UIDirectoryBrowser>(this);
-    m_directoryBrowserWindow->setRemoteConnectionWindow(m_remoteConnectionWindow.get());
     m_recordingProfileManager = std::make_unique<RecordingProfileManager>();
     m_streamingProfileManager = std::make_unique<StreamingProfileManager>();
-
-    // Open the most useful window on first launch so the user sees
-    // something rather than a bare menu bar. Same role the old
-    // "RetroCapture Controls" tab window had.
-    if (m_sourceWindow) m_sourceWindow->setVisible(true);
+    m_configWindow->setVisible(true);
+    m_configWindow->setJustOpened(true);
 
     m_initialized = true;
     LOG_INFO("UIManager initialized");
@@ -296,20 +190,13 @@ void UIManager::beginFrame()
         return;
     }
 
-    // Mouse-input gating. NoMouse blocks ImGui from interpreting any
-    // pointer activity, used to keep the cursor / clicks from leaking
-    // into a hidden UI. But the OSD layer (#68) lives outside the
-    // m_uiVisible gate — its buttons must respond to clicks even
-    // with F12 hiding the rest of the UI. So gate NoMouse on
-    // (UI hidden AND no interactive OSD on screen) rather than on
-    // UI alone, and skip the mouse-position scrub that would prevent
-    // any widget from seeing hover at all.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
-    const bool blockMouse     = !m_uiVisible && !osdInteractive;
+    // Disable ImGui mouse input BEFORE processing events when UI is hidden
+    // This prevents ImGui from processing mouse events and controlling cursor
     ImGuiIO& io = ImGui::GetIO();
-    if (blockMouse)
+    if (!m_uiVisible)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        // Also disable mouse buttons to prevent any mouse interaction
         io.MouseDown[0] = false;
         io.MouseDown[1] = false;
         io.MouseDown[2] = false;
@@ -320,7 +207,7 @@ void UIManager::beginFrame()
     {
         io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
-
+    
     // Always call NewFrame, even when UI is hidden (maintains ImGui state)
     ImGui_ImplOpenGL3_NewFrame();
 #ifdef USE_SDL2
@@ -329,13 +216,14 @@ void UIManager::beginFrame()
     ImGui_ImplGlfw_NewFrame();
 #endif
     ImGui::NewFrame();
-
-    // ImGui backends (Glfw/SDL2 NewFrame) may flip the mouse flag and
-    // pull a fresh cursor position from the OS — re-apply our gating
-    // and scrub the position only when truly blocking input.
-    if (blockMouse)
+    
+    // CRITICAL: Ensure mouse is disabled after NewFrame
+    // ImGui backends (ImGui_ImplGlfw_NewFrame/ImGui_ImplSDL2_NewFrame) may re-enable mouse input
+    // and restore cursor visibility, so we must disable it again
+    if (!m_uiVisible)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        // Also clear mouse position to prevent any mouse interaction
         io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
         io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
@@ -348,26 +236,21 @@ void UIManager::endFrame()
         return;
     }
 
-    // Always paint the frame, even when the main UI is hidden.
-    // renderConnectionOverlay() runs before render()'s m_uiVisible
-    // gate, so when F12 hides the rest of the UI the draw list still
-    // has the overlay in it. Calling EndFrame instead of Render
-    // discarded that, leaving the user with a frozen-looking stream
-    // during reconnects. With nothing added to the draw list this is
-    // effectively a no-op anyway.
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    if (m_uiVisible)
+    {
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
+    else
+    {
+        // Quando oculta, ainda precisamos finalizar o frame para manter o estado correto
+        ImGui::EndFrame();
+    }
     
-    // Mouse input gating. NoMouse blocks ImGui from interpreting
-    // clicks, which keeps the cursor from being captured by hidden
-    // windows. But the OSD layer (#68) lives outside the m_uiVisible
-    // gate — when the quick-actions overlay is on screen, its
-    // buttons must respond to clicks even with the rest of the UI
-    // hidden via F12. So gate NoMouse on (UI hidden AND no
-    // interactive OSD visible) rather than UI alone.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    // Keep ImGui mouse disabled when UI is hidden
+    // This prevents ImGui from interfering with cursor visibility
     ImGuiIO& io = ImGui::GetIO();
-    if (!m_uiVisible && !osdInteractive)
+    if (!m_uiVisible)
     {
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
     }
@@ -391,37 +274,21 @@ void UIManager::setVisible(bool visible)
 
 void UIManager::render()
 {
-    if (!m_initialized) return;
-
-    // OSD layer renders BEFORE the m_uiVisible gate (#68). By
-    // definition an OSD shows up regardless of whether the rest of
-    // the UI is hidden — the user pressing F12 to clear the screen
-    // shouldn't make the quick-actions widget or the connection
-    // status indicator vanish too. Quick actions renders first so
-    // its rendered-height is up-to-date when the connection overlay
-    // queries it for anti-collision math.
-    if (m_quickActionsOverlay) m_quickActionsOverlay->render();
-    renderConnectionOverlay();
-
-    if (!m_uiVisible)
+    if (!m_initialized || !m_uiVisible)
     {
         return;
     }
 
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu(T("menu.file").c_str()))
+        if (ImGui::BeginMenu("File"))
         {
-            if (m_preferencesWindow)
+            if (ImGui::MenuItem("Rescan Shaders"))
             {
-                bool visible = m_preferencesWindow->isVisible();
-                if (ImGui::MenuItem(T("menu.file.preferences").c_str(), nullptr, visible))
-                {
-                    m_preferencesWindow->setVisible(!visible);
-                }
+                scanShaders(m_shaderBasePath);
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(T("menu.file.exit").c_str(), "Esc"))
+            if (ImGui::MenuItem("Exit", "Esc"))
             {
                 if (m_window)
                 {
@@ -435,129 +302,45 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
-
-        // Configurations menu — each entry toggles one of the
-        // ex-tab windows. Producer-only windows hide entirely in
-        // client mode so the user can't accidentally try to
-        // configure things that don't apply to the inbound stream.
-        const bool clientMode = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-        if (ImGui::BeginMenu(T("menu.configurations").c_str()))
+        if (ImGui::BeginMenu("View"))
         {
-            auto toggleItem = [](const std::string &label, auto *window) {
-                if (!window) return;
-                bool vis = window->isVisible();
-                if (ImGui::MenuItem(label.c_str(), nullptr, vis)) window->setVisible(!vis);
-            };
-            // Shader + Image stay visible in client mode — shader
-            // params and brightness/contrast/aspect ratio make
-            // sense for a viewer to override.
-            toggleItem(T("menu.configurations.shaders"),  m_shaderWindow.get());
-            toggleItem(T("menu.configurations.image"),    m_imageWindow.get());
-            // Recording is allowed in client mode (#68) — the
-            // pipeline is generic and captures whatever the
-            // framebuffer holds, which in client mode is the
-            // decoded remote /raw. Audio has a caveat (no local
-            // loopback by default) that the OSD tooltip surfaces.
-            toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
-            if (!clientMode)
-            {
-                ImGui::Separator();
-                toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
-                toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
-                toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
-#ifdef __linux__
-                toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
-#endif
-            }
-            ImGui::EndMenu();
-        }
-
-        if (ImGui::BeginMenu(T("menu.view").c_str()))
-        {
-            if (ImGui::MenuItem(T("menu.view.toggleui").c_str(), "F12"))
+            if (ImGui::MenuItem("Toggle UI", "F12"))
             {
                 setVisible(!m_uiVisible);
             }
             ImGui::Separator();
-            if (m_quickActionsOverlay)
+            if (m_configWindow)
             {
-                bool visible = m_quickActionsOverlay->isVisible();
-                if (ImGui::MenuItem(T("menu.view.quickactions").c_str(), nullptr, visible))
+                bool visible = m_configWindow->isVisible();
+                if (ImGui::MenuItem("Configuration", nullptr, visible))
                 {
-                    m_quickActionsOverlay->setVisible(!visible);
+                    m_configWindow->setVisible(!visible);
                 }
             }
-            if (m_shortcutsHelpWindow)
+            if (m_capturePresetsWindow)
             {
-                bool visible = m_shortcutsHelpWindow->isVisible();
-                if (ImGui::MenuItem(T("menu.view.shortcuts").c_str(), nullptr, visible))
+                bool visible = m_capturePresetsWindow->isVisible();
+                if (ImGui::MenuItem("Capture Presets", nullptr, visible))
                 {
-                    m_shortcutsHelpWindow->setVisible(!visible);
+                    m_capturePresetsWindow->setVisible(!visible);
                 }
             }
-            if (m_infoWindow)
+            if (m_recordingsWindow)
             {
-                bool visible = m_infoWindow->isVisible();
-                if (ImGui::MenuItem(T("menu.view.info").c_str(), nullptr, visible))
+                bool visible = m_recordingsWindow->isVisible();
+                if (ImGui::MenuItem("Recordings", nullptr, visible))
                 {
-                    m_infoWindow->setVisible(!visible);
-                }
-            }
-            if (!clientMode)
-            {
-                if (m_capturePresetsWindow)
-                {
-                    bool visible = m_capturePresetsWindow->isVisible();
-                    if (ImGui::MenuItem(T("menu.view.capturepresets").c_str(), nullptr, visible))
-                    {
-                        m_capturePresetsWindow->setVisible(!visible);
-                    }
-                }
-                if (m_recordingsWindow)
-                {
-                    bool visible = m_recordingsWindow->isVisible();
-                    if (ImGui::MenuItem(T("menu.view.recordings").c_str(), nullptr, visible))
-                    {
-                        m_recordingsWindow->setVisible(!visible);
-                    }
+                    m_recordingsWindow->setVisible(!visible);
                 }
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu(T("menu.remote").c_str()))
-        {
-            const bool clientEntryAllowed = !m_streamingActive;
-            if (ImGui::MenuItem(T("menu.remote.connect").c_str(), nullptr, false, clientEntryAllowed))
-            {
-                if (m_remoteConnectionWindow)
-                {
-                    m_remoteConnectionWindow->setVisible(true);
-                }
-            }
-            if (ImGui::MenuItem(T("menu.remote.browse").c_str(), nullptr, false, clientEntryAllowed))
-            {
-                if (m_directoryBrowserWindow)
-                {
-                    m_directoryBrowserWindow->setVisible(true);
-                }
-            }
-            if (m_streamingActive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            {
-                ImGui::SetTooltip("%s", T("menu.remote.disabled_streaming_tip").c_str());
-            }
-            const bool connected = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-            if (ImGui::MenuItem(T("menu.remote.disconnect").c_str(), nullptr, false, connected))
-            {
-                setCurrentDevice("");
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu(T("menu.help").c_str()))
+        if (ImGui::BeginMenu("Help"))
         {
             if (m_creditsWindow)
             {
                 bool visible = m_creditsWindow->isVisible();
-                if (ImGui::MenuItem(T("menu.help.credits").c_str(), nullptr, visible))
+                if (ImGui::MenuItem("Credits", nullptr, visible))
                 {
                     m_creditsWindow->setVisible(!visible);
                 }
@@ -567,68 +350,16 @@ void UIManager::render()
         ImGui::EndMainMenuBar();
     }
 
-    // While in client mode (Remote source + active connection), force the
-    // producer-only windows shut so the user can't accidentally have them
-    // sitting open from a previous local session — the menu hides their
-    // toggles too, so without this they'd be unreachable but still drawing.
-    const bool clientModeActive = (m_sourceType == SourceType::Remote) && !m_currentDevice.empty();
-    // Symmetric to the menu-item gating above: when we're streaming as
-    // host, force the client-side windows shut. Without this the user
-    // could have left them open from before they hit Start Streaming
-    // and they'd remain visible (and active) on screen.
-    if (m_streamingActive)
+    // Renderizar janela de configuração
+    if (m_configWindow)
     {
-        if (m_remoteConnectionWindow) m_remoteConnectionWindow->setVisible(false);
-        if (m_directoryBrowserWindow) m_directoryBrowserWindow->setVisible(false);
+        m_configWindow->render();
     }
-    if (clientModeActive)
-    {
-        if (m_capturePresetsWindow) m_capturePresetsWindow->setVisible(false);
-        if (m_recordingsWindow)     m_recordingsWindow->setVisible(false);
-        // Producer-only configuration windows also force-shut in
-        // client mode — Source/Streaming/Recording/Web Portal/Audio
-        // operate on the local pipeline that isn't running when
-        // we're a remote viewer.
-        if (m_sourceWindow)    m_sourceWindow->setVisible(false);
-        if (m_streamingWindow) m_streamingWindow->setVisible(false);
-        // Recording window stays openable in client mode (#68).
-        if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
-#ifdef __linux__
-        if (m_audioWindow)     m_audioWindow->setVisible(false);
-#endif
-    }
-
-    // Render the seven configuration windows + Preferences + Info.
-    // Each is a no-op when its own m_visible is false.
-    if (m_sourceWindow)      m_sourceWindow->render();
-    if (m_shaderWindow)      m_shaderWindow->render();
-    if (m_imageWindow)       m_imageWindow->render();
-    if (m_streamingWindow)   m_streamingWindow->render();
-    if (m_recordingWindow)   m_recordingWindow->render();
-    if (m_webPortalWindow)   m_webPortalWindow->render();
-#ifdef __linux__
-    if (m_audioWindow)       m_audioWindow->render();
-#endif
-    if (m_infoWindow)        m_infoWindow->render();
-    if (m_preferencesWindow) m_preferencesWindow->render();
-    if (m_shortcutsHelpWindow) m_shortcutsHelpWindow->render();
-    // m_quickActionsOverlay rendered earlier, above the m_uiVisible gate.
 
     // Renderizar janela de créditos
     if (m_creditsWindow)
     {
         m_creditsWindow->render();
-    }
-
-    // Renderizar janela de conexão remota
-    if (m_remoteConnectionWindow)
-    {
-        m_remoteConnectionWindow->render();
-    }
-
-    if (m_directoryBrowserWindow)
-    {
-        m_directoryBrowserWindow->render();
     }
 
     // Renderizar janela de presets
@@ -936,7 +667,7 @@ void UIManager::renderSourcePanel()
     }
     else if (m_sourceType == SourceType::None)
     {
-        ImGui::TextWrapped("No source selected. Pick a source type above.");
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
 }
 
@@ -946,7 +677,7 @@ void UIManager::renderV4L2Controls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("No V4L2 device connected. Select a device below to start capture.");
+        ImGui::TextWrapped("Nenhum dispositivo V4L2 conectado. Selecione um dispositivo abaixo para iniciar a captura.");
         ImGui::Separator();
     }
 
@@ -1467,14 +1198,21 @@ void UIManager::setCaptureInfo(uint32_t width, uint32_t height, uint32_t fps, co
 
 void UIManager::renderStreamingPanel()
 {
-    ImGui::Text("HTTP MPEG-TS Streaming (audio + video)");
+    ImGui::Text("HTTP MPEG-TS Streaming (Áudio + Vídeo)");
     ImGui::Separator();
 
-    // Status — bullet drawn via ui_status_indicator() in
-    // UISectionHeader.h so it goes through ImDrawList primitives
-    // instead of an untyped Unicode glyph the default font can't
-    // render.
-    ui_status_indicator(m_streamingActive, "Active", "Inactive");
+    // Status
+    ImGui::Text("Status: %s", m_streamingActive ? "Ativo" : "Inativo");
+    if (m_streamingActive)
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "●");
+    }
+    else
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "●");
+    }
 
     if (m_streamingActive && !m_streamUrl.empty())
     {
@@ -1483,12 +1221,12 @@ void UIManager::renderStreamingPanel()
     }
 
     ImGui::Separator();
-    ImGui::Text("Basic Settings");
+    ImGui::Text("Configurações Básicas");
     ImGui::Separator();
 
     // Controles básicos
     int port = static_cast<int>(m_streamingPort);
-    if (ImGui::InputInt("Port", &port, 1, 100))
+    if (ImGui::InputInt("Porta", &port, 1, 100))
     {
         // Validation is done in setStreamingPort/triggerStreamingPortChange
         if (port >= 1024 && port <= 65535)
@@ -1522,7 +1260,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
+    if (ImGui::Combo("Resolução", &currentResIndex, resolutions, 10))
     {
         m_streamingWidth = resolutionWidths[currentResIndex];
         m_streamingHeight = resolutionHeights[currentResIndex];
@@ -1577,7 +1315,7 @@ void UIManager::renderStreamingPanel()
         }
     }
 
-    if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
+    if (ImGui::Combo("Codec de Vídeo", &currentVideoCodecIndex, videoCodecs, 4))
     {
         m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
         if (m_onStreamingVideoCodecChanged)
@@ -1632,7 +1370,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
+        if (ImGui::Combo("Qualidade H.264", &currentPresetIndex, h264Presets, 9))
         {
             m_streamingH264Preset = h264Presets[currentPresetIndex];
             if (m_onStreamingH264PresetChanged)
@@ -1643,10 +1381,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("H.264 encoder preset:\n"
-                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
-                              "fast/medium: balance between speed and quality\n"
-                              "slow/slower/veryslow: maximum quality, lower speed");
+            ImGui::SetTooltip("Preset do encoder H.264:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
         }
     }
 
@@ -1673,7 +1411,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
+        if (ImGui::Combo("Qualidade H.265", &currentPresetIndex, h265Presets, 9))
         {
             m_streamingH265Preset = h265Presets[currentPresetIndex];
             if (m_onStreamingH265PresetChanged)
@@ -1684,10 +1422,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("H.265 encoder preset:\n"
-                              "ultrafast/superfast/veryfast: maximum speed, lower quality\n"
-                              "fast/medium: balance between speed and quality\n"
-                              "slow/slower/veryslow: maximum quality, lower speed");
+            ImGui::SetTooltip("Preset do encoder H.265:\n"
+                              "ultrafast/superfast/veryfast: Máxima velocidade, menor qualidade\n"
+                              "fast/medium: Equilíbrio entre velocidade e qualidade\n"
+                              "slow/slower/veryslow: Máxima qualidade, menor velocidade");
         }
 
         // Profile H.265
@@ -1702,7 +1440,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
+        if (ImGui::Combo("Profile H.265", &currentProfileIndex, h265Profiles, 2))
         {
             m_streamingH265Profile = h265Profiles[currentProfileIndex];
             if (m_onStreamingH265ProfileChanged)
@@ -1713,9 +1451,9 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("H.265 encoder profile:\n"
-                              "main: 8-bit, maximum compatibility\n"
-                              "main10: 10-bit, better quality, HDR support");
+            ImGui::SetTooltip("Profile do encoder H.265:\n"
+                              "main: 8-bit, máxima compatibilidade\n"
+                              "main10: 10-bit, melhor qualidade, suporte HDR");
         }
 
         // Level H.265
@@ -1732,7 +1470,7 @@ void UIManager::renderStreamingPanel()
             }
         }
 
-        if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
+        if (ImGui::Combo("Level H.265", &currentLevelIndex, h265Levels, 14))
         {
             m_streamingH265Level = h265Levels[currentLevelIndex];
             if (m_onStreamingH265LevelChanged)
@@ -1743,10 +1481,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("H.265 encoder level:\n"
-                              "auto: automatic detection (recommended)\n"
-                              "1-6.2: specific levels for compatibility\n"
-                              "Higher levels support larger resolutions/bitrates");
+            ImGui::SetTooltip("Level do encoder H.265:\n"
+                              "auto: Detecção automática (recomendado)\n"
+                              "1-6.2: Níveis específicos para compatibilidade\n"
+                              "Níveis mais altos suportam resoluções/bitrates maiores");
         }
     }
 
@@ -1754,7 +1492,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp8")
     {
         int currentSpeed = m_streamingVP8Speed;
-        if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
+        if (ImGui::SliderInt("Speed VP8 (0-16)", &currentSpeed, 0, 16))
         {
             m_streamingVP8Speed = currentSpeed;
             if (m_onStreamingVP8SpeedChanged)
@@ -1765,10 +1503,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("VP8 encoder speed:\n"
-                              "0: best quality, slower\n"
-                              "16: faster, lower quality\n"
-                              "12: good balance for streaming");
+            ImGui::SetTooltip("Speed do encoder VP8:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "16: Mais rápido, menor qualidade\n"
+                              "12: Bom equilíbrio para streaming");
         }
     }
 
@@ -1776,7 +1514,7 @@ void UIManager::renderStreamingPanel()
     if (m_streamingVideoCodec == "vp9")
     {
         int currentSpeed = m_streamingVP9Speed;
-        if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
+        if (ImGui::SliderInt("Speed VP9 (0-9)", &currentSpeed, 0, 9))
         {
             m_streamingVP9Speed = currentSpeed;
             if (m_onStreamingVP9SpeedChanged)
@@ -1787,10 +1525,10 @@ void UIManager::renderStreamingPanel()
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("VP9 encoder speed:\n"
-                              "0: best quality, slower\n"
-                              "9: faster, lower quality\n"
-                              "6: good balance for streaming");
+            ImGui::SetTooltip("Speed do encoder VP9:\n"
+                              "0: Melhor qualidade, mais lento\n"
+                              "9: Mais rápido, menor qualidade\n"
+                              "6: Bom equilíbrio para streaming");
         }
     }
 
@@ -1800,7 +1538,7 @@ void UIManager::renderStreamingPanel()
 
     // Bitrate de vídeo
     int bitrate = static_cast<int>(m_streamingBitrate);
-    if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
+    if (ImGui::InputInt("Bitrate Vídeo (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
@@ -1815,15 +1553,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Video bitrate in kbps.\n"
-                          "0 = automatic (based on resolution/FPS)\n"
-                          "100-100000 kbps: valid range\n"
-                          "Recommended: 2000-8000 kbps for streaming");
+        ImGui::SetTooltip("Bitrate de vídeo em kbps.\n"
+                          "0 = automático (baseado na resolução/FPS)\n"
+                          "100-100000 kbps: valores válidos\n"
+                          "Recomendado: 2000-8000 kbps para streaming");
     }
 
     // Bitrate de áudio
     int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
-    if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
+    if (ImGui::InputInt("Bitrate Áudio (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
@@ -1838,18 +1576,18 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Audio bitrate in kbps.\n"
-                          "64-320 kbps: valid range\n"
-                          "Recommended: 128-256 kbps for good quality");
+        ImGui::SetTooltip("Bitrate de áudio em kbps.\n"
+                          "64-320 kbps: valores válidos\n"
+                          "Recomendado: 128-256 kbps para boa qualidade");
     }
 
     ImGui::Separator();
-    ImGui::Text("Buffer (Advanced)");
+    ImGui::Text("Buffer (Avançado)");
     ImGui::Separator();
 
     // Max Video Buffer Size
     int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
-    if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
+    if (ImGui::SliderInt("Max Frames no Buffer", &maxVideoBuffer, 1, 50))
     {
         m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
         if (m_onStreamingMaxVideoBufferSizeChanged)
@@ -1860,15 +1598,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Max video frames in the buffer.\n"
-                          "1-50 frames: valid range\n"
-                          "Default: 10 frames\n"
-                          "Higher values = more memory, less risk of dropped frames");
+        ImGui::SetTooltip("Máximo de frames de vídeo no buffer.\n"
+                          "1-50 frames: valores válidos\n"
+                          "Padrão: 10 frames\n"
+                          "Valores maiores = mais memória, menos risco de perda de frames");
     }
 
     // Max Audio Buffer Size
     int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
-    if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
+    if (ImGui::SliderInt("Max Chunks no Buffer", &maxAudioBuffer, 5, 100))
     {
         m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
         if (m_onStreamingMaxAudioBufferSizeChanged)
@@ -1879,15 +1617,15 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Max audio chunks in the buffer.\n"
-                          "5-100 chunks: valid range\n"
-                          "Default: 20 chunks\n"
-                          "Higher values = more memory, better sync");
+        ImGui::SetTooltip("Máximo de chunks de áudio no buffer.\n"
+                          "5-100 chunks: valores válidos\n"
+                          "Padrão: 20 chunks\n"
+                          "Valores maiores = mais memória, melhor sincronização");
     }
 
     // Max Buffer Time
     int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
-    if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
+    if (ImGui::SliderInt("Max Tempo de Buffer (segundos)", &maxBufferTime, 1, 30))
     {
         m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
         if (m_onStreamingMaxBufferTimeSecondsChanged)
@@ -1898,10 +1636,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Max buffer time in seconds.\n"
-                          "1-30 seconds: valid range\n"
-                          "Default: 5 seconds\n"
-                          "Controls how much video/audio can be queued before processing");
+        ImGui::SetTooltip("Tempo máximo de buffer em segundos.\n"
+                          "1-30 segundos: valores válidos\n"
+                          "Padrão: 5 segundos\n"
+                          "Controla quanto tempo de vídeo/áudio pode ser armazenado antes de processar");
     }
 
     // AVIO Buffer Size
@@ -1917,10 +1655,10 @@ void UIManager::renderStreamingPanel()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("FFmpeg AVIO buffer size in KB.\n"
-                          "64-1024 KB: valid range\n"
-                          "Default: 256 KB\n"
-                          "FFmpeg internal buffer for streaming I/O");
+        ImGui::SetTooltip("Tamanho do buffer AVIO do FFmpeg em KB.\n"
+                          "64-1024 KB: valores válidos\n"
+                          "Padrão: 256 KB\n"
+                          "Buffer interno do FFmpeg para I/O de streaming");
     }
 
     ImGui::Separator();
@@ -1946,7 +1684,7 @@ void UIManager::renderStreamingPanel()
     }
     else if (m_streamingActive)
     {
-        if (ImGui::Button("Stop Streaming", ImVec2(-1, 0)))
+        if (ImGui::Button("Parar Streaming", ImVec2(-1, 0)))
         {
             if (m_onStreamingStartStop)
             {
@@ -1972,7 +1710,7 @@ void UIManager::renderStreamingPanel()
         }
         else
         {
-            if (ImGui::Button("Start Streaming", ImVec2(-1, 0)))
+            if (ImGui::Button("Iniciar Streaming", ImVec2(-1, 0)))
             {
                 if (m_onStreamingStartStop)
                 {
@@ -2203,51 +1941,6 @@ void UIManager::triggerStreamingVP9SpeedChange(int speed)
     saveConfig();
 }
 
-void UIManager::triggerStreamingHardwareEncoderChange(int v)
-{
-    m_streamingHardwareEncoder = v;
-    if (m_onStreamingHardwareEncoderChanged)
-    {
-        m_onStreamingHardwareEncoderChanged(v);
-    }
-    saveConfig();
-}
-
-void UIManager::triggerStreamingNvencPresetChange(const std::string &v)
-{
-    m_streamingNvencPreset = v;
-    if (m_onStreamingNvencPresetChanged) m_onStreamingNvencPresetChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerStreamingVaapiRcModeChange(const std::string &v)
-{
-    m_streamingVaapiRcMode = v;
-    if (m_onStreamingVaapiRcModeChanged) m_onStreamingVaapiRcModeChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerStreamingQsvPresetChange(const std::string &v)
-{
-    m_streamingQsvPreset = v;
-    if (m_onStreamingQsvPresetChanged) m_onStreamingQsvPresetChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
-{
-    m_streamingAmfQuality = v;
-    if (m_onStreamingAmfQualityChanged) m_onStreamingAmfQualityChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerRemoteInterpolationChange(const std::string &v)
-{
-    m_remoteInterpolation = v;
-    if (m_onRemoteInterpolationChanged) m_onRemoteInterpolationChanged(v);
-    saveConfig();
-}
-
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2433,7 +2126,7 @@ void UIManager::loadConfig()
         std::ifstream file(configPath);
         if (!file.is_open())
         {
-            LOG_WARN("Could not open config file: " + configPath);
+            LOG_WARN("Não foi possível abrir arquivo de configuração: " + configPath);
             return;
         }
 
@@ -2473,18 +2166,6 @@ void UIManager::loadConfig()
                 m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
                 m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
-            if (streaming.contains("hardwareEncoder"))
-                m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
-            if (streaming.contains("nvencPreset"))
-                m_streamingNvencPreset = streaming["nvencPreset"].get<std::string>();
-            if (streaming.contains("vaapiRcMode"))
-                m_streamingVaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
-            if (streaming.contains("qsvPreset"))
-                m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
-            if (streaming.contains("amfQuality"))
-                m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
-            if (streaming.contains("remoteInterpolation"))
-                m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -2499,38 +2180,6 @@ void UIManager::loadConfig()
                 if (buffer.contains("avioBufferSize"))
                     m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
             }
-            if (streaming.contains("directory"))
-            {
-                auto &dir = streaming["directory"];
-                if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
-                if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
-                if (dir.contains("insecureSkipVerify")) m_directoryInsecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
-                if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
-                if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
-                if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
-                if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
-                if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
-                if (dir.contains("tunnelMode"))           m_directoryTunnelMode           = dir["tunnelMode"].get<std::string>();
-                if (dir.contains("namedTunnelId"))        m_directoryNamedTunnelId        = dir["namedTunnelId"].get<std::string>();
-                if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
-                if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
-            }
-        }
-
-        // Preferences (#45 placeholder + window restructure)
-        if (config.contains("preferences"))
-        {
-            auto &prefs = config["preferences"];
-            if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
-            if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
-            // #68 — Quick actions widget visibility persists. Default
-            // true so users discover the widget on first launch; once
-            // they toggle it off via View, the choice survives across
-            // runs.
-            if (prefs.contains("quickActionsVisible"))
-                m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
-            if (prefs.contains("shortcutsHelpVisible"))
-                m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2836,16 +2485,6 @@ void UIManager::loadConfig()
                 m_recordingIncludeAudio = recording["includeAudio"];
             if (recording.contains("applyShader"))
                 m_recordingApplyShader = recording["applyShader"].get<bool>();
-            if (recording.contains("hardwareEncoder"))
-                m_recordingHardwareEncoder = recording["hardwareEncoder"].get<int>();
-            if (recording.contains("nvencPreset"))
-                m_recordingNvencPreset = recording["nvencPreset"].get<std::string>();
-            if (recording.contains("vaapiRcMode"))
-                m_recordingVaapiRcMode = recording["vaapiRcMode"].get<std::string>();
-            if (recording.contains("qsvPreset"))
-                m_recordingQsvPreset = recording["qsvPreset"].get<std::string>();
-            if (recording.contains("amfQuality"))
-                m_recordingAmfQuality = recording["amfQuality"].get<std::string>();
         }
 
         if (config.contains("streaming"))
@@ -2887,45 +2526,8 @@ void UIManager::saveConfig()
             {"h265Level", m_streamingH265Level},
             {"vp8Speed", m_streamingVP8Speed},
             {"vp9Speed", m_streamingVP9Speed},
-            {"hardwareEncoder", m_streamingHardwareEncoder},
-            {"nvencPreset", m_streamingNvencPreset},
-            {"vaapiRcMode", m_streamingVaapiRcMode},
-            {"qsvPreset",   m_streamingQsvPreset},
-            {"amfQuality",  m_streamingAmfQuality},
-            {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}},
-            // #49 Phase 2: public directory publish settings.
-            // The password is persisted because the user re-uses it
-            // across sessions; the runtime streamId + ownerToken are
-            // never persisted (per the spec — a new run is a new
-            // directory entry).
-            {"directory", {
-                {"publishEnabled", m_directoryPublishEnabled},
-                {"url",            m_directoryUrl},
-                {"insecureSkipVerify", m_directoryInsecureSkipVerify},
-                {"streamName",     m_directoryStreamName},
-                {"hostNickname",   m_directoryHostNickname},
-                {"password",       m_directoryPassword},
-                {"endpointMode",        m_directoryEndpointMode},
-                {"customEndpoint",      m_directoryCustomEndpoint},
-                {"tunnelMode",          m_directoryTunnelMode},
-                {"namedTunnelId",       m_directoryNamedTunnelId},
-                {"namedTunnelHostname", m_directoryNamedTunnelHostname},
-                {"privacyAcked",   m_directoryPrivacyAcked},
-            }}};
-
-        // Preferences (#45 placeholder + window restructure)
-        config["preferences"] = {
-            {"language",        m_language},
-            {"startFullscreen", m_startFullscreen},
-            {"quickActionsVisible",
-             m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
-                                  : m_quickActionsVisible},
-            {"shortcutsHelpVisible",
-             m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
-                                   : m_shortcutsHelpVisible},
-        };
+            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}}};
 
         // Salvar configurações de imagem
         config["image"] = {
@@ -2999,12 +2601,7 @@ void UIManager::saveConfig()
             {"outputPath", m_recordingOutputPath},
             {"filenameTemplate", m_recordingFilenameTemplate},
             {"includeAudio", m_recordingIncludeAudio},
-            {"applyShader", m_recordingApplyShader},
-            {"hardwareEncoder", m_recordingHardwareEncoder},
-            {"nvencPreset", m_recordingNvencPreset},
-            {"vaapiRcMode", m_recordingVaapiRcMode},
-            {"qsvPreset", m_recordingQsvPreset},
-            {"amfQuality", m_recordingAmfQuality}};
+            {"applyShader", m_recordingApplyShader}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -3033,7 +2630,7 @@ void UIManager::renderWebPortalPanel()
 
     // Web Portal Enable/Disable (configuração)
     bool portalEnabled = m_webPortalEnabled;
-    if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
+    if (ImGui::Checkbox("Habilitar Web Portal", &portalEnabled))
     {
         m_webPortalEnabled = portalEnabled;
         if (!portalEnabled && m_webPortalHTTPSEnabled)
@@ -3066,7 +2663,7 @@ void UIManager::renderWebPortalPanel()
     // Botão Start/Stop do Portal Web (independente do streaming)
     if (m_webPortalActive)
     {
-        if (ImGui::Button("Stop Web Portal", ImVec2(-1, 0)))
+        if (ImGui::Button("Parar Portal Web", ImVec2(-1, 0)))
         {
             m_webPortalActive = false;
             if (m_onWebPortalStartStop)
@@ -3082,7 +2679,7 @@ void UIManager::renderWebPortalPanel()
     }
     else
     {
-        if (ImGui::Button("Start Web Portal", ImVec2(-1, 0)))
+        if (ImGui::Button("Iniciar Portal Web", ImVec2(-1, 0)))
         {
             m_webPortalActive = true;
             if (m_onWebPortalStartStop)
@@ -3100,7 +2697,7 @@ void UIManager::renderWebPortalPanel()
 
     // HTTPS Enable/Disable
     bool httpsEnabled = m_webPortalHTTPSEnabled;
-    if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
+    if (ImGui::Checkbox("Habilitar HTTPS", &httpsEnabled))
     {
         m_webPortalHTTPSEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
@@ -3121,12 +2718,12 @@ void UIManager::renderWebPortalPanel()
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificate not found");
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "⚠ Certificado não encontrado");
         }
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Certificate Settings"))
+        if (ImGui::CollapsingHeader("Configuração de Certificado"))
         {
             char certPathBuffer[512];
             strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
@@ -3165,7 +2762,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Personalização
-    ImGui::Text("Customization");
+    ImGui::Text("Personalização");
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -3173,7 +2770,7 @@ void UIManager::renderWebPortalPanel()
     char titleBuffer[256];
     strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-    ImGui::Text("Title:");
+    ImGui::Text("Título:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
         m_webPortalTitle = std::string(titleBuffer);
@@ -3190,7 +2787,7 @@ void UIManager::renderWebPortalPanel()
     char subtitleBuffer[256];
     strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
-    ImGui::Text("Subtitle:");
+    ImGui::Text("Subtítulo:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
         m_webPortalSubtitle = std::string(subtitleBuffer);
@@ -3206,7 +2803,7 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Configurações avançadas (colapsável)
-    if (ImGui::CollapsingHeader("Advanced"))
+    if (ImGui::CollapsingHeader("Avançado"))
     {
         ImGui::Spacing();
 
@@ -3245,32 +2842,32 @@ void UIManager::renderWebPortalPanel()
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primary", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária", m_webPortalColorPrimary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primary Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária Light", m_webPortalColorPrimaryLight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Primary Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Primária Dark", m_webPortalColorPrimaryDark, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secondary", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secundária", m_webPortalColorSecondary, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Secondary Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Secundária Highlight", m_webPortalColorSecondaryHighlight, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
 
-        if (ImGui::ColorEdit4("Header", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
+        if (ImGui::ColorEdit4("Cabeçalho", m_webPortalColorCardHeader, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar))
         {
             colorsChanged = true;
         }
@@ -3312,7 +2909,7 @@ void UIManager::renderWebPortalPanel()
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Reset to Default Colors"))
+        if (ImGui::Button("Restaurar Cores Padrão"))
         {
             // Restaurar valores padrão do styleguide RetroCapture
             // Dark Background #1D1F21
@@ -3570,41 +3167,6 @@ void UIManager::triggerRecordingIncludeAudioChange(bool include)
     saveConfig();
 }
 
-void UIManager::triggerRecordingHardwareEncoderChange(int v)
-{
-    m_recordingHardwareEncoder = v;
-    if (m_onRecordingHardwareEncoderChanged) m_onRecordingHardwareEncoderChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerRecordingNvencPresetChange(const std::string &v)
-{
-    m_recordingNvencPreset = v;
-    if (m_onRecordingNvencPresetChanged) m_onRecordingNvencPresetChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerRecordingVaapiRcModeChange(const std::string &v)
-{
-    m_recordingVaapiRcMode = v;
-    if (m_onRecordingVaapiRcModeChanged) m_onRecordingVaapiRcModeChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerRecordingQsvPresetChange(const std::string &v)
-{
-    m_recordingQsvPreset = v;
-    if (m_onRecordingQsvPresetChanged) m_onRecordingQsvPresetChanged(v);
-    saveConfig();
-}
-
-void UIManager::triggerRecordingAmfQualityChange(const std::string &v)
-{
-    m_recordingAmfQuality = v;
-    if (m_onRecordingAmfQualityChanged) m_onRecordingAmfQualityChanged(v);
-    saveConfig();
-}
-
 void UIManager::triggerRecordingStartStop(bool start)
 {
     if (m_onRecordingStartStop)
@@ -3640,15 +3202,6 @@ RecordingSettings collectRecordingSettings(const UIManager &ui)
     s.outputPath = ui.getRecordingOutputPath();
     s.filenameTemplate = ui.getRecordingFilenameTemplate();
     s.includeAudio = ui.getRecordingIncludeAudio();
-    s.hardwareEncoder = ui.getRecordingHardwareEncoder();
-    switch (s.hardwareEncoder)
-    {
-        case 2: s.hwPreset = ui.getRecordingNvencPreset(); break;
-        case 3: s.hwPreset = ui.getRecordingVaapiRcMode(); break;
-        case 4: s.hwPreset = ui.getRecordingQsvPreset();   break;
-        case 5: s.hwPreset = ui.getRecordingAmfQuality();  break;
-        default: s.hwPreset.clear(); break;
-    }
     return s;
 }
 
@@ -3711,17 +3264,6 @@ bool UIManager::loadRecordingProfile(const std::string &name)
     triggerRecordingOutputPathChange(s.outputPath);
     triggerRecordingFilenameTemplateChange(s.filenameTemplate);
     triggerRecordingIncludeAudioChange(s.includeAudio);
-    triggerRecordingHardwareEncoderChange(s.hardwareEncoder);
-    // Route the backend-specific preset string to the right per-backend
-    // field — same dispatch as the streaming side does.
-    switch (s.hardwareEncoder)
-    {
-        case 2: triggerRecordingNvencPresetChange(s.hwPreset); break;
-        case 3: triggerRecordingVaapiRcModeChange(s.hwPreset); break;
-        case 4: triggerRecordingQsvPresetChange  (s.hwPreset); break;
-        case 5: triggerRecordingAmfQualityChange (s.hwPreset); break;
-        default: break;
-    }
     return true;
 }
 
@@ -3810,31 +3352,4 @@ bool UIManager::loadStreamingProfile(const std::string &name)
     triggerStreamingMaxBufferTimeSecondsChange(s.maxBufferTimeSeconds);
     triggerStreamingAVIOBufferSizeChange(s.avioBufferSize);
     return true;
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Always-on-top connection state overlay.
-//
-// Reads the same signals UIInfoPanel does (source type, current
-// device, capture dims, host-likely-offline mirror) and renders a
-// small fixed window in the bottom-right corner whenever the user
-// needs to know something is happening:
-//
-//   Connecting...   — Remote source armed, no frames yet, fresh URL
-//   Reconnecting... — Remote source armed, frames stopped or host-likely-offline
-//   Disconnecting...— transient ~1.5s after currentDevice clears
-//   Connected       — flashes for ~3 s on the first frame
-//
-// Renders BEFORE UIManager::render()'s m_uiVisible gate so the user
-// sees state changes with the full UI hidden too. The window itself
-// uses NoInputs so it never steals clicks from the underlying stream
-// view.
-// ─────────────────────────────────────────────────────────────────────
-void UIManager::renderConnectionOverlay()
-{
-    // Delegates to osd::ConnectionStatusOverlay since the OSD layer
-    // pass in #68. UIManager keeps this thin entry point so existing
-    // callers (Application's render path) don't need to learn about
-    // the new location.
-    if (m_connectionOverlay) m_connectionOverlay->render();
 }

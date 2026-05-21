@@ -143,14 +143,14 @@ STDMETHODIMP DSPin::ReceiveConnection(IPin *pConnector, const AM_MEDIA_TYPE *pmt
     
     if (m_pConnectedPin)
     {
-        LOG_WARN("[DSPin] ReceiveConnection: already connected");
+        LOG_WARN("[DSPin] ReceiveConnection: já conectado");
         return VFW_E_ALREADY_CONNECTED;
     }
     
     // Verificar se aceitamos este tipo de mídia
     if (pmt->majortype != MEDIATYPE_Video)
     {
-        LOG_WARN("[DSPin] ReceiveConnection: media type not accepted");
+        LOG_WARN("[DSPin] ReceiveConnection: tipo de mídia não aceito");
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
     
@@ -167,7 +167,7 @@ STDMETHODIMP DSPin::ReceiveConnection(IPin *pConnector, const AM_MEDIA_TYPE *pmt
     m_pConnectedPin = pConnector;
     m_pConnectedPin->AddRef();
     
-    LOG_INFO("[DSPin] ReceiveConnection: connection accepted");
+    LOG_INFO("[DSPin] ReceiveConnection: conexão aceita com sucesso");
     return S_OK;
 }
 

@@ -5,7 +5,6 @@
 #include <string>
 #include <cstdint>
 #include <fstream>
-#include <map>
 #include <mutex>
 
 /**
@@ -19,11 +18,6 @@ class FileRecorder
 public:
     FileRecorder();
     ~FileRecorder();
-
-    // Stage container-level metadata (#59). Forwarded to MediaMuxer
-     // and applied just before avformat_write_header so the keys land
-     // in the output file's metadata atoms. Call BEFORE initialize().
-    void setMetadata(const std::map<std::string, std::string> &metadata);
 
     // Initialize recorder with configurations and output path
     bool initialize(const MediaEncoder::VideoConfig& videoConfig,

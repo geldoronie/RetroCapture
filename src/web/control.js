@@ -52,9 +52,9 @@ function copyStreamUrl() {
     const url = urlInput.value || window.location.origin + '/stream';
     
     navigator.clipboard.writeText(url).then(() => {
-        showAlert('URL copied to clipboard!', 'success');
+        showAlert('URL copiada para a área de transferência!', 'success');
     }).catch(() => {
-        showAlert('Failed to copy URL', 'danger');
+        showAlert('Erro ao copiar URL', 'danger');
     });
 }
 
@@ -63,7 +63,7 @@ function copyStreamUrl() {
  */
 async function loadPlatform() {
     try {
-        console.log('Loading platform info...');
+        console.log('Carregando informações da plataforma...');
         const platform = await api.getPlatform();
         console.log('Plataforma recebida:', platform);
         appState.platform = platform;
@@ -71,7 +71,7 @@ async function loadPlatform() {
         // Atualizar UI baseado na plataforma
         updatePlatformUI();
     } catch (error) {
-        console.error('Failed to load platform info:', error);
+        console.error('Erro ao carregar informações da plataforma:', error);
         // Usar padrão baseado na detecção do user agent se falhar
         const isWindows = navigator.platform.toLowerCase().includes('win') || 
                          navigator.userAgent.toLowerCase().includes('windows');
@@ -109,7 +109,7 @@ function updatePlatformUI() {
     
     const sourceTypeSelect = document.getElementById('sourceType');
     if (!sourceTypeSelect) {
-        console.warn('sourceType select not found');
+        console.warn('sourceType select não encontrado');
         return;
     }
     
@@ -118,7 +118,7 @@ function updatePlatformUI() {
     
     // Verificar se temos tipos de source disponíveis
     if (!appState.platform.availableSourceTypes || appState.platform.availableSourceTypes.length === 0) {
-        console.warn('No source types available on this platform');
+        console.warn('Nenhum tipo de source disponível na plataforma');
         const option = document.createElement('option');
         option.value = '0';
         option.textContent = 'Carregando...';
@@ -164,8 +164,8 @@ async function loadAllData() {
         // Carregar recording settings
         await loadRecordingSettings();
     } catch (error) {
-        console.error('Failed to load data:', error);
-        showAlert('Failed to load data: ' + error.message, 'danger');
+        console.error('Erro ao carregar dados:', error);
+        showAlert('Erro ao carregar dados: ' + error.message, 'danger');
     }
 }
 
@@ -180,7 +180,7 @@ async function loadStatus() {
         // A API retorna 'streamingActive', não 'active'
         const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
         
-        document.getElementById('streamStatus').textContent = isActive ? 'Active' : 'Inactive';
+        document.getElementById('streamStatus').textContent = isActive ? 'Ativo' : 'Inativo';
         document.getElementById('streamStatusIcon').className = isActive
             ? 'bi bi-broadcast text-success'
             : 'bi bi-broadcast text-secondary';
@@ -219,7 +219,7 @@ async function loadStatus() {
             }
         }
     } catch (error) {
-        console.error('Failed to load status:', error);
+        console.error('Erro ao carregar status:', error);
     }
 }
 
@@ -247,8 +247,8 @@ function updateStreamingButton(isActive, canStart, cooldownMs) {
             btn.style.pointerEvents = 'none'; // Garantir que não é clicável
             btn.style.cursor = 'not-allowed';
             const cooldownSeconds = Math.ceil((cooldownMs || 0) / 1000);
-            text.innerHTML = '<i class="bi bi-clock me-2"></i>Waiting (' + cooldownSeconds + 's)';
-            btn.title = 'Wait for the cooldown to end before starting streaming again';
+            text.innerHTML = '<i class="bi bi-clock me-2"></i>Aguardando (' + cooldownSeconds + 's)';
+            btn.title = 'Aguarde o cooldown terminar antes de iniciar o streaming novamente';
         } else {
             // Pode iniciar
             btn.className = 'btn btn-primary btn-lg w-100';
@@ -274,7 +274,7 @@ async function toggleStreaming() {
         if (action === 'start' && !status.streamingCanStart) {
             const cooldownMs = status.streamingCooldownRemainingMs || 0;
             const cooldownSeconds = Math.ceil(cooldownMs / 1000);
-            showAlert('Streaming still in cooldown. Wait ' + cooldownSeconds + ' seconds before starting again.', 'warning');
+            showAlert('Streaming ainda em cooldown. Aguarde ' + cooldownSeconds + ' segundos antes de iniciar novamente.', 'warning');
             await loadStatus(); // Recarregar status para atualizar o botão
             return;
         }
@@ -300,10 +300,10 @@ async function toggleStreaming() {
                 }
             }, 1000);
         } else {
-            throw new Error(result.message || 'Failed to ' + (action === 'start' ? 'start' : 'stop') + ' streaming');
+            throw new Error(result.message || 'Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming');
         }
     } catch (error) {
-        console.error('Failed to toggle streaming:', error);
+        console.error('Erro ao alternar streaming:', error);
         
         // Verificar se o erro é de cooldown
         if (error.message && error.message.includes('cooldown')) {
@@ -312,7 +312,7 @@ async function toggleStreaming() {
             const status = await api.getStatus();
             const isActive = status.streamingActive !== undefined ? status.streamingActive : status.active;
             const action = isActive ? 'stop' : 'start';
-            showAlert('Failed to ' + (action === 'start' ? 'start' : 'stop') + ' streaming: ' + error.message, 'danger');
+            showAlert('Erro ao ' + (action === 'start' ? 'iniciar' : 'parar') + ' streaming: ' + error.message, 'danger');
         }
         
         const btn = document.getElementById('streamingStartStopBtn');
@@ -349,7 +349,7 @@ async function loadSource() {
             if (optionExists) {
                 sourceTypeSelect.value = sourceType;
             } else {
-                console.warn('Source type', sourceType, 'not found in options. Available options:', 
+                console.warn('Tipo de source', sourceType, 'não encontrado nas opções. Opções disponíveis:', 
                     Array.from(sourceTypeSelect.options).map(opt => opt.value + '=' + opt.textContent));
             }
         }
@@ -387,7 +387,7 @@ async function loadSource() {
             }
         }
     } catch (error) {
-        console.error('Failed to load source:', error);
+        console.error('Erro ao carregar source:', error);
     }
 }
 
@@ -460,7 +460,7 @@ async function loadV4L2DevicesForSource() {
             captureInfo.style.display = currentDevice ? 'block' : 'none';
         }
     } catch (error) {
-        console.error('Failed to load V4L2 devices:', error);
+        console.error('Erro ao carregar dispositivos V4L2:', error);
     }
 }
 
@@ -478,7 +478,7 @@ async function loadV4L2ControlsForSource() {
         container.innerHTML = '';
         
         if (controls.length === 0) {
-            container.innerHTML = '<div class="col-12 text-muted">No controls available</div>';
+            container.innerHTML = '<div class="col-12 text-muted">Nenhum controle disponível</div>';
             return;
         }
         
@@ -529,7 +529,7 @@ async function loadV4L2ControlsForSource() {
             }
         });
     } catch (error) {
-        console.error('Failed to load V4L2 controls:', error);
+        console.error('Erro ao carregar controles V4L2:', error);
     }
 }
 
@@ -540,7 +540,7 @@ async function updateV4L2ControlSource(name, value) {
     try {
         await api.setV4L2Control(name, parseInt(value));
     } catch (error) {
-        showAlert(`Failed to atualizar controle ${name}: ` + error.message, 'danger');
+        showAlert(`Erro ao atualizar controle ${name}: ` + error.message, 'danger');
     }
 }
 
@@ -570,7 +570,7 @@ async function loadDSDevicesForSource() {
             option.textContent = device.name || device.id;
             if (!device.available) {
                 option.disabled = true;
-                option.textContent += ' (Not available)';
+                option.textContent += ' (Não disponível)';
             }
             select.appendChild(option);
         });
@@ -593,8 +593,8 @@ async function loadDSDevicesForSource() {
             captureInfo.style.display = 'block';
         }
     } catch (error) {
-        console.error('Failed to load DirectShow devices:', error);
-        showAlert('Failed to load DirectShow devices: ' + error.message, 'danger');
+        console.error('Erro ao carregar dispositivos DirectShow:', error);
+        showAlert('Erro ao carregar dispositivos DirectShow: ' + error.message, 'danger');
     }
 }
 
@@ -621,8 +621,8 @@ async function updateDSDeviceSource() {
         
         showAlert('Dispositivo DirectShow atualizado', 'success');
     } catch (error) {
-        console.error('Failed to update DirectShow device:', error);
-        showAlert('Failed to update DirectShow device: ' + error.message, 'danger');
+        console.error('Erro ao atualizar dispositivo DirectShow:', error);
+        showAlert('Erro ao atualizar dispositivo DirectShow: ' + error.message, 'danger');
     }
 }
 
@@ -635,8 +635,8 @@ async function refreshDSDevices() {
         await loadDSDevicesForSource();
         showAlert('Lista de dispositivos DirectShow atualizada', 'success');
     } catch (error) {
-        console.error('Failed to refresh DirectShow device list:', error);
-        showAlert('Failed to refresh list: ' + error.message, 'danger');
+        console.error('Erro ao atualizar lista de dispositivos DirectShow:', error);
+        showAlert('Erro ao atualizar lista: ' + error.message, 'danger');
     }
 }
 
@@ -667,7 +667,7 @@ async function updateV4L2DeviceSource() {
         
         // Atualização em tempo real - sem alerta
     } catch (error) {
-        showAlert('Failed to update V4L2 device: ' + error.message, 'danger');
+        showAlert('Erro ao atualizar dispositivo V4L2: ' + error.message, 'danger');
     }
 }
 
@@ -695,7 +695,7 @@ async function setQuickFPS(fps) {
         }
         showAlert(`FPS definido para ${fps}!`, 'success');
     } catch (error) {
-        showAlert('Failed to set FPS: ' + error.message, 'danger');
+        showAlert('Erro ao definir FPS: ' + error.message, 'danger');
     }
 }
 
@@ -725,7 +725,7 @@ async function setQuickResolution(width, height) {
         }
         showAlert(`Resolução definida para ${width}x${height}!`, 'success');
     } catch (error) {
-        showAlert('Failed to set resolution: ' + error.message, 'danger');
+        showAlert('Erro ao definir resolução: ' + error.message, 'danger');
     }
 }
 
@@ -777,7 +777,7 @@ async function updateV4L2CaptureSettings() {
             captureFPSEl.textContent = `${fps} FPS`;
         }
     } catch (error) {
-        showAlert('Failed to update configuration: ' + error.message, 'danger');
+        showAlert('Erro ao atualizar configurações: ' + error.message, 'danger');
     }
 }
 
@@ -792,7 +792,7 @@ async function refreshV4L2Devices() {
         await loadV4L2DevicesForSource();
         showAlert('Lista de dispositivos atualizada!', 'success');
     } catch (error) {
-        showAlert('Failed to update devices: ' + error.message, 'danger');
+        showAlert('Erro ao atualizar dispositivos: ' + error.message, 'danger');
     }
 }
 
@@ -821,7 +821,7 @@ async function updateSource() {
         // Recarregar dados completos
         await loadSource();
     } catch (error) {
-        showAlert('Failed to update source: ' + error.message, 'danger');
+        showAlert('Erro ao atualizar fonte: ' + error.message, 'danger');
     }
 }
 
@@ -854,7 +854,7 @@ async function loadShader() {
         // Carregar parâmetros
         await loadShaderParameters();
     } catch (error) {
-        console.error('Failed to load shader:', error);
+        console.error('Erro ao carregar shader:', error);
     }
 }
 
@@ -895,8 +895,8 @@ async function loadShaderList() {
             }
         }
     } catch (error) {
-        console.error('Failed to carregar lista de shaders:', error);
-        showAlert('Failed to load shader list: ' + error.message, 'danger');
+        console.error('Erro ao carregar lista de shaders:', error);
+        showAlert('Erro ao carregar lista de shaders: ' + error.message, 'danger');
     }
 }
 
@@ -941,7 +941,7 @@ async function loadShaderParameters() {
             container.appendChild(col);
         });
     } catch (error) {
-        console.error('Failed to load shader parameters:', error);
+        console.error('Erro ao carregar parâmetros do shader:', error);
     }
 }
 
@@ -1001,7 +1001,7 @@ async function updateShader() {
         // Atualizar shader atual e parâmetros
         await loadShader();
     } catch (error) {
-        console.error('Failed to update shader:', error);
+        console.error('Erro ao atualizar shader:', error);
         // Não mostrar alerta para atualizações em tempo real
     }
 }
@@ -1046,7 +1046,7 @@ async function loadCapture() {
             captureFPSEl.textContent = appState.capture.fps;
         }
     } catch (error) {
-        console.error('Failed to load capture configuration:', error);
+        console.error('Erro ao carregar configurações de captura:', error);
     }
 }
 
@@ -1110,7 +1110,7 @@ async function loadImageSettings() {
             }
         }
     } catch (error) {
-        console.error('Failed to load image configuration:', error);
+        console.error('Erro ao carregar configurações de imagem:', error);
     }
 }
 
@@ -1170,7 +1170,7 @@ async function updateImageSettings() {
         
         // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
-        console.error('Failed to update image configuration:', error);
+        console.error('Erro ao atualizar configurações de imagem:', error);
         // Não mostrar alerta para atualizações em tempo real
     }
 }
@@ -1282,7 +1282,7 @@ async function loadStreamingSettings() {
             updateCodecSpecificControls(settings.videoCodec);
         }
     } catch (error) {
-        console.error('Failed to load streaming configuration:', error);
+        console.error('Erro ao carregar configurações de streaming:', error);
     }
 }
 
@@ -1301,7 +1301,7 @@ async function updateStreamingSettings() {
         const audioCodecEl = document.getElementById('streamingAudioCodec');
         
         if (!videoCodecEl || !portEl || !bitrateEl || !audioBitrateEl || !widthEl || !heightEl || !fpsEl || !audioCodecEl) {
-            showAlert('Error: form elements not found', 'danger');
+            showAlert('Erro: Elementos do formulário não encontrados', 'danger');
             return;
         }
         
@@ -1339,7 +1339,7 @@ async function updateStreamingSettings() {
         await api.setStreamingSettings(settings);
         // Não recarregar para evitar flicker - atualização em tempo real
     } catch (error) {
-        console.error('Failed to update streaming configuration:', error);
+        console.error('Erro ao atualizar configurações de streaming:', error);
         // Não mostrar alerta para atualizações em tempo real
     }
 }
@@ -1380,7 +1380,7 @@ async function loadV4L2Devices() {
             }
         }
     } catch (error) {
-        console.error('Failed to load V4L2 devices:', error);
+        console.error('Erro ao carregar dispositivos V4L2:', error);
     }
 }
 
@@ -1396,7 +1396,7 @@ async function updateV4L2Device() {
         appState.v4l2.currentDevice = device;
         // Atualização em tempo real - sem alerta
     } catch (error) {
-        showAlert('Failed to update V4L2 device: ' + error.message, 'danger');
+        showAlert('Erro ao atualizar dispositivo V4L2: ' + error.message, 'danger');
     }
 }
 
@@ -1443,7 +1443,7 @@ document.addEventListener('DOMContentLoaded', function() {
             updateSource(); // Aplicar mudança automaticamente
         });
     } else {
-        console.error('sourceType select not found when adding event listener');
+        console.error('sourceType select não encontrado ao adicionar event listener');
     }
     
     // Event listener para mudança de dispositivo V4L2 na aba Source
@@ -1694,7 +1694,7 @@ async function loadPresets() {
         const response = await api.getPresets();
         
         if (!response.presets || response.presets.length === 0) {
-            grid.innerHTML = '<div class="col-12 text-muted">No presets found. Create a new preset with the "Create Preset" button.</div>';
+            grid.innerHTML = '<div class="col-12 text-muted">Nenhum preset encontrado. Crie um novo preset usando o botão "Create Preset".</div>';
             return;
         }
         
@@ -1704,8 +1704,8 @@ async function loadPresets() {
             grid.appendChild(presetCard);
         });
     } catch (error) {
-        console.error('Failed to load presets:', error);
-        grid.innerHTML = `<div class="col-12 text-danger">Failed to carregar presets: ${error.message}</div>`;
+        console.error('Erro ao carregar presets:', error);
+        grid.innerHTML = `<div class="col-12 text-danger">Erro ao carregar presets: ${error.message}</div>`;
     }
 }
 
@@ -1819,8 +1819,8 @@ async function createPreset() {
         showAlert(`Preset "${name}" criado com sucesso!`, 'success');
         await loadPresets();
     } catch (error) {
-        console.error('Failed to criar preset:', error);
-        showAlert(`Failed to criar preset: ${error.message}`, 'danger');
+        console.error('Erro ao criar preset:', error);
+        showAlert(`Erro ao criar preset: ${error.message}`, 'danger');
     }
 }
 
@@ -1835,8 +1835,8 @@ async function applyPreset(presetName) {
         // Reload all data to reflect changes
         await loadAllData();
     } catch (error) {
-        console.error('Failed to aplicar preset:', error);
-        showAlert(`Failed to aplicar preset: ${error.message}`, 'danger');
+        console.error('Erro ao aplicar preset:', error);
+        showAlert(`Erro ao aplicar preset: ${error.message}`, 'danger');
     }
 }
 
@@ -1853,8 +1853,8 @@ async function deletePreset(presetName) {
         showAlert(`Preset "${presetName}" deletado com sucesso!`, 'success');
         await loadPresets();
     } catch (error) {
-        console.error('Failed to deletar preset:', error);
-        showAlert(`Failed to deletar preset: ${error.message}`, 'danger');
+        console.error('Erro ao deletar preset:', error);
+        showAlert(`Erro ao deletar preset: ${error.message}`, 'danger');
     }
 }
 
@@ -1905,7 +1905,7 @@ async function loadRecordingSettings() {
         // Update status
         await updateRecordingStatus();
     } catch (error) {
-        console.error('Failed to load recording configuration:', error);
+        console.error('Erro ao carregar configurações de recording:', error);
     }
 }
 
@@ -1969,7 +1969,7 @@ async function updateRecordingStatus() {
             }
         }
     } catch (error) {
-        console.error('Failed to atualizar status de recording:', error);
+        console.error('Erro ao atualizar status de recording:', error);
     }
 }
 
@@ -1999,8 +1999,8 @@ async function toggleRecording() {
             if (btn) btn.disabled = false;
         }, 500);
     } catch (error) {
-        console.error('Failed to toggle recording:', error);
-        showAlert(`Failed to ${status.isRecording ? 'stop' : 'start'} recording: ${error.message}`, 'danger');
+        console.error('Erro ao toggle recording:', error);
+        showAlert(`Erro ao ${status.isRecording ? 'parar' : 'iniciar'} gravação: ${error.message}`, 'danger');
         
         const btn = document.getElementById('recordingStartStopBtn');
         if (btn) btn.disabled = false;
@@ -2021,9 +2021,9 @@ async function setRecordingResolution(width, height) {
         
         // Atualizar as configurações de gravação
         await updateRecordingSettings();
-        showAlert(`Recording resolution set to ${width}x${height}!`, 'success');
+        showAlert(`Resolução de gravação definida para ${width}x${height}!`, 'success');
     } catch (error) {
-        showAlert('Failed to set recording resolution: ' + error.message, 'danger');
+        showAlert('Erro ao definir resolução de gravação: ' + error.message, 'danger');
     }
 }
 
@@ -2066,8 +2066,8 @@ async function updateRecordingSettings() {
         await api.setRecordingSettings(settings);
         showAlert('Recording settings updated!', 'success');
     } catch (error) {
-        console.error('Failed to update recording configuration:', error);
-        showAlert(`Failed to atualizar configurações: ${error.message}`, 'danger');
+        console.error('Erro ao atualizar configurações de recording:', error);
+        showAlert(`Erro ao atualizar configurações: ${error.message}`, 'danger');
     }
 }
 
@@ -2086,7 +2086,7 @@ async function loadAudioStatus() {
         audioState.status = status;
         updateAudioUI();
     } catch (error) {
-        console.error('Failed to load audio status:', error);
+        console.error('Erro ao carregar status de áudio:', error);
         audioState.status = { available: false, open: false, currentInputSource: '' };
         updateAudioUI();
     }
@@ -2101,8 +2101,8 @@ async function loadAudioInputSources() {
         audioState.inputSources = response.sources || [];
         updateAudioInputSourceSelect();
     } catch (error) {
-        console.error('Failed to load audio input sources:', error);
-        showAlert('Failed to load audio input sources', 'danger');
+        console.error('Erro ao carregar fontes de entrada de áudio:', error);
+        showAlert('Erro ao carregar fontes de entrada de áudio', 'danger');
     }
 }
 
@@ -2185,8 +2185,8 @@ async function connectAudioInput() {
         await loadAudioStatus();
         updateAudioInputSourceSelect();
     } catch (error) {
-        console.error('Failed to conectar fonte de entrada:', error);
-        showAlert(`Failed to conectar fonte: ${error.message}`, 'danger');
+        console.error('Erro ao conectar fonte de entrada:', error);
+        showAlert(`Erro ao conectar fonte: ${error.message}`, 'danger');
     }
 }
 
@@ -2200,8 +2200,8 @@ async function disconnectAudioInput() {
         await loadAudioStatus();
         updateAudioInputSourceSelect();
     } catch (error) {
-        console.error('Failed to desconectar fonte de entrada:', error);
-        showAlert(`Failed to desconectar fonte: ${error.message}`, 'danger');
+        console.error('Erro ao desconectar fonte de entrada:', error);
+        showAlert(`Erro ao desconectar fonte: ${error.message}`, 'danger');
     }
 }
 

@@ -1,11 +1,8 @@
 #include "UIConfigurationSource.h"
 #include "UIManager.h"
-#include "UISectionHeader.h"
-#include "../utils/TranslationManager.h"
 #include "../capture/IVideoCapture.h"
 #include <imgui.h>
 #include <algorithm>
-#include <cstring>
 #ifdef __linux__
 #include <linux/videodev2.h>
 #endif
@@ -25,31 +22,24 @@ UIConfigurationSource::~UIConfigurationSource()
 
 void UIConfigurationSource::render()
 {
-    if (!m_visible || !m_uiManager) return;
-
-    ImGui::SetNextWindowSize(ImVec2(620, 540), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin(T("source.title").c_str(), &m_visible))
+    if (!m_uiManager)
     {
-        ImGui::End();
         return;
     }
 
     // Atualizar referência ao capture se necessário
     m_capture = m_uiManager->getCapture();
+    
+    // Não atualizar a lista aqui - será atualizada apenas quando necessário em renderDSDeviceSelection
+    // Isso evita chamar refreshDSDevices() a cada frame
 
     renderSourceTypeSelection();
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
+    // Renderizar controles específicos da fonte selecionada
     UIManager::SourceType sourceType = m_uiManager->getSourceType();
-
-    if (sourceType == UIManager::SourceType::Remote)
-    {
-        renderRemoteControls();
-        ImGui::End();
-        return;
-    }
 #ifdef __linux__
     if (sourceType == UIManager::SourceType::V4L2)
     {
@@ -57,7 +47,7 @@ void UIConfigurationSource::render()
     }
     else if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("No source selected. Pick a source type above.");
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
 #elif defined(_WIN32)
     if (sourceType == UIManager::SourceType::DS)
@@ -66,43 +56,34 @@ void UIConfigurationSource::render()
     }
     else if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("No source selected. Pick a source type above.");
+        ImGui::TextWrapped("Nenhuma fonte selecionada. Selecione um tipo de fonte acima.");
     }
 #else
     if (sourceType == UIManager::SourceType::None)
     {
-        ImGui::TextWrapped("No source selected.");
+        ImGui::TextWrapped("Nenhuma fonte selecionada.");
     }
 #endif
-
-    ImGui::End();
 }
 
 void UIConfigurationSource::renderSourceTypeSelection()
 {
-    ui_section_header("Source",
-                      "Which physical capture device to read frames "
-                      "from. Switching here re-initialises the pipeline.");
+    ImGui::Text("Source Type:");
+    ImGui::Separator();
+    ImGui::Spacing();
 
-    // Dropdown for selecting the local capture source type.
-    // 'Remote' no longer lives here — it now has its own top-level menu
-    // ('Remote → Connect to Remote...') with a dedicated window for URL
-    // and interpolation. The Source tab focuses only on physical capture
-    // options local to the machine.
+// Dropdown para seleção do tipo de fonte
 #ifdef __linux__
     const char *sourceTypeNames[] = {"None", "V4L2"};
-    UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None,
-        UIManager::SourceType::V4L2};
+    // Mapeamento: índice 0 = None (0), índice 1 = V4L2 (1)
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::V4L2};
 #elif defined(_WIN32)
     const char *sourceTypeNames[] = {"None", "DirectShow"};
-    UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None,
-        UIManager::SourceType::DS};
+    // Mapeamento: índice 0 = None (0), índice 1 = MF (2)
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None, UIManager::SourceType::DS};
 #else
     const char *sourceTypeNames[] = {"None"};
-    UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None};
+    UIManager::SourceType sourceTypeMap[] = {UIManager::SourceType::None};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -132,7 +113,7 @@ void UIConfigurationSource::renderV4L2Controls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("No V4L2 device connected. Select a device below to start capture.");
+        ImGui::TextWrapped("Nenhum dispositivo V4L2 conectado. Selecione um dispositivo abaixo para iniciar a captura.");
         ImGui::Separator();
     }
 
@@ -143,10 +124,11 @@ void UIConfigurationSource::renderV4L2Controls()
     renderQuickResolutions();
     ImGui::Separator();
     renderQuickFPS();
+    ImGui::Separator();
 
-    ui_section_header("V4L2 Hardware Controls",
-                      "Driver-exposed knobs (brightness, hue, exposure, "
-                      "etc.) — set is device-specific.");
+    // V4L2 Hardware Controls
+    ImGui::Text("V4L2 Hardware Controls");
+    ImGui::Separator();
 
     // Renderizar controles dinâmicos (discovered from device)
     const auto &controls = m_uiManager->getV4L2Controls();
@@ -193,6 +175,7 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
     // Combo box for device selection
     // Adicionar "None" como primeira opção
     std::string currentDevice = m_uiManager->getCurrentDevice();
+    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
     int selectedIndex = -1;
 
     // Verificar se "None" está selecionado
@@ -212,15 +195,6 @@ void UIConfigurationSource::renderV4L2DeviceSelection()
             }
         }
     }
-
-    // If currentDevice is set but doesn't match any V4L2 path, it's
-    // leftover state from another source type (typically a remote
-    // URL when the user had Remote mode active before switching to
-    // V4L2). Showing it raw in the dropdown made http://localhost:…
-    // appear as if it were a video device. Display "None" instead.
-    std::string displayText = (currentDevice.empty() || selectedIndex < 0)
-                              ? "None (No device)"
-                              : currentDevice;
 
     if (ImGui::BeginCombo("##device", displayText.c_str()))
     {
@@ -270,7 +244,7 @@ void UIConfigurationSource::renderDSControls()
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
     {
-        ImGui::TextWrapped("No DirectShow device connected. Select a device below to start capture.");
+        ImGui::TextWrapped("Nenhum dispositivo DirectShow conectado. Selecione um dispositivo abaixo para iniciar a captura.");
         ImGui::Separator();
     }
 
@@ -281,10 +255,11 @@ void UIConfigurationSource::renderDSControls()
     renderQuickResolutions();
     ImGui::Separator();
     renderQuickFPS();
+    ImGui::Separator();
 
-    ui_section_header("DirectShow Hardware Controls",
-                      "Filter-exposed knobs from the DirectShow driver. "
-                      "Set is device-specific.");
+    // DirectShow Hardware Controls
+    ImGui::Text("DirectShow Hardware Controls");
+    ImGui::Separator();
 
     // Helper function para renderizar controle com range do dispositivo ou padrão
     auto renderControl = [this](const char *name, int32_t defaultMin, int32_t defaultMax, int32_t defaultValue)
@@ -377,15 +352,15 @@ void UIConfigurationSource::renderDSDeviceSelection()
     // Combo box for device selection
     // Adicionar "None" como primeira opção
     std::string currentDevice = m_uiManager->getCurrentDevice();
-
+    std::string displayText = currentDevice.empty() ? "None (No device)" : currentDevice;
+    
     // Se não houver dispositivos, mostrar mensagem mas ainda permitir seleção de "None"
     if (currentDevices.empty())
     {
-        ImGui::TextWrapped("No DirectShow devices found. Click Refresh to update.");
+        ImGui::TextWrapped("Nenhum dispositivo DirectShow encontrado. Clique em Refresh para atualizar.");
         ImGui::Spacing();
     }
-    int         selectedIndex = -1;
-    std::string matchedLabel;
+    int selectedIndex = -1;
 
     // Verificar se "None" está selecionado
     if (currentDevice.empty())
@@ -400,21 +375,11 @@ void UIConfigurationSource::renderDSDeviceSelection()
             if (currentDevices[i].id == currentDevice || currentDevices[i].name == currentDevice)
             {
                 selectedIndex = static_cast<int>(i) + 1; // +1 porque "None" é 0
-                matchedLabel  = currentDevices[i].name + " (" + currentDevices[i].id + ")";
+                displayText = currentDevices[i].name + " (" + currentDevices[i].id + ")";
                 break;
             }
         }
     }
-
-    // If currentDevice is set but no DS device matched, the value
-    // belongs to a different source type (typically a remote URL
-    // like http://localhost:8080 left over from Remote mode). It
-    // used to be rendered raw inside the dropdown — show "None"
-    // instead so the field doesn't claim a URL is a DirectShow
-    // camera.
-    std::string displayText;
-    if (selectedIndex == 0 || selectedIndex < 0) displayText = "None (No device)";
-    else                                          displayText = matchedLabel;
 
     if (ImGui::BeginCombo("##dsdevice", displayText.c_str()))
     {
@@ -464,9 +429,8 @@ void UIConfigurationSource::renderDSDeviceSelection()
 
 void UIConfigurationSource::renderCaptureSettings()
 {
-    ui_section_header("Capture Resolution & Framerate",
-                      "What the source streams at — separate from the "
-                      "Streaming / Recording target settings.");
+    ImGui::Text("Capture Resolution & Framerate");
+    ImGui::Separator();
 
     // Controles de resolução
     ImGui::Text("Resolution:");
@@ -709,27 +673,5 @@ void UIConfigurationSource::renderQuickResolutions()
     if (ImGui::Button("3840x2160"))
     {
         m_uiManager->triggerResolutionChange(3840, 2160);
-    }
-}
-
-void UIConfigurationSource::renderRemoteControls()
-{
-    // Remote-mode controls moved out of the Source tab into a dedicated
-    // top-level menu entry ('Remote → Connect to Remote...'). This stub
-    // just points the user at the new location when they land here with
-    // a Remote source already loaded from config.
-    ImGui::TextWrapped(
-        "Remote viewer mode — connection controls moved to the 'Remote' menu. "
-        "Use 'Remote → Connect to Remote...' to manage URL, interpolation and "
-        "the connect/disconnect actions.");
-    ImGui::Spacing();
-    const std::string currentDevice = m_uiManager->getCurrentDevice();
-    if (!currentDevice.empty())
-    {
-        ImGui::TextDisabled("connected to %s", currentDevice.c_str());
-    }
-    else
-    {
-        ImGui::TextDisabled("not connected");
     }
 }

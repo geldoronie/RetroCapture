@@ -24,7 +24,7 @@ bool StreamManager::initialize(uint16_t port, uint32_t width, uint32_t height, u
 {
     if (m_initialized)
     {
-        LOG_WARN("StreamManager already initialized");
+        LOG_WARN("StreamManager já inicializado");
         return true;
     }
 
@@ -36,7 +36,7 @@ bool StreamManager::initialize(uint16_t port, uint32_t width, uint32_t height, u
     {
         if (!streamer->initialize(port, width, height, fps))
         {
-            LOG_ERROR("Failed to inicializar streamer: " + streamer->getType());
+            LOG_ERROR("Falha ao inicializar streamer: " + streamer->getType());
             allInitialized = false;
         }
     }
@@ -49,13 +49,13 @@ bool StreamManager::start()
 {
     if (!m_initialized)
     {
-        LOG_ERROR("StreamManager not initialized");
+        LOG_ERROR("StreamManager não inicializado");
         return false;
     }
 
     if (m_active)
     {
-        LOG_WARN("StreamManager is already active");
+        LOG_WARN("StreamManager já está ativo");
         return true;
     }
 
@@ -64,7 +64,7 @@ bool StreamManager::start()
     {
         if (!streamer->start())
         {
-            LOG_ERROR("Failed to iniciar streamer: " + streamer->getType());
+            LOG_ERROR("Falha ao iniciar streamer: " + streamer->getType());
             allStarted = false;
         }
     }
@@ -129,40 +129,6 @@ void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount)
             streamer->pushAudio(samples, sampleCount);
         }
     }
-}
-
-void StreamManager::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height)
-{
-    if (!m_active || !data)
-    {
-        return;
-    }
-
-    // The raw output is an MPEG-TS-specific concept (Phase 2 of #47); only
-    // dispatch to streamers that actually support it. Future non-TS
-    // streamers (e.g. WebRTC) won't have the raw concept and are silently
-    // skipped here.
-    for (auto &streamer : m_streamers)
-    {
-        if (!streamer->isActive()) continue;
-        if (auto *ts = dynamic_cast<HTTPTSStreamer *>(streamer.get()))
-        {
-            ts->pushRawFrame(data, width, height);
-        }
-    }
-}
-
-bool StreamManager::hasRawClients() const
-{
-    for (const auto &streamer : m_streamers)
-    {
-        if (!streamer->isActive()) continue;
-        if (auto *ts = dynamic_cast<const HTTPTSStreamer *>(streamer.get()))
-        {
-            if (ts->hasRawClients()) return true;
-        }
-    }
-    return false;
 }
 
 std::vector<std::string> StreamManager::getStreamUrls() const
@@ -260,17 +226,6 @@ std::string StreamManager::getFoundSSLKeyPath() const
     return "";
 }
 
-void StreamManager::setStreamPasswordHash(const std::string &sha256Hex)
-{
-    for (auto &streamer : m_streamers)
-    {
-        if (auto *ts = dynamic_cast<HTTPTSStreamer *>(streamer.get()))
-        {
-            ts->setStreamPasswordHash(sha256Hex);
-        }
-    }
-}
-
 void StreamManager::setWebPortalEnabled(bool enabled)
 {
     for (auto &streamer : m_streamers)
@@ -315,7 +270,7 @@ void StreamManager::setWebPortalTitle(const std::string &title)
         if (tsStreamer)
         {
             tsStreamer->setWebPortalTitle(title);
-            LOG_INFO("Web Portal title updated: " + title);
+            LOG_INFO("Título do Web Portal atualizado: " + title);
         }
     }
 }
@@ -329,7 +284,7 @@ void StreamManager::setWebPortalSubtitle(const std::string &subtitle)
         if (tsStreamer)
         {
             tsStreamer->setWebPortalSubtitle(subtitle);
-            LOG_INFO("Web Portal subtitle updated: " + subtitle);
+            LOG_INFO("Subtítulo do Web Portal atualizado: " + subtitle);
         }
     }
 }

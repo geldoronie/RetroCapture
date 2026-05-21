@@ -1,9 +1,0 @@
-data/
-*.db
-*.db-journal
-*.db-shm
-*.db-wal
-.git/
-.gitignore
-README.md
-docker-compose.yml

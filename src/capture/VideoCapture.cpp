@@ -23,7 +23,7 @@ bool VideoCapture::open(const std::string &device)
 {
     if (m_fd >= 0)
     {
-        LOG_WARN("Device already open, closing first");
+        LOG_WARN("Dispositivo já aberto, fechando primeiro");
         close();
     }
 
@@ -31,7 +31,7 @@ bool VideoCapture::open(const std::string &device)
     // Isso evita tentar abrir dispositivos que não existem
     if (!std::filesystem::exists(device))
     {
-        LOG_ERROR("Device does not exist: " + device);
+        LOG_ERROR("Dispositivo não existe: " + device);
         return false;
     }
 
@@ -39,7 +39,7 @@ bool VideoCapture::open(const std::string &device)
     if (m_fd < 0)
     {
         int err = errno;
-        LOG_ERROR("Failed to abrir dispositivo: " + device + " (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Falha ao abrir dispositivo: " + device + " (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -92,7 +92,7 @@ bool VideoCapture::setFormat(uint32_t width, uint32_t height, uint32_t pixelForm
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não aberto");
         return false;
     }
 
@@ -101,7 +101,7 @@ bool VideoCapture::setFormat(uint32_t width, uint32_t height, uint32_t pixelForm
 
     if (ioctl(m_fd, VIDIOC_G_FMT, &fmt) < 0)
     {
-        LOG_ERROR("Failed to obter formato atual");
+        LOG_ERROR("Falha ao obter formato atual");
         return false;
     }
 
@@ -122,7 +122,7 @@ bool VideoCapture::setFormat(uint32_t width, uint32_t height, uint32_t pixelForm
 
     if (ioctl(m_fd, VIDIOC_S_FMT, &fmt) < 0)
     {
-        LOG_ERROR("Failed to definir formato");
+        LOG_ERROR("Falha ao definir formato");
         return false;
     }
 
@@ -149,7 +149,7 @@ bool VideoCapture::setFramerate(uint32_t fps)
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não está aberto");
         return false;
     }
 
@@ -160,14 +160,14 @@ bool VideoCapture::setFramerate(uint32_t fps)
     // Primeiro, obter os parâmetros atuais
     if (ioctl(m_fd, VIDIOC_G_PARM, &parm) == -1)
     {
-        LOG_WARN("Could not get streaming parameters (ioctl VIDIOC_G_PARM)");
+        LOG_WARN("Não foi possível obter parâmetros de streaming (ioctl VIDIOC_G_PARM)");
         return false;
     }
 
     // Verificar se o dispositivo suporta configuração de framerate
     if (!(parm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME))
     {
-        LOG_WARN("Device does not support framerate configuration");
+        LOG_WARN("Dispositivo não suporta configuração de framerate");
         return false;
     }
 
@@ -177,7 +177,7 @@ bool VideoCapture::setFramerate(uint32_t fps)
 
     if (ioctl(m_fd, VIDIOC_S_PARM, &parm) == -1)
     {
-        LOG_WARN("Failed to configurar framerate (ioctl VIDIOC_S_PARM)");
+        LOG_WARN("Falha ao configurar framerate (ioctl VIDIOC_S_PARM)");
         return false;
     }
 
@@ -207,13 +207,13 @@ bool VideoCapture::initMemoryMapping()
 
     if (ioctl(m_fd, VIDIOC_REQBUFS, &req) < 0)
     {
-        LOG_ERROR("Failed to solicitar buffers");
+        LOG_ERROR("Falha ao solicitar buffers");
         return false;
     }
 
     if (req.count < 2)
     {
-        LOG_ERROR("Out of memory");
+        LOG_ERROR("Memória insuficiente");
         return false;
     }
 
@@ -228,7 +228,7 @@ bool VideoCapture::initMemoryMapping()
 
         if (ioctl(m_fd, VIDIOC_QUERYBUF, &buf) < 0)
         {
-            LOG_ERROR("Failed to consultar buffer");
+            LOG_ERROR("Falha ao consultar buffer");
             cleanupBuffers();
             return false;
         }
@@ -241,7 +241,7 @@ bool VideoCapture::initMemoryMapping()
 
         if (m_buffers[i].start == MAP_FAILED)
         {
-            LOG_ERROR("Failed to mapear buffer");
+            LOG_ERROR("Falha ao mapear buffer");
             cleanupBuffers();
             return false;
         }
@@ -276,7 +276,7 @@ bool VideoCapture::startCapture()
     {
         if (m_streaming)
         {
-            LOG_WARN("Dummy capture already started");
+            LOG_WARN("Captura dummy já iniciada");
             return true;
         }
 
@@ -294,13 +294,13 @@ bool VideoCapture::startCapture()
 
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não aberto");
         return false;
     }
 
     if (m_streaming)
     {
-        LOG_WARN("Capture already started");
+        LOG_WARN("Captura já iniciada");
         return true;
     }
 
@@ -322,7 +322,7 @@ bool VideoCapture::startCapture()
 
         if (ioctl(m_fd, VIDIOC_QBUF, &buf) < 0)
         {
-            LOG_ERROR("Failed to enfileirar buffer");
+            LOG_ERROR("Falha ao enfileirar buffer");
             stopCapture();
             return false;
         }
@@ -332,7 +332,7 @@ bool VideoCapture::startCapture()
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(m_fd, VIDIOC_STREAMON, &type) < 0)
     {
-        LOG_ERROR("Failed to iniciar streaming");
+        LOG_ERROR("Falha ao iniciar streaming");
         return false;
     }
 
@@ -420,14 +420,14 @@ bool VideoCapture::captureFrame(Frame &frame)
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
                 m_dummyFrameBuffer.resize(frameSize, 0);
                 m_streaming = true;
-                LOG_INFO("Dummy mode activated automatically after device disconnect");
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
             }
             
             return false;
         }
         
         // Outros erros
-        LOG_ERROR("Failed to capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+        LOG_ERROR("Erro ao capturar frame (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         return false;
     }
 
@@ -436,7 +436,7 @@ bool VideoCapture::captureFrame(Frame &frame)
         !m_buffers[buf.index].start || 
         m_buffers[buf.index].start == MAP_FAILED)
     {
-        LOG_ERROR("Invalid buffer at index " + std::to_string(buf.index));
+        LOG_ERROR("Buffer inválido no índice " + std::to_string(buf.index));
         // Tentar reenfileirar para não perder sincronização (mas pode falhar se dispositivo foi desconectado)
         if (m_fd >= 0)
         {
@@ -478,12 +478,12 @@ bool VideoCapture::captureFrame(Frame &frame)
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
                 m_dummyFrameBuffer.resize(frameSize, 0);
                 m_streaming = true;
-                LOG_INFO("Dummy mode activated automatically after device disconnect");
+                LOG_INFO("Modo dummy ativado automaticamente após desconexão do dispositivo");
             }
         }
         else
         {
-            LOG_ERROR("Failed to reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
+            LOG_ERROR("Falha ao reenfileirar buffer (errno: " + std::to_string(err) + " - " + strerror(err) + ")");
         }
         return false;
     }
@@ -550,7 +550,7 @@ bool VideoCapture::setControl(uint32_t controlId, int32_t value)
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não está aberto");
         return false;
     }
 
@@ -560,7 +560,7 @@ bool VideoCapture::setControl(uint32_t controlId, int32_t value)
 
     if (ioctl(m_fd, VIDIOC_S_CTRL, &ctrl) < 0)
     {
-        LOG_WARN("Failed to definir controle V4L2 (ID: " + std::to_string(controlId) +
+        LOG_WARN("Falha ao definir controle V4L2 (ID: " + std::to_string(controlId) +
                  ", valor: " + std::to_string(value) + "): " + strerror(errno));
         return false;
     }
@@ -572,7 +572,7 @@ bool VideoCapture::getControl(uint32_t controlId, int32_t &value)
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não está aberto");
         return false;
     }
 
@@ -581,7 +581,7 @@ bool VideoCapture::getControl(uint32_t controlId, int32_t &value)
 
     if (ioctl(m_fd, VIDIOC_G_CTRL, &ctrl) < 0)
     {
-        LOG_WARN("Failed to obter controle V4L2 (ID: " + std::to_string(controlId) + ")");
+        LOG_WARN("Falha ao obter controle V4L2 (ID: " + std::to_string(controlId) + ")");
         return false;
     }
 
@@ -593,7 +593,7 @@ bool VideoCapture::getControl(uint32_t controlId, int32_t &value, int32_t &min, 
 {
     if (m_fd < 0)
     {
-        LOG_ERROR("Device not open");
+        LOG_ERROR("Dispositivo não está aberto");
         return false;
     }
 

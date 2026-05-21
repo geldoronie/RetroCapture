@@ -3,7 +3,6 @@
 #include <string>
 #include <functional>
 #include <cstdint>
-#include <mutex>
 
 class UIManager;
 class Application;
@@ -55,14 +54,6 @@ public:
      */
     bool handleRequest(int clientFd, const std::string &request);
 
-    /**
-     * #49 Phase 3 — Updates the password hash used to gate /meta.
-     * Pass an empty string to disable auth. Mirrors the behaviour of
-     * HTTPTSStreamer::setStreamPasswordHash; Application keeps both
-     * in sync with the UI on every frame.
-     */
-    void setStreamPasswordHash(const std::string &sha256Hex);
-
 private:
     /**
      * Extrai o método HTTP da requisição (GET, POST, PUT, DELETE)
@@ -105,14 +96,6 @@ private:
      */
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
-    /**
-     * Compute a content hash of a preset file for the /meta endpoint.
-     * Returns an opaque string (e.g. "fnv1a64:abcd...") used by the remote
-     * client to decide whether its locally-cached preset is still valid.
-     * Returns empty string if the file cannot be read.
-     */
-    std::string computePresetHash(const std::string &presetPath) const;
-
     // Endpoints GET (leitura)
     bool handleGET(int clientFd, const std::string &path, const std::string &request);
     bool handleGETSource(int clientFd);
@@ -130,20 +113,6 @@ private:
     bool handleGETV4L2Devices(int clientFd);
     bool handleGETV4L2Controls(int clientFd);
     bool handleGETStatus(int clientFd);
-    bool handleGETMeta(int clientFd, const std::string &request);
-    /**
-     * Long-lived Server-Sent Events loop on /meta — pushes snapshot deltas
-     * to the connected client every ~250 ms whenever the JSON changes,
-     * plus a comment keepalive every 30 s. Returns when the client
-     * disconnects or sending fails. Phase 6 of #47.
-     */
-    bool handleGETMetaSSE(int clientFd);
-    /**
-     * Builds the /meta JSON snapshot. Pure function over current
-     * Application / UIManager / ShaderEngine state — safe to call from
-     * the SSE loop on every tick.
-     */
-    std::string buildMetaSnapshotJSON();
     bool handleRefreshV4L2Devices(int clientFd);
     bool handleGETPlatform(int clientFd);
     bool handleGETDSDevices(int clientFd);
@@ -151,14 +120,6 @@ private:
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETSourceOverscan(int clientFd);
-    /**
-     * GET /api/v1/preferences — exposes the host application's current
-     * UI language so the portal can default to it on first load.
-     * Read-only; the portal user overrides via header dropdown
-     * (persisted in localStorage on the client only — does not affect
-     * the host's setting).
-     */
-    bool handleGETPreferences(int clientFd);
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
@@ -205,8 +166,4 @@ private:
     Application *m_application = nullptr;
     UIManager *m_uiManager = nullptr;
     HTTPServer *m_httpServer = nullptr; // Ponteiro para HTTPServer
-
-    // #49 Phase 3 — sha256(password) hex; empty == no auth.
-    mutable std::mutex m_passwordMu;
-    std::string        m_streamPasswordHash;
 };

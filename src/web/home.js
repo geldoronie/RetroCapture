@@ -17,8 +17,7 @@ async function pollStatus() {
     try {
         const status = await api.getStatus();
         const isLive = !!status.streamingActive;
-        document.getElementById('homeStreamStatus').textContent =
-            isLive ? t('web.home.state.live') : t('web.home.state.offline');
+        document.getElementById('homeStreamStatus').textContent = isLive ? 'Live' : 'Offline';
         document.getElementById('homeStreamStatus').className = 'home-stat-value ' +
             (isLive ? 'text-danger' : 'text-secondary');
         document.getElementById('homeClientCount').textContent = status.clientCount ?? 0;
@@ -58,10 +57,10 @@ async function pollNowPlaying() {
             api.getSource().catch(() => ({})),
             api.getShader().catch(() => ({})),
         ]);
-        const labels = { 0: t('web.home.source_none'), 1: 'V4L2', 2: 'DirectShow' };
+        const labels = { 0: 'None', 1: 'V4L2', 2: 'DirectShow' };
         document.getElementById('homeSource').textContent =
-            (labels[src.type] || t('web.home.unknown')) + (src.device ? ' — ' + src.device : '');
-        document.getElementById('homeShader').textContent = shader.name || t('web.home.none');
+            (labels[src.type] || 'Unknown') + (src.device ? ' — ' + src.device : '');
+        document.getElementById('homeShader').textContent = shader.name || '(none)';
     } catch (err) {
         console.warn('Now-playing poll failed:', err);
     }
@@ -92,7 +91,7 @@ function startLivePlayer() {
         // Safari / native TS playback fallback.
         video.src = liveStreamUrl();
         video.play().catch(() => {});
-        if (status) status.textContent = t('web.home.native_playback');
+        if (status) status.textContent = 'Native playback (Safari / fallback)';
     } else {
         try {
             _livePlayer = mpegts.createPlayer({
@@ -108,10 +107,10 @@ function startLivePlayer() {
             _livePlayer.attachMediaElement(video);
             _livePlayer.load();
             _livePlayer.play().catch(() => {});
-            if (status) status.textContent = t('web.home.connected');
+            if (status) status.textContent = 'Connected.';
         } catch (err) {
             console.error('mpegts.js error:', err);
-            if (status) status.textContent = t('web.home.player_error') + ' ' + err.message;
+            if (status) status.textContent = 'Player error: ' + err.message;
             return;
         }
     }
@@ -145,7 +144,7 @@ function stopLivePlayer() {
     }
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
-    if (status) status.textContent = t('web.home.stopped');
+    if (status) status.textContent = 'Stopped.';
     if (overlay) overlay.classList.remove('d-none');
 }
 
@@ -177,8 +176,8 @@ function showAlert(message, type) {
 function copyStreamUrl() {
     const url = document.getElementById('streamLink').href || (window.location.origin + '/stream');
     navigator.clipboard.writeText(url).then(
-        () => showAlert(t('web.alert.copy_ok'), 'success'),
-        () => showAlert(t('web.alert.copy_fail'), 'danger'),
+        () => showAlert('Stream URL copied to clipboard.', 'success'),
+        () => showAlert('Failed to copy stream URL.', 'danger'),
     );
 }
 
@@ -192,14 +191,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopBtn = document.getElementById('livePlayerStopBtn');
     if (startBtn) startBtn.addEventListener('click', startLivePlayer);
     if (stopBtn) stopBtn.addEventListener('click', stopLivePlayer);
-
-    // Language dropdown — picks up current selection on load, persists
-    // the user's choice in localStorage via i18n.setLanguage().
-    const langSelect = document.getElementById('langSelect');
-    if (langSelect && window.i18n) {
-        window.i18n.onReady(() => { langSelect.value = window.i18n.getLanguage(); });
-        langSelect.addEventListener('change', () => { window.i18n.setLanguage(langSelect.value); });
-    }
 
     // First load.
     pollStatus();

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="RetroCapture">
 
-    <title data-i18n="web.home.title">RetroCapture · Live</title>
+    <title>RetroCapture · Live</title>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json">
@@ -28,10 +28,6 @@
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css">
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/style.css">
-    <!-- i18n loader: must run before body renders so the
-         'i18n-loading' class is set in time to hide the raw English
-         literals while translations are fetched. -->
-    <script src="/i18n.js"></script>
 </head>
 <body class="home-page">
     <!-- Top navigation (shared across pages) -->
@@ -40,22 +36,18 @@
             <div class="d-flex align-items-center justify-content-between">
                 <a href="/" class="portal-brand text-decoration-none d-flex align-items-center">
                     <i class="bi bi-controller fs-3 me-2"></i>
-                    <span class="fw-semibold" data-i18n="web.nav.brand">RetroCapture</span>
+                    <span class="fw-semibold">RetroCapture</span>
                 </a>
                 <nav class="portal-nav-links d-flex">
-                    <a href="/" class="portal-nav-link active"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.live">Live</span></a>
-                    <a href="/recordings.html" class="portal-nav-link"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.recordings">Recordings</span></a>
-                    <a href="/config.html" class="portal-nav-link"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline" data-i18n="web.nav.configuration">Configuration</span></a>
+                    <a href="/" class="portal-nav-link active"><i class="bi bi-broadcast me-1"></i><span class="d-none d-sm-inline">Live</span></a>
+                    <a href="/recordings.html" class="portal-nav-link"><i class="bi bi-camera-video me-1"></i><span class="d-none d-sm-inline">Recordings</span></a>
+                    <a href="/config.html" class="portal-nav-link"><i class="bi bi-gear me-1"></i><span class="d-none d-sm-inline">Configuration</span></a>
                 </nav>
                 <div class="d-flex align-items-center gap-1">
-                    <select id="langSelect" class="form-select form-select-sm bg-dark text-light border-secondary" style="width: auto;" data-i18n-attr="aria-label:web.lang.label">
-                        <option value="en" data-i18n="web.lang.en">English</option>
-                        <option value="pt" data-i18n="web.lang.pt">Português (Brasil)</option>
-                    </select>
-                    <button class="btn btn-sm btn-outline-light" onclick="copyStreamUrl()" data-i18n-title="web.nav.copy_stream" title="Copy stream URL">
+                    <button class="btn btn-sm btn-outline-light" onclick="copyStreamUrl()" title="Copy stream URL">
                         <i class="bi bi-clipboard"></i>
                     </button>
-                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-sm btn-outline-light" data-i18n-title="web.nav.open_stream" title="Open stream in new tab">
+                    <a id="streamLink" href="/stream" target="_blank" class="btn btn-sm btn-outline-light" title="Open stream in new tab">
                         <i class="bi bi-box-arrow-up-right"></i>
                     </a>
                 </div>
@@ -74,14 +66,14 @@
                 <div class="home-player-overlay" id="livePlayerIdleOverlay">
                     <div class="text-center">
                         <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
-                        <h3 class="text-light" data-i18n="web.home.offline.title">Stream is offline</h3>
-                        <p class="text-light opacity-75 mb-3" data-i18n="web.home.offline.body">Start streaming from the Configuration page or click Play to try anyway.</p>
-                        <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i><span data-i18n="web.home.play">Play</span></button>
+                        <h3 class="text-light">Stream is offline</h3>
+                        <p class="text-light opacity-75 mb-3">Start streaming from the Configuration page or click Play to try anyway.</p>
+                        <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i>Play</button>
                     </div>
                 </div>
                 <div class="home-player-controls" id="livePlayerControls">
-                    <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i><span data-i18n="web.home.stop">Stop</span></button>
-                    <span class="text-light small ms-2" id="livePlayerStatus" data-i18n="web.home.ready">Ready.</span>
+                    <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i>Stop</button>
+                    <span class="text-light small ms-2" id="livePlayerStatus">Ready.</span>
                 </div>
             </div>
         </div>
@@ -98,25 +90,25 @@
                             <div class="row g-2 text-center">
                                 <div class="col-6 col-md-3">
                                     <div class="home-stat">
-                                        <div class="home-stat-label" data-i18n="web.home.stat.streaming">Streaming</div>
+                                        <div class="home-stat-label">Streaming</div>
                                         <div class="home-stat-value" id="homeStreamStatus">—</div>
                                     </div>
                                 </div>
                                 <div class="col-6 col-md-3">
                                     <div class="home-stat">
-                                        <div class="home-stat-label" data-i18n="web.home.stat.viewers">Viewers</div>
+                                        <div class="home-stat-label">Viewers</div>
                                         <div class="home-stat-value" id="homeClientCount">0</div>
                                     </div>
                                 </div>
                                 <div class="col-6 col-md-3">
                                     <div class="home-stat">
-                                        <div class="home-stat-label" data-i18n="web.home.stat.resolution">Resolution</div>
+                                        <div class="home-stat-label">Resolution</div>
                                         <div class="home-stat-value" id="homeResolution">—</div>
                                     </div>
                                 </div>
                                 <div class="col-6 col-md-3">
                                     <div class="home-stat">
-                                        <div class="home-stat-label" data-i18n="web.home.stat.fps">FPS</div>
+                                        <div class="home-stat-label">FPS</div>
                                         <div class="home-stat-value" id="homeFps">—</div>
                                     </div>
                                 </div>
@@ -129,14 +121,14 @@
                 <div class="col-12">
                     <div class="card">
                         <div class="card-body">
-                            <h6 class="card-title text-uppercase text-muted small mb-3"><i class="bi bi-palette me-1"></i><span data-i18n="web.home.now_playing">Now playing</span></h6>
+                            <h6 class="card-title text-uppercase text-muted small mb-3"><i class="bi bi-palette me-1"></i>Now playing</h6>
                             <div class="row g-3">
                                 <div class="col-md-6">
-                                    <div class="text-muted small" data-i18n="web.home.source">Source</div>
+                                    <div class="text-muted small">Source</div>
                                     <div id="homeSource" class="fw-semibold">—</div>
                                 </div>
                                 <div class="col-md-6">
-                                    <div class="text-muted small" data-i18n="web.home.shader">Shader</div>
+                                    <div class="text-muted small">Shader</div>
                                     <div id="homeShader" class="fw-semibold">—</div>
                                 </div>
                             </div>
@@ -153,6 +145,12 @@
     <script src="/home.js"></script>
 
     <!-- Service Worker registration -->
-    <script src="/sw-register.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').catch(err => console.warn('SW registration failed:', err));
+            });
+        }
+    </script>
 </body>
 </html>
