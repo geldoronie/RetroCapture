@@ -32,16 +32,54 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
   presets, including `PassFeedback` and the `OriginalHistory` alias chain.
 - 📡 **HTTP MPEG-TS streaming** with H.264 / H.265 (VP8 / VP9 experimental)
   and PulseAudio / WASAPI system-audio capture.
+- 🔁 **Shader-preserving distributed playback** — connect another RetroCapture
+  in *Remote source* mode and it receives the host's pre-shader feed plus
+  the host's current preset/parameters, so the picture renders with the
+  exact same look on the remote machine. ([REMOTE_STREAM_PROTOCOL](docs/REMOTE_STREAM_PROTOCOL.md))
+- 🌎 **Public stream directory** (opt-in) — publish your stream to
+  `directory.retrocapture.com` with one click and let other RetroCaptures
+  discover and connect from the in-app browser. ([DIRECTORY_PROTOCOL](docs/DIRECTORY_PROTOCOL.md))
+- ☁️ **Cloudflare tunnels** — Quick (ephemeral `trycloudflare.com` URL) or
+  Named (your own hostname) modes so the publish works behind CGNAT and
+  on networks where you can't open ports.
+- 🔒 **HTTPS everywhere** — directory and `/raw` traffic go through TLS by
+  default; the bundled HTTP client probes well-known CA stores so
+  AppImage builds work out of the box.
 - ⏺️ **Local recording** to MP4 / MKV / AVI with AAC / MP3 / Opus audio,
   configurable resolution, FPS and bitrates.
 - 💾 **Named profiles** for both streaming and recording — save / load / delete
   full configs by name from either the native UI or the web portal.
 - 🌐 **Web portal**: live stream player on Home, recordings browser with
   thumbnails, full configuration UI, installable as a PWA.
+- ⚡ **Quick Actions OSD** — stream / record / browse / disconnect buttons
+  pinned on-screen and reachable even when the main UI is hidden.
+- 🌍 **Bilingual UI** — English and Portuguese, switchable from Preferences.
 - 🎛️ **Hardware controls** exposed directly (V4L2 / DirectShow brightness,
   contrast, saturation, hue, gain, exposure, gamma, white balance, …).
 - 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
   (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
+
+### What's new in 0.7.0-alpha
+
+- **Remote source mode (#47)** — connect a second RetroCapture to the
+  first one as a video source and watch the same shader output remotely,
+  with live parameter sync.
+- **Public stream directory (#49)** with **Cloudflare Quick + Named
+  tunnels (#53 / #60)** so you can publish without port-forwarding.
+- **HTTPS / TLS in HttpClient (#69)** — directory and `/raw` connections
+  default to `https://`.
+- **Recording pipeline parity + unified UI idiom (#59)** — recording
+  and streaming now share `MediaSynchronizer` semantics and a single
+  configuration UI layout.
+- **Quick Actions OSD + Shortcuts helper (#68)** — pinned overlay
+  controls and an at-a-glance shortcut reference.
+- **Preferences pane + i18n (#45 / #46)** — language selection, default
+  fullscreen, persisted Preferences window.
+- **Directory + Remote drift / probe / orientation / disconnect fixes
+  (#67)** — A/V clock corruption on mid-join, AAC probe races, ghost
+  audio after disconnect and remote-source orientation all handled.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
 ---
 
@@ -140,8 +178,13 @@ edges are still being polished.
 | VP8 / VP9 streaming | ⚠️ Functional but may show as "Data: bin_data" in some players |
 | Local recording (MP4 / MKV / AVI) | ✅ Stable as of 0.6.0 (PTS fix landed) |
 | Web portal | ✅ Stable (full overhaul in 0.6.0) |
-| Profiles (streaming + recording) | ✅ New in 0.6.0 |
+| Profiles (streaming + recording) | ✅ Stable since 0.6.0 |
 | Raspberry Pi (ARM64 / ARM32) | ✅ Headless via SDL2 + DirectFB |
+| **Remote source mode (`/raw` + `/meta`)** | ✅ New in 0.7.0-alpha |
+| **Public stream directory + Cloudflare tunnels** | ✅ New in 0.7.0-alpha |
+| **HTTPS / TLS for directory and `/raw`** | ✅ New in 0.7.0-alpha |
+| **Bilingual UI (EN / PT-BR)** | ✅ New in 0.7.0-alpha |
+| **Quick Actions OSD + Shortcuts helper** | ✅ New in 0.7.0-alpha |
 
 **Shader compatibility note:** most CRT, NTSC, upscale (xBR, Super-xBR) and
 handheld presets work cleanly. A handful of complex multi-pass presets are
