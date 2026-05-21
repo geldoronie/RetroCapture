@@ -116,6 +116,13 @@ public:
     struct RecordingSettings getRecordingSettings() const;
     bool startRecording();
     void stopRecording();
+
+private:
+    // Build the metadata context for a recording session (#59): pulls
+    // shader / source / nickname / version off the UI and capture
+    // pipeline so RecordingManager can embed it as MP4/MKV metadata.
+    void populateRecordingContext();
+public:
     bool isRecording() const;
     uint64_t getRecordingDurationUs();
     uint64_t getRecordingFileSize();
@@ -138,6 +145,15 @@ public:
     
     // Shader path resolution (centralized)
     std::string resolveShaderPath(const std::string& shaderPath) const;
+
+    // Phase 4 of #47: drains pending remote /meta snapshot onto the GL
+    // thread. Called once per main-loop iteration; cheap no-op when
+    // m_hasPendingRemoteMeta is false.
+    void applyPendingRemoteMeta();
+
+    // #49 Phase 2: reconciles the public-directory publish state with
+    // the UI toggle. Called every frame; cheap when no transition.
+    void syncDirectoryClient();
     fs::path getShaderBasePath() const;
     
     // Thread-safe resolution change scheduling
@@ -161,9 +177,54 @@ private:
     std::unique_ptr<UIManager> m_ui;
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
+    std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
+    std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
+    std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
+    // #69 — Cache the URL each subsystem was started against so a
+    // runtime edit in the UI reconfigures both immediately instead of
+    // waiting for an app restart.
+    std::string m_publishedDirectoryUrl;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
+
+    // Remote-source render pacing: when consuming a remote /raw stream the
+    // client's main loop has no reason to iterate faster than the host's
+    // source FPS. Without this cap an idle high-refresh display can
+    // re-render the same decoded frame hundreds of times per source frame
+    // — wasted GPU and CPU, plus the ImGui frame counter ends up showing
+    // 500+ fps regardless of how slow the underlying source is.
+    // sourceFps comes from /meta; m_lastFrameSwapUs tracks the timestamp
+    // of the last completed main-loop iteration to compute the next sleep.
+    uint32_t m_remoteSourceFps = 0;
+    int64_t  m_lastFrameSwapUs = 0;
+
+    // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
+    // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
+    std::unique_ptr<class RemoteMetaSync> m_remoteMetaSync;
+    std::mutex                       m_pendingRemoteMutex;
+    std::atomic<bool>                m_hasPendingRemoteMeta{false};
+    std::string                      m_pendingRemotePreset;
+    std::string                      m_pendingRemotePresetHash;
+    std::string                      m_appliedRemotePresetHash;
+    bool                             m_pendingRemotePipelineEnabled = true;
+    std::vector<std::pair<std::string, float>> m_pendingRemoteParams;
+    // Host's source resolution from /meta. The capture rescales /raw to
+    // these dims so the local shader sees frames at the host's logical
+    // source size, not the smaller transmission size.
+    uint32_t                         m_pendingRemoteSourceWidth  = 0;
+    uint32_t                         m_pendingRemoteSourceHeight = 0;
+    // Host's Image-tab values from /meta. Only applied on the FIRST
+    // snapshot after a connect — m_remoteImageSeeded gates the apply
+    // so subsequent snapshots don't stomp whatever the local user
+    // tweaked after the seed.
+    bool                             m_remoteImageSeeded = false;
+    float                            m_pendingRemoteImageBrightness     = 1.0f;
+    float                            m_pendingRemoteImageContrast       = 1.0f;
+    bool                             m_pendingRemoteImageMaintainAspect = true;
+    uint32_t                         m_pendingRemoteImageOutputWidth    = 0;
+    uint32_t                         m_pendingRemoteImageOutputHeight   = 0;
+    bool                             m_hasPendingRemoteImageSeed        = false;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.
@@ -252,6 +313,13 @@ private:
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_streamingHardwareEncoder = 0;             // 0 = Auto (MediaEncoder::HardwareEncoder enum value)
+    std::string m_streamingNvencPreset = "p4";
+    std::string m_streamingVaapiRcMode = "CBR";
+    std::string m_streamingQsvPreset   = "veryfast";
+    std::string m_streamingAmfQuality  = "speed";
+    std::string m_remoteInterpolation  = "linear";
+    bool        m_remoteWindowFocused  = true;  // tracks vsync toggle state in the Remote main-loop branch
 
     // Buffer configuration
     size_t m_streamingMaxVideoBufferSize = 10;     // Máximo de frames no buffer de vídeo (1-50)
@@ -274,17 +342,17 @@ private:
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
     std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
     std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Informações do Stream";
-    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextStreamInfo = "Stream Information";
+    std::string m_webPortalTextQuickActions = "Quick Actions";
     std::string m_webPortalTextCompatibility = "Compatibilidade";
     std::string m_webPortalTextStatus = "Status";
     std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextResolution = "Resolution";
     std::string m_webPortalTextStreamUrl = "URL do Stream";
     std::string m_webPortalTextCopyUrl = "Copiar URL";
     std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";

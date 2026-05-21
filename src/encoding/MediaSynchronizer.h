@@ -87,11 +87,20 @@ public:
     // Obter chunks de áudio de uma zona de sincronização
     std::vector<TimestampedAudio> getAudioChunks(const SyncZone &zone);
 
-    // Obter todos os chunks de áudio ainda não processados, sem gating
-    // por sync zone. Áudio é barato pra encodar e não precisa esperar o
-    // vídeo — drenar continuamente evita o synchronizer dropar chunks
-    // (que causa o áudio terminar antes do vídeo no arquivo).
+    // Drain every audio chunk that hasn't been processed yet, with no
+    // sync-zone gating. Audio is cheap to encode and doesn't need to
+    // wait on video — continuous drain stops the synchronizer from
+    // dropping chunks (which caused audio to end before video in
+    // recorded files).
     std::vector<TimestampedAudio> getAllUnprocessedAudio();
+
+    // Same idea for video — used by the /raw encoder thread, where the
+    // MPEG-TS muxer reorders packets by DTS regardless, and sync-zone
+    // gating was producing whole seconds with no video output whenever
+    // audio briefly stopped arriving. (calculateSyncZone returns invalid
+    // when audio and video timestamps don't overlap within the
+    // tolerance, which happens under normal capture jitter.)
+    std::vector<TimestampedFrame> getAllUnprocessedVideo();
 
     // Marcar dados como processados
     void markVideoProcessed(size_t startIdx, size_t endIdx);
@@ -129,6 +138,12 @@ private:
     int64_t m_minBufferTimeUs = 100 * 1000LL;   // 100ms - pequeno buffer para melhor sincronização
     size_t m_maxVideoBufferSize = 15;           // Máximo de frames no buffer (reduzido para evitar atraso)
     size_t m_maxAudioBufferSize = 30;           // Máximo de chunks no buffer (reduzido para evitar atraso)
+
+    // Minimum number of audio chunks kept in the buffer after the eager
+    // mark-processed drain — calculateSyncZone needs at least one audio
+    // timestamp to align with video, and emptying the buffer would
+    // starve every subsequent encode iteration.
+    static constexpr size_t kAudioAnchorChunks = 4;
 
     // Buffers temporais ordenados por timestamp
     mutable std::mutex m_videoBufferMutex;

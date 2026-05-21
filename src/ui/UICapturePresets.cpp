@@ -67,14 +67,15 @@ void UICapturePresets::render()
         ImVec2 initialPos(workPos.x + 50.0f, workPos.y + menuBarHeight + 50.0f);
         ImVec2 initialSize(800.0f, 600.0f);
         
-        ImGui::SetNextWindowPos(initialPos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(initialSize, ImGuiCond_Always);
-        
+        ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(initialSize, ImGuiCond_FirstUseEver);
+
         m_justOpened = false;
     }
 
-    // Main window
-    ImGui::Begin("Capture Presets", &m_visible, ImGuiWindowFlags_NoSavedSettings);
+    // Main window. Position/size persisted via the ImGui ini file
+    // anchored in the user-data dir by UIManager.
+    ImGui::Begin("Capture Presets", &m_visible);
 
     // Header with Create button and search
     if (ImGui::Button("Create New Preset"))

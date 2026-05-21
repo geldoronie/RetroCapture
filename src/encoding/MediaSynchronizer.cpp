@@ -295,6 +295,25 @@ std::vector<MediaSynchronizer::TimestampedAudio> MediaSynchronizer::getAllUnproc
     return chunks;
 }
 
+std::vector<MediaSynchronizer::TimestampedFrame> MediaSynchronizer::getAllUnprocessedVideo()
+{
+    std::lock_guard<std::mutex> lock(m_videoBufferMutex);
+    std::vector<TimestampedFrame> frames;
+    frames.reserve(m_videoBuffer.size());
+    for (const auto &f : m_videoBuffer)
+    {
+        if (!f.processed)
+        {
+            frames.push_back(f);
+        }
+    }
+    std::sort(frames.begin(), frames.end(),
+              [](const TimestampedFrame &a, const TimestampedFrame &b) {
+                  return a.captureTimestampUs < b.captureTimestampUs;
+              });
+    return frames;
+}
+
 void MediaSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
 {
     std::lock_guard<std::mutex> lock(m_videoBufferMutex);
@@ -304,6 +323,15 @@ void MediaSynchronizer::markVideoProcessed(size_t startIdx, size_t endIdx)
         {
             m_videoBuffer[i].processed = true;
         }
+    }
+    // Eager front-drain — keep the bounded buffer from filling up with
+    // already-encoded frames waiting for the 5 s "old data" cleanup to
+    // catch them. Without this drain, processed frames squat on the
+    // ring slots and addVideoFrame ends up overflowing on perfectly
+    // healthy pipelines because every slot reads "already processed".
+    while (!m_videoBuffer.empty() && m_videoBuffer.front().processed)
+    {
+        m_videoBuffer.pop_front();
     }
 }
 
@@ -316,6 +344,15 @@ void MediaSynchronizer::markAudioProcessed(size_t startIdx, size_t endIdx)
         {
             m_audioBuffer[i].processed = true;
         }
+    }
+    // Pop processed audio from the front but keep the last few entries
+    // even if processed — calculateSyncZone needs an audio timestamp
+    // anchor to align with video; emptying the audio buffer entirely
+    // makes every subsequent iteration return SyncZone::invalid and
+    // starves the video encoder.
+    while (m_audioBuffer.size() > kAudioAnchorChunks && m_audioBuffer.front().processed)
+    {
+        m_audioBuffer.pop_front();
     }
 }
 
@@ -331,6 +368,10 @@ void MediaSynchronizer::markVideoFrameProcessedByTimestamp(int64_t timestampUs)
             break; // Only mark first match (should be unique)
         }
     }
+    while (!m_videoBuffer.empty() && m_videoBuffer.front().processed)
+    {
+        m_videoBuffer.pop_front();
+    }
 }
 
 void MediaSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
@@ -344,6 +385,13 @@ void MediaSynchronizer::markAudioChunkProcessedByTimestamp(int64_t timestampUs)
             chunk.processed = true;
             break; // Only mark first match (should be unique)
         }
+    }
+    // Same anchor-preserving drain as markAudioProcessed — leave a few
+    // chunks at the back so calculateSyncZone can still match the audio
+    // timeline against incoming video.
+    while (m_audioBuffer.size() > kAudioAnchorChunks && m_audioBuffer.front().processed)
+    {
+        m_audioBuffer.pop_front();
     }
 }
 

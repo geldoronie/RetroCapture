@@ -1,6 +1,14 @@
 #include "core/Application.h"
+#include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
+#include "utils/HttpClient.h"
 #include "utils/Logger.h"
+
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+#include <nlohmann/json.hpp>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <algorithm>
@@ -13,12 +21,20 @@ void printUsage(const char *programName)
     std::cout << "  --preset <path>        Load preset with multiple passes (.glslp)\n";
     std::cout << "\nCapture Options:\n";
 #ifdef __linux__
-    std::cout << "  --source <type>        Source type: none, v4l2 (default: v4l2)\n";
+    std::cout << "  --source <type>        Source type: none, v4l2, remote (default: v4l2)\n";
 #elif defined(_WIN32)
-    std::cout << "  --source <type>        Source type: none, ds (default: ds)\n";
+    std::cout << "  --source <type>        Source type: none, ds, remote (default: ds)\n";
 #else
-    std::cout << "  --source <type>        Source type: none (default: none)\n";
+    std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
+    std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
+    std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
+    std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
+    std::cout << "  --directory-url <url>  Override the directory service URL (default https://directory.retrocapture.com).\n";
+    std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
+    std::cout << "  --cloudflared-binary <path>\n";
+    std::cout << "                         Use the given cloudflared binary verbatim (skip download + sha256 check).\n";
+    std::cout << "                         For air-gapped setups where GitHub releases aren't reachable.\n";
     std::cout << "  --width <value>        Capture width (default: 1920)\n";
     std::cout << "  --height <value>       Capture height (default: 1080)\n";
     std::cout << "  --fps <value>          Capture framerate (default: 60)\n";
@@ -56,28 +72,28 @@ void printUsage(const char *programName)
     std::cout << "  --ds-gamma <value>         DirectShow gamma (100 to 300, default: don't set)\n";
     std::cout << "  --ds-whitebalance <value>   DirectShow white balance (2800 to 6500, default: don't set)\n";
 #endif
-    std::cout << "\nOpções de Streaming:\n";
-    std::cout << "  --stream-enable              Habilitar streaming HTTP MPEG-TS (áudio + vídeo)\n";
-    std::cout << "  --stream-port <porta>        Porta para streaming (padrão: 8080)\n";
-    std::cout << "  --stream-width <largura>    Largura do stream (padrão: 640, 0 = captura)\n";
-    std::cout << "  --stream-height <altura>    Altura do stream (padrão: 480, 0 = captura)\n";
-    std::cout << "  --stream-fps <fps>          FPS do stream (padrão: 60, 0 = captura)\n";
-    std::cout << "  --stream-bitrate <kbps>      Bitrate de vídeo em kbps (padrão: 8000)\n";
-    std::cout << "  --stream-audio-bitrate <kbps> Bitrate de áudio em kbps (padrão: 256)\n";
-    std::cout << "  --stream-video-codec <codec> Codec de vídeo: h264, h265, vp8, vp9 (padrão: h264)\n";
-    std::cout << "  --stream-audio-codec <codec> Codec de áudio: aac, mp3, opus (padrão: aac)\n";
-    std::cout << "\nOpções de Web Portal:\n";
-    std::cout << "  --web-portal-enable              Habilitar web portal (padrão: habilitado)\n";
-    std::cout << "  --web-portal-disable             Desabilitar web portal\n";
-    std::cout << "  --web-portal-start               Iniciar web portal automaticamente na inicialização\n";
-    std::cout << "  --web-portal-port <porta>       Porta do web portal (padrão: 8080, mesma do streaming)\n";
-    std::cout << "  --web-portal-https               Habilitar HTTPS no web portal\n";
-    std::cout << "  --web-portal-ssl-cert <caminho>   Caminho do certificado SSL (padrão: ssl/server.crt)\n";
-    std::cout << "  --web-portal-ssl-key <caminho>    Caminho da chave SSL (padrão: ssl/server.key)\n";
-    std::cout << "\nOutras:\n";
+    std::cout << "\nStreaming Options:\n";
+    std::cout << "  --stream-enable              Enable HTTP MPEG-TS streaming (audio + video)\n";
+    std::cout << "  --stream-port <port>         Streaming port (default: 8080)\n";
+    std::cout << "  --stream-width <width>       Stream width (default: 640, 0 = capture)\n";
+    std::cout << "  --stream-height <height>     Stream height (default: 480, 0 = capture)\n";
+    std::cout << "  --stream-fps <fps>           Stream FPS (default: 60, 0 = capture)\n";
+    std::cout << "  --stream-bitrate <kbps>      Video bitrate in kbps (default: 8000)\n";
+    std::cout << "  --stream-audio-bitrate <kbps> Audio bitrate in kbps (default: 256)\n";
+    std::cout << "  --stream-video-codec <codec> Video codec: h264, h265, vp8, vp9 (default: h264)\n";
+    std::cout << "  --stream-audio-codec <codec> Audio codec: aac, mp3, opus (default: aac)\n";
+    std::cout << "\nWeb Portal Options:\n";
+    std::cout << "  --web-portal-enable              Enable web portal (default: enabled)\n";
+    std::cout << "  --web-portal-disable             Disable web portal\n";
+    std::cout << "  --web-portal-start               Start the web portal automatically on launch\n";
+    std::cout << "  --web-portal-port <port>         Web portal port (default: 8080, shared with streaming)\n";
+    std::cout << "  --web-portal-https               Enable HTTPS on the web portal\n";
+    std::cout << "  --web-portal-ssl-cert <path>     Path to the SSL certificate (default: ssl/server.crt)\n";
+    std::cout << "  --web-portal-ssl-key <path>      Path to the SSL key (default: ssl/server.key)\n";
+    std::cout << "\nOther:\n";
     std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
-    std::cout << "  --help, -h             Mostrar esta ajuda\n";
-    std::cout << "\nExemplos:\n";
+    std::cout << "  --help, -h             Show this help\n";
+    std::cout << "\nExamples:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
     std::cout << "  " << programName << " --width 1280 --height 720 --fps 30\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video1 --width 3840 --height 2160 --fps 60\n";
@@ -92,10 +108,13 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
-    LOG_INFO("RetroCapture v0.5.0");
+    LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 
     std::string shaderPath;
     std::string presetPath;
+    std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
+    bool        browseDirectory = false;     // #49 Phase 4: --browse-directory
+    std::string browseDirectoryUrl;          // optional, defaults to https://directory.retrocapture.com
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
@@ -195,22 +214,48 @@ int main(int argc, char *argv[])
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
 #ifdef __linux__
-            if (sourceType != "none" && sourceType != "v4l2")
+            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
 #elif defined(_WIN32)
-            if (sourceType != "none" && sourceType != "ds")
+            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
 #else
-            if (sourceType != "none")
+            if (sourceType != "none" && sourceType != "remote")
 #endif
             {
 #ifdef __linux__
-                LOG_ERROR("Invalid source type. Use 'none' or 'v4l2'");
+                LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
 #elif defined(_WIN32)
-                LOG_ERROR("Invalid source type. Use 'none' or 'ds'");
+                LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
 #else
-                LOG_ERROR("Invalid source type. Use 'none'");
+                LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
 #endif
                 return 1;
             }
+        }
+        else if (arg == "--remote-url" && i + 1 < argc)
+        {
+            // Phase 3 of #47: base URL of the remote RetroCapture server.
+            // Client appends /raw (and /meta in Phase 4) by convention.
+            remoteUrl = argv[++i];
+        }
+        else if (arg == "--browse-directory")
+        {
+            // #49 Phase 4: print current directory listing to stdout
+            // and exit. Optional --directory-url overrides the default.
+            browseDirectory = true;
+        }
+        else if (arg == "--directory-url" && i + 1 < argc)
+        {
+            // Overrides the URL --browse-directory queries (and the
+            // default the app uses internally when launched normally).
+            browseDirectoryUrl = argv[++i];
+        }
+        else if (arg == "--cloudflared-binary" && i + 1 < argc)
+        {
+            // Phase 2.5b (#53): air-gapped escape hatch. The path
+            // becomes the only thing resolveBinaryPath() returns —
+            // download + sha256 are skipped because the user took
+            // responsibility for the binary by handing it to us.
+            CloudflaredDownloader::setCliOverride(argv[++i]);
         }
         else if (arg == "--v4l2-device" && i + 1 < argc)
         {
@@ -525,7 +570,7 @@ int main(int argc, char *argv[])
             streamingPort = std::stoi(argv[++i]);
             if (streamingPort < 1024 || streamingPort > 65535)
             {
-                LOG_ERROR("Porta de streaming inválida. Use um valor entre 1024 e 65535");
+                LOG_ERROR("Invalid streaming port. Use a value between 1024 and 65535");
                 return 1;
             }
         }
@@ -534,7 +579,7 @@ int main(int argc, char *argv[])
             streamWidth = std::stoi(argv[++i]);
             if (streamWidth < 1 || streamWidth > 7680)
             {
-                LOG_ERROR("Largura do stream inválida. Use um valor entre 1 e 7680");
+                LOG_ERROR("Invalid stream width. Use a value between 1 and 7680");
                 return 1;
             }
         }
@@ -543,7 +588,7 @@ int main(int argc, char *argv[])
             streamHeight = std::stoi(argv[++i]);
             if (streamHeight < 1 || streamHeight > 4320)
             {
-                LOG_ERROR("Altura do stream inválida. Use um valor entre 1 e 4320");
+                LOG_ERROR("Invalid stream height. Use a value between 1 and 4320");
                 return 1;
             }
         }
@@ -552,7 +597,7 @@ int main(int argc, char *argv[])
             streamFps = std::stoi(argv[++i]);
             if (streamFps < 1 || streamFps > 120)
             {
-                LOG_ERROR("FPS do stream inválido. Use um valor entre 1 e 120");
+                LOG_ERROR("Invalid stream FPS. Use a value between 1 and 120");
                 return 1;
             }
         }
@@ -561,7 +606,7 @@ int main(int argc, char *argv[])
             streamBitrate = std::stoi(argv[++i]);
             if (streamBitrate < 100 || streamBitrate > 50000)
             {
-                LOG_ERROR("Bitrate do stream inválido. Use um valor entre 100 e 50000 kbps");
+                LOG_ERROR("Invalid stream bitrate. Use a value between 100 and 50000 kbps");
                 return 1;
             }
         }
@@ -570,7 +615,7 @@ int main(int argc, char *argv[])
             streamAudioBitrate = std::stoi(argv[++i]);
             if (streamAudioBitrate < 32 || streamAudioBitrate > 320)
             {
-                LOG_ERROR("Bitrate de áudio inválido. Use um valor entre 32 e 320 kbps");
+                LOG_ERROR("Invalid audio bitrate. Use a value between 32 and 320 kbps");
                 return 1;
             }
         }
@@ -628,12 +673,84 @@ int main(int argc, char *argv[])
         }
     }
 
+    // #49 Phase 4: --browse-directory is a one-shot CLI command.
+    // Fetch the directory's list, print as a plain-text table, exit.
+    // Intentionally bypasses the app's full init so it stays fast
+    // and works headless (CI / scripting).
+    if (browseDirectory)
+    {
+        const std::string url = browseDirectoryUrl.empty()
+                                    ? std::string("https://directory.retrocapture.com")
+                                    : browseDirectoryUrl;
+        auto resp = HttpClient::send(HttpClient::Method::GET, url + "/streams");
+        if (!resp.ok)
+        {
+            std::cerr << "browse-directory: fetch failed: " << resp.error << "\n";
+            return 2;
+        }
+        if (resp.statusCode != 200)
+        {
+            std::cerr << "browse-directory: HTTP " << resp.statusCode
+                      << " — " << resp.body << "\n";
+            return 2;
+        }
+        try
+        {
+            auto j = nlohmann::json::parse(resp.body);
+            auto data = j.at("data");
+            int total = data.value("totalCount", 0);
+            std::cout << "Directory: " << url << "  (" << total << " stream(s))\n";
+            std::cout << std::string(78, '-') << "\n";
+            std::cout << std::left
+                      << std::setw(28) << "Name"
+                      << std::setw(14) << "Host"
+                      << std::setw(10) << "Codec"
+                      << std::setw(6)  << "Clt"
+                      << "Endpoint\n";
+            std::cout << std::string(78, '-') << "\n";
+            if (data.contains("streams"))
+            {
+                for (const auto &row : data["streams"])
+                {
+                    std::cout << std::left
+                              << std::setw(28) << row.value("name", "").substr(0, 27)
+                              << std::setw(14) << row.value("hostNickname", "").substr(0, 13)
+                              << std::setw(10) << row.value("codec", "")
+                              << std::setw(6)  << row.value("clientCount", 0)
+                              << row.value("endpoint", "")
+                              << (row.value("passwordRequired", false) ? "  [locked]" : "")
+                              << "\n";
+                }
+            }
+            return 0;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "browse-directory: parse failed: " << e.what() << "\n";
+            return 2;
+        }
+    }
+
 // Determinar tipo de fonte
 #ifdef __linux__
     bool isV4L2Source = (sourceType == "v4l2");
 #elif defined(_WIN32)
     bool isDSSource = (sourceType == "ds");
 #endif
+    bool isRemoteSource = (sourceType == "remote");
+
+    // Phase 3 of #47: remote source needs a base URL up front.
+    if (isRemoteSource && remoteUrl.empty())
+    {
+        LOG_ERROR("--source remote requires --remote-url <base-url> (e.g. http://host:8080)");
+        return 1;
+    }
+    // Hand the URL to Application via the same devicePath field — semantically
+    // it's the "where to read frames from" string for any source kind.
+    if (isRemoteSource)
+    {
+        devicePath = remoteUrl;
+    }
 
     LOG_INFO("Initializing application...");
     LOG_INFO("Source type: " + sourceType);
@@ -648,6 +765,10 @@ int main(int argc, char *argv[])
         LOG_INFO("DirectShow device: " + devicePath);
     }
 #endif
+    if (isRemoteSource)
+    {
+        LOG_INFO("Remote URL: " + remoteUrl);
+    }
     LOG_INFO("Capture resolution: " + std::to_string(captureWidth) + "x" + std::to_string(captureHeight));
     LOG_INFO("Framerate: " + std::to_string(captureFps) + " fps");
     LOG_INFO("Window size: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight));
@@ -781,6 +902,13 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // Phase 3 of #47: remote source carries the base URL in devicePath; the
+    // platform-conditional V4L2/DS branches above already skipped it.
+    if (isRemoteSource)
+    {
+        app.setDevicePath(devicePath);
+    }
+
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
@@ -823,6 +951,8 @@ int main(int argc, char *argv[])
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
 #endif
+    if (sourceType == "remote")
+        sourceTypeEnum = UIManager::SourceType::Remote;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
     

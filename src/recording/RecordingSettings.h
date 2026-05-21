@@ -34,4 +34,14 @@ struct RecordingSettings
     bool autoStart = false;
     uint64_t maxDurationUs = 0; // 0 = no limit
     uint64_t maxFileSize = 0;   // 0 = no limit
+
+    // Hardware encoder selection (#59) — mirrors the streaming side.
+    // Same int encoding as MediaEncoder::HardwareEncoder
+    // (0=Auto, 1=Software, 2=NVENC, 3=VAAPI, 4=QSV, 5=AMF). Auto is
+    // the safe default: MediaEncoder probes the build for hardware
+    // support and falls back to libx264 if none is wired up. hwPreset
+    // carries the backend-specific tuning string (NVENC p1..p7,
+    // VAAPI CBR/VBR/CQP, QSV preset names, AMF quality levels).
+    int         hardwareEncoder = 0;
+    std::string hwPreset = "";
 };

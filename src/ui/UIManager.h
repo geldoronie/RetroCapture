@@ -19,8 +19,19 @@ class ShaderEngine;
 class IAudioCapture;
 
 // Forward declarations
-class UIConfiguration;
+class UIConfigurationSource;
+class UIConfigurationShader;
+class UIConfigurationImage;
+class UIConfigurationStreaming;
+class UIConfigurationRecording;
+class UIConfigurationWebPortal;
+class UIConfigurationAudio;
+class UIInfoPanel;
+class QuickActionsOverlay;
+class UIPreferences;
 class UICredits;
+class UIRemoteConnection;
+class UIDirectoryBrowser;
 class UICapturePresets;
 class UIRecordings;
 class RecordingProfileManager;
@@ -39,6 +50,14 @@ public:
     void endFrame();
 
     void render();
+
+    /// Always-on-top corner overlay that surfaces remote-connection
+    /// state transitions (Connecting / Reconnecting / Disconnecting
+    /// / Connected). Rendered before render()'s F12-visibility gate
+    /// so the user sees connection feedback even with the rest of
+    /// the IMGUI surface hidden. Delegates to
+    /// osd::ConnectionStatusOverlay since #68.
+    void renderConnectionOverlay();
 
     // Callbacks para interação
     void setShaderList(const std::vector<std::string> &shaders) { m_shaderList = shaders; }
@@ -143,7 +162,8 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2 // DirectShow (Windows)
+        DS = 2, // DirectShow (Windows)
+        Remote = 3 // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -151,6 +171,9 @@ public:
 
     void setOnSourceTypeChanged(std::function<void(SourceType)> callback) { m_onSourceTypeChanged = callback; }
     SourceType getSourceType() const { return m_sourceType; }
+    // Phase 5 of #47: client mode (consuming a remote /raw) — UI controls
+    // should render disabled, and a banner advertises the connection.
+    bool isRemoteSource() const { return m_sourceType == SourceType::Remote; }
     void setCurrentDevice(const std::string &device)
     {
         m_currentDevice = device;
@@ -158,6 +181,14 @@ public:
         {
             m_onDeviceChanged(device);
         }
+    }
+    // Update the device path without firing the device-change callback.
+    // Used by Application when it needs to mark a failed connect cleared
+    // from inside the same callback — calling setCurrentDevice would
+    // re-enter and either hang or recurse depending on the guard.
+    void setCurrentDeviceSilent(const std::string &device)
+    {
+        m_currentDevice = device;
     }
     std::string getCurrentDevice() const { return m_currentDevice; }
 
@@ -234,6 +265,70 @@ public:
     void setStreamingCooldownRemainingMs(int64_t ms) { m_streamingCooldownRemainingMs = ms; }
     void setStreamingProcessing(bool processing) { m_streamingProcessing = processing; }
     bool isStreamingProcessing() const { return m_streamingProcessing; }
+
+    // ── Public-directory publish settings (#49 Phase 2) ──
+    bool getDirectoryPublishEnabled() const          { return m_directoryPublishEnabled; }
+    void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
+    const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
+    void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
+    bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
+    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    // Preferences (#45 placeholder + window restructure). Persisted
+    // today; the TranslationManager that consumes the language code
+    // lands in Fase B.
+    const std::string &getLanguage() const           { return m_language; }
+    void setLanguage(const std::string &v)           { m_language = v; }
+    bool getStartFullscreen() const                  { return m_startFullscreen; }
+    void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
+    const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
+    void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
+    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
+    const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
+    void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
+    const std::string &getDirectoryEndpointMode() const { return m_directoryEndpointMode; }
+    void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
+    const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
+    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
+    // tunnelMode is "quick" (default) or "named". When "named", the
+    // tunnel id + hostname identify which existing tunnel cloudflared
+    // should run, and the directory entry's URL points at the user's
+    // own hostname instead of a fresh trycloudflare.com one.
+    const std::string &getDirectoryTunnelMode() const { return m_directoryTunnelMode; }
+    void setDirectoryTunnelMode(const std::string &v) { m_directoryTunnelMode = v; }
+    const std::string &getDirectoryNamedTunnelId() const { return m_directoryNamedTunnelId; }
+    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryNamedTunnelId = v; }
+    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryNamedTunnelHostname; }
+    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryNamedTunnelHostname = v; }
+    bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
+    void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
+    const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
+    void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
+    void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
+
+    // Directory telemetry getters/setters (#49 Phase 5).
+    uint64_t getDirectoryRegisterOk()    const { return m_directoryRegisterOk; }
+    uint64_t getDirectoryRegisterFail()  const { return m_directoryRegisterFail; }
+    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryHeartbeatOk; }
+    uint64_t getDirectoryHeartbeatFail() const { return m_directoryHeartbeatFail; }
+    uint64_t getDirectoryPatchOk()       const { return m_directoryPatchOk; }
+    uint64_t getDirectoryPatchFail()     const { return m_directoryPatchFail; }
+    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directorySecondsSinceLastHeartbeat; }
+    void setDirectoryStats(uint64_t regOk, uint64_t regFail,
+                           uint64_t hbOk, uint64_t hbFail,
+                           uint64_t patchOk, uint64_t patchFail,
+                           int64_t secondsSinceLastHeartbeat)
+    {
+        m_directoryRegisterOk    = regOk;
+        m_directoryRegisterFail  = regFail;
+        m_directoryHeartbeatOk   = hbOk;
+        m_directoryHeartbeatFail = hbFail;
+        m_directoryPatchOk       = patchOk;
+        m_directoryPatchFail     = patchFail;
+        m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
+    }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
@@ -248,6 +343,11 @@ public:
     void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
     void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
     void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    // Hardware encoder selection — uses int so we don't have to pull
+    // MediaEncoder.h into the UI layer. Stored as int matching the
+    // MediaEncoder::HardwareEncoder enum values (Auto=0, Software=1,
+    // NVENC=2, VAAPI=3, QSV=4, AMF=5).
+    void setStreamingHardwareEncoder(int v) { m_streamingHardwareEncoder = v; }
 
     // Buffer settings
     void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
@@ -275,6 +375,12 @@ public:
     std::string getStreamingH265Level() const { return m_streamingH265Level; }
     int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
     int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
+    int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
+    std::string getStreamingNvencPreset() const { return m_streamingNvencPreset; }
+    std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
+    std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
+    std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
+    std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -291,6 +397,12 @@ public:
     void triggerStreamingH265LevelChange(const std::string &level);
     void triggerStreamingVP8SpeedChange(int speed);
     void triggerStreamingVP9SpeedChange(int speed);
+    void triggerStreamingHardwareEncoderChange(int v);
+    void triggerStreamingNvencPresetChange(const std::string &v);
+    void triggerStreamingVaapiRcModeChange(const std::string &v);
+    void triggerStreamingQsvPresetChange(const std::string &v);
+    void triggerStreamingAmfQualityChange(const std::string &v);
+    void triggerRemoteInterpolationChange(const std::string &v);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -329,6 +441,28 @@ public:
     uint32_t getCaptureHeight() const { return m_captureHeight; }
     uint32_t getActualCaptureWidth() const { return m_actualCaptureWidth; }
     uint32_t getActualCaptureHeight() const { return m_actualCaptureHeight; }
+
+    // Mirror of VideoCaptureRemote::isHostLikelyOffline() pushed by
+    // Application every frame. Lives here because in Remote mode the
+    // UIManager's m_capture pointer is null (Application passes
+    // nullptr to setCaptureControls to suppress the V4L2/DS hardware
+    // controls) so the Info panel can't dynamic-cast its way to the
+    // flag. Default false in host mode (#58).
+    bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
+    void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
+    // 'Are we decoding frames right now' — distinct from
+    // captureWidth > 0, which stays at the last seen value after
+    // the stream drops. Mirrored by Application from
+    // VideoCaptureRemote::isReceivingFrames() every frame.
+    bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
+    void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+
+    // Host's current viewer count, parsed from /meta when we're in
+    // client mode (#68). Application piggybacks the
+    // RemoteMetaSync::Snapshot callback to keep this fresh. 0 when
+    // we're not a client or the host's /meta predates this field.
+    uint32_t getRemoteUpstreamClientCount() const { return m_remoteUpstreamClientCount; }
+    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteUpstreamClientCount = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -387,6 +521,21 @@ public:
     void setOnStreamingH265LevelChanged(std::function<void(const std::string &)> callback) { m_onStreamingH265LevelChanged = callback; }
     void setOnStreamingVP8SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP8SpeedChanged = callback; }
     void setOnStreamingVP9SpeedChanged(std::function<void(int)> callback) { m_onStreamingVP9SpeedChanged = callback; }
+    void setOnStreamingHardwareEncoderChanged(std::function<void(int)> callback) { m_onStreamingHardwareEncoderChanged = callback; }
+    void setOnStreamingNvencPresetChanged(std::function<void(const std::string &)> cb) { m_onStreamingNvencPresetChanged = cb; }
+    void setOnStreamingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onStreamingVaapiRcModeChanged = cb; }
+    void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
+    void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
+    void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
+
+    // Accessor used by Application to keep the connection-window's
+    // capture pointer current — the window reads .isOpen() / dims to
+    // decide whether to show Connect or Disconnect.
+    UIRemoteConnection *getRemoteConnectionWindow() const { return m_remoteConnectionWindow.get(); }
+    UIDirectoryBrowser *getDirectoryBrowserWindow() const { return m_directoryBrowserWindow.get(); }
+    // OSD layer accessor — Application needs it to gate cursor
+    // visibility on whether an interactive overlay is on screen (#68).
+    QuickActionsOverlay *getQuickActionsOverlay() const { return m_quickActionsOverlay.get(); }
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -415,6 +564,18 @@ public:
     void setRecordingFilenameTemplate(const std::string& template_) { m_recordingFilenameTemplate = template_; }
     void setRecordingIncludeAudio(bool include) { m_recordingIncludeAudio = include; }
 
+    // Hardware encoder selection for recording (#59). Same int-based
+    // encoding as the streaming side so we don't have to pull
+    // MediaEncoder.h into the UI layer (0=Auto, 1=Software,
+    // 2=NVENC, 3=VAAPI, 4=QSV, 5=AMF). Backend-specific preset
+    // strings live in separate fields per backend, mirroring the
+    // streaming layout exactly so the same UI block can render both.
+    void setRecordingHardwareEncoder(int v)           { m_recordingHardwareEncoder = v; }
+    void setRecordingNvencPreset(const std::string &v){ m_recordingNvencPreset = v; }
+    void setRecordingVaapiRcMode(const std::string &v){ m_recordingVaapiRcMode = v; }
+    void setRecordingQsvPreset(const std::string &v)  { m_recordingQsvPreset = v; }
+    void setRecordingAmfQuality(const std::string &v) { m_recordingAmfQuality = v; }
+
     // Recording info getters (public)
     bool getRecordingActive() const { return m_recordingActive; }
     uint64_t getRecordingDurationUs() const { return m_recordingDurationUs; }
@@ -437,6 +598,11 @@ public:
     std::string getRecordingOutputPath() const { return m_recordingOutputPath; }
     std::string getRecordingFilenameTemplate() const { return m_recordingFilenameTemplate; }
     bool getRecordingIncludeAudio() const { return m_recordingIncludeAudio; }
+    int  getRecordingHardwareEncoder() const         { return m_recordingHardwareEncoder; }
+    std::string getRecordingNvencPreset() const      { return m_recordingNvencPreset; }
+    std::string getRecordingVaapiRcMode() const      { return m_recordingVaapiRcMode; }
+    std::string getRecordingQsvPreset()   const      { return m_recordingQsvPreset; }
+    std::string getRecordingAmfQuality()  const      { return m_recordingAmfQuality; }
 
     // Recording setters with callbacks
     void triggerRecordingWidthChange(uint32_t width);
@@ -456,6 +622,11 @@ public:
     void triggerRecordingOutputPathChange(const std::string& path);
     void triggerRecordingFilenameTemplateChange(const std::string& template_);
     void triggerRecordingIncludeAudioChange(bool include);
+    void triggerRecordingHardwareEncoderChange(int v);
+    void triggerRecordingNvencPresetChange(const std::string &v);
+    void triggerRecordingVaapiRcModeChange(const std::string &v);
+    void triggerRecordingQsvPresetChange(const std::string &v);
+    void triggerRecordingAmfQualityChange(const std::string &v);
     void triggerRecordingStartStop(bool start);
 
     // Recording profiles — save/load/list/delete the full recording
@@ -495,6 +666,11 @@ public:
     void setOnRecordingOutputPathChanged(std::function<void(const std::string&)> callback) { m_onRecordingOutputPathChanged = callback; }
     void setOnRecordingFilenameTemplateChanged(std::function<void(const std::string&)> callback) { m_onRecordingFilenameTemplateChanged = callback; }
     void setOnRecordingIncludeAudioChanged(std::function<void(bool)> callback) { m_onRecordingIncludeAudioChanged = callback; }
+    void setOnRecordingHardwareEncoderChanged(std::function<void(int)> cb)             { m_onRecordingHardwareEncoderChanged = cb; }
+    void setOnRecordingNvencPresetChanged(std::function<void(const std::string &)> cb) { m_onRecordingNvencPresetChanged = cb; }
+    void setOnRecordingVaapiRcModeChanged(std::function<void(const std::string &)> cb) { m_onRecordingVaapiRcModeChanged = cb; }
+    void setOnRecordingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onRecordingQsvPresetChanged = cb; }
+    void setOnRecordingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onRecordingAmfQualityChanged = cb; }
 
     // Web Portal settings
     void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
@@ -660,11 +836,46 @@ private:
     bool m_initialized = false;
     bool m_uiVisible = true;
 
-    // UI Configuration window (refatorado)
-    std::unique_ptr<class UIConfiguration> m_configWindow;
+    // Standalone configuration windows. Previously hosted as tabs
+    // inside the unified "RetroCapture Controls" window; split out
+    // for clarity (Fase A of #45 + window restructure). Each one
+    // owns its own m_visible and ImGui::Begin/End.
+    std::unique_ptr<class UIConfigurationSource>    m_sourceWindow;
+    std::unique_ptr<class UIConfigurationShader>    m_shaderWindow;
+    std::unique_ptr<class UIConfigurationImage>     m_imageWindow;
+    std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
+    std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
+    std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
+#ifdef __linux__
+    std::unique_ptr<class UIConfigurationAudio>     m_audioWindow;
+#endif
+    std::unique_ptr<class UIInfoPanel>              m_infoWindow;
+    std::unique_ptr<class UIPreferences>            m_preferencesWindow;
+    std::unique_ptr<class UIShortcutsHelp>          m_shortcutsHelpWindow;
+    // OSD layer (#68) — lives in src/osd/, owned by UIManager since
+    // it has the only natural place to hand them lifetime + state
+    // accessors.
+    std::unique_ptr<class QuickActionsOverlay>      m_quickActionsOverlay;
+    std::unique_ptr<class ConnectionStatusOverlay>  m_connectionOverlay;
+    // Loaded from config.json before m_quickActionsOverlay exists,
+    // applied via setVisible() right after construction. Defaults to
+    // true so first-time users see the overlay; subsequent toggles
+    // round-trip through saveConfig().
+    bool m_quickActionsVisible = true;
+    // Same persistence pattern for the shortcuts-help orientation
+    // widget (#68 follow-up). Default true so new users see the
+    // keyboard hints on first launch.
+    bool m_shortcutsHelpVisible = true;
+
     std::unique_ptr<class UICredits> m_creditsWindow;
     std::unique_ptr<class UICapturePresets> m_capturePresetsWindow;
     std::unique_ptr<class UIRecordings> m_recordingsWindow;
+    std::unique_ptr<class UIRemoteConnection> m_remoteConnectionWindow;
+    std::unique_ptr<class UIDirectoryBrowser> m_directoryBrowserWindow;
+
+    // ImGui's IO holds a raw pointer to the ini path string; keep the
+    // backing storage alive on UIManager for the whole lifetime.
+    std::string m_iniPath;
     std::unique_ptr<RecordingProfileManager> m_recordingProfileManager;
     std::unique_ptr<StreamingProfileManager> m_streamingProfileManager;
     void *m_window = nullptr; // GLFWwindow* or SDL_Window*
@@ -738,6 +949,12 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
+    bool     m_remoteHostLikelyOffline = false;
+    bool     m_remoteReceivingFrames   = false;
+    uint32_t m_remoteUpstreamClientCount = 0;
+    // Connection-overlay frame-to-frame tracking. We detect
+    // Connection-overlay transition tracking moved to
+    // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
     // Overscan: crop % das bordas do source antes do downscale.
     // X horizontal, Y vertical. Locked espelha um no outro.
     float m_sourceOverscanPercentX = 0.0f;
@@ -762,9 +979,10 @@ public:
     void loadConfig();
     std::string getConfigPath() const;
 
-private:
     // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
+
+private:
     void scanV4L2Devices();
 
     std::vector<std::string> m_scannedShaders;
@@ -791,12 +1009,71 @@ private:
     std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
     int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
     int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
+    int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
+    // Per-backend quality / preset values — the Streaming-tab UI shows
+    // whichever combo matches the currently selected hardware encoder.
+    // Stored separately so switching encoders preserves each backend's
+    // previously chosen value rather than collapsing them onto one
+    // shared string whose meaning would shift mid-flight.
+    std::string m_streamingNvencPreset = "p4";      // p1 (fastest) .. p7 (slowest)
+    std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
+    std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
+    std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
+
+    // Client-side interpolation mode for Remote-source playback. Picks
+    // how each display refresh resolves the time between two consecutive
+    // stream frames (see VideoCaptureRemote::captureLatestFrame):
+    //   "linear"  — LERP between prev and next (smooth motion, ghosting)
+    //   "nearest" — show the closer frame (clean image, 3:2 stutter)
+    //   "off"     — strict PTS gate, hold prev until next is due
+    std::string m_remoteInterpolation = "linear";
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
     bool m_canStartStreaming = true;            // Pode iniciar streaming (não está em cooldown)
     int64_t m_streamingCooldownRemainingMs = 0; // Tempo restante de cooldown em ms
     bool m_streamingProcessing = false;         // Flag para indicar que start/stop está sendo processado
+
+    // Public-directory publish settings (#49 Phase 2). State here is
+    // UI-side only; Application owns the DirectoryClient that
+    // actually talks to the directory service and mirrors the toggle
+    // from here every frame.
+    bool        m_directoryPublishEnabled = false;
+    std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // Dev-only: skip TLS peer-certificate verification when talking to
+    // the directory. Off by default; toggled from Streaming → Public
+    // Directory → Advanced. Never persisted as ON for the public host.
+    bool        m_directoryInsecureSkipVerify = false;
+    // Preferences (#45 placeholder + window restructure)
+    std::string m_language                = "en";    // "en" | "pt"
+    bool        m_startFullscreen         = false;
+    std::string m_directoryStreamName     = "";
+    std::string m_directoryHostNickname   = "";
+    std::string m_directoryPassword       = "";       // optional; empty = no password
+    std::string m_directoryEndpointMode   = "direct"; // "direct" | "tunnel-cloudflare" | "custom"
+    std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
+    // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
+    std::string m_directoryTunnelMode           = "quick"; // "quick" | "named"
+    std::string m_directoryNamedTunnelId        = "";       // cloudflared tunnel uuid
+    std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
+    bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
+    std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+
+    // Per-session telemetry counters mirrored from DirectoryClient
+    // (#49 Phase 5). Application writes each frame; UI reads.
+    uint64_t m_directoryRegisterOk     = 0;
+    uint64_t m_directoryRegisterFail   = 0;
+    uint64_t m_directoryHeartbeatOk    = 0;
+    uint64_t m_directoryHeartbeatFail  = 0;
+    uint64_t m_directoryPatchOk        = 0;
+    uint64_t m_directoryPatchFail      = 0;
+    int64_t  m_directorySecondsSinceLastHeartbeat = -1;
+
+    // Transient bearer token for the next remote connect (#49 Phase 3).
+    // sha256 hex of the password the user typed in the prompt. Not
+    // persisted: set on browse-click or Manual-tab connect, consumed
+    // by Application's onDeviceChanged callback, then cleared.
+    std::string m_remoteAuthToken;
 
     // Buffer configuration (para economizar memória, especialmente em ARM)
     // Default video buffer raised from 10 to 15 frames (~250ms at 60fps)
@@ -823,6 +1100,12 @@ private:
     std::function<void(const std::string &)> m_onStreamingH265LevelChanged;
     std::function<void(int)> m_onStreamingVP8SpeedChanged;
     std::function<void(int)> m_onStreamingVP9SpeedChanged;
+    std::function<void(int)> m_onStreamingHardwareEncoderChanged;
+    std::function<void(const std::string &)> m_onStreamingNvencPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingVaapiRcModeChanged;
+    std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
+    std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
+    std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;
@@ -850,6 +1133,14 @@ private:
     std::string m_recordingOutputPath = "recordings/";
     std::string m_recordingFilenameTemplate = "recording_%Y%m%d_%H%M%S";
     bool m_recordingIncludeAudio = true;
+    // Mirrors the streaming side (#59). 0=Auto (try hardware,
+    // fall back to libx264), 1=Software, 2=NVENC, 3=VAAPI, 4=QSV,
+    // 5=AMF. Backend-specific presets live in separate fields.
+    int         m_recordingHardwareEncoder = 0;
+    std::string m_recordingNvencPreset = "p4";
+    std::string m_recordingVaapiRcMode = "VBR"; // VBR is the better default for files
+    std::string m_recordingQsvPreset   = "medium";
+    std::string m_recordingAmfQuality  = "quality"; // recordings can afford the latency for visual quality
 
     // Recording callbacks
     std::function<void(bool)> m_onRecordingStartStop;
@@ -870,6 +1161,11 @@ private:
     std::function<void(const std::string&)> m_onRecordingOutputPathChanged;
     std::function<void(const std::string&)> m_onRecordingFilenameTemplateChanged;
     std::function<void(bool)> m_onRecordingIncludeAudioChanged;
+    std::function<void(int)> m_onRecordingHardwareEncoderChanged;
+    std::function<void(const std::string &)> m_onRecordingNvencPresetChanged;
+    std::function<void(const std::string &)> m_onRecordingVaapiRcModeChanged;
+    std::function<void(const std::string &)> m_onRecordingQsvPresetChanged;
+    std::function<void(const std::string &)> m_onRecordingAmfQualityChanged;
 
     // Web Portal settings
     bool m_webPortalEnabled = true; // Habilitado por padrão
@@ -879,17 +1175,17 @@ private:
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
     std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Streaming de vídeo em tempo real"; // Subtítulo
+    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
     std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Informações do Stream";
-    std::string m_webPortalTextQuickActions = "Ações Rápidas";
+    std::string m_webPortalTextStreamInfo = "Stream Information";
+    std::string m_webPortalTextQuickActions = "Quick Actions";
     std::string m_webPortalTextCompatibility = "Compatibilidade";
     std::string m_webPortalTextStatus = "Status";
     std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolução";
+    std::string m_webPortalTextResolution = "Resolution";
     std::string m_webPortalTextStreamUrl = "URL do Stream";
     std::string m_webPortalTextCopyUrl = "Copiar URL";
     std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
