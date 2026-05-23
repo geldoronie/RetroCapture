@@ -418,6 +418,9 @@ elseif(PLATFORM_WINDOWS)
     # No Windows, excluir implementações Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
 
     # Excluir arquivos Linux genéricos que não têm versão Windows

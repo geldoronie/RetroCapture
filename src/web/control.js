@@ -2111,7 +2111,7 @@ async function loadAudioInputSources() {
  */
 async function refreshAudioInputSources() {
     await loadAudioInputSources();
-    showAlert('Input sources refreshed', 'success');
+    showAlert('Input devices refreshed', 'success');
 }
 
 /**
@@ -2121,8 +2121,8 @@ function updateAudioInputSourceSelect() {
     const select = document.getElementById('audioInputSource');
     if (!select) return;
 
-    select.innerHTML = '<option value="">Select input source...</option>';
-    
+    select.innerHTML = '<option value="">Select input device...</option>';
+
     audioState.inputSources.forEach(source => {
         const option = document.createElement('option');
         option.value = source.id;
@@ -2141,6 +2141,7 @@ function updateAudioInputSourceSelect() {
 function updateAudioUI() {
     const statusInfo = document.getElementById('audioStatusInfo');
     const currentInputSource = document.getElementById('currentInputSource');
+    const currentInputFormat = document.getElementById('currentInputFormat');
     const connectBtn = document.getElementById('connectInputBtn');
     const disconnectBtn = document.getElementById('disconnectInputBtn');
 
@@ -2157,9 +2158,19 @@ function updateAudioUI() {
     if (currentInputSource) {
         if (audioState.status.currentInputSource) {
             const source = audioState.inputSources.find(s => s.id === audioState.status.currentInputSource);
-            currentInputSource.textContent = `Connected: ${source ? (source.description || source.name) : audioState.status.currentInputSource}`;
+            const label = source ? (source.description || source.name) : audioState.status.currentInputSource;
+            currentInputSource.textContent = `Capturing from: ${label} — published as 'RetroCapture' source`;
         } else {
-            currentInputSource.textContent = 'No source connected';
+            currentInputSource.textContent = 'No input device selected';
+        }
+    }
+
+    if (currentInputFormat) {
+        if (audioState.status.open && audioState.status.currentInputSource) {
+            currentInputFormat.textContent =
+                `Format: ${audioState.status.sampleRate} Hz, ${audioState.status.channels} channel${audioState.status.channels === 1 ? '' : 's'}`;
+        } else {
+            currentInputFormat.textContent = '';
         }
     }
 
@@ -2167,6 +2178,8 @@ function updateAudioUI() {
     const hasInput = !!audioState.status.currentInputSource;
     if (connectBtn) connectBtn.disabled = hasInput;
     if (disconnectBtn) disconnectBtn.disabled = !hasInput;
+    const resyncBtn = document.getElementById('resyncMonitorBtn');
+    if (resyncBtn) resyncBtn.disabled = !hasInput;
 }
 
 /**
@@ -2175,33 +2188,47 @@ function updateAudioUI() {
 async function connectAudioInput() {
     const select = document.getElementById('audioInputSource');
     if (!select || !select.value) {
-        showAlert('Please select an input source', 'warning');
+        showAlert('Please pick an input device', 'warning');
         return;
     }
 
     try {
         await api.setAudioInputSource(select.value);
-        showAlert('Input source connected', 'success');
+        showAlert('Capturing from selected device', 'success');
         await loadAudioStatus();
         updateAudioInputSourceSelect();
     } catch (error) {
-        console.error('Failed to conectar fonte de entrada:', error);
-        showAlert(`Failed to conectar fonte: ${error.message}`, 'danger');
+        console.error('Failed to start capture:', error);
+        showAlert(`Failed to start capture: ${error.message}`, 'danger');
     }
 }
 
 /**
- * Disconnect audio input source
+ * Stop capturing from the selected input device.
  */
 async function disconnectAudioInput() {
     try {
         await api.disconnectAudioInput();
-        showAlert('Input source disconnected', 'success');
+        showAlert('Capture stopped', 'success');
         await loadAudioStatus();
         updateAudioInputSourceSelect();
     } catch (error) {
-        console.error('Failed to desconectar fonte de entrada:', error);
-        showAlert(`Failed to desconectar fonte: ${error.message}`, 'danger');
+        console.error('Failed to stop capture:', error);
+        showAlert(`Failed to stop capture: ${error.message}`, 'danger');
+    }
+}
+
+/**
+ * Force the monitor playback to drop any backlog (typically after a
+ * stall) and snap back to live audio.
+ */
+async function resyncAudioMonitor() {
+    try {
+        await api.resyncAudioMonitor();
+        showAlert('Monitor resync requested', 'success');
+    } catch (error) {
+        console.error('Failed to resync monitor:', error);
+        showAlert(`Failed to resync monitor: ${error.message}`, 'danger');
     }
 }
 

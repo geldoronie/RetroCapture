@@ -19,6 +19,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0-alpha] - unreleased
+
+Linux audio pipeline refactor: the host-side capture path no longer
+hides behind PulseAudio's `module-null-sink` + `module-loopback`
+loopback trick. RetroCapture now records directly from the user-picked
+input device and exposes a symmetric `RetroCapture` source/sink pair
+to the OS audio graph — same shape as the client side has always
+had via `AudioPlaybackPulse`.
+
+### Changed
+
+- **Linux audio: drop null-sink loopback for a coherent `RetroCapture`
+  source/sink pair** (#78) — the host pipeline used to load a
+  `module-null-sink sink_name=RetroCapture` and route the capture-card
+  audio into it via `module-loopback` so we could record the sink's
+  `.monitor`. The user had to understand the PulseAudio sink/source
+  distinction and route an app via `pavucontrol`. Replaced by:
+  - A direct `PA_STREAM_RECORD` against the user-picked capture
+    device. No more null-sink.
+  - A new in-process `AudioBus` fan-out so multiple consumers
+    (encoder/recorder, the published source, the local monitor) all
+    pull from the same owned audio pipeline — opens the door for a
+    DSP chain follow-up without rearchitecting.
+  - A `module-pipe-source source_name=RetroCapture` that publishes
+    what RetroCapture is currently capturing to the OS audio graph,
+    so other apps (DAW, monitoring chain) can record from it — the
+    "input" half of the symmetric pair.
+  - A host-side `MonitorPlayback` (`pa_simple` PLAYBACK stream named
+    `RetroCapture` to the default sink) — the "output" half of the
+    pair, mirror of the client's `AudioPlaybackPulse`. Picking a
+    device under the Audio tab is now audible immediately, with no
+    `pavucontrol` routing. Kept in-process (no module-loopback) so
+    a future DSP chain can sit between the bus and the playback.
+  - A **"Resync monitor" button** in the Audio tab (native + web
+    portal) that drains the monitor backlog and flushes PulseAudio's
+    playback buffer, snapping the monitor back to ~50 ms latency.
+    Useful when a stall accumulates a delay between the captured
+    audio and what the user hears.
+  - Audio tab copy across native UI and the web portal updated to
+    "Input device" / "Start capture" / "Stop capture" and shows a
+    live status line with the current sample rate / channels.
+  - A one-shot migration GC that unloads any leftover pre-0.8
+    `module-null-sink sink_name=RetroCapture` + matching
+    `module-loopback` modules at startup, so upgrades from 0.7.x
+    don't leave stale modules behind.
+- Removed ~700 lines of dead `module-null-sink` / `module-loopback`
+  scaffolding from `AudioCapturePulse`, plus the `restoreAudio-
+  DeviceConnections` two-step (the saved input source is now passed
+  directly to `AudioCapturePulse::open()` during init).
+
+### Scope
+
+- Linux only. WASAPI loopback already works differently on Windows;
+  the host audio path on Windows is untouched in this release.
+
+---
+
 ## [0.7.0-alpha] - 2026-05-21
 
 Twelfth alpha release. Two large product surfaces (shader-preserving

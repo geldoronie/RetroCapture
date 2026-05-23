@@ -111,9 +111,10 @@ void UIConfigurationAudio::refreshInputSources()
 void UIConfigurationAudio::renderInputSourceSelection()
 {
     ui_section_header("Audio input",
-                      "Pick the audio source captured alongside video. "
-                      "The selection is shared between streaming and "
-                      "recording.");
+                      "Pick the capture-card audio device. RetroCapture "
+                      "records directly from it and republishes the "
+                      "stream as the 'RetroCapture' source so other apps "
+                      "(DAWs, monitors) can pick it up.");
 
     if (!m_audioCapture)
     {
@@ -162,19 +163,17 @@ void UIConfigurationAudio::renderInputSourceSelection()
         sourceNamesCStr.push_back(name.c_str());
     }
 
-    // Input source selection combo
+    // Device dropdown drives the input directly — no more loopback hop
+    // through a virtual sink.
     int prevSelectedIndex = m_selectedInputSourceIndex;
-    if (ImGui::Combo("Input Source", &m_selectedInputSourceIndex, sourceNamesCStr.data(), static_cast<int>(sourceNamesCStr.size())))
+    if (ImGui::Combo("Input device", &m_selectedInputSourceIndex, sourceNamesCStr.data(), static_cast<int>(sourceNamesCStr.size())))
     {
-        // Source changed
         if (m_selectedInputSourceIndex >= 0 && m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIds.size()))
         {
             std::string selectedSourceId = m_inputSourceIds[m_selectedInputSourceIndex];
-            
+
             if (pulseCapture->connectInputSource(selectedSourceId))
             {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Input source connected successfully");
-                // Save configuration
                 if (m_uiManager)
                 {
                     m_uiManager->setAudioInputSourceId(selectedSourceId);
@@ -183,8 +182,7 @@ void UIConfigurationAudio::renderInputSourceSelection()
             }
             else
             {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to connect input source");
-                // Revert selection
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to open input device");
                 m_selectedInputSourceIndex = prevSelectedIndex;
             }
         }
@@ -192,18 +190,27 @@ void UIConfigurationAudio::renderInputSourceSelection()
 
     ImGui::Spacing();
 
-    // Current input source info
     std::string currentSource = pulseCapture->getCurrentInputSource();
     if (!currentSource.empty())
     {
-        ImGui::Text("Current Input: %s", currentSource.c_str());
-        
+        ImGui::Text("Capturing from: %s", currentSource.c_str());
+        ImGui::Text("Format: %u Hz, %u channel%s",
+                    pulseCapture->getSampleRate(),
+                    pulseCapture->getChannels(),
+                    pulseCapture->getChannels() == 1 ? "" : "s");
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                           "Published as 'RetroCapture' source");
+
         ImGui::Spacing();
-        if (ImGui::Button("Disconnect Input Source"))
+        if (ImGui::Button("Resync monitor"))
+        {
+            pulseCapture->resyncMonitor();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Stop capture"))
         {
             pulseCapture->disconnectInputSource();
             m_selectedInputSourceIndex = -1;
-            // Save configuration (clear saved source)
             if (m_uiManager)
             {
                 m_uiManager->setAudioInputSourceId("");
@@ -213,9 +220,10 @@ void UIConfigurationAudio::renderInputSourceSelection()
     }
     else
     {
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "No input source connected");
-        ImGui::TextWrapped("Select an input source above to connect it to RetroCapture. "
-                         "The selected source will be captured for streaming and recording.");
+        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "No input device selected");
+        ImGui::TextWrapped("Pick a device above to start capturing. "
+                           "RetroCapture will record from it and publish "
+                           "the audio as the 'RetroCapture' source.");
     }
 #endif
 }

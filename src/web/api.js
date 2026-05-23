@@ -282,6 +282,10 @@ class RetroCaptureAPI {
     async disconnectAudioInput() {
         return await this.request('POST', '/audio/disconnect-input');
     }
+
+    async resyncAudioMonitor() {
+        return await this.request('POST', '/audio/resync');
+    }
 }
 
 // Instância global da API

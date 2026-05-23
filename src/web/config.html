@@ -801,27 +801,33 @@
                                                 </div>
                                                 <div class="card-body">
                                                     <div class="mb-3">
-                                                        <label class="form-label">Select Input Source</label>
+                                                        <label class="form-label">Input device</label>
                                                         <div class="input-group">
                                                             <select class="form-select" id="audioInputSource">
-                                                                <option value="">Loading sources...</option>
+                                                                <option value="">Loading devices...</option>
                                                             </select>
-                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh sources">
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh devices">
                                                                 <i class="bi bi-arrow-clockwise"></i>
                                                             </button>
                                                         </div>
-                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
+                                                        <small class="form-text text-muted">Pick the capture-card audio device. RetroCapture records from it and republishes the stream as the 'RetroCapture' source so other apps can pick it up.</small>
                                                     </div>
-                                                    <div class="d-flex gap-2">
+                                                    <div class="d-flex gap-2 flex-wrap">
                                                         <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
-                                                            <i class="bi bi-plug me-1"></i>Connect
+                                                            <i class="bi bi-plug me-1"></i>Start capture
+                                                        </button>
+                                                        <button type="button" class="btn btn-outline-secondary" id="resyncMonitorBtn" onclick="resyncAudioMonitor()" disabled title="Drop monitor backlog and play live audio again">
+                                                            <i class="bi bi-arrow-counterclockwise me-1"></i>Resync monitor
                                                         </button>
                                                         <button type="button" class="btn btn-secondary" id="disconnectInputBtn" onclick="disconnectAudioInput()" disabled>
-                                                            <i class="bi bi-plug-fill me-1"></i>Disconnect
+                                                            <i class="bi bi-plug-fill me-1"></i>Stop capture
                                                         </button>
                                                     </div>
                                                     <div class="mt-2">
-                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
+                                                        <small class="text-muted" id="currentInputSource">No input device selected</small>
+                                                    </div>
+                                                    <div class="mt-1">
+                                                        <small class="text-muted" id="currentInputFormat"></small>
                                                     </div>
                                                 </div>
                                             </div>
