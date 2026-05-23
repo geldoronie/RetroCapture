@@ -189,6 +189,7 @@ private:
     bool handleUpdatePresetParameters(int clientFd, const std::string &presetName, const std::string &body);
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
+    bool handleResyncAudioMonitor(int clientFd);
 
     // Recording profiles (saved snapshots of recording configuration)
     bool handleGETRecordingProfiles(int clientFd);

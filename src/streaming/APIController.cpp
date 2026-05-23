@@ -611,6 +611,10 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleDisconnectAudioInput(clientFd);
     }
+    else if (path == "/api/v1/audio/resync")
+    {
+        return handleResyncAudioMonitor(clientFd);
+    }
     else if (path == "/api/v1/source/overscan")
     {
         return handleSetSourceOverscan(clientFd, body);
@@ -3103,6 +3107,40 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
     }
 #else
     sendErrorResponse(clientFd, 400, "Audio source selection only available on Linux");
+    return true;
+#endif
+}
+
+bool APIController::handleResyncAudioMonitor(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        sendErrorResponse(clientFd, 400, "Audio capture not available");
+        return true;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+    if (pulseCapture)
+    {
+        pulseCapture->resyncMonitor();
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Monitor resync requested";
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux");
+    return true;
+#else
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux");
     return true;
 #endif
 }

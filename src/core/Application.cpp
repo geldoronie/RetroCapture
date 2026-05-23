@@ -3118,8 +3118,18 @@ bool Application::initAudioCapture()
         LOG_WARN("RecordingManager not initialized - recording will not be available");
     }
 
-    // Open default audio device (will create virtual sink)
-    if (!m_audioCapture->open())
+    // Use the saved input source if any (set via UI / web portal in a
+    // previous session). Empty string falls back to PulseAudio's default
+    // source. Replaces the old "open() creates a null-sink and a
+    // separate restoreAudioDeviceConnections() loops the saved source
+    // into it" two-step.
+    std::string savedSource;
+    if (m_ui)
+    {
+        savedSource = m_ui->getAudioInputSourceId();
+    }
+
+    if (!m_audioCapture->open(savedSource))
     {
         LOG_ERROR("Failed to open audio device");
         m_audioCapture.reset();
@@ -3151,29 +3161,10 @@ bool Application::initAudioCapture()
 
 void Application::restoreAudioDeviceConnections()
 {
-    if (!m_audioCapture || !m_ui)
-    {
-        return;
-    }
-
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture.get());
-    if (!pulseCapture)
-    {
-        return;
-    }
-
-    std::string savedInputSourceId = m_ui->getAudioInputSourceId();
-    if (!savedInputSourceId.empty())
-    {
-        usleep(500000);
-        if (!pulseCapture->connectInputSource(savedInputSourceId))
-        {
-            LOG_WARN("Failed to restore audio input source: " + savedInputSourceId);
-        }
-    }
-
-#endif
+    // Obsolete since 0.8.0-alpha: the saved input source is now passed
+    // directly to AudioCapturePulse::open() during initAudioCapture(),
+    // so there is no separate "load a loopback module into a null-sink"
+    // step to restore. Kept as a no-op for callers that still invoke it.
 }
 
 void Application::run()
