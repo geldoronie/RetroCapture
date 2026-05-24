@@ -24,6 +24,8 @@ void printUsage(const char *programName)
     std::cout << "  --source <type>        Source type: none, v4l2, remote (default: v4l2)\n";
 #elif defined(_WIN32)
     std::cout << "  --source <type>        Source type: none, ds, remote (default: ds)\n";
+#elif defined(__APPLE__)
+    std::cout << "  --source <type>        Source type: none, avfoundation, remote (default: avfoundation)\n";
 #else
     std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif

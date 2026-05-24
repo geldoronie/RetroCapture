@@ -166,6 +166,7 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_VERSION 0x1F02
 #define GL_SHADING_LANGUAGE_VERSION 0x8B8C
 #define GL_MAJOR_VERSION 0x821B
+#define GL_EXTENSIONS 0x1F03
 
 // Funções básicas do OpenGL que podem estar disponíveis estaticamente
 // glGetString está disponível desde OpenGL 1.0, então pode ser linkado estaticamente
