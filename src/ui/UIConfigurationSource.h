@@ -4,6 +4,13 @@
 #include <cstdint>
 #include <vector>
 
+#ifdef __APPLE__
+// Pulled in (not forward-declared) because m_avfDevices and
+// m_avfFormats below are std::vector instantiations and need the
+// complete type for size/destructor.
+#include "../capture/IVideoCapture.h"
+#endif
+
 // Forward declarations
 class UIManager;
 class IVideoCapture;
@@ -36,6 +43,22 @@ private:
 #ifdef _WIN32
     void renderDSControls();
     void renderDSDeviceSelection();
+#endif
+#ifdef __APPLE__
+    // macOS / AVFoundation: device dropdown + format dropdown
+    // (OBS-style — picking a format selects width/height/fps/pixfmt
+    // atomically since AVFoundation exposes them as fixed tuples).
+    void renderAVFoundationControls();
+    void renderAVFoundationDeviceSelection();
+    void renderAVFoundationFormatSelection();
+
+    // Per-frame cache of the device + format list so we don't hit
+    // AVFoundation every frame from inside render().
+    std::vector<DeviceInfo> m_avfDevices;
+    std::vector<AVFoundationFormatInfo> m_avfFormats;
+    bool m_avfDevicesNeedRefresh = true;
+    bool m_avfFormatsNeedRefresh = true;
+    std::string m_avfFormatsForDeviceId; // tracks which device's formats we cached
 #endif
     void renderCaptureSettings();
     void renderQuickResolutions();

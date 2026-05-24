@@ -162,6 +162,15 @@ private:
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
+#ifdef __APPLE__
+    // AVFoundation device + format endpoints (macOS only). The format
+    // dropdown follows OBS's "pick a (resolution, fps range, pixel
+    // format) tuple atomically" pattern instead of independent
+    // resolution/FPS sliders.
+    bool handleGETAVFoundationDevices(int clientFd);
+    bool handleGETAVFoundationFormats(int clientFd, const std::string &deviceId);
+    bool handleGETAVFoundationAudioDevices(int clientFd);
+#endif
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
@@ -190,6 +199,11 @@ private:
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
     bool handleResyncAudioMonitor(int clientFd);
+#ifdef __APPLE__
+    bool handleSetAVFoundationDevice(int clientFd, const std::string &body);
+    bool handleSetAVFoundationFormat(int clientFd, const std::string &body);
+    bool handleSetAVFoundationAudioDevice(int clientFd, const std::string &body);
+#endif
 
     // Recording profiles (saved snapshots of recording configuration)
     bool handleGETRecordingProfiles(int clientFd);

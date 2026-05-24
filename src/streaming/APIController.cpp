@@ -511,6 +511,21 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETAudioStatus(clientFd);
     }
+#ifdef __APPLE__
+    else if (path == "/api/v1/avfoundation/devices")
+    {
+        return handleGETAVFoundationDevices(clientFd);
+    }
+    else if (path.rfind("/api/v1/avfoundation/formats/", 0) == 0)
+    {
+        return handleGETAVFoundationFormats(clientFd,
+                path.substr(std::string("/api/v1/avfoundation/formats/").size()));
+    }
+    else if (path == "/api/v1/avfoundation/audio-devices")
+    {
+        return handleGETAVFoundationAudioDevices(clientFd);
+    }
+#endif
     else if (path == "/api/v1/recording/profiles")
     {
         return handleGETRecordingProfiles(clientFd);
@@ -615,6 +630,20 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleResyncAudioMonitor(clientFd);
     }
+#ifdef __APPLE__
+    else if (path == "/api/v1/avfoundation/device")
+    {
+        return handleSetAVFoundationDevice(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/format")
+    {
+        return handleSetAVFoundationFormat(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/audio-device")
+    {
+        return handleSetAVFoundationAudioDevice(clientFd, body);
+    }
+#endif
     else if (path == "/api/v1/source/overscan")
     {
         return handleSetSourceOverscan(clientFd, body);
@@ -3144,4 +3173,242 @@ bool APIController::handleResyncAudioMonitor(int clientFd)
     return true;
 #endif
 }
+
+#ifdef __APPLE__
+// AVFoundation endpoints (macOS). The video capture instance is asked
+// for the listings; on macOS that's VideoCaptureAVFoundation, which
+// implements the optional methods on IVideoCapture with real data.
+// The device-mutation endpoints go through IVideoCapture so we don't
+// need to dynamic_cast against the AVFoundation type here.
+
+bool APIController::handleGETAVFoundationDevices(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["devices"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["devices"] = nlohmann::json::array();
+    for (const auto &d : vc->listDevices())
+    {
+        r["devices"].push_back({
+            {"id",        d.id},
+            {"name",      d.name},
+            {"driver",    d.driver},
+            {"available", d.available}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleGETAVFoundationFormats(int clientFd, const std::string &deviceId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["formats"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["deviceId"] = deviceId;
+    r["formats"]  = nlohmann::json::array();
+    for (const auto &f : vc->listFormats(deviceId))
+    {
+        r["formats"].push_back({
+            {"id",          f.id},
+            {"width",       f.width},
+            {"height",      f.height},
+            {"minFps",      f.minFps},
+            {"maxFps",      f.maxFps},
+            {"pixelFormat", f.pixelFormat},
+            {"colorSpace",  f.colorSpace},
+            {"displayName", f.displayName}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleGETAVFoundationAudioDevices(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["devices"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["current"]   = vc->getCurrentAudioDevice();
+    r["devices"]   = nlohmann::json::array();
+    for (const auto &d : vc->listAudioDevices())
+    {
+        r["devices"].push_back({
+            {"id",        d.id},
+            {"name",      d.name},
+            {"available", d.available}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleSetAVFoundationDevice(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string deviceId = j.value("deviceId", "");
+        if (deviceId.empty())
+        {
+            sendErrorResponse(clientFd, 400, "deviceId is required");
+            return true;
+        }
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        // Route through UIManager.triggerDeviceChange so config
+        // persistence and capture reconfig stay synchronized with
+        // whatever the native UI does when a user picks a device.
+        if (!m_uiManager)
+        {
+            sendErrorResponse(clientFd, 500, "UI manager not available");
+            return true;
+        }
+        m_uiManager->triggerDeviceChange(deviceId);
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationDeviceId(deviceId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]  = true;
+        r["deviceId"] = deviceId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+
+bool APIController::handleSetAVFoundationFormat(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string formatId = j.value("formatId", "");
+        const std::string deviceId = j.value("deviceId", "");
+        if (formatId.empty())
+        {
+            sendErrorResponse(clientFd, 400, "formatId is required");
+            return true;
+        }
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        if (!vc->setFormatById(formatId, deviceId))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to apply AVFoundation format");
+            return true;
+        }
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationFormatId(formatId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]  = true;
+        r["formatId"] = formatId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+
+bool APIController::handleSetAVFoundationAudioDevice(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string audioDeviceId = j.value("audioDeviceId", "");
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        if (!vc->setAudioDevice(audioDeviceId))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to set AVFoundation audio device");
+            return true;
+        }
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationAudioDeviceId(audioDeviceId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]       = true;
+        r["audioDeviceId"] = audioDeviceId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+#endif // __APPLE__
 

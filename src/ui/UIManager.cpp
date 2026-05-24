@@ -2796,6 +2796,27 @@ void UIManager::loadConfig()
             }
         }
 
+        // AVFoundation persistence (macOS device + format selection).
+        // Loaded on every platform so the JSON round-trips cleanly;
+        // ignored on non-macOS builds where the fields don't drive
+        // anything.
+        if (config.contains("avfoundation"))
+        {
+            auto &avf = config["avfoundation"];
+            if (avf.contains("deviceId") && !avf["deviceId"].is_null())
+            {
+                m_avfDeviceId = avf["deviceId"].get<std::string>();
+            }
+            if (avf.contains("formatId") && !avf["formatId"].is_null())
+            {
+                m_avfFormatId = avf["formatId"].get<std::string>();
+            }
+            if (avf.contains("audioDeviceId") && !avf["audioDeviceId"].is_null())
+            {
+                m_avfAudioDeviceId = avf["audioDeviceId"].get<std::string>();
+            }
+        }
+
         // Carregar configurações de gravação
         if (config.contains("recording"))
         {
@@ -2979,6 +3000,12 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+
+        // AVFoundation device + format selection (macOS).
+        config["avfoundation"] = {
+            {"deviceId",      m_avfDeviceId},
+            {"formatId",      m_avfFormatId},
+            {"audioDeviceId", m_avfAudioDeviceId}};
 
         // Salvar configurações de gravação
         config["recording"] = {

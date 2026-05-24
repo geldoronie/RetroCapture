@@ -43,6 +43,12 @@ void UIConfigurationAudio::render()
     }
 
     renderInputSourceSelection();
+#ifdef __APPLE__
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    renderAVFoundationAudioDeviceSelection();
+#endif
 
     ImGui::End();
 }
@@ -227,4 +233,73 @@ void UIConfigurationAudio::renderInputSourceSelection()
     }
 #endif
 }
+
+#ifdef __APPLE__
+
+void UIConfigurationAudio::renderAVFoundationAudioDeviceSelection()
+{
+    ui_section_header("AVFoundation audio source",
+                      "Some capture devices carry audio alongside video "
+                      "(UVC HDMI grabbers). Use this dropdown to pick "
+                      "between the bundled stream and any other "
+                      "AVFoundation audio source on the system.");
+
+    if (!m_uiManager) return;
+
+    // Listing the AVFoundation audio devices goes through the video
+    // capture instance — AVFoundation owns the audio enumeration since
+    // the audio is bundled with the video device descriptor.
+    IVideoCapture *vc = m_uiManager->getCapture();
+    if (!vc)
+    {
+        ImGui::TextWrapped("No AVFoundation capture active.");
+        return;
+    }
+
+    if (m_avfAudioDevicesNeedRefresh)
+    {
+        m_avfAudioDevices = vc->listAudioDevices();
+        m_avfAudioDevicesNeedRefresh = false;
+    }
+
+    if (m_avfAudioDevices.empty())
+    {
+        ImGui::TextWrapped("No AVFoundation audio devices found.");
+        if (ImGui::Button("Refresh##avfAudioDevices"))
+        {
+            m_avfAudioDevicesNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string current = vc->getCurrentAudioDevice();
+    std::vector<const char *> names;
+    int idx = -1;
+    names.reserve(m_avfAudioDevices.size());
+    for (size_t i = 0; i < m_avfAudioDevices.size(); ++i)
+    {
+        names.push_back(m_avfAudioDevices[i].name.c_str());
+        if (m_avfAudioDevices[i].id == current) idx = static_cast<int>(i);
+    }
+    if (idx < 0) idx = 0;
+
+    if (ImGui::Combo("##avfAudioDevices", &idx,
+                     names.data(), static_cast<int>(names.size())))
+    {
+        const auto &picked = m_avfAudioDevices[idx];
+        if (vc->setAudioDevice(picked.id))
+        {
+            m_uiManager->setAVFoundationAudioDeviceId(picked.id);
+            m_uiManager->saveConfig();
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfAudioDevices"))
+    {
+        m_avfAudioDevicesNeedRefresh = true;
+    }
+}
+
+#endif // __APPLE__
 

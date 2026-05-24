@@ -286,6 +286,33 @@ class RetroCaptureAPI {
     async resyncAudioMonitor() {
         return await this.request('POST', '/audio/resync');
     }
+
+    // AVFoundation (macOS) — the backend gates these endpoints by
+    // platform, so calling them on Linux/Windows returns 404 (which
+    // the UI uses as a "hide the AVFoundation cards" signal).
+    async getAVFoundationDevices() {
+        return await this.request('GET', '/avfoundation/devices');
+    }
+
+    async getAVFoundationFormats(deviceId) {
+        return await this.request('GET', `/avfoundation/formats/${encodeURIComponent(deviceId || '')}`);
+    }
+
+    async getAVFoundationAudioDevices() {
+        return await this.request('GET', '/avfoundation/audio-devices');
+    }
+
+    async setAVFoundationDevice(deviceId) {
+        return await this.request('POST', '/avfoundation/device', { deviceId });
+    }
+
+    async setAVFoundationFormat(formatId, deviceId) {
+        return await this.request('POST', '/avfoundation/format', { formatId, deviceId });
+    }
+
+    async setAVFoundationAudioDevice(audioDeviceId) {
+        return await this.request('POST', '/avfoundation/audio-device', { audioDeviceId });
+    }
 }
 
 // Instância global da API
