@@ -65,7 +65,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <unistd.h>
 #endif
 #include "../utils/FilesystemCompat.h"
@@ -333,7 +333,7 @@ bool Application::initRenderer()
                         appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                     }
 // Small delay to ensure ShaderEngine finished recreating framebuffers
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(10000); // 10ms
 #else
                     Sleep(10); // 10ms
@@ -695,7 +695,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
     // Small delay to ensure any ongoing frame processing completes
     // This prevents race conditions where processFrame is accessing the device
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(50000); // 50ms to let current frame processing finish
 #else
     Sleep(50); // 50ms to let current frame processing finish
@@ -721,7 +721,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     m_capture->close();
 
 // Small delay to ensure device was released
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(100000); // 100ms
 #else
     Sleep(100); // 100ms
@@ -742,7 +742,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         LOG_ERROR("Failed to configure new capture format");
         // Try rollback: reopen with previous format
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -776,7 +776,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -804,7 +804,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     for (int i = 0; i < 5; ++i)
     {
         m_capture->captureLatestFrame(dummyFrame);
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(10000); // 10ms entre tentativas
 #else
         Sleep(10); // 10ms entre tentativas
@@ -3556,7 +3556,7 @@ void Application::run()
                     }
                     if (attempt < maxAttempts - 1)
                     {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(5000); // 5ms between attempts
 #else
                         Sleep(5); // 5ms between attempts
@@ -4701,7 +4701,7 @@ void Application::run()
                     // Hidden / backgrounded — sleep a frame's worth so
                     // captureLatestFrame still drains the queue at a
                     // reasonable rate without spinning the CPU.
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(16000);
 #else
                     Sleep(16);
@@ -4723,7 +4723,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4798,7 +4798,7 @@ void Application::run()
                 if (elapsedUs < targetIntervalUs)
                 {
                     const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(static_cast<useconds_t>(sleepUs));
 #else
                     Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4829,7 +4829,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4839,7 +4839,7 @@ void Application::run()
                 }
                 else
                 {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(1000);
 #else
                     Sleep(1);
