@@ -12,6 +12,9 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#ifdef __APPLE__
+#include <signal.h>
+#endif
 
 void printUsage(const char *programName)
 {
@@ -109,6 +112,21 @@ void printUsage(const char *programName)
 int main(int argc, char *argv[])
 {
     Logger::init();
+
+#ifdef __APPLE__
+    // macOS has no MSG_NOSIGNAL on send(); without ignoring SIGPIPE
+    // globally, a peer disconnecting mid-write would terminate the
+    // whole process. Linux uses MSG_NOSIGNAL per-send and Windows
+    // doesn't generate SIGPIPE in the first place, so this is needed
+    // on macOS specifically.
+    {
+        struct sigaction sa{};
+        sa.sa_handler = SIG_IGN;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGPIPE, &sa, nullptr);
+    }
+#endif
 
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 

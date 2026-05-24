@@ -3,7 +3,7 @@
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -724,7 +724,7 @@ void HTTPTSStreamer::cleanup()
 void HTTPTSStreamer::handleClient(int clientFd)
 {
 // Configurar socket para baixa latência
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     int flag = 1;
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 #elif defined(_WIN32)
