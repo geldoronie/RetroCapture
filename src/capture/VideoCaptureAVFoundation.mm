@@ -273,27 +273,14 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
     return false;
         }
         
-        // AVCaptureSession defaults to `AVCaptureSessionPresetHigh` as
-        // soon as an input is added, which on macOS *overrides* whatever
-        // `activeFormat` we set on the device — that's exactly why
-        // earlier attempts to apply 160x120 / 640x480 / 1600x1200 etc.
-        // silently reverted to 1280x720 / 1920x1080 after
-        // `startRunning`. The fix is to explicitly opt into
-        // `AVCaptureSessionPresetInputPriority`, which tells
-        // AVFoundation "honor the device's activeFormat, do not
-        // impose any preset of your own". This preset has been
-        // available on macOS since 10.7 (the old comment in this
-        // file claimed it was iOS-only — incorrect).
-        if ([m_captureSession canSetSessionPreset:AVCaptureSessionPresetInputPriority])
-        {
-            m_captureSession.sessionPreset = AVCaptureSessionPresetInputPriority;
-            LOG_INFO("Session preset: InputPriority (activeFormat honored)");
-        }
-        else
-        {
-            LOG_WARN("Session does not accept InputPriority preset — activeFormat "
-                     "may be overridden by the default preset.");
-        }
+        // No `sessionPreset` set here — on macOS `InputPriority` is
+        // iOS-only, and any concrete preset (`PresetHigh`, `PresetLow`)
+        // overrides whatever activeFormat we set on the device. The
+        // strategy below is instead to let the device pick its own
+        // native format and rely on `videoSettings` on the
+        // `AVCaptureVideoDataOutput` (configured later in this method)
+        // to scale frames down to the requested width/height.
+        LOG_INFO("Session created (no preset — videoSettings will drive output size)");
         
         // Selecionar dispositivo
         AVCaptureDevice* deviceObj = nil;
@@ -470,15 +457,23 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
             return false;
         }
         
-        // IMPORTANT: OBS Studio approach - do NOT force pixel format in videoSettings
-        // Let the device use its native format (NV12, YUY2, etc.) from activeFormat
-        // Forcing BGRA can cause format mismatches and performance issues
-        // The activeFormat's native pixel format will be used automatically
-        // If we need BGRA, we can convert from the native format in the delegate
-        // For now, let's try without forcing a format to see if it helps with format selection
-        NSDictionary* videoSettings = @{
-            (NSString*)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
-        };
+        // `videoSettings` on the AVCaptureVideoDataOutput is the macOS
+        // lever for getting a specific output size out of UVC capture
+        // devices that ignore `setActiveFormat:` (every external HDMI
+        // grabber I've seen does). When width/height keys are present
+        // here, AVFoundation scales the pixel buffer down to that
+        // size before delivering it — even if the device is internally
+        // producing 1920x1080. Pixel format stays at BGRA because the
+        // BGRA→YUYV conversion path downstream expects it.
+        NSMutableDictionary *videoSettings = [NSMutableDictionary dictionary];
+        videoSettings[(NSString *)kCVPixelBufferPixelFormatTypeKey] = @(kCVPixelFormatType_32BGRA);
+        if (m_width > 0 && m_height > 0)
+        {
+            videoSettings[(NSString *)kCVPixelBufferWidthKey]  = @(m_width);
+            videoSettings[(NSString *)kCVPixelBufferHeightKey] = @(m_height);
+            LOG_INFO("videoSettings target: " + std::to_string(m_width) +
+                     "x" + std::to_string(m_height) + " BGRA");
+        }
         [m_videoOutput setVideoSettings:videoSettings];
         
         // IMPORTANT: Try NO to allow buffering - this may help with framerate
