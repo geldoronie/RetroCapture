@@ -71,7 +71,7 @@ UIManager::~UIManager()
     m_streamingWindow.reset();
     m_recordingWindow.reset();
     m_webPortalWindow.reset();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow.reset();
 #endif
     m_infoWindow.reset();
@@ -593,7 +593,7 @@ void UIManager::render()
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
         // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
 #endif
     }
@@ -606,7 +606,7 @@ void UIManager::render()
     if (m_streamingWindow)   m_streamingWindow->render();
     if (m_recordingWindow)   m_recordingWindow->render();
     if (m_webPortalWindow)   m_webPortalWindow->render();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     if (m_audioWindow)       m_audioWindow->render();
 #endif
     if (m_infoWindow)        m_infoWindow->render();

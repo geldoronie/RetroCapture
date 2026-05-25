@@ -857,7 +857,7 @@ private:
     std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
     std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
     std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     std::unique_ptr<class UIConfigurationAudio>     m_audioWindow;
 #endif
     std::unique_ptr<class UIInfoPanel>              m_infoWindow;
