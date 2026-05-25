@@ -2320,6 +2320,27 @@ bool Application::initUI()
                                      }
 #endif
 
+#ifdef __APPLE__
+                                     if (sourceType == UIManager::SourceType::AVFoundation)
+                                     {
+                                         LOG_INFO("AVFoundation source selected");
+                                         // Re-arm the UI's capture pointer (the None
+                                         // branch above clears it as a side effect of
+                                         // setCaptureControls(nullptr)) so the Source
+                                         // tab can call listDevices() / setFormatById().
+                                         if (m_ui && m_capture)
+                                         {
+                                             m_ui->setCaptureControls(m_capture.get());
+                                         }
+                                         // Stay in dummy mode until the user explicitly
+                                         // picks a device from the AVFoundation dropdown.
+                                         // listDevices() will fire on the first render
+                                         // of UIConfigurationSource's AVFoundation
+                                         // section and trigger the camera-permission
+                                         // probe if needed.
+                                     }
+#endif
+
                                      // Phase 5b/#47: switching INTO Remote — close the
                                      // current capture (V4L2/DS/None) and stand up an
                                      // empty VideoCaptureRemote that waits for the
