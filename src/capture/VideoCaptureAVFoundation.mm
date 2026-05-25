@@ -2519,22 +2519,47 @@ bool VideoCaptureAVFoundation::setFormatById(const std::string &formatId, const 
         // This prevents setFormat() from overwriting the user's selection
         m_formatSelectedViaUI = true;
         m_selectedFormatId = formatId;
-        
+
         // Set the format
         CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions([matchingFormat formatDescription]);
         m_width = dims.width;
         m_height = dims.height;
-        
-        // If device is open, apply format immediately with proper session reconfiguration
+
+        // AVFoundation does not reliably honor `activeFormat` swaps on a
+        // running session — macOS silently reverts to the device's
+        // default (the warning chain "Format changed after restarting
+        // session in applyFormatAndFramerate!" / "Format STILL does not
+        // match after retry!" is exactly that). Setting the format
+        // DURING open(), before the input is added, does stick. So when
+        // the user changes the format on an already-open device we
+        // close + reopen with m_width/m_height + m_formatSelectedViaUI
+        // armed, letting the open() path place the format in the spot
+        // where the device accepts it.
         if (m_isOpen && m_captureDevice == device)
         {
-            // Use centralized method to apply format and framerate atomically
-            return applyFormatAndFramerate(matchingFormat, m_fps, true);
+            NSString *currentUniqueID = [device uniqueID];
+            const std::string reopenId = currentUniqueID
+                ? std::string([currentUniqueID UTF8String])
+                : std::string();
+            LOG_INFO("Format change requires reopen: " + std::to_string(m_width) +
+                     "x" + std::to_string(m_height) + " (formatId=" + formatId + ")");
+            close();
+            if (!open(reopenId))
+            {
+                LOG_ERROR("Failed to reopen device with new format: " + formatId);
+                return false;
+            }
+            if (!startCapture())
+            {
+                LOG_WARN("Failed to restart capture after format change");
+            }
+            return true;
         }
         else
         {
             // Format will be applied when device is opened
-            LOG_INFO("Format will be applied when device is opened: " + std::to_string(m_width) + "x" + std::to_string(m_height));
+            LOG_INFO("Format will be applied when device is opened: " +
+                     std::to_string(m_width) + "x" + std::to_string(m_height));
             return true;
         }
     }
