@@ -11,6 +11,68 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AudioToolbox/AudioToolbox.h>
 
+namespace {
+
+// Picks the supported AVFrameRateRange closest to `requestedFps` and
+// returns its native CMTime — devices reject anything that doesn't
+// match the rational representation exactly (FaceTime cameras only
+// accept 1001/30000 for 29.97 fps, not 1/29 or 1/30). The fallback
+// is `kCMTimeInvalid` when the device exposes no ranges; callers
+// must check via `CMTIME_IS_VALID`.
+inline CMTime pickFrameDurationForFps(NSArray *ranges, uint32_t requestedFps)
+{
+    AVFrameRateRange *bestRange = nil;
+    double bestDistance = 1e9;
+    for (AVFrameRateRange *r in ranges)
+    {
+        const double clamped = std::max(r.minFrameRate,
+                                        std::min(static_cast<double>(requestedFps),
+                                                 r.maxFrameRate));
+        const double distance = std::abs(clamped - static_cast<double>(requestedFps));
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestRange    = r;
+        }
+    }
+    return bestRange ? bestRange.minFrameDuration : kCMTimeInvalid;
+}
+
+// Applies the closest supported framerate to `device` and reports
+// success. Wraps the actual `setActiveVideoMin/MaxFrameDuration`
+// calls in `@try / @catch` so an unexpected rational mismatch logs
+// a warning instead of terminating the app.
+inline bool applyClosestFramerate(AVCaptureDevice *device, uint32_t requestedFps)
+{
+    if (!device) return false;
+    NSArray *ranges = [device.activeFormat videoSupportedFrameRateRanges];
+    CMTime duration = pickFrameDurationForFps(ranges, requestedFps);
+    if (!CMTIME_IS_VALID(duration))
+    {
+        LOG_WARN("applyClosestFramerate: device exposes no frame-rate ranges");
+        return false;
+    }
+    @try
+    {
+        device.activeVideoMinFrameDuration = duration;
+        device.activeVideoMaxFrameDuration = duration;
+        const double applied = (CMTimeGetSeconds(duration) > 0.0)
+            ? 1.0 / CMTimeGetSeconds(duration)
+            : 0.0;
+        LOG_INFO("Applied framerate: requested " + std::to_string(requestedFps) +
+                 " fps → " + std::to_string(applied) + " fps");
+        return true;
+    }
+    @catch (NSException *ex)
+    {
+        LOG_WARN(std::string("applyClosestFramerate raised: ") +
+                 [[ex reason] UTF8String]);
+        return false;
+    }
+}
+
+} // namespace
+
 // Helper class para callback do AVFoundation
 @interface VideoCaptureDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 {
@@ -895,15 +957,14 @@ bool VideoCaptureAVFoundation::setFormat(uint32_t width, uint32_t height, uint32
                             targetFps = static_cast<uint32_t>(maxFps);
                         }
                         
-                        // Configure framerate on device (while still locked)
-                        CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                        CMTime frameDuration = CMTimeMake(1, timescale);
-                        m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                        m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
+                        // Configure framerate on device (while still locked) — via the
+                        // helper that clamps to a supported rate and guards against
+                        // NSInvalidArgumentException when the requested rate isn't
+                        // representable as the device's rational format.
                         LOG_INFO("=== CONFIGURING FRAMERATE WITH FORMAT ===");
                         LOG_INFO("Format: " + std::to_string(m_width) + "x" + std::to_string(m_height));
-                        LOG_INFO("Device framerate configured: " + std::to_string(targetFps) + " fps (requested: " + 
-                                 std::to_string(m_fps) + " fps, found requested: " + (foundRequestedFps ? "yes" : "no") + ")");
+                        applyClosestFramerate(m_captureDevice, targetFps);
+                        (void)foundRequestedFps;
                     }
                 }
                 
@@ -957,10 +1018,8 @@ bool VideoCaptureAVFoundation::setFormat(uint32_t width, uint32_t height, uint32
                                 }
                                 
                                 // OBS Studio approach: set framerate directly on device
-                                CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                                CMTime frameDuration = CMTimeMake(1, timescale);
-                                m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                                m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
+                                // via helper that clamps to a supported rational rate.
+                                applyClosestFramerate(m_captureDevice, targetFps);
                             }
                         }
                         
@@ -1711,11 +1770,8 @@ bool VideoCaptureAVFoundation::startCapture()
                                         {
                                             targetFps = static_cast<uint32_t>(maxFps);
                                         }
-                                        
-                                        CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                                        CMTime frameDuration = CMTimeMake(1, timescale);
-                                        m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                                        m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
+
+                                        applyClosestFramerate(m_captureDevice, targetFps);
                                     }
                                 }
                             }
@@ -1953,15 +2009,9 @@ bool VideoCaptureAVFoundation::startCapture()
                                 {
                                     targetFps = static_cast<uint32_t>(maxFps);
                                 }
-                                
-                                // OBS Studio approach: set framerate directly on device
-                                CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                                CMTime frameDuration = CMTimeMake(1, timescale);
-                                m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                                m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
-                                
-                                LOG_INFO("Reconfigured framerate to: " + std::to_string(targetFps) + " fps (requested: " + 
-                                         std::to_string(m_fps) + " fps, found requested: " + (foundRequestedFps ? "yes" : "no") + ")");
+
+                                applyClosestFramerate(m_captureDevice, targetFps);
+                                (void)foundRequestedFps;
                             }
                         }
                         else
@@ -2557,18 +2607,13 @@ bool VideoCaptureAVFoundation::applyFormatAndFramerate(AVCaptureDeviceFormat* fo
                     targetFps = maxFps;
                 }
                 
-                // Step 3: Configure framerate on DEVICE (while still locked)
-                CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                CMTime frameDuration = CMTimeMake(1, timescale);
-                m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
-                
+                // Step 3: Configure framerate on DEVICE (while still locked) — via
+                // the clamping/guarded helper, otherwise an integer-vs-rational
+                // mismatch (e.g. 29 vs 1001/30000) would throw and crash here.
                 LOG_INFO("=== APPLYING FORMAT AND FRAMERATE ATOMICALLY ===");
                 CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions([format formatDescription]);
                 LOG_INFO("Format: " + std::to_string(dims.width) + "x" + std::to_string(dims.height));
-                LOG_INFO("Framerate: " + std::to_string(targetFps) + " fps (requested: " + std::to_string(fps) + 
-                        ", supported: " + std::to_string(bestRange.minFrameRate) + " - " + 
-                        std::to_string(bestRange.maxFrameRate) + " fps)");
+                applyClosestFramerate(m_captureDevice, targetFps);
                 
                 // Step 4: Configure framerate on CONNECTION (while device is still locked)
                 if (m_videoOutput)
