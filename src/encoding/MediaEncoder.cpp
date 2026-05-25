@@ -882,6 +882,25 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         return false;
     }
 
+    // sws_scale's AVX2-fastpath on macOS (libswscale 9.x from Homebrew
+    // FFmpeg 7) crashes with EXC_BAD_ACCESS when the source height is
+    // odd — it reads 32 bytes past the last row through `vinserti128`.
+    // The window framebuffer on a macOS host can easily be 1920x953
+    // (1080 minus the menu bar / title bar), which trips this. Clamp
+    // source height to even before any sws_getContext / sws_scale call;
+    // the lost row is one pixel at the bottom edge, negligible. We
+    // don't touch width because the source row stride is derived from
+    // the caller's allocation, and changing width here would desync
+    // it from the actual buffer layout.
+    if (height & 1u)
+    {
+        --height;
+    }
+    if (height == 0)
+    {
+        return false;
+    }
+
     uint32_t dstWidth = m_videoConfig.width;
     uint32_t dstHeight = m_videoConfig.height;
 
