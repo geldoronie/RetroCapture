@@ -476,7 +476,10 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
 elseif(PLATFORM_MACOS)
-    # No macOS, excluir implementações Linux e Windows
+    # No macOS, excluir implementações Linux e Windows.
+    # Note: `AudioBus` is platform-agnostic (std::deque + mutex) and is
+    # used by both AudioCapturePulse on Linux and AudioCaptureCoreAudio
+    # on macOS, so it is NOT excluded here.
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
@@ -485,7 +488,6 @@ elseif(PLATFORM_MACOS)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
-    list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
 
     # Excluir arquivos Linux genéricos
