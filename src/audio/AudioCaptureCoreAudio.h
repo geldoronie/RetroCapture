@@ -97,7 +97,11 @@ private:
     std::thread                    m_monitorThread;
 
     // Internal methods
-    bool initializeAudioUnit();
+    // `requestedDeviceId` is the same id string `listDevices()` returns
+    // (decimal AudioDeviceID). Empty / unparseable → use system default
+    // input, which is the legacy behaviour from when this function
+    // ignored the deviceName entirely.
+    bool initializeAudioUnit(const std::string &requestedDeviceId);
     void cleanupAudioUnit();
     bool startMonitor();
     void stopMonitor();

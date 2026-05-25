@@ -33,7 +33,19 @@ static OSStatus audioInputCallback(void *inRefCon,
     {
         return noErr;
     }
-    
+
+    // Top-of-callback heartbeat (rate-limited) so we can tell apart:
+    //   - callback never called: no "input callback HIT" log at all
+    //   - called but AudioUnitRender fails: HIT log + status warning
+    //   - called and rendered: HIT log + "pushed N samples" log below
+    static std::atomic<unsigned> hitCount{0};
+    const unsigned h = ++hitCount;
+    if (h <= 3 || (h % 1000) == 0)
+    {
+        LOG_INFO("Core Audio input callback HIT #" + std::to_string(h) +
+                 " (inNumberFrames=" + std::to_string(inNumberFrames) + ")");
+    }
+
     AudioUnitRenderActionFlags flags = 0;
     AudioTimeStamp timeStamp = *inTimeStamp;
     AudioBufferList bufferList;
@@ -41,14 +53,19 @@ static OSStatus audioInputCallback(void *inRefCon,
     bufferList.mBuffers[0].mNumberChannels = 2; // Stereo
     bufferList.mBuffers[0].mDataByteSize = inNumberFrames * 2 * sizeof(int16_t);
     bufferList.mBuffers[0].mData = nullptr;
-    
+
     // Alocar buffer temporário
     std::vector<int16_t> tempBuffer(inNumberFrames * 2);
     bufferList.mBuffers[0].mData = tempBuffer.data();
-    
+
     // Renderizar áudio
     AudioComponentInstance audioUnit = context->capture->getAudioUnit();
     OSStatus status = AudioUnitRender(audioUnit, &flags, &timeStamp, 1, inNumberFrames, &bufferList);
+    if (status != noErr && (h <= 3 || (h % 1000) == 0))
+    {
+        LOG_WARN("Core Audio AudioUnitRender returned status=" +
+                 std::to_string(static_cast<int>(status)));
+    }
     
     if (status == noErr && context->bus)
     {
@@ -170,7 +187,7 @@ bool AudioCaptureCoreAudio::open(const std::string &deviceName)
         }
     }
 
-    if (!initializeAudioUnit())
+    if (!initializeAudioUnit(deviceName))
     {
         LOG_ERROR("Falha ao inicializar AudioUnit");
         return false;
@@ -400,7 +417,7 @@ size_t AudioCaptureCoreAudio::getSamples(int16_t *buffer, size_t maxSamples)
     return m_localTap->pull(buffer, maxSamples);
 }
 
-bool AudioCaptureCoreAudio::initializeAudioUnit()
+bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDeviceId)
 {
 #ifdef __APPLE__
     // Descrição do componente de áudio
@@ -510,7 +527,47 @@ bool AudioCaptureCoreAudio::initializeAudioUnit()
         m_audioUnit = nullptr;
         return false;
     }
-    
+
+    // Bind the AudioUnit to the user-selected Core Audio device. Without
+    // this property the HALOutput AudioUnit captures from whatever
+    // System Settings → Sound → Input has selected, regardless of which
+    // device id the UI asked for — exactly the "selected the device, no
+    // audio" behaviour reported. The id is the decimal `AudioDeviceID`
+    // string emitted by `listDevices()`.
+    if (!requestedDeviceId.empty())
+    {
+        AudioDeviceID devId = 0;
+        try
+        {
+            devId = static_cast<AudioDeviceID>(std::stoul(requestedDeviceId));
+        }
+        catch (...)
+        {
+            LOG_WARN("AudioCaptureCoreAudio: unparseable device id '" +
+                     requestedDeviceId + "' — falling back to system default");
+        }
+        if (devId != 0)
+        {
+            status = AudioUnitSetProperty(m_audioUnit,
+                                          kAudioOutputUnitProperty_CurrentDevice,
+                                          kAudioUnitScope_Global,
+                                          0,
+                                          &devId,
+                                          sizeof(devId));
+            if (status != noErr)
+            {
+                LOG_WARN("AudioCaptureCoreAudio: CurrentDevice set failed "
+                         "(status=" + std::to_string(status) +
+                         "), falling back to system default");
+            }
+            else
+            {
+                LOG_INFO("AudioCaptureCoreAudio: bound AudioUnit to device id " +
+                         std::to_string(devId));
+            }
+        }
+    }
+
     // Inicializar AudioUnit
     status = AudioUnitInitialize(m_audioUnit);
     if (status != noErr)
