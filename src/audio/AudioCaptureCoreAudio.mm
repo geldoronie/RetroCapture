@@ -4,6 +4,7 @@
 #include <cstring>
 
 #ifdef __APPLE__
+#import <AVFoundation/AVFoundation.h>
 #import <CoreAudio/CoreAudio.h>
 #import <AudioUnit/AudioUnit.h>
 #import <CoreFoundation/CoreFoundation.h>
@@ -52,6 +53,17 @@ static OSStatus audioInputCallback(void *inRefCon,
     if (status == noErr && context->bus)
     {
         context->bus->push(tempBuffer.data(), tempBuffer.size());
+
+        // Log the first few callbacks plus a periodic heartbeat so a
+        // silently-not-firing callback (microphone permission denied,
+        // device produces no samples) is obvious from the log.
+        static std::atomic<unsigned> cbCount{0};
+        const unsigned n = ++cbCount;
+        if (n <= 3 || (n % 1000) == 0)
+        {
+            LOG_INFO("Core Audio input callback #" + std::to_string(n) +
+                     " — pushed " + std::to_string(tempBuffer.size()) + " samples");
+        }
     }
 
     return status;
@@ -106,6 +118,58 @@ bool AudioCaptureCoreAudio::open(const std::string &deviceName)
     }
 
 #ifdef __APPLE__
+    // macOS 10.14+ gates Core Audio input behind the microphone
+    // privacy setting. Without an explicit grant the AudioUnit
+    // "opens" successfully but the input callback never fires and
+    // no samples ever reach the bus — silent failure that looks
+    // exactly like "monitor doesn't play". Surface the current
+    // status in the log, and synchronously request access on first
+    // run so the consent prompt has a chance to appear (only works
+    // for binaries inside an .app bundle with `NSMicrophoneUsage-
+    // Description` in Info.plist; raw command-line binaries get the
+    // request immediately denied without UI).
+    @autoreleasepool
+    {
+        AVAuthorizationStatus s =
+            [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+        const char *label = "unknown";
+        switch (s)
+        {
+            case AVAuthorizationStatusNotDetermined: label = "NotDetermined"; break;
+            case AVAuthorizationStatusRestricted:    label = "Restricted";    break;
+            case AVAuthorizationStatusDenied:        label = "Denied";        break;
+            case AVAuthorizationStatusAuthorized:    label = "Authorized";    break;
+        }
+        LOG_INFO(std::string("Core Audio microphone authorization: ") + label);
+
+        if (s == AVAuthorizationStatusNotDetermined)
+        {
+            __block bool grantedFlag  = false;
+            __block bool finishedFlag = false;
+            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
+                                     completionHandler:^(BOOL granted) {
+                grantedFlag  = granted;
+                finishedFlag = true;
+            }];
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+            while (!finishedFlag &&
+                   [[NSDate date] compare:deadline] == NSOrderedAscending)
+            {
+                [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                         beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            }
+            LOG_INFO(std::string("Core Audio microphone prompt result: ") +
+                     (grantedFlag ? "granted" : "denied/timeout"));
+        }
+        else if (s == AVAuthorizationStatusDenied || s == AVAuthorizationStatusRestricted)
+        {
+            LOG_WARN("Core Audio microphone access denied — open System Settings → "
+                     "Privacy & Security → Microphone and enable RetroCapture (or the "
+                     "binary's parent process if running uncodesigned). No audio will "
+                     "flow until access is granted.");
+        }
+    }
+
     if (!initializeAudioUnit())
     {
         LOG_ERROR("Falha ao inicializar AudioUnit");
@@ -598,7 +662,18 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
 
         if (m_monitor->isEnabled() && m_monitor->isOpen())
         {
-            m_monitor->write(chunk.data(), got);
+            const size_t written = m_monitor->write(chunk.data(), got);
+            // Mirror the input-callback diagnostic — first few iterations
+            // plus a periodic heartbeat so an open-but-silent monitor
+            // playback path can be told apart from an empty input.
+            static std::atomic<unsigned> wCount{0};
+            const unsigned n = ++wCount;
+            if (n <= 3 || (n % 1000) == 0)
+            {
+                LOG_INFO("Monitor writer iter #" + std::to_string(n) +
+                         " — pulled " + std::to_string(got) +
+                         " samples, wrote " + std::to_string(written));
+            }
         }
     }
 }
