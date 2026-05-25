@@ -1522,9 +1522,9 @@ std::vector<DeviceInfo> VideoCaptureAVFoundation::listDevices()
             // Wait up to ~3 s for the user to respond to the prompt
             // (synchronous wait so this listDevices() call returns the
             // post-grant list rather than the empty pre-grant one).
-            const NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
             while (!finishedFlag &&
-                   [(NSDate *)[NSDate date] compare:deadline] == NSOrderedAscending)
+                   [[NSDate date] compare:deadline] == NSOrderedAscending)
             {
                 [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
                                          beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
