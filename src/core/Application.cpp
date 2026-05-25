@@ -2369,6 +2369,26 @@ bool Application::initUI()
                                                  {
                                                      m_ui->triggerDeviceChange(target);
                                                  }
+
+                                                 // Restore the format the user had
+                                                 // selected on this device in a previous
+                                                 // session, if any and if the device is
+                                                 // the saved one (don't carry a format
+                                                 // across devices — different cards
+                                                 // expose different format IDs).
+                                                 const std::string savedFormatId = m_ui
+                                                     ? m_ui->getAVFoundationFormatId()
+                                                     : std::string();
+                                                 if (!savedFormatId.empty() && target == saved &&
+                                                     m_capture)
+                                                 {
+                                                     LOG_INFO("Restoring AVFoundation format: " + savedFormatId);
+                                                     if (!m_capture->setFormatById(savedFormatId, target))
+                                                     {
+                                                         LOG_WARN("Saved AVFoundation format id no longer matches a "
+                                                                  "format on this device — leaving device at default");
+                                                     }
+                                                 }
                                              }
                                          }
                                      }
