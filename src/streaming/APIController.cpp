@@ -12,6 +12,9 @@
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
+#ifdef __APPLE__
+#include "../audio/AudioCaptureCoreAudio.h"
+#endif
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <iomanip>
@@ -3166,10 +3169,23 @@ bool APIController::handleResyncAudioMonitor(int clientFd)
         sendJSONResponse(clientFd, 200, response.dump());
         return true;
     }
-    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux");
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
+    return true;
+#elif defined(__APPLE__)
+    AudioCaptureCoreAudio *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(audioCapture);
+    if (caCapture)
+    {
+        caCapture->resyncMonitor();
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Monitor resync requested";
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
     return true;
 #else
-    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux");
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
     return true;
 #endif
 }

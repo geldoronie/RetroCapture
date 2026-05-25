@@ -19,9 +19,6 @@ struct RecordingMetadata;
 
 class IVideoCapture;
 class IAudioCapture;
-#ifdef __APPLE__
-class IAudioOutput;
-#endif
 class WindowManager;
 #ifdef USE_SDL2
 class WindowManagerSDL;
@@ -189,14 +186,6 @@ private:
     // waiting for an app restart.
     std::string m_publishedDirectoryUrl;
     std::unique_ptr<IAudioCapture> m_audioCapture;
-#ifdef __APPLE__
-    // Host-side audio monitor on macOS. Counterpart to Linux's
-    // MonitorPlayback (which lives inside AudioCapturePulse). Owned at
-    // the Application level because AudioCaptureCoreAudio does not
-    // bundle a playback path. Polymorphic so the platform can swap in
-    // a different output implementation if needed.
-    std::unique_ptr<IAudioOutput> m_audioOutput;
-#endif
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
 
@@ -433,13 +422,5 @@ private:
     void stopWebPortal();
     bool initAudioCapture();
     void restoreAudioDeviceConnections();
-#ifdef __APPLE__
-    // Construct + open the IAudioOutput (Core Audio) for monitor
-    // playback. Called from initAudioCapture() so format matches the
-    // capture's sample rate / channel count. No-op on non-Apple
-    // platforms — Linux uses MonitorPlayback inside AudioCapturePulse,
-    // Windows currently has no host-side monitor.
-    bool initAudioOutput();
-#endif
     void handleKeyInput();
 };

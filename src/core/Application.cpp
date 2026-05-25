@@ -41,10 +41,6 @@
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
-#ifdef __APPLE__
-#include "../audio/IAudioOutput.h"
-#include "../audio/AudioOutputCoreAudio.h"
-#endif
 #include "../recording/RecordingManager.h"
 #include "../recording/RecordingSettings.h"
 #include "../recording/RecordingMetadata.h"
@@ -3236,68 +3232,16 @@ bool Application::initAudioCapture()
         m_ui->setAudioCapture(m_audioCapture.get());
     }
 
-#ifdef __APPLE__
-    // Host-side monitor playback for macOS. On Linux this lives inside
-    // AudioCapturePulse (MonitorPlayback); Core Audio doesn't bundle a
-    // playback path with capture, so we open it at the Application
-    // layer and feed it from the main loop's getSamples calls.
-    if (!initAudioOutput())
-    {
-        LOG_WARN("Failed to initialize macOS audio output — user will not "
-                 "hear the input through the default device");
-    }
-#endif
+    // Host-side monitor playback: on Linux it lives inside
+    // AudioCapturePulse (MonitorPlayback), on macOS inside
+    // AudioCaptureCoreAudio (also called MonitorPlayback there). The
+    // capture class spins up its own monitor in open() — no Application-
+    // level wiring needed.
 
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;
 }
-
-#ifdef __APPLE__
-bool Application::initAudioOutput()
-{
-    if (!m_audioCapture)
-    {
-        LOG_WARN("initAudioOutput called before audio capture is up");
-        return false;
-    }
-
-    m_audioOutput = std::make_unique<AudioOutputCoreAudio>();
-    if (!m_audioOutput)
-    {
-        LOG_ERROR("Failed to allocate AudioOutputCoreAudio");
-        return false;
-    }
-
-    const uint32_t sampleRate = m_audioCapture->getSampleRate();
-    const uint32_t channels   = m_audioCapture->getChannels();
-    if (sampleRate == 0 || channels == 0)
-    {
-        LOG_WARN("Audio capture format not ready; postponing audio output init");
-        m_audioOutput.reset();
-        return false;
-    }
-
-    if (!m_audioOutput->open("", sampleRate, channels))
-    {
-        LOG_ERROR("AudioOutputCoreAudio: open failed");
-        m_audioOutput.reset();
-        return false;
-    }
-    if (!m_audioOutput->start())
-    {
-        LOG_ERROR("AudioOutputCoreAudio: start failed");
-        m_audioOutput->close();
-        m_audioOutput.reset();
-        return false;
-    }
-    m_audioOutput->setEnabled(true);
-    LOG_INFO("Audio output (monitor) started: " +
-             std::to_string(m_audioOutput->getSampleRate()) + "Hz, " +
-             std::to_string(m_audioOutput->getChannels()) + " channels");
-    return true;
-}
-#endif
 
 void Application::restoreAudioDeviceConnections()
 {
@@ -3448,12 +3392,6 @@ void Application::run()
                         {
                             m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
                         }
-#ifdef __APPLE__
-                        if (m_audioOutput && m_audioOutput->isOpen() && m_audioOutput->isEnabled())
-                        {
-                            m_audioOutput->write(audioBuffer.data(), samplesRead);
-                        }
-#endif
 
                         // If we read less than expected, no more samples available
                         if (samplesRead < samplesPerVideoFrame)
@@ -3501,12 +3439,6 @@ void Application::run()
                     if (samplesRead > 0)
                     {
                         m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
-#ifdef __APPLE__
-                        if (m_audioOutput && m_audioOutput->isOpen() && m_audioOutput->isEnabled())
-                        {
-                            m_audioOutput->write(audioBuffer.data(), samplesRead);
-                        }
-#endif
                         if (samplesRead < samplesPerVideoFrame)
                         {
                             break;
@@ -3523,22 +3455,14 @@ void Application::run()
             {
                 // Neither streaming nor recording active, but we still need to process mainloop
                 // to prevent PulseAudio from freezing system audio
-                // Read and discard samples to keep buffer clean
-                const size_t maxSamples = 4096; // Temporary buffer
+                // Read and discard samples to keep the capture buffer
+                // from backing up. The host-side monitor (Linux:
+                // MonitorPlayback inside AudioCapturePulse; macOS:
+                // monitor inside AudioCaptureCoreAudio) has its own
+                // tap on the bus, so the user still hears the input.
+                const size_t maxSamples = 4096;
                 std::vector<int16_t> tempBuffer(maxSamples);
-                size_t samplesRead = m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
-#ifdef __APPLE__
-                // Still feed the monitor so the user can hear the
-                // capture even when neither streaming nor recording
-                // is running.
-                if (samplesRead > 0 && m_audioOutput && m_audioOutput->isOpen() &&
-                    m_audioOutput->isEnabled())
-                {
-                    m_audioOutput->write(tempBuffer.data(), samplesRead);
-                }
-#else
-                (void)samplesRead;
-#endif
+                m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
         }
 

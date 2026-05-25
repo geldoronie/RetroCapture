@@ -12,8 +12,7 @@
 struct AudioCaptureContext
 {
     AudioCaptureCoreAudio* capture;
-    std::mutex* bufferMutex;
-    std::vector<int16_t>* audioBuffer;
+    AudioBus *bus;
 };
 
 static OSStatus audioInputCallback(void *inRefCon,
@@ -50,14 +49,11 @@ static OSStatus audioInputCallback(void *inRefCon,
     AudioComponentInstance audioUnit = context->capture->getAudioUnit();
     OSStatus status = AudioUnitRender(audioUnit, &flags, &timeStamp, 1, inNumberFrames, &bufferList);
     
-    if (status == noErr)
+    if (status == noErr && context->bus)
     {
-        std::lock_guard<std::mutex> lock(*context->bufferMutex);
-        context->audioBuffer->insert(context->audioBuffer->end(), 
-                                     tempBuffer.begin(), 
-                                     tempBuffer.end());
+        context->bus->push(tempBuffer.data(), tempBuffer.size());
     }
-    
+
     return status;
 }
 #endif
@@ -70,17 +66,22 @@ AudioCaptureCoreAudio::AudioCaptureCoreAudio()
     , m_bufferMutex()
     , m_sampleRate(44100)
     , m_channels(2)
-    , m_bytesPerSample(2) // 16-bit
+    , m_bytesPerSample(2)
     , m_isOpen(false)
     , m_isCapturing(false)
 #else
     : m_sampleRate(44100)
     , m_channels(2)
-    , m_bytesPerSample(2) // 16-bit
+    , m_bytesPerSample(2)
     , m_isOpen(false)
     , m_isCapturing(false)
 #endif
 {
+    m_bus = std::make_unique<AudioBus>(m_sampleRate, m_channels);
+    // ~2 s of slack at 44.1 kHz stereo, matching AudioCapturePulse on
+    // Linux. Encoder/recorder pulls every video frame, so this is
+    // comfortably above expected fill.
+    m_localTap = m_bus->createTap(static_cast<size_t>(m_sampleRate) * m_channels * 2);
 }
 
 AudioCaptureCoreAudio::~AudioCaptureCoreAudio()
@@ -113,6 +114,16 @@ bool AudioCaptureCoreAudio::open(const std::string &deviceName)
 
     m_isOpen = true;
     LOG_INFO("Dispositivo de áudio aberto: " + (deviceName.empty() ? "default" : deviceName));
+
+    // Stand up the host-side monitor playback — Core Audio counterpart
+    // of Linux's MonitorPlayback (pa_simple writer). Failure is
+    // non-fatal: capture still works for encoder/recorder, the user
+    // just won't hear the input through the default output device.
+    if (!startMonitor())
+    {
+        LOG_WARN("AudioCaptureCoreAudio: host-side monitor failed to start; "
+                 "input will not be audible through the default output");
+    }
     return true;
 #else
     LOG_ERROR("Core Audio só está disponível no macOS");
@@ -127,6 +138,7 @@ void AudioCaptureCoreAudio::close()
         stopCapture();
     }
 
+    stopMonitor();
     m_isOpen = false;
     LOG_INFO("Dispositivo de áudio fechado");
 }
@@ -138,34 +150,26 @@ bool AudioCaptureCoreAudio::isOpen() const
 
 size_t AudioCaptureCoreAudio::getSamples(std::vector<float> &samples)
 {
-    if (!m_isOpen || !m_isCapturing)
+    if (!m_isOpen || !m_isCapturing || !m_localTap)
     {
         samples.clear();
         return 0;
     }
 
-#ifdef __APPLE__
-    std::lock_guard<std::mutex> lock(m_bufferMutex);
-    
-    if (m_audioBuffer.empty())
+    const size_t available = m_localTap->available();
+    if (available == 0)
     {
         samples.clear();
         return 0;
     }
-
-    // Converter int16 para float
-    samples.resize(m_audioBuffer.size());
-    for (size_t i = 0; i < m_audioBuffer.size(); ++i)
+    std::vector<int16_t> raw(available);
+    const size_t pulled = m_localTap->pull(raw.data(), available);
+    samples.resize(pulled);
+    for (size_t i = 0; i < pulled; ++i)
     {
-        samples[i] = m_audioBuffer[i] / 32768.0f;
+        samples[i] = static_cast<float>(raw[i]) / 32768.0f;
     }
-
-    m_audioBuffer.clear();
-    return samples.size();
-#else
-    samples.clear();
-    return 0;
-#endif
+    return pulled;
 }
 
 uint32_t AudioCaptureCoreAudio::getSampleRate() const
@@ -325,25 +329,11 @@ void AudioCaptureCoreAudio::stopCapture()
 
 size_t AudioCaptureCoreAudio::getSamples(int16_t *buffer, size_t maxSamples)
 {
-    if (!m_isOpen || !m_isCapturing || !buffer)
+    if (!m_isOpen || !m_isCapturing || !buffer || maxSamples == 0 || !m_localTap)
     {
         return 0;
     }
-
-#ifdef __APPLE__
-    std::lock_guard<std::mutex> lock(m_bufferMutex);
-    
-    size_t samplesToCopy = std::min(maxSamples, m_audioBuffer.size());
-    if (samplesToCopy > 0)
-    {
-        std::memcpy(buffer, m_audioBuffer.data(), samplesToCopy * sizeof(int16_t));
-        m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + samplesToCopy);
-    }
-    
-    return samplesToCopy;
-#else
-    return 0;
-#endif
+    return m_localTap->pull(buffer, maxSamples);
 }
 
 bool AudioCaptureCoreAudio::initializeAudioUnit()
@@ -437,8 +427,7 @@ bool AudioCaptureCoreAudio::initializeAudioUnit()
     // Criar contexto
     m_context = new AudioCaptureContext;
     m_context->capture = this;
-    m_context->bufferMutex = &m_bufferMutex;
-    m_context->audioBuffer = &m_audioBuffer;
+    m_context->bus     = m_bus.get();
     
     callbackStruct.inputProcRefCon = m_context;
     
@@ -494,6 +483,136 @@ void AudioCaptureCoreAudio::cleanupAudioUnit()
     }
     
     m_audioComponent = nullptr;
-    m_audioBuffer.clear();
 #endif
 }
+
+#ifdef __APPLE__
+
+// Forward declaration: defined in AudioOutputCoreAudio.h.
+// We don't include that header at the top of this file because it
+// would pull Core Audio macros transitively into header consumers
+// that don't need them.
+extern std::unique_ptr<IAudioOutput> createAudioOutputCoreAudio();
+
+bool AudioCaptureCoreAudio::startMonitor()
+{
+    if (m_monitor)
+    {
+        return true;
+    }
+    if (!m_bus)
+    {
+        return false;
+    }
+
+    m_monitor = createAudioOutputCoreAudio();
+    if (!m_monitor)
+    {
+        LOG_ERROR("AudioCaptureCoreAudio: createAudioOutputCoreAudio returned null");
+        return false;
+    }
+    if (!m_monitor->open("", m_sampleRate, m_channels))
+    {
+        LOG_ERROR("AudioCaptureCoreAudio: monitor open() failed");
+        m_monitor.reset();
+        return false;
+    }
+    if (!m_monitor->start())
+    {
+        LOG_ERROR("AudioCaptureCoreAudio: monitor start() failed");
+        m_monitor->close();
+        m_monitor.reset();
+        return false;
+    }
+    m_monitor->setEnabled(true);
+
+    // ~2 s slack on the monitor tap, matching the local-tap capacity
+    // (and Linux's MonitorPlayback tap). Drop-oldest at this cap is
+    // the safety net if the playback path stalls; the writer loop
+    // does NOT actively skip — same minimal posture as Linux.
+    m_monitorTap = m_bus->createTap(static_cast<size_t>(m_sampleRate) * m_channels * 2);
+    m_monitorResyncPending = false;
+    m_monitorRunning       = true;
+    m_monitorThread        = std::thread(&AudioCaptureCoreAudio::monitorWriterLoop, this);
+
+    LOG_INFO("AudioCaptureCoreAudio: monitor started (" +
+             std::to_string(m_monitor->getSampleRate()) + " Hz x " +
+             std::to_string(m_monitor->getChannels()) + " ch)");
+    return true;
+}
+
+void AudioCaptureCoreAudio::stopMonitor()
+{
+    m_monitorRunning = false;
+    if (m_monitorThread.joinable())
+    {
+        m_monitorThread.join();
+    }
+    if (m_monitor)
+    {
+        m_monitor->stop();
+        m_monitor->close();
+        m_monitor.reset();
+    }
+    m_monitorTap.reset();
+    m_monitorResyncPending = false;
+}
+
+void AudioCaptureCoreAudio::monitorWriterLoop()
+{
+    // ~10 ms chunks at 44.1 kHz stereo, same sizing as Linux's
+    // MonitorPlayback writer.
+    constexpr size_t kChunkSamples = 882 * 2;
+    std::vector<int16_t> chunk(kChunkSamples);
+    std::vector<int16_t> drain;
+
+    while (m_monitorRunning.load())
+    {
+        if (m_monitorResyncPending.exchange(false))
+        {
+            // Drop everything queued in the tap so the next write
+            // restarts from the producer's newest samples.
+            const size_t available = m_monitorTap ? m_monitorTap->available() : 0;
+            if (available > 0)
+            {
+                drain.resize(available);
+                m_monitorTap->pull(drain.data(), available);
+            }
+            LOG_INFO("AudioCaptureCoreAudio: monitor resync (dropped " +
+                     std::to_string(available / (m_channels ? m_channels : 1)) +
+                     " queued frames)");
+        }
+
+        if (!m_monitorTap || !m_monitor)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        const size_t got = m_monitorTap->pull(chunk.data(), chunk.size());
+        if (got == 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        if (m_monitor->isEnabled() && m_monitor->isOpen())
+        {
+            m_monitor->write(chunk.data(), got);
+        }
+    }
+}
+
+void AudioCaptureCoreAudio::resyncMonitor()
+{
+    m_monitorResyncPending = true;
+}
+
+#else // !__APPLE__
+
+bool AudioCaptureCoreAudio::startMonitor() { return false; }
+void AudioCaptureCoreAudio::stopMonitor()  {}
+void AudioCaptureCoreAudio::monitorWriterLoop() {}
+void AudioCaptureCoreAudio::resyncMonitor() {}
+
+#endif
