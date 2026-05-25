@@ -273,13 +273,27 @@ bool VideoCaptureAVFoundation::open(const std::string &device)
     return false;
         }
         
-        // IMPORTANT: OBS Studio approach - do NOT set sessionPreset when using manual format control
-        // The activeFormat of the device will determine the resolution
-        // Setting a preset (even Low) can interfere with activeFormat on some devices
-        // We'll configure the format explicitly via activeFormat within beginConfiguration/commitConfiguration
-        // Note: AVCaptureSessionPresetInputPriority is NOT available on macOS (iOS/iPadOS only)
-        // OBS Studio does not set sessionPreset when using manual format configuration
-        LOG_INFO("Session created - format will be controlled via activeFormat (no preset)");
+        // AVCaptureSession defaults to `AVCaptureSessionPresetHigh` as
+        // soon as an input is added, which on macOS *overrides* whatever
+        // `activeFormat` we set on the device — that's exactly why
+        // earlier attempts to apply 160x120 / 640x480 / 1600x1200 etc.
+        // silently reverted to 1280x720 / 1920x1080 after
+        // `startRunning`. The fix is to explicitly opt into
+        // `AVCaptureSessionPresetInputPriority`, which tells
+        // AVFoundation "honor the device's activeFormat, do not
+        // impose any preset of your own". This preset has been
+        // available on macOS since 10.7 (the old comment in this
+        // file claimed it was iOS-only — incorrect).
+        if ([m_captureSession canSetSessionPreset:AVCaptureSessionPresetInputPriority])
+        {
+            m_captureSession.sessionPreset = AVCaptureSessionPresetInputPriority;
+            LOG_INFO("Session preset: InputPriority (activeFormat honored)");
+        }
+        else
+        {
+            LOG_WARN("Session does not accept InputPriority preset — activeFormat "
+                     "may be overridden by the default preset.");
+        }
         
         // Selecionar dispositivo
         AVCaptureDevice* deviceObj = nil;
