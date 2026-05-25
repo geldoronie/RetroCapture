@@ -976,6 +976,9 @@ int main(int argc, char *argv[])
 #elif defined(_WIN32)
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
+#elif defined(__APPLE__)
+    if (sourceType == "avfoundation")
+        sourceTypeEnum = UIManager::SourceType::AVFoundation;
 #endif
     if (sourceType == "remote")
         sourceTypeEnum = UIManager::SourceType::Remote;

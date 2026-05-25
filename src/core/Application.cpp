@@ -2332,12 +2332,45 @@ bool Application::initUI()
                                          {
                                              m_ui->setCaptureControls(m_capture.get());
                                          }
-                                         // Stay in dummy mode until the user explicitly
-                                         // picks a device from the AVFoundation dropdown.
-                                         // listDevices() will fire on the first render
-                                         // of UIConfigurationSource's AVFoundation
-                                         // section and trigger the camera-permission
-                                         // probe if needed.
+
+                                         // Auto-open the saved device (or the first
+                                         // available one) instead of leaving the user
+                                         // in dummy mode with the dropdown showing a
+                                         // device that is not actually active. Without
+                                         // this, the user has to pick another device
+                                         // and come back just to make AVFoundation
+                                         // actually capture.
+                                         if (m_capture && m_capture->isDummyMode())
+                                         {
+                                             const auto devices = m_capture->listDevices();
+                                             if (!devices.empty())
+                                             {
+                                                 const std::string saved = m_ui
+                                                     ? m_ui->getAVFoundationDeviceId()
+                                                     : std::string();
+                                                 std::string target;
+                                                 if (!saved.empty())
+                                                 {
+                                                     for (const auto &d : devices)
+                                                     {
+                                                         if (d.id == saved)
+                                                         {
+                                                             target = saved;
+                                                             break;
+                                                         }
+                                                     }
+                                                 }
+                                                 if (target.empty())
+                                                 {
+                                                     target = devices.front().id;
+                                                 }
+                                                 LOG_INFO("Auto-opening AVFoundation device: " + target);
+                                                 if (m_ui)
+                                                 {
+                                                     m_ui->triggerDeviceChange(target);
+                                                 }
+                                             }
+                                         }
                                      }
 #endif
 
