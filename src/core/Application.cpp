@@ -5587,7 +5587,18 @@ void Application::applyPendingRemoteMeta()
     }
 
     // Master pipeline toggle: mirror the host's "Apply shader pipeline".
+    // Log every time it changes vs the local state, so a "shader vanishes
+    // after N seconds" symptom can be traced back to whichever snapshot
+    // flipped the value.
+    const bool prevPipelineEnabled = m_ui->getShaderPipelineEnabled();
     m_ui->setShaderPipelineEnabled(pipelineEnabled);
+    if (prevPipelineEnabled != pipelineEnabled)
+    {
+        LOG_INFO(std::string("RemoteMetaSync: pipelineEnabled changed ") +
+                 (prevPipelineEnabled ? "true" : "false") + " → " +
+                 (pipelineEnabled ? "true" : "false") +
+                 " (preset='" + preset + "' hash=" + presetHash + ")");
+    }
 
     // Parameter overrides apply on top of whatever preset is now active.
     // After a preset reload, the engine's parameters are at their preset
