@@ -2615,15 +2615,24 @@ bool VideoCaptureAVFoundation::applyFormatAndFramerate(AVCaptureDeviceFormat* fo
                 LOG_INFO("Format: " + std::to_string(dims.width) + "x" + std::to_string(dims.height));
                 applyClosestFramerate(m_captureDevice, targetFps);
                 
-                // Step 4: Configure framerate on CONNECTION (while device is still locked)
+                // Step 4: Configure framerate on CONNECTION (while device is still
+                // locked). Mirror the value the device ended up at — applyClosest-
+                // Framerate may have clamped it to a different rate than `targetFps`
+                // so read it back from the device rather than rebuilding from the
+                // integer.
                 if (m_videoOutput)
                 {
                     AVCaptureConnection* conn = [m_videoOutput connectionWithMediaType:AVMediaTypeVideo];
                     if (conn)
                     {
-                        conn.videoMinFrameDuration = frameDuration;
-                        conn.videoMaxFrameDuration = frameDuration;
-                        LOG_INFO("Connection framerate configured: " + std::to_string(targetFps) + " fps");
+                        CMTime applied = m_captureDevice.activeVideoMinFrameDuration;
+                        conn.videoMinFrameDuration = applied;
+                        conn.videoMaxFrameDuration = applied;
+                        const double appliedFps = (CMTimeGetSeconds(applied) > 0.0)
+                            ? 1.0 / CMTimeGetSeconds(applied)
+                            : 0.0;
+                        LOG_INFO("Connection framerate configured: " +
+                                 std::to_string(appliedFps) + " fps");
                     }
                 }
                 
