@@ -476,21 +476,103 @@ bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDevi
         return false;
     }
     
-    // Configurar formato de áudio
-    AudioStreamBasicDescription streamFormat;
-    streamFormat.mSampleRate = m_sampleRate;
-    streamFormat.mFormatID = kAudioFormatLinearPCM;
-    streamFormat.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
-    streamFormat.mBitsPerChannel = 16;
+    // Bind the AudioUnit to the user-selected Core Audio device. MUST
+    // happen before reading the device's native stream format below,
+    // otherwise we'd read the AudioUnit's default (44100 Hz / 2 ch /
+    // float32) instead of the actual device's format.
+    if (!requestedDeviceId.empty())
+    {
+        AudioDeviceID devId = 0;
+        try
+        {
+            devId = static_cast<AudioDeviceID>(std::stoul(requestedDeviceId));
+        }
+        catch (...)
+        {
+            LOG_WARN("AudioCaptureCoreAudio: unparseable device id '" +
+                     requestedDeviceId + "' — falling back to system default");
+        }
+        if (devId != 0)
+        {
+            OSStatus bindStatus = AudioUnitSetProperty(m_audioUnit,
+                                                       kAudioOutputUnitProperty_CurrentDevice,
+                                                       kAudioUnitScope_Global,
+                                                       0,
+                                                       &devId,
+                                                       sizeof(devId));
+            if (bindStatus != noErr)
+            {
+                LOG_WARN("AudioCaptureCoreAudio: CurrentDevice set failed "
+                         "(status=" + std::to_string(bindStatus) +
+                         "), falling back to system default");
+            }
+            else
+            {
+                LOG_INFO("AudioCaptureCoreAudio: bound AudioUnit to device id " +
+                         std::to_string(devId));
+            }
+        }
+    }
+
+    // Read the device's native stream format BEFORE setting our
+    // requested format. Hard-coding 44.1 kHz / 2 ch / 16-bit caused
+    // `AudioUnitRender` to return `-10863
+    // (kAudioUnitErr_CannotDoInCurrentContext)` on UVC capture cards
+    // that natively run at 48 kHz / mono / float32 — the AudioUnit's
+    // internal converter can resample arbitrary rates but couldn't
+    // bridge that big a gap in one shot. Pick up the device's actual
+    // sample rate and channel count and use them; bit depth stays at
+    // signed 16-bit interleaved (what the rest of the pipeline
+    // expects, and what the converter does handle reliably).
+    AudioStreamBasicDescription deviceFormat = {};
+    UInt32 deviceFormatSize = sizeof(deviceFormat);
+    OSStatus formatStatus = AudioUnitGetProperty(m_audioUnit,
+                                                 kAudioUnitProperty_StreamFormat,
+                                                 kAudioUnitScope_Input,
+                                                 1,
+                                                 &deviceFormat,
+                                                 &deviceFormatSize);
+    if (formatStatus == noErr)
+    {
+        LOG_INFO("Core Audio device native format: " +
+                 std::to_string(static_cast<int>(deviceFormat.mSampleRate)) + " Hz, " +
+                 std::to_string(deviceFormat.mChannelsPerFrame) + " ch, " +
+                 std::to_string(deviceFormat.mBitsPerChannel) + "-bit");
+        if (deviceFormat.mSampleRate > 0)
+        {
+            m_sampleRate = static_cast<uint32_t>(deviceFormat.mSampleRate);
+        }
+        if (deviceFormat.mChannelsPerFrame > 0)
+        {
+            m_channels = deviceFormat.mChannelsPerFrame;
+        }
+    }
+    else
+    {
+        LOG_WARN("Core Audio: failed to query device native format (status=" +
+                 std::to_string(formatStatus) +
+                 "), falling back to hardcoded 44100 Hz / 2 ch");
+    }
+
+    // Build our requested format using the device's sample rate /
+    // channel count so the AudioUnit only has to handle bit-depth
+    // conversion (float / 24-bit / 32-bit → signed 16-bit). Some
+    // mono devices will deliver a single channel; the rest of the
+    // bus / monitor pipeline handles channel counts > 0 fine.
+    AudioStreamBasicDescription streamFormat = {};
+    streamFormat.mSampleRate       = m_sampleRate;
+    streamFormat.mFormatID         = kAudioFormatLinearPCM;
+    streamFormat.mFormatFlags      = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    streamFormat.mBitsPerChannel   = 16;
     streamFormat.mChannelsPerFrame = m_channels;
-    streamFormat.mBytesPerFrame = streamFormat.mChannelsPerFrame * (streamFormat.mBitsPerChannel / 8);
-    streamFormat.mFramesPerPacket = 1;
-    streamFormat.mBytesPerPacket = streamFormat.mBytesPerFrame * streamFormat.mFramesPerPacket;
-    
+    streamFormat.mBytesPerFrame    = streamFormat.mChannelsPerFrame * (streamFormat.mBitsPerChannel / 8);
+    streamFormat.mFramesPerPacket  = 1;
+    streamFormat.mBytesPerPacket   = streamFormat.mBytesPerFrame * streamFormat.mFramesPerPacket;
+
     status = AudioUnitSetProperty(m_audioUnit,
                                   kAudioUnitProperty_StreamFormat,
                                   kAudioUnitScope_Output,
-                                  1, // Input element
+                                  1,
                                   &streamFormat,
                                   sizeof(streamFormat));
     if (status != noErr)
@@ -526,46 +608,6 @@ bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDevi
         AudioComponentInstanceDispose(m_audioUnit);
         m_audioUnit = nullptr;
         return false;
-    }
-
-    // Bind the AudioUnit to the user-selected Core Audio device. Without
-    // this property the HALOutput AudioUnit captures from whatever
-    // System Settings → Sound → Input has selected, regardless of which
-    // device id the UI asked for — exactly the "selected the device, no
-    // audio" behaviour reported. The id is the decimal `AudioDeviceID`
-    // string emitted by `listDevices()`.
-    if (!requestedDeviceId.empty())
-    {
-        AudioDeviceID devId = 0;
-        try
-        {
-            devId = static_cast<AudioDeviceID>(std::stoul(requestedDeviceId));
-        }
-        catch (...)
-        {
-            LOG_WARN("AudioCaptureCoreAudio: unparseable device id '" +
-                     requestedDeviceId + "' — falling back to system default");
-        }
-        if (devId != 0)
-        {
-            status = AudioUnitSetProperty(m_audioUnit,
-                                          kAudioOutputUnitProperty_CurrentDevice,
-                                          kAudioUnitScope_Global,
-                                          0,
-                                          &devId,
-                                          sizeof(devId));
-            if (status != noErr)
-            {
-                LOG_WARN("AudioCaptureCoreAudio: CurrentDevice set failed "
-                         "(status=" + std::to_string(status) +
-                         "), falling back to system default");
-            }
-            else
-            {
-                LOG_INFO("AudioCaptureCoreAudio: bound AudioUnit to device id " +
-                         std::to_string(devId));
-            }
-        }
     }
 
     // Inicializar AudioUnit
