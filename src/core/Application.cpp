@@ -404,9 +404,13 @@ bool Application::initCapture()
     // If it fails, activate dummy mode (generates black frames)
     if (m_devicePath.empty())
     {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
+        // Windows (DirectShow) and macOS (AVFoundation) both pick a
+        // capture device by enumeration at the backend layer — there
+        // is no filesystem path. Without a device explicitly chosen,
+        // start in dummy mode and let the user pick a device via the
+        // Source tab.
         LOG_INFO("No device specified - activating dummy mode directly");
-        // Go directly to dummy mode without trying to open device
         m_capture->setDummyMode(true);
         if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
         {

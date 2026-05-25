@@ -2762,7 +2762,29 @@ void UIManager::loadConfig()
             if (source.contains("type"))
             {
                 int sourceTypeInt = source["type"].get<int>();
-                m_sourceType = static_cast<SourceType>(sourceTypeInt);
+                SourceType loaded  = static_cast<SourceType>(sourceTypeInt);
+                // Coerce platform-foreign source types to the local
+                // platform's native one: a config saved on Linux
+                // with V4L2 shouldn't try to instantiate V4L2 on
+                // macOS, and so on. Remote and None always travel.
+                const bool isPlatformNative =
+                    loaded == SourceType::None ||
+                    loaded == SourceType::Remote ||
+#ifdef __linux__
+                    loaded == SourceType::V4L2;
+#elif defined(_WIN32)
+                    loaded == SourceType::DS;
+#elif defined(__APPLE__)
+                    loaded == SourceType::AVFoundation;
+#else
+                    false;
+#endif
+                if (isPlatformNative)
+                {
+                    m_sourceType = loaded;
+                }
+                // else: keep the platform-default that the
+                // constructor / default-init set.
             }
         }
 

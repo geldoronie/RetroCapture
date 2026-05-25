@@ -141,6 +141,8 @@ int main(int argc, char *argv[])
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
     sourceType = "ds"; // Windows usa DirectShow
+#elif defined(__APPLE__)
+    sourceType = "avfoundation"; // macOS usa AVFoundation
 #else
     sourceType = "none"; // Outras plataformas sem suporte
 #endif
@@ -237,6 +239,8 @@ int main(int argc, char *argv[])
             if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
 #elif defined(_WIN32)
             if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
+#elif defined(__APPLE__)
+            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote")
 #else
             if (sourceType != "none" && sourceType != "remote")
 #endif
@@ -245,6 +249,8 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
 #elif defined(_WIN32)
                 LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
+#elif defined(__APPLE__)
+                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation' or 'remote'");
 #else
                 LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
 #endif
