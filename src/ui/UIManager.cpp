@@ -5,7 +5,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #  include "UIConfigurationAudio.h"
 #endif
 #include "UIInfoPanel.h"
@@ -228,7 +228,7 @@ bool UIManager::init(void *window)
     m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
     m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
 #endif
     m_infoWindow        = std::make_unique<UIInfoPanel>(this);
@@ -465,7 +465,7 @@ void UIManager::render()
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
 #endif
             }
