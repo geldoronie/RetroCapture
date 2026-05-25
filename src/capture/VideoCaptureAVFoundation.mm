@@ -1488,10 +1488,59 @@ std::vector<DeviceInfo> VideoCaptureAVFoundation::listDevices()
 
 #ifdef __APPLE__
     @autoreleasepool {
-        // Sempre listar dispositivos reais, mesmo em dummy mode
-        // Isso permite que o usuário selecione um dispositivo mesmo quando está em dummy mode
-        // Nota: UltraWide e Telephoto são apenas iOS, não macOS
-        AVCaptureDeviceDiscoverySession* discoverySession = [AVCaptureDeviceDiscoverySession 
+        // macOS 10.14+ guards AVFoundation camera enumeration behind
+        // the per-app camera privacy setting. Without an explicit
+        // grant, AVCaptureDeviceDiscoverySession returns an empty
+        // array silently — no error, no prompt. Surface the current
+        // authorization state in the log, and synchronously request
+        // access on first run so the user gets the consent prompt
+        // (the binary must live in an .app bundle with an Info.plist
+        // carrying NSCameraUsageDescription for the prompt to actually
+        // appear — running as a raw command-line binary may simply
+        // record the deny without UI).
+        AVAuthorizationStatus authStatus =
+            [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+        const char *statusStr = "unknown";
+        switch (authStatus)
+        {
+            case AVAuthorizationStatusNotDetermined: statusStr = "NotDetermined"; break;
+            case AVAuthorizationStatusRestricted:    statusStr = "Restricted";    break;
+            case AVAuthorizationStatusDenied:        statusStr = "Denied";        break;
+            case AVAuthorizationStatusAuthorized:    statusStr = "Authorized";    break;
+        }
+        LOG_INFO(std::string("AVFoundation camera authorization: ") + statusStr);
+
+        if (authStatus == AVAuthorizationStatusNotDetermined)
+        {
+            __block bool grantedFlag = false;
+            __block bool finishedFlag = false;
+            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+                                     completionHandler:^(BOOL granted) {
+                grantedFlag  = granted;
+                finishedFlag = true;
+            }];
+            // Wait up to ~3 s for the user to respond to the prompt
+            // (synchronous wait so this listDevices() call returns the
+            // post-grant list rather than the empty pre-grant one).
+            const NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+            while (!finishedFlag &&
+                   [(NSDate *)[NSDate date] compare:deadline] == NSOrderedAscending)
+            {
+                [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                         beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            }
+            LOG_INFO(std::string("AVFoundation camera prompt result: ") +
+                     (grantedFlag ? "granted" : "denied/timeout"));
+        }
+        else if (authStatus == AVAuthorizationStatusDenied ||
+                 authStatus == AVAuthorizationStatusRestricted)
+        {
+            LOG_WARN("AVFoundation camera access denied — open System Settings → "
+                     "Privacy & Security → Camera and enable RetroCapture (or the "
+                     "binary's parent process if running uncodesigned).");
+        }
+
+        AVCaptureDeviceDiscoverySession* discoverySession = [AVCaptureDeviceDiscoverySession
             discoverySessionWithDeviceTypes:@[
                 AVCaptureDeviceTypeBuiltInWideAngleCamera,
                 AVCaptureDeviceTypeExternalUnknown
@@ -1499,7 +1548,7 @@ std::vector<DeviceInfo> VideoCaptureAVFoundation::listDevices()
             mediaType:AVMediaTypeVideo
             position:AVCaptureDevicePositionUnspecified];
         NSArray* videoDevices = [discoverySession devices];
-        
+
         LOG_INFO("Encontrados " + std::to_string([videoDevices count]) + " dispositivos AVFoundation");
         
         for (AVCaptureDevice* device in videoDevices)
