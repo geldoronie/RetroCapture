@@ -1048,67 +1048,59 @@ bool VideoCaptureAVFoundation::setFramerate(uint32_t fps)
                              std::to_string(range.maxFrameRate) + " fps");
                 }
                 
-                // Configurar framerate no device
+                // Pick the supported AVFrameRateRange closest to the
+                // requested fps. Critical to use the range's own
+                // minFrameDuration (e.g. 1001/30000 for 29.97 fps)
+                // rather than CMTimeMake(1, fps), because devices
+                // expose specific rational durations and throw
+                // NSInvalidArgumentException when asked for an
+                // unsupported one (FaceTime cameras only accept
+                // 29.97 / 25 / 24 / 15 exactly).
                 AVFrameRateRange* bestRange = nil;
+                double bestDistance = 1e9;
                 for (AVFrameRateRange* range in frameRateRanges)
                 {
-                    if (fps >= range.minFrameRate && fps <= range.maxFrameRate)
+                    double clamped = std::max(range.minFrameRate,
+                                              std::min(static_cast<double>(fps),
+                                                       range.maxFrameRate));
+                    double distance = std::abs(clamped - static_cast<double>(fps));
+                    if (distance < bestDistance)
                     {
-                        bestRange = range;
-                        break;
+                        bestDistance = distance;
+                        bestRange    = range;
                     }
                 }
-                
+
                 if (bestRange)
                 {
-                    // IMPORTANT: Use high timescale to avoid rounding issues
-                    // For exact fps like 30, use CMTime(value: 1, timescale: 30)
-                    CMTimeScale timescale = static_cast<CMTimeScale>(fps);
-                    CMTime frameDuration = CMTimeMake(1, timescale);
-                    
-                    m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                    m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
-                    LOG_INFO("Device framerate configured: " + std::to_string(fps) + " fps (timescale: " + std::to_string(timescale) + ")");
-                    
-                    // Verificar se foi aplicado corretamente
-                    CMTime actualMinDuration = m_captureDevice.activeVideoMinFrameDuration;
-                    CMTime actualMaxDuration = m_captureDevice.activeVideoMaxFrameDuration;
-                    double actualMinFps = 1.0 / (CMTimeGetSeconds(actualMinDuration));
-                    double actualMaxFps = 1.0 / (CMTimeGetSeconds(actualMaxDuration));
-                    LOG_INFO("Actual device framerate range: " + std::to_string(actualMinFps) + " - " + 
-                             std::to_string(actualMaxFps) + " fps");
-                    
-                    if (std::abs(actualMinFps - fps) > 0.1 || std::abs(actualMaxFps - fps) > 0.1)
+                    @try
                     {
-                        LOG_WARN("Device framerate may not have been applied correctly!");
-                        LOG_WARN("Requested: " + std::to_string(fps) + " fps");
-                        LOG_WARN("Actual: " + std::to_string(actualMinFps) + " - " + std::to_string(actualMaxFps) + " fps");
+                        // minFrameDuration = shortest duration = highest
+                        // achievable rate in this range. Using the
+                        // range's own CMTime avoids any rational-mismatch
+                        // exception.
+                        CMTime frameDuration = bestRange.minFrameDuration;
+                        m_captureDevice.activeVideoMinFrameDuration = frameDuration;
+                        m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
+                        double appliedFps = (CMTimeGetSeconds(frameDuration) > 0.0)
+                            ? 1.0 / CMTimeGetSeconds(frameDuration)
+                            : 0.0;
+                        LOG_INFO("Device framerate configured: requested " +
+                                 std::to_string(fps) + " fps → applied " +
+                                 std::to_string(appliedFps) + " fps");
+                    }
+                    @catch (NSException *ex)
+                    {
+                        LOG_WARN(std::string("setActiveVideoFrameDuration raised: ") +
+                                 [[ex reason] UTF8String] +
+                                 " — leaving device framerate at its default");
                     }
                 }
                 else
                 {
-                    LOG_WARN("Framerate " + std::to_string(fps) + " fps não suportado pelo formato atual");
-                    LOG_WARN("Usando padrão do dispositivo");
-                    
-                    // Tentar usar o framerate máximo suportado mais próximo
-                    double bestFps = 0.0;
-                    for (AVFrameRateRange* range in frameRateRanges)
-                    {
-                        if (range.maxFrameRate > bestFps)
-                        {
-                            bestFps = range.maxFrameRate;
-                        }
-                    }
-                    
-                    if (bestFps > 0.0)
-                    {
-                        uint32_t targetFps = static_cast<uint32_t>(bestFps);
-                        CMTimeScale timescale = static_cast<CMTimeScale>(targetFps);
-                        CMTime frameDuration = CMTimeMake(1, timescale);
-                        m_captureDevice.activeVideoMinFrameDuration = frameDuration;
-                        m_captureDevice.activeVideoMaxFrameDuration = frameDuration;
-                        LOG_INFO("Usando framerate máximo suportado: " + std::to_string(targetFps) + " fps");
-                    }
+                    LOG_WARN("Framerate " + std::to_string(fps) +
+                             " fps não suportado pelo formato atual; mantendo o "
+                             "framerate padrão do dispositivo");
                 }
                 
                 LOG_INFO("==============================");
