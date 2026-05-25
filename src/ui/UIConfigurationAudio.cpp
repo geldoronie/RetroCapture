@@ -6,6 +6,9 @@
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
+#ifdef __APPLE__
+#include "../audio/AudioCaptureCoreAudio.h"
+#endif
 #include <imgui.h>
 #include <algorithm>
 
@@ -90,7 +93,7 @@ void UIConfigurationAudio::refreshInputSources()
                 }
             }
         }
-        
+
         // If no active connection found, check saved configuration from UIManager
         if (m_selectedInputSourceIndex == -1 && m_uiManager)
         {
@@ -105,6 +108,31 @@ void UIConfigurationAudio::refreshInputSources()
                         break;
                     }
                 }
+            }
+        }
+    }
+#elif defined(__APPLE__)
+    // Core Audio devices via IAudioCapture::listDevices — same listing
+    // used elsewhere. On macOS the saved id comes from
+    // `getAudioInputSourceId()`, same field reused.
+    const auto devices = m_audioCapture->listDevices();
+    for (const auto &d : devices)
+    {
+        m_inputSourceNames.push_back(d.name);
+        m_inputSourceIds.push_back(d.id);
+    }
+
+    const std::string saved = m_uiManager
+        ? m_uiManager->getAudioInputSourceId()
+        : std::string();
+    if (!saved.empty())
+    {
+        for (size_t i = 0; i < m_inputSourceIds.size(); ++i)
+        {
+            if (m_inputSourceIds[i] == saved)
+            {
+                m_selectedInputSourceIndex = static_cast<int>(i);
+                break;
             }
         }
     }
@@ -230,6 +258,62 @@ void UIConfigurationAudio::renderInputSourceSelection()
         ImGui::TextWrapped("Pick a device above to start capturing. "
                            "RetroCapture will record from it and publish "
                            "the audio as the 'RetroCapture' source.");
+    }
+#elif defined(__APPLE__)
+    if (m_inputSourceNames.empty())
+    {
+        ImGui::TextWrapped("No Core Audio input devices found.");
+        return;
+    }
+
+    std::vector<const char *> namesCStr;
+    namesCStr.reserve(m_inputSourceNames.size());
+    for (const auto &n : m_inputSourceNames) namesCStr.push_back(n.c_str());
+
+    const int prev = m_selectedInputSourceIndex;
+    int        idx = (m_selectedInputSourceIndex >= 0)
+                     ? m_selectedInputSourceIndex : 0;
+    if (ImGui::Combo("Input device", &idx,
+                     namesCStr.data(), static_cast<int>(namesCStr.size())))
+    {
+        if (idx >= 0 && idx < static_cast<int>(m_inputSourceIds.size()))
+        {
+            const std::string pickedId = m_inputSourceIds[idx];
+            m_audioCapture->close();
+            if (m_audioCapture->open(pickedId))
+            {
+                m_audioCapture->startCapture();
+                m_selectedInputSourceIndex = idx;
+                if (m_uiManager)
+                {
+                    m_uiManager->setAudioInputSourceId(pickedId);
+                    m_uiManager->saveConfig();
+                }
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+                                   "Failed to open Core Audio device");
+                m_selectedInputSourceIndex = prev;
+            }
+        }
+    }
+
+    ImGui::Spacing();
+    if (m_audioCapture->isOpen())
+    {
+        ImGui::Text("Format: %u Hz, %u channel%s",
+                    m_audioCapture->getSampleRate(),
+                    m_audioCapture->getChannels(),
+                    m_audioCapture->getChannels() == 1 ? "" : "s");
+
+        if (ImGui::Button("Resync monitor"))
+        {
+            if (auto *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(m_audioCapture))
+            {
+                caCapture->resyncMonitor();
+            }
+        }
     }
 #endif
 }
