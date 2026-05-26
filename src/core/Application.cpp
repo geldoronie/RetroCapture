@@ -21,6 +21,8 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../osd/QuickActionsOverlay.h"
+#include "../osd/OSDChat.h"
+#include "../chat/ChatClient.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -119,6 +121,15 @@ bool Application::init()
     }
     LOG_INFO("UI initialized");
 
+    // Chat transport (#84). Created up front so the OSD panel has a
+    // live pointer even before publish/connect; the client self-idles
+    // until connect(streamId) is called by the publish or remote-meta
+    // path. Base URL comes from --chat-url; UI changes can later swap
+    // it at runtime via Application::setChatBaseUrl.
+    m_chatClient = std::make_unique<ChatClient>();
+    m_chatClient->setBaseUrl(m_chatBaseUrl);
+    if (m_ui) m_ui->setChatClient(m_chatClient.get());
+
     // Connect ShaderEngine to UI for parameters
     if (m_ui && m_shaderEngine)
     {
@@ -197,10 +208,14 @@ void Application::updateCursorVisibility()
     // the underlying clicks register.
     if (m_ui && m_window)
     {
-        const bool osdInteractive =
+        const bool quickInteractive =
             m_ui->getQuickActionsOverlay() &&
             m_ui->getQuickActionsOverlay()->isVisible();
-        m_window->setCursorVisible(m_ui->isVisible() || osdInteractive);
+        const bool chatInteractive =
+            m_ui->getChatOverlay() &&
+            m_ui->getChatOverlay()->isVisible();
+        m_window->setCursorVisible(
+            m_ui->isVisible() || quickInteractive || chatInteractive);
     }
 }
 
@@ -668,6 +683,27 @@ bool Application::initCapture()
                 // mode. Bypasses the pending-snapshot apply path
                 // because there's no GL state involved.
                 if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                // #84 — Chat: if the host advertised a streamId in /meta,
+                // bind the local chat client to that room. Empty streamId
+                // means the host isn't publishing publicly, so close any
+                // session we might have had from a previous host.
+                if (m_chatClient)
+                {
+                    const std::string &sid = snap.chatStreamId;
+                    if (!sid.empty() && sid != m_chatBoundStreamId)
+                    {
+                        m_chatBoundStreamId = sid;
+                        const std::string nick = m_ui
+                            ? m_ui->getDirectoryHostNickname()
+                            : std::string{};
+                        m_chatClient->connect(sid, nick);
+                    }
+                    else if (sid.empty() && !m_chatBoundStreamId.empty())
+                    {
+                        m_chatBoundStreamId.clear();
+                        m_chatClient->disconnect();
+                    }
+                }
             });
     }
 
@@ -2590,6 +2626,27 @@ bool Application::initUI()
                         // Browse leaves the OSD's "watching with N
                         // others" stuck at 0 forever.
                         if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                        // #84 — same chat-binding logic as the
+                        // initCapture-side callback. Reconnect when
+                        // the host's streamId arrives or changes;
+                        // disconnect when it goes empty.
+                        if (m_chatClient)
+                        {
+                            const std::string &sid = snap.chatStreamId;
+                            if (!sid.empty() && sid != m_chatBoundStreamId)
+                            {
+                                m_chatBoundStreamId = sid;
+                                const std::string nick = m_ui
+                                    ? m_ui->getDirectoryHostNickname()
+                                    : std::string{};
+                                m_chatClient->connect(sid, nick);
+                            }
+                            else if (sid.empty() && !m_chatBoundStreamId.empty())
+                            {
+                                m_chatBoundStreamId.clear();
+                                m_chatClient->disconnect();
+                            }
+                        }
                     });
             }
             else
@@ -2820,6 +2877,23 @@ void Application::handleKeyInput()
         {
             f11Pressed = false;
         }
+
+        // F8 toggles the chat overlay (#84). Suppressed while the
+        // chat input box has focus — otherwise pressing F8 to send a
+        // funny line just toggles the panel.
+        static bool f8Pressed = false;
+        bool f8Now = sdlWindow->isKeyPressed(SDLK_F8);
+        if (f8Now && !f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+        else if (!f8Now)
+        {
+            f8Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2859,6 +2933,25 @@ void Application::handleKeyInput()
     else
     {
         f11Pressed = false;
+    }
+
+    // F8 toggles the chat overlay (#84). Suppressed while the chat
+    // input box has focus so typing "F8" in a message doesn't toggle
+    // the panel mid-sentence.
+    static bool f8Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS)
+    {
+        if (!f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+    }
+    else
+    {
+        f8Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -5939,6 +6032,29 @@ void Application::syncDirectoryClient()
                             stats.heartbeatOk, stats.heartbeatFail,
                             stats.patchOk, stats.patchFail,
                             stats.secondsSinceLastHeartbeat);
+
+    // #84 — Chat lifecycle on the host side. The chat room is keyed
+    // by directory streamId; once we go Active and the directory has
+    // handed us one, open the chat session against it. Re-bind if
+    // the streamId changes between Active runs (re-publish picks up
+    // a fresh id). Drop the session when we leave Active.
+    if (m_chatClient)
+    {
+        const std::string streamId = m_directoryClient->getStreamId();
+        const bool active = (state == DirectoryClient::State::Active) && !streamId.empty();
+        if (active && streamId != m_chatBoundStreamId)
+        {
+            m_chatBoundStreamId = streamId;
+            m_ui->setDirectoryStreamId(streamId);
+            m_chatClient->connect(streamId, m_ui->getDirectoryHostNickname());
+        }
+        else if (!active && !m_chatBoundStreamId.empty())
+        {
+            m_chatBoundStreamId.clear();
+            m_ui->setDirectoryStreamId(std::string{});
+            m_chatClient->disconnect();
+        }
+    }
 }
 
 // Recording methods

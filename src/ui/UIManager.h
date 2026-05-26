@@ -306,6 +306,12 @@ public:
     void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
     const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
     void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    // #84 — Currently-published directory streamId (empty when not
+    // Active). Application mirrors DirectoryClient::getStreamId() here
+    // every frame so APIController can embed it in /meta for the chat
+    // panel on remote clients.
+    const std::string &getDirectoryStreamId() const   { return m_directoryStreamId; }
+    void setDirectoryStreamId(const std::string &v)   { m_directoryStreamId = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
 
@@ -547,6 +553,11 @@ public:
     // OSD layer accessor — Application needs it to gate cursor
     // visibility on whether an interactive overlay is on screen (#68).
     QuickActionsOverlay *getQuickActionsOverlay() const { return m_quickActionsOverlay.get(); }
+    class OSDChat       *getChatOverlay()        const { return m_chatOverlay.get(); }
+    // Chat-overlay wiring (#84). Application creates the ChatClient
+    // and hands the pointer here so the OSD has a transport to draw
+    // from. Safe to call before or after init().
+    void setChatClient(class ChatClient *chat);
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -868,11 +879,18 @@ private:
     // accessors.
     std::unique_ptr<class QuickActionsOverlay>      m_quickActionsOverlay;
     std::unique_ptr<class ConnectionStatusOverlay>  m_connectionOverlay;
+    // Chat overlay (#84) — OSD layer like the two above, owns its
+    // input/scroll state but reads message data from the shared
+    // ChatClient (held by Application; pointer wired via
+    // setChatClient).
+    std::unique_ptr<class OSDChat>                  m_chatOverlay;
+    class ChatClient                               *m_chatClient = nullptr;
     // Loaded from config.json before m_quickActionsOverlay exists,
     // applied via setVisible() right after construction. Defaults to
     // true so first-time users see the overlay; subsequent toggles
     // round-trip through saveConfig().
     bool m_quickActionsVisible = true;
+    bool m_chatOverlayVisible  = true;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the
     // keyboard hints on first launch.
@@ -1076,6 +1094,7 @@ private:
     std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+    std::string m_directoryStreamId       = "";       // #84 — mirrored from DirectoryClient for /meta
 
     // Per-session telemetry counters mirrored from DirectoryClient
     // (#49 Phase 5). Application writes each frame; UI reads.

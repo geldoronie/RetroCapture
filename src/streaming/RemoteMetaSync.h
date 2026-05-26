@@ -60,6 +60,10 @@ public:
         // mode. Optional; older hosts that don't send this field
         // leave it at 0.
         uint32_t                     upstreamClientCount = 0;
+        // chat block (#84) — directory streamId the host is currently
+        // publishing under. Empty when the host isn't listed publicly.
+        // The client opens its chat overlay against this streamId.
+        std::string                  chatStreamId;
     };
 
     using SnapshotCallback = std::function<void(const Snapshot &)>;

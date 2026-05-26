@@ -14,6 +14,7 @@
 #include "UIShortcutsHelp.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
+#include "../osd/OSDChat.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -240,6 +241,12 @@ bool UIManager::init(void *window)
     m_quickActionsOverlay->setVisible(m_quickActionsVisible);
     m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
         this, m_quickActionsOverlay.get());
+    // Chat overlay (#84) — needs the ChatClient pointer Application
+    // installs via setChatClient(). Always constructed; the overlay
+    // self-hides while the client is Idle, so a null/unconfigured
+    // pointer renders as nothing.
+    m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+    m_chatOverlay->setVisible(m_chatOverlayVisible);
     // Shortcuts orientation widget — UI layer, top-right corner,
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
@@ -262,6 +269,20 @@ bool UIManager::init(void *window)
     m_initialized = true;
     LOG_INFO("UIManager initialized");
     return true;
+}
+
+void UIManager::setChatClient(ChatClient *chat)
+{
+    m_chatClient = chat;
+    if (m_chatOverlay)
+    {
+        // The overlay was constructed before init() finished if
+        // setChatClient ran first; reconstruct it so it picks up the
+        // pointer. Cheaper to swap than to expose another setter that
+        // most callers wouldn't touch.
+        m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+        m_chatOverlay->setVisible(m_chatOverlayVisible);
+    }
 }
 
 void UIManager::shutdown()
@@ -304,7 +325,8 @@ void UIManager::beginFrame()
     // (UI hidden AND no interactive OSD on screen) rather than on
     // UI alone, and skip the mouse-position scrub that would prevent
     // any widget from seeing hover at all.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     const bool blockMouse     = !m_uiVisible && !osdInteractive;
     ImGuiIO& io = ImGui::GetIO();
     if (blockMouse)
@@ -365,7 +387,8 @@ void UIManager::endFrame()
     // buttons must respond to clicks even with the rest of the UI
     // hidden via F12. So gate NoMouse on (UI hidden AND no
     // interactive OSD visible) rather than UI alone.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     ImGuiIO& io = ImGui::GetIO();
     if (!m_uiVisible && !osdInteractive)
     {
@@ -402,6 +425,9 @@ void UIManager::render()
     // queries it for anti-collision math.
     if (m_quickActionsOverlay) m_quickActionsOverlay->render();
     renderConnectionOverlay();
+    // Chat overlay (#84) — also outside the m_uiVisible gate so the
+    // user can keep an eye on chat while everything else is hidden.
+    if (m_chatOverlay) m_chatOverlay->render();
 
     if (!m_uiVisible)
     {
@@ -485,6 +511,14 @@ void UIManager::render()
                 if (ImGui::MenuItem(T("menu.view.quickactions").c_str(), nullptr, visible))
                 {
                     m_quickActionsOverlay->setVisible(!visible);
+                }
+            }
+            if (m_chatOverlay)
+            {
+                bool visible = m_chatOverlay->isVisible();
+                if (ImGui::MenuItem("Chat", "F8", visible))
+                {
+                    m_chatOverlay->setVisible(!visible);
                 }
             }
             if (m_shortcutsHelpWindow)
@@ -2531,6 +2565,10 @@ void UIManager::loadConfig()
                 m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
             if (prefs.contains("shortcutsHelpVisible"))
                 m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
+            // Chat overlay visibility (#84). Default true — same
+            // discoverability story as the quick-actions widget.
+            if (prefs.contains("chatOverlayVisible"))
+                m_chatOverlayVisible = prefs["chatOverlayVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2968,6 +3006,9 @@ void UIManager::saveConfig()
             {"shortcutsHelpVisible",
              m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
                                    : m_shortcutsHelpVisible},
+            {"chatOverlayVisible",
+             m_chatOverlay ? m_chatOverlay->isVisible()
+                           : m_chatOverlayVisible},
         };
 
         // Salvar configurações de imagem

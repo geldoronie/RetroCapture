@@ -327,6 +327,26 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
         GIT_TAG v3.11.3
     )
     FetchContent_MakeAvailable(json)
+
+    # IXWebSocket — WS/WSS client for the chat panel (#84). TLS via the
+    # platform-native backend (OpenSSL on Linux, SChannel on Windows,
+    # SecureTransport on macOS) — we already require OpenSSL elsewhere
+    # so set USE_OPEN_SSL explicitly on Linux. USE_WS builds the `ws`
+    # CLI demo; we don't need it. USE_ZLIB enables permessage-deflate;
+    # off keeps the dep footprint clean.
+    set(USE_TLS         ON  CACHE BOOL "ixwebsocket: TLS support"               FORCE)
+    set(USE_WS          OFF CACHE BOOL "ixwebsocket: build the ws CLI demo"     FORCE)
+    set(USE_ZLIB        OFF CACHE BOOL "ixwebsocket: permessage-deflate"        FORCE)
+    if(PLATFORM_LINUX)
+        set(USE_OPEN_SSL ON  CACHE BOOL "ixwebsocket: OpenSSL backend"          FORCE)
+        set(USE_MBED_TLS OFF CACHE BOOL "ixwebsocket: mbedTLS backend"          FORCE)
+    endif()
+    FetchContent_Declare(
+        ixwebsocket
+        GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
+        GIT_TAG v11.4.5
+    )
+    FetchContent_MakeAvailable(ixwebsocket)
 else()
     # Fallback para CMake 3.10: baixar manualmente durante configure
     set(IMGUI_DIR ${CMAKE_BINARY_DIR}/_deps/imgui-src)
@@ -648,6 +668,13 @@ elseif(PLATFORM_WINDOWS)
 endif()
 
 target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
+
+# IXWebSocket — chat WS/WSS transport (#84). FetchContent created the
+# `ixwebsocket` target; on macOS it also pulls in Security + Foundation
+# automatically via SecureTransport, and on Linux it links OpenSSL we
+# already require. Linked PRIVATE because the public headers don't
+# expose IXWebSocket types.
+target_link_libraries(retrocapture PRIVATE ixwebsocket)
 
 # macOS-specific frameworks (need -framework syntax)
 if(PLATFORM_MACOS)

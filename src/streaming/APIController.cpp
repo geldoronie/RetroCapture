@@ -1151,6 +1151,13 @@ std::string APIController::buildMetaSnapshotJSON()
          // OSD quick-actions widget. No security concern since
          // browsing the directory already exposes per-stream counts.
          <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
+         << "}, "
+         // #84 — Chat-room hint. streamId is the directory streamId
+         // when this host is publishing publicly, empty otherwise.
+         // Remote clients use it to bind their chat overlay to the
+         // same room the host's overlay is on.
+         << "\"chat\": {"
+         <<   "\"streamId\": " << jsonString(m_uiManager->getDirectoryStreamId())
          << "}"
          << "}";
 

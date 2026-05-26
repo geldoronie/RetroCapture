@@ -63,6 +63,9 @@ public:
     void setFullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
     void setMonitorIndex(int index) { m_monitorIndex = index; }
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
+    // #84 — Chat service base URL plumbing from --chat-url.
+    void setChatBaseUrl(const std::string &url) { m_chatBaseUrl = url; }
+    std::string getChatBaseUrl() const          { return m_chatBaseUrl; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
     void setTextureFilterLinear(bool linear) { m_textureFilterLinear = linear; }
@@ -181,10 +184,20 @@ private:
     std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
     std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
     std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
+    std::unique_ptr<class ChatClient>      m_chatClient;             // #84
     // #69 — Cache the URL each subsystem was started against so a
     // runtime edit in the UI reconfigures both immediately instead of
     // waiting for an app restart.
     std::string m_publishedDirectoryUrl;
+    // #84 — Chat-service base URL (ws:// or wss://). Plumbed in from
+    // --chat-url; defaults to the local docker compose port for dev
+    // ergonomics. Wired into m_chatClient on init and re-applied when
+    // setChatBaseUrl() is called.
+    std::string m_chatBaseUrl = "ws://localhost:8082";
+    // #84 — Tracks the streamId the chat client is currently bound to,
+    // so syncDirectoryClient can detect transitions (publish→unpublish
+    // → re-publish with a fresh streamId).
+    std::string m_chatBoundStreamId;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
