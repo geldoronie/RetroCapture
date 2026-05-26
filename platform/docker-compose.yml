@@ -52,3 +52,31 @@ services:
     # The test stage's RUN already executed `go test ./...`; if it
     # passed, the image built — there's nothing left to do at run time.
     command: ["true"]
+
+  chat:
+    build:
+      context: ./services/chat
+      target: runtime
+    image: retrocapture-chat:dev
+    container_name: retrocapture-chat
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./services/chat/data:/data
+    environment:
+      CHAT_PORT: "8082"
+      CHAT_DB_PATH: "/data/chat.db"
+      CHAT_LOG_LEVEL: "debug"
+      # Same reverse-proxy story as directory: flip on when deployed
+      # behind FRP / nginx / Cloudflare so the real client IP gets
+      # used for per-IP rate limiting instead of the proxy's.
+      CHAT_TRUST_PROXY_HEADERS: "false"
+    restart: unless-stopped
+
+  chat-test:
+    build:
+      context: ./services/chat
+      target: test
+    image: retrocapture-chat:test
+    profiles: ["test"]
+    command: ["true"]
