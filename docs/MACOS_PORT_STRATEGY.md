@@ -192,23 +192,86 @@ make -j$(sysctl -n hw.ncpu)
 4. **Streaming**: Testar streaming HTTP MPEG-TS
 5. **Gravação**: Testar gravação local
 
+## Estado Atual (0.8.0-alpha)
+
+Fase 1 + 2 concluídas. Funciona ponta-a-ponta nos dois papéis:
+
+- **Host**: AVFoundation video capture + Core Audio input + monitor playback
+  in-process via `AudioCaptureCoreAudio` (espelhando `AudioCapturePulse`
+  no Linux com `AudioBus` + tap + writer thread → `AudioOutputCoreAudio`).
+  Stream MPEG-TS + recording funcionam.
+- **Client**: `VideoCaptureRemote` decodifica /raw, áudio sai via
+  `AudioPlaybackCoreAudio` (adapter `IAudioPlayback` → `AudioOutputCoreAudio`).
+
+UI nativa expõe Source tab com AVFoundation device + format pickers
+(OBS-style — picking um format aplica resolution/fps/pixfmt
+atomicamente) e Audio tab com Core Audio device picker + Resync
+monitor button. Web portal espelha ambos via novos endpoints
+`/api/v1/avfoundation/*`.
+
+### Gotchas resolvidos (para não redescobrir)
+
+- **AudioUnit `CurrentDevice` antes do format query**: `AudioUnitGet-
+  Property(StreamFormat, Scope_Input, 1, ...)` retorna o default do
+  AudioUnit se chamado antes de `kAudioOutputUnitProperty_CurrentDevice`.
+- **Adotar SR/channels nativos do device**: hardcoded 44.1k stereo
+  16-bit produz `-10863 kAudioUnitErr_CannotDoInCurrentContext` em
+  UVC cards 48k mono float. Lê o formato do device e usa SR+channels
+  dele; converter só lida com bit-depth.
+- **`AVCaptureSessionPresetInputPriority` é iOS-only**: pra resolução
+  arbitrária via UVC, usar `videoSettings` no `AVCaptureVideoDataOutput`
+  (`kCVPixelBufferWidthKey/HeightKey/PixelFormatTypeKey`).
+- **Format change na sessão rodando reverte ao default**: `setActiveFormat:`
+  numa sessão running silenciosamente volta pro default. Mecanismo é
+  close + reopen via `setFormatById` (implementado).
+- **`AudioUnitSet/GetProperty(activeVideoMinFrameDuration)` lança NSException
+  pra rates não-suportados**: framerate clamping com `AVFrameRateRange.
+  minFrameDuration` + @try/@catch no `applyClosestFramerate`.
+- **`sws_scale` AVX2 crasha em source heights ímpares**: macOS window
+  framebuffer (1080 - menu bar ≈ 953) é ímpar. Clampar source height
+  pra par antes de `sws_scale` em `MediaEncoder::convertRGBToYUV`.
+
 ## Limitações Conhecidas
 
-1. **OpenGL deprecated**: Funciona mas pode ser removido no futuro
-2. **Permissões**: Requer permissões de câmera/microfone
-3. **Captura de sistema**: Requer BlackHole ou similar para áudio
-4. **Controles de hardware**: Podem não estar disponíveis em todos os dispositivos
+- **OpenGL deprecated**: Funciona mas pode ser removido no futuro
+  (migração pra Metal/MoltenVK é trabalho à parte)
+- **Sem .app bundle**: rodando como command-line binary, o macOS não
+  consegue exibir o prompt de permissão. User tem que adicionar
+  manualmente em System Settings → Privacy & Security → Camera /
+  Microphone. Bundle proper requer `Info.plist` com
+  `NSCameraUsageDescription` / `NSMicrophoneUsageDescription`.
+- **Sem codesigning**: Gatekeeper bloqueia execução de download na
+  primeira vez. Workaround: right-click → Open (uma vez).
+- **Captura de sistema**: ainda requer BlackHole / Loopback similar pra
+  ouvir output do sistema (situação igual à do Linux com PulseAudio
+  monitor.)
+- **Controles de hardware**: AVFoundation não expõe brightness/contrast/
+  exposure como V4L2 ou DirectShow; UI omite Hardware Controls em
+  AVFoundation.
+- **Sem publisher externo `RetroCapture` source**: no Linux a gente
+  carrega `module-pipe-source` pra expor o áudio capturado como source
+  PulseAudio que outros apps podem gravar. macOS não tem equivalente
+  user-space (precisa de AudioServerPlugIn signed kext ou BlackHole-
+  like). Seria follow-up issue.
 
-## Próximos Passos
+## Follow-ups (issues separadas)
 
-1. Implementar VideoCaptureAVFoundation
-2. Implementar AudioCaptureCoreAudio
-3. Atualizar CMakeLists.txt
-4. Atualizar Factories
-5. Testar build e funcionalidades básicas
+1. **`.app` bundle + permissions** — bundle com `Info.plist` carregando
+   `NSCamera/MicrophoneUsageDescription` pro macOS exibir o prompt de
+   permissão automaticamente. Inclui modificar `tools/build-macos.sh`
+   pra produzir o bundle além do binary cru.
+2. **Codesigning + notarization** — Developer ID + `xcrun notarytool
+   submit` no script de release pra distribuir sem Gatekeeper bloquear.
+3. **macOS source publisher** — equivalente do `module-pipe-source` no
+   Linux. Opções: AudioServerPlugIn bundle, ou wrapper sobre BlackHole.
+4. **Metal renderer (opcional)** — quando Apple deprecar OpenGL.
+5. **arm64 / Apple Silicon build** — atualmente só x86_64 (Rosetta).
+6. **macOS no CI / release pipeline** — atualmente o build-macos.sh roda
+   só localmente; integrar com os tarballs do release.
 
 ## Referências
 
 - [AVFoundation Programming Guide](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/)
 - [Core Audio Overview](https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/CoreAudioOverview/)
 - [GLFW macOS Guide](https://www.glfw.org/docs/latest/build_guide.html#build_link_cmake)
+- [Apple — Requesting authorization to capture and save media](https://developer.apple.com/documentation/avfoundation/capture_setup/requesting_authorization_to_capture_and_save_media)
