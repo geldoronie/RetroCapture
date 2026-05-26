@@ -2813,3 +2813,158 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+// =============================================================
+// AVFoundation (macOS) — device + format selection
+// =============================================================
+// Endpoints are gated on the backend; calling them on Linux/Windows
+// returns 404 and the corresponding cards stay hidden.
+
+const avfState = {
+    devices: [],
+    formats: [],
+    audioDevices: [],
+    formatsForDeviceId: '',
+    supported: null  // null until first probe; true/false thereafter
+};
+
+async function probeAVFoundationSupport() {
+    if (avfState.supported !== null) return avfState.supported;
+    try {
+        await api.getAVFoundationDevices();
+        avfState.supported = true;
+    } catch (err) {
+        avfState.supported = false;
+    }
+    // Show / hide the AVFoundation cards based on platform support.
+    const sourceContainer = document.getElementById('avfoundationControlsContainer');
+    const audioContainer  = document.getElementById('avfoundationAudioDeviceContainer');
+    if (avfState.supported) {
+        if (sourceContainer) sourceContainer.style.display = '';
+        if (audioContainer)  audioContainer.style.display  = '';
+    }
+    return avfState.supported;
+}
+
+async function refreshAVFoundationDevices() {
+    if (!(await probeAVFoundationSupport())) return;
+    try {
+        const resp = await api.getAVFoundationDevices();
+        avfState.devices = resp.devices || [];
+    } catch (err) {
+        console.error('AVFoundation: getAVFoundationDevices failed:', err);
+        avfState.devices = [];
+    }
+    const sel = document.getElementById('avfoundationDevice');
+    if (!sel) return;
+    sel.innerHTML = '';
+    if (avfState.devices.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No AVFoundation devices found';
+        sel.appendChild(opt);
+        return;
+    }
+    avfState.devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = d.name || d.id;
+        sel.appendChild(opt);
+    });
+}
+
+async function refreshAVFoundationFormats() {
+    if (!(await probeAVFoundationSupport())) return;
+    const sel = document.getElementById('avfoundationDevice');
+    const deviceId = sel ? sel.value : '';
+    try {
+        const resp = await api.getAVFoundationFormats(deviceId);
+        avfState.formats = resp.formats || [];
+        avfState.formatsForDeviceId = deviceId;
+    } catch (err) {
+        console.error('AVFoundation: getAVFoundationFormats failed:', err);
+        avfState.formats = [];
+    }
+    const formatSel = document.getElementById('avfoundationFormat');
+    if (!formatSel) return;
+    formatSel.innerHTML = '';
+    if (avfState.formats.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No formats available';
+        formatSel.appendChild(opt);
+        return;
+    }
+    avfState.formats.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.id;
+        opt.textContent = f.displayName || `${f.width}x${f.height}`;
+        formatSel.appendChild(opt);
+    });
+}
+
+async function refreshAVFoundationAudioDevices() {
+    if (!(await probeAVFoundationSupport())) return;
+    try {
+        const resp = await api.getAVFoundationAudioDevices();
+        avfState.audioDevices = resp.devices || [];
+        const sel = document.getElementById('avfoundationAudioDevice');
+        if (!sel) return;
+        sel.innerHTML = '';
+        avfState.audioDevices.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.name || d.id;
+            if (d.id === resp.current) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    } catch (err) {
+        console.error('AVFoundation: getAVFoundationAudioDevices failed:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const deviceSel = document.getElementById('avfoundationDevice');
+    if (deviceSel) {
+        deviceSel.addEventListener('change', async () => {
+            try {
+                await api.setAVFoundationDevice(deviceSel.value);
+                await refreshAVFoundationFormats();
+                showAlert('AVFoundation device updated', 'success');
+            } catch (err) {
+                showAlert('Failed to switch AVFoundation device: ' + err.message, 'danger');
+            }
+        });
+    }
+    const formatSel = document.getElementById('avfoundationFormat');
+    if (formatSel) {
+        formatSel.addEventListener('change', async () => {
+            const dev = document.getElementById('avfoundationDevice');
+            try {
+                await api.setAVFoundationFormat(formatSel.value, dev ? dev.value : '');
+                showAlert('AVFoundation format applied', 'success');
+            } catch (err) {
+                showAlert('Failed to apply AVFoundation format: ' + err.message, 'danger');
+            }
+        });
+    }
+    const audioSel = document.getElementById('avfoundationAudioDevice');
+    if (audioSel) {
+        audioSel.addEventListener('change', async () => {
+            try {
+                await api.setAVFoundationAudioDevice(audioSel.value);
+                showAlert('AVFoundation audio device updated', 'success');
+            } catch (err) {
+                showAlert('Failed to switch AVFoundation audio device: ' + err.message, 'danger');
+            }
+        });
+    }
+    // First-load probe — populates the dropdowns and reveals the cards
+    // on macOS.
+    probeAVFoundationSupport().then(supported => {
+        if (supported) {
+            refreshAVFoundationDevices().then(refreshAVFoundationFormats);
+            refreshAVFoundationAudioDevices();
+        }
+    });
+});

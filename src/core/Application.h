@@ -137,6 +137,7 @@ public:
     UIManager *getUIManager() { return m_ui.get(); }
     RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
     IAudioCapture* getAudioCapture() const { return m_audioCapture.get(); }
+    IVideoCapture* getVideoCapture() const { return m_capture.get(); }
 
     // Preset management
     void applyPreset(const std::string& presetName);
@@ -242,8 +243,10 @@ private:
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
-#ifdef _WIN32
-    std::string m_devicePath = ""; // Windows: vazio por padrão (DirectShow usa índices)
+#if defined(_WIN32) || defined(__APPLE__)
+    // Windows (DirectShow) and macOS (AVFoundation) both pick a
+    // device by enumeration, not by filesystem path.
+    std::string m_devicePath = "";
 #else
     std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
 #endif

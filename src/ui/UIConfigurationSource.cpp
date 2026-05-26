@@ -68,6 +68,15 @@ void UIConfigurationSource::render()
     {
         ImGui::TextWrapped("No source selected. Pick a source type above.");
     }
+#elif defined(__APPLE__)
+    if (sourceType == UIManager::SourceType::AVFoundation)
+    {
+        renderAVFoundationControls();
+    }
+    else if (sourceType == UIManager::SourceType::None)
+    {
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
+    }
 #else
     if (sourceType == UIManager::SourceType::None)
     {
@@ -99,6 +108,11 @@ void UIConfigurationSource::renderSourceTypeSelection()
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
         UIManager::SourceType::DS};
+#elif defined(__APPLE__)
+    const char *sourceTypeNames[] = {"None", "AVFoundation"};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::AVFoundation};
 #else
     const char *sourceTypeNames[] = {"None"};
     UIManager::SourceType sourceTypeMap[] = {
@@ -733,3 +747,160 @@ void UIConfigurationSource::renderRemoteControls()
         ImGui::TextDisabled("not connected");
     }
 }
+
+#ifdef __APPLE__
+
+void UIConfigurationSource::renderAVFoundationControls()
+{
+    if (!m_capture || !m_capture->isOpen())
+    {
+        ImGui::TextWrapped("No AVFoundation device connected. Pick a device below "
+                           "to start capture.");
+        ImGui::Separator();
+    }
+
+    renderAVFoundationDeviceSelection();
+    ImGui::Separator();
+    renderAVFoundationFormatSelection();
+    // AVFoundation on macOS does not surface per-device hardware
+    // controls (brightness, gain, etc.) the way V4L2 / DirectShow do,
+    // so there is no hardware-controls section here. See
+    // docs/MACOS_PORT_STRATEGY.md.
+}
+
+void UIConfigurationSource::renderAVFoundationDeviceSelection()
+{
+    ui_section_header("AVFoundation device",
+                      "macOS capture device. The list is sourced from "
+                      "AVCaptureDevice — UVC HDMI grabbers, webcams, and "
+                      "any virtual camera installed on the system show up here.");
+
+    if (m_avfDevicesNeedRefresh && m_capture)
+    {
+        m_avfDevices = m_capture->listDevices();
+        m_avfDevicesNeedRefresh = false;
+    }
+
+    if (m_avfDevices.empty())
+    {
+        ImGui::TextWrapped("No AVFoundation devices found.");
+        if (ImGui::Button("Refresh##avfDevices"))
+        {
+            m_avfDevicesNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string currentId = m_uiManager
+        ? m_uiManager->getAVFoundationDeviceId()
+        : std::string();
+
+    std::vector<const char *> names;
+    int currentIndex = -1;
+    names.reserve(m_avfDevices.size());
+    for (size_t i = 0; i < m_avfDevices.size(); ++i)
+    {
+        names.push_back(m_avfDevices[i].name.c_str());
+        if (m_avfDevices[i].id == currentId)
+        {
+            currentIndex = static_cast<int>(i);
+        }
+    }
+    if (currentIndex < 0) currentIndex = 0;
+
+    if (ImGui::Combo("##avfDeviceCombo", &currentIndex,
+                     names.data(), static_cast<int>(names.size())))
+    {
+        const auto &picked = m_avfDevices[currentIndex];
+        if (m_uiManager)
+        {
+            m_uiManager->triggerDeviceChange(picked.id);
+            m_uiManager->setAVFoundationDeviceId(picked.id);
+            m_uiManager->saveConfig();
+        }
+        // Force a format-list refresh against the new device.
+        m_avfFormatsNeedRefresh = true;
+        m_avfFormatsForDeviceId.clear();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfDevices"))
+    {
+        m_avfDevicesNeedRefresh = true;
+    }
+}
+
+void UIConfigurationSource::renderAVFoundationFormatSelection()
+{
+    ui_section_header("Format",
+                      "Each AVFoundation device exposes a fixed set of "
+                      "(resolution, FPS range, pixel format) tuples. "
+                      "Picking a format applies all three atomically — "
+                      "no separate resolution / FPS sliders, OBS-style.");
+
+    if (!m_capture)
+    {
+        ImGui::TextWrapped("No capture instance available.");
+        return;
+    }
+
+    const std::string deviceId = m_uiManager
+        ? m_uiManager->getAVFoundationDeviceId()
+        : std::string();
+
+    if (m_avfFormatsNeedRefresh || m_avfFormatsForDeviceId != deviceId)
+    {
+        m_avfFormats = m_capture->listFormats(deviceId);
+        m_avfFormatsForDeviceId = deviceId;
+        m_avfFormatsNeedRefresh = false;
+    }
+
+    if (m_avfFormats.empty())
+    {
+        ImGui::TextWrapped("No formats available for the selected device.");
+        if (ImGui::Button("Refresh##avfFormats"))
+        {
+            m_avfFormatsNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string currentFormatId = m_uiManager
+        ? m_uiManager->getAVFoundationFormatId()
+        : std::string();
+
+    std::vector<const char *> displayNames;
+    int currentIndex = -1;
+    displayNames.reserve(m_avfFormats.size());
+    for (size_t i = 0; i < m_avfFormats.size(); ++i)
+    {
+        displayNames.push_back(m_avfFormats[i].displayName.c_str());
+        if (m_avfFormats[i].id == currentFormatId)
+        {
+            currentIndex = static_cast<int>(i);
+        }
+    }
+    if (currentIndex < 0) currentIndex = 0;
+
+    if (ImGui::Combo("##avfFormatCombo", &currentIndex,
+                     displayNames.data(), static_cast<int>(displayNames.size())))
+    {
+        const auto &picked = m_avfFormats[currentIndex];
+        if (m_capture->setFormatById(picked.id, deviceId))
+        {
+            if (m_uiManager)
+            {
+                m_uiManager->setAVFoundationFormatId(picked.id);
+                m_uiManager->saveConfig();
+            }
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfFormats"))
+    {
+        m_avfFormatsNeedRefresh = true;
+    }
+}
+
+#endif // __APPLE__

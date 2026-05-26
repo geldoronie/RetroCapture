@@ -3,7 +3,7 @@
 #include <string>
 #include <map>
 #include <cstddef>
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <sys/types.h>
 #endif
 

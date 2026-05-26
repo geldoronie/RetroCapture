@@ -61,7 +61,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <unistd.h>
 #endif
 #include "../utils/FilesystemCompat.h"
@@ -329,7 +329,7 @@ bool Application::initRenderer()
                         appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                     }
 // Small delay to ensure ShaderEngine finished recreating framebuffers
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(10000); // 10ms
 #else
                     Sleep(10); // 10ms
@@ -400,9 +400,13 @@ bool Application::initCapture()
     // If it fails, activate dummy mode (generates black frames)
     if (m_devicePath.empty())
     {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
+        // Windows (DirectShow) and macOS (AVFoundation) both pick a
+        // capture device by enumeration at the backend layer — there
+        // is no filesystem path. Without a device explicitly chosen,
+        // start in dummy mode and let the user pick a device via the
+        // Source tab.
         LOG_INFO("No device specified - activating dummy mode directly");
-        // Go directly to dummy mode without trying to open device
         m_capture->setDummyMode(true);
         if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
         {
@@ -691,7 +695,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
     // Small delay to ensure any ongoing frame processing completes
     // This prevents race conditions where processFrame is accessing the device
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(50000); // 50ms to let current frame processing finish
 #else
     Sleep(50); // 50ms to let current frame processing finish
@@ -717,7 +721,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     m_capture->close();
 
 // Small delay to ensure device was released
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(100000); // 100ms
 #else
     Sleep(100); // 100ms
@@ -738,7 +742,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         LOG_ERROR("Failed to configure new capture format");
         // Try rollback: reopen with previous format
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -772,7 +776,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -800,7 +804,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     for (int i = 0; i < 5; ++i)
     {
         m_capture->captureLatestFrame(dummyFrame);
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(10000); // 10ms entre tentativas
 #else
         Sleep(10); // 10ms entre tentativas
@@ -2312,6 +2316,80 @@ bool Application::initUI()
                                      }
 #endif
 
+#ifdef __APPLE__
+                                     if (sourceType == UIManager::SourceType::AVFoundation)
+                                     {
+                                         LOG_INFO("AVFoundation source selected");
+                                         // Re-arm the UI's capture pointer (the None
+                                         // branch above clears it as a side effect of
+                                         // setCaptureControls(nullptr)) so the Source
+                                         // tab can call listDevices() / setFormatById().
+                                         if (m_ui && m_capture)
+                                         {
+                                             m_ui->setCaptureControls(m_capture.get());
+                                         }
+
+                                         // Auto-open the saved device (or the first
+                                         // available one) instead of leaving the user
+                                         // in dummy mode with the dropdown showing a
+                                         // device that is not actually active. Without
+                                         // this, the user has to pick another device
+                                         // and come back just to make AVFoundation
+                                         // actually capture.
+                                         if (m_capture && m_capture->isDummyMode())
+                                         {
+                                             const auto devices = m_capture->listDevices();
+                                             if (!devices.empty())
+                                             {
+                                                 const std::string saved = m_ui
+                                                     ? m_ui->getAVFoundationDeviceId()
+                                                     : std::string();
+                                                 std::string target;
+                                                 if (!saved.empty())
+                                                 {
+                                                     for (const auto &d : devices)
+                                                     {
+                                                         if (d.id == saved)
+                                                         {
+                                                             target = saved;
+                                                             break;
+                                                         }
+                                                     }
+                                                 }
+                                                 if (target.empty())
+                                                 {
+                                                     target = devices.front().id;
+                                                 }
+                                                 LOG_INFO("Auto-opening AVFoundation device: " + target);
+                                                 if (m_ui)
+                                                 {
+                                                     m_ui->triggerDeviceChange(target);
+                                                 }
+
+                                                 // Restore the format the user had
+                                                 // selected on this device in a previous
+                                                 // session, if any and if the device is
+                                                 // the saved one (don't carry a format
+                                                 // across devices — different cards
+                                                 // expose different format IDs).
+                                                 const std::string savedFormatId = m_ui
+                                                     ? m_ui->getAVFoundationFormatId()
+                                                     : std::string();
+                                                 if (!savedFormatId.empty() && target == saved &&
+                                                     m_capture)
+                                                 {
+                                                     LOG_INFO("Restoring AVFoundation format: " + savedFormatId);
+                                                     if (!m_capture->setFormatById(savedFormatId, target))
+                                                     {
+                                                         LOG_WARN("Saved AVFoundation format id no longer matches a "
+                                                                  "format on this device — leaving device at default");
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#endif
+
                                      // Phase 5b/#47: switching INTO Remote — close the
                                      // current capture (V4L2/DS/None) and stand up an
                                      // empty VideoCaptureRemote that waits for the
@@ -3154,6 +3232,12 @@ bool Application::initAudioCapture()
         m_ui->setAudioCapture(m_audioCapture.get());
     }
 
+    // Host-side monitor playback: on Linux it lives inside
+    // AudioCapturePulse (MonitorPlayback), on macOS inside
+    // AudioCaptureCoreAudio (also called MonitorPlayback there). The
+    // capture class spins up its own monitor in open() — no Application-
+    // level wiring needed.
+
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;
@@ -3371,8 +3455,12 @@ void Application::run()
             {
                 // Neither streaming nor recording active, but we still need to process mainloop
                 // to prevent PulseAudio from freezing system audio
-                // Read and discard samples to keep buffer clean
-                const size_t maxSamples = 4096; // Temporary buffer
+                // Read and discard samples to keep the capture buffer
+                // from backing up. The host-side monitor (Linux:
+                // MonitorPlayback inside AudioCapturePulse; macOS:
+                // monitor inside AudioCaptureCoreAudio) has its own
+                // tap on the bus, so the user still hears the input.
+                const size_t maxSamples = 4096;
                 std::vector<int16_t> tempBuffer(maxSamples);
                 m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
@@ -3470,7 +3558,7 @@ void Application::run()
                     }
                     if (attempt < maxAttempts - 1)
                     {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(5000); // 5ms between attempts
 #else
                         Sleep(5); // 5ms between attempts
@@ -4615,7 +4703,7 @@ void Application::run()
                     // Hidden / backgrounded — sleep a frame's worth so
                     // captureLatestFrame still drains the queue at a
                     // reasonable rate without spinning the CPU.
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(16000);
 #else
                     Sleep(16);
@@ -4637,7 +4725,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4712,7 +4800,7 @@ void Application::run()
                 if (elapsedUs < targetIntervalUs)
                 {
                     const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(static_cast<useconds_t>(sleepUs));
 #else
                     Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4743,7 +4831,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4753,7 +4841,7 @@ void Application::run()
                 }
                 else
                 {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(1000);
 #else
                     Sleep(1);
@@ -5499,7 +5587,18 @@ void Application::applyPendingRemoteMeta()
     }
 
     // Master pipeline toggle: mirror the host's "Apply shader pipeline".
+    // Log every time it changes vs the local state, so a "shader vanishes
+    // after N seconds" symptom can be traced back to whichever snapshot
+    // flipped the value.
+    const bool prevPipelineEnabled = m_ui->getShaderPipelineEnabled();
     m_ui->setShaderPipelineEnabled(pipelineEnabled);
+    if (prevPipelineEnabled != pipelineEnabled)
+    {
+        LOG_INFO(std::string("RemoteMetaSync: pipelineEnabled changed ") +
+                 (prevPipelineEnabled ? "true" : "false") + " → " +
+                 (pipelineEnabled ? "true" : "false") +
+                 " (preset='" + preset + "' hash=" + presetHash + ")");
+    }
 
     // Parameter overrides apply on top of whatever preset is now active.
     // After a preset reload, the engine's parameters are at their preset

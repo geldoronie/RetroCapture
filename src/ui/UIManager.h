@@ -162,8 +162,9 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2, // DirectShow (Windows)
-        Remote = 3 // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
+        DS = 2,           // DirectShow (Windows)
+        Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
+        AVFoundation = 4  // AVFoundation (macOS)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -489,6 +490,16 @@ public:
     // Audio device configuration
     void setAudioInputSourceId(const std::string &sourceId) { m_audioInputSourceId = sourceId; }
     std::string getAudioInputSourceId() const { return m_audioInputSourceId; }
+
+    // AVFoundation device + format persistence (macOS only). Stored
+    // regardless of platform so a config saved on macOS round-trips
+    // through Linux/Windows without losing data — they just ignore it.
+    void setAVFoundationDeviceId(const std::string &id) { m_avfDeviceId = id; }
+    std::string getAVFoundationDeviceId() const { return m_avfDeviceId; }
+    void setAVFoundationFormatId(const std::string &id) { m_avfFormatId = id; }
+    std::string getAVFoundationFormatId() const { return m_avfFormatId; }
+    void setAVFoundationAudioDeviceId(const std::string &id) { m_avfAudioDeviceId = id; }
+    std::string getAVFoundationAudioDeviceId() const { return m_avfAudioDeviceId; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -846,7 +857,7 @@ private:
     std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
     std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
     std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     std::unique_ptr<class UIConfigurationAudio>     m_audioWindow;
 #endif
     std::unique_ptr<class UIInfoPanel>              m_infoWindow;
@@ -924,12 +935,19 @@ private:
     
     // Audio device configuration (saved/loaded from config)
     std::string m_audioInputSourceId;
+    // AVFoundation persistence (macOS). Stored on all platforms so
+    // configs round-trip cleanly between machines.
+    std::string m_avfDeviceId;
+    std::string m_avfFormatId;
+    std::string m_avfAudioDeviceId;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 
     // Source selection
 #ifdef _WIN32
     SourceType m_sourceType = SourceType::DS; // Padrão: DirectShow no Windows
+#elif defined(__APPLE__)
+    SourceType m_sourceType = SourceType::AVFoundation; // Padrão: AVFoundation no macOS
 #else
     SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
 #endif

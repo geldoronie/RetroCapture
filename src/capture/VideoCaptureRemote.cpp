@@ -5,6 +5,8 @@
 #include "../audio/AudioPlaybackPulse.h"
 #elif defined(_WIN32)
 #include "../audio/AudioPlaybackWASAPI.h"
+#elif defined(__APPLE__)
+#include "../audio/AudioPlaybackCoreAudio.h"
 #endif
 
 extern "C"
@@ -268,6 +270,8 @@ bool VideoCaptureRemote::initDecoder()
                 m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
 #elif defined(_WIN32)
                 m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
+#elif defined(__APPLE__)
+                m_audioPlayback = std::make_unique<AudioPlaybackCoreAudio>();
 #endif
                 const uint32_t rate     = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
                 // Channel count compat: AVCodecContext.channels was

@@ -5,7 +5,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #  include "UIConfigurationAudio.h"
 #endif
 #include "UIInfoPanel.h"
@@ -71,7 +71,7 @@ UIManager::~UIManager()
     m_streamingWindow.reset();
     m_recordingWindow.reset();
     m_webPortalWindow.reset();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow.reset();
 #endif
     m_infoWindow.reset();
@@ -228,7 +228,7 @@ bool UIManager::init(void *window)
     m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
     m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
 #endif
     m_infoWindow        = std::make_unique<UIInfoPanel>(this);
@@ -465,7 +465,7 @@ void UIManager::render()
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
 #endif
             }
@@ -593,7 +593,7 @@ void UIManager::render()
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
         // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
 #endif
     }
@@ -606,7 +606,7 @@ void UIManager::render()
     if (m_streamingWindow)   m_streamingWindow->render();
     if (m_recordingWindow)   m_recordingWindow->render();
     if (m_webPortalWindow)   m_webPortalWindow->render();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     if (m_audioWindow)       m_audioWindow->render();
 #endif
     if (m_infoWindow)        m_infoWindow->render();
@@ -2762,7 +2762,29 @@ void UIManager::loadConfig()
             if (source.contains("type"))
             {
                 int sourceTypeInt = source["type"].get<int>();
-                m_sourceType = static_cast<SourceType>(sourceTypeInt);
+                SourceType loaded  = static_cast<SourceType>(sourceTypeInt);
+                // Coerce platform-foreign source types to the local
+                // platform's native one: a config saved on Linux
+                // with V4L2 shouldn't try to instantiate V4L2 on
+                // macOS, and so on. Remote and None always travel.
+                const bool isPlatformNative =
+                    loaded == SourceType::None ||
+                    loaded == SourceType::Remote ||
+#ifdef __linux__
+                    loaded == SourceType::V4L2;
+#elif defined(_WIN32)
+                    loaded == SourceType::DS;
+#elif defined(__APPLE__)
+                    loaded == SourceType::AVFoundation;
+#else
+                    false;
+#endif
+                if (isPlatformNative)
+                {
+                    m_sourceType = loaded;
+                }
+                // else: keep the platform-default that the
+                // constructor / default-init set.
             }
         }
 
@@ -2793,6 +2815,27 @@ void UIManager::loadConfig()
             if (audio.contains("inputSourceId") && !audio["inputSourceId"].is_null())
             {
                 m_audioInputSourceId = audio["inputSourceId"].get<std::string>();
+            }
+        }
+
+        // AVFoundation persistence (macOS device + format selection).
+        // Loaded on every platform so the JSON round-trips cleanly;
+        // ignored on non-macOS builds where the fields don't drive
+        // anything.
+        if (config.contains("avfoundation"))
+        {
+            auto &avf = config["avfoundation"];
+            if (avf.contains("deviceId") && !avf["deviceId"].is_null())
+            {
+                m_avfDeviceId = avf["deviceId"].get<std::string>();
+            }
+            if (avf.contains("formatId") && !avf["formatId"].is_null())
+            {
+                m_avfFormatId = avf["formatId"].get<std::string>();
+            }
+            if (avf.contains("audioDeviceId") && !avf["audioDeviceId"].is_null())
+            {
+                m_avfAudioDeviceId = avf["audioDeviceId"].get<std::string>();
             }
         }
 
@@ -2979,6 +3022,12 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+
+        // AVFoundation device + format selection (macOS).
+        config["avfoundation"] = {
+            {"deviceId",      m_avfDeviceId},
+            {"formatId",      m_avfFormatId},
+            {"audioDeviceId", m_avfAudioDeviceId}};
 
         // Salvar configurações de gravação
         config["recording"] = {

@@ -211,6 +211,31 @@ std::string Paths::getReadOnlyAssetsDir()
     // Último recurso: assume layout NSIS relativo ao .exe mesmo que os
     // arquivos não estejam lá ainda — alguns callers gravam por baixo.
     return installShared.string();
+#elif defined(__APPLE__)
+    // macOS .app bundle layout:
+    //   RetroCapture.app/
+    //     Contents/
+    //       MacOS/retrocapture          ← exeDir
+    //       Resources/shaders/...       ← assets sit here
+    //       Resources/web/...
+    //       Resources/ssl/...
+    // Probe `<exeDir>/../Resources` for the canonical bundle layout
+    // before falling back to the Linux-style lookups (so a developer
+    // running the raw binary from `build-macos-x86_64/bin/` still gets
+    // assets resolved via the CWD probe at the top of this function).
+    {
+        fs::path exeDir(getExecutableDir());
+        fs::path resources = exeDir.parent_path() / "Resources";
+        if (fs::exists(resources / "shaders" / "shaders_glsl"))
+        {
+            return resources.string();
+        }
+        fs::path siblingShare = exeDir.parent_path() / "share" / "retrocapture";
+        if (fs::exists(siblingShare)) return siblingShare.string();
+        fs::path portable = exeDir / "assets";
+        if (fs::exists(portable)) return portable.string();
+        return portable.string();
+    }
 #else
     // Linux: $XDG_DATA_DIRS é uma lista separada por ':'. Procura por
     // retrocapture/ em cada uma. Fallback /usr/local/share, /usr/share,

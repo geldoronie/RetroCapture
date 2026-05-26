@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 
+#ifdef __APPLE__
+#include "../capture/IVideoCapture.h"
+#endif
+
 // Forward declarations
 class UIManager;
 class IAudioCapture;
@@ -33,4 +37,15 @@ private:
     
     void renderInputSourceSelection();
     void refreshInputSources();
+#ifdef __APPLE__
+    // AVFoundation device-bundled audio device picker. AVFoundation
+    // capture devices (UVC HDMI grabbers) carry their own audio
+    // streams; this dropdown lets the user choose between the device's
+    // bundled audio and any other AVFoundation audio source on the
+    // system. Independent of the IAudioCapture (CoreAudio) path that
+    // the encoder/recorder consume.
+    void renderAVFoundationAudioDeviceSelection();
+    std::vector<DeviceInfo> m_avfAudioDevices;
+    bool m_avfAudioDevicesNeedRefresh = true;
+#endif
 };

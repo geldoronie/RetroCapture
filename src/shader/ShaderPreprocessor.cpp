@@ -128,25 +128,63 @@ ShaderPreprocessor::PreprocessResult ShaderPreprocessor::preprocess(
     
     // Verificar se estamos usando OpenGL ES
     bool isES = isOpenGLES();
-    
+
+    // Probe whether GL_ARB_shading_language_420pack is actually
+    // exposed by this GL context. Some macOS GPUs (Intel Iris under
+    // OpenGL 4.1) do not expose it even though shaders ship with a
+    // `#extension ... : require` line — requiring it then fails
+    // compile. Default to not requiring it; only emit the
+    // `#extension : require` line when the driver actually has it,
+    // and strip stray `#extension` lines from shader sources
+    // otherwise (same code path as the OpenGL ES branch).
+    auto checkExtension = [](const char *name) -> bool {
+        const GLubyte *raw = glGetString(GL_EXTENSIONS);
+        if (!raw)
+        {
+            return false;
+        }
+        const std::string extStr = reinterpret_cast<const char *>(raw);
+        const std::string needle = name;
+        size_t pos = 0;
+        while ((pos = extStr.find(needle, pos)) != std::string::npos)
+        {
+            const bool startOk = (pos == 0) || (extStr[pos - 1] == ' ');
+            const size_t endPos = pos + needle.size();
+            const bool endOk = (endPos == extStr.size()) || (extStr[endPos] == ' ');
+            if (startOk && endOk)
+            {
+                return true;
+            }
+            pos = endPos;
+        }
+        return false;
+    };
+    const bool has420Pack = !isES && checkExtension("GL_ARB_shading_language_420pack");
+
     // Adicionar extensão para inicialização estilo C (GL_ARB_shading_language_420pack)
     // Isso permite inicialização de arrays e estruturas estilo C
-    // IMPORTANTE: Esta extensão NÃO é suportada em OpenGL ES, então só adicionar em Desktop
+    // IMPORTANTE: Esta extensão NÃO é suportada em OpenGL ES e nem
+    // em alguns drivers macOS, então só adicionar quando o driver
+    // expõe explicitamente.
     std::string extensionLine = "";
-    if (!isES) {
+    if (has420Pack) {
         extensionLine = "#extension GL_ARB_shading_language_420pack : require\n";
     }
-    
-    // Remover extensões não suportadas do código fonte se for OpenGL ES
+
+    // Remover extensões não suportadas do código fonte se o driver
+    // não expõe a extensão (OpenGL ES ou desktop sem 420pack — macOS
+    // Intel Iris).
     std::string processedCodeAfterVersion = codeAfterVersion;
-    if (isES) {
+    if (!has420Pack) {
         // Remover todas as extensões GL_ARB_shading_language_420pack do código fonte
         std::regex extensionRegex(R"(#extension\s+GL_ARB_shading_language_420pack\s*:?\s*\w*\s*\n?)");
         processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, extensionRegex, "");
-        
-        // Remover outras extensões problemáticas comuns em ES
-        std::regex arbExtensionRegex(R"(#extension\s+GL_ARB_[^\n]*\n?)");
-        processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, arbExtensionRegex, "");
+
+        if (isES) {
+            // Remover outras extensões problemáticas comuns em ES
+            std::regex arbExtensionRegex(R"(#extension\s+GL_ARB_[^\n]*\n?)");
+            processedCodeAfterVersion = std::regex_replace(processedCodeAfterVersion, arbExtensionRegex, "");
+        }
     }
 
     std::string vertexCode = processedCodeAfterVersion;

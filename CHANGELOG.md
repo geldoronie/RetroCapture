@@ -69,10 +69,63 @@ had via `AudioPlaybackPulse`.
   DeviceConnections` two-step (the saved input source is now passed
   directly to `AudioCapturePulse::open()` during init).
 
+### Added
+
+- **macOS x86_64 port — first working build of host + client modes**
+  (#18). Cherry-picked the older `18-port-to-macos-13-or-later-x86_64`
+  branch's backend files onto current 0.8.0-alpha and rebuilt the
+  user-facing surface in 0.8 idioms. Highlights:
+  - Video capture via `VideoCaptureAVFoundation` with the runtime
+    camera-permission probe pattern (`AVAuthorizationStatusForMedia-
+    Type:AVMediaTypeVideo`) so the dropdown is no longer empty
+    silently. Format dropdown is OBS-style (resolution + fps range +
+    pixel format picked atomically per device). Format changes do a
+    close+reopen because macOS reverts `activeFormat` mid-session;
+    output dimensions are forced via `videoSettings`'
+    `kCVPixelBufferWidthKey/HeightKey` because
+    `AVCaptureSessionPresetInputPriority` is iOS-only on the macOS
+    SDK. Framerate clamping via `AVFrameRateRange.minFrameDuration`
+    (with `@try/@catch` belt-and-suspenders) prevents
+    `NSInvalidArgumentException` on devices that only support
+    rational rates like 29.97.
+  - Audio capture via `AudioCaptureCoreAudio` mirroring Linux's
+    `AudioCapturePulse` architecture: same `AudioBus` fan-out, a
+    local tap backing `getSamples`, plus an in-class monitor
+    playback (`AudioOutputCoreAudio` + writer thread) — the macOS
+    counterpart of `MonitorPlayback`. AudioUnit gets bound to the
+    user-selected device via `kAudioOutputUnitProperty_CurrentDevice`
+    BEFORE format negotiation, then adopts the device's native
+    sample rate / channel count so UVC cards that run at 48 kHz /
+    mono / float32 don't fail with
+    `-10863 kAudioUnitErr_CannotDoInCurrentContext`. Microphone
+    permission probe lives at the top of `open()`.
+  - Client-mode remote-stream playback via the new
+    `AudioPlaybackCoreAudio` (adapts `IAudioPlayback`'s float-PCM +
+    PTS API onto `AudioOutputCoreAudio`'s int16 push).
+  - `MediaEncoder::convertRGBToYUV` clamps odd source heights to the
+    nearest even value before `sws_scale` — macOS window framebuffer
+    (1080 minus menu bar ≈ 953) is odd, and libswscale 9.x's AVX2
+    fastpath would `EXC_BAD_ACCESS` on the unaligned tail.
+  - Auto-open of the saved AVFoundation device + format on
+    `SourceType::AVFoundation` activation, so the first frame after
+    launch is the same capture the user had in the previous session.
+  - Native UI + web portal expose AVFoundation device / format and
+    Core Audio input device pickers; the `Resync monitor` button
+    works on macOS too.
+- See `docs/MACOS_PORT_STRATEGY.md` for the full inventory of
+  resolved gotchas and the follow-up list (`.app` bundle with
+  `Info.plist` permission strings, codesigning, macOS source
+  publisher equivalent of `module-pipe-source`, Apple Silicon
+  build, CI/release integration).
+
 ### Scope
 
-- Linux only. WASAPI loopback already works differently on Windows;
-  the host audio path on Windows is untouched in this release.
+- Linux audio refactor (#78) is Linux-only — WASAPI loopback already
+  works differently on Windows; the host audio path on Windows is
+  untouched in this release.
+- macOS port (#18) lands x86_64 only and depends on Homebrew FFmpeg /
+  GLFW / libpng; build via `tools/build-macos.sh` on the Mac itself
+  (no cross-compile from Linux).
 
 ---
 

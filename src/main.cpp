@@ -12,6 +12,9 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#ifdef __APPLE__
+#include <signal.h>
+#endif
 
 void printUsage(const char *programName)
 {
@@ -24,6 +27,8 @@ void printUsage(const char *programName)
     std::cout << "  --source <type>        Source type: none, v4l2, remote (default: v4l2)\n";
 #elif defined(_WIN32)
     std::cout << "  --source <type>        Source type: none, ds, remote (default: ds)\n";
+#elif defined(__APPLE__)
+    std::cout << "  --source <type>        Source type: none, avfoundation, remote (default: avfoundation)\n";
 #else
     std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
@@ -108,6 +113,21 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
+#ifdef __APPLE__
+    // macOS has no MSG_NOSIGNAL on send(); without ignoring SIGPIPE
+    // globally, a peer disconnecting mid-write would terminate the
+    // whole process. Linux uses MSG_NOSIGNAL per-send and Windows
+    // doesn't generate SIGPIPE in the first place, so this is needed
+    // on macOS specifically.
+    {
+        struct sigaction sa{};
+        sa.sa_handler = SIG_IGN;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGPIPE, &sa, nullptr);
+    }
+#endif
+
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 
     std::string shaderPath;
@@ -121,6 +141,8 @@ int main(int argc, char *argv[])
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
     sourceType = "ds"; // Windows usa DirectShow
+#elif defined(__APPLE__)
+    sourceType = "avfoundation"; // macOS usa AVFoundation
 #else
     sourceType = "none"; // Outras plataformas sem suporte
 #endif
@@ -217,6 +239,8 @@ int main(int argc, char *argv[])
             if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
 #elif defined(_WIN32)
             if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
+#elif defined(__APPLE__)
+            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote")
 #else
             if (sourceType != "none" && sourceType != "remote")
 #endif
@@ -225,6 +249,8 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
 #elif defined(_WIN32)
                 LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
+#elif defined(__APPLE__)
+                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation' or 'remote'");
 #else
                 LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
 #endif
@@ -950,6 +976,9 @@ int main(int argc, char *argv[])
 #elif defined(_WIN32)
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
+#elif defined(__APPLE__)
+    if (sourceType == "avfoundation")
+        sourceTypeEnum = UIManager::SourceType::AVFoundation;
 #endif
     if (sourceType == "remote")
         sourceTypeEnum = UIManager::SourceType::Remote;

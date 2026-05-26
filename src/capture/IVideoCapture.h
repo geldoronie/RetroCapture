@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,21 @@ struct DeviceInfo
     std::string name;      // Human-readable name
     std::string driver;    // Driver name (optional)
     bool available = true; // Whether device is available
+};
+
+// Format descriptor for AVFoundation devices on macOS (each device
+// exposes a fixed set of (resolution, fps range, pixel format) tuples;
+// picking a format selects all three atomically, OBS-style).
+struct AVFoundationFormatInfo
+{
+    std::string id;          // Unique stable identifier for this format
+    uint32_t width = 0;
+    uint32_t height = 0;
+    float minFps = 0.0f;
+    float maxFps = 0.0f;
+    std::string pixelFormat; // e.g. "NV12 (420v)", "YUY2 (yuvs)", "BGRA"
+    std::string colorSpace;  // e.g. "CS 709"
+    std::string displayName; // human-readable concatenation for dropdowns
 };
 
 /**
@@ -72,5 +88,40 @@ public:
      * never hold a "reconnect" state.
      */
     virtual bool isReceivingFrames() const { return isOpen(); }
+
+    // AVFoundation-specific extensions. Default no-op so V4L2,
+    // DirectShow and Remote captures don't need to implement them.
+    virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "")
+    {
+        (void)deviceId;
+        return {};
+    }
+    virtual bool setFormatById(const std::string &formatId, const std::string &deviceId = "")
+    {
+        (void)formatId;
+        (void)deviceId;
+        return false;
+    }
+
+    // Some macOS capture devices (UVC HDMI grabbers etc.) carry audio
+    // alongside the video stream — these accessors expose it without
+    // forcing a separate IAudioCapture path. Default no-op for
+    // platforms whose video pipeline never carries audio.
+    virtual bool hasAudio() const { return false; }
+    virtual size_t getAudioSamples(int16_t *buffer, size_t maxSamples)
+    {
+        (void)buffer;
+        (void)maxSamples;
+        return 0;
+    }
+    virtual uint32_t getAudioSampleRate() const { return 0; }
+    virtual uint32_t getAudioChannels() const { return 0; }
+    virtual std::vector<DeviceInfo> listAudioDevices() { return {}; }
+    virtual bool setAudioDevice(const std::string &audioDeviceId)
+    {
+        (void)audioDeviceId;
+        return false;
+    }
+    virtual std::string getCurrentAudioDevice() const { return ""; }
 };
 
