@@ -76,47 +76,49 @@ void OSDChat::render()
         return;
     }
 
-    // Top-right anchor. Width is fixed; height grows with content up
-    // to a cap so the overlay doesn't cover the viewport.
+    // Initial placement only — top-right corner with a reasonable
+    // size. After that the user is free to drag and resize; imgui.ini
+    // persists position/size by window id across launches. The OSD
+    // distinction here isn't "pinned, no chrome" (#84 amendment) but
+    // "lives outside the m_uiVisible gate so F12 doesn't hide it".
     const ImGuiViewport *vp = ImGui::GetMainViewport();
-    const float width  = 340.0f;
-    const float height = std::clamp(vp->WorkSize.y * 0.45f, 240.0f, 480.0f);
-    const ImVec2 anchor(vp->WorkPos.x + vp->WorkSize.x - 16.0f,
-                        vp->WorkPos.y + 16.0f);
-    ImGui::SetNextWindowPos(anchor, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
+    const float initialW = 340.0f;
+    const float initialH = std::clamp(vp->WorkSize.y * 0.45f, 240.0f, 480.0f);
+    const ImVec2 initialPos(vp->WorkPos.x + vp->WorkSize.x - initialW - 16.0f,
+                            vp->WorkPos.y + 16.0f);
+    ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(initialW, initialH), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(240, 160), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::SetNextWindowBgAlpha(0.88f);
 
-    // Like QuickActionsOverlay: no decoration, no save, anchored every
-    // frame. NoNav so arrow keys don't get hijacked by ImGui nav.
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
-                                   ImGuiWindowFlags_NoMove     |
-                                   ImGuiWindowFlags_NoResize   |
-                                   ImGuiWindowFlags_NoCollapse |
-                                   ImGuiWindowFlags_NoSavedSettings |
+    // Title bar gives the user an obvious drag handle. NoCollapse so
+    // the chevron doesn't appear (the View → Chat menu / F8 already
+    // toggles the panel). NoNav keeps arrow keys out of ImGui nav
+    // while the input box has focus.
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav;
 
-    if (!ImGui::Begin("##chatOSD", nullptr, flags))
+    // Stable id (the part after ##) so imgui.ini round-trips the
+    // window's geometry. Visible title ("Chat") is what the user
+    // reads on the title bar.
+    if (!ImGui::Begin("Chat##osdChat", nullptr, flags))
     {
         ImGui::End();
         return;
     }
 
-    // ---- header line --------------------------------------------------
-    ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Chat");
-    ImGui::SameLine();
-    ImGui::TextColored(stateColor(snap.state), "(%s)", stateLabel(snap.state));
+    // ---- status line (title bar already says "Chat") -----------------
+    ImGui::TextColored(stateColor(snap.state), "%s", stateLabel(snap.state));
     if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
     {
         ImGui::SameLine();
-        ImGui::TextDisabled(" — %s", snap.lastError.c_str());
+        ImGui::TextDisabled("— %s", snap.lastError.c_str());
     }
-    // Participant count, when we know it.
     if (!snap.participants.empty())
     {
         ImGui::SameLine();
-        ImGui::TextDisabled(" • %zu", snap.participants.size());
+        ImGui::TextDisabled("• %zu", snap.participants.size());
     }
     ImGui::Separator();
 
