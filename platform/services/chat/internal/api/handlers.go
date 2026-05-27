@@ -208,6 +208,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, roomID st
 			Nickname:      m.Nickname,
 			Body:          m.Body,
 			PostedAtMs:    m.PostedAt.UnixMilli(),
+			IsHost:        m.IsHost,
 		}
 		if m.DeletedAt != nil {
 			mp.Deleted = true

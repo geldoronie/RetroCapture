@@ -18,6 +18,10 @@ type Participant struct {
 	ID       string // "p_<random>" — per-connection, NOT stable across reconnects in v0.5
 	Nickname string
 	JoinedAt time.Time
+	// IsHost is true when this participant claimed the host role
+	// (and won) for the room. Set once at hello-time; never flips
+	// during the session.
+	IsHost   bool
 
 	// Send is the per-connection outbound channel. The WebSocket
 	// writer goroutine reads from this; the hub writes to it during
@@ -32,6 +36,10 @@ type Room struct {
 
 	mu           sync.RWMutex
 	participants map[string]*Participant
+	// hostID is the participant id of whoever currently holds the
+	// host role for this room. First-claim-wins in v0.5; cleared
+	// when that participant leaves so a reconnect can re-claim.
+	hostID       string
 }
 
 // NewRoom returns an empty room. Created lazily by the Registry.
@@ -40,6 +48,28 @@ func NewRoom(id string) *Room {
 		ID:           id,
 		participants: make(map[string]*Participant),
 	}
+}
+
+// TryClaimHost atomically assigns the host role to participantID
+// when no one currently holds it. Returns true on success. The
+// caller is expected to set the Participant.IsHost flag on a
+// successful claim.
+func (r *Room) TryClaimHost(participantID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hostID != "" {
+		return false
+	}
+	r.hostID = participantID
+	return true
+}
+
+// HostID returns the current host's participant id, or "" if no one
+// holds the role.
+func (r *Room) HostID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.hostID
 }
 
 // Join adds the participant to the room.
@@ -60,6 +90,12 @@ func (r *Room) Leave(participantID string) {
 		// drains. The writer goroutine exits when it sees Send
 		// closed.
 		close(p.Send)
+	}
+	// If the host left, clear the slot so a reconnect can re-claim.
+	// First-claim-wins isn't great UX if the host crashes and reopens
+	// against a still-populated room; with this clear it just works.
+	if r.hostID == participantID {
+		r.hostID = ""
 	}
 }
 
@@ -103,6 +139,7 @@ func (r *Room) BroadcastExcept(frame []byte, skipParticipantID string) {
 type ParticipantInfo struct {
 	ID       string
 	Nickname string
+	IsHost   bool
 }
 
 func (r *Room) Snapshot() []ParticipantInfo {
@@ -110,7 +147,11 @@ func (r *Room) Snapshot() []ParticipantInfo {
 	defer r.mu.RUnlock()
 	out := make([]ParticipantInfo, 0, len(r.participants))
 	for _, p := range r.participants {
-		out = append(out, ParticipantInfo{ID: p.ID, Nickname: p.Nickname})
+		out = append(out, ParticipantInfo{
+			ID:       p.ID,
+			Nickname: p.Nickname,
+			IsHost:   p.IsHost,
+		})
 	}
 	return out
 }

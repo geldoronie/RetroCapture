@@ -63,6 +63,7 @@ type Message struct {
 	Body          string
 	PostedAt      time.Time
 	DeletedAt     *time.Time
+	IsHost        bool
 }
 
 // Store is the public handle. Safe for concurrent use; SQLite
@@ -255,11 +256,18 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO chat_messages(
             id, room_id, participant_id, nickname, body,
-            posted_at_ms, deleted_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+            posted_at_ms, deleted_at_ms, is_host
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
     `, m.ID, m.RoomID, m.ParticipantID, m.Nickname, m.Body,
-		m.PostedAt.UnixMilli())
+		m.PostedAt.UnixMilli(), boolToInt(m.IsHost))
 	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // SoftDeleteMessage marks a message as deleted. Returns ErrNotFound
@@ -326,7 +334,7 @@ func (s *Store) ListMessages(
 	if hasBefore {
 		rows, err = s.db.QueryContext(ctx, `
             SELECT id, room_id, participant_id, nickname, body,
-                   posted_at_ms, deleted_at_ms
+                   posted_at_ms, deleted_at_ms, is_host
               FROM chat_messages
              WHERE room_id = ?
                AND (posted_at_ms, id) < (?, ?)
@@ -336,7 +344,7 @@ func (s *Store) ListMessages(
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
             SELECT id, room_id, participant_id, nickname, body,
-                   posted_at_ms, deleted_at_ms
+                   posted_at_ms, deleted_at_ms, is_host
               FROM chat_messages
              WHERE room_id = ?
              ORDER BY posted_at_ms DESC, id DESC
@@ -354,10 +362,11 @@ func (s *Store) ListMessages(
 			m         Message
 			postedMs  int64
 			deletedMs sql.NullInt64
+			isHost    int
 		)
 		if err := rows.Scan(
 			&m.ID, &m.RoomID, &m.ParticipantID, &m.Nickname, &m.Body,
-			&postedMs, &deletedMs,
+			&postedMs, &deletedMs, &isHost,
 		); err != nil {
 			return nil, "", err
 		}
@@ -366,6 +375,7 @@ func (s *Store) ListMessages(
 			t := time.UnixMilli(deletedMs.Int64).UTC()
 			m.DeletedAt = &t
 		}
+		m.IsHost = isHost != 0
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {

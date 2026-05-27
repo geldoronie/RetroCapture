@@ -53,6 +53,7 @@ type messagePayload struct {
 	Body          string `json:"body"`
 	PostedAtMs    int64  `json:"posted_at_ms"`
 	Deleted       bool   `json:"deleted,omitempty"`
+	IsHost        bool   `json:"is_host,omitempty"`
 }
 
 type historyPayload struct {
@@ -88,6 +89,13 @@ type wsFrame struct {
 // Client → server.
 type wsHello struct {
 	Nickname string `json:"nickname"`
+	// Role is an opt-in self-declaration. The only meaningful value
+	// in v0.5 is "host" — the RetroCapture instance that's publishing
+	// this stream announces itself so its messages can render with a
+	// host badge on every viewer's panel. First claimant per room
+	// wins (v0.5 trust model: same level as streamId secrecy; v1
+	// validates against the directory ownerToken).
+	Role string `json:"role,omitempty"`
 }
 
 type wsPost struct {
@@ -102,12 +110,18 @@ type wsPing struct{}
 
 // Server → client.
 type wsWelcome struct {
-	ParticipantID   string `json:"participant_id"`
-	RoomID          string `json:"room_id"`
-	RoomKind        string `json:"room_kind"`
-	LinkedStreamID  string `json:"linked_stream_id,omitempty"`
-	ServerTimeMs    int64  `json:"server_time_ms"`
-	ProtocolVersion int    `json:"protocol_version"`
+	ParticipantID     string `json:"participant_id"`
+	RoomID            string `json:"room_id"`
+	RoomKind          string `json:"room_kind"`
+	LinkedStreamID    string `json:"linked_stream_id,omitempty"`
+	ServerTimeMs      int64  `json:"server_time_ms"`
+	ProtocolVersion   int    `json:"protocol_version"`
+	// #84 — Host role plumbing. IsHost echoes whether this welcome's
+	// participant_id is the room's host (relevant when the connecting
+	// client passed role:"host" and won the claim). HostParticipantID
+	// is the room's current host id, empty if no one has claimed.
+	IsHost            bool   `json:"is_host,omitempty"`
+	HostParticipantID string `json:"host_participant_id,omitempty"`
 }
 
 type wsMessage struct {
@@ -117,12 +131,17 @@ type wsMessage struct {
 	Nickname      string `json:"nickname"`
 	Body          string `json:"body"`
 	PostedAtMs    int64  `json:"posted_at_ms"`
+	// #84 — Sticky host flag. Set at insert-time based on the
+	// poster's room-host status; stays true across server restarts
+	// even if the host's session id has since changed.
+	IsHost        bool   `json:"is_host,omitempty"`
 }
 
 type wsPresence struct {
 	ParticipantID string `json:"participant_id"`
 	Nickname      string `json:"nickname"`
 	Event         string `json:"event"` // "join" | "leave"
+	IsHost        bool   `json:"is_host,omitempty"`
 }
 
 type wsDeleted struct {
@@ -138,13 +157,18 @@ type wsError struct {
 }
 
 type wsRoomState struct {
-	Participants []wsParticipant `json:"participants"`
-	Settings     wsRoomSettings  `json:"settings"`
+	Participants     []wsParticipant `json:"participants"`
+	Settings         wsRoomSettings  `json:"settings"`
+	// #84 — Current host's participant id (empty if no host has
+	// claimed the room yet). Lets the client mark seeded backlog
+	// messages whose participant_id matches.
+	HostParticipantID string         `json:"host_participant_id,omitempty"`
 }
 
 type wsParticipant struct {
 	ID       string `json:"id"`
 	Nickname string `json:"nickname"`
+	IsHost   bool   `json:"is_host,omitempty"`
 }
 
 type wsRoomSettings struct {

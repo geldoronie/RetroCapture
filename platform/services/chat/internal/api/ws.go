@@ -133,6 +133,14 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		JoinedAt: time.Now().UTC(),
 		Send:     make(chan []byte, sendBufferSize),
 	}
+	// #84 — Host role claim. Only meaningful on stream_linked rooms;
+	// standalone rooms can re-use the same field later for room
+	// owners but v0.5 doesn't expose that path.
+	if first.Hello.Role == "host" && roomRow.Kind == store.RoomKindStreamLinked {
+		if roomLive.TryClaimHost(p.ID) {
+			p.IsHost = true
+		}
+	}
 	roomLive.Join(p)
 	defer func() {
 		roomLive.Leave(p.ID)
@@ -145,12 +153,14 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 	if err := writeFrame(ctx, conn, wsFrame{
 		Kind: "welcome",
 		Welcome: &wsWelcome{
-			ParticipantID:   p.ID,
-			RoomID:          roomRow.ID,
-			RoomKind:        string(roomRow.Kind),
-			LinkedStreamID:  roomRow.LinkedStreamID,
-			ServerTimeMs:    time.Now().UnixMilli(),
-			ProtocolVersion: ProtocolVersion,
+			ParticipantID:     p.ID,
+			RoomID:            roomRow.ID,
+			RoomKind:          string(roomRow.Kind),
+			LinkedStreamID:    roomRow.LinkedStreamID,
+			ServerTimeMs:      time.Now().UnixMilli(),
+			ProtocolVersion:   ProtocolVersion,
+			IsHost:            p.IsHost,
+			HostParticipantID: roomLive.HostID(),
 		},
 	}); err != nil {
 		return
@@ -158,13 +168,18 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 	snap := roomLive.Snapshot()
 	parts := make([]wsParticipant, 0, len(snap))
 	for _, sp := range snap {
-		parts = append(parts, wsParticipant{ID: sp.ID, Nickname: sp.Nickname})
+		parts = append(parts, wsParticipant{
+			ID:       sp.ID,
+			Nickname: sp.Nickname,
+			IsHost:   sp.IsHost,
+		})
 	}
 	if err := writeFrame(ctx, conn, wsFrame{
 		Kind: "room_state",
 		RoomState: &wsRoomState{
-			Participants: parts,
-			Settings:     wsRoomSettings{SlowModeSecs: 0, WordFilter: []string{}},
+			Participants:      parts,
+			Settings:          wsRoomSettings{SlowModeSecs: 0, WordFilter: []string{}},
+			HostParticipantID: roomLive.HostID(),
 		},
 	}); err != nil {
 		return
@@ -177,6 +192,7 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			ParticipantID: p.ID,
 			Nickname:      p.Nickname,
 			Event:         "join",
+			IsHost:        p.IsHost,
 		},
 	}); err == nil {
 		roomLive.BroadcastExcept(presence, p.ID)
@@ -292,6 +308,7 @@ func (s *Server) handlePost(
 		Nickname:      p.Nickname,
 		Body:          body,
 		PostedAt:      time.Now().UTC(),
+		IsHost:        p.IsHost,
 	}
 	if err := s.Store.InsertMessage(ctx, msg); err != nil {
 		s.Logger.Error("insert_message", "err", err, "room_id", roomRow.ID)
@@ -316,6 +333,7 @@ func (s *Server) handlePost(
 			Nickname:      msg.Nickname,
 			Body:          msg.Body,
 			PostedAtMs:    msg.PostedAt.UnixMilli(),
+			IsHost:        msg.IsHost,
 		},
 	})
 	if err != nil {
