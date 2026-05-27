@@ -1082,10 +1082,11 @@ private:
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
     std::string m_directoryUrl            = "https://directory.retrocapture.com";
-    // #84 — Chat URL. Default matches the local docker compose port
-    // for dev ergonomics; --chat-url overrides at launch; the
-    // Streaming → Advanced field overrides at runtime.
-    std::string m_chatBaseUrl             = "ws://localhost:8082";
+    // #84 — Chat URL. Production default; --chat-url overrides at
+    // launch; the Streaming → Advanced field overrides at runtime.
+    // Accepts https://, http://, wss://, ws:// — ChatClient
+    // normalizes the scheme when building REST vs WS endpoints.
+    std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.

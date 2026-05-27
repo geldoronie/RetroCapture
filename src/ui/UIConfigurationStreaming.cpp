@@ -1123,10 +1123,10 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             m_uiManager->setDirectoryUrl(buf);
             m_uiManager->saveConfig();
         }
-        // #84 — Chat service URL. Defaults to the local docker
-        // compose port; production is wss://chat.retrocapture.com.
-        // ws:// for the unencrypted local dev path, wss:// when
-        // talking to TLS-terminating proxies.
+        // #84 — Chat service URL. Default: production.
+        // Accepts any of https:// / http:// / wss:// / ws:// — the
+        // client normalizes internally between the REST resolve /
+        // history endpoints (http/https) and the WS upgrade (ws/wss).
         char chatBuf[256];
         std::snprintf(chatBuf, sizeof(chatBuf), "%s",
                       m_uiManager->getChatBaseUrl().c_str());
@@ -1138,11 +1138,11 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         if (ImGui::IsItemHovered())
         {
             ImGui::SetTooltip(
-                "Chat service base URL. Accepts ws:// or wss://;\n"
-                "the HTTP form used for room resolution / history\n"
-                "is derived by swapping the scheme.\n"
-                "Default: ws://localhost:8082\n"
-                "Production: wss://chat.retrocapture.com");
+                "Chat service base URL. Accepts https:// / http:// /\n"
+                "wss:// / ws:// — the client picks the right scheme\n"
+                "for each endpoint internally.\n"
+                "Default: https://chat.retrocapture.com\n"
+                "Local dev: http://localhost:8082");
         }
         // Dev escape hatch — only meaningful for https:// URLs.
         // Off by default. The label spells out "self-signed" because

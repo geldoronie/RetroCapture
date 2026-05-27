@@ -14,13 +14,26 @@
 
 namespace
 {
-// Swap ws:// → http:// and wss:// → https:// so the same base URL can
-// be used for REST and WS. Anything else passes through unchanged.
-std::string deriveHttpFromWs(const std::string &ws)
+// The chat base URL is accepted in any of four schemes: ws://, wss://,
+// http://, https://. The user types whatever feels natural; we
+// normalize internally to ws/wss for the WebSocket dial and http/
+// https for the REST resolve / history endpoints.
+std::string deriveHttpFromWs(const std::string &any)
 {
-    if (ws.rfind("wss://", 0) == 0) return "https://" + ws.substr(6);
-    if (ws.rfind("ws://", 0) == 0)  return "http://"  + ws.substr(5);
-    return ws;
+    if (any.rfind("wss://",   0) == 0) return "https://" + any.substr(6);
+    if (any.rfind("ws://",    0) == 0) return "http://"  + any.substr(5);
+    if (any.rfind("https://", 0) == 0) return any;
+    if (any.rfind("http://",  0) == 0) return any;
+    return any;
+}
+
+std::string deriveWsFromHttp(const std::string &any)
+{
+    if (any.rfind("https://", 0) == 0) return "wss://" + any.substr(8);
+    if (any.rfind("http://",  0) == 0) return "ws://"  + any.substr(7);
+    if (any.rfind("wss://",   0) == 0) return any;
+    if (any.rfind("ws://",    0) == 0) return any;
+    return any;
 }
 
 // Whitelist-safe substitution for a streamId in a URL path. Stream IDs
@@ -201,7 +214,7 @@ void ChatClient::resolveAndConnect()
 
     // Open the WS. IXWebSocket runs its own thread; we just register
     // the callback and call start().
-    const std::string wsUrl = baseUrl + "/ws?room=" + roomId;
+    const std::string wsUrl = deriveWsFromHttp(baseUrl) + "/ws?room=" + roomId;
     {
         std::lock_guard<std::mutex> lk(m_mu);
         setStateLocked(State::Connecting);
