@@ -1157,7 +1157,8 @@ std::string APIController::buildMetaSnapshotJSON()
          // Remote clients use it to bind their chat overlay to the
          // same room the host's overlay is on.
          << "\"chat\": {"
-         <<   "\"streamId\": " << jsonString(m_uiManager->getDirectoryStreamId())
+         <<   "\"streamId\": " << jsonString(m_uiManager->getDirectoryStreamId()) << ", "
+         <<   "\"url\": "      << jsonString(m_uiManager->getChatBaseUrl())
          << "}"
          << "}";
 

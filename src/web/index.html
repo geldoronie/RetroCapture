@@ -126,8 +126,8 @@
                 </div>
 
                 <!-- Now playing — read-only info about what's on the live stream. -->
-                <div class="col-12">
-                    <div class="card">
+                <div class="col-md-6">
+                    <div class="card h-100">
                         <div class="card-body">
                             <h6 class="card-title text-uppercase text-muted small mb-3"><i class="bi bi-palette me-1"></i><span data-i18n="web.home.now_playing">Now playing</span></h6>
                             <div class="row g-3">
@@ -143,6 +143,32 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Chat (#84) — talks to the chat service over WebSocket. -->
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-body d-flex flex-column" id="chatCard">
+                            <h6 class="card-title text-uppercase text-muted small mb-2 d-flex align-items-center">
+                                <i class="bi bi-chat-dots me-1"></i>
+                                <span data-i18n="web.home.chat">Chat</span>
+                                <span id="chatStateBadge" class="badge bg-secondary ms-2">idle</span>
+                                <span id="chatParticipantCount" class="text-muted small ms-auto"></span>
+                            </h6>
+                            <div id="chatLog" class="chat-log mb-2"></div>
+                            <div id="chatUnavailable" class="text-muted small mb-2 d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
+                            <div class="input-group input-group-sm mb-2">
+                                <span class="input-group-text" data-i18n="web.chat.as">as</span>
+                                <input id="chatNickInput" type="text" class="form-control" maxlength="32" placeholder="" data-i18n-placeholder="web.chat.nickname_placeholder">
+                                <button id="chatNickApply" type="button" class="btn btn-outline-secondary" data-i18n="web.chat.apply">Apply</button>
+                            </div>
+                            <div id="chatNickError" class="text-danger small mb-2 d-none"></div>
+                            <div class="input-group input-group-sm">
+                                <input id="chatMessageInput" type="text" class="form-control" maxlength="800" placeholder="" data-i18n-placeholder="web.chat.message_placeholder">
+                                <button id="chatSendBtn" type="button" class="btn btn-primary" data-i18n="web.chat.send">Send</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </main>
@@ -151,6 +177,7 @@
     <script src="/vendor/bootstrap.bundle.min.js"></script>
     <script src="/vendor/mpegts.min.js"></script>
     <script src="/home.js"></script>
+    <script src="/chat.js"></script>
 
     <!-- Service Worker registration -->
     <script src="/sw-register.js"></script>

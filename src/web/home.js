@@ -22,9 +22,14 @@ async function pollStatus() {
         document.getElementById('homeStreamStatus').className = 'home-stat-value ' +
             (isLive ? 'text-danger' : 'text-secondary');
         document.getElementById('homeClientCount').textContent = status.clientCount ?? 0;
-        if (status.streamUrl) {
-            document.getElementById('streamLink').href = status.streamUrl;
-        }
+        // Stream link uses the relative /stream path on whichever origin
+        // is serving this page — keeping the literal value from the
+        // HTML. Don't override with api.streamUrl: the server-side
+        // helper hardcodes "localhost" in the host part, which is the
+        // wrong answer for any browser that reached this page from a
+        // LAN IP / DNS name / tunnel hostname. The relative path
+        // resolves correctly against window.location.origin in all
+        // those cases.
 
         // Show/hide the idle overlay on the player based on live state.
         const overlay = document.getElementById('livePlayerIdleOverlay');
