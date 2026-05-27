@@ -280,6 +280,14 @@ public:
     // the ChatClient when it changes (cheap no-op when unchanged).
     const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
     void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
+    // #84 — Persistent chat nickname. Shared between host and viewer
+    // modes (you're "geldo" regardless of which side you're on); the
+    // OSD chat panel writes here when the user clicks Apply. Empty
+    // means "use a fallback": Application falls back to the directory
+    // host nickname when publishing, or sends an empty hello (server
+    // generates anon-<rand>) when viewing.
+    const std::string &getChatNickname() const       { return m_chatNickname; }
+    void setChatNickname(const std::string &v)       { m_chatNickname = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -1087,6 +1095,9 @@ private:
     // Accepts https://, http://, wss://, ws:// — ChatClient
     // normalizes the scheme when building REST vs WS endpoints.
     std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
+    // #84 — Persistent chat display name. Default empty; OSD chat
+    // panel's Apply button writes here + saveConfig.
+    std::string m_chatNickname            = "";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.

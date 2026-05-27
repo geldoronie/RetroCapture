@@ -714,8 +714,11 @@ bool Application::initCapture()
                     if (!sid.empty() && sid != m_chatBoundStreamId)
                     {
                         m_chatBoundStreamId = sid;
+                        // Viewer nick: persistent chat name only.
+                        // No host-nickname fallback (that's a host-
+                        // side concept, irrelevant to viewers).
                         const std::string nick = m_ui
-                            ? m_ui->getDirectoryHostNickname()
+                            ? m_ui->getChatNickname()
                             : std::string{};
                         m_chatClient->connect(sid, nick);
                     }
@@ -2657,8 +2660,9 @@ bool Application::initUI()
                             if (!sid.empty() && sid != m_chatBoundStreamId)
                             {
                                 m_chatBoundStreamId = sid;
+                                // Viewer nick: persistent chat name.
                                 const std::string nick = m_ui
-                                    ? m_ui->getDirectoryHostNickname()
+                                    ? m_ui->getChatNickname()
                                     : std::string{};
                                 m_chatClient->connect(sid, nick);
                             }
@@ -6081,10 +6085,13 @@ void Application::syncDirectoryClient()
             m_ui->setDirectoryStreamId(streamId);
             // asHost=true: this instance is the one publishing the
             // stream, so the chat service tags our messages with
-            // is_host=true for the host badge.
-            m_chatClient->connect(streamId,
-                                  m_ui->getDirectoryHostNickname(),
-                                  /*asHost=*/true);
+            // is_host=true for the host badge. Nickname precedence:
+            // explicit chat nickname (persisted via OSD Apply) wins;
+            // otherwise fall back to the directory host nickname so
+            // the user doesn't have to type the same name twice.
+            std::string nick = m_ui->getChatNickname();
+            if (nick.empty()) nick = m_ui->getDirectoryHostNickname();
+            m_chatClient->connect(streamId, nick, /*asHost=*/true);
         }
         else if (!active && !m_chatBoundStreamId.empty())
         {

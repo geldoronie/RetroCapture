@@ -171,6 +171,14 @@ void OSDChat::render()
         else if (nickChanged)
         {
             m_nickError.clear();
+            // Persist BEFORE poking the transport — saveConfig writes
+            // synchronously, and if the user kills the app mid-
+            // reconnect the new nick is still in config.json.
+            if (m_uiManager)
+            {
+                m_uiManager->setChatNickname(typedNick);
+                m_uiManager->saveConfig();
+            }
             m_chat->setNickname(typedNick);
         }
     }
