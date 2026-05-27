@@ -420,25 +420,34 @@ void OSDChat::render()
     // ---- input row ----------------------------------------------------
     const bool sendable = snap.state == ChatClient::State::Connected;
     ImGui::BeginDisabled(!sendable);
-    // Refocus the input on the frame AFTER a submit. ImGui's
-    // EnterReturnsTrue deactivates the widget on submission; without
-    // this the user has to click back in for every message. Setting
-    // SetKeyboardFocusHere(0) BEFORE the InputText queues focus for
-    // that next widget when the new frame paints.
-    if (m_refocusMessageInput)
-    {
-        ImGui::SetKeyboardFocusHere(0);
-        m_refocusMessageInput = false;
-    }
     ImGui::SetNextItemWidth(-60.0f);
-    bool submitted = ImGui::InputText("##chatInput", m_inputBuf, sizeof(m_inputBuf),
-                                      ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool enterSubmit =
+        ImGui::InputText("##chatInput", m_inputBuf, sizeof(m_inputBuf),
+                         ImGuiInputTextFlags_EnterReturnsTrue);
     if (ImGui::IsItemActive()) m_inputFocused = true;
+    // Reclaim focus on the SAME frame, RIGHT AFTER the InputText —
+    // before any other widget is rendered. -1 = "previous widget" =
+    // the InputText we just submitted. This is the pattern straight
+    // out of imgui_demo.cpp's Example: Console window. Doing it on a
+    // later frame via a flag misses because ImGui clears ActiveID
+    // before the next render and tab-stop walks past the input.
+    if (enterSubmit && sendable)
+    {
+        ImGui::SetKeyboardFocusHere(-1);
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Send", ImVec2(-1.0f, 0.0f))) submitted = true;
+    const bool sendClicked = ImGui::Button("Send", ImVec2(-1.0f, 0.0f));
+    // Send button click: SetKeyboardFocusHere(-1) here would refocus
+    // the button itself. Step further back: pass -2 to skip past the
+    // SameLine'd Button onto the InputText. (ImGui demo's chat box
+    // doesn't have a Send button so it doesn't need this offset.)
+    if (sendClicked && sendable)
+    {
+        ImGui::SetKeyboardFocusHere(-2);
+    }
     ImGui::EndDisabled();
 
-    if (submitted && sendable)
+    if ((enterSubmit || sendClicked) && sendable)
     {
         std::string body = m_inputBuf;
         // Trim trailing newline / whitespace ImGui's InputText
@@ -453,7 +462,6 @@ void OSDChat::render()
         {
             m_chat->post(body);
             m_inputBuf[0] = '\0';
-            m_refocusMessageInput = true; // keep cursor in the input
         }
     }
 
