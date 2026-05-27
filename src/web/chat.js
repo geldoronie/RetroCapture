@@ -71,24 +71,16 @@
 
     // --- Helpers --------------------------------------------------------
 
-    // If the host configured a localhost-shaped chat URL (typical dev
-    // setup against docker compose), the browser can only reach it
-    // when it happens to be on the same machine. Rewrite the host part
-    // to whatever hostname the browser used to reach this page,
-    // preserving scheme + port — so e.g. http://localhost:8082 becomes
-    // http://<lan-ip>:8082 when the page was loaded over a LAN address.
-    // No-op for non-loopback hosts.
+    // Local-dev convenience: if BOTH the chat URL and the browser are
+    // at localhost-shaped hostnames, just keep the URL as configured.
+    // This intentionally does NOT rewrite localhost → public hostname
+    // when the page is served from a public domain — that just
+    // pretends a chat service exists at host:8082 when nothing is
+    // listening there. If the host wants browsers on other networks
+    // to chat, they need to configure a publicly reachable chat URL
+    // in Streaming → Advanced (default https://chat.retrocapture.com).
     function reachableFromBrowser(url) {
-        if (!url) return '';
-        try {
-            const u = new URL(url);
-            if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
-                u.hostname = window.location.hostname;
-            }
-            return u.toString().replace(/\/$/, '');
-        } catch (err) {
-            return url;
-        }
+        return url || '';
     }
 
     // Same scheme normalisation the C++ ChatClient does: accept any of
@@ -113,6 +105,12 @@
         const div = document.createElement('div');
         div.textContent = String(text ?? '');
         return div.innerHTML;
+    }
+
+    function deletedLabel() {
+        return (typeof t === 'function')
+            ? t('web.chat.message_removed')
+            : '[message removed]';
     }
 
     function setState(newState) {
@@ -159,7 +157,7 @@
             (time ? `<span class="home-chat-time">${escapeHtml(time)}</span>` : '') +
             hostBadge +
             `<span class="${nickClass}">${escapeHtml(m.nickname)}</span>` +
-            `<span class="home-chat-body">${escapeHtml(m.deleted ? '[message removed]' : m.body)}</span>`;
+            `<span class="home-chat-body">${escapeHtml(m.deleted ? deletedLabel() : m.body)}</span>`;
 
         $log.appendChild(row);
         if (state.autoScroll) {
@@ -379,9 +377,9 @@
                 const d = frame.deleted || {};
                 const row = $log.querySelector(`[data-msg-id="${d.message_id}"]`);
                 if (row) {
-                    row.classList.add('text-muted', 'fst-italic');
-                    const body = row.querySelector('.chat-body');
-                    if (body) body.textContent = '[message removed]';
+                    row.classList.add('deleted');
+                    const body = row.querySelector('.home-chat-body');
+                    if (body) body.textContent = deletedLabel();
                 }
                 break;
             }
@@ -406,14 +404,18 @@
         const newNick = $nick.value.trim();
         $nickError.classList.add('d-none');
         if (!newNick) {
-            $nickError.textContent = 'Nickname can\'t be empty';
+            $nickError.textContent = (typeof t === 'function')
+                ? t('web.chat.nickname_empty')
+                : "Nickname can't be empty";
             $nickError.classList.remove('d-none');
             return;
         }
         const collision = state.participants.some(p =>
             p.id !== state.myParticipantId && p.nickname === newNick);
         if (collision) {
-            $nickError.textContent = 'Nickname already in use';
+            $nickError.textContent = (typeof t === 'function')
+                ? t('web.chat.nickname_taken')
+                : 'Nickname already in use';
             $nickError.classList.remove('d-none');
             return;
         }
