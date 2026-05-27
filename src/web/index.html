@@ -66,22 +66,53 @@
     <!-- Alert Container -->
     <div class="alert-container" id="alertContainer"></div>
 
-    <!-- Hero: live player -->
+    <!-- Hero: live player + chat sidebar (#84). On desktop the chat
+         sits to the right of the player, matching its height (YouTube
+         live layout). On tablets/phones it stacks below the player at
+         full width. -->
     <section class="home-hero">
         <div class="container-fluid px-3 px-md-4 py-3">
-            <div class="home-player-wrapper">
-                <video id="livePlayer" controls autoplay muted playsinline class="home-player"></video>
-                <div class="home-player-overlay" id="livePlayerIdleOverlay">
-                    <div class="text-center">
-                        <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
-                        <h3 class="text-light" data-i18n="web.home.offline.title">Stream is offline</h3>
-                        <p class="text-light opacity-75 mb-3" data-i18n="web.home.offline.body">Start streaming from the Configuration page or click Play to try anyway.</p>
-                        <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i><span data-i18n="web.home.play">Play</span></button>
+            <div class="row g-3 home-hero-row align-items-stretch">
+                <div class="col-lg-9 home-hero-player-col">
+                    <div class="home-player-wrapper">
+                        <video id="livePlayer" controls autoplay muted playsinline class="home-player"></video>
+                        <div class="home-player-overlay" id="livePlayerIdleOverlay">
+                            <div class="text-center">
+                                <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
+                                <h3 class="text-light" data-i18n="web.home.offline.title">Stream is offline</h3>
+                                <p class="text-light opacity-75 mb-3" data-i18n="web.home.offline.body">Start streaming from the Configuration page or click Play to try anyway.</p>
+                                <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i><span data-i18n="web.home.play">Play</span></button>
+                            </div>
+                        </div>
+                        <div class="home-player-controls" id="livePlayerControls">
+                            <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i><span data-i18n="web.home.stop">Stop</span></button>
+                            <span class="text-light small ms-2" id="livePlayerStatus" data-i18n="web.home.ready">Ready.</span>
+                        </div>
                     </div>
                 </div>
-                <div class="home-player-controls" id="livePlayerControls">
-                    <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i><span data-i18n="web.home.stop">Stop</span></button>
-                    <span class="text-light small ms-2" id="livePlayerStatus" data-i18n="web.home.ready">Ready.</span>
+                <div class="col-lg-3 home-hero-chat-col">
+                    <aside class="home-chat-panel">
+                        <header class="home-chat-header">
+                            <i class="bi bi-chat-dots me-1"></i>
+                            <span data-i18n="web.home.chat">Live chat</span>
+                            <span id="chatStateBadge" class="home-chat-state">offline</span>
+                            <span id="chatParticipantCount" class="home-chat-count"></span>
+                        </header>
+                        <div id="chatLog" class="home-chat-log"></div>
+                        <div id="chatUnavailable" class="home-chat-empty d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
+                        <div class="home-chat-nick-row">
+                            <span class="home-chat-nick-prefix" data-i18n="web.chat.as">as</span>
+                            <input id="chatNickInput" type="text" maxlength="32" placeholder="" data-i18n-placeholder="web.chat.nickname_placeholder">
+                            <button id="chatNickApply" type="button" data-i18n="web.chat.apply">Apply</button>
+                        </div>
+                        <div id="chatNickError" class="home-chat-error d-none"></div>
+                        <div class="home-chat-compose">
+                            <input id="chatMessageInput" type="text" maxlength="800" placeholder="" data-i18n-placeholder="web.chat.message_placeholder">
+                            <button id="chatSendBtn" type="button" title="Send" data-i18n-title="web.chat.send">
+                                <i class="bi bi-send-fill"></i>
+                            </button>
+                        </div>
+                    </aside>
                 </div>
             </div>
         </div>
@@ -126,8 +157,8 @@
                 </div>
 
                 <!-- Now playing — read-only info about what's on the live stream. -->
-                <div class="col-md-6">
-                    <div class="card h-100">
+                <div class="col-12">
+                    <div class="card">
                         <div class="card-body">
                             <h6 class="card-title text-uppercase text-muted small mb-3"><i class="bi bi-palette me-1"></i><span data-i18n="web.home.now_playing">Now playing</span></h6>
                             <div class="row g-3">
@@ -139,32 +170,6 @@
                                     <div class="text-muted small" data-i18n="web.home.shader">Shader</div>
                                     <div id="homeShader" class="fw-semibold">—</div>
                                 </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Chat (#84) — talks to the chat service over WebSocket. -->
-                <div class="col-md-6">
-                    <div class="card h-100">
-                        <div class="card-body d-flex flex-column" id="chatCard">
-                            <h6 class="card-title text-uppercase text-muted small mb-2 d-flex align-items-center">
-                                <i class="bi bi-chat-dots me-1"></i>
-                                <span data-i18n="web.home.chat">Chat</span>
-                                <span id="chatStateBadge" class="badge bg-secondary ms-2">idle</span>
-                                <span id="chatParticipantCount" class="text-muted small ms-auto"></span>
-                            </h6>
-                            <div id="chatLog" class="chat-log mb-2"></div>
-                            <div id="chatUnavailable" class="text-muted small mb-2 d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
-                            <div class="input-group input-group-sm mb-2">
-                                <span class="input-group-text" data-i18n="web.chat.as">as</span>
-                                <input id="chatNickInput" type="text" class="form-control" maxlength="32" placeholder="" data-i18n-placeholder="web.chat.nickname_placeholder">
-                                <button id="chatNickApply" type="button" class="btn btn-outline-secondary" data-i18n="web.chat.apply">Apply</button>
-                            </div>
-                            <div id="chatNickError" class="text-danger small mb-2 d-none"></div>
-                            <div class="input-group input-group-sm">
-                                <input id="chatMessageInput" type="text" class="form-control" maxlength="800" placeholder="" data-i18n-placeholder="web.chat.message_placeholder">
-                                <button id="chatSendBtn" type="button" class="btn btn-primary" data-i18n="web.chat.send">Send</button>
                             </div>
                         </div>
                     </div>

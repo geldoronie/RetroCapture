@@ -117,15 +117,7 @@
 
     function setState(newState) {
         state.connectionState = newState;
-        const colors = {
-            idle:         'bg-secondary',
-            resolving:    'bg-warning text-dark',
-            connecting:   'bg-warning text-dark',
-            connected:    'bg-success',
-            reconnecting: 'bg-warning text-dark',
-            error:        'bg-danger',
-        };
-        $stateBadge.className = 'badge ms-2 ' + (colors[newState] || 'bg-secondary');
+        $stateBadge.className = 'home-chat-state ' + newState;
         $stateBadge.textContent = newState;
         const sendable = newState === 'connected';
         $send.disabled = !sendable;
@@ -148,25 +140,26 @@
             (state.hostParticipantId && m.participant_id === state.hostParticipantId);
 
         const row = document.createElement('div');
-        row.className = 'chat-msg';
-        if (m.deleted) row.classList.add('text-muted', 'fst-italic');
+        row.className = 'home-chat-msg';
+        row.dataset.msgId = m.id;
+        if (m.deleted) row.classList.add('deleted');
 
         const time = formatTime(m.posted_at_ms);
         const nickClass = isHost
-            ? 'chat-nick chat-nick-host'
+            ? 'home-chat-nick-label host'
             : (m.participant_id === state.myParticipantId
-                ? 'chat-nick chat-nick-self'
-                : 'chat-nick');
+                ? 'home-chat-nick-label self'
+                : 'home-chat-nick-label');
 
         const hostBadge = isHost
-            ? '<span class="chat-host-badge">HOST</span> '
+            ? '<span class="home-chat-host-badge">Host</span>'
             : '';
 
         row.innerHTML =
-            (time ? `<span class="chat-time">${escapeHtml(time)}</span> ` : '') +
+            (time ? `<span class="home-chat-time">${escapeHtml(time)}</span>` : '') +
             hostBadge +
-            `<span class="${nickClass}">${escapeHtml(m.nickname)}:</span> ` +
-            `<span class="chat-body">${escapeHtml(m.deleted ? '[message removed]' : m.body)}</span>`;
+            `<span class="${nickClass}">${escapeHtml(m.nickname)}</span>` +
+            `<span class="home-chat-body">${escapeHtml(m.deleted ? '[message removed]' : m.body)}</span>`;
 
         $log.appendChild(row);
         if (state.autoScroll) {
