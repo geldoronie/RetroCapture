@@ -2,6 +2,7 @@
 
 #include "../chat/ChatClient.h"
 #include "../ui/UIManager.h"
+#include "../ui/UISectionHeader.h" // ui_status_bullet — emoji-safe dot
 
 #include <imgui.h>
 
@@ -151,9 +152,14 @@ void OSDChat::render()
     }
 
     // ---- status line (title bar already says "Chat") -----------------
-    // Bullet glyph + label colored together so the dot reads as a
-    // connection indicator at a glance, matching the web portal.
-    ImGui::TextColored(stateColor(snap.state), "\xE2\x97\x8F %s", stateLabel(snap.state));
+    // Bullet drawn through ImDrawList instead of a U+25CF glyph,
+    // because Dear ImGui's bundled Proggy Clean font has no data
+    // for that codepoint — the glyph would render as the missing
+    // box. Same approach UISectionHeader::ui_status_bullet uses
+    // for the Configuration-window section indicators.
+    ui_status_bullet(stateColor(snap.state));
+    ImGui::SameLine();
+    ImGui::TextColored(stateColor(snap.state), "%s", stateLabel(snap.state));
     if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
     {
         ImGui::SameLine();

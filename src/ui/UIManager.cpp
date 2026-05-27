@@ -175,6 +175,53 @@ bool UIManager::init(void *window)
     // fallback. The bullets are now drawn via ImDrawList primitives
     // through ui_status_bullet() in UISectionHeader.h — same
     // technique UIDirectoryBrowser::drawPadlockIcon uses.
+    //
+    // Optional emoji font (#84) — chat messages routinely contain
+    // emojis the default font can't render either. We don't bundle a
+    // font (Noto Emoji's monochrome TTF is ~530 KB and adding it
+    // would grow every release), but we DO honour one if the user
+    // drops it under assets/fonts/. The expected file is
+    // NotoEmoji-Regular.ttf (download from
+    // https://fonts.google.com/noto/specimen/Noto+Emoji). When
+    // present we merge a broad emoji + dingbats + supplemental
+    // symbols range into the default atlas so chat content lands
+    // with proper glyphs instead of fallback boxes.
+    {
+        const fs::path fontPath =
+            fs::path(Paths::getReadOnlyAssetsDir()) / "assets" / "fonts" /
+            "NotoEmoji-Regular.ttf";
+        if (fs::exists(fontPath))
+        {
+            ImGuiIO &io = ImGui::GetIO();
+            io.Fonts->AddFontDefault();
+            ImFontConfig cfg;
+            cfg.MergeMode  = true;
+            cfg.PixelSnapH = true;
+            // ImGui's atlas only supports the Basic Multilingual Plane
+            // (U+0000..U+FFFF) plus surrogate-paired codepoints up to
+            // U+10FFFF that ImWchar32 can address; the runtime build
+            // here uses ImWchar = 16-bit by default. Cover the BMP
+            // symbol ranges that don't need surrogates so the merge
+            // takes effect even on a stock build.
+            static const ImWchar ranges[] = {
+                0x2000, 0x206F,   // general punctuation
+                0x2190, 0x21FF,   // arrows
+                0x2300, 0x23FF,   // misc technical (⏎ etc.)
+                0x2500, 0x257F,   // box drawing
+                0x2580, 0x259F,   // block elements
+                0x25A0, 0x25FF,   // geometric shapes (●, ○, …)
+                0x2600, 0x26FF,   // misc symbols (☀, ★, ♥…)
+                0x2700, 0x27BF,   // dingbats (✓, ✦…)
+                0x2B00, 0x2BFF,   // misc symbols + arrows
+                0x3000, 0x303F,   // CJK punctuation
+                0xFB00, 0xFB06,   // Latin ligatures
+                0,
+            };
+            io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(),
+                                         13.0f, &cfg, ranges);
+            LOG_INFO("UIManager: merged emoji font from " + fontPath.string());
+        }
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
