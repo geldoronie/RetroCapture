@@ -124,11 +124,32 @@ bool Application::init()
     // Chat transport (#84). Created up front so the OSD panel has a
     // live pointer even before publish/connect; the client self-idles
     // until connect(streamId) is called by the publish or remote-meta
-    // path. Base URL comes from --chat-url; UI changes can later swap
-    // it at runtime via Application::setChatBaseUrl.
+    // path.
+    //
+    // URL precedence:
+    //   1. --chat-url (non-empty m_chatBaseUrl) wins on launch and is
+    //      written into UIManager so the Streaming → Advanced field
+    //      reflects the live value. The user can then edit it from
+    //      there.
+    //   2. Otherwise UIManager's value (loaded from config.json, or
+    //      the built-in default ws://localhost:8082) is the source
+    //      of truth.
+    // After init, the UI is the canonical value — syncDirectoryClient
+    // reads it every frame and pushes any change down to ChatClient.
     m_chatClient = std::make_unique<ChatClient>();
-    m_chatClient->setBaseUrl(m_chatBaseUrl);
-    if (m_ui) m_ui->setChatClient(m_chatClient.get());
+    if (m_ui)
+    {
+        if (!m_chatBaseUrl.empty())
+        {
+            m_ui->setChatBaseUrl(m_chatBaseUrl);
+        }
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+        m_ui->setChatClient(m_chatClient.get());
+    }
+    else
+    {
+        m_chatClient->setBaseUrl(m_chatBaseUrl);
+    }
 
     // Connect ShaderEngine to UI for parameters
     if (m_ui && m_shaderEngine)
@@ -5729,6 +5750,18 @@ void Application::applyPendingRemoteMeta()
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
+
+    // #84 — Keep ChatClient's base URL in sync with the editable
+    // Streaming → Advanced field. setBaseUrl is a no-op when the
+    // value hasn't changed; on change it tears down the WS and
+    // reconnects against the new URL. Runs at the top of the
+    // function (before any of the publish-gated early returns)
+    // so chat works whether or not the user has the directory
+    // publish toggle on.
+    if (m_chatClient)
+    {
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+    }
 
     // Mirror the remote capture's reconnect-backoff flag and the
     // "currently decoding frames" flag onto UIManager so the Info

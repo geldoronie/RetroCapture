@@ -1113,7 +1113,7 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             "(port-forwarding) — won't work behind CGNAT.");
     }
 
-    // Advanced: directory URL override + TLS dev toggle.
+    // Advanced: directory URL override + chat URL + TLS dev toggle.
     if (ImGui::TreeNode("Advanced"))
     {
         char buf[256];
@@ -1122,6 +1122,27 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         {
             m_uiManager->setDirectoryUrl(buf);
             m_uiManager->saveConfig();
+        }
+        // #84 — Chat service URL. Defaults to the local docker
+        // compose port; production is wss://chat.retrocapture.com.
+        // ws:// for the unencrypted local dev path, wss:// when
+        // talking to TLS-terminating proxies.
+        char chatBuf[256];
+        std::snprintf(chatBuf, sizeof(chatBuf), "%s",
+                      m_uiManager->getChatBaseUrl().c_str());
+        if (ImGui::InputText("Chat URL", chatBuf, sizeof(chatBuf)))
+        {
+            m_uiManager->setChatBaseUrl(chatBuf);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Chat service base URL. Accepts ws:// or wss://;\n"
+                "the HTTP form used for room resolution / history\n"
+                "is derived by swapping the scheme.\n"
+                "Default: ws://localhost:8082\n"
+                "Production: wss://chat.retrocapture.com");
         }
         // Dev escape hatch — only meaningful for https:// URLs.
         // Off by default. The label spells out "self-signed" because

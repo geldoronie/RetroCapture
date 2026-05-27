@@ -274,6 +274,12 @@ public:
     void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
     bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
     void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    // #84 — Chat service base URL (ws:// or wss://). Editable under
+    // Configurations → Streaming → Advanced, mirroring the directory
+    // URL field. Application reads this every frame and reconfigures
+    // the ChatClient when it changes (cheap no-op when unchanged).
+    const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
+    void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -1076,6 +1082,10 @@ private:
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
     std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // #84 — Chat URL. Default matches the local docker compose port
+    // for dev ergonomics; --chat-url overrides at launch; the
+    // Streaming → Advanced field overrides at runtime.
+    std::string m_chatBaseUrl             = "ws://localhost:8082";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.

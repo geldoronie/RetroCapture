@@ -2549,6 +2549,12 @@ void UIManager::loadConfig()
                 if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
                 if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
             }
+            // Chat URL (#84) — sibling to the directory block.
+            if (streaming.contains("chat"))
+            {
+                auto &chat = streaming["chat"];
+                if (chat.contains("baseUrl")) m_chatBaseUrl = chat["baseUrl"].get<std::string>();
+            }
         }
 
         // Preferences (#45 placeholder + window restructure)
@@ -2994,6 +3000,10 @@ void UIManager::saveConfig()
                 {"namedTunnelId",       m_directoryNamedTunnelId},
                 {"namedTunnelHostname", m_directoryNamedTunnelHostname},
                 {"privacyAcked",   m_directoryPrivacyAcked},
+            }},
+            // Chat service URL (#84) — sibling to directory.
+            {"chat", {
+                {"baseUrl", m_chatBaseUrl},
             }}};
 
         // Preferences (#45 placeholder + window restructure)

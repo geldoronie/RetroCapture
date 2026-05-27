@@ -189,11 +189,12 @@ private:
     // runtime edit in the UI reconfigures both immediately instead of
     // waiting for an app restart.
     std::string m_publishedDirectoryUrl;
-    // #84 — Chat-service base URL (ws:// or wss://). Plumbed in from
-    // --chat-url; defaults to the local docker compose port for dev
-    // ergonomics. Wired into m_chatClient on init and re-applied when
-    // setChatBaseUrl() is called.
-    std::string m_chatBaseUrl = "ws://localhost:8082";
+    // #84 — Chat-service base URL override from --chat-url. Empty
+    // means "no CLI override; let UIManager (loaded from config.json)
+    // pick the value". UIManager owns the persistent default and the
+    // runtime-editable field; Application syncs the UI value into
+    // m_chatClient every frame via syncChatTransport().
+    std::string m_chatBaseUrl;
     // #84 — Tracks the streamId the chat client is currently bound to,
     // so syncDirectoryClient can detect transitions (publish→unpublish
     // → re-publish with a fresh streamId).
