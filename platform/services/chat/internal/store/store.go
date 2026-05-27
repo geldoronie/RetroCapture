@@ -245,6 +245,56 @@ func (s *Store) GetOrCreateRoomForStream(
 	return r, true, nil
 }
 
+// GetRoomBySlug resolves a standalone room by its human-readable
+// slug. ErrNotFound if the slug isn't taken.
+func (s *Store) GetRoomBySlug(ctx context.Context, slug string) (*Room, error) {
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id FROM chat_rooms WHERE slug = ? LIMIT 1
+    `, slug)
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return s.GetRoom(ctx, id)
+}
+
+// ErrSlugTaken is returned by CreateStandaloneRoom when the
+// requested slug already exists. Callers map it to HTTP 409.
+var ErrSlugTaken = errors.New("slug already in use")
+
+// CreateStandaloneRoom inserts a kind=standalone row with the given
+// slug + title. Returns ErrSlugTaken when slug is already taken.
+// The caller is expected to have validated slug shape ahead of time.
+func (s *Store) CreateStandaloneRoom(
+	ctx context.Context,
+	roomID, slug, title string,
+) (*Room, error) {
+	// Pre-check so we can return a typed error instead of relying on
+	// the SQLite UNIQUE-constraint error text.
+	if existing, err := s.GetRoomBySlug(ctx, slug); err == nil && existing != nil {
+		return nil, ErrSlugTaken
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx, `
+        INSERT INTO chat_rooms(
+            id, kind, linked_stream_id, owner_account_id, slug,
+            title, description, settings_json,
+            created_at_ms, archived_at_ms
+        )
+        VALUES (?, ?, NULL, NULL, ?, ?, '', '{}', ?, NULL)
+    `, roomID, string(RoomKindStandalone), slug, title,
+		now.UnixMilli()); err != nil {
+		return nil, fmt.Errorf("insert standalone room: %w", err)
+	}
+	return s.GetRoom(ctx, roomID)
+}
+
 // InsertMessage records a chat message. Caller supplies a pre-
 // generated id so the broadcast and the persistence share the same
 // value (the hub fanout pre-computes the wire message with its id

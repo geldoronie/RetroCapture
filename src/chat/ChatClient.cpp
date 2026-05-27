@@ -96,6 +96,7 @@ void ChatClient::connect(const std::string &streamId,
     {
         std::lock_guard<std::mutex> lk(m_mu);
         const bool sameTarget = (m_streamId == streamId) &&
+                                (m_slug.empty()) &&
                                 (m_nickname == nickname) &&
                                 (m_asHost   == asHost) &&
                                 (m_state == State::Connected ||
@@ -109,8 +110,52 @@ void ChatClient::connect(const std::string &streamId,
     {
         std::lock_guard<std::mutex> lk(m_mu);
         m_streamId        = streamId;
+        m_slug.clear();
         m_nickname        = nickname;
         m_asHost          = asHost;
+        m_iAmHost         = false;
+        m_messages.clear();
+        m_participants.clear();
+        m_myParticipantId.clear();
+        m_hostParticipantId.clear();
+        m_roomId.clear();
+        m_helloSent       = false;
+        m_helloAcked      = false;
+        m_unreadCount     = 0;
+        m_lastError.clear();
+        m_stopRequested.store(false);
+        setStateLocked(State::Resolving);
+    }
+
+    m_resolverRunning.store(true);
+    m_resolver = std::thread(&ChatClient::resolveAndConnect, this);
+}
+
+void ChatClient::connectBySlug(const std::string &slug,
+                               const std::string &nickname)
+{
+    if (slug.empty()) return;
+
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        const bool sameTarget = (m_slug == slug) &&
+                                (m_streamId.empty()) &&
+                                (m_nickname == nickname) &&
+                                (!m_asHost) &&
+                                (m_state == State::Connected ||
+                                 m_state == State::Connecting ||
+                                 m_state == State::Resolving);
+        if (sameTarget) return;
+    }
+
+    disconnect();
+
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        m_slug            = slug;
+        m_streamId.clear();
+        m_nickname        = nickname;
+        m_asHost          = false;
         m_iAmHost         = false;
         m_messages.clear();
         m_participants.clear();
@@ -161,21 +206,25 @@ void ChatClient::resolveAndConnect()
 {
     std::string baseUrl;
     std::string streamId;
+    std::string slug;
     {
         std::lock_guard<std::mutex> lk(m_mu);
         baseUrl  = m_baseUrl;
         streamId = sanitizeStreamId(m_streamId);
+        slug     = sanitizeStreamId(m_slug); // same charset whitelist
     }
 
-    if (baseUrl.empty() || streamId.empty())
+    if (baseUrl.empty() || (streamId.empty() && slug.empty()))
     {
         std::lock_guard<std::mutex> lk(m_mu);
-        setErrorLocked("missing baseUrl or streamId");
+        setErrorLocked("missing baseUrl or target (streamId/slug)");
         return;
     }
 
     const std::string httpBase = deriveHttpFromWs(baseUrl);
-    const std::string resolveUrl = httpBase + "/rooms/by-stream/" + streamId;
+    const std::string resolveUrl = !slug.empty()
+        ? httpBase + "/rooms/by-slug/"   + slug
+        : httpBase + "/rooms/by-stream/" + streamId;
 
     auto resp = HttpClient::send(HttpClient::Method::GET, resolveUrl, "", 5000);
     if (m_stopRequested.load()) return;
@@ -532,6 +581,7 @@ void ChatClient::post(const std::string &body)
 void ChatClient::setNickname(const std::string &nick)
 {
     std::string streamId;
+    std::string slug;
     std::string currentNick;
     bool        asHost = false;
     {
@@ -539,19 +589,87 @@ void ChatClient::setNickname(const std::string &nick)
         if (m_nickname == nick) return;
         m_nickname  = nick;
         streamId    = m_streamId;
+        slug        = m_slug;
         currentNick = nick;
         asHost      = m_asHost;
     }
     // Reconnect to re-handshake — the wire protocol doesn't have a
-    // mid-session rename frame. Preserve the host claim across the
-    // reconnect; the server's room.hostID is cleared on the Leave
-    // that disconnect() triggers, so the new hello's role claim wins
-    // again.
-    if (!streamId.empty())
+    // mid-session rename frame. Preserve the host claim and the
+    // target type (stream-linked vs standalone) across the reconnect.
+    if (!slug.empty())
+    {
+        disconnect();
+        connectBySlug(slug, currentNick);
+    }
+    else if (!streamId.empty())
     {
         disconnect();
         connect(streamId, currentNick, asHost);
     }
+}
+
+bool ChatClient::createStandaloneRoom(const std::string &title,
+                                      const std::string &slug,
+                                      std::string       &outSlug,
+                                      std::string       &outError)
+{
+    std::string baseUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        baseUrl = m_baseUrl;
+    }
+    if (baseUrl.empty())
+    {
+        outError = "no chat base URL configured";
+        return false;
+    }
+
+    nlohmann::json body = nlohmann::json::object();
+    if (!title.empty()) body["title"] = title;
+    if (!slug.empty())  body["slug"]  = slug;
+
+    const std::string url = deriveHttpFromWs(baseUrl) + "/rooms";
+    auto resp = HttpClient::send(HttpClient::Method::POST, url, body.dump(), 5000);
+    if (!resp.ok)
+    {
+        outError = resp.error.empty() ? "network failure" : resp.error;
+        return false;
+    }
+    if (resp.statusCode != 200 && resp.statusCode != 201)
+    {
+        // Server returned a JSON error envelope; lift the message
+        // when possible so the UI shows "slug already in use" rather
+        // than "HTTP 409".
+        std::string serverMsg;
+        try
+        {
+            auto j = nlohmann::json::parse(resp.body);
+            const auto err = j.value("error", nlohmann::json::object());
+            serverMsg = err.value("message", std::string{});
+        }
+        catch (...) { /* swallow */ }
+        outError = serverMsg.empty()
+            ? ("HTTP " + std::to_string(resp.statusCode))
+            : serverMsg;
+        return false;
+    }
+
+    try
+    {
+        auto j = nlohmann::json::parse(resp.body);
+        outSlug = j.at("data").value("slug", std::string{});
+    }
+    catch (const std::exception &e)
+    {
+        outError = std::string("parse: ") + e.what();
+        return false;
+    }
+    if (outSlug.empty())
+    {
+        outError = "server returned no slug";
+        return false;
+    }
+    return true;
 }
 
 ChatClient::Snapshot ChatClient::getSnapshot() const
@@ -562,6 +680,7 @@ ChatClient::Snapshot ChatClient::getSnapshot() const
     s.lastError         = m_lastError;
     s.baseUrl           = m_baseUrl;
     s.streamId          = m_streamId;
+    s.slug              = m_slug;
     s.roomId            = m_roomId;
     s.nickname          = m_nickname;
     s.myParticipantId   = m_myParticipantId;

@@ -88,7 +88,8 @@ public:
         State                     state         = State::Idle;
         std::string               lastError;
         std::string               baseUrl;      // e.g. "ws://localhost:8082"
-        std::string               streamId;
+        std::string               streamId;     // empty when standalone room
+        std::string               slug;         // non-empty when standalone room
         std::string               roomId;
         std::string               nickname;
         std::string               myParticipantId;
@@ -132,6 +133,25 @@ public:
     void connect(const std::string &streamId,
                  const std::string &nickname,
                  bool               asHost = false);
+
+    /// Connect to a standalone room by its slug. v0.5 standalone
+    /// rooms have no host role — asHost is implicitly false. Same
+    /// idempotency rules as connect().
+    void connectBySlug(const std::string &slug,
+                       const std::string &nickname);
+
+    /// Create a standalone room via POST /rooms. Synchronous: blocks
+    /// the calling thread on the HTTP round-trip (~50 ms in dev).
+    /// Returns true on success and writes the server-assigned slug
+    /// into `outSlug`; the caller is expected to follow up with
+    /// connectBySlug(outSlug, nickname). On failure returns false
+    /// and writes the human-readable reason into `outError`.
+    /// `title` and `slug` may both be empty — server auto-fills
+    /// either when missing.
+    bool createStandaloneRoom(const std::string &title,
+                              const std::string &slug,
+                              std::string       &outSlug,
+                              std::string       &outError);
 
     /// Tear down the WS session. Idempotent.
     void disconnect();
@@ -180,6 +200,7 @@ private:
     std::string                 m_baseUrl;
     std::string                 m_streamId;
     std::string                 m_nickname;
+    std::string                 m_slug;          // non-empty == standalone
     std::string                 m_roomId;
     std::string                 m_myParticipantId;
     std::string                 m_hostParticipantId;

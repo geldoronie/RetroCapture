@@ -112,13 +112,11 @@ void OSDChat::render()
     if (!m_visible || !m_chat) return;
 
     const auto snap = m_chat->getSnapshot();
-
-    // Nothing to subscribe to — collapse the overlay rather than
-    // surface an empty box.
-    if (snap.state == ChatClient::State::Idle && snap.streamId.empty())
-    {
-        return;
-    }
+    // No more auto-hide — the user controls visibility via F8 / View
+    // menu. Standalone rooms break the old "auto-hide when no
+    // streamId" rule because the user needs the Rooms… button to
+    // even be reachable. When the panel is idle the empty state
+    // tells them to click Rooms….
 
     // Initial placement only — top-right corner with a reasonable
     // size. After that the user is free to drag and resize; imgui.ini
@@ -165,6 +163,106 @@ void OSDChat::render()
     {
         ImGui::SameLine();
         ImGui::TextDisabled("• %zu", snap.participants.size());
+    }
+    // Show which room we're in (slug when standalone, otherwise the
+    // host stream is implicit). The header gets crowded fast so this
+    // sits on its own line when there's something to surface.
+    if (!snap.slug.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("• #%s", snap.slug.c_str());
+    }
+    // Room-picker button — opens a popup with Join-by-slug + Create.
+    // Right-aligned so it doesn't shift the status line on narrow
+    // panels.
+    ImGui::SameLine();
+    {
+        const float btnW = 60.0f;
+        float regionW = ImGui::GetContentRegionAvail().x;
+        if (regionW > btnW) ImGui::Dummy(ImVec2(regionW - btnW, 1));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Rooms…"))
+        {
+            ImGui::OpenPopup("##chatRoomsPopup");
+            m_standaloneError.clear();
+        }
+    }
+    if (ImGui::BeginPopup("##chatRoomsPopup"))
+    {
+        m_inputFocused = true; // keep F8 toggle from firing while in popup
+
+        ImGui::Text("Join existing room");
+        ImGui::SetNextItemWidth(220.0f);
+        const bool joinEnter = ImGui::InputText(
+            "##joinSlug", m_joinSlugBuf, sizeof(m_joinSlugBuf),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        const bool joinClick = ImGui::Button("Join");
+        if (joinEnter || joinClick)
+        {
+            std::string slug = m_joinSlugBuf;
+            // Trim + lowercase to match server-side validation.
+            while (!slug.empty() && std::isspace((unsigned char)slug.back())) slug.pop_back();
+            for (auto &c : slug) c = static_cast<char>(std::tolower((unsigned char)c));
+            if (slug.empty())
+            {
+                m_standaloneError = "Slug can't be empty";
+            }
+            else
+            {
+                m_chat->connectBySlug(slug, snap.nickname);
+                m_standaloneError.clear();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Create new room");
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputText("##createTitle", m_createTitleBuf, sizeof(m_createTitleBuf));
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint(
+            "##createSlug", "slug (optional, auto-generated)",
+            m_createSlugBuf, sizeof(m_createSlugBuf));
+        ImGui::BeginDisabled(m_createInFlight);
+        if (ImGui::Button("Create + Join"))
+        {
+            m_standaloneError.clear();
+            m_createInFlight = true;
+            std::string newSlug;
+            std::string err;
+            const bool ok = m_chat->createStandaloneRoom(
+                m_createTitleBuf, m_createSlugBuf, newSlug, err);
+            m_createInFlight = false;
+            if (!ok)
+            {
+                m_standaloneError = err;
+            }
+            else
+            {
+                m_chat->connectBySlug(newSlug, snap.nickname);
+                m_createTitleBuf[0] = '\0';
+                m_createSlugBuf[0]  = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (!m_standaloneError.empty())
+        {
+            ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                               "%s", m_standaloneError.c_str());
+        }
+        if (!snap.streamId.empty() || !snap.slug.empty())
+        {
+            ImGui::Separator();
+            if (ImGui::Button("Leave / disconnect"))
+            {
+                m_chat->disconnect();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
     }
     ImGui::Separator();
 

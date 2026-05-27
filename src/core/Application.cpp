@@ -6075,7 +6075,12 @@ void Application::syncDirectoryClient()
     // handed us one, open the chat session against it. Re-bind if
     // the streamId changes between Active runs (re-publish picks up
     // a fresh id). Drop the session when we leave Active.
-    if (m_chatClient)
+    //
+    // BYPASS: when the user has manually joined a standalone room
+    // via the OSD popup (snap.slug non-empty), the auto-bind path
+    // stays out of the way — otherwise we'd fight the user's
+    // intent. They reclaim auto-bind by hitting Leave on the popup.
+    if (m_chatClient && m_chatClient->getSnapshot().slug.empty())
     {
         const std::string streamId = m_directoryClient->getStreamId();
         const bool active = (state == DirectoryClient::State::Active) && !streamId.empty();

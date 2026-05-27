@@ -66,6 +66,26 @@ type roomByStreamPayload struct {
 	Created bool   `json:"created"`
 }
 
+type roomBySlugPayload struct {
+	RoomID string `json:"room_id"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+}
+
+// Request body for POST /rooms — both fields are optional. An empty
+// slug triggers server-side autogeneration; an empty title falls
+// back to the slug.
+type createRoomRequest struct {
+	Title string `json:"title"`
+	Slug  string `json:"slug"`
+}
+
+type createRoomPayload struct {
+	RoomID string `json:"room_id"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+}
+
 // --- WebSocket envelope ---------------------------------------------
 
 // wsFrame is a single JSON frame on the WebSocket. Exactly one of the

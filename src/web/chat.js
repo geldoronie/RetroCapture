@@ -48,6 +48,9 @@
     const state = {
         chatUrl:           '',
         streamId:          '',
+        slug:              '',  // set from window.location.hash; non-empty
+                                // pins the panel to a standalone room and
+                                // suppresses the /meta stream-linked auto-bind
         roomId:            '',
         nickname:          localStorage.getItem(NICK_KEY) || '',
         ws:                null,
@@ -235,8 +238,13 @@
         }
     }
 
-    async function resolveRoom(streamId) {
-        const url = toHttpBase(state.chatUrl) + '/rooms/by-stream/' + encodeURIComponent(streamId);
+    async function resolveRoom() {
+        // Slug pins win — standalone rooms are user-chosen, stream-
+        // linked is the fallback when nothing was pinned via URL.
+        const base = toHttpBase(state.chatUrl);
+        const url = state.slug
+            ? base + '/rooms/by-slug/'   + encodeURIComponent(state.slug)
+            : base + '/rooms/by-stream/' + encodeURIComponent(state.streamId);
         const resp = await fetch(url, { credentials: 'omit' });
         if (!resp.ok) throw new Error('resolve HTTP ' + resp.status);
         const j = await resp.json();
@@ -284,7 +292,8 @@
     }
 
     async function openSessionInner() {
-        if (!state.chatUrl || !state.streamId) {
+        const hasTarget = !!state.chatUrl && (!!state.streamId || !!state.slug);
+        if (!hasTarget) {
             teardown();
             setState('idle');
             $unavailable.classList.remove('d-none');
@@ -297,7 +306,7 @@
         setState('resolving');
         let roomId;
         try {
-            roomId = await resolveRoom(state.streamId);
+            roomId = await resolveRoom();
         } catch (err) {
             console.warn('chat resolve failed:', err);
             setState('error');
@@ -502,6 +511,17 @@
 
     // --- Discovery loop -------------------------------------------------
 
+    // Parse the URL hash for a standalone-room pin: #r/<slug>. When
+    // present the panel ignores /meta's stream-linked binding and
+    // talks to the slug instead. Lets viewers share a link like
+    // https://stream.example.com/#r/smash-sun without the host having
+    // to do anything chat-side.
+    function readHashSlug() {
+        const h = (window.location.hash || '').replace(/^#/, '');
+        const m = h.match(/^r\/([a-z0-9][a-z0-9-]{1,40})$/i);
+        return m ? m[1].toLowerCase() : '';
+    }
+
     // /meta is on the same origin as the page; api.js is set up for the
     // /api/v1/* endpoints, so we just fetch /meta directly.
     async function pollMeta() {
@@ -512,19 +532,32 @@
             const chat = meta.chat || {};
             const url  = chat.url || '';
             const sid  = chat.streamId || '';
+            const slug = readHashSlug();
+
+            // Slug-pinned mode: hash is the source of truth, /meta only
+            // contributes the chat URL. If the hash changes (popstate)
+            // pollMeta will detect the new slug and reconnect.
+            if (slug) {
+                if (!url) return;
+                if (url !== state.chatUrl || slug !== state.slug) {
+                    state.chatUrl  = url;
+                    state.streamId = '';
+                    state.slug     = slug;
+                    openSession();
+                }
+                return;
+            }
+
+            // Stream-linked mode (default).
             // Defensive: a poll that returns empty values almost always
             // means the host's DirectoryClient is briefly Error-state
-            // between heartbeats (publish about to retry). Tearing the
-            // chat down on every blip would make the panel flash
-            // "idle ↔ connected" and re-resolve the room every few
-            // seconds. Ignore empties; only act on a stable, non-empty
-            // configuration. The cost is that "host genuinely stopped
-            // publishing" doesn't snap the panel to idle immediately —
-            // the user can refresh the page to clean up.
+            // between heartbeats. Ignore empties; only act on a stable,
+            // non-empty config.
             if (!url || !sid) return;
-            if (url !== state.chatUrl || sid !== state.streamId) {
+            if (url !== state.chatUrl || sid !== state.streamId || state.slug) {
                 state.chatUrl  = url;
                 state.streamId = sid;
+                state.slug     = '';
                 openSession();
             }
         } catch (err) {
@@ -535,4 +568,13 @@
     setState('idle');
     pollMeta();
     setInterval(pollMeta, 5000);
+
+    // Hash change → re-resolve on next poll. Don't trigger openSession
+    // synchronously here so we don't race pollMeta's in-flight fetch.
+    window.addEventListener('hashchange', () => {
+        // Force re-evaluation: clearing the cached slug makes the next
+        // pollMeta tick treat the URL as new.
+        const slug = readHashSlug();
+        if (slug !== state.slug) pollMeta();
+    });
 })();

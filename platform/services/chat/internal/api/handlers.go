@@ -48,7 +48,9 @@ func (s *Server) Routes() http.Handler {
 	// /rooms/* — pattern matching is intentionally manual so we keep
 	// the dep on http.ServeMux without pulling chi/gorilla/etc.
 	mux.HandleFunc("/rooms/by-stream/", s.handleRoomByStream)
-	mux.HandleFunc("/rooms/", s.handleRoom)
+	mux.HandleFunc("/rooms/by-slug/",   s.handleRoomBySlug)
+	mux.HandleFunc("/rooms",            s.handleRoomsCollection)
+	mux.HandleFunc("/rooms/",           s.handleRoom)
 
 	// WebSocket upgrade — implemented in ws.go on the same Server.
 	mux.HandleFunc("/ws", s.handleWebSocket)
@@ -113,6 +115,116 @@ func (s *Server) handleRoomByStream(w http.ResponseWriter, r *http.Request) {
 		RoomID:  room.ID,
 		Created: created,
 	})
+}
+
+// handleRoomBySlug serves GET /rooms/by-slug/<slug> — the standalone-
+// room analog of by-stream. 404 if no room owns the slug.
+func (s *Server) handleRoomBySlug(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+		return
+	}
+	slug := strings.TrimPrefix(r.URL.Path, "/rooms/by-slug/")
+	if !isValidSlug(slug) {
+		s.writeError(w, http.StatusBadRequest, "bad_request",
+			"slug must match ^[a-z0-9][a-z0-9-]{1,40}$")
+		return
+	}
+	row, err := s.Store.GetRoomBySlug(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "room_not_found", "no such slug")
+			return
+		}
+		s.Logger.Error("get_room_by_slug", "err", err, "slug", slug)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+		return
+	}
+	s.writeData(w, http.StatusOK, roomBySlugPayload{
+		RoomID: row.ID,
+		Slug:   row.Slug,
+		Title:  row.Title,
+	})
+}
+
+// handleRoomsCollection serves POST /rooms — creates a new standalone
+// room. v0.5 has no authentication; anyone can create. v1 ties room
+// ownership to the directory account that posted.
+func (s *Server) handleRoomsCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
+		return
+	}
+	var req createRoomRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+
+	slug := strings.TrimSpace(strings.ToLower(req.Slug))
+	if slug == "" {
+		slug = generateSlug()
+	} else if !isValidSlug(slug) {
+		s.writeError(w, http.StatusBadRequest, "bad_request",
+			"slug must match ^[a-z0-9][a-z0-9-]{1,40}$")
+		return
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if len(title) > 120 {
+		title = title[:120]
+	}
+	if title == "" {
+		title = slug
+	}
+
+	roomID := "r_" + shortID()
+	room, err := s.Store.CreateStandaloneRoom(r.Context(), roomID, slug, title)
+	if err != nil {
+		if errors.Is(err, store.ErrSlugTaken) {
+			s.writeError(w, http.StatusConflict, "slug_taken", "slug already in use")
+			return
+		}
+		s.Logger.Error("create_standalone_room", "err", err, "slug", slug)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+		return
+	}
+
+	s.writeData(w, http.StatusCreated, createRoomPayload{
+		RoomID: room.ID,
+		Slug:   room.Slug,
+		Title:  room.Title,
+	})
+}
+
+// isValidSlug enforces the same shape we documented in
+// docs/CHAT_PROTOCOL.md: lowercase alphanumeric + dashes, 2..41 chars,
+// must start with a letter or digit (not a dash).
+func isValidSlug(s string) bool {
+	n := len(s)
+	if n < 2 || n > 41 {
+		return false
+	}
+	if s[0] == '-' {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// generateSlug returns an 8-char hex slug for server-generated rooms.
+// Cheaper to type / share than a UUID; 8 hex chars = 32 bits of
+// entropy which is enough for the v0.5 namespace.
+func generateSlug() string {
+	return shortID()[:8]
 }
 
 // handleRoom serves GET /rooms/<roomId> and GET /rooms/<roomId>/history.

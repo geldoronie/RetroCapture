@@ -64,6 +64,16 @@ private:
     char        m_nickBuf[64]  = {0};
     bool        m_nickInitialized = false;
 
+    // Standalone-room popup buffers (#84). Live across frames so what
+    // the user typed doesn't reset on every render.
+    char        m_joinSlugBuf[64]   = {0};
+    char        m_createTitleBuf[128] = {0};
+    char        m_createSlugBuf[64] = {0};
+    std::string m_standaloneError;
+    // Set true when a POST /rooms is in flight; disables the Create
+    // button so we don't double-fire. Cleared by ChatClient's reply.
+    bool        m_createInFlight = false;
+
     // #84 — Transient inline validation feedback for the nickname
     // Apply button. Cleared next frame when the user resumes typing
     // or successfully reconnects.
