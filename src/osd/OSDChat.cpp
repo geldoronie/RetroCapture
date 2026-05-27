@@ -420,6 +420,16 @@ void OSDChat::render()
     // ---- input row ----------------------------------------------------
     const bool sendable = snap.state == ChatClient::State::Connected;
     ImGui::BeginDisabled(!sendable);
+    // Refocus the input on the frame AFTER a submit. ImGui's
+    // EnterReturnsTrue deactivates the widget on submission; without
+    // this the user has to click back in for every message. Setting
+    // SetKeyboardFocusHere(0) BEFORE the InputText queues focus for
+    // that next widget when the new frame paints.
+    if (m_refocusMessageInput)
+    {
+        ImGui::SetKeyboardFocusHere(0);
+        m_refocusMessageInput = false;
+    }
     ImGui::SetNextItemWidth(-60.0f);
     bool submitted = ImGui::InputText("##chatInput", m_inputBuf, sizeof(m_inputBuf),
                                       ImGuiInputTextFlags_EnterReturnsTrue);
@@ -443,6 +453,7 @@ void OSDChat::render()
         {
             m_chat->post(body);
             m_inputBuf[0] = '\0';
+            m_refocusMessageInput = true; // keep cursor in the input
         }
     }
 

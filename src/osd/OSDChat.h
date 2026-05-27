@@ -78,4 +78,10 @@ private:
     // Apply button. Cleared next frame when the user resumes typing
     // or successfully reconnects.
     std::string m_nickError;
+
+    // Set when the message input was just submitted (Enter or Send
+    // button). The render path calls ImGui::SetKeyboardFocusHere
+    // BEFORE the input on the next frame so the user can keep typing
+    // without having to click back in.
+    bool        m_refocusMessageInput = false;
 };

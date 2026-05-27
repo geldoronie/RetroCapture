@@ -496,6 +496,11 @@
                 post: { body: body },
             }));
             $msg.value = '';
+            // Restore focus on the input — Enter keeps it natively,
+            // but clicking the Send button moves focus to the button.
+            // Either way, refocus so the user can keep typing without
+            // a stray click on the textbox between every message.
+            $msg.focus();
         } catch (err) {
             console.warn('post send failed:', err);
         }
