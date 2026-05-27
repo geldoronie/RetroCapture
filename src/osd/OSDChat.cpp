@@ -419,54 +419,99 @@ void OSDChat::render()
 
     // ---- input row ----------------------------------------------------
     //
-    // Why InputTextMultiline at single-row height instead of plain
-    // InputText: ImGui's single-line InputText deactivates the widget
-    // on every Enter (regardless of EnterReturnsTrue). The user has
-    // to click back into the field for the next message. Refocus
-    // tricks (SetKeyboardFocusHere -1 same-frame, flag + 0 next-
-    // frame, both pattern variants from imgui_demo.cpp) all bounce
-    // off the actual focus state on this build. Sidestepping the
-    // problem entirely: use the multi-line widget at single-row
-    // visual height, where Enter inserts '\n' into the buffer
-    // instead of deactivating. We detect the newline as our send
-    // trigger and clear the buffer in place — focus never moves.
+    // InputTextMultiline at single-row height so Enter inserts '\n'
+    // instead of deactivating the widget (the focus-loss problem of
+    // plain InputText that no SetKeyboardFocusHere variant could
+    // recover from on this build).
+    //
+    // Catch: while the widget is active, ImGui caches the text in
+    // its own ImGuiInputTextState. Modifying m_inputBuf externally
+    // (e.g. `m_inputBuf[0] = '\0'`) is ignored — ImGui reapplies its
+    // cached "hello\n" on the next frame, my newline scan fires
+    // again, the message gets posted in a loop. The fix is to do
+    // the clear THROUGH the callback API, which mutates the active
+    // widget's state directly.
+    //
+    // Callback design: CallbackEdit fires on every edit. Inside we
+    // scan for '\n'; on finding one we capture everything before it
+    // into pendingPost, then DeleteChars from 0..BufTextLen so the
+    // buffer ends frame empty AND ImGui's cached state agrees.
+    struct EditCb
+    {
+        std::string pendingPost;
+    };
+    static EditCb editCb; // function-local static; the OSD chat is
+                          // a singleton from the user's POV and the
+                          // pendingPost is consumed every frame.
+    auto editCallback = [](ImGuiInputTextCallbackData *data) -> int {
+        auto *cb = static_cast<EditCb *>(data->UserData);
+        if (data->EventFlag != ImGuiInputTextFlags_CallbackEdit) return 0;
+        for (int i = 0; i < data->BufTextLen; ++i)
+        {
+            if (data->Buf[i] == '\n')
+            {
+                cb->pendingPost.assign(data->Buf, data->Buf + i);
+                // Strip everything from 0 onwards — clears the line
+                // that just got submitted (and any junk after \n).
+                data->DeleteChars(0, data->BufTextLen);
+                break;
+            }
+        }
+        return 0;
+    };
+
     const bool sendable = snap.state == ChatClient::State::Connected;
     const float rowH = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f;
     ImGui::BeginDisabled(!sendable);
     const ImVec2 inputSize(
         ImGui::GetContentRegionAvail().x - 60.0f - ImGui::GetStyle().ItemSpacing.x,
         rowH);
-    ImGui::InputTextMultiline("##chatInput", m_inputBuf, sizeof(m_inputBuf),
-                              inputSize,
-                              ImGuiInputTextFlags_NoHorizontalScroll);
+    ImGui::InputTextMultiline(
+        "##chatInput", m_inputBuf, sizeof(m_inputBuf),
+        inputSize,
+        ImGuiInputTextFlags_NoHorizontalScroll |
+            ImGuiInputTextFlags_CallbackEdit,
+        editCallback, &editCb);
     if (ImGui::IsItemActive()) m_inputFocused = true;
     ImGui::SameLine();
     const bool sendClicked = ImGui::Button("Send", ImVec2(-1.0f, rowH));
     ImGui::EndDisabled();
 
-    // Detect Enter via the '\n' the multi-line widget appended.
-    char *nlPos = std::strchr(m_inputBuf, '\n');
-    const bool enterSubmit = (nlPos != nullptr);
-
-    if ((enterSubmit || sendClicked) && sendable)
+    // 1) Enter path — body was captured by the callback, buffer
+    //    already cleared via DeleteChars while the widget was
+    //    rendering. Post once, drop the pending body.
+    if (!editCb.pendingPost.empty())
     {
-        // Truncate at the first newline so the body is everything
-        // the user typed BEFORE pressing Enter; anything they pasted
-        // with embedded newlines past that gets dropped (mirrors a
-        // single-line input's behaviour from the user's POV).
-        if (nlPos) *nlPos = '\0';
+        if (sendable)
+        {
+            std::string body = std::move(editCb.pendingPost);
+            // Trim trailing whitespace (the line never contained a
+            // newline — that was the submit trigger and got stripped).
+            while (!body.empty() &&
+                   (body.back() == '\r' || body.back() == ' ' || body.back() == '\t'))
+            {
+                body.pop_back();
+            }
+            if (!body.empty()) m_chat->post(body);
+        }
+        editCb.pendingPost.clear();
+    }
+
+    // 2) Send button path — widget isn't active during the click,
+    //    so the callback isn't going to fire. Read the buffer
+    //    directly and clear it (the deactivation that ImGui already
+    //    handles for us on the button click means ImGui's cached
+    //    state isn't fighting us here).
+    if (sendClicked && sendable)
+    {
         std::string body = m_inputBuf;
         while (!body.empty() &&
-               (body.back() == '\r' || body.back() == ' ' || body.back() == '\t'))
+               (body.back() == '\n' || body.back() == '\r' ||
+                body.back() == ' '  || body.back() == '\t'))
         {
             body.pop_back();
         }
-        if (!body.empty())
-        {
-            m_chat->post(body);
-        }
-        // Clear buffer regardless — even empty Enter strokes shouldn't
-        // leave a stray \n behind.
+        if (!body.empty()) m_chat->post(body);
         m_inputBuf[0] = '\0';
     }
 
