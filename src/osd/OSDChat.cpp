@@ -130,19 +130,55 @@ void OSDChat::render()
     }
     ImGui::TextDisabled("as");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(-50.0f);
-    if (ImGui::InputText("##chatNick", m_nickBuf, sizeof(m_nickBuf),
-                         ImGuiInputTextFlags_EnterReturnsTrue))
+    ImGui::SetNextItemWidth(-60.0f);
+    const bool nickEnterSubmit =
+        ImGui::InputText("##chatNick", m_nickBuf, sizeof(m_nickBuf),
+                         ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemActive()) m_inputFocused = true;
+    if (ImGui::IsItemEdited())  m_nickError.clear();
+    ImGui::SameLine();
+    const std::string typedNick = m_nickBuf;
+    const bool nickChanged      = (typedNick != snap.nickname);
+    const bool nickEmpty        = typedNick.empty();
+    ImGui::BeginDisabled(!nickChanged || nickEmpty);
+    const bool applyClicked = ImGui::Button("Apply", ImVec2(-1.0f, 0.0f));
+    ImGui::EndDisabled();
+    if (nickEnterSubmit || applyClicked)
     {
-        const std::string newNick = m_nickBuf;
-        if (newNick != snap.nickname && !newNick.empty())
+        // Client-side dedup: refuse if the typed nickname is held by
+        // any OTHER participant in the room. Self-match (same id) is
+        // allowed because that's just a no-op rename to the current
+        // value. v0.5 doesn't validate server-side — race conditions
+        // can let two clients pick the same name; v1 will add a
+        // server `nickname_taken` error frame.
+        bool collision = false;
+        for (const auto &part : snap.participants)
         {
-            m_chat->setNickname(newNick);
+            if (part.id != snap.myParticipantId && part.nickname == typedNick)
+            {
+                collision = true;
+                break;
+            }
+        }
+        if (nickEmpty)
+        {
+            m_nickError = "Nickname can't be empty";
+        }
+        else if (collision)
+        {
+            m_nickError = "Nickname already in use";
+        }
+        else if (nickChanged)
+        {
+            m_nickError.clear();
+            m_chat->setNickname(typedNick);
         }
     }
-    if (ImGui::IsItemActive()) m_inputFocused = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("apply⏎"); // U+23CE Return symbol
+    if (!m_nickError.empty())
+    {
+        ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f), "%s",
+                           m_nickError.c_str());
+    }
     ImGui::Separator();
 
     // ---- message list -------------------------------------------------
@@ -164,9 +200,25 @@ void OSDChat::render()
                 ImGui::TextDisabled("%s", when.c_str());
                 ImGui::SameLine();
             }
-            const ImVec4 nameColor = m.local
-                ? ImVec4(0.45f, 0.85f, 0.50f, 1.0f)
-                : ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
+            // Fallback: a message with no `is_host` field but whose
+            // participant id matches the current host gets the badge.
+            // Covers history rows from an older server that didn't
+            // know about the role.
+            const bool isHostMsg = m.host ||
+                (!snap.hostParticipantId.empty() &&
+                 m.participantId == snap.hostParticipantId);
+            if (isHostMsg)
+            {
+                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f), "[HOST]");
+                ImGui::SameLine();
+            }
+            // Local-author wins as the colour cue (you posted this),
+            // then host (other host's messages stand out), then a
+            // neutral viewer colour.
+            ImVec4 nameColor;
+            if (m.local)        nameColor = ImVec4(0.45f, 0.85f, 0.50f, 1.0f);
+            else if (isHostMsg) nameColor = ImVec4(0.95f, 0.78f, 0.30f, 1.0f);
+            else                nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
             ImGui::TextColored(nameColor, "%s:", m.nickname.c_str());
             ImGui::SameLine();
             if (m.deleted)

@@ -63,4 +63,9 @@ private:
     // Edit buffer for the nickname row. Same lifetime semantics.
     char        m_nickBuf[64]  = {0};
     bool        m_nickInitialized = false;
+
+    // #84 — Transient inline validation feedback for the nickname
+    // Apply button. Cleared next frame when the user resumes typing
+    // or successfully reconnects.
+    std::string m_nickError;
 };

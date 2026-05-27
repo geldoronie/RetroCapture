@@ -87,7 +87,9 @@ std::string ChatClient::getBaseUrl() const
     return m_baseUrl;
 }
 
-void ChatClient::connect(const std::string &streamId, const std::string &nickname)
+void ChatClient::connect(const std::string &streamId,
+                         const std::string &nickname,
+                         bool               asHost)
 {
     if (streamId.empty()) return;
 
@@ -95,6 +97,7 @@ void ChatClient::connect(const std::string &streamId, const std::string &nicknam
         std::lock_guard<std::mutex> lk(m_mu);
         const bool sameTarget = (m_streamId == streamId) &&
                                 (m_nickname == nickname) &&
+                                (m_asHost   == asHost) &&
                                 (m_state == State::Connected ||
                                  m_state == State::Connecting ||
                                  m_state == State::Resolving);
@@ -107,9 +110,12 @@ void ChatClient::connect(const std::string &streamId, const std::string &nicknam
         std::lock_guard<std::mutex> lk(m_mu);
         m_streamId        = streamId;
         m_nickname        = nickname;
+        m_asHost          = asHost;
+        m_iAmHost         = false;
         m_messages.clear();
         m_participants.clear();
         m_myParticipantId.clear();
+        m_hostParticipantId.clear();
         m_roomId.clear();
         m_helloSent       = false;
         m_helloAcked      = false;
@@ -268,6 +274,7 @@ bool ChatClient::fetchHistory(const std::string &roomId)
             out.body          = m.value("body", std::string{});
             out.postedAtMs    = m.value("posted_at_ms", int64_t{0});
             out.deleted       = m.value("deleted", false);
+            out.host          = m.value("is_host", false);
             seed.push_back(std::move(out));
         }
         // The history endpoint returns newest-first; we want oldest
@@ -298,16 +305,20 @@ void ChatClient::onMessage(const ix::WebSocketMessage &msg)
             // it closes us — IXWebSocket reconnects automatically and
             // we re-send on the next Open.
             std::string nick;
+            bool        asHost = false;
             {
                 std::lock_guard<std::mutex> lk(m_mu);
                 nick         = m_nickname;
+                asHost       = m_asHost;
                 m_helloSent  = false;
                 m_helloAcked = false;
                 setStateLocked(State::Connecting);
             }
+            nlohmann::json helloPayload = { {"nickname", nick} };
+            if (asHost) helloPayload["role"] = "host";
             nlohmann::json hello = {
                 {"kind",  "hello"},
-                {"hello", { {"nickname", nick} }},
+                {"hello", helloPayload},
             };
             try
             {
@@ -373,14 +384,29 @@ void ChatClient::handleFrame(const std::string &payload)
     {
         const auto w = j.value("welcome", nlohmann::json::object());
         std::lock_guard<std::mutex> lk(m_mu);
-        m_myParticipantId = w.value("participant_id", std::string{});
-        m_helloAcked      = true;
+        m_myParticipantId   = w.value("participant_id", std::string{});
+        m_iAmHost           = w.value("is_host", false);
+        m_hostParticipantId = w.value("host_participant_id", std::string{});
+        m_helloAcked        = true;
         setStateLocked(State::Connected);
         m_lastError.clear();
+        // Backfill is_host on any history messages we seeded before
+        // the welcome arrived (REST history will carry is_host on
+        // its own, but in older deployments it might not — defensive).
+        if (!m_hostParticipantId.empty())
+        {
+            for (auto &msg : m_messages)
+            {
+                if (!msg.host && msg.participantId == m_hostParticipantId)
+                {
+                    msg.host = true;
+                }
+            }
+        }
     }
     else if (kind == "room_state")
     {
-        const auto rs   = j.value("room_state", nlohmann::json::object());
+        const auto rs    = j.value("room_state", nlohmann::json::object());
         const auto plist = rs.value("participants", nlohmann::json::array());
         std::vector<Participant> ps;
         ps.reserve(plist.size());
@@ -389,11 +415,14 @@ void ChatClient::handleFrame(const std::string &payload)
             Participant out;
             out.id       = p.value("participant_id", std::string{});
             out.nickname = p.value("nickname", std::string{});
+            out.host     = p.value("is_host", false);
             ps.push_back(std::move(out));
         }
+        const std::string hostId = rs.value("host_participant_id", std::string{});
         std::lock_guard<std::mutex> lk(m_mu);
         if (ps.size() > kMaxParticipants) ps.resize(kMaxParticipants);
-        m_participants = std::move(ps);
+        m_participants      = std::move(ps);
+        m_hostParticipantId = hostId;
     }
     else if (kind == "message")
     {
@@ -405,6 +434,7 @@ void ChatClient::handleFrame(const std::string &payload)
         out.body          = m.value("body", std::string{});
         out.postedAtMs    = m.value("posted_at_ms", int64_t{0});
         out.deleted       = m.value("deleted", false);
+        out.host          = m.value("is_host", false);
         appendMessage(std::move(out));
     }
     else if (kind == "deleted")
@@ -428,6 +458,7 @@ void ChatClient::handleFrame(const std::string &payload)
         const std::string event = p.value("event", std::string{});
         const std::string pid   = p.value("participant_id", std::string{});
         const std::string nick  = p.value("nickname", std::string{});
+        const bool        host  = p.value("is_host", false);
         std::lock_guard<std::mutex> lk(m_mu);
         if (event == "join")
         {
@@ -435,8 +466,9 @@ void ChatClient::handleFrame(const std::string &payload)
                                    [&](const Participant &x) { return x.id == pid; });
             if (it == m_participants.end() && m_participants.size() < kMaxParticipants)
             {
-                m_participants.push_back({pid, nick});
+                m_participants.push_back({pid, nick, host});
             }
+            if (host) m_hostParticipantId = pid;
         }
         else if (event == "leave")
         {
@@ -444,6 +476,7 @@ void ChatClient::handleFrame(const std::string &payload)
                 std::remove_if(m_participants.begin(), m_participants.end(),
                                [&](const Participant &x) { return x.id == pid; }),
                 m_participants.end());
+            if (m_hostParticipantId == pid) m_hostParticipantId.clear();
         }
     }
     else if (kind == "error")
@@ -500,19 +533,24 @@ void ChatClient::setNickname(const std::string &nick)
 {
     std::string streamId;
     std::string currentNick;
+    bool        asHost = false;
     {
         std::lock_guard<std::mutex> lk(m_mu);
         if (m_nickname == nick) return;
         m_nickname  = nick;
         streamId    = m_streamId;
         currentNick = nick;
+        asHost      = m_asHost;
     }
     // Reconnect to re-handshake — the wire protocol doesn't have a
-    // mid-session rename frame.
+    // mid-session rename frame. Preserve the host claim across the
+    // reconnect; the server's room.hostID is cleared on the Leave
+    // that disconnect() triggers, so the new hello's role claim wins
+    // again.
     if (!streamId.empty())
     {
         disconnect();
-        connect(streamId, currentNick);
+        connect(streamId, currentNick, asHost);
     }
 }
 
@@ -520,16 +558,18 @@ ChatClient::Snapshot ChatClient::getSnapshot() const
 {
     std::lock_guard<std::mutex> lk(m_mu);
     Snapshot s;
-    s.state           = m_state;
-    s.lastError       = m_lastError;
-    s.baseUrl         = m_baseUrl;
-    s.streamId        = m_streamId;
-    s.roomId          = m_roomId;
-    s.nickname        = m_nickname;
-    s.myParticipantId = m_myParticipantId;
+    s.state             = m_state;
+    s.lastError         = m_lastError;
+    s.baseUrl           = m_baseUrl;
+    s.streamId          = m_streamId;
+    s.roomId            = m_roomId;
+    s.nickname          = m_nickname;
+    s.myParticipantId   = m_myParticipantId;
+    s.hostParticipantId = m_hostParticipantId;
+    s.iAmHost           = m_iAmHost;
     s.messages.assign(m_messages.begin(), m_messages.end());
-    s.participants    = m_participants;
-    s.unreadCount     = m_unreadCount;
+    s.participants      = m_participants;
+    s.unreadCount       = m_unreadCount;
     return s;
 }
 

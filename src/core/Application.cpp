@@ -6079,7 +6079,12 @@ void Application::syncDirectoryClient()
         {
             m_chatBoundStreamId = streamId;
             m_ui->setDirectoryStreamId(streamId);
-            m_chatClient->connect(streamId, m_ui->getDirectoryHostNickname());
+            // asHost=true: this instance is the one publishing the
+            // stream, so the chat service tags our messages with
+            // is_host=true for the host badge.
+            m_chatClient->connect(streamId,
+                                  m_ui->getDirectoryHostNickname(),
+                                  /*asHost=*/true);
         }
         else if (!active && !m_chatBoundStreamId.empty())
         {

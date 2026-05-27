@@ -73,12 +73,14 @@ public:
         int64_t     postedAtMs = 0;
         bool        deleted    = false;
         bool        local      = false; // true == sent by this client
+        bool        host       = false; // posted by the stream host (#84)
     };
 
     struct Participant
     {
         std::string id;
         std::string nickname;
+        bool        host = false;
     };
 
     struct Snapshot
@@ -90,6 +92,14 @@ public:
         std::string               roomId;
         std::string               nickname;
         std::string               myParticipantId;
+        // #84 — Current room's host participant id (empty if no host
+        // has claimed). Used by OSDChat to mark backlog messages
+        // whose participant_id matches even when the wire frame
+        // didn't carry is_host (older history rows).
+        std::string               hostParticipantId;
+        // Whether this client is the room's host (i.e. connected with
+        // role="host" and won the claim).
+        bool                      iAmHost       = false;
         std::vector<Message>      messages;     // oldest first
         std::vector<Participant>  participants;
         // Count of messages that arrived since the last markRead() call.
@@ -113,10 +123,15 @@ public:
 
     /// Begin a session against `streamId`. Resolves the linked room,
     /// fetches recent history, opens the WS, and sends `hello` with
-    /// the nickname. Idempotent: connect() with the same args while
+    /// the nickname. Pass `asHost=true` when this RetroCapture instance
+    /// is the one publishing the stream — the server will tag
+    /// outgoing messages with is_host=true so viewers can render a
+    /// host badge. Idempotent: connect() with the same args while
     /// already Connected is a no-op; with different args it tears
     /// down and reconnects.
-    void connect(const std::string &streamId, const std::string &nickname);
+    void connect(const std::string &streamId,
+                 const std::string &nickname,
+                 bool               asHost = false);
 
     /// Tear down the WS session. Idempotent.
     void disconnect();
@@ -167,6 +182,9 @@ private:
     std::string                 m_nickname;
     std::string                 m_roomId;
     std::string                 m_myParticipantId;
+    std::string                 m_hostParticipantId;
+    bool                        m_asHost          = false;
+    bool                        m_iAmHost         = false;
     std::string                 m_lastError;
     std::deque<Message>         m_messages;
     std::vector<Participant>    m_participants;

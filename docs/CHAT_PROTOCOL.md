@@ -29,7 +29,8 @@ Every frame is a single JSON object with a `kind` discriminator and a payload ke
 {
   "kind": "hello",
   "hello": {
-    "nickname": "geldo"
+    "nickname": "geldo",
+    "role":     "host"          // optional, default ""; see "Host role" below
   }
 }
 ```
@@ -45,16 +46,26 @@ Server responses share the same shape:
     "room_kind":      "stream_linked",     // "stream_linked" | "standalone"
     "linked_stream_id": "s_3e9aab",        // null for standalone rooms
     "server_time_ms": 1716665490123,
-    "protocol_version": 1
+    "protocol_version": 1,
+    "is_host":            true,            // optional; this connection won the host claim
+    "host_participant_id": "p_8af1c4"      // optional; participant_id of the current host
   }
 }
 ```
+
+### Host role
+
+A stream-linked room MAY have exactly one **host** at a time — the RetroCapture instance that's publishing the stream. The host opts in by including `role: "host"` in its `hello`. First claimant wins; subsequent role-claims in the same room get `is_host: false` in their welcome.
+
+When a participant is the host, the server tags their `message` frames with `is_host: true` and exposes the room's current host via `host_participant_id` on `welcome`, `room_state`, and `presence` (join events). The flag persists on stored messages so history replays render correctly even after the host's WebSocket session id changes on reconnect.
+
+When the host disconnects, the slot is cleared; the next `role: "host"` connection can re-claim. Trust model in v0.5 is the same level as streamId secrecy (anyone with the streamId can claim host); v1 validates against the directory ownerToken.
 
 ### Client-to-server kinds
 
 | Kind        | When                                                                 | Payload                                                              |
 | ----------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `hello`     | First frame after upgrade. Server expects this within 5 s or closes. | `{ "nickname": "<string>" }`                                          |
+| `hello`     | First frame after upgrade. Server expects this within 5 s or closes. | `{ "nickname": "<string>", "role"?: "host" }`                          |
 | `post`      | New chat message from this participant.                              | `{ "body": "<string>" }`                                              |
 | `delete`    | Moderation: drop a specific message.                                 | `{ "message_id": "m_…" }`                                              |
 | `ping`      | Keepalive (also covered by WS Ping/Pong frames; this is optional).   | `{}`                                                                 |
@@ -66,12 +77,12 @@ A `post` frame MUST be sent only after the client has received `welcome`. Server
 | Kind        | When                                                                                       | Payload                                                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `welcome`   | Once, right after a successful `hello`.                                                    | see above                                                                                                               |
-| `message`   | Broadcast of a new `post`, or replay of a historical message.                              | `{ "id": "m_…", "room_id": "r_…", "participant_id": "p_…", "nickname": "<string>", "body": "<string>", "posted_at_ms": 1716665490123 }` |
-| `presence`  | A participant joined or left.                                                              | `{ "participant_id": "p_…", "nickname": "<string>", "event": "join" \| "leave" }`                                       |
+| `message`   | Broadcast of a new `post`, or replay of a historical message.                              | `{ "id": "m_…", "room_id": "r_…", "participant_id": "p_…", "nickname": "<string>", "body": "<string>", "posted_at_ms": 1716665490123, "is_host"?: true }` |
+| `presence`  | A participant joined or left.                                                              | `{ "participant_id": "p_…", "nickname": "<string>", "event": "join" \| "leave", "is_host"?: true }`                     |
 | `deleted`   | A message was deleted by moderation.                                                       | `{ "message_id": "m_…", "deleted_by": "p_…" }`                                                                          |
 | `pong`      | Response to client `ping`.                                                                 | `{}`                                                                                                                    |
 | `error`     | Server rejecting the previous frame.                                                       | `{ "code": "<symbolic>", "message": "<human-readable>" }`                                                               |
-| `room_state` | Sent at welcome time to seed the client.                                                  | `{ "participants": [{...}], "settings": { "slow_mode_secs": 0, "word_filter": [] } }`                                  |
+| `room_state` | Sent at welcome time to seed the client.                                                  | `{ "participants": [{ "id": "p_…", "nickname": "<string>", "is_host"?: true }], "settings": { "slow_mode_secs": 0, "word_filter": [] }, "host_participant_id"?: "p_…" }` |
 
 Error `code`s in v0.5: `not_authenticated`, `rate_limited`, `room_not_found`, `room_closed`, `bad_request`, `internal_error`.
 
