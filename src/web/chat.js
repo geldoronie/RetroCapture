@@ -58,7 +58,13 @@
         participants:      [], // [{id, nickname, isHost}]
         autoScroll:        true,
         reconnectTimer:    null,
+        reconnectDelayMs:  2000, // exponential backoff, reset on welcome
         connectionState:   'idle',
+        // Set true while openSession is running. Guards against
+        // pollMeta firing a second openSession before the first one
+        // has finished its WS handshake (which would tear down the
+        // half-open WS and start over).
+        opening:           false,
     };
 
     $nick.value = state.nickname;
@@ -205,13 +211,26 @@
         return j.data.room_id;
     }
 
+    // teardown clears the active session: drops the reconnect timer,
+    // detaches all WS handlers BEFORE closing so the old socket's
+    // async close event can't fire scheduleReconnect, then drops the
+    // socket. Used by every code path that re-opens a session (poll
+    // detected new URL, user changed nickname) — those paths follow
+    // up with a fresh openSession that wires its own handlers on a
+    // new socket.
     function teardown() {
         if (state.reconnectTimer) {
             clearTimeout(state.reconnectTimer);
             state.reconnectTimer = null;
         }
         if (state.ws) {
-            try { state.ws.close(); } catch (e) { /* ignore */ }
+            try {
+                state.ws.onopen    = null;
+                state.ws.onmessage = null;
+                state.ws.onclose   = null;
+                state.ws.onerror   = null;
+                state.ws.close();
+            } catch (e) { /* ignore */ }
             state.ws = null;
         }
         state.myParticipantId   = '';
@@ -222,6 +241,16 @@
     }
 
     async function openSession() {
+        if (state.opening) return; // already in flight
+        state.opening = true;
+        try {
+            await openSessionInner();
+        } finally {
+            state.opening = false;
+        }
+    }
+
+    async function openSessionInner() {
         if (!state.chatUrl || !state.streamId) {
             teardown();
             setState('idle');
@@ -272,6 +301,8 @@
         };
 
         ws.onclose = () => {
+            // teardown() nulls all handlers before closing, so we only
+            // ever see this when the server really dropped us.
             state.helloAcked = false;
             if (state.connectionState !== 'idle') {
                 setState('reconnecting');
@@ -286,10 +317,15 @@
 
     function scheduleReconnect() {
         if (state.reconnectTimer) return;
+        const delay = state.reconnectDelayMs;
         state.reconnectTimer = setTimeout(() => {
             state.reconnectTimer = null;
+            // Exponential backoff with a 30 s cap so a genuinely
+            // unreachable chat service doesn't pin the tab pegging
+            // the network.
+            state.reconnectDelayMs = Math.min(state.reconnectDelayMs * 2, 30000);
             openSession();
-        }, 2000);
+        }, delay);
     }
 
     function handleFrame(frame) {
@@ -300,6 +336,11 @@
                 state.myParticipantId   = w.participant_id || '';
                 state.hostParticipantId = w.host_participant_id || '';
                 state.helloAcked        = true;
+                // A successful handshake resets the reconnect backoff
+                // so the next transient blip starts at 2 s again
+                // instead of inheriting whatever capped delay we
+                // were sitting on from a previous outage.
+                state.reconnectDelayMs  = 2000;
                 setState('connected');
                 break;
             }
@@ -434,6 +475,16 @@
             const chat = meta.chat || {};
             const url  = chat.url || '';
             const sid  = chat.streamId || '';
+            // Defensive: a poll that returns empty values almost always
+            // means the host's DirectoryClient is briefly Error-state
+            // between heartbeats (publish about to retry). Tearing the
+            // chat down on every blip would make the panel flash
+            // "idle ↔ connected" and re-resolve the room every few
+            // seconds. Ignore empties; only act on a stable, non-empty
+            // configuration. The cost is that "host genuinely stopped
+            // publishing" doesn't snap the panel to idle immediately —
+            // the user can refresh the page to clean up.
+            if (!url || !sid) return;
             if (url !== state.chatUrl || sid !== state.streamId) {
                 state.chatUrl  = url;
                 state.streamId = sid;
