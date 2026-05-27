@@ -294,6 +294,8 @@
   "web.chat.nickname_empty":   "Nickname can't be empty",
   "web.chat.nickname_taken":   "Nickname already in use",
   "web.chat.message_removed":  "[message removed]",
+  "web.chat.empty_hint":       "(no messages yet — say hi 👋)",
+  "web.chat.mention_you":      "mentioned you",
   "web.alert.copy_ok":         "Stream URL copied to clipboard.",
   "web.alert.copy_fail":       "Failed to copy stream URL.",
 

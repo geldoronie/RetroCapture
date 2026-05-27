@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 
@@ -40,6 +41,49 @@ const char *stateLabel(ChatClient::State s)
         case ChatClient::State::Error:        return "error";
     }
     return "?";
+}
+
+// True when `body` contains `@nick` as a standalone token (case-
+// insensitive, with word-boundary punctuation OK). Used to draw the
+// reader's attention to messages calling them out — same as the web
+// portal's mentionsMe in chat.js.
+bool mentionsNick(const std::string &body, const std::string &nick)
+{
+    if (body.empty() || nick.empty()) return false;
+    const size_t nlen = nick.size();
+    for (size_t i = 0; i + 1 < body.size(); ++i)
+    {
+        if (body[i] != '@') continue;
+        // boundary before '@' — start-of-string or non-word char.
+        if (i > 0)
+        {
+            const unsigned char prev = static_cast<unsigned char>(body[i - 1]);
+            if (std::isalnum(prev) || prev == '_') continue;
+        }
+        if (i + 1 + nlen > body.size()) continue;
+        bool match = true;
+        for (size_t k = 0; k < nlen; ++k)
+        {
+            const char a = body[i + 1 + k];
+            const char b = nick[k];
+            if (std::tolower(static_cast<unsigned char>(a)) !=
+                std::tolower(static_cast<unsigned char>(b)))
+            {
+                match = false;
+                break;
+            }
+        }
+        if (!match) continue;
+        // boundary after the nick
+        const size_t after = i + 1 + nlen;
+        if (after < body.size())
+        {
+            const unsigned char next = static_cast<unsigned char>(body[after]);
+            if (std::isalnum(next) || next == '_') continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 ImVec4 stateColor(ChatClient::State s)
@@ -109,7 +153,9 @@ void OSDChat::render()
     }
 
     // ---- status line (title bar already says "Chat") -----------------
-    ImGui::TextColored(stateColor(snap.state), "%s", stateLabel(snap.state));
+    // Bullet glyph + label colored together so the dot reads as a
+    // connection indicator at a glance, matching the web portal.
+    ImGui::TextColored(stateColor(snap.state), "\xE2\x97\x8F %s", stateLabel(snap.state));
     if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
     {
         ImGui::SameLine();
@@ -229,9 +275,22 @@ void OSDChat::render()
             else                nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
             ImGui::TextColored(nameColor, "%s:", m.nickname.c_str());
             ImGui::SameLine();
+            // Mention check: someone else cited @<myNick>. Renders the
+            // body in a warm tint so the row stands out at a glance.
+            const bool isMention = !m.deleted &&
+                                   !m.local &&
+                                   !snap.nickname.empty() &&
+                                   mentionsNick(m.body, snap.nickname);
             if (m.deleted)
             {
                 ImGui::TextDisabled("%s", m.body.c_str());
+            }
+            else if (isMention)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
+                ImGui::TextWrapped("%s", m.body.c_str());
+                ImGui::PopStyleColor();
             }
             else
             {

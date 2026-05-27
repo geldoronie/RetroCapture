@@ -294,6 +294,8 @@
   "web.chat.nickname_empty":   "Apelido não pode ser vazio",
   "web.chat.nickname_taken":   "Apelido já em uso",
   "web.chat.message_removed":  "[mensagem removida]",
+  "web.chat.empty_hint":       "(nenhuma mensagem ainda — diga oi 👋)",
+  "web.chat.mention_you":      "mencionou você",
   "web.alert.copy_ok":         "URL do stream copiada para a área de transferência.",
   "web.alert.copy_fail":       "Falha ao copiar URL do stream.",
 

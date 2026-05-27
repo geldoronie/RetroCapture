@@ -120,6 +120,9 @@
         const sendable = newState === 'connected';
         $send.disabled = !sendable;
         $msg.disabled  = !sendable;
+        if (newState === 'connected') {
+            renderEmptyPlaceholder();
+        }
     }
 
     function formatTime(epochMs) {
@@ -130,17 +133,33 @@
         return `${hh}:${mm}`;
     }
 
+    // Word-boundary match for `@<nickname>` in a message body. Case-
+    // insensitive so "@Alice" highlights when the local user is
+    // "alice" too. Only fires when the current user has a non-empty
+    // nickname — no point matching @anon-xxxx.
+    function mentionsMe(body) {
+        if (!body || !state.nickname) return false;
+        const escaped = state.nickname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp('(^|[^A-Za-z0-9_])@' + escaped + '\\b', 'i');
+        return re.test(body);
+    }
+
     function renderMessage(m) {
         if (state.messageIds.has(m.id)) return;
         state.messageIds.add(m.id);
+        removeEmptyPlaceholder();
 
         const isHost = m.is_host ||
             (state.hostParticipantId && m.participant_id === state.hostParticipantId);
+        const isMention = !m.deleted &&
+            m.participant_id !== state.myParticipantId &&
+            mentionsMe(m.body);
 
         const row = document.createElement('div');
         row.className = 'home-chat-msg';
         row.dataset.msgId = m.id;
-        if (m.deleted) row.classList.add('deleted');
+        if (m.deleted)  row.classList.add('deleted');
+        if (isMention)  row.classList.add('mention');
 
         const time = formatTime(m.posted_at_ms);
         const nickClass = isHost
@@ -168,6 +187,29 @@
     function clearLog() {
         $log.innerHTML = '';
         state.messageIds.clear();
+        renderEmptyPlaceholder();
+    }
+
+    // Drop-in "(no messages yet — say hi)" hint when the log is
+    // visually empty + we're actually connected. Removed automatically
+    // the moment a real message lands (renderMessage appends to $log
+    // after the placeholder so the user gets a clean transition).
+    function renderEmptyPlaceholder() {
+        if (state.connectionState !== 'connected') return;
+        if ($log.querySelector('.home-chat-msg')) return;
+        const existing = $log.querySelector('.home-chat-empty-inline');
+        if (existing) return;
+        const div = document.createElement('div');
+        div.className = 'home-chat-empty-inline';
+        div.textContent = (typeof t === 'function')
+            ? t('web.chat.empty_hint')
+            : '(no messages yet — say hi)';
+        $log.appendChild(div);
+    }
+
+    function removeEmptyPlaceholder() {
+        const ph = $log.querySelector('.home-chat-empty-inline');
+        if (ph) ph.remove();
     }
 
     function updateCount() {
