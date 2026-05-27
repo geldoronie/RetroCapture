@@ -418,51 +418,56 @@ void OSDChat::render()
     ImGui::EndChild();
 
     // ---- input row ----------------------------------------------------
+    //
+    // Why InputTextMultiline at single-row height instead of plain
+    // InputText: ImGui's single-line InputText deactivates the widget
+    // on every Enter (regardless of EnterReturnsTrue). The user has
+    // to click back into the field for the next message. Refocus
+    // tricks (SetKeyboardFocusHere -1 same-frame, flag + 0 next-
+    // frame, both pattern variants from imgui_demo.cpp) all bounce
+    // off the actual focus state on this build. Sidestepping the
+    // problem entirely: use the multi-line widget at single-row
+    // visual height, where Enter inserts '\n' into the buffer
+    // instead of deactivating. We detect the newline as our send
+    // trigger and clear the buffer in place — focus never moves.
     const bool sendable = snap.state == ChatClient::State::Connected;
+    const float rowH = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f;
     ImGui::BeginDisabled(!sendable);
-    ImGui::SetNextItemWidth(-60.0f);
-    const bool enterSubmit =
-        ImGui::InputText("##chatInput", m_inputBuf, sizeof(m_inputBuf),
-                         ImGuiInputTextFlags_EnterReturnsTrue);
+    const ImVec2 inputSize(
+        ImGui::GetContentRegionAvail().x - 60.0f - ImGui::GetStyle().ItemSpacing.x,
+        rowH);
+    ImGui::InputTextMultiline("##chatInput", m_inputBuf, sizeof(m_inputBuf),
+                              inputSize,
+                              ImGuiInputTextFlags_NoHorizontalScroll);
     if (ImGui::IsItemActive()) m_inputFocused = true;
-    // Reclaim focus on the SAME frame, RIGHT AFTER the InputText —
-    // before any other widget is rendered. -1 = "previous widget" =
-    // the InputText we just submitted. This is the pattern straight
-    // out of imgui_demo.cpp's Example: Console window. Doing it on a
-    // later frame via a flag misses because ImGui clears ActiveID
-    // before the next render and tab-stop walks past the input.
-    if (enterSubmit && sendable)
-    {
-        ImGui::SetKeyboardFocusHere(-1);
-    }
     ImGui::SameLine();
-    const bool sendClicked = ImGui::Button("Send", ImVec2(-1.0f, 0.0f));
-    // Send button click: SetKeyboardFocusHere(-1) here would refocus
-    // the button itself. Step further back: pass -2 to skip past the
-    // SameLine'd Button onto the InputText. (ImGui demo's chat box
-    // doesn't have a Send button so it doesn't need this offset.)
-    if (sendClicked && sendable)
-    {
-        ImGui::SetKeyboardFocusHere(-2);
-    }
+    const bool sendClicked = ImGui::Button("Send", ImVec2(-1.0f, rowH));
     ImGui::EndDisabled();
+
+    // Detect Enter via the '\n' the multi-line widget appended.
+    char *nlPos = std::strchr(m_inputBuf, '\n');
+    const bool enterSubmit = (nlPos != nullptr);
 
     if ((enterSubmit || sendClicked) && sendable)
     {
+        // Truncate at the first newline so the body is everything
+        // the user typed BEFORE pressing Enter; anything they pasted
+        // with embedded newlines past that gets dropped (mirrors a
+        // single-line input's behaviour from the user's POV).
+        if (nlPos) *nlPos = '\0';
         std::string body = m_inputBuf;
-        // Trim trailing newline / whitespace ImGui's InputText
-        // sometimes attaches when Enter triggered the submit.
         while (!body.empty() &&
-               (body.back() == '\n' || body.back() == '\r' ||
-                body.back() == ' '  || body.back() == '\t'))
+               (body.back() == '\r' || body.back() == ' ' || body.back() == '\t'))
         {
             body.pop_back();
         }
         if (!body.empty())
         {
             m_chat->post(body);
-            m_inputBuf[0] = '\0';
         }
+        // Clear buffer regardless — even empty Enter strokes shouldn't
+        // leave a stray \n behind.
+        m_inputBuf[0] = '\0';
     }
 
     // Reset unread counter while the panel is on screen and current.
