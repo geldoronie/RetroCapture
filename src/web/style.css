@@ -1133,12 +1133,24 @@ body.home-page .card .text-muted {
     color: #6FC4C0;
     border-color: rgba(111, 196, 192, 0.4);
 }
+/* The body wraps the participants sidebar + the message log so the
+   flex row gives us the two-column layout when the sidebar is on
+   and a single-column when it's hidden. */
+.home-chat-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0; /* allow children to actually scroll */
+}
 .home-chat-parts {
-    max-height: 140px;
+    flex: 0 0 130px;
     overflow-y: auto;
     padding: 0.4rem 0.625rem;
     background: rgba(0, 0, 0, 0.18);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+.home-chat-body > .home-chat-log {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 .home-chat-part {
     padding: 0.15rem 0;

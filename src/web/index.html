@@ -99,8 +99,10 @@
                             <span id="chatRoomTitle" class="home-chat-title"></span>
                             <button id="chatParticipantCount" type="button" class="home-chat-count" title="Toggle participants list"></button>
                         </header>
-                        <div id="chatParticipantsPanel" class="home-chat-parts d-none"></div>
-                        <div id="chatLog" class="home-chat-log"></div>
+                        <div class="home-chat-body">
+                            <aside id="chatParticipantsPanel" class="home-chat-parts d-none"></aside>
+                            <div id="chatLog" class="home-chat-log"></div>
+                        </div>
                         <div id="chatUnavailable" class="home-chat-empty d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
                         <div class="home-chat-nick-row">
                             <span class="home-chat-nick-prefix" data-i18n="web.chat.as">as</span>
