@@ -6105,16 +6105,81 @@ void Application::syncDirectoryClient()
     // otherwise we'd fight the user's intent.
     if (m_chatClient)
     {
-        const std::string configuredSlug = m_ui->getStreamRoomSlug();
         const bool chatEnabled = m_ui->getStreamChatEnabled();
         const bool active = (state == DirectoryClient::State::Active);
+        std::string configuredSlug = m_ui->getStreamRoomSlug();
         const auto snap   = m_chatClient->getSnapshot();
-        const bool userPinnedElsewhere = !snap.slug.empty() &&
-                                         snap.slug != configuredSlug;
         // Keep DirectoryStreamId updated so other consumers (UI
         // labels, the host's own indicator) still see the session
         // id — we just don't key chat on it anymore.
         m_ui->setDirectoryStreamId(m_directoryClient->getStreamId());
+
+        // First stream start after the user ticked "Create chat room"
+        // with no slug derived yet — derive one from the title (user
+        // text or fallback "Stream of <nick>") so the rest of this
+        // function has something to bind to. Stored back into
+        // UIManager so subsequent reconnects skip the derivation.
+        if (active && chatEnabled && configuredSlug.empty())
+        {
+            const std::string nick = m_ui->getChatNickname();
+            std::string source = m_ui->getStreamRoomTitle();
+            if (source.empty() && !nick.empty())
+            {
+                source = std::string("Stream of ") + nick;
+            }
+            // Slugify: lowercase ASCII alnum + dashes, collapse
+            // runs of separators, strip leading/trailing dash,
+            // clamp to 32 chars to leave room for the suffix. Matches
+            // the server's isValidSlug shape (handlers.go).
+            auto slugify = [](const std::string &in) {
+                std::string out;
+                out.reserve(in.size());
+                bool lastWasDash = false;
+                for (char c : in)
+                {
+                    const unsigned char uc = static_cast<unsigned char>(c);
+                    if ((uc >= 'A' && uc <= 'Z') ||
+                        (uc >= 'a' && uc <= 'z') ||
+                        (uc >= '0' && uc <= '9'))
+                    {
+                        out.push_back(static_cast<char>(std::tolower(uc)));
+                        lastWasDash = false;
+                    }
+                    else if (!lastWasDash && !out.empty())
+                    {
+                        out.push_back('-');
+                        lastWasDash = true;
+                    }
+                }
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                if (out.size() > 32) out.resize(32);
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                return out;
+            };
+            std::string slug = slugify(source);
+            // Anything below 2 chars fails the server's isValidSlug.
+            // Backstop with a hex-suffix slug so the user isn't
+            // blocked just because their inputs were unusable.
+            if (slug.size() < 2)
+            {
+                slug = ownedrooms::generateSecret().substr(0, 8);
+            }
+            else
+            {
+                // Disambiguate against collisions by appending the
+                // first 4 hex chars of a random secret. Cheap and
+                // makes the slug effectively unique-per-creation.
+                slug += "-" + ownedrooms::generateSecret().substr(0, 4);
+                if (slug.size() > 41) slug.resize(41);
+                while (!slug.empty() && slug.back() == '-') slug.pop_back();
+            }
+            m_ui->setStreamRoomSlug(slug);
+            m_ui->saveConfig();
+            configuredSlug = slug;
+        }
+
+        const bool userPinnedElsewhere = !snap.slug.empty() &&
+                                         snap.slug != configuredSlug;
 
         if (!userPinnedElsewhere)
         {
@@ -6133,21 +6198,25 @@ void Application::syncDirectoryClient()
                 }
                 else
                 {
-                    // Mint a fresh secret + POST /rooms. We listed=
-                    // false so the stream's room doesn't double up
-                    // in the public listing alongside the streamer's
-                    // directory entry — the /meta hint already wires
-                    // viewers to it.
+                    // Resolve the title: user-supplied wins; else the
+                    // "Stream of <nick>" fallback; else the directory
+                    // stream name as a last resort.
+                    std::string title = m_ui->getStreamRoomTitle();
+                    if (title.empty() && !m_ui->getChatNickname().empty())
+                        title = std::string("Stream of ") +
+                                m_ui->getChatNickname();
+                    if (title.empty())
+                        title = m_ui->getDirectoryStreamName();
+
+                    // Mint a fresh secret + POST /rooms. listed=false
+                    // keeps the room out of the public listing — the
+                    // /meta hint is how viewers find it.
                     ownerSecret = ownedrooms::generateSecret();
                     std::string newRoomId, newSlug, err;
-                    const std::string title =
-                        m_ui->getDirectoryStreamName();
                     if (m_chatClient->createStandaloneRoom(
                             title, configuredSlug,
                             /*password=*/"", /*listed=*/false,
-                            /*ownerClientId=*/m_ui->getChatNickname().empty()
-                                ? std::string{}
-                                : m_chatClient->getClientId(),
+                            /*ownerClientId=*/m_chatClient->getClientId(),
                             ownerSecret,
                             newRoomId, newSlug, err))
                     {
@@ -6161,9 +6230,6 @@ void Application::syncDirectoryClient()
                     else
                     {
                         LOG_WARN("Chat: stream-room provision failed: " + err);
-                        // Leave m_chatBoundSlug set so we don't loop
-                        // — the user can retry by toggling the
-                        // checkbox or editing the slug.
                     }
                 }
                 std::string nick = m_ui->getChatNickname();

@@ -307,11 +307,17 @@ public:
     // behaviour. Editable under Streaming → Public Directory.
     bool getStreamChatEnabled() const                { return m_streamChatEnabled; }
     void setStreamChatEnabled(bool v)                { m_streamChatEnabled = v; }
-    // #84 — The streamer's persistent chat-room slug. Picked once
-    // (the first time they start a stream with chat enabled) and
-    // saved here for every subsequent session, so the streamer's
-    // chat lives at the same URL across reboots. Empty == "not
-    // chosen yet" — Application prompts the user on next start.
+    // #84 — Human-readable name of the streamer's chat room. User-
+    // editable in Streaming → Chat room. Empty == "use default
+    // 'Stream of <nick>' at provision time".
+    const std::string &getStreamRoomTitle() const    { return m_streamRoomTitle; }
+    void setStreamRoomTitle(const std::string &v)    { m_streamRoomTitle = v; }
+    // #84 — Auto-derived public slug for the streamer's room. Not
+    // user-editable; computed from the room title (or the fallback
+    // "Stream of <nick>") at first stream start, persisted here so
+    // every reconnect lands on the same room. Empty == "not yet
+    // provisioned"; Application fills it on the first stream start
+    // with chat enabled.
     const std::string &getStreamRoomSlug() const     { return m_streamRoomSlug; }
     void setStreamRoomSlug(const std::string &v)     { m_streamRoomSlug = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
@@ -1141,8 +1147,11 @@ private:
     // #84 — Open the chat alongside the stream. ON by default for
     // backwards-compatible behaviour.
     bool        m_streamChatEnabled       = true;
-    // #84 — The streamer's persistent room slug. Provisioned on the
-    // first stream-with-chat start, then reused forever.
+    // #84 — Human-readable title for the streamer's chat room.
+    std::string m_streamRoomTitle         = "";
+    // #84 — The streamer's persistent room slug, auto-derived at
+    // provision time. Provisioned on the first stream-with-chat
+    // start, then reused forever.
     std::string m_streamRoomSlug          = "";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public

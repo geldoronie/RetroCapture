@@ -143,6 +143,7 @@ void UIConfigurationStreaming::render()
     renderCodecSettings();
     renderBitrateSettings();
     renderDirectoryPublish();      // #49 Phase 2
+    renderChatRoom();              // #84 — Chat room section
     // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
     // is not surfaced in the UI anymore — defaults work for the vast
     // majority of cases. Power users can still override via config.json.
@@ -980,88 +981,10 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         }
     }
 
-    // #84 — Chat-with-stream toggle + persistent room slug. When the
-    // toggle is on, Application provisions a standalone chat room
-    // (named by the slug below) on the first stream start and binds
-    // viewers to it via /meta. The slug is editable until a room
-    // exists for it — after that, changing it would orphan the old
-    // room and the user would lose their is_owner grant, so we lock
-    // the field once owned_rooms.json has a matching entry.
-    {
-        bool chatOn = m_uiManager->getStreamChatEnabled();
-        if (ImGui::Checkbox("Open chat alongside this stream", &chatOn))
-        {
-            m_uiManager->setStreamChatEnabled(chatOn);
-            // #84 — When the user turns chat on but hasn't named
-            // their stream yet, seed a default like "Stream of
-            // <nick>" so the directory entry has something readable.
-            // The user can still edit the field afterwards. We only
-            // fill when nickname is non-empty; without a nickname
-            // we'd write "Stream of " which is worse than nothing.
-            if (chatOn &&
-                m_uiManager->getDirectoryStreamName().empty() &&
-                !m_uiManager->getChatNickname().empty())
-            {
-                m_uiManager->setDirectoryStreamName(
-                    std::string("Stream of ") + m_uiManager->getChatNickname());
-            }
-            m_uiManager->saveConfig();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "When on, viewers' chat panel auto-binds to your\n"
-                "persistent room (slug below) as soon as they tune in.\n"
-                "When off, the stream goes live without a chat panel —\n"
-                "viewers can still join any room manually.");
-        }
-        if (chatOn)
-        {
-            char slugBuf[64];
-            std::snprintf(slugBuf, sizeof(slugBuf), "%s",
-                          m_uiManager->getStreamRoomSlug().c_str());
-            OwnedRoom owned;
-            const bool alreadyProvisioned =
-                !m_uiManager->getStreamRoomSlug().empty() &&
-                ownedrooms::findBySlug(m_uiManager->getStreamRoomSlug(),
-                                       owned);
-            ImGui::BeginDisabled(alreadyProvisioned);
-            if (ImGui::InputText("Room slug *", slugBuf, sizeof(slugBuf)))
-            {
-                // Normalise: lowercase + strip whitespace. The chat
-                // service has its own slug validator that'll reject
-                // anything outside [a-z0-9-_]; let the user keep
-                // typing freely and trim on save.
-                std::string s = slugBuf;
-                while (!s.empty() && std::isspace((unsigned char)s.back()))
-                    s.pop_back();
-                for (auto &c : s)
-                    c = static_cast<char>(std::tolower((unsigned char)c));
-                m_uiManager->setStreamRoomSlug(s);
-                m_uiManager->saveConfig();
-            }
-            ImGui::EndDisabled();
-            if (alreadyProvisioned)
-            {
-                ImGui::TextDisabled(
-                    "Locked: the room has been provisioned. Delete it\n"
-                    "from Chat → Rooms → Owned to pick a new slug.");
-            }
-            else if (m_uiManager->getStreamRoomSlug().empty())
-            {
-                ImGui::TextDisabled(
-                    "Pick a public name for your chat room (e.g.\n"
-                    "your nickname). The room is created on your\n"
-                    "next stream start and you own it forever.");
-            }
-            else
-            {
-                ImGui::TextDisabled(
-                    "The room will be created on your next stream\n"
-                    "start.");
-            }
-        }
-    }
+    // #84 — Chat room is now its own section, rendered separately
+    // (renderChatRoom). Keeps Public directory focused on directory
+    // concerns; chat-room knobs live in their own visually-anchored
+    // block below.
 
     // Endpoint-mode dropdown.
     //
@@ -1435,6 +1358,102 @@ void UIConfigurationStreaming::renderDirectoryPublish()
 // ─────────────────────────────────────────────────────────────────────
 // Cloudflared auto-download UI (#53 / Phase 2.5b)
 //
+// ─────────────────────────────────────────────────────────────────────
+// Chat room — standalone section sibling to "Public directory" (#84).
+// One checkbox + one human-readable name field. The public slug
+// (server identifier) is *not* exposed: it's derived deterministically
+// from the name, or from a fallback like "stream-of-<nick>" when the
+// user leaves the field empty, at first stream start. Locking once
+// provisioned keeps the same room across reboots — renaming after
+// would orphan it server-side (v0.5 has no rename endpoint).
+// ─────────────────────────────────────────────────────────────────────
+void UIConfigurationStreaming::renderChatRoom()
+{
+    ui_section_header("Chat room",
+                      "Create a chat room for this stream. Viewers' "
+                      "panels auto-bind to it; the room persists across "
+                      "every stream you publish.");
+
+    bool chatOn = m_uiManager->getStreamChatEnabled();
+    if (ImGui::Checkbox("Create chat room", &chatOn))
+    {
+        m_uiManager->setStreamChatEnabled(chatOn);
+        // Seed a default stream name when the user turns chat on
+        // but hasn't named the stream yet — saves them from a
+        // "Stream name *" rejection at publish time.
+        if (chatOn &&
+            m_uiManager->getDirectoryStreamName().empty() &&
+            !m_uiManager->getChatNickname().empty())
+        {
+            m_uiManager->setDirectoryStreamName(
+                std::string("Stream of ") + m_uiManager->getChatNickname());
+        }
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Provision a chat room on your next stream start. The\n"
+            "room belongs to you (rc_<id>-bound owner secret) and\n"
+            "is reused for every following stream — no orphan rooms.");
+    }
+
+    if (!chatOn) return;
+
+    // Title field. Slug is derived; we don't surface it here. Once
+    // the room has been provisioned the title locks — v0.5 has no
+    // rename endpoint, and editing it locally would just confuse
+    // the user when viewers still see the original.
+    OwnedRoom owned;
+    const bool alreadyProvisioned =
+        !m_uiManager->getStreamRoomSlug().empty() &&
+        ownedrooms::findBySlug(m_uiManager->getStreamRoomSlug(), owned);
+
+    char titleBuf[128];
+    std::snprintf(titleBuf, sizeof(titleBuf), "%s",
+                  m_uiManager->getStreamRoomTitle().c_str());
+    ImGui::BeginDisabled(alreadyProvisioned);
+    if (ImGui::InputText("Room name", titleBuf, sizeof(titleBuf)))
+    {
+        m_uiManager->setStreamRoomTitle(titleBuf);
+        m_uiManager->saveConfig();
+    }
+    ImGui::EndDisabled();
+
+    if (alreadyProvisioned)
+    {
+        ImGui::TextDisabled(
+            "Room created. Public address: #%s",
+            m_uiManager->getStreamRoomSlug().c_str());
+        ImGui::TextDisabled(
+            "To pick a different name, delete the room from\n"
+            "Chat -> Rooms -> Owned first.");
+    }
+    else if (m_uiManager->getStreamRoomTitle().empty())
+    {
+        const std::string &nick = m_uiManager->getChatNickname();
+        if (nick.empty())
+        {
+            ImGui::TextDisabled(
+                "Optional. If left empty, the room will be named\n"
+                "after your stream and nickname at create time.\n"
+                "Configure your Profile first to enable the default.");
+        }
+        else
+        {
+            ImGui::TextDisabled(
+                "Optional. If left empty, the room will be named\n"
+                "\"Stream of %s\" (your nickname) at create time.",
+                nick.c_str());
+        }
+    }
+    else
+    {
+        ImGui::TextDisabled(
+            "Room will be created on your next stream start.");
+    }
+}
+
 // Rendered inline inside the Cloudflare Tunnel branch of the endpoint
 // dropdown rather than as a modal, because:
 //   * the user is already looking at this row of the config — popping

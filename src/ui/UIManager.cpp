@@ -2604,6 +2604,8 @@ void UIManager::loadConfig()
                 if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
                 if (chat.contains("streamChatEnabled"))
                     m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
+                if (chat.contains("streamRoomTitle"))
+                    m_streamRoomTitle   = chat["streamRoomTitle"].get<std::string>();
                 if (chat.contains("streamRoomSlug"))
                     m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
             }
@@ -3067,6 +3069,7 @@ void UIManager::saveConfig()
                 {"baseUrl",            m_chatBaseUrl},
                 {"nickname",           m_chatNickname},
                 {"streamChatEnabled",  m_streamChatEnabled},
+                {"streamRoomTitle",    m_streamRoomTitle},
                 {"streamRoomSlug",     m_streamRoomSlug},
             }}};
 
