@@ -1152,12 +1152,18 @@ std::string APIController::buildMetaSnapshotJSON()
          // browsing the directory already exposes per-stream counts.
          <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
          << "}, "
-         // #84 — Chat-room hint. streamId is the directory streamId
-         // when this host is publishing publicly, empty otherwise.
-         // Remote clients use it to bind their chat overlay to the
-         // same room the host's overlay is on.
+         // #84 — Chat-room hint. roomSlug is the streamer's chosen
+         // persistent slug (UIManager::getStreamRoomSlug), populated
+         // only when the streamer ticked "Enable chat alongside this
+         // stream" and the slug has been provisioned. Empty means
+         // viewers should NOT auto-bind; they can still join any
+         // public room manually. We dropped the per-session streamId
+         // here in #84 because it produced one orphan chat_rooms
+         // row per stream session.
          << "\"chat\": {"
-         <<   "\"streamId\": " << jsonString(m_uiManager->getDirectoryStreamId()) << ", "
+         <<   "\"roomSlug\": " << jsonString(m_uiManager->getStreamChatEnabled()
+                                              ? m_uiManager->getStreamRoomSlug()
+                                              : std::string{}) << ", "
          <<   "\"url\": "      << jsonString(m_uiManager->getChatBaseUrl())
          << "}"
          << "}";

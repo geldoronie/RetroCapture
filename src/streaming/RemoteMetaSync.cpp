@@ -136,7 +136,7 @@ namespace
                 // #84 — Chat-room hint. Empty when the host isn't
                 // publishing publicly; the client overlay will stay
                 // idle in that case.
-                out.chatStreamId = j["chat"].value("streamId", std::string{});
+                out.chatRoomSlug = j["chat"].value("roomSlug", std::string{});
             }
             return true;
         }

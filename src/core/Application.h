@@ -195,10 +195,12 @@ private:
     // runtime-editable field; Application syncs the UI value into
     // m_chatClient every frame via syncChatTransport().
     std::string m_chatBaseUrl;
-    // #84 — Tracks the streamId the chat client is currently bound to,
-    // so syncDirectoryClient can detect transitions (publish→unpublish
-    // → re-publish with a fresh streamId).
-    std::string m_chatBoundStreamId;
+    // #84 — Tracks the slug the chat client is currently bound to
+    // (was streamId before the identity-bound rework). syncDirectory-
+    // Client uses this to detect transitions on the host side; on
+    // the viewer side, the remote /meta snapshot path uses the same
+    // member to detect roomSlug changes.
+    std::string m_chatBoundSlug;
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

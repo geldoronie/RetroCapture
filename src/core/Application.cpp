@@ -24,6 +24,7 @@
 #include "../osd/OSDChat.h"
 #include "../chat/ChatClient.h"
 #include "../identity/ChatIdentity.h"
+#include "../identity/OwnedRooms.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -727,27 +728,26 @@ bool Application::initCapture()
                 // mode. Bypasses the pending-snapshot apply path
                 // because there's no GL state involved.
                 if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
-                // #84 — Chat: if the host advertised a streamId in /meta,
-                // bind the local chat client to that room. Empty streamId
-                // means the host isn't publishing publicly, so close any
-                // session we might have had from a previous host.
+                // #84 — Chat: if the host advertised a roomSlug in
+                // /meta, bind the local chat client to that room.
+                // Empty roomSlug means the host has chat disabled or
+                // hasn't picked a slug yet — close any session we
+                // might have had from a previous host.
                 if (m_chatClient)
                 {
-                    const std::string &sid = snap.chatStreamId;
-                    if (!sid.empty() && sid != m_chatBoundStreamId)
+                    const std::string &slug = snap.chatRoomSlug;
+                    if (!slug.empty() && slug != m_chatBoundSlug)
                     {
-                        m_chatBoundStreamId = sid;
+                        m_chatBoundSlug = slug;
                         // Viewer nick: persistent chat name only.
-                        // No host-nickname fallback (that's a host-
-                        // side concept, irrelevant to viewers).
                         const std::string nick = m_ui
                             ? m_ui->getChatNickname()
                             : std::string{};
-                        m_chatClient->connect(sid, nick);
+                        m_chatClient->connectBySlug(slug, nick);
                     }
-                    else if (sid.empty() && !m_chatBoundStreamId.empty())
+                    else if (slug.empty() && !m_chatBoundSlug.empty())
                     {
-                        m_chatBoundStreamId.clear();
+                        m_chatBoundSlug.clear();
                         m_chatClient->disconnect();
                     }
                 }
@@ -2675,23 +2675,22 @@ bool Application::initUI()
                         if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
                         // #84 — same chat-binding logic as the
                         // initCapture-side callback. Reconnect when
-                        // the host's streamId arrives or changes;
+                        // the host's roomSlug arrives or changes;
                         // disconnect when it goes empty.
                         if (m_chatClient)
                         {
-                            const std::string &sid = snap.chatStreamId;
-                            if (!sid.empty() && sid != m_chatBoundStreamId)
+                            const std::string &slug = snap.chatRoomSlug;
+                            if (!slug.empty() && slug != m_chatBoundSlug)
                             {
-                                m_chatBoundStreamId = sid;
-                                // Viewer nick: persistent chat name.
+                                m_chatBoundSlug = slug;
                                 const std::string nick = m_ui
                                     ? m_ui->getChatNickname()
                                     : std::string{};
-                                m_chatClient->connect(sid, nick);
+                                m_chatClient->connectBySlug(slug, nick);
                             }
-                            else if (sid.empty() && !m_chatBoundStreamId.empty())
+                            else if (slug.empty() && !m_chatBoundSlug.empty())
                             {
-                                m_chatBoundStreamId.clear();
+                                m_chatBoundSlug.clear();
                                 m_chatClient->disconnect();
                             }
                         }
@@ -6093,39 +6092,91 @@ void Application::syncDirectoryClient()
                             stats.patchOk, stats.patchFail,
                             stats.secondsSinceLastHeartbeat);
 
-    // #84 — Chat lifecycle on the host side. The chat room is keyed
-    // by directory streamId; once we go Active and the directory has
-    // handed us one, open the chat session against it. Re-bind if
-    // the streamId changes between Active runs (re-publish picks up
-    // a fresh id). Drop the session when we leave Active.
+    // #84 — Chat lifecycle on the host side. As of the identity-
+    // bound rework, the chat room is no longer keyed by per-session
+    // streamId — it's a standalone room with a user-chosen slug,
+    // provisioned once and reused across every stream. The slug
+    // (m_ui->getStreamRoomSlug()) lives in the user's config and the
+    // host always reconnects to that same room when the toggle is on.
     //
-    // BYPASS: when the user has manually joined a standalone room
-    // via the OSD popup (snap.slug non-empty), the auto-bind path
-    // stays out of the way — otherwise we'd fight the user's
-    // intent. They reclaim auto-bind by hitting Leave on the popup.
-    if (m_chatClient && m_chatClient->getSnapshot().slug.empty())
+    // BYPASS: when the user has manually joined a *different* room
+    // via the OSD popup (snap.slug non-empty AND different from the
+    // configured stream slug), the auto-bind stays out of the way —
+    // otherwise we'd fight the user's intent.
+    if (m_chatClient)
     {
-        const std::string streamId = m_directoryClient->getStreamId();
-        const bool active = (state == DirectoryClient::State::Active) && !streamId.empty();
-        if (active && streamId != m_chatBoundStreamId)
+        const std::string configuredSlug = m_ui->getStreamRoomSlug();
+        const bool chatEnabled = m_ui->getStreamChatEnabled();
+        const bool active = (state == DirectoryClient::State::Active);
+        const auto snap   = m_chatClient->getSnapshot();
+        const bool userPinnedElsewhere = !snap.slug.empty() &&
+                                         snap.slug != configuredSlug;
+        // Keep DirectoryStreamId updated so other consumers (UI
+        // labels, the host's own indicator) still see the session
+        // id — we just don't key chat on it anymore.
+        m_ui->setDirectoryStreamId(m_directoryClient->getStreamId());
+
+        if (!userPinnedElsewhere)
         {
-            m_chatBoundStreamId = streamId;
-            m_ui->setDirectoryStreamId(streamId);
-            // asHost=true: this instance is the one publishing the
-            // stream, so the chat service tags our messages with
-            // is_host=true for the host badge. Nickname precedence:
-            // explicit chat nickname (persisted via OSD Apply) wins;
-            // otherwise fall back to the directory host nickname so
-            // the user doesn't have to type the same name twice.
-            std::string nick = m_ui->getChatNickname();
-            if (nick.empty()) nick = m_ui->getDirectoryHostNickname();
-            m_chatClient->connect(streamId, nick, /*asHost=*/true);
-        }
-        else if (!active && !m_chatBoundStreamId.empty())
-        {
-            m_chatBoundStreamId.clear();
-            m_ui->setDirectoryStreamId(std::string{});
-            m_chatClient->disconnect();
+            if (active && chatEnabled && !configuredSlug.empty() &&
+                configuredSlug != m_chatBoundSlug)
+            {
+                m_chatBoundSlug = configuredSlug;
+                // Pull the owner secret from owned_rooms.json. If
+                // the room isn't there yet, provision it now: this
+                // is the first stream-start after picking the slug.
+                OwnedRoom owned;
+                std::string ownerSecret;
+                if (ownedrooms::findBySlug(configuredSlug, owned))
+                {
+                    ownerSecret = owned.ownerSecret;
+                }
+                else
+                {
+                    // Mint a fresh secret + POST /rooms. We listed=
+                    // false so the stream's room doesn't double up
+                    // in the public listing alongside the streamer's
+                    // directory entry — the /meta hint already wires
+                    // viewers to it.
+                    ownerSecret = ownedrooms::generateSecret();
+                    std::string newRoomId, newSlug, err;
+                    const std::string title =
+                        m_ui->getDirectoryStreamName();
+                    if (m_chatClient->createStandaloneRoom(
+                            title, configuredSlug,
+                            /*password=*/"", /*listed=*/false,
+                            /*ownerClientId=*/m_ui->getChatNickname().empty()
+                                ? std::string{}
+                                : m_chatClient->getClientId(),
+                            ownerSecret,
+                            newRoomId, newSlug, err))
+                    {
+                        OwnedRoom rec;
+                        rec.roomId      = newRoomId;
+                        rec.slug        = newSlug;
+                        rec.title       = title;
+                        rec.ownerSecret = ownerSecret;
+                        ownedrooms::append(rec);
+                    }
+                    else
+                    {
+                        LOG_WARN("Chat: stream-room provision failed: " + err);
+                        // Leave m_chatBoundSlug set so we don't loop
+                        // — the user can retry by toggling the
+                        // checkbox or editing the slug.
+                    }
+                }
+                std::string nick = m_ui->getChatNickname();
+                if (nick.empty()) nick = m_ui->getDirectoryHostNickname();
+                m_chatClient->connectBySlug(configuredSlug, nick,
+                                            /*password=*/"",
+                                            ownerSecret);
+            }
+            else if ((!active || !chatEnabled) && !m_chatBoundSlug.empty())
+            {
+                m_chatBoundSlug.clear();
+                m_chatClient->disconnect();
+            }
         }
     }
 }

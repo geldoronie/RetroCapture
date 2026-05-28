@@ -1,6 +1,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
 #include "UISectionHeader.h"
+#include "../identity/OwnedRooms.h"
 #include "../utils/Logger.h"
 #include "../utils/TranslationManager.h"
 #include "../encoding/MediaEncoder.h"
@@ -951,6 +952,76 @@ void UIConfigurationStreaming::renderDirectoryPublish()
                 "If set, clients must enter this password to connect.\n"
                 "The directory only stores the flag that a password is\n"
                 "required — never the password itself.");
+        }
+    }
+
+    // #84 — Chat-with-stream toggle + persistent room slug. When the
+    // toggle is on, Application provisions a standalone chat room
+    // (named by the slug below) on the first stream start and binds
+    // viewers to it via /meta. The slug is editable until a room
+    // exists for it — after that, changing it would orphan the old
+    // room and the user would lose their is_owner grant, so we lock
+    // the field once owned_rooms.json has a matching entry.
+    {
+        bool chatOn = m_uiManager->getStreamChatEnabled();
+        if (ImGui::Checkbox("Open chat alongside this stream", &chatOn))
+        {
+            m_uiManager->setStreamChatEnabled(chatOn);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "When on, viewers' chat panel auto-binds to your\n"
+                "persistent room (slug below) as soon as they tune in.\n"
+                "When off, the stream goes live without a chat panel —\n"
+                "viewers can still join any room manually.");
+        }
+        if (chatOn)
+        {
+            char slugBuf[64];
+            std::snprintf(slugBuf, sizeof(slugBuf), "%s",
+                          m_uiManager->getStreamRoomSlug().c_str());
+            OwnedRoom owned;
+            const bool alreadyProvisioned =
+                !m_uiManager->getStreamRoomSlug().empty() &&
+                ownedrooms::findBySlug(m_uiManager->getStreamRoomSlug(),
+                                       owned);
+            ImGui::BeginDisabled(alreadyProvisioned);
+            if (ImGui::InputText("Room slug *", slugBuf, sizeof(slugBuf)))
+            {
+                // Normalise: lowercase + strip whitespace. The chat
+                // service has its own slug validator that'll reject
+                // anything outside [a-z0-9-_]; let the user keep
+                // typing freely and trim on save.
+                std::string s = slugBuf;
+                while (!s.empty() && std::isspace((unsigned char)s.back()))
+                    s.pop_back();
+                for (auto &c : s)
+                    c = static_cast<char>(std::tolower((unsigned char)c));
+                m_uiManager->setStreamRoomSlug(s);
+                m_uiManager->saveConfig();
+            }
+            ImGui::EndDisabled();
+            if (alreadyProvisioned)
+            {
+                ImGui::TextDisabled(
+                    "Locked: the room has been provisioned. Delete it\n"
+                    "from Chat → Rooms → Owned to pick a new slug.");
+            }
+            else if (m_uiManager->getStreamRoomSlug().empty())
+            {
+                ImGui::TextDisabled(
+                    "Pick a public name for your chat room (e.g.\n"
+                    "your nickname). The room is created on your\n"
+                    "next stream start and you own it forever.");
+            }
+            else
+            {
+                ImGui::TextDisabled(
+                    "The room will be created on your next stream\n"
+                    "start.");
+            }
         }
     }
 

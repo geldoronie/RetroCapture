@@ -12,15 +12,15 @@
  *     native OSD's Apply flow.
  *
  * Discovery:
- *   - Reads chat.url + chat.streamId from /meta. /meta lives on the
+ *   - Reads chat.url + chat.roomSlug from /meta. /meta lives on the
  *     same origin as this page (served by the host's web portal),
  *     so we don't need any cross-origin gymnastics for the API
  *     fetch itself — only the WebSocket connects out to the chat
  *     service.
  *
  * Lifecycle:
- *   - Auto-connects when /meta exposes a non-empty streamId.
- *   - Tears down + reconnects when either chat.url or chat.streamId
+ *   - Auto-connects when /meta exposes a non-empty roomSlug.
+ *   - Tears down + reconnects when either chat.url or chat.roomSlug
  *     changes between polls.
  *   - Idle (panel placeholder) when the host isn't published.
  */
@@ -1221,39 +1221,39 @@
             if (!resp.ok) return;
             const meta = await resp.json();
             const chat = meta.chat || {};
-            const url  = chat.url || '';
-            const sid  = chat.streamId || '';
-            const slug = readHashSlug();
+            const url      = chat.url      || '';
+            // #84 — The host's persistent chat room is now exposed
+            // as `roomSlug`; the per-session `streamId` form is
+            // gone. Older hosts that haven't shipped the update
+            // simply won't expose anything here and the viewer
+            // stays idle until they pick a room by hand.
+            const hostSlug = chat.roomSlug || '';
+            const slug     = readHashSlug() || hostSlug;
 
-            // Slug-pinned mode: hash is the source of truth, /meta only
-            // contributes the chat URL. If the hash changes (popstate)
-            // pollMeta will detect the new slug and reconnect.
-            if (slug) {
-                if (!url) return;
-                if (url !== state.chatUrl || slug !== state.slug) {
-                    state.chatUrl  = url;
+            // No host-side slug AND no hash → nothing to bind to.
+            // Tear down any session we had so the panel goes idle
+            // instead of pretending to be connected.
+            if (!slug) {
+                if (state.slug || state.streamId) {
+                    teardown();
+                    state.slug     = '';
                     state.streamId = '';
-                    state.slug     = slug;
-                    openSession();
+                    setState('idle');
                 }
                 return;
             }
+            if (!url) return;
 
             // User pressed Disconnect — suppress auto-bind to the
-            // host stream until the user explicitly opts back in
-            // (Join from Rooms, hash navigation, etc).
-            if (state.userDisconnected) return;
+            // host stream until the user explicitly opts back in.
+            // Hash-pinned slugs bypass this gate because they're an
+            // explicit opt-in by the user.
+            if (state.userDisconnected && !readHashSlug()) return;
 
-            // Stream-linked mode (default).
-            // Defensive: a poll that returns empty values almost always
-            // means the host's DirectoryClient is briefly Error-state
-            // between heartbeats. Ignore empties; only act on a stable,
-            // non-empty config.
-            if (!url || !sid) return;
-            if (url !== state.chatUrl || sid !== state.streamId || state.slug) {
+            if (url !== state.chatUrl || slug !== state.slug) {
                 state.chatUrl  = url;
-                state.streamId = sid;
-                state.slug     = '';
+                state.streamId = '';
+                state.slug     = slug;
                 openSession();
             }
         } catch (err) {

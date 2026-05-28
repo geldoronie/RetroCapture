@@ -186,8 +186,14 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		JoinedAt: time.Now().UTC(),
 		Send:     make(chan []byte, sendBufferSize),
 	}
-	// #84 — Host role claim. Only meaningful on stream_linked rooms.
-	if first.Hello.Role == "host" && roomRow.Kind == store.RoomKindStreamLinked {
+	// #84 — Host role claim. After the identity-bound stream-room
+	// rework, the streamer's chat is a standalone room they own; the
+	// kind==stream_linked gate is gone. First-claim-wins still
+	// applies — in practice the streamer joins with role="host"
+	// before viewers, so the right participant gets the badge. The
+	// is_owner grant from owner_secret is the trust-bearing channel;
+	// is_host is purely cosmetic.
+	if first.Hello.Role == "host" {
 		if roomLive.TryClaimHost(p.ID) {
 			p.IsHost = true
 		}

@@ -288,6 +288,20 @@ public:
     // generates anon-<rand>) when viewing.
     const std::string &getChatNickname() const       { return m_chatNickname; }
     void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    // #84 — "Open the chat alongside the stream" master toggle. When
+    // off, Application skips chat provisioning entirely; /meta omits
+    // chat.roomSlug so viewers don't auto-bind. Default ON so the
+    // out-of-the-box experience matches the prior auto-create-room
+    // behaviour. Editable under Streaming → Public Directory.
+    bool getStreamChatEnabled() const                { return m_streamChatEnabled; }
+    void setStreamChatEnabled(bool v)                { m_streamChatEnabled = v; }
+    // #84 — The streamer's persistent chat-room slug. Picked once
+    // (the first time they start a stream with chat enabled) and
+    // saved here for every subsequent session, so the streamer's
+    // chat lives at the same URL across reboots. Empty == "not
+    // chosen yet" — Application prompts the user on next start.
+    const std::string &getStreamRoomSlug() const     { return m_streamRoomSlug; }
+    void setStreamRoomSlug(const std::string &v)     { m_streamRoomSlug = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -1098,6 +1112,12 @@ private:
     // #84 — Persistent chat display name. Default empty; OSD chat
     // panel's Apply button writes here + saveConfig.
     std::string m_chatNickname            = "";
+    // #84 — Open the chat alongside the stream. ON by default for
+    // backwards-compatible behaviour.
+    bool        m_streamChatEnabled       = true;
+    // #84 — The streamer's persistent room slug. Provisioned on the
+    // first stream-with-chat start, then reused forever.
+    std::string m_streamRoomSlug          = "";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.

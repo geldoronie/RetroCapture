@@ -2602,6 +2602,10 @@ void UIManager::loadConfig()
                 auto &chat = streaming["chat"];
                 if (chat.contains("baseUrl"))  m_chatBaseUrl  = chat["baseUrl"].get<std::string>();
                 if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
+                if (chat.contains("streamChatEnabled"))
+                    m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
+                if (chat.contains("streamRoomSlug"))
+                    m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
             }
         }
 
@@ -3051,8 +3055,10 @@ void UIManager::saveConfig()
             }},
             // Chat service URL + persistent nickname (#84).
             {"chat", {
-                {"baseUrl",  m_chatBaseUrl},
-                {"nickname", m_chatNickname},
+                {"baseUrl",            m_chatBaseUrl},
+                {"nickname",           m_chatNickname},
+                {"streamChatEnabled",  m_streamChatEnabled},
+                {"streamRoomSlug",     m_streamRoomSlug},
             }}};
 
         // Preferences (#45 placeholder + window restructure)
