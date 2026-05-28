@@ -869,6 +869,33 @@ bool ChatClient::deleteStandaloneRoom(const std::string &roomId,
     return true;
 }
 
+bool ChatClient::roomExistsBySlug(const std::string &slug, std::string &outError)
+{
+    outError.clear();
+    std::string baseUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        baseUrl = m_baseUrl;
+    }
+    if (baseUrl.empty() || slug.empty())
+    {
+        outError = "missing baseUrl or slug";
+        return false;
+    }
+    const std::string url = deriveHttpFromWs(baseUrl) +
+                            "/rooms/by-slug/" + slug;
+    auto resp = HttpClient::send(HttpClient::Method::GET, url, "", 5000);
+    if (!resp.ok)
+    {
+        outError = resp.error.empty() ? "network failure" : resp.error;
+        return false;
+    }
+    if (resp.statusCode == 200) return true;
+    if (resp.statusCode == 404) return false;
+    outError = "HTTP " + std::to_string(resp.statusCode);
+    return false;
+}
+
 bool ChatClient::setStandaloneRoomListed(const std::string &roomId,
                                          const std::string &ownerSecret,
                                          bool               listed,

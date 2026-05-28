@@ -477,6 +477,39 @@ void OSDChat::render()
                                     const std::string nick = m_uiManager
                                         ? m_uiManager->getChatNickname()
                                         : snap.nickname;
+                                    // #84 — Revive path: the server
+                                    // may have reaped this room via
+                                    // the inactivity sweep while we
+                                    // kept the local entry. Probe
+                                    // first; if gone, recreate with
+                                    // the same slug + saved secret
+                                    // so we transparently keep
+                                    // ownership.
+                                    std::string probeErr;
+                                    const bool exists =
+                                        m_chat->roomExistsBySlug(
+                                            r.slug, probeErr);
+                                    if (!exists && probeErr.empty())
+                                    {
+                                        std::string newRoomId, newSlug, err;
+                                        if (m_chat->createStandaloneRoom(
+                                                r.title, r.slug,
+                                                /*password=*/"", /*listed=*/true,
+                                                /*ownerClientId=*/m_identity.id,
+                                                r.ownerSecret,
+                                                newRoomId, newSlug, err))
+                                        {
+                                            OwnedRoom rec = r;
+                                            rec.roomId = newRoomId;
+                                            ownedrooms::append(rec);
+                                            m_ownedRoomsLoaded = false;
+                                        }
+                                        else
+                                        {
+                                            m_deleteError =
+                                                "Revive failed: " + err;
+                                        }
+                                    }
                                     m_chat->connectBySlug(
                                         r.slug, nick, "", r.ownerSecret);
                                     m_pendingDeleteSlug.clear();

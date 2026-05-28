@@ -197,6 +197,14 @@ public:
                               const std::string &ownerSecret,
                               std::string       &outError);
 
+    /// Check whether a standalone room with the given slug exists on
+    /// the server. Synchronous GET /rooms/by-slug. Returns true when
+    /// the room exists, false on a 404. Any other failure (network,
+    /// parse, 5xx) returns false and populates outError; the caller
+    /// can distinguish "missing" vs "couldn't tell" by checking
+    /// whether outError stayed empty.
+    bool roomExistsBySlug(const std::string &slug, std::string &outError);
+
     /// Promote / demote a standalone room's public-listing flag via
     /// PATCH /rooms/<id>. Same auth as deleteStandaloneRoom — server
     /// gates on sha256(ownerSecret). Returns true on success.

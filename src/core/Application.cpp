@@ -6195,13 +6195,56 @@ void Application::syncDirectoryClient()
                 if (ownedrooms::findBySlug(configuredSlug, owned))
                 {
                     ownerSecret = owned.ownerSecret;
-                    // The streamer-rooms-are-public default landed
-                    // partway through #84. Rooms provisioned before
-                    // that fix are still listed=0 in the DB and
-                    // viewers won't find them via Rooms → Public.
-                    // Fire-and-forget PATCH to flip the flag on
-                    // every bind — server treats it as idempotent,
-                    // failures are logged and don't block the join.
+                    // #84 — Revive path. The room may have been
+                    // reaped by the server-side inactivity sweep
+                    // (or manually deleted from another client)
+                    // while owned_rooms.json still has the entry.
+                    // Probe first: if the room is gone, recreate
+                    // it with the same slug + same secret so the
+                    // user transparently keeps ownership. The
+                    // server doesn't have a "claim by secret"
+                    // endpoint — POST /rooms with the matching
+                    // slug succeeds because the slug is free now.
+                    std::string probeErr;
+                    const bool exists = m_chatClient->roomExistsBySlug(
+                        configuredSlug, probeErr);
+                    if (!exists && probeErr.empty())
+                    {
+                        LOG_INFO("Chat: room '" + configuredSlug +
+                                 "' missing on server, reviving with "
+                                 "saved owner_secret");
+                        std::string newRoomId, newSlug, err;
+                        std::string title = m_ui->getStreamRoomTitle();
+                        if (title.empty()) title = owned.title;
+                        if (title.empty() &&
+                            !m_ui->getChatNickname().empty())
+                            title = std::string("Stream of ") +
+                                    m_ui->getChatNickname();
+                        if (m_chatClient->createStandaloneRoom(
+                                title, configuredSlug,
+                                /*password=*/"", /*listed=*/true,
+                                /*ownerClientId=*/m_chatClient->getClientId(),
+                                owned.ownerSecret,
+                                newRoomId, newSlug, err))
+                        {
+                            // Refresh the local registry entry —
+                            // the new room has a different
+                            // room_id even though the slug is the
+                            // same.
+                            OwnedRoom rec = owned;
+                            rec.roomId = newRoomId;
+                            rec.title  = title;
+                            ownedrooms::append(rec);
+                            owned = rec;
+                        }
+                        else
+                        {
+                            LOG_WARN("Chat: revive failed: " + err);
+                        }
+                    }
+                    // Idempotent listed=true bump on every bind
+                    // (carries over from the legacy listed=false
+                    // rooms before the streamer-public default).
                     std::string patchErr;
                     if (!m_chatClient->setStandaloneRoomListed(
                             owned.roomId, ownerSecret,
