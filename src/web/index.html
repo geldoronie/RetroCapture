@@ -99,6 +99,7 @@
                             <span id="chatRoomTitle" class="home-chat-title"></span>
                             <button id="chatProfileBtn" type="button" class="home-chat-headerbtn" title="Profile">Profile</button>
                             <button id="chatRoomsBtn" type="button" class="home-chat-headerbtn" title="Rooms">Rooms</button>
+                            <button id="chatDisconnectBtn" type="button" class="home-chat-headerbtn home-chat-disconnect d-none" title="Disconnect">Disconnect</button>
                             <button id="chatParticipantCount" type="button" class="home-chat-count open" title="Toggle participants list"></button>
                         </header>
                         <div id="chatRoomBanner" class="home-chat-room-banner d-none">
@@ -137,29 +138,31 @@
                             </div>
                         </div>
                         <div id="chatRoomsModal" class="home-chat-profile d-none">
-                            <div class="home-chat-rooms-section">
-                                <div class="home-chat-rooms-head">
-                                    <span class="text-muted small">Public rooms</span>
-                                    <button id="chatRoomsRefresh" type="button" class="btn btn-outline-secondary btn-sm">Refresh</button>
-                                </div>
+                            <div class="home-chat-rooms-head">
+                                <button id="chatRoomsOpenCreate" type="button" class="btn btn-primary btn-sm">Create new...</button>
+                                <button id="chatRoomsOpenJoin"   type="button" class="btn btn-outline-secondary btn-sm">Join custom...</button>
+                                <button id="chatRoomsRefresh"    type="button" class="btn btn-outline-secondary btn-sm ms-auto">Refresh</button>
+                            </div>
+                            <div class="home-chat-rooms-tabs">
+                                <button id="chatRoomsTabPublic" type="button" class="home-chat-rooms-tab is-active" data-tab="public">Public</button>
+                                <button id="chatRoomsTabOwned"  type="button" class="home-chat-rooms-tab" data-tab="owned">Owned</button>
+                            </div>
+                            <div id="chatRoomsTabPanelPublic" class="home-chat-rooms-panel">
                                 <div id="chatRoomsList" class="home-chat-rooms-list"></div>
                             </div>
-                            <hr class="my-2">
-                            <div class="home-chat-profile-row">
-                                <label class="home-chat-profile-label">Join by slug</label>
-                                <input id="chatRoomsJoinSlug" type="text" maxlength="42" placeholder="slug">
+                            <div id="chatRoomsTabPanelOwned" class="home-chat-rooms-panel d-none">
+                                <div id="chatOwnedList" class="home-chat-rooms-list"></div>
+                                <div id="chatOwnedError" class="text-danger small d-none"></div>
                             </div>
-                            <div class="home-chat-profile-row">
-                                <label class="home-chat-profile-label">Password (if required)</label>
-                                <input id="chatRoomsJoinPass" type="password" maxlength="64">
-                            </div>
+                            <div id="chatRoomsError" class="text-danger small d-none"></div>
                             <div class="home-chat-profile-actions">
-                                <button id="chatRoomsJoin" type="button" class="btn btn-primary btn-sm">Join</button>
+                                <button id="chatRoomsClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
                             </div>
-                            <hr class="my-2">
+                        </div>
+                        <div id="chatCreateModal" class="home-chat-profile d-none">
                             <div class="home-chat-profile-row">
-                                <label class="home-chat-profile-label">New room title</label>
-                                <input id="chatRoomsCreateTitle" type="text" maxlength="120" placeholder="title">
+                                <label class="home-chat-profile-label">Title</label>
+                                <input id="chatRoomsCreateTitle" type="text" maxlength="120" placeholder="Friday Smash Bros">
                             </div>
                             <div class="home-chat-profile-row">
                                 <label class="home-chat-profile-label">Slug (optional)</label>
@@ -173,10 +176,25 @@
                                 <label class="home-chat-profile-label">List publicly</label>
                                 <input id="chatRoomsCreateListed" type="checkbox" checked>
                             </div>
-                            <div id="chatRoomsError" class="text-danger small d-none"></div>
+                            <div id="chatCreateError" class="text-danger small d-none"></div>
                             <div class="home-chat-profile-actions">
                                 <button id="chatRoomsCreate" type="button" class="btn btn-primary btn-sm">Create + Join</button>
-                                <button id="chatRoomsClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                                <button id="chatCreateClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
+                        <div id="chatJoinCustomModal" class="home-chat-profile d-none">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Slug</label>
+                                <input id="chatRoomsJoinSlug" type="text" maxlength="42" placeholder="smash-sun">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Password (if required)</label>
+                                <input id="chatRoomsJoinPass" type="password" maxlength="64">
+                            </div>
+                            <div id="chatJoinError" class="text-danger small d-none"></div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsJoin" type="button" class="btn btn-primary btn-sm">Join</button>
+                                <button id="chatJoinClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
                             </div>
                         </div>
                         <div class="home-chat-body">

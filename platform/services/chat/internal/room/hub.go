@@ -214,6 +214,32 @@ func (g *Registry) Get(id string) *Room {
 	return r
 }
 
+// Forget evicts the room from the registry and severs every live
+// connection by closing each participant's Send channel. Used by
+// the owner-initiated DELETE /rooms/<id> flow so connected clients
+// can't keep posting against a room whose row has just been wiped.
+// Idempotent — calling Forget on a missing id is a no-op.
+func (g *Registry) Forget(id string) {
+	g.mu.Lock()
+	r, ok := g.rooms[id]
+	if ok {
+		delete(g.rooms, id)
+	}
+	g.mu.Unlock()
+	if !ok {
+		return
+	}
+	r.mu.Lock()
+	for pid, p := range r.participants {
+		// close(Send) tells the per-connection writer goroutine to
+		// finish; that goroutine then closes the WebSocket itself.
+		close(p.Send)
+		delete(r.participants, pid)
+	}
+	r.hostID = ""
+	r.mu.Unlock()
+}
+
 // Stats returns coarse counters for /health diagnostics.
 func (g *Registry) Stats() (rooms int, totalParticipants int) {
 	g.mu.Lock()

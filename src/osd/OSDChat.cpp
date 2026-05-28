@@ -179,16 +179,23 @@ void OSDChat::render()
             m_showParticipants = !m_showParticipants;
         }
     }
-    // Header buttons — Profile + Rooms, right-aligned with a tiny
-    // breathing space from the title bar X.
+    // Header buttons — Profile + Rooms + (when connected) Disconnect,
+    // right-aligned with a tiny breathing space from the title bar X.
+    // Disconnect lives in the chat window itself rather than inside
+    // Rooms because that's where the user's attention is during a
+    // session.
     ImGui::SameLine();
     {
-        const float profW  = 64.0f;
-        const float roomsW = 64.0f;
-        const float gap    = ImGui::GetStyle().ItemSpacing.x;
+        const bool connected = (snap.state != ChatClient::State::Idle) &&
+                               (!snap.streamId.empty() || !snap.slug.empty());
+        const float profW   = 64.0f;
+        const float roomsW  = 64.0f;
+        const float discW   = connected ? 80.0f : 0.0f;
+        const float gap     = ImGui::GetStyle().ItemSpacing.x;
         const float rightPad = 8.0f;
         const float regionW  = ImGui::GetContentRegionAvail().x;
-        const float spacer   = regionW - profW - roomsW - gap - rightPad;
+        const float gapsTotal = gap * (connected ? 2.0f : 1.0f);
+        const float spacer   = regionW - profW - roomsW - discW - gapsTotal - rightPad;
         if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
         ImGui::SameLine();
         if (ImGui::SmallButton("Profile"))
@@ -216,15 +223,35 @@ void OSDChat::render()
             m_showRoomsWindow    = true;
             m_standaloneError.clear();
             m_roomsListRequested = false; // re-fetch on open
+            m_ownedRoomsLoaded   = false; // re-load owned list on open
+        }
+        if (connected)
+        {
+            ImGui::SameLine();
+            // Tinted red so it reads as the session-terminating action
+            // it is, but still a SmallButton to stay in the header.
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.55f, 0.22f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.70f, 0.28f, 0.28f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.45f, 0.18f, 0.18f, 1.0f));
+            if (ImGui::SmallButton("Disconnect"))
+            {
+                m_chat->disconnect();
+            }
+            ImGui::PopStyleColor(3);
         }
     }
     // Render the Rooms window OUTSIDE the chat panel's Begin/End so
     // it lives as its own draggable top-level window with a native
-    // close button (X). The bool is wired into ImGui::Begin's p_open
-    // so clicking X closes it cleanly.
+    // close button (X). The window is now slim: a header strip with
+    // the two "open sub-window" buttons + a tab bar with Public and
+    // Owned listings. Create + Join Custom forms live in their own
+    // top-level windows below.
     if (m_showRoomsWindow)
     {
-        ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(440.0f, 360.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Chat rooms##chatRoomsWindow", &m_showRoomsWindow,
                          ImGuiWindowFlags_NoCollapse))
         {
@@ -232,168 +259,290 @@ void OSDChat::render()
             // typing into this window's inputs.
             m_inputFocused = true;
 
-            // ---------- Browse public rooms -------------------------------
-            // Lazy load on first open of the window. The user can hit
-            // Refresh to re-fetch.
-            if (!m_roomsListRequested)
+            // ---------- Header strip ---------------------------------------
+            if (ImGui::Button("Create new..."))
             {
-                std::string err;
-                m_roomsList.clear();
-                if (!m_chat->listPublicRooms(50, m_roomsList, err))
-                {
-                    m_roomsListError = err;
-                }
-                else
-                {
-                    m_roomsListError.clear();
-                }
-                m_roomsListRequested = true;
+                m_showCreateWindow = true;
+                m_standaloneError.clear();
             }
-            ImGui::TextDisabled("Public rooms");
             ImGui::SameLine();
-            const float rightPad = 4.0f;
-            const float btnW     = 60.0f;
-            const float regionW  = ImGui::GetContentRegionAvail().x;
-            const float spacerW  = regionW - btnW - rightPad;
-            if (spacerW > 0.0f) ImGui::Dummy(ImVec2(spacerW, 1));
+            if (ImGui::Button("Join custom..."))
+            {
+                m_showJoinCustomWindow = true;
+                m_standaloneError.clear();
+            }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Refresh"))
+            // Refresh button anchored right — refreshes whichever
+            // tab is active. Both lists reload cheaply.
             {
-                std::string err;
-                m_roomsList.clear();
-                if (!m_chat->listPublicRooms(50, m_roomsList, err))
+                const float btnW    = 70.0f;
+                const float pad     = 4.0f;
+                const float region  = ImGui::GetContentRegionAvail().x;
+                const float spacer  = region - btnW - pad;
+                if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
+                ImGui::SameLine();
+                if (ImGui::Button("Refresh", ImVec2(btnW, 0)))
                 {
-                    m_roomsListError = err;
+                    m_roomsListRequested = false;
+                    m_ownedRoomsLoaded   = false;
                 }
-                else
+            }
+            ImGui::Spacing();
+
+            // ---------- Tabs -----------------------------------------------
+            if (ImGui::BeginTabBar("##chatRoomsTabs"))
+            {
+                if (ImGui::BeginTabItem("Public"))
                 {
-                    m_roomsListError.clear();
-                }
-            }
-            if (!m_roomsListError.empty())
-            {
-                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
-                                   "%s", m_roomsListError.c_str());
-            }
-            else if (m_roomsList.empty())
-            {
-                ImGui::TextDisabled("(no public rooms yet)");
-            }
-            else
-            {
-                const float listH = std::min(180.0f,
-                    ImGui::GetTextLineHeightWithSpacing() *
-                        static_cast<float>(m_roomsList.size()) + 8.0f);
-                if (ImGui::BeginChild("##chatRoomsBrowse",
-                                      ImVec2(0, listH), true))
-                {
-                    for (const auto &r : m_roomsList)
+                    // Lazy load on first open of the window or after a
+                    // Refresh click.
+                    if (!m_roomsListRequested)
                     {
-                        const std::string label = r.title.empty()
-                            ? ("#" + r.slug)
-                            : r.title;
-                        char selBuf[256];
-                        std::snprintf(selBuf, sizeof(selBuf), "%s%s##%s",
-                                      r.hasPassword ? "[lock] " : "",
-                                      label.c_str(), r.roomId.c_str());
-                        if (ImGui::Selectable(selBuf))
+                        std::string err;
+                        m_roomsList.clear();
+                        if (!m_chat->listPublicRooms(50, m_roomsList, err))
                         {
-                            // Click → pre-fill the join form so the
-                            // user can supply a password when needed.
-                            std::snprintf(m_joinSlugBuf, sizeof(m_joinSlugBuf),
-                                          "%s", r.slug.c_str());
-                            if (!r.hasPassword)
+                            m_roomsListError = err;
+                        }
+                        else
+                        {
+                            m_roomsListError.clear();
+                        }
+                        m_roomsListRequested = true;
+                    }
+                    if (!m_roomsListError.empty())
+                    {
+                        ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                           "%s", m_roomsListError.c_str());
+                    }
+                    else if (m_roomsList.empty())
+                    {
+                        ImGui::TextDisabled("(no public rooms yet)");
+                    }
+                    else
+                    {
+                        if (ImGui::BeginChild("##chatRoomsBrowse",
+                                              ImVec2(0, 0), true))
+                        {
+                            for (const auto &r : m_roomsList)
                             {
-                                // Read the nick from UIManager (disk-
-                                // backed identity) rather than the
-                                // snapshot — the snapshot's m_nickname
-                                // is empty until something pushes it,
-                                // which without streaming never
-                                // happens.
-                                const std::string nick = m_uiManager
-                                    ? m_uiManager->getChatNickname()
-                                    : snap.nickname;
-                                // Auto-apply owner secret if we own
-                                // this room locally — server flags
-                                // us as is_owner without prompting.
-                                OwnedRoom owned;
-                                const std::string sec =
-                                    ownedrooms::findBySlug(r.slug, owned)
-                                        ? owned.ownerSecret
-                                        : std::string{};
-                                m_chat->connectBySlug(r.slug, nick, "", sec);
-                                m_showRoomsWindow = false;
+                                const std::string label = r.title.empty()
+                                    ? ("#" + r.slug)
+                                    : r.title;
+                                char selBuf[256];
+                                std::snprintf(selBuf, sizeof(selBuf),
+                                              "%s%s##%s",
+                                              r.hasPassword ? "[lock] " : "",
+                                              label.c_str(), r.roomId.c_str());
+                                if (ImGui::Selectable(selBuf))
+                                {
+                                    // Click → pre-fill the join form so
+                                    // the user can supply a password.
+                                    std::snprintf(m_joinSlugBuf,
+                                                  sizeof(m_joinSlugBuf),
+                                                  "%s", r.slug.c_str());
+                                    if (r.hasPassword)
+                                    {
+                                        m_showJoinCustomWindow = true;
+                                    }
+                                    else
+                                    {
+                                        const std::string nick = m_uiManager
+                                            ? m_uiManager->getChatNickname()
+                                            : snap.nickname;
+                                        OwnedRoom owned;
+                                        const std::string sec =
+                                            ownedrooms::findBySlug(r.slug, owned)
+                                                ? owned.ownerSecret
+                                                : std::string{};
+                                        m_chat->connectBySlug(r.slug, nick, "", sec);
+                                        m_showRoomsWindow = false;
+                                    }
+                                }
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("  %d", r.participantCount);
                             }
                         }
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("  %d", r.participantCount);
+                        ImGui::EndChild();
                     }
+                    ImGui::EndTabItem();
                 }
-                ImGui::EndChild();
-            }
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // ---------- Join by slug + optional password ------------------
-            ImGui::TextDisabled("Join by slug");
-            ImGui::SetNextItemWidth(-1.0f);
-            const bool joinEnter = ImGui::InputTextWithHint(
-                "##joinSlug", "slug",
-                m_joinSlugBuf, sizeof(m_joinSlugBuf),
-                ImGuiInputTextFlags_EnterReturnsTrue);
-            ImGui::SetNextItemWidth(-60.0f);
-            ImGui::InputTextWithHint(
-                "##joinPass", "password (if required)",
-                m_joinPasswordBuf, sizeof(m_joinPasswordBuf),
-                ImGuiInputTextFlags_Password);
-            ImGui::SameLine();
-            const bool joinClick = ImGui::Button("Join", ImVec2(-1.0f, 0.0f));
-            if (joinEnter || joinClick)
-            {
-                std::string slug = m_joinSlugBuf;
-                while (!slug.empty() && std::isspace((unsigned char)slug.back())) slug.pop_back();
-                for (auto &c : slug) c = static_cast<char>(std::tolower((unsigned char)c));
-                if (slug.empty())
+                if (ImGui::BeginTabItem("Owned"))
                 {
-                    m_standaloneError = "Slug can't be empty";
-                }
-                else
-                {
-                    const std::string nick = m_uiManager
-                        ? m_uiManager->getChatNickname()
-                        : snap.nickname;
-                    OwnedRoom owned;
-                    const std::string sec =
-                        ownedrooms::findBySlug(slug, owned)
-                            ? owned.ownerSecret
-                            : std::string{};
-                    m_chat->connectBySlug(slug, nick, m_joinPasswordBuf, sec);
-                    m_joinPasswordBuf[0] = '\0';
-                    m_standaloneError.clear();
-                    m_showRoomsWindow = false;
-                }
-            }
+                    if (!m_ownedRoomsLoaded)
+                    {
+                        m_ownedRooms = ownedrooms::loadAll();
+                        m_ownedRoomsLoaded = true;
+                    }
+                    if (!m_deleteError.empty())
+                    {
+                        ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                           "%s", m_deleteError.c_str());
+                    }
+                    if (m_ownedRooms.empty())
+                    {
+                        ImGui::TextDisabled(
+                            "(you haven't created any rooms yet)");
+                        ImGui::Spacing();
+                        ImGui::TextDisabled(
+                            "Click \"Create new...\" above to mint one.");
+                    }
+                    else
+                    {
+                        if (ImGui::BeginChild("##chatOwnedList",
+                                              ImVec2(0, 0), true))
+                        {
+                            for (size_t i = 0; i < m_ownedRooms.size(); ++i)
+                            {
+                                const auto &r = m_ownedRooms[i];
+                                const std::string label = r.title.empty()
+                                    ? ("#" + r.slug)
+                                    : r.title;
+                                ImGui::PushID(static_cast<int>(i));
+                                ImGui::TextColored(
+                                    ImVec4(0.98f, 0.98f, 0.92f, 1.0f),
+                                    "%s", label.c_str());
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("  #%s", r.slug.c_str());
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-            ImGui::TextDisabled("Create new room");
+                                // Action row
+                                if (ImGui::SmallButton("Join"))
+                                {
+                                    const std::string nick = m_uiManager
+                                        ? m_uiManager->getChatNickname()
+                                        : snap.nickname;
+                                    m_chat->connectBySlug(
+                                        r.slug, nick, "", r.ownerSecret);
+                                    m_showRoomsWindow   = false;
+                                    m_pendingDeleteSlug.clear();
+                                }
+                                ImGui::SameLine();
+                                const bool pendingThis =
+                                    (m_pendingDeleteSlug == r.slug);
+                                if (pendingThis)
+                                {
+                                    ImGui::PushStyleColor(ImGuiCol_Button,
+                                        ImVec4(0.70f, 0.20f, 0.20f, 1.0f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                        ImVec4(0.85f, 0.25f, 0.25f, 1.0f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                        ImVec4(0.55f, 0.15f, 0.15f, 1.0f));
+                                }
+                                const char *delLabel = pendingThis
+                                    ? "Confirm delete (forever)"
+                                    : "Delete";
+                                if (ImGui::SmallButton(delLabel))
+                                {
+                                    if (!pendingThis)
+                                    {
+                                        m_pendingDeleteSlug = r.slug;
+                                        m_deleteError.clear();
+                                    }
+                                    else
+                                    {
+                                        // Fire the server-side delete.
+                                        // Order: server first (so we
+                                        // don't lose the secret if the
+                                        // network fails); then erase
+                                        // the local entry; finally
+                                        // disconnect if we're still in
+                                        // the doomed room.
+                                        std::string err;
+                                        const std::string ownerId =
+                                            m_identity.id;
+                                        const bool ok =
+                                            m_chat->deleteStandaloneRoom(
+                                                r.roomId, r.ownerSecret,
+                                                ownerId, err);
+                                        if (!ok)
+                                        {
+                                            m_deleteError = err;
+                                        }
+                                        else
+                                        {
+                                            const std::string doomedSlug =
+                                                r.slug;
+                                            ownedrooms::remove(doomedSlug);
+                                            m_ownedRoomsLoaded   = false;
+                                            m_roomsListRequested = false;
+                                            m_pendingDeleteSlug.clear();
+                                            m_deleteError.clear();
+                                            // If we're currently in
+                                            // that room, drop the
+                                            // session — the server
+                                            // already evicted us, but
+                                            // the client state is
+                                            // still pointing at it.
+                                            if (snap.slug == doomedSlug)
+                                            {
+                                                m_chat->disconnect();
+                                            }
+                                            ImGui::PopID();
+                                            if (pendingThis)
+                                                ImGui::PopStyleColor(3);
+                                            // Re-read the (possibly
+                                            // shrunk) vector on the
+                                            // next frame — bail out
+                                            // of the for-loop now.
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (pendingThis)
+                                {
+                                    ImGui::PopStyleColor(3);
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("Cancel"))
+                                    {
+                                        m_pendingDeleteSlug.clear();
+                                    }
+                                }
+                                ImGui::Separator();
+                                ImGui::PopID();
+                            }
+                        }
+                        ImGui::EndChild();
+                    }
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+        }
+        ImGui::End();
+    }
+
+    // -------- Create new room window (#84) ------------------------------
+    // Standalone top-level window — opened from the Rooms window's
+    // "Create new..." header button. Closes via X (p_open bound).
+    if (m_showCreateWindow)
+    {
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Create new room##chatCreateWindow",
+                         &m_showCreateWindow,
+                         ImGuiWindowFlags_NoCollapse))
+        {
+            m_inputFocused = true;
+            ImGui::TextDisabled("Title");
             ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint(
-                "##createTitle", "title",
-                m_createTitleBuf, sizeof(m_createTitleBuf));
+            ImGui::InputTextWithHint("##createTitle", "Friday Smash Bros",
+                                     m_createTitleBuf,
+                                     sizeof(m_createTitleBuf));
+            ImGui::TextDisabled("Slug (optional)");
             ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint(
-                "##createSlug", "slug (optional, auto-generated)",
-                m_createSlugBuf, sizeof(m_createSlugBuf));
+            ImGui::InputTextWithHint("##createSlug",
+                                     "auto-generated when blank",
+                                     m_createSlugBuf, sizeof(m_createSlugBuf));
+            ImGui::TextDisabled("Password (optional)");
             ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint(
-                "##createPass", "password (leave blank for none)",
-                m_createPasswordBuf, sizeof(m_createPasswordBuf),
-                ImGuiInputTextFlags_Password);
+            ImGui::InputTextWithHint("##createPass",
+                                     "leave blank for an open room",
+                                     m_createPasswordBuf,
+                                     sizeof(m_createPasswordBuf),
+                                     ImGuiInputTextFlags_Password);
             ImGui::Checkbox("List publicly", &m_createListed);
+            ImGui::Spacing();
+
             ImGui::BeginDisabled(m_createInFlight);
             if (ImGui::Button("Create + Join", ImVec2(-1.0f, 0.0f)))
             {
@@ -403,10 +552,6 @@ void OSDChat::render()
                 std::string newSlug;
                 std::string err;
                 const std::string ownerId     = m_identity.id;
-                // Mint the per-room secret BEFORE the POST so we
-                // can persist it the moment the server confirms.
-                // The server hashes its copy; we keep plaintext on
-                // disk in owned_rooms.json.
                 const std::string ownerSecret = ownedrooms::generateSecret();
                 const bool ok = m_chat->createStandaloneRoom(
                     m_createTitleBuf, m_createSlugBuf,
@@ -420,10 +565,6 @@ void OSDChat::render()
                 }
                 else
                 {
-                    // Persist the local record BEFORE the join, so
-                    // the connect path picks up the secret via
-                    // findBySlug and the server grants is_owner on
-                    // the very first hello.
                     OwnedRoom rec;
                     rec.roomId      = newRoomId;
                     rec.slug        = newSlug;
@@ -439,27 +580,82 @@ void OSDChat::render()
                     m_createTitleBuf[0]    = '\0';
                     m_createSlugBuf[0]     = '\0';
                     m_createPasswordBuf[0] = '\0';
+                    m_showCreateWindow     = false;
                     m_showRoomsWindow      = false;
                     m_roomsListRequested   = false;
+                    m_ownedRoomsLoaded     = false;
                 }
             }
             ImGui::EndDisabled();
-
             if (!m_standaloneError.empty())
             {
                 ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
                                    "%s", m_standaloneError.c_str());
             }
-            if (!snap.streamId.empty() || !snap.slug.empty())
+        }
+        ImGui::End();
+    }
+
+    // -------- Join custom room window (#84) -----------------------------
+    // Opened from the Rooms window header OR from clicking a
+    // password-protected entry in the Public listing (in which case
+    // m_joinSlugBuf is pre-filled).
+    if (m_showJoinCustomWindow)
+    {
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Join custom room##chatJoinCustomWindow",
+                         &m_showJoinCustomWindow,
+                         ImGuiWindowFlags_NoCollapse))
+        {
+            m_inputFocused = true;
+            ImGui::TextDisabled("Slug");
+            ImGui::SetNextItemWidth(-1.0f);
+            const bool joinEnter = ImGui::InputTextWithHint(
+                "##joinSlug", "smash-sun",
+                m_joinSlugBuf, sizeof(m_joinSlugBuf),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::TextDisabled("Password (if required)");
+            ImGui::SetNextItemWidth(-1.0f);
+            const bool passEnter = ImGui::InputTextWithHint(
+                "##joinPass", "",
+                m_joinPasswordBuf, sizeof(m_joinPasswordBuf),
+                ImGuiInputTextFlags_Password |
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::Spacing();
+            const bool joinClick = ImGui::Button("Join", ImVec2(-1.0f, 0.0f));
+            if (joinEnter || passEnter || joinClick)
             {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                if (ImGui::Button("Leave / disconnect", ImVec2(-1.0f, 0.0f)))
+                std::string slug = m_joinSlugBuf;
+                while (!slug.empty() && std::isspace((unsigned char)slug.back()))
+                    slug.pop_back();
+                for (auto &c : slug)
+                    c = static_cast<char>(std::tolower((unsigned char)c));
+                if (slug.empty())
                 {
-                    m_chat->disconnect();
-                    m_showRoomsWindow = false;
+                    m_standaloneError = "Slug can't be empty";
                 }
+                else
+                {
+                    const std::string nick = m_uiManager
+                        ? m_uiManager->getChatNickname()
+                        : snap.nickname;
+                    OwnedRoom owned;
+                    const std::string sec =
+                        ownedrooms::findBySlug(slug, owned)
+                            ? owned.ownerSecret
+                            : std::string{};
+                    m_chat->connectBySlug(slug, nick,
+                                          m_joinPasswordBuf, sec);
+                    m_joinPasswordBuf[0]    = '\0';
+                    m_standaloneError.clear();
+                    m_showJoinCustomWindow  = false;
+                    m_showRoomsWindow       = false;
+                }
+            }
+            if (!m_standaloneError.empty())
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "%s", m_standaloneError.c_str());
             }
         }
         ImGui::End();

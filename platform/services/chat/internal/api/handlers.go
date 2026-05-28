@@ -315,11 +315,84 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// handleRoom serves GET /rooms/<roomId> and GET /rooms/<roomId>/history.
-// Dispatches by suffix because we're hand-rolling routing.
+// handleRoomDelete serves DELETE /rooms/<roomId>. Authorized via the
+// caller's owner_secret (preferred) or owner_client_id — either must
+// match what the room was created with. Cascades through chat_messages
+// so the room and its history are gone for good. Active sessions are
+// detached from the in-memory registry; their writer goroutines will
+// see the connection drop on their next read tick.
+func (s *Server) handleRoomDelete(w http.ResponseWriter, r *http.Request, roomID string) {
+	type deleteReq struct {
+		OwnerSecret   string `json:"owner_secret"`
+		OwnerClientID string `json:"owner_client_id"`
+	}
+	var req deleteReq
+	// Body is optional for HTTP DELETE but the spec doesn't forbid it.
+	// We tolerate both empty and malformed bodies; the owner check
+	// below still has to pass either way.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	row, err := s.Store.GetRoom(r.Context(), roomID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "room_not_found", "no such room")
+			return
+		}
+		s.Logger.Error("delete_room get", "err", err, "room_id", roomID)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+		return
+	}
+
+	// Owner check — same two paths the WS hello uses to grant
+	// IsOwner. Either match authorises the delete.
+	authorised := false
+	if row.OwnerSecretHash != "" && req.OwnerSecret != "" {
+		if sha256Hex(req.OwnerSecret) == row.OwnerSecretHash {
+			authorised = true
+		}
+	}
+	if !authorised && row.OwnerAccountID != "" && req.OwnerClientID != "" {
+		if req.OwnerClientID == row.OwnerAccountID {
+			authorised = true
+		}
+	}
+	if !authorised {
+		s.writeError(w, http.StatusForbidden, "not_owner",
+			"owner_secret or owner_client_id required and must match the room")
+		return
+	}
+
+	if err := s.Store.DeleteRoom(r.Context(), roomID); err != nil {
+		s.Logger.Error("delete_room", "err", err, "room_id", roomID)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+		return
+	}
+	// Evict the live room — any participants still connected lose
+	// the broadcast channel and disconnect on their next write.
+	s.Registry.Forget(roomID)
+
+	s.writeData(w, http.StatusOK, struct {
+		Deleted bool `json:"deleted"`
+	}{Deleted: true})
+}
+
+// handleRoom serves GET /rooms/<roomId> and GET /rooms/<roomId>/history,
+// plus DELETE /rooms/<roomId>. Dispatches by method + suffix because
+// we're hand-rolling routing.
 func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		rest := strings.TrimPrefix(r.URL.Path, "/rooms/")
+		if rest == "" || strings.Contains(rest, "/") {
+			s.writeError(w, http.StatusBadRequest, "bad_request",
+				"DELETE /rooms/<roomId>")
+			return
+		}
+		s.handleRoomDelete(w, r, rest)
+		return
+	}
 	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"GET or DELETE only")
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/rooms/")

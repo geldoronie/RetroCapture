@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -135,6 +136,18 @@ bool append(const OwnedRoom &room)
     OwnedRoom withTs = room;
     if (withTs.createdAt.empty()) withTs.createdAt = isoNow();
     rooms.push_back(withTs);
+    return writeAll(rooms);
+}
+
+bool remove(const std::string &slug)
+{
+    if (slug.empty()) return false;
+    auto rooms = loadAll();
+    const auto before = rooms.size();
+    rooms.erase(std::remove_if(rooms.begin(), rooms.end(),
+                               [&](const OwnedRoom &r) { return r.slug == slug; }),
+                rooms.end());
+    if (rooms.size() == before) return false;
     return writeAll(rooms);
 }
 

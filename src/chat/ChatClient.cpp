@@ -789,6 +789,61 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
     return true;
 }
 
+bool ChatClient::deleteStandaloneRoom(const std::string &roomId,
+                                      const std::string &ownerSecret,
+                                      const std::string &ownerClientId,
+                                      std::string       &outError)
+{
+    std::string baseUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        baseUrl = m_baseUrl;
+    }
+    if (baseUrl.empty())
+    {
+        outError = "no chat base URL configured";
+        return false;
+    }
+    if (roomId.empty())
+    {
+        outError = "roomId required";
+        return false;
+    }
+    if (ownerSecret.empty() && ownerClientId.empty())
+    {
+        outError = "owner secret or client id required";
+        return false;
+    }
+
+    nlohmann::json body = nlohmann::json::object();
+    if (!ownerSecret.empty())   body["owner_secret"]    = ownerSecret;
+    if (!ownerClientId.empty()) body["owner_client_id"] = ownerClientId;
+
+    const std::string url = deriveHttpFromWs(baseUrl) + "/rooms/" + roomId;
+    auto resp = HttpClient::send(HttpClient::Method::DELETE_, url, body.dump(), 5000);
+    if (!resp.ok)
+    {
+        outError = resp.error.empty() ? "network failure" : resp.error;
+        return false;
+    }
+    if (resp.statusCode != 200 && resp.statusCode != 204)
+    {
+        std::string serverMsg;
+        try
+        {
+            auto j = nlohmann::json::parse(resp.body);
+            const auto err = j.value("error", nlohmann::json::object());
+            serverMsg = err.value("message", std::string{});
+        }
+        catch (...) { /* swallow */ }
+        outError = serverMsg.empty()
+            ? ("HTTP " + std::to_string(resp.statusCode))
+            : serverMsg;
+        return false;
+    }
+    return true;
+}
+
 ChatClient::Snapshot ChatClient::getSnapshot() const
 {
     std::lock_guard<std::mutex> lk(m_mu);

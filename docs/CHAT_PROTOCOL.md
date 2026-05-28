@@ -131,6 +131,34 @@ Resolve a stream id to its room id; creates the room if it doesn't exist.
 }
 ```
 
+### `DELETE /rooms/:roomId`
+
+Owner-initiated permanent delete (#84). The server cascades through
+`chat_messages` so the room and its history are gone for good — no
+soft-delete tombstone, no archived state. Active participants are
+evicted from the in-memory registry the moment the row is dropped.
+
+Authorisation: caller must prove ownership via *either* the
+plaintext `owner_secret` (matched against the stored hash) *or*
+`owner_client_id` (matched against the room's stored creator id).
+Either path is sufficient; both are accepted in case the caller
+only has one.
+
+```jsonc
+DELETE /rooms/r_abc123
+Content-Type: application/json
+{
+  "owner_secret":    "deadbeefcafef00ddeadbeefcafef00d",
+  "owner_client_id": "rc_3f1a2b…"   // optional fallback when secret is missing
+}
+
+200 OK
+{ "data": { "deleted": true }, "error": null }
+```
+
+Error envelopes: `403 not_owner` (neither auth path matched),
+`404 room_not_found` (already gone).
+
 ### `GET /rooms/:roomId`
 
 Room metadata (visible to anyone — not moderation-gated).

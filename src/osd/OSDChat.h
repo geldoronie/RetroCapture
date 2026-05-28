@@ -2,6 +2,7 @@
 
 #include "../chat/ChatClient.h"
 #include "../identity/ChatIdentity.h"
+#include "../identity/OwnedRooms.h"
 
 #include <string>
 #include <vector>
@@ -86,6 +87,13 @@ private:
     // mirrors ImGui::Begin's p_open so the title-bar X closes it
     // cleanly.
     bool        m_showRoomsWindow   = false;
+    // Separate windows for the create + join-custom flows (#84). The
+    // main Rooms window stays uncluttered — just a tab bar with the
+    // public + owned listings — and these sub-windows open on demand
+    // via header buttons. Buffers live across frames so what the user
+    // typed isn't lost if they switch away and back.
+    bool        m_showCreateWindow     = false;
+    bool        m_showJoinCustomWindow = false;
     // Participants panel toggle (#84). Defaults to visible — the
     // panel reads better with the sidebar showing who's in the room;
     // users who want a wider message column toggle it off via the
@@ -106,6 +114,19 @@ private:
     std::vector<ChatClient::ListedRoom> m_roomsList;
     std::string m_roomsListError;
     bool        m_roomsListRequested    = false;
+    // Cached owned-rooms registry for the "Owned" tab (#84). Loaded
+    // from disk on demand (when the window opens or after a create/
+    // delete mutates the file). Sourced from ownedrooms::loadAll().
+    std::vector<OwnedRoom> m_ownedRooms;
+    bool        m_ownedRoomsLoaded      = false;
+    std::string m_ownedRoomsError;
+    // Two-step confirm for "delete forever". First click on the row's
+    // Delete sets this to the room's slug and recolours the button to
+    // a destructive red on the next frame; second click fires the
+    // server-side DELETE + local registry erase. Any click elsewhere
+    // clears it.
+    std::string m_pendingDeleteSlug;
+    std::string m_deleteError;
 
     // #84 — Transient inline validation feedback for the nickname
     // Apply button. Cleared next frame when the user resumes typing

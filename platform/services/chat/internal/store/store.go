@@ -422,6 +422,36 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// DeleteRoom removes the room AND all of its messages from the
+// database — true cascade delete; no archived_at marker, no soft
+// remnants. Used by the owner-initiated delete flow (#84). The
+// caller is responsible for evicting the live room from the in-
+// memory registry separately.
+func (s *Store) DeleteRoom(ctx context.Context, roomID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_messages WHERE room_id = ?`, roomID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_rooms WHERE id = ?`, roomID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
 // SoftDeleteMessage marks a message as deleted. Returns ErrNotFound
 // if the id doesn't exist (or is already deleted).
 func (s *Store) SoftDeleteMessage(ctx context.Context, roomID, messageID string) error {

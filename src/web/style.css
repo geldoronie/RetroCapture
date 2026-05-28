@@ -1341,6 +1341,53 @@ body.home-page .card .text-muted {
     font-size: 0.78rem;
     text-align: center;
 }
+/* Tab bar inside the slim Rooms modal (Public / Owned). */
+.home-chat-rooms-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin: 0.25rem 0 0.4rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.home-chat-rooms-tab {
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: #8ea2ad;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+.home-chat-rooms-tab:hover { color: #e8edf0; }
+.home-chat-rooms-tab.is-active {
+    color: #F3C93E;
+    border-bottom-color: #F3C93E;
+}
+.home-chat-rooms-panel { display: block; }
+.home-chat-rooms-item.owned {
+    cursor: default;
+}
+.home-chat-rooms-item.owned:hover { background: transparent; }
+.home-chat-rooms-item-label { color: #e8edf0; }
+.home-chat-rooms-item-slug  {
+    color: #8ea2ad;
+    font-size: 0.75rem;
+    margin-left: 0.3rem;
+    margin-right: auto;
+}
+.home-chat-rooms-item.owned .action-join,
+.home-chat-rooms-item.owned .action-del {
+    padding: 0.1rem 0.45rem;
+    font-size: 0.72rem;
+}
+/* Header Disconnect button — same shape as Profile/Rooms but red. */
+.home-chat-disconnect {
+    color: #ff8a8a !important;
+    border-color: rgba(255, 100, 100, 0.4) !important;
+}
+.home-chat-disconnect:hover {
+    background: rgba(255, 80, 80, 0.18) !important;
+    color: #ffd0d0 !important;
+}
 .home-chat-log {
     flex: 1 1 auto;
     overflow-y: auto;

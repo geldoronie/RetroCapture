@@ -61,6 +61,21 @@
     const $roomsList    = document.getElementById('chatRoomsList');
     const $roomsRefresh = document.getElementById('chatRoomsRefresh');
     const $roomsClose   = document.getElementById('chatRoomsClose');
+    const $roomsOpenCreate = document.getElementById('chatRoomsOpenCreate');
+    const $roomsOpenJoin   = document.getElementById('chatRoomsOpenJoin');
+    const $roomsTabPublic  = document.getElementById('chatRoomsTabPublic');
+    const $roomsTabOwned   = document.getElementById('chatRoomsTabOwned');
+    const $roomsTabPanelPublic = document.getElementById('chatRoomsTabPanelPublic');
+    const $roomsTabPanelOwned  = document.getElementById('chatRoomsTabPanelOwned');
+    const $ownedList       = document.getElementById('chatOwnedList');
+    const $ownedError      = document.getElementById('chatOwnedError');
+    const $createModal       = document.getElementById('chatCreateModal');
+    const $createClose       = document.getElementById('chatCreateClose');
+    const $createError       = document.getElementById('chatCreateError');
+    const $joinCustomModal   = document.getElementById('chatJoinCustomModal');
+    const $joinClose         = document.getElementById('chatJoinClose');
+    const $joinError         = document.getElementById('chatJoinError');
+    const $disconnectBtn     = document.getElementById('chatDisconnectBtn');
     const $roomsJoinSlug = document.getElementById('chatRoomsJoinSlug');
     const $roomsJoinPass = document.getElementById('chatRoomsJoinPass');
     const $roomsJoinBtn  = document.getElementById('chatRoomsJoin');
@@ -82,6 +97,65 @@
 
     const NICK_KEY     = 'rc_chat_nick';
     const IDENTITY_KEY = 'rc_chat_identity';
+    // Per-room owner secrets. Mirrors the native client's
+    // $XDG_DATA_HOME/retrocapture/owned_rooms.json — the JSON shape
+    // is intentionally identical so a user could in principle hand-
+    // copy between web and desktop, though there's no built-in
+    // sync. Each entry: { room_id, slug, title, owner_secret,
+    // createdAt }.
+    const OWNED_KEY    = 'rc_chat_owned_rooms';
+
+    function loadOwned() {
+        try {
+            const raw = localStorage.getItem(OWNED_KEY);
+            if (!raw) return [];
+            const j = JSON.parse(raw);
+            return Array.isArray(j && j.rooms) ? j.rooms : [];
+        } catch (err) {
+            console.warn('owned-rooms load failed:', err);
+            return [];
+        }
+    }
+    function saveOwned(rooms) {
+        try {
+            localStorage.setItem(OWNED_KEY,
+                JSON.stringify({ rooms: rooms || [] }));
+            return true;
+        } catch (err) {
+            console.warn('owned-rooms save failed:', err);
+            return false;
+        }
+    }
+    function findOwnedBySlug(slug) {
+        if (!slug) return null;
+        const rooms = loadOwned();
+        for (const r of rooms) {
+            if (r.slug === slug) return r;
+        }
+        return null;
+    }
+    function appendOwned(rec) {
+        const rooms = loadOwned();
+        for (let i = 0; i < rooms.length; ++i) {
+            if (rooms[i].slug === rec.slug) {
+                rooms[i] = Object.assign({}, rooms[i], rec);
+                return saveOwned(rooms);
+            }
+        }
+        rooms.push(rec);
+        return saveOwned(rooms);
+    }
+    function removeOwned(slug) {
+        const rooms = loadOwned().filter(r => r.slug !== slug);
+        return saveOwned(rooms);
+    }
+    function generateOwnerSecret() {
+        // 16 bytes via crypto.getRandomValues → 32 hex chars; same
+        // entropy budget as the native std::random_device path.
+        const buf = new Uint8Array(16);
+        (crypto.getRandomValues || function () {})(buf);
+        return [...buf].map(b => b.toString(16).padStart(2, '0')).join('');
+    }
 
     // --- Identity (#84) -------------------------------------------------
     // Persisted in localStorage. The first save mints an immutable
@@ -157,6 +231,17 @@
         // has finished its WS handshake (which would tear down the
         // half-open WS and start over).
         opening:           false,
+        // Set by the in-header Disconnect button to suppress the
+        // /meta auto-bind. Cleared the next time the user explicitly
+        // joins a room (joinSlug clears it).
+        userDisconnected:  false,
+        // Plaintext password / per-room owner secret to ride the
+        // next hello frame. joinSlug() sets these; the hello sender
+        // reads them once and they decay (pendingPassword survives
+        // across reconnects so we don't ask the user every time the
+        // socket flaps).
+        pendingPassword:    '',
+        pendingOwnerSecret: '',
     };
 
     $nick.value = state.nickname;
@@ -214,6 +299,11 @@
         $msg.disabled  = !sendable;
         if (newState === 'connected') {
             renderEmptyPlaceholder();
+        }
+        // Disconnect button visible only while a session is in flight
+        // — there's no session to terminate when we're idle.
+        if ($disconnectBtn) {
+            $disconnectBtn.classList.toggle('d-none', newState === 'idle');
         }
     }
 
@@ -420,11 +510,14 @@
                 row.innerHTML = lock + escapeHtml(label) +
                     `<span class="count">${r.participant_count}</span>`;
                 row.addEventListener('click', () => {
-                    $roomsJoinSlug.value = r.slug;
-                    if (!r.has_password) {
-                        joinSlug(r.slug, '');
+                    if (r.has_password) {
+                        $roomsJoinSlug.value = r.slug;
+                        openJoinCustom();
+                        if ($roomsJoinPass) $roomsJoinPass.focus();
                     } else {
-                        $roomsJoinPass.focus();
+                        // Auto-pass owner secret if this is one of ours.
+                        const owned = findOwnedBySlug(r.slug);
+                        joinSlug(r.slug, '', owned ? owned.owner_secret : '');
                     }
                 });
                 $roomsList.appendChild(row);
@@ -434,43 +527,195 @@
                 `<div class="home-chat-rooms-empty">Fetch failed: ${escapeHtml(err.message)}</div>`;
         }
     }
+
+    // Owned rooms list — populated from localStorage (mirrors the
+    // native client's owned_rooms.json). Renders one row per entry
+    // with a Join button and a destructive Delete (two-step confirm).
+    function refreshOwnedList() {
+        if (!$ownedList) return;
+        $ownedError.classList.add('d-none');
+        $ownedList.innerHTML = '';
+        const owned = loadOwned();
+        if (!owned.length) {
+            $ownedList.innerHTML =
+                '<div class="home-chat-rooms-empty">' +
+                'You haven\'t created any rooms yet — click Create new... above.' +
+                '</div>';
+            return;
+        }
+        for (const r of owned) {
+            const row = document.createElement('div');
+            row.className = 'home-chat-rooms-item owned';
+            const label  = r.title || `#${r.slug}`;
+            row.innerHTML =
+                `<span class="home-chat-rooms-item-label">${escapeHtml(label)}</span>` +
+                `<span class="home-chat-rooms-item-slug">#${escapeHtml(r.slug)}</span>` +
+                `<button type="button" class="btn btn-sm btn-outline-primary action-join">Join</button>` +
+                `<button type="button" class="btn btn-sm btn-outline-danger action-del">Delete</button>`;
+            const $join = row.querySelector('.action-join');
+            const $del  = row.querySelector('.action-del');
+            $join.addEventListener('click', () => {
+                joinSlug(r.slug, '', r.owner_secret || '');
+            });
+            let armed = false;
+            $del.addEventListener('click', async () => {
+                if (!armed) {
+                    armed = true;
+                    $del.textContent = 'Confirm delete (forever)';
+                    $del.classList.remove('btn-outline-danger');
+                    $del.classList.add('btn-danger');
+                    setTimeout(() => {
+                        // Disarm after 4 s if user did nothing.
+                        if (!armed) return;
+                        armed = false;
+                        $del.textContent = 'Delete';
+                        $del.classList.remove('btn-danger');
+                        $del.classList.add('btn-outline-danger');
+                    }, 4000);
+                    return;
+                }
+                // Fire the destructive DELETE.
+                try {
+                    const httpBase = toHttpBase(state.chatUrl);
+                    const resp = await fetch(httpBase + '/rooms/' + r.room_id, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            owner_secret:    r.owner_secret    || '',
+                            owner_client_id: state.identity.id || '',
+                        }),
+                        credentials: 'omit',
+                    });
+                    if (!resp.ok && resp.status !== 404) {
+                        let msg = `HTTP ${resp.status}`;
+                        try {
+                            const j = await resp.json();
+                            if (j && j.error && j.error.message) msg = j.error.message;
+                        } catch (_) {}
+                        $ownedError.textContent = 'Delete failed: ' + msg;
+                        $ownedError.classList.remove('d-none');
+                        return;
+                    }
+                    // 200 or 404 → entry is dead either way; drop the
+                    // local record and bail out of any active session
+                    // pointing at it.
+                    removeOwned(r.slug);
+                    if (state.slug === r.slug) {
+                        userDisconnect();
+                    }
+                    refreshOwnedList();
+                    refreshRoomsList();
+                } catch (err) {
+                    $ownedError.textContent = 'Delete failed: ' + err.message;
+                    $ownedError.classList.remove('d-none');
+                }
+            });
+            $ownedList.appendChild(row);
+        }
+    }
+
+    function selectRoomsTab(which) {
+        const pubActive = (which === 'public');
+        if ($roomsTabPublic) $roomsTabPublic.classList.toggle('is-active', pubActive);
+        if ($roomsTabOwned)  $roomsTabOwned.classList.toggle('is-active', !pubActive);
+        if ($roomsTabPanelPublic) $roomsTabPanelPublic.classList.toggle('d-none', !pubActive);
+        if ($roomsTabPanelOwned)  $roomsTabPanelOwned.classList.toggle('d-none',  pubActive);
+        if (pubActive) refreshRoomsList(); else refreshOwnedList();
+    }
+
     function openRooms() {
         if (!$roomsModal) return;
         $roomsError.classList.add('d-none');
         $roomsModal.classList.remove('d-none');
-        refreshRoomsList();
+        selectRoomsTab('public');
     }
     function closeRooms() {
         if (!$roomsModal) return;
         $roomsModal.classList.add('d-none');
     }
-    function joinSlug(slug, password) {
+    function openCreate() {
+        if (!$createModal) return;
+        $createError.classList.add('d-none');
+        $createModal.classList.remove('d-none');
+    }
+    function closeCreate() {
+        if (!$createModal) return;
+        $createModal.classList.add('d-none');
+    }
+    function openJoinCustom() {
+        if (!$joinCustomModal) return;
+        $joinError.classList.add('d-none');
+        $joinCustomModal.classList.remove('d-none');
+    }
+    function closeJoinCustom() {
+        if (!$joinCustomModal) return;
+        $joinCustomModal.classList.add('d-none');
+    }
+    function joinSlug(slug, password, ownerSecret) {
         if (!slug) return;
         state.slug     = slug;
         state.streamId = '';
-        state.pendingPassword = password || '';
+        state.pendingPassword    = password    || '';
+        state.pendingOwnerSecret = ownerSecret || '';
+        // Joining a room clears the user-disconnected flag so the
+        // /meta poll can resume normal stream-linked auto-binding
+        // when this room is left.
+        state.userDisconnected = false;
         window.location.hash = `#r/${slug}`;
         closeRooms();
+        closeCreate();
+        closeJoinCustom();
         openSession();
+    }
+    // User-initiated disconnect. Closes the live WS, drops the slug
+    // pin, and arms a flag so the /meta auto-bind doesn't immediately
+    // reconnect us to the host stream until the user explicitly opts
+    // back in (Join from Rooms, URL hash, etc).
+    function userDisconnect() {
+        state.userDisconnected = true;
+        state.slug             = '';
+        state.streamId         = '';
+        state.pendingPassword    = '';
+        state.pendingOwnerSecret = '';
+        if (window.location.hash) {
+            try { history.replaceState(null, '', window.location.pathname); }
+            catch (_) { window.location.hash = ''; }
+        }
+        teardown();
+        setState('idle');
     }
     if ($roomsBtn)     $roomsBtn.addEventListener('click', openRooms);
     if ($roomsClose)   $roomsClose.addEventListener('click', closeRooms);
-    if ($roomsRefresh) $roomsRefresh.addEventListener('click', refreshRoomsList);
+    if ($roomsRefresh) {
+        $roomsRefresh.addEventListener('click', () => {
+            refreshRoomsList();
+            refreshOwnedList();
+        });
+    }
+    if ($roomsTabPublic) $roomsTabPublic.addEventListener('click', () => selectRoomsTab('public'));
+    if ($roomsTabOwned)  $roomsTabOwned.addEventListener('click',  () => selectRoomsTab('owned'));
+    if ($roomsOpenCreate) $roomsOpenCreate.addEventListener('click', openCreate);
+    if ($roomsOpenJoin)   $roomsOpenJoin.addEventListener('click',   openJoinCustom);
+    if ($createClose) $createClose.addEventListener('click', closeCreate);
+    if ($joinClose)   $joinClose.addEventListener('click',   closeJoinCustom);
+    if ($disconnectBtn) $disconnectBtn.addEventListener('click', userDisconnect);
     if ($roomsJoinBtn) {
         $roomsJoinBtn.addEventListener('click', () => {
             const slug = ($roomsJoinSlug.value || '').trim().toLowerCase();
             const pw   = $roomsJoinPass.value || '';
             if (!slug) {
-                $roomsError.textContent = 'Slug is required.';
-                $roomsError.classList.remove('d-none');
+                $joinError.textContent = 'Slug is required.';
+                $joinError.classList.remove('d-none');
                 return;
             }
-            joinSlug(slug, pw);
+            const owned  = findOwnedBySlug(slug);
+            const secret = owned ? owned.owner_secret : '';
+            joinSlug(slug, pw, secret);
         });
     }
     if ($roomsCreateBtn) {
         $roomsCreateBtn.addEventListener('click', async () => {
-            $roomsError.classList.add('d-none');
+            $createError.classList.add('d-none');
             const body = {};
             if ($roomsCreateTitle.value.trim()) body.title = $roomsCreateTitle.value.trim();
             if ($roomsCreateSlug.value.trim())  body.slug  = $roomsCreateSlug.value.trim();
@@ -479,6 +724,11 @@
             if (state.identity && state.identity.id) {
                 body.owner_client_id = state.identity.id;
             }
+            // Mint the per-room secret BEFORE the POST so we can
+            // persist it the moment the server confirms — server
+            // hashes its copy, plaintext lives only in localStorage.
+            const ownerSecret = generateOwnerSecret();
+            body.owner_secret = ownerSecret;
             try {
                 const httpBase = toHttpBase(state.chatUrl);
                 const resp = await fetch(httpBase + '/rooms', {
@@ -491,17 +741,24 @@
                 if (!resp.ok || !j.data || !j.data.slug) {
                     const code = (j.error && j.error.code) || resp.status;
                     const msg  = (j.error && j.error.message) || 'create failed';
-                    $roomsError.textContent = `${code}: ${msg}`;
-                    $roomsError.classList.remove('d-none');
+                    $createError.textContent = `${code}: ${msg}`;
+                    $createError.classList.remove('d-none');
                     return;
                 }
+                appendOwned({
+                    room_id:      j.data.room_id,
+                    slug:         j.data.slug,
+                    title:        body.title || '',
+                    owner_secret: ownerSecret,
+                    createdAt:    new Date().toISOString(),
+                });
                 $roomsCreateTitle.value = '';
                 $roomsCreateSlug.value  = '';
                 $roomsCreatePass.value  = '';
-                joinSlug(j.data.slug, body.password || '');
+                joinSlug(j.data.slug, body.password || '', ownerSecret);
             } catch (err) {
-                $roomsError.textContent = 'Create failed: ' + err.message;
-                $roomsError.classList.remove('d-none');
+                $createError.textContent = 'Create failed: ' + err.message;
+                $createError.classList.remove('d-none');
             }
         });
     }
@@ -699,6 +956,9 @@
                 }
                 if (state.pendingPassword) {
                     helloPayload.password = state.pendingPassword;
+                }
+                if (state.pendingOwnerSecret) {
+                    helloPayload.owner_secret = state.pendingOwnerSecret;
                 }
                 ws.send(JSON.stringify({
                     kind:  'hello',
@@ -926,6 +1186,11 @@
                 }
                 return;
             }
+
+            // User pressed Disconnect — suppress auto-bind to the
+            // host stream until the user explicitly opts back in
+            // (Join from Rooms, hash navigation, etc).
+            if (state.userDisconnected) return;
 
             // Stream-linked mode (default).
             // Defensive: a poll that returns empty values almost always

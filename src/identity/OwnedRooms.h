@@ -43,6 +43,12 @@ bool findBySlug(const std::string &slug, OwnedRoom &out);
 /// caller before the response lands.
 bool append(const OwnedRoom &room);
 
+/// Remove the entry with the given slug. Returns true when an
+/// entry was removed; false when no match was found (still a
+/// success from the caller's perspective — idempotent). Writes
+/// the trimmed registry back to disk on match.
+bool remove(const std::string &slug);
+
 /// Generate a fresh 32-hex-character owner secret (128 bits of
 /// entropy via std::random_device).
 std::string generateSecret();
