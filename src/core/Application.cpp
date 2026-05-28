@@ -161,13 +161,15 @@ bool Application::init()
         if (ident.isInitialized())
         {
             m_chatClient->setClientId(ident.id);
-            // Mirror the saved nickname into UIManager so the chat
-            // connect path picks it up. The Profile window stays the
-            // source of truth; this just primes the existing
-            // m_chatNickname channel until that UI is wired through.
-            if (m_ui && !ident.nickname.empty())
+            // Push the saved nickname into ChatClient AND UIManager —
+            // the OSD's Rooms-browse click + manual join paths read
+            // snap.nickname; without this seeding, connectBySlug
+            // bails on the empty-nickname guard and silently does
+            // nothing on first launch.
+            if (!ident.nickname.empty())
             {
-                m_ui->setChatNickname(ident.nickname);
+                m_chatClient->setNickname(ident.nickname);
+                if (m_ui) m_ui->setChatNickname(ident.nickname);
             }
         }
     }

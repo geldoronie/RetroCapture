@@ -223,10 +223,9 @@ void OSDChat::render()
     // so clicking X closes it cleanly.
     if (m_showRoomsWindow)
     {
-        ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Chat rooms##chatRoomsWindow", &m_showRoomsWindow,
-                         ImGuiWindowFlags_NoCollapse |
-                         ImGuiWindowFlags_NoSavedSettings))
+                         ImGuiWindowFlags_NoCollapse))
         {
             // Suppress the F8 chat-toggle hotkey while the user is
             // typing into this window's inputs.
@@ -304,7 +303,16 @@ void OSDChat::render()
                                           "%s", r.slug.c_str());
                             if (!r.hasPassword)
                             {
-                                m_chat->connectBySlug(r.slug, snap.nickname);
+                                // Read the nick from UIManager (disk-
+                                // backed identity) rather than the
+                                // snapshot — the snapshot's m_nickname
+                                // is empty until something pushes it,
+                                // which without streaming never
+                                // happens.
+                                const std::string nick = m_uiManager
+                                    ? m_uiManager->getChatNickname()
+                                    : snap.nickname;
+                                m_chat->connectBySlug(r.slug, nick);
                                 m_showRoomsWindow = false;
                             }
                         }
@@ -344,7 +352,10 @@ void OSDChat::render()
                 }
                 else
                 {
-                    m_chat->connectBySlug(slug, snap.nickname, m_joinPasswordBuf);
+                    const std::string nick = m_uiManager
+                        ? m_uiManager->getChatNickname()
+                        : snap.nickname;
+                    m_chat->connectBySlug(slug, nick, m_joinPasswordBuf);
                     m_joinPasswordBuf[0] = '\0';
                     m_standaloneError.clear();
                     m_showRoomsWindow = false;
@@ -390,7 +401,10 @@ void OSDChat::render()
                 }
                 else
                 {
-                    m_chat->connectBySlug(newSlug, snap.nickname, m_createPasswordBuf);
+                    const std::string nick = m_uiManager
+                        ? m_uiManager->getChatNickname()
+                        : snap.nickname;
+                    m_chat->connectBySlug(newSlug, nick, m_createPasswordBuf);
                     m_createTitleBuf[0]    = '\0';
                     m_createSlugBuf[0]     = '\0';
                     m_createPasswordBuf[0] = '\0';
@@ -433,8 +447,7 @@ void OSDChat::render()
         ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Chat profile##chatProfileWindow",
                          &m_showProfileWindow,
-                         ImGuiWindowFlags_NoCollapse |
-                         ImGuiWindowFlags_NoSavedSettings))
+                         ImGuiWindowFlags_NoCollapse))
         {
             m_inputFocused = true;
 
