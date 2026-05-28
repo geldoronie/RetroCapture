@@ -2607,6 +2607,15 @@ void UIManager::loadConfig()
                 if (chat.contains("streamRoomSlug"))
                     m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
             }
+            // #84 — One-shot migration: pre-rework configs stored
+            // the directory's display nickname in a separate field
+            // (m_directoryHostNickname). The chat Profile now owns
+            // it; copy across when the chat nickname is empty so
+            // legacy configs don't suddenly look "unnamed".
+            if (m_chatNickname.empty() && !m_directoryHostNickname.empty())
+            {
+                m_chatNickname = m_directoryHostNickname;
+            }
         }
 
         // Preferences (#45 placeholder + window restructure)

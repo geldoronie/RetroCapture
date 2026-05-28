@@ -38,6 +38,15 @@ public:
 
     void render();
 
+private:
+    // Profile window is rendered before the chat panel's visibility
+    // gate so external callers (e.g. Streaming → Configure Profile)
+    // can pop it even when the chat overlay is hidden. Internal —
+    // never called from outside the class.
+    void renderProfileWindow();
+
+public:
+
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const        { return m_visible; }
     void toggleVisibility()       { m_visible = !m_visible; }

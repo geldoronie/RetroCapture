@@ -288,6 +288,18 @@ public:
     // generates anon-<rand>) when viewing.
     const std::string &getChatNickname() const       { return m_chatNickname; }
     void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    // #84 — Cross-window request to open the Chat Profile dialog.
+    // Set by UIConfigurationStreaming when the user clicks
+    // "Configure Profile"; consumed by OSDChat on the next frame.
+    // The flag is a one-shot — the consumer clears it so a stale
+    // request from minutes ago doesn't pop the dialog every frame.
+    bool consumeOpenChatProfileRequest()
+    {
+        if (!m_openChatProfileRequested) return false;
+        m_openChatProfileRequested = false;
+        return true;
+    }
+    void requestOpenChatProfile()                    { m_openChatProfileRequested = true; }
     // #84 — "Open the chat alongside the stream" master toggle. When
     // off, Application skips chat provisioning entirely; /meta omits
     // chat.roomSlug so viewers don't auto-bind. Default ON so the
@@ -311,7 +323,16 @@ public:
     void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
     const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
-    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    // #84 — As of the profile unification, the directory's "host
+    // nickname" is derived from the chat Profile (m_chatNickname).
+    // The setter is still here for ConfigJSON round-trips of legacy
+    // configs that have a separate hostNickname field; on first
+    // load we mirror it into m_chatNickname when the latter is
+    // empty, then the chat profile owns the value going forward.
+    const std::string &getDirectoryHostNickname() const
+    {
+        return m_chatNickname.empty() ? m_directoryHostNickname : m_chatNickname;
+    }
     void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
     const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
     void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
@@ -1112,6 +1133,11 @@ private:
     // #84 — Persistent chat display name. Default empty; OSD chat
     // panel's Apply button writes here + saveConfig.
     std::string m_chatNickname            = "";
+    // #84 — One-shot flag: UIConfigurationStreaming raises it when
+    // the user clicks "Configure Profile" from the streaming
+    // settings; OSDChat consumes it on the next frame and opens
+    // the Profile window even if the chat panel itself is hidden.
+    bool        m_openChatProfileRequested = false;
     // #84 — Open the chat alongside the stream. ON by default for
     // backwards-compatible behaviour.
     bool        m_streamChatEnabled       = true;

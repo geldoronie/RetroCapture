@@ -111,7 +111,36 @@ OSDChat::~OSDChat() = default;
 void OSDChat::render()
 {
     m_inputFocused = false;
-    if (!m_visible || !m_chat) return;
+    if (!m_chat) return;
+
+    // #84 — External "open Profile" requests (e.g. from the Streaming
+    // settings' "Configure Profile" button). Consumed once per
+    // request; lazy-load identity into the buffers exactly like the
+    // header button's path does. Runs BEFORE the m_visible gate so
+    // the dialog opens even when the chat panel itself is hidden.
+    if (m_uiManager && m_uiManager->consumeOpenChatProfileRequest())
+    {
+        if (!m_identityLoaded)
+        {
+            m_identity = identity::load();
+            std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
+                          m_identity.name.c_str());
+            std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
+                          m_identity.nickname.c_str());
+            m_profileAge     = m_identity.age;
+            m_identityLoaded = true;
+        }
+        m_showProfileWindow = true;
+        m_profileError.clear();
+        m_profileSavedHint.clear();
+    }
+
+    // Profile window is rendered unconditionally too — the consume
+    // request above can pop it on a hidden chat panel; once shown,
+    // it should stay reachable until the user closes it.
+    renderProfileWindow();
+
+    if (!m_visible) return;
 
     const auto snap = m_chat->getSnapshot();
     // No more auto-hide — the user controls visibility via F8 / View
@@ -719,118 +748,10 @@ void OSDChat::render()
         ImGui::End();
     }
 
-    // Profile window (#84). Standalone top-level window with native
-    // X close (p_open bound to m_showProfileWindow). The user fills
-    // Name / Nickname / Age and clicks Save; the first save derives
-    // the immutable ID from those inputs + timestamp + random bytes.
-    // Subsequent saves keep the ID and just refresh editable fields.
-    if (m_showProfileWindow)
-    {
-        ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Chat profile##chatProfileWindow",
-                         &m_showProfileWindow,
-                         ImGuiWindowFlags_NoCollapse))
-        {
-            m_inputFocused = true;
-
-            ImGui::TextDisabled("Display name");
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint("##profName", "Your real name",
-                                     m_profileNameBuf, sizeof(m_profileNameBuf));
-
-            ImGui::TextDisabled("Nickname (visible in chat)");
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint("##profNick", "geldo",
-                                     m_profileNickBuf, sizeof(m_profileNickBuf));
-
-            ImGui::TextDisabled("Age");
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::InputInt("##profAge", &m_profileAge);
-            if (m_profileAge < 0)  m_profileAge = 0;
-            if (m_profileAge > 130) m_profileAge = 130;
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // ID block. Shown read-only — generated on first save,
-            // immutable afterwards. The disk path is surfaced so the
-            // user knows what to back up.
-            ImGui::TextDisabled("Identity (read-only)");
-            if (m_identity.id.empty())
-            {
-                ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
-                                   "Not generated yet - click Save to mint one");
-            }
-            else
-            {
-                ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f),
-                                   "%s", m_identity.id.c_str());
-                if (!m_identity.createdAt.empty())
-                {
-                    ImGui::TextDisabled("Created: %s",
-                                        m_identity.createdAt.c_str());
-                }
-            }
-            ImGui::TextDisabled("File: %s", identity::filePath().c_str());
-            ImGui::TextDisabled(
-                "Back this file up - losing it loses your chat identity.");
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // Save button. Validates nickname (non-empty) before
-            // calling identity::save which mints the ID on first
-            // save. Pushes the result into ChatClient so the next
-            // hello carries it.
-            const bool nickEmpty = (m_profileNickBuf[0] == '\0');
-            ImGui::BeginDisabled(nickEmpty);
-            if (ImGui::Button("Save", ImVec2(-1.0f, 0.0f)))
-            {
-                m_identity.name     = m_profileNameBuf;
-                m_identity.nickname = m_profileNickBuf;
-                m_identity.age      = m_profileAge;
-                if (identity::save(m_identity))
-                {
-                    if (m_chat) m_chat->setClientId(m_identity.id);
-                    // Mirror nickname into UIManager so the chat
-                    // connect path picks the same value up across
-                    // reconnects.
-                    if (m_uiManager)
-                    {
-                        m_uiManager->setChatNickname(m_identity.nickname);
-                        m_uiManager->saveConfig();
-                    }
-                    if (m_chat) m_chat->setNickname(m_identity.nickname);
-                    m_profileSavedHint = "Saved.";
-                    m_profileError.clear();
-                }
-                else
-                {
-                    m_profileError = "Failed to write identity.json";
-                    m_profileSavedHint.clear();
-                }
-            }
-            ImGui::EndDisabled();
-            if (nickEmpty)
-            {
-                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
-                                   "Nickname is required.");
-            }
-            if (!m_profileError.empty())
-            {
-                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
-                                   "%s", m_profileError.c_str());
-            }
-            if (!m_profileSavedHint.empty())
-            {
-                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
-                                   "%s", m_profileSavedHint.c_str());
-            }
-        }
-        ImGui::End();
-    }
+    // Profile window now lives in renderProfileWindow() and is
+    // rendered ABOVE this gate so it can be opened even when the
+    // chat panel itself is hidden (e.g. Streaming → Configure
+    // Profile button).
 
     ImGui::Separator();
 
@@ -1259,5 +1180,108 @@ void OSDChat::render()
     // Reset unread counter while the panel is on screen and current.
     if (sendable && m_autoScroll) m_chat->markRead();
 
+    ImGui::End();
+}
+
+// Standalone Profile dialog — rendered unconditionally from render()
+// so external triggers (Streaming → Configure Profile) can pop it
+// even when the chat panel is hidden. The body is the same edit
+// form the header's Profile button used to inline.
+void OSDChat::renderProfileWindow()
+{
+    if (!m_showProfileWindow) return;
+    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Chat profile##chatProfileWindow",
+                     &m_showProfileWindow,
+                     ImGuiWindowFlags_NoCollapse))
+    {
+        m_inputFocused = true;
+
+        ImGui::TextDisabled("Display name");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##profName", "Your real name",
+                                 m_profileNameBuf, sizeof(m_profileNameBuf));
+
+        ImGui::TextDisabled("Nickname (visible in chat)");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##profNick", "geldo",
+                                 m_profileNickBuf, sizeof(m_profileNickBuf));
+
+        ImGui::TextDisabled("Age");
+        ImGui::SetNextItemWidth(120.0f);
+        ImGui::InputInt("##profAge", &m_profileAge);
+        if (m_profileAge < 0)   m_profileAge = 0;
+        if (m_profileAge > 130) m_profileAge = 130;
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextDisabled("Identity (read-only)");
+        if (m_identity.id.empty())
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                               "Not generated yet - click Save to mint one");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f),
+                               "%s", m_identity.id.c_str());
+            if (!m_identity.createdAt.empty())
+            {
+                ImGui::TextDisabled("Created: %s",
+                                    m_identity.createdAt.c_str());
+            }
+        }
+        ImGui::TextDisabled("File: %s", identity::filePath().c_str());
+        ImGui::TextDisabled(
+            "Back this file up - losing it loses your chat identity.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const bool nickEmpty = (m_profileNickBuf[0] == '\0');
+        ImGui::BeginDisabled(nickEmpty);
+        if (ImGui::Button("Save", ImVec2(-1.0f, 0.0f)))
+        {
+            m_identity.name     = m_profileNameBuf;
+            m_identity.nickname = m_profileNickBuf;
+            m_identity.age      = m_profileAge;
+            if (identity::save(m_identity))
+            {
+                if (m_chat) m_chat->setClientId(m_identity.id);
+                if (m_uiManager)
+                {
+                    m_uiManager->setChatNickname(m_identity.nickname);
+                    m_uiManager->saveConfig();
+                }
+                if (m_chat) m_chat->setNickname(m_identity.nickname);
+                m_profileSavedHint = "Saved.";
+                m_profileError.clear();
+            }
+            else
+            {
+                m_profileError = "Failed to write identity.json";
+                m_profileSavedHint.clear();
+            }
+        }
+        ImGui::EndDisabled();
+        if (nickEmpty)
+        {
+            ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                               "Nickname is required.");
+        }
+        if (!m_profileError.empty())
+        {
+            ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                               "%s", m_profileError.c_str());
+        }
+        if (!m_profileSavedHint.empty())
+        {
+            ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                               "%s", m_profileSavedHint.c_str());
+        }
+    }
     ImGui::End();
 }

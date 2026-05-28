@@ -929,13 +929,38 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             m_uiManager->saveConfig();
         }
     }
+    // #84 — Nickname now comes from the chat Profile (single source
+    // of truth for the user's display name across stream + chat).
+    // Show a read-only label and a button that pops the Profile
+    // window via UIManager's one-shot request flag.
     {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryHostNickname().c_str());
-        if (ImGui::InputText("Nickname (optional)", buf, sizeof(buf)))
+        const std::string &nick = m_uiManager->getChatNickname();
+        if (nick.empty())
         {
-            m_uiManager->setDirectoryHostNickname(buf);
-            m_uiManager->saveConfig();
+            ImGui::TextDisabled("Nickname: ");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                               "(not set)");
+        }
+        else
+        {
+            ImGui::TextDisabled("Nickname:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.90f, 1.0f),
+                               "%s", nick.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Configure Profile"))
+        {
+            m_uiManager->requestOpenChatProfile();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Your display name is taken from the chat Profile\n"
+                "(name + nickname + persistent rc_<id>). Click to\n"
+                "edit it; the same nickname is used in the directory\n"
+                "listing AND in chat.");
         }
     }
     {
@@ -967,6 +992,19 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         if (ImGui::Checkbox("Open chat alongside this stream", &chatOn))
         {
             m_uiManager->setStreamChatEnabled(chatOn);
+            // #84 — When the user turns chat on but hasn't named
+            // their stream yet, seed a default like "Stream of
+            // <nick>" so the directory entry has something readable.
+            // The user can still edit the field afterwards. We only
+            // fill when nickname is non-empty; without a nickname
+            // we'd write "Stream of " which is worse than nothing.
+            if (chatOn &&
+                m_uiManager->getDirectoryStreamName().empty() &&
+                !m_uiManager->getChatNickname().empty())
+            {
+                m_uiManager->setDirectoryStreamName(
+                    std::string("Stream of ") + m_uiManager->getChatNickname());
+            }
             m_uiManager->saveConfig();
         }
         if (ImGui::IsItemHovered())
@@ -1282,6 +1320,21 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     {
         if (enabled)
         {
+            // #84 — Safety-net auto-fill: the chat-toggle handler
+            // already seeds "Stream of <nick>" but only if both the
+            // toggle AND a nickname were set at that moment. If the
+            // user did it the other way around (configured profile
+            // AFTER ticking chat, or just left the field empty), do
+            // the fill one more time here so they don't get rejected
+            // by the empty-name validation.
+            if (m_uiManager->getStreamChatEnabled() &&
+                m_uiManager->getDirectoryStreamName().empty() &&
+                !m_uiManager->getChatNickname().empty())
+            {
+                m_uiManager->setDirectoryStreamName(
+                    std::string("Stream of ") +
+                    m_uiManager->getChatNickname());
+            }
             if (!m_uiManager->getDirectoryPrivacyAcked())
             {
                 // Need consent first. Modal flips the toggle on once
