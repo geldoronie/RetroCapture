@@ -639,10 +639,35 @@ void ChatClient::handleFrame(const std::string &payload)
         const auto e = j.value("error", nlohmann::json::object());
         const std::string code = e.value("code",    std::string{});
         const std::string text = e.value("message", std::string{});
-        std::lock_guard<std::mutex> lk(m_mu);
-        m_lastError = code.empty() ? text : (code + ": " + text);
-        // Server-side errors don't kill the connection unless it
-        // followed up with a close; just surface for the UI.
+        bool fatal = false;
+        {
+            std::lock_guard<std::mutex> lk(m_mu);
+            m_lastError = code.empty() ? text : (code + ": " + text);
+            // Hello-time rejections (password_wrong, password_required,
+            // identity_in_use, bad_request) are followed by a server-
+            // side close. IXWebSocket's auto-reconnect would then re-
+            // open and resend the SAME bad hello forever. Treat any
+            // error frame received before the welcome ack as fatal:
+            // park the state in Error and disable reconnection so the
+            // socket dies cleanly. The UI can then surface the error
+            // and the user can correct the input and retry, which
+            // builds a fresh WS via a new connectBySlug call.
+            if (!m_helloAcked)
+            {
+                setStateLocked(State::Error);
+                fatal = true;
+                // Wipe the stale password so the next reconnect via
+                // connectBySlug doesn't carry it forward by accident.
+                if (code == "password_wrong" || code == "password_required")
+                {
+                    m_password.clear();
+                }
+            }
+        }
+        if (fatal && m_ws)
+        {
+            try { m_ws->disableAutomaticReconnection(); } catch (...) {}
+        }
     }
     // pong is informational; ignore.
 }
@@ -791,7 +816,6 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
 
 bool ChatClient::deleteStandaloneRoom(const std::string &roomId,
                                       const std::string &ownerSecret,
-                                      const std::string &ownerClientId,
                                       std::string       &outError)
 {
     std::string baseUrl;
@@ -809,15 +833,14 @@ bool ChatClient::deleteStandaloneRoom(const std::string &roomId,
         outError = "roomId required";
         return false;
     }
-    if (ownerSecret.empty() && ownerClientId.empty())
+    if (ownerSecret.empty())
     {
-        outError = "owner secret or client id required";
+        outError = "owner secret required";
         return false;
     }
 
     nlohmann::json body = nlohmann::json::object();
-    if (!ownerSecret.empty())   body["owner_secret"]    = ownerSecret;
-    if (!ownerClientId.empty()) body["owner_client_id"] = ownerClientId;
+    body["owner_secret"] = ownerSecret;
 
     const std::string url = deriveHttpFromWs(baseUrl) + "/rooms/" + roomId;
     auto resp = HttpClient::send(HttpClient::Method::DELETE_, url, body.dump(), 5000);

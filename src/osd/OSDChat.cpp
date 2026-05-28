@@ -356,7 +356,11 @@ void OSDChat::render()
                                                 ? owned.ownerSecret
                                                 : std::string{};
                                         m_chat->connectBySlug(r.slug, nick, "", sec);
-                                        m_showRoomsWindow = false;
+                                        // Leave the window open — the
+                                        // user decides when to close
+                                        // it. Also lets connect errors
+                                        // (password_wrong, etc) stay
+                                        // visible inline.
                                     }
                                 }
                                 ImGui::SameLine();
@@ -414,7 +418,6 @@ void OSDChat::render()
                                         : snap.nickname;
                                     m_chat->connectBySlug(
                                         r.slug, nick, "", r.ownerSecret);
-                                    m_showRoomsWindow   = false;
                                     m_pendingDeleteSlug.clear();
                                 }
                                 ImGui::SameLine();
@@ -449,12 +452,9 @@ void OSDChat::render()
                                         // disconnect if we're still in
                                         // the doomed room.
                                         std::string err;
-                                        const std::string ownerId =
-                                            m_identity.id;
                                         const bool ok =
                                             m_chat->deleteStandaloneRoom(
-                                                r.roomId, r.ownerSecret,
-                                                ownerId, err);
+                                                r.roomId, r.ownerSecret, err);
                                         if (!ok)
                                         {
                                             m_deleteError = err;
@@ -580,8 +580,9 @@ void OSDChat::render()
                     m_createTitleBuf[0]    = '\0';
                     m_createSlugBuf[0]     = '\0';
                     m_createPasswordBuf[0] = '\0';
-                    m_showCreateWindow     = false;
-                    m_showRoomsWindow      = false;
+                    // Window stays open — the user closes when ready.
+                    // Refresh the cached lists so the new room shows
+                    // up immediately when they switch to Owned/Public.
                     m_roomsListRequested   = false;
                     m_ownedRoomsLoaded     = false;
                 }
@@ -646,16 +647,43 @@ void OSDChat::render()
                             : std::string{};
                     m_chat->connectBySlug(slug, nick,
                                           m_joinPasswordBuf, sec);
-                    m_joinPasswordBuf[0]    = '\0';
+                    // Window stays open so the user sees password
+                    // errors inline; m_joinPasswordBuf is kept too in
+                    // case they want to fix a typo and retry.
                     m_standaloneError.clear();
-                    m_showJoinCustomWindow  = false;
-                    m_showRoomsWindow       = false;
                 }
             }
             if (!m_standaloneError.empty())
             {
                 ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
                                    "%s", m_standaloneError.c_str());
+            }
+            // Live status feedback so the user sees why a join didn't
+            // take. Server-side hello rejections (password_wrong,
+            // identity_in_use, etc) leave the ChatClient in Error with
+            // lastError populated.
+            if (snap.state == ChatClient::State::Resolving ||
+                snap.state == ChatClient::State::Connecting)
+            {
+                ImGui::TextColored(ImVec4(0.75f, 0.80f, 0.90f, 1.0f),
+                                   "Connecting...");
+            }
+            else if (snap.state == ChatClient::State::Error &&
+                     !snap.lastError.empty())
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "%s", snap.lastError.c_str());
+            }
+            else if (snap.state == ChatClient::State::Connected &&
+                     !snap.slug.empty() && snap.slug == [&] {
+                         std::string s = m_joinSlugBuf;
+                         while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+                         for (auto &c : s) c = static_cast<char>(std::tolower((unsigned char)c));
+                         return s;
+                     }())
+            {
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                                   "Connected.");
             }
         }
         ImGui::End();

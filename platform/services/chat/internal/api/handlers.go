@@ -315,21 +315,24 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// handleRoomDelete serves DELETE /rooms/<roomId>. Authorized via the
-// caller's owner_secret (preferred) or owner_client_id — either must
-// match what the room was created with. Cascades through chat_messages
-// so the room and its history are gone for good. Active sessions are
-// detached from the in-memory registry; their writer goroutines will
-// see the connection drop on their next read tick.
+// handleRoomDelete serves DELETE /rooms/<roomId>. Authorized strictly
+// via the room's owner_secret — the plaintext must hash to the stored
+// owner_secret_hash. Unlike the WS hello's is_owner grant, we
+// intentionally do NOT fall back to owner_client_id matching: a
+// client_id (rc_<id>) is sender-claimed and visible to every other
+// participant in chat frames, so honouring it for an authoritative
+// op like delete would let anyone who's seen a creator's id wipe
+// their rooms. Cascades through chat_messages so the row is gone
+// for good. Active participants are evicted from the in-memory
+// registry; their writer goroutines drop on the next write.
 func (s *Server) handleRoomDelete(w http.ResponseWriter, r *http.Request, roomID string) {
 	type deleteReq struct {
-		OwnerSecret   string `json:"owner_secret"`
-		OwnerClientID string `json:"owner_client_id"`
+		OwnerSecret string `json:"owner_secret"`
 	}
 	var req deleteReq
 	// Body is optional for HTTP DELETE but the spec doesn't forbid it.
-	// We tolerate both empty and malformed bodies; the owner check
-	// below still has to pass either way.
+	// We tolerate empty / malformed bodies; the owner check below
+	// will reject with the same 403.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	row, err := s.Store.GetRoom(r.Context(), roomID)
@@ -343,22 +346,20 @@ func (s *Server) handleRoomDelete(w http.ResponseWriter, r *http.Request, roomID
 		return
 	}
 
-	// Owner check — same two paths the WS hello uses to grant
-	// IsOwner. Either match authorises the delete.
-	authorised := false
-	if row.OwnerSecretHash != "" && req.OwnerSecret != "" {
-		if sha256Hex(req.OwnerSecret) == row.OwnerSecretHash {
-			authorised = true
-		}
-	}
-	if !authorised && row.OwnerAccountID != "" && req.OwnerClientID != "" {
-		if req.OwnerClientID == row.OwnerAccountID {
-			authorised = true
-		}
-	}
-	if !authorised {
+	// Owner check — secret-only. A missing OwnerSecretHash on the
+	// room means it was created before owner_secret support landed
+	// (v0.5 stream-linked rooms, pre-#84 standalones). Those can't
+	// be deleted via this endpoint; let them expire / archive
+	// through a separate v1 admin path.
+	if row.OwnerSecretHash == "" {
 		s.writeError(w, http.StatusForbidden, "not_owner",
-			"owner_secret or owner_client_id required and must match the room")
+			"room has no owner_secret on file; cannot be deleted via this endpoint")
+		return
+	}
+	if req.OwnerSecret == "" ||
+		sha256Hex(req.OwnerSecret) != row.OwnerSecretHash {
+		s.writeError(w, http.StatusForbidden, "not_owner",
+			"owner_secret required and must match the room")
 		return
 	}
 

@@ -184,14 +184,13 @@ public:
 
     /// Delete a standalone room via DELETE /rooms/<roomId>. Synchronous.
     /// Auth: server matches sha256(ownerSecret) against the stored
-    /// hash; either the secret or the rc_<id> stored as owner must
-    /// be supplied. Cascades through chat_messages — the room is
-    /// gone for good. On success, returns true; outError is populated
-    /// with a server-side reason on failure (e.g. "not_owner",
-    /// "room_not_found").
+    /// hash. There is no client_id fallback — see handlers.go for
+    /// why (client_id is sender-claimed). Cascades through
+    /// chat_messages, the room row is gone for good. On success,
+    /// returns true; outError is populated with the server's reason
+    /// on failure (e.g. "not_owner", "room_not_found").
     bool deleteStandaloneRoom(const std::string &roomId,
                               const std::string &ownerSecret,
-                              const std::string &ownerClientId,
                               std::string       &outError);
 
     /// Fetch the public-room listing (GET /rooms). Synchronous;

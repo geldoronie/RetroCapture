@@ -138,26 +138,28 @@ Owner-initiated permanent delete (#84). The server cascades through
 soft-delete tombstone, no archived state. Active participants are
 evicted from the in-memory registry the moment the row is dropped.
 
-Authorisation: caller must prove ownership via *either* the
-plaintext `owner_secret` (matched against the stored hash) *or*
-`owner_client_id` (matched against the room's stored creator id).
-Either path is sufficient; both are accepted in case the caller
-only has one.
+Authorisation: caller must prove ownership via the plaintext
+`owner_secret` matching the stored hash. There is intentionally
+**no** fallback to `owner_client_id`: a client_id is sender-claimed
+and is visible to every participant in `welcome`/`room_state`
+frames, so honouring it for an authoritative op would let anyone
+who has seen the creator's id wipe their rooms. Rooms with no
+`owner_secret_hash` on file (legacy / stream-linked) cannot be
+deleted through this endpoint.
 
 ```jsonc
 DELETE /rooms/r_abc123
 Content-Type: application/json
 {
-  "owner_secret":    "deadbeefcafef00ddeadbeefcafef00d",
-  "owner_client_id": "rc_3f1a2b…"   // optional fallback when secret is missing
+  "owner_secret": "deadbeefcafef00ddeadbeefcafef00d"
 }
 
 200 OK
 { "data": { "deleted": true }, "error": null }
 ```
 
-Error envelopes: `403 not_owner` (neither auth path matched),
-`404 room_not_found` (already gone).
+Error envelopes: `403 not_owner` (missing or wrong secret, or
+room has no secret on file), `404 room_not_found` (already gone).
 
 ### `GET /rooms/:roomId`
 

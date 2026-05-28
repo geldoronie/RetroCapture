@@ -574,15 +574,24 @@
                     }, 4000);
                     return;
                 }
-                // Fire the destructive DELETE.
+                // Fire the destructive DELETE. Auth is the
+                // per-room owner_secret only — the server rejects
+                // anything without the matching plaintext, on
+                // purpose (client_id is sender-claimed and not
+                // safe for an authoritative op like this).
+                if (!r.owner_secret) {
+                    $ownedError.textContent =
+                        'Missing local owner secret; cannot delete remotely.';
+                    $ownedError.classList.remove('d-none');
+                    return;
+                }
                 try {
                     const httpBase = toHttpBase(state.chatUrl);
                     const resp = await fetch(httpBase + '/rooms/' + r.room_id, {
                         method: 'DELETE',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            owner_secret:    r.owner_secret    || '',
-                            owner_client_id: state.identity.id || '',
+                            owner_secret: r.owner_secret,
                         }),
                         credentials: 'omit',
                     });
