@@ -104,6 +104,12 @@ void ChatClient::connect(const std::string &streamId,
                          bool               asHost)
 {
     if (streamId.empty()) return;
+    // #84 — profile gate: the server rejects empty nicknames anyway,
+    // but we'd rather avoid the round-trip-then-close cycle and
+    // leave the OSD able to render a friendly "set up your profile"
+    // CTA while we're stuck without an identity. State stays Idle
+    // so the UI gate (snap.state == Idle + non-empty target) fires.
+    if (nickname.empty()) return;
 
     {
         std::lock_guard<std::mutex> lk(m_mu);
@@ -148,6 +154,7 @@ void ChatClient::connectBySlug(const std::string &slug,
                                const std::string &nickname)
 {
     if (slug.empty()) return;
+    if (nickname.empty()) return; // same profile gate as connect()
 
     {
         std::lock_guard<std::mutex> lk(m_mu);

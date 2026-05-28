@@ -100,6 +100,16 @@
                             <button id="chatProfileBtn" type="button" class="home-chat-headerbtn" title="Profile">Profile</button>
                             <button id="chatParticipantCount" type="button" class="home-chat-count" title="Toggle participants list"></button>
                         </header>
+                        <div id="chatRoomBanner" class="home-chat-room-banner d-none">
+                            <span id="chatRoomBannerKind" class="home-chat-room-kind">[ROOM]</span>
+                            <span id="chatRoomBannerLabel" class="home-chat-room-label">Room</span>
+                            <span id="chatRoomBannerSub" class="home-chat-room-sub"></span>
+                        </div>
+                        <div id="chatProfileGate" class="home-chat-gate d-none">
+                            <div class="home-chat-gate-title">Profile required</div>
+                            <p class="home-chat-gate-body">You need a chat profile before you can send or receive messages.</p>
+                            <button id="chatProfileGateBtn" type="button" class="btn btn-primary btn-sm">Open Profile</button>
+                        </div>
                         <div id="chatProfileModal" class="home-chat-profile d-none">
                             <div class="home-chat-profile-row">
                                 <label class="home-chat-profile-label">Display name</label>

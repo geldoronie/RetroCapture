@@ -1192,6 +1192,64 @@ body.home-page .card .text-muted {
     margin-right: 0.35rem;
 }
 
+/* Room info banner — prominent line under the header showing kind +
+   title + sub-label (slug or hosted-by). */
+.home-chat-room-banner {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.4rem 0.875rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.825rem;
+    flex-wrap: wrap;
+}
+.home-chat-room-kind {
+    color: #7abee0;
+    font-weight: 700;
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+    padding: 0.05rem 0.35rem;
+    border-radius: 0.25rem;
+    background: rgba(122, 190, 224, 0.15);
+    border: 1px solid rgba(122, 190, 224, 0.3);
+}
+.home-chat-room-kind.stream {
+    color: #F3C93E;
+    background: rgba(243, 201, 62, 0.12);
+    border-color: rgba(243, 201, 62, 0.3);
+}
+.home-chat-room-label {
+    color: #fafad8;
+    font-weight: 600;
+}
+.home-chat-room-sub {
+    color: #8ea2ad;
+    font-size: 0.75rem;
+}
+
+/* Profile required gate — shown in place of the chat body when
+   identity hasn't been saved yet. */
+.home-chat-gate {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem 1rem;
+    text-align: center;
+    gap: 0.5rem;
+}
+.home-chat-gate-title {
+    color: #F3C93E;
+    font-weight: 700;
+}
+.home-chat-gate-body {
+    color: #8ea2ad;
+    font-size: 0.85rem;
+    margin: 0;
+}
+
 /* Profile modal — inline overlay inside the chat panel. */
 .home-chat-profile {
     padding: 0.75rem 0.875rem;

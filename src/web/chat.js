@@ -45,6 +45,17 @@
     const $profileClose = document.getElementById('chatProfileClose');
     const $profileError = document.getElementById('chatProfileError');
     const $profileSaved = document.getElementById('chatProfileSaved');
+    const $profileGate  = document.getElementById('chatProfileGate');
+    const $profileGateBtn = document.getElementById('chatProfileGateBtn');
+    const $body         = document.querySelector('.home-chat-body');
+    const $msgInput     = document.getElementById('chatMessageInput');
+    const $sendBtn      = document.getElementById('chatSendBtn');
+    const $nickRow      = document.querySelector('.home-chat-nick-row');
+    const $composeRow   = document.querySelector('.home-chat-compose');
+    const $roomBanner   = document.getElementById('chatRoomBanner');
+    const $roomKind     = document.getElementById('chatRoomBannerKind');
+    const $roomLabel    = document.getElementById('chatRoomBannerLabel');
+    const $roomSub      = document.getElementById('chatRoomBannerSub');
     const $nick        = document.getElementById('chatNickInput');
     const $nickApply   = document.getElementById('chatNickApply');
     const $nickError   = document.getElementById('chatNickError');
@@ -321,10 +332,53 @@
     }
 
     function setTitle() {
-        if (!$title) return;
-        $title.textContent = state.roomTitle
-            ? `— ${state.roomTitle}`
-            : (state.slug ? `— #${state.slug}` : '');
+        if ($title) {
+            $title.textContent = state.roomTitle
+                ? `— ${state.roomTitle}`
+                : (state.slug ? `— #${state.slug}` : '');
+        }
+        // Banner: prominent room kind + label + sub on a dedicated
+        // line right under the header. Hidden when idle.
+        if ($roomBanner) {
+            const visible = state.connectionState !== 'idle' &&
+                            (state.roomTitle || state.slug || state.streamId);
+            $roomBanner.classList.toggle('d-none', !visible);
+            if (visible) {
+                const isStandalone = !!state.slug;
+                $roomKind.textContent = isStandalone ? '[ROOM]' : '[STREAM]';
+                $roomKind.className = 'home-chat-room-kind' +
+                    (isStandalone ? '' : ' stream');
+                $roomLabel.textContent = state.roomTitle ||
+                    (state.slug ? `#${state.slug}` : 'Host stream chat');
+                let sub = '';
+                if (isStandalone && state.roomTitle && state.slug) {
+                    sub = `#${state.slug}`;
+                } else if (!isStandalone && state.hostParticipantId) {
+                    const hostParticipant = state.participants.find(
+                        p => p.id === state.hostParticipantId);
+                    if (hostParticipant && hostParticipant.nickname) {
+                        sub = `hosted by ${hostParticipant.nickname}`;
+                    }
+                }
+                $roomSub.textContent = sub;
+            }
+        }
+    }
+
+    function hasProfile() {
+        return !!(state.identity && state.identity.id);
+    }
+
+    function refreshGate() {
+        if (!$profileGate) return;
+        const needsProfile = !hasProfile();
+        $profileGate.classList.toggle('d-none', !needsProfile);
+        if ($body)       $body.classList.toggle('d-none',       needsProfile);
+        if ($nickRow)    $nickRow.classList.toggle('d-none',    needsProfile);
+        if ($composeRow) $composeRow.classList.toggle('d-none', needsProfile);
+    }
+    if ($profileGateBtn) {
+        $profileGateBtn.addEventListener('click', () => openProfile());
     }
 
     // --- Transport ------------------------------------------------------
@@ -412,8 +466,10 @@
                 localStorage.setItem(NICK_KEY, saved.nickname);
                 $profileId.textContent = saved.id;
                 $profileSaved.classList.remove('d-none');
-                // Reconnect so the server picks up the new
-                // client_id / nickname on the next hello.
+                // Re-evaluate the gate (now passing) and reconnect so
+                // the server picks up the new client_id / nickname
+                // on the next hello.
+                refreshGate();
                 openSession();
             } catch (err) {
                 $profileError.textContent = 'Save failed: ' + err.message;
@@ -468,6 +524,16 @@
     }
 
     async function openSessionInner() {
+        // Profile gate (#84): without a saved identity we don't open
+        // a WS at all — the server requires non-empty nickname and
+        // we'd just bounce immediately. The CTA in the gate panel
+        // points the user at Profile.
+        if (!hasProfile()) {
+            teardown();
+            setState('idle');
+            refreshGate();
+            return;
+        }
         const hasTarget = !!state.chatUrl && (!!state.streamId || !!state.slug);
         if (!hasTarget) {
             teardown();
@@ -751,6 +817,7 @@
     }
 
     setState('idle');
+    refreshGate();
     pollMeta();
     setInterval(pollMeta, 5000);
 

@@ -165,20 +165,6 @@ void OSDChat::render()
         ImGui::SameLine();
         ImGui::TextDisabled("- %s", snap.lastError.c_str());
     }
-    // Room identity line — title when the server gave us one
-    // (standalone rooms always have it; stream-linked rooms may or
-    // may not), otherwise fall back to slug for standalone, or
-    // nothing for stream-linked (the host stream is implicit).
-    if (!snap.roomTitle.empty())
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("- %s", snap.roomTitle.c_str());
-    }
-    else if (!snap.slug.empty())
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("- #%s", snap.slug.c_str());
-    }
     // Participant count doubles as the panel toggle: click to expand
     // a small list below the header showing everyone in the room.
     if (!snap.participants.empty())
@@ -442,9 +428,99 @@ void OSDChat::render()
 
     ImGui::Separator();
 
+    // ---- room info banner --------------------------------------------
+    // Prominent room label so the user always knows which room they
+    // landed in. Format:
+    //     [STREAM] Friday Smash Bros
+    //     [ROOM]   #smash-sun · hosted by geldo
+    // The kind tag colour-codes the row; missing title falls back to
+    // slug; missing slug means stream-linked unnamed, which is also
+    // useful to surface ("you're in the host's chat").
+    if (snap.state != ChatClient::State::Idle &&
+        (!snap.roomTitle.empty() || !snap.slug.empty() || !snap.streamId.empty()))
+    {
+        const bool isStandalone = !snap.slug.empty();
+        const ImVec4 kindColor = isStandalone
+            ? ImVec4(0.65f, 0.75f, 0.95f, 1.0f)   // blueish for standalone
+            : ImVec4(0.95f, 0.78f, 0.30f, 1.0f);  // gold for stream-linked
+        ImGui::TextColored(kindColor, "%s",
+                           isStandalone ? "[ROOM]" : "[STREAM]");
+        ImGui::SameLine();
+        const std::string label = !snap.roomTitle.empty()
+            ? snap.roomTitle
+            : (!snap.slug.empty() ? ("#" + snap.slug) : "Host stream chat");
+        ImGui::TextColored(ImVec4(0.98f, 0.98f, 0.92f, 1.0f), "%s",
+                           label.c_str());
+        // Sub-line: surface the host's name when we know it, and the
+        // slug as a copy-friendly identifier for standalone rooms.
+        std::string sub;
+        if (isStandalone)
+        {
+            // Slug only as detail if the title is what's on the main
+            // line. (Avoid showing "#smash-sun" twice in a row.)
+            if (!snap.roomTitle.empty() && !snap.slug.empty())
+            {
+                sub = "#" + snap.slug;
+            }
+        }
+        else if (!snap.hostParticipantId.empty())
+        {
+            // Find the host in the participant list to surface their
+            // nickname (the actual id is on the participants panel
+            // tooltip; here we want the human label).
+            for (const auto &p : snap.participants)
+            {
+                if (p.host) { sub = "hosted by " + p.nickname; break; }
+            }
+        }
+        if (!sub.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("- %s", sub.c_str());
+        }
+        ImGui::Separator();
+    }
+
     // (#84) Inline "as <nick> [Apply]" removed — identity now lives
     // in a dedicated Profile window opened via the header button.
     // Nickname/Name/Age/ID all set there; persisted to identity.json.
+
+    // ---- profile gate -------------------------------------------------
+    // When the user hasn't filled out a chat nickname yet, the chat
+    // client refuses to connect (no hello = no session). Replace the
+    // body area with a focused CTA so the user can fix it in one
+    // click instead of seeing an empty panel with no explanation.
+    const std::string activeNickname = m_uiManager
+        ? m_uiManager->getChatNickname()
+        : snap.nickname;
+    if (activeNickname.empty())
+    {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                           "Profile required");
+        ImGui::TextWrapped(
+            "You need a chat profile before you can send or receive "
+            "messages. Click below to set your nickname.");
+        ImGui::Spacing();
+        if (ImGui::Button("Open Profile", ImVec2(-1.0f, 0.0f)))
+        {
+            if (!m_identityLoaded)
+            {
+                m_identity = identity::load();
+                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
+                              m_identity.name.c_str());
+                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
+                              m_identity.nickname.c_str());
+                m_profileAge     = m_identity.age;
+                m_identityLoaded = true;
+            }
+            m_showProfileWindow = true;
+            m_profileError.clear();
+            m_profileSavedHint.clear();
+        }
+        ImGui::End();
+        return;
+    }
 
     // ---- two-column body: participants (left) + messages (right) ------
     //
