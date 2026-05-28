@@ -36,6 +36,17 @@ type Config struct {
 	// RemoteAddr. Off by default so a fresh direct deployment is
 	// spoofing-resistant.
 	TrustProxyHeaders bool
+
+	// RoomInactivityDays (#84) — rooms with no participant joins
+	// and no posts for this many days are permanently deleted by
+	// the sweep worker. 0 disables the sweep entirely. Activity is
+	// stamped on the chat_rooms row on every WS hello + every
+	// persisted message.
+	RoomInactivityDays int
+	// RoomSweepInterval is how often the sweep worker wakes up to
+	// scan for expired rooms. Defaults to 1 hour — the sweep is
+	// idempotent and cheap (indexed query + targeted DELETEs).
+	RoomSweepInterval time.Duration
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -43,12 +54,14 @@ type Config struct {
 // fall back to defaults.
 func Load() (Config, error) {
 	cfg := Config{
-		Port:              8082,
-		DBPath:            "./data/chat.db",
-		LogLevel:          slog.LevelInfo,
-		HelloTimeout:      5 * time.Second,
-		RatePostPer10s:    5,
-		TrustProxyHeaders: false,
+		Port:               8082,
+		DBPath:             "./data/chat.db",
+		LogLevel:           slog.LevelInfo,
+		HelloTimeout:       5 * time.Second,
+		RatePostPer10s:     5,
+		TrustProxyHeaders:  false,
+		RoomInactivityDays: 3,
+		RoomSweepInterval:  1 * time.Hour,
 	}
 
 	if v := os.Getenv("CHAT_PORT"); v != "" {
@@ -92,6 +105,22 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("CHAT_RATE_POST_PER_10S must be a positive integer, got %q", v)
 		}
 		cfg.RatePostPer10s = n
+	}
+
+	if v := os.Getenv("CHAT_ROOM_INACTIVITY_DAYS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return cfg, fmt.Errorf("CHAT_ROOM_INACTIVITY_DAYS must be >= 0, got %q", v)
+		}
+		cfg.RoomInactivityDays = n
+	}
+
+	if v := os.Getenv("CHAT_ROOM_SWEEP_INTERVAL_MINUTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("CHAT_ROOM_SWEEP_INTERVAL_MINUTES must be > 0, got %q", v)
+		}
+		cfg.RoomSweepInterval = time.Duration(n) * time.Minute
 	}
 
 	if v := os.Getenv("CHAT_TRUST_PROXY_HEADERS"); v != "" {

@@ -77,6 +77,17 @@ func run() error {
 	// directory uses.
 	go evictRateLimitBuckets(ctx, logger, limPost)
 
+	// #84 — Room inactivity sweep. Permanently deletes rooms (and
+	// their messages) that have had no joins and no posts within
+	// the configured window. CHAT_ROOM_INACTIVITY_DAYS=0 disables.
+	if cfg.RoomInactivityDays > 0 {
+		go sweepInactiveRooms(ctx, logger, st, registry,
+			cfg.RoomSweepInterval,
+			time.Duration(cfg.RoomInactivityDays)*24*time.Hour)
+	} else {
+		logger.Info("inactivity_sweep disabled (CHAT_ROOM_INACTIVITY_DAYS=0)")
+	}
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
 		Handler:           server.Routes(),
@@ -104,6 +115,78 @@ func run() error {
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// sweepInactiveRooms periodically wipes rooms (and their messages)
+// whose last activity timestamp is older than `window`. We skip
+// any room currently has at least one live participant in the
+// in-memory Registry — even if the DB row's last_activity_ms is
+// stale (e.g. a long-lived viewer who joined right at the window
+// boundary), an actually-connected room must not be reaped.
+//
+// Idempotent + safe to run alongside DELETE /rooms; both paths
+// use the same Store.DeleteRoom transaction so a race is at worst
+// a 404 on one side.
+func sweepInactiveRooms(
+	ctx context.Context,
+	logger *slog.Logger,
+	st *store.Store,
+	registry *room.Registry,
+	interval time.Duration,
+	window time.Duration,
+) {
+	logger.Info("inactivity_sweep starting",
+		"interval", interval.String(),
+		"window", window.String())
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	// Fire once on boot so a fresh container picks up any past-due
+	// rooms immediately instead of waiting a full interval.
+	runSweepOnce(ctx, logger, st, registry, window)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			runSweepOnce(ctx, logger, st, registry, window)
+		}
+	}
+}
+
+func runSweepOnce(
+	ctx context.Context,
+	logger *slog.Logger,
+	st *store.Store,
+	registry *room.Registry,
+	window time.Duration,
+) {
+	cutoff := time.Now().UTC().Add(-window).UnixMilli()
+	ids, err := st.ListInactiveRoomIDs(ctx, cutoff)
+	if err != nil {
+		logger.Warn("inactivity_sweep list_failed", "err", err)
+		return
+	}
+	deleted := 0
+	skippedLive := 0
+	for _, id := range ids {
+		if registry.HasParticipants(id) {
+			skippedLive++
+			continue
+		}
+		if err := st.DeleteRoom(ctx, id); err != nil {
+			logger.Warn("inactivity_sweep delete_failed",
+				"err", err, "room_id", id)
+			continue
+		}
+		registry.Forget(id)
+		deleted++
+	}
+	if deleted > 0 || skippedLive > 0 {
+		logger.Info("inactivity_sweep tick",
+			"deleted", deleted,
+			"skipped_live", skippedLive,
+			"cutoff_ms", cutoff)
+	}
 }
 
 func evictRateLimitBuckets(ctx context.Context, logger *slog.Logger, limiters ...*ratelimit.Limiter) {

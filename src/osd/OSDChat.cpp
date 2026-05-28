@@ -174,8 +174,10 @@ void OSDChat::render()
 
     // Stable id (the part after ##) so imgui.ini round-trips the
     // window's geometry. Visible title ("Chat") is what the user
-    // reads on the title bar.
-    if (!ImGui::Begin("Chat##osdChat", nullptr, flags))
+    // reads on the title bar. p_open is bound to m_visible so the
+    // native title-bar X closes the panel cleanly — the user can
+    // reopen via View → Chat or the F8 hotkey.
+    if (!ImGui::Begin("Chat##osdChat", &m_visible, flags))
     {
         ImGui::End();
         return;

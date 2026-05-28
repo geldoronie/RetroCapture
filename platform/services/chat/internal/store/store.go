@@ -395,11 +395,12 @@ func (s *Store) CreateStandaloneRoom(
             id, kind, linked_stream_id, owner_account_id, slug,
             title, description, settings_json,
             password_hash, owner_secret_hash, listed,
-            created_at_ms, archived_at_ms
+            created_at_ms, archived_at_ms, last_activity_ms
         )
-        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, NULL)
+        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, NULL, ?)
     `, roomID, string(RoomKindStandalone), ownerArg, slug, title,
-		passArg, secretArg, listedInt, now.UnixMilli()); err != nil {
+		passArg, secretArg, listedInt, now.UnixMilli(),
+		now.UnixMilli()); err != nil {
 		return nil, fmt.Errorf("insert standalone room: %w", err)
 	}
 	return s.GetRoom(ctx, roomID)
@@ -428,6 +429,46 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// TouchRoomActivity stamps last_activity_ms = now on the given
+// room. Called by the gateway on (a) WS hello (a participant just
+// joined) and (b) message persist (someone posted). Best-effort:
+// errors are surfaced via the return value so the caller can log
+// them, but the activity ping is non-fatal — if it fails the
+// sweep just becomes slightly more aggressive on this room than
+// intended.
+func (s *Store) TouchRoomActivity(ctx context.Context, roomID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_rooms SET last_activity_ms = ? WHERE id = ?`,
+		time.Now().UTC().UnixMilli(), roomID)
+	return err
+}
+
+// ListInactiveRoomIDs returns room ids whose last_activity_ms is
+// older than `cutoffMs`. Used by the inactivity sweep worker. The
+// caller (sweep loop) is responsible for cross-checking the live
+// Registry to avoid deleting a room that just had a participant
+// connect in the half-second since the query ran.
+func (s *Store) ListInactiveRoomIDs(ctx context.Context, cutoffMs int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id FROM chat_rooms
+         WHERE archived_at_ms IS NULL
+           AND COALESCE(last_activity_ms, created_at_ms) < ?
+    `, cutoffMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // SetRoomListed flips the public-listed flag on an existing room.

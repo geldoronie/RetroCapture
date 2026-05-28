@@ -214,6 +214,21 @@ func (g *Registry) Get(id string) *Room {
 	return r
 }
 
+// HasParticipants reports whether the registry currently holds a
+// Room with the given id AND that Room has at least one connected
+// participant. Used by the inactivity sweep to skip rooms that
+// are live right now — even if the DB's last_activity_ms is stale.
+// Unlike Get, this does NOT create the room on miss.
+func (g *Registry) HasParticipants(id string) bool {
+	g.mu.Lock()
+	r, ok := g.rooms[id]
+	g.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return r.Count() > 0
+}
+
 // Forget evicts the room from the registry and severs every live
 // connection by closing each participant's Send channel. Used by
 // the owner-initiated DELETE /rooms/<id> flow so connected clients

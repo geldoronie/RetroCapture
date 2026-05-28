@@ -230,6 +230,13 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		})
 		return
 	}
+	// #84 — Activity ping: a participant just joined. Resets the
+	// inactivity clock so the sweep worker won't reap the room
+	// while it's live. Best-effort; an error just means the row
+	// remains slightly more reapable than intended.
+	if err := s.Store.TouchRoomActivity(ctx, roomRow.ID); err != nil {
+		s.Logger.Warn("touch_activity hello", "err", err, "room_id", roomRow.ID)
+	}
 	defer func() {
 		roomLive.Leave(p.ID)
 		if s.LimitPost != nil {
@@ -416,6 +423,11 @@ func (s *Server) handlePost(
 			}
 		}
 		return
+	}
+	// #84 — keep last_activity_ms fresh so the inactivity sweep
+	// doesn't reap an actively-used room. Best-effort.
+	if err := s.Store.TouchRoomActivity(ctx, roomRow.ID); err != nil {
+		s.Logger.Warn("touch_activity post", "err", err, "room_id", roomRow.ID)
 	}
 
 	frame, err := encodeFrame(wsFrame{

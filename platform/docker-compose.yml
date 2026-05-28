@@ -71,6 +71,15 @@ services:
       # behind FRP / nginx / Cloudflare so the real client IP gets
       # used for per-IP rate limiting instead of the proxy's.
       CHAT_TRUST_PROXY_HEADERS: "false"
+      # Room inactivity sweep (#84). Rooms with no joins AND no
+      # posts for this many days are permanently deleted (cascade
+      # through chat_messages). 0 disables the sweep so existing
+      # rooms live forever.
+      CHAT_ROOM_INACTIVITY_DAYS: "3"
+      # How often the sweep worker runs. The sweep query is indexed
+      # and cheap, so an hour is fine even for large DBs. Lower it
+      # in dev (e.g. "1") if you want to watch the eviction happen.
+      CHAT_ROOM_SWEEP_INTERVAL_MINUTES: "60"
     restart: unless-stopped
 
   chat-test:
