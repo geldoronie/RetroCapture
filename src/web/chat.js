@@ -56,6 +56,20 @@
     const $roomKind     = document.getElementById('chatRoomBannerKind');
     const $roomLabel    = document.getElementById('chatRoomBannerLabel');
     const $roomSub      = document.getElementById('chatRoomBannerSub');
+    const $roomsBtn     = document.getElementById('chatRoomsBtn');
+    const $roomsModal   = document.getElementById('chatRoomsModal');
+    const $roomsList    = document.getElementById('chatRoomsList');
+    const $roomsRefresh = document.getElementById('chatRoomsRefresh');
+    const $roomsClose   = document.getElementById('chatRoomsClose');
+    const $roomsJoinSlug = document.getElementById('chatRoomsJoinSlug');
+    const $roomsJoinPass = document.getElementById('chatRoomsJoinPass');
+    const $roomsJoinBtn  = document.getElementById('chatRoomsJoin');
+    const $roomsCreateTitle  = document.getElementById('chatRoomsCreateTitle');
+    const $roomsCreateSlug   = document.getElementById('chatRoomsCreateSlug');
+    const $roomsCreatePass   = document.getElementById('chatRoomsCreatePass');
+    const $roomsCreateListed = document.getElementById('chatRoomsCreateListed');
+    const $roomsCreateBtn    = document.getElementById('chatRoomsCreate');
+    const $roomsError        = document.getElementById('chatRoomsError');
     const $nick        = document.getElementById('chatNickInput');
     const $nickApply   = document.getElementById('chatNickApply');
     const $nickError   = document.getElementById('chatNickError');
@@ -381,6 +395,117 @@
         $profileGateBtn.addEventListener('click', () => openProfile());
     }
 
+    // ---- Rooms modal (#84) ----------------------------------------
+    async function refreshRoomsList() {
+        if (!$roomsList) return;
+        $roomsList.innerHTML = '<div class="home-chat-rooms-empty">Loading...</div>';
+        try {
+            const httpBase = toHttpBase(state.chatUrl);
+            const resp = await fetch(httpBase + '/rooms?limit=50',
+                { credentials: 'omit' });
+            const j = await resp.json();
+            const rooms = (j.data && j.data.rooms) || [];
+            if (rooms.length === 0) {
+                $roomsList.innerHTML = '<div class="home-chat-rooms-empty">(no public rooms)</div>';
+                return;
+            }
+            $roomsList.innerHTML = '';
+            for (const r of rooms) {
+                const row = document.createElement('div');
+                row.className = 'home-chat-rooms-item';
+                const lock = r.has_password
+                    ? '<span class="lock">[lock]</span> '
+                    : '';
+                const label = r.title || `#${r.slug}`;
+                row.innerHTML = lock + escapeHtml(label) +
+                    `<span class="count">${r.participant_count}</span>`;
+                row.addEventListener('click', () => {
+                    $roomsJoinSlug.value = r.slug;
+                    if (!r.has_password) {
+                        joinSlug(r.slug, '');
+                    } else {
+                        $roomsJoinPass.focus();
+                    }
+                });
+                $roomsList.appendChild(row);
+            }
+        } catch (err) {
+            $roomsList.innerHTML =
+                `<div class="home-chat-rooms-empty">Fetch failed: ${escapeHtml(err.message)}</div>`;
+        }
+    }
+    function openRooms() {
+        if (!$roomsModal) return;
+        $roomsError.classList.add('d-none');
+        $roomsModal.classList.remove('d-none');
+        refreshRoomsList();
+    }
+    function closeRooms() {
+        if (!$roomsModal) return;
+        $roomsModal.classList.add('d-none');
+    }
+    function joinSlug(slug, password) {
+        if (!slug) return;
+        state.slug     = slug;
+        state.streamId = '';
+        state.pendingPassword = password || '';
+        window.location.hash = `#r/${slug}`;
+        closeRooms();
+        openSession();
+    }
+    if ($roomsBtn)     $roomsBtn.addEventListener('click', openRooms);
+    if ($roomsClose)   $roomsClose.addEventListener('click', closeRooms);
+    if ($roomsRefresh) $roomsRefresh.addEventListener('click', refreshRoomsList);
+    if ($roomsJoinBtn) {
+        $roomsJoinBtn.addEventListener('click', () => {
+            const slug = ($roomsJoinSlug.value || '').trim().toLowerCase();
+            const pw   = $roomsJoinPass.value || '';
+            if (!slug) {
+                $roomsError.textContent = 'Slug is required.';
+                $roomsError.classList.remove('d-none');
+                return;
+            }
+            joinSlug(slug, pw);
+        });
+    }
+    if ($roomsCreateBtn) {
+        $roomsCreateBtn.addEventListener('click', async () => {
+            $roomsError.classList.add('d-none');
+            const body = {};
+            if ($roomsCreateTitle.value.trim()) body.title = $roomsCreateTitle.value.trim();
+            if ($roomsCreateSlug.value.trim())  body.slug  = $roomsCreateSlug.value.trim();
+            if ($roomsCreatePass.value)         body.password = $roomsCreatePass.value;
+            body.listed = $roomsCreateListed.checked;
+            if (state.identity && state.identity.id) {
+                body.owner_client_id = state.identity.id;
+            }
+            try {
+                const httpBase = toHttpBase(state.chatUrl);
+                const resp = await fetch(httpBase + '/rooms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    credentials: 'omit',
+                });
+                const j = await resp.json();
+                if (!resp.ok || !j.data || !j.data.slug) {
+                    const code = (j.error && j.error.code) || resp.status;
+                    const msg  = (j.error && j.error.message) || 'create failed';
+                    $roomsError.textContent = `${code}: ${msg}`;
+                    $roomsError.classList.remove('d-none');
+                    return;
+                }
+                $roomsCreateTitle.value = '';
+                $roomsCreateSlug.value  = '';
+                $roomsCreatePass.value  = '';
+                joinSlug(j.data.slug, body.password || '');
+            } catch (err) {
+                $roomsError.textContent = 'Create failed: ' + err.message;
+                $roomsError.classList.remove('d-none');
+            }
+        });
+    }
+
     // --- Transport ------------------------------------------------------
 
     async function loadHistory(roomId) {
@@ -571,6 +696,9 @@
                 const helloPayload = { nickname: state.nickname };
                 if (state.identity && state.identity.id) {
                     helloPayload.client_id = state.identity.id;
+                }
+                if (state.pendingPassword) {
+                    helloPayload.password = state.pendingPassword;
                 }
                 ws.send(JSON.stringify({
                     kind:  'hello',

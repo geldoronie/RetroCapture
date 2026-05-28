@@ -98,7 +98,8 @@
                             <span id="chatStateBadge" class="home-chat-state">offline</span>
                             <span id="chatRoomTitle" class="home-chat-title"></span>
                             <button id="chatProfileBtn" type="button" class="home-chat-headerbtn" title="Profile">Profile</button>
-                            <button id="chatParticipantCount" type="button" class="home-chat-count" title="Toggle participants list"></button>
+                            <button id="chatRoomsBtn" type="button" class="home-chat-headerbtn" title="Rooms">Rooms</button>
+                            <button id="chatParticipantCount" type="button" class="home-chat-count open" title="Toggle participants list"></button>
                         </header>
                         <div id="chatRoomBanner" class="home-chat-room-banner d-none">
                             <span id="chatRoomBannerKind" class="home-chat-room-kind">[ROOM]</span>
@@ -135,8 +136,51 @@
                                 <button id="chatProfileClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
                             </div>
                         </div>
+                        <div id="chatRoomsModal" class="home-chat-profile d-none">
+                            <div class="home-chat-rooms-section">
+                                <div class="home-chat-rooms-head">
+                                    <span class="text-muted small">Public rooms</span>
+                                    <button id="chatRoomsRefresh" type="button" class="btn btn-outline-secondary btn-sm">Refresh</button>
+                                </div>
+                                <div id="chatRoomsList" class="home-chat-rooms-list"></div>
+                            </div>
+                            <hr class="my-2">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Join by slug</label>
+                                <input id="chatRoomsJoinSlug" type="text" maxlength="42" placeholder="slug">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Password (if required)</label>
+                                <input id="chatRoomsJoinPass" type="password" maxlength="64">
+                            </div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsJoin" type="button" class="btn btn-primary btn-sm">Join</button>
+                            </div>
+                            <hr class="my-2">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">New room title</label>
+                                <input id="chatRoomsCreateTitle" type="text" maxlength="120" placeholder="title">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Slug (optional)</label>
+                                <input id="chatRoomsCreateSlug" type="text" maxlength="42" placeholder="auto-generated">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Password</label>
+                                <input id="chatRoomsCreatePass" type="password" maxlength="64" placeholder="leave blank for none">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">List publicly</label>
+                                <input id="chatRoomsCreateListed" type="checkbox" checked>
+                            </div>
+                            <div id="chatRoomsError" class="text-danger small d-none"></div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsCreate" type="button" class="btn btn-primary btn-sm">Create + Join</button>
+                                <button id="chatRoomsClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
                         <div class="home-chat-body">
-                            <aside id="chatParticipantsPanel" class="home-chat-parts d-none"></aside>
+                            <aside id="chatParticipantsPanel" class="home-chat-parts"></aside>
                             <div id="chatLog" class="home-chat-log"></div>
                         </div>
                         <div id="chatUnavailable" class="home-chat-empty d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>

@@ -1,10 +1,11 @@
 #pragma once
 
+#include "../chat/ChatClient.h"
 #include "../identity/ChatIdentity.h"
 
 #include <string>
+#include <vector>
 
-class ChatClient;
 class UIManager;
 
 /**
@@ -85,17 +86,26 @@ private:
     // mirrors ImGui::Begin's p_open so the title-bar X closes it
     // cleanly.
     bool        m_showRoomsWindow   = false;
-    // Participants panel toggle (#84). When true, a small list is
-    // rendered between the header and the message log showing
-    // everyone in the room with their host marker.
-    bool        m_showParticipants  = false;
-    char        m_joinSlugBuf[64]   = {0};
-    char        m_createTitleBuf[128] = {0};
-    char        m_createSlugBuf[64] = {0};
+    // Participants panel toggle (#84). Defaults to visible — the
+    // panel reads better with the sidebar showing who's in the room;
+    // users who want a wider message column toggle it off via the
+    // count chip in the header.
+    bool        m_showParticipants  = true;
+    char        m_joinSlugBuf[64]       = {0};
+    char        m_joinPasswordBuf[64]   = {0};
+    char        m_createTitleBuf[128]   = {0};
+    char        m_createSlugBuf[64]     = {0};
+    char        m_createPasswordBuf[64] = {0};
+    bool        m_createListed          = true;
     std::string m_standaloneError;
     // Set true when a POST /rooms is in flight; disables the Create
     // button so we don't double-fire. Cleared by ChatClient's reply.
-    bool        m_createInFlight = false;
+    bool        m_createInFlight        = false;
+    // Cached room listing + refresh state (#84). Lazy-refreshed when
+    // the Rooms window is opened.
+    std::vector<ChatClient::ListedRoom> m_roomsList;
+    std::string m_roomsListError;
+    bool        m_roomsListRequested    = false;
 
     // #84 — Transient inline validation feedback for the nickname
     // Apply button. Cleared next frame when the user resumes typing

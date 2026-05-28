@@ -212,8 +212,9 @@ void OSDChat::render()
         ImGui::SameLine();
         if (ImGui::SmallButton("Rooms..."))
         {
-            m_showRoomsWindow = true;
+            m_showRoomsWindow    = true;
             m_standaloneError.clear();
+            m_roomsListRequested = false; // re-fetch on open
         }
     }
     // Render the Rooms window OUTSIDE the chat panel's Begin/End so
@@ -231,17 +232,110 @@ void OSDChat::render()
             // typing into this window's inputs.
             m_inputFocused = true;
 
-            ImGui::TextDisabled("Join existing room");
-            ImGui::SetNextItemWidth(-60.0f);
-            const bool joinEnter = ImGui::InputText(
-                "##joinSlug", m_joinSlugBuf, sizeof(m_joinSlugBuf),
+            // ---------- Browse public rooms -------------------------------
+            // Lazy load on first open of the window. The user can hit
+            // Refresh to re-fetch.
+            if (!m_roomsListRequested)
+            {
+                std::string err;
+                m_roomsList.clear();
+                if (!m_chat->listPublicRooms(50, m_roomsList, err))
+                {
+                    m_roomsListError = err;
+                }
+                else
+                {
+                    m_roomsListError.clear();
+                }
+                m_roomsListRequested = true;
+            }
+            ImGui::TextDisabled("Public rooms");
+            ImGui::SameLine();
+            const float rightPad = 4.0f;
+            const float btnW     = 60.0f;
+            const float regionW  = ImGui::GetContentRegionAvail().x;
+            const float spacerW  = regionW - btnW - rightPad;
+            if (spacerW > 0.0f) ImGui::Dummy(ImVec2(spacerW, 1));
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Refresh"))
+            {
+                std::string err;
+                m_roomsList.clear();
+                if (!m_chat->listPublicRooms(50, m_roomsList, err))
+                {
+                    m_roomsListError = err;
+                }
+                else
+                {
+                    m_roomsListError.clear();
+                }
+            }
+            if (!m_roomsListError.empty())
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "%s", m_roomsListError.c_str());
+            }
+            else if (m_roomsList.empty())
+            {
+                ImGui::TextDisabled("(no public rooms yet)");
+            }
+            else
+            {
+                const float listH = std::min(180.0f,
+                    ImGui::GetTextLineHeightWithSpacing() *
+                        static_cast<float>(m_roomsList.size()) + 8.0f);
+                if (ImGui::BeginChild("##chatRoomsBrowse",
+                                      ImVec2(0, listH), true))
+                {
+                    for (const auto &r : m_roomsList)
+                    {
+                        const std::string label = r.title.empty()
+                            ? ("#" + r.slug)
+                            : r.title;
+                        char selBuf[256];
+                        std::snprintf(selBuf, sizeof(selBuf), "%s%s##%s",
+                                      r.hasPassword ? "[lock] " : "",
+                                      label.c_str(), r.roomId.c_str());
+                        if (ImGui::Selectable(selBuf))
+                        {
+                            // Click → pre-fill the join form so the
+                            // user can supply a password when needed.
+                            std::snprintf(m_joinSlugBuf, sizeof(m_joinSlugBuf),
+                                          "%s", r.slug.c_str());
+                            if (!r.hasPassword)
+                            {
+                                m_chat->connectBySlug(r.slug, snap.nickname);
+                                m_showRoomsWindow = false;
+                            }
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("  %d", r.participantCount);
+                    }
+                }
+                ImGui::EndChild();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ---------- Join by slug + optional password ------------------
+            ImGui::TextDisabled("Join by slug");
+            ImGui::SetNextItemWidth(-1.0f);
+            const bool joinEnter = ImGui::InputTextWithHint(
+                "##joinSlug", "slug",
+                m_joinSlugBuf, sizeof(m_joinSlugBuf),
                 ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SetNextItemWidth(-60.0f);
+            ImGui::InputTextWithHint(
+                "##joinPass", "password (if required)",
+                m_joinPasswordBuf, sizeof(m_joinPasswordBuf),
+                ImGuiInputTextFlags_Password);
             ImGui::SameLine();
             const bool joinClick = ImGui::Button("Join", ImVec2(-1.0f, 0.0f));
             if (joinEnter || joinClick)
             {
                 std::string slug = m_joinSlugBuf;
-                // Trim + lowercase to match server-side validation.
                 while (!slug.empty() && std::isspace((unsigned char)slug.back())) slug.pop_back();
                 for (auto &c : slug) c = static_cast<char>(std::tolower((unsigned char)c));
                 if (slug.empty())
@@ -250,7 +344,8 @@ void OSDChat::render()
                 }
                 else
                 {
-                    m_chat->connectBySlug(slug, snap.nickname);
+                    m_chat->connectBySlug(slug, snap.nickname, m_joinPasswordBuf);
+                    m_joinPasswordBuf[0] = '\0';
                     m_standaloneError.clear();
                     m_showRoomsWindow = false;
                 }
@@ -268,6 +363,12 @@ void OSDChat::render()
             ImGui::InputTextWithHint(
                 "##createSlug", "slug (optional, auto-generated)",
                 m_createSlugBuf, sizeof(m_createSlugBuf));
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint(
+                "##createPass", "password (leave blank for none)",
+                m_createPasswordBuf, sizeof(m_createPasswordBuf),
+                ImGuiInputTextFlags_Password);
+            ImGui::Checkbox("List publicly", &m_createListed);
             ImGui::BeginDisabled(m_createInFlight);
             if (ImGui::Button("Create + Join", ImVec2(-1.0f, 0.0f)))
             {
@@ -275,8 +376,13 @@ void OSDChat::render()
                 m_createInFlight = true;
                 std::string newSlug;
                 std::string err;
+                // Owner client id is whatever the Profile saved; passing
+                // empty (no identity yet) is allowed by the server.
+                const std::string ownerId = m_identity.id;
                 const bool ok = m_chat->createStandaloneRoom(
-                    m_createTitleBuf, m_createSlugBuf, newSlug, err);
+                    m_createTitleBuf, m_createSlugBuf,
+                    m_createPasswordBuf, m_createListed, ownerId,
+                    newSlug, err);
                 m_createInFlight = false;
                 if (!ok)
                 {
@@ -284,10 +390,15 @@ void OSDChat::render()
                 }
                 else
                 {
-                    m_chat->connectBySlug(newSlug, snap.nickname);
-                    m_createTitleBuf[0] = '\0';
-                    m_createSlugBuf[0]  = '\0';
-                    m_showRoomsWindow = false;
+                    m_chat->connectBySlug(newSlug, snap.nickname, m_createPasswordBuf);
+                    m_createTitleBuf[0]    = '\0';
+                    m_createSlugBuf[0]     = '\0';
+                    m_createPasswordBuf[0] = '\0';
+                    m_showRoomsWindow      = false;
+                    // Trigger a refresh next time the user opens the
+                    // window so the new room shows up in the browse
+                    // list right away.
+                    m_roomsListRequested   = false;
                 }
             }
             ImGui::EndDisabled();
@@ -568,10 +679,17 @@ void OSDChat::render()
                                        "[HOST]");
                     ImGui::SameLine();
                 }
+                else if (p.owner)
+                {
+                    ImGui::TextColored(ImVec4(0.75f, 0.90f, 1.00f, 1.0f),
+                                       "[OWNER]");
+                    ImGui::SameLine();
+                }
                 const ImVec4 nameColor = p.host
                     ? ImVec4(0.95f, 0.78f, 0.30f, 1.0f)
+                    : (p.owner ? ImVec4(0.75f, 0.90f, 1.00f, 1.0f)
                     : (isMe ? ImVec4(0.45f, 0.85f, 0.50f, 1.0f)
-                            : ImVec4(0.48f, 0.78f, 0.94f, 1.0f));
+                            : ImVec4(0.48f, 0.78f, 0.94f, 1.0f)));
                 ImGui::TextColored(nameColor, "%s", p.nickname.c_str());
                 // Hover shows the participant's id (rc_<…> when
                 // persistent, p_<…> when anon). Same affordance as
@@ -641,18 +759,27 @@ void OSDChat::render()
             const bool isHostMsg = m.host ||
                 (!snap.hostParticipantId.empty() &&
                  m.participantId == snap.hostParticipantId);
+            const bool isOwnerMsg = m.owner ||
+                (!snap.ownerClientId.empty() &&
+                 m.participantId == snap.ownerClientId);
             if (isHostMsg)
             {
                 ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f), "[HOST]");
+                ImGui::SameLine();
+            }
+            else if (isOwnerMsg)
+            {
+                ImGui::TextColored(ImVec4(0.75f, 0.90f, 1.00f, 1.0f), "[OWNER]");
                 ImGui::SameLine();
             }
             // Local-author wins as the colour cue (you posted this),
             // then host (other host's messages stand out), then a
             // neutral viewer colour.
             ImVec4 nameColor;
-            if (m.local)        nameColor = ImVec4(0.45f, 0.85f, 0.50f, 1.0f);
-            else if (isHostMsg) nameColor = ImVec4(0.95f, 0.78f, 0.30f, 1.0f);
-            else                nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
+            if (m.local)         nameColor = ImVec4(0.45f, 0.85f, 0.50f, 1.0f);
+            else if (isHostMsg)  nameColor = ImVec4(0.95f, 0.78f, 0.30f, 1.0f);
+            else if (isOwnerMsg) nameColor = ImVec4(0.75f, 0.90f, 1.00f, 1.0f);
+            else                 nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
             ImGui::TextColored(nameColor, "%s:", m.nickname.c_str());
             // Hover shows the persistent identity (rc_<id>) when the
             // poster sent one, or the per-session p_<random> id for

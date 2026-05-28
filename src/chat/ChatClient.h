@@ -74,13 +74,27 @@ public:
         bool        deleted    = false;
         bool        local      = false; // true == sent by this client
         bool        host       = false; // posted by the stream host (#84)
+        bool        owner      = false; // posted by the standalone-room owner (#84)
     };
 
     struct Participant
     {
         std::string id;
         std::string nickname;
-        bool        host = false;
+        bool        host  = false;
+        bool        owner = false;
+    };
+
+    /// Single entry in the public room listing returned by
+    /// listPublicRooms. Mirrors the server's GET /rooms payload.
+    struct ListedRoom
+    {
+        std::string roomId;
+        std::string slug;
+        std::string title;
+        bool        hasPassword      = false;
+        int         participantCount = 0;
+        int64_t     createdAtMs      = 0;
     };
 
     struct Snapshot
@@ -92,6 +106,8 @@ public:
         std::string               slug;         // non-empty when standalone room
         std::string               roomId;
         std::string               roomTitle;    // server-supplied; empty for unnamed stream-linked rooms
+        std::string               ownerClientId; // standalone-room owner rc_<id>, empty otherwise
+        bool                      iAmOwner      = false;
         std::string               nickname;
         std::string               myParticipantId;
         // #84 — Current room's host participant id (empty if no host
@@ -135,11 +151,14 @@ public:
                  const std::string &nickname,
                  bool               asHost = false);
 
-    /// Connect to a standalone room by its slug. v0.5 standalone
+    /// Connect to a standalone room by its slug. Optional `password`
+    /// rides the next hello for password-protected rooms; empty
+    /// means "no password" and is the default. v0.5 standalone
     /// rooms have no host role — asHost is implicitly false. Same
     /// idempotency rules as connect().
     void connectBySlug(const std::string &slug,
-                       const std::string &nickname);
+                       const std::string &nickname,
+                       const std::string &password = "");
 
     /// Create a standalone room via POST /rooms. Synchronous: blocks
     /// the calling thread on the HTTP round-trip (~50 ms in dev).
@@ -148,11 +167,22 @@ public:
     /// connectBySlug(outSlug, nickname). On failure returns false
     /// and writes the human-readable reason into `outError`.
     /// `title` and `slug` may both be empty — server auto-fills
-    /// either when missing.
+    /// either when missing. `password` plaintext is hashed
+    /// server-side; empty == no password. `ownerClientId` is the
+    /// caller's persistent id; the server flags subsequent joins
+    /// from the same identity as is_owner.
     bool createStandaloneRoom(const std::string &title,
                               const std::string &slug,
+                              const std::string &password,
+                              bool               listed,
+                              const std::string &ownerClientId,
                               std::string       &outSlug,
                               std::string       &outError);
+
+    /// Fetch the public-room listing (GET /rooms). Synchronous;
+    /// fills `out` with the response and returns true on success.
+    bool listPublicRooms(int limit, std::vector<ListedRoom> &out,
+                         std::string &outError);
 
     /// Tear down the WS session. Idempotent.
     void disconnect();
@@ -214,6 +244,9 @@ private:
     std::string                 m_clientId;      // rc_<hex> persistent identity, empty == anon
     std::string                 m_roomId;
     std::string                 m_roomTitle;     // populated from resolve response
+    std::string                 m_ownerClientId; // standalone-room owner from welcome, empty otherwise
+    std::string                 m_password;      // plaintext to send in hello (password-protected rooms)
+    bool                        m_iAmOwner       = false;
     std::string                 m_myParticipantId;
     std::string                 m_hostParticipantId;
     bool                        m_asHost          = false;

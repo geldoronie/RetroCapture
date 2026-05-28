@@ -93,6 +93,54 @@ void ChatClient::setClientId(const std::string &clientId)
     m_clientId = clientId;
 }
 
+bool ChatClient::listPublicRooms(int limit,
+                                 std::vector<ListedRoom> &out,
+                                 std::string &outError)
+{
+    out.clear();
+    std::string baseUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        baseUrl = m_baseUrl;
+    }
+    if (baseUrl.empty())
+    {
+        outError = "no chat base URL configured";
+        return false;
+    }
+    const std::string url = deriveHttpFromWs(baseUrl) +
+                            "/rooms?limit=" + std::to_string(limit);
+    auto resp = HttpClient::send(HttpClient::Method::GET, url, "", 5000);
+    if (!resp.ok || resp.statusCode != 200)
+    {
+        outError = resp.error.empty() ? ("HTTP " + std::to_string(resp.statusCode))
+                                      : resp.error;
+        return false;
+    }
+    try
+    {
+        const auto j  = nlohmann::json::parse(resp.body);
+        const auto rs = j.at("data").value("rooms", nlohmann::json::array());
+        for (const auto &r : rs)
+        {
+            ListedRoom lr;
+            lr.roomId           = r.value("room_id",           std::string{});
+            lr.slug             = r.value("slug",              std::string{});
+            lr.title            = r.value("title",             std::string{});
+            lr.hasPassword      = r.value("has_password",      false);
+            lr.participantCount = r.value("participant_count", 0);
+            lr.createdAtMs      = r.value("created_at_ms",     int64_t{0});
+            out.push_back(std::move(lr));
+        }
+    }
+    catch (const std::exception &e)
+    {
+        outError = std::string("parse: ") + e.what();
+        return false;
+    }
+    return true;
+}
+
 std::string ChatClient::getClientId() const
 {
     std::lock_guard<std::mutex> lk(m_mu);
@@ -130,6 +178,7 @@ void ChatClient::connect(const std::string &streamId,
         m_streamId        = streamId;
         m_slug.clear();
         m_nickname        = nickname;
+        m_password.clear(); // stream-linked rooms don't carry passwords
         m_asHost          = asHost;
         m_iAmHost         = false;
         m_messages.clear();
@@ -138,6 +187,8 @@ void ChatClient::connect(const std::string &streamId,
         m_hostParticipantId.clear();
         m_roomId.clear();
         m_roomTitle.clear();
+        m_ownerClientId.clear();
+        m_iAmOwner        = false;
         m_helloSent       = false;
         m_helloAcked      = false;
         m_unreadCount     = 0;
@@ -151,7 +202,8 @@ void ChatClient::connect(const std::string &streamId,
 }
 
 void ChatClient::connectBySlug(const std::string &slug,
-                               const std::string &nickname)
+                               const std::string &nickname,
+                               const std::string &password)
 {
     if (slug.empty()) return;
     if (nickname.empty()) return; // same profile gate as connect()
@@ -175,6 +227,7 @@ void ChatClient::connectBySlug(const std::string &slug,
         m_slug            = slug;
         m_streamId.clear();
         m_nickname        = nickname;
+        m_password        = password;
         m_asHost          = false;
         m_iAmHost         = false;
         m_messages.clear();
@@ -183,6 +236,8 @@ void ChatClient::connectBySlug(const std::string &slug,
         m_hostParticipantId.clear();
         m_roomId.clear();
         m_roomTitle.clear();
+        m_ownerClientId.clear();
+        m_iAmOwner        = false;
         m_helloSent       = false;
         m_helloAcked      = false;
         m_unreadCount     = 0;
@@ -348,7 +403,8 @@ bool ChatClient::fetchHistory(const std::string &roomId)
             out.body          = m.value("body", std::string{});
             out.postedAtMs    = m.value("posted_at_ms", int64_t{0});
             out.deleted       = m.value("deleted", false);
-            out.host          = m.value("is_host", false);
+            out.host          = m.value("is_host",  false);
+            out.owner         = m.value("is_owner", false);
             seed.push_back(std::move(out));
         }
         // The history endpoint returns newest-first; we want oldest
@@ -389,13 +445,16 @@ void ChatClient::onMessage(const ix::WebSocketMessage &msg)
                 setStateLocked(State::Connecting);
             }
             std::string clientId;
+            std::string password;
             {
                 std::lock_guard<std::mutex> lk(m_mu);
                 clientId = m_clientId;
+                password = m_password;
             }
             nlohmann::json helloPayload = { {"nickname", nick} };
             if (asHost)            helloPayload["role"]      = "host";
             if (!clientId.empty()) helloPayload["client_id"] = clientId;
+            if (!password.empty()) helloPayload["password"]  = password;
             nlohmann::json hello = {
                 {"kind",  "hello"},
                 {"hello", helloPayload},
@@ -467,6 +526,8 @@ void ChatClient::handleFrame(const std::string &payload)
         m_myParticipantId   = w.value("participant_id", std::string{});
         m_iAmHost           = w.value("is_host", false);
         m_hostParticipantId = w.value("host_participant_id", std::string{});
+        m_iAmOwner          = w.value("is_owner", false);
+        m_ownerClientId     = w.value("owner_client_id", std::string{});
         m_helloAcked        = true;
         setStateLocked(State::Connected);
         m_lastError.clear();
@@ -494,15 +555,22 @@ void ChatClient::handleFrame(const std::string &payload)
         {
             Participant out;
             out.id       = p.value("participant_id", std::string{});
+            // room_state participants serialize "id" as well (server
+            // wsParticipant uses "id", not "participant_id"). Try
+            // both for tolerance against future protocol shifts.
+            if (out.id.empty()) out.id = p.value("id", std::string{});
             out.nickname = p.value("nickname", std::string{});
-            out.host     = p.value("is_host", false);
+            out.host     = p.value("is_host",  false);
+            out.owner    = p.value("is_owner", false);
             ps.push_back(std::move(out));
         }
-        const std::string hostId = rs.value("host_participant_id", std::string{});
+        const std::string hostId  = rs.value("host_participant_id", std::string{});
+        const std::string ownerId = rs.value("owner_client_id",     std::string{});
         std::lock_guard<std::mutex> lk(m_mu);
         if (ps.size() > kMaxParticipants) ps.resize(kMaxParticipants);
         m_participants      = std::move(ps);
         m_hostParticipantId = hostId;
+        if (!ownerId.empty()) m_ownerClientId = ownerId;
     }
     else if (kind == "message")
     {
@@ -514,7 +582,8 @@ void ChatClient::handleFrame(const std::string &payload)
         out.body          = m.value("body", std::string{});
         out.postedAtMs    = m.value("posted_at_ms", int64_t{0});
         out.deleted       = m.value("deleted", false);
-        out.host          = m.value("is_host", false);
+        out.host          = m.value("is_host",  false);
+        out.owner         = m.value("is_owner", false);
         appendMessage(std::move(out));
     }
     else if (kind == "deleted")
@@ -538,7 +607,8 @@ void ChatClient::handleFrame(const std::string &payload)
         const std::string event = p.value("event", std::string{});
         const std::string pid   = p.value("participant_id", std::string{});
         const std::string nick  = p.value("nickname", std::string{});
-        const bool        host  = p.value("is_host", false);
+        const bool        host  = p.value("is_host",  false);
+        const bool        owner = p.value("is_owner", false);
         std::lock_guard<std::mutex> lk(m_mu);
         if (event == "join")
         {
@@ -546,7 +616,7 @@ void ChatClient::handleFrame(const std::string &payload)
                                    [&](const Participant &x) { return x.id == pid; });
             if (it == m_participants.end() && m_participants.size() < kMaxParticipants)
             {
-                m_participants.push_back({pid, nick, host});
+                m_participants.push_back({pid, nick, host, owner});
             }
             if (host) m_hostParticipantId = pid;
         }
@@ -641,6 +711,9 @@ void ChatClient::setNickname(const std::string &nick)
 
 bool ChatClient::createStandaloneRoom(const std::string &title,
                                       const std::string &slug,
+                                      const std::string &password,
+                                      bool               listed,
+                                      const std::string &ownerClientId,
                                       std::string       &outSlug,
                                       std::string       &outError)
 {
@@ -656,8 +729,11 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
     }
 
     nlohmann::json body = nlohmann::json::object();
-    if (!title.empty()) body["title"] = title;
-    if (!slug.empty())  body["slug"]  = slug;
+    if (!title.empty())         body["title"]            = title;
+    if (!slug.empty())          body["slug"]             = slug;
+    if (!password.empty())      body["password"]         = password;
+    if (!ownerClientId.empty()) body["owner_client_id"]  = ownerClientId;
+    body["listed"] = listed;
 
     const std::string url = deriveHttpFromWs(baseUrl) + "/rooms";
     auto resp = HttpClient::send(HttpClient::Method::POST, url, body.dump(), 5000);
@@ -714,6 +790,8 @@ ChatClient::Snapshot ChatClient::getSnapshot() const
     s.slug              = m_slug;
     s.roomId            = m_roomId;
     s.roomTitle         = m_roomTitle;
+    s.ownerClientId     = m_ownerClientId;
+    s.iAmOwner          = m_iAmOwner;
     s.nickname          = m_nickname;
     s.myParticipantId   = m_myParticipantId;
     s.hostParticipantId = m_hostParticipantId;
