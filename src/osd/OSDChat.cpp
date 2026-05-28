@@ -134,6 +134,18 @@ void OSDChat::render()
         m_profileError.clear();
         m_profileSavedHint.clear();
     }
+    // #84 — External "open Chat Rooms" requests from QuickActions.
+    // Force the chat panel itself visible too — the rooms window
+    // lives alongside it conceptually and the user expects to land
+    // on a usable chat afterwards.
+    if (m_uiManager && m_uiManager->consumeOpenChatRoomsRequest())
+    {
+        m_visible            = true;
+        m_showRoomsWindow    = true;
+        m_standaloneError.clear();
+        m_roomsListRequested = false;
+        m_ownedRoomsLoaded   = false;
+    }
 
     // Profile window is rendered unconditionally too — the consume
     // request above can pop it on a hidden chat panel; once shown,

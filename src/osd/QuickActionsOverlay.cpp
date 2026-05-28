@@ -1,4 +1,5 @@
 #include "QuickActionsOverlay.h"
+#include "OSDChat.h"
 #include "../ui/UIManager.h"
 #include "../ui/UIDirectoryBrowser.h"
 #include "../ui/UISectionHeader.h"
@@ -107,14 +108,46 @@ void QuickActionsOverlay::render()
         ImGui::Separator();
     }
 
-    // Browse directory — always available so users can discover other
-    // streams without going through the Remote menu, regardless of
-    // whether they're broadcasting (host) or consuming (client).
+    // Open chat — flips the OSD chat overlay back on if the user
+    // had hit the title-bar X. Cheap and always relevant; appears
+    // first because it's the most-used action of the trio.
+    if (ImGui::Button(T("quickactions.open_chat").c_str(), ImVec2(-1, 0)))
+    {
+        if (auto *chat = m_uiManager->getChatOverlay())
+        {
+            chat->setVisible(true);
+        }
+    }
+
+    // Chat rooms — opens the OSDChat Rooms window (one-shot request
+    // flag consumed by OSDChat next frame). Same widget the chat
+    // panel's "Rooms..." header button uses, just from a different
+    // entry point.
+    if (ImGui::Button(T("quickactions.chat_rooms").c_str(), ImVec2(-1, 0)))
+    {
+        m_uiManager->requestOpenChatRooms();
+    }
+
+    // Browse streams (formerly "Browse directory"). Hidden while
+    // we're streaming — exposing the directory browser to a host
+    // who's currently live creates two confusing "viewer" UIs in
+    // the same process. Joining someone else's stream while
+    // broadcasting also breaks the capture pipeline. The user has
+    // to stop the stream first; tooltip on the disabled button
+    // explains why.
     if (UIDirectoryBrowser *browser = m_uiManager->getDirectoryBrowserWindow())
     {
+        const bool blockedByStreaming = streamingActive && !clientMode;
+        ImGui::BeginDisabled(blockedByStreaming);
         if (ImGui::Button(T("quickactions.browse").c_str(), ImVec2(-1, 0)))
         {
             browser->setVisible(true);
+        }
+        ImGui::EndDisabled();
+        if (blockedByStreaming && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s",
+                T("quickactions.browse_disabled_streaming").c_str());
         }
     }
 

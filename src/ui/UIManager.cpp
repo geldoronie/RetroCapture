@@ -475,6 +475,13 @@ void UIManager::render()
     // Chat overlay (#84) — also outside the m_uiVisible gate so the
     // user can keep an eye on chat while everything else is hidden.
     if (m_chatOverlay) m_chatOverlay->render();
+    // Directory browser (#84) — promoted from the regular UI layer
+    // to the OSD layer so it stays reachable when F12 hides the
+    // config windows. Same one-button entry from QuickActions
+    // continues to work; the only behavioural change is "outside
+    // m_uiVisible". p_open binding inside UIDirectoryBrowser::render
+    // gives it the standard title-bar X.
+    if (m_directoryBrowserWindow) m_directoryBrowserWindow->render();
 
     if (!m_uiVisible)
     {
@@ -707,10 +714,10 @@ void UIManager::render()
         m_remoteConnectionWindow->render();
     }
 
-    if (m_directoryBrowserWindow)
-    {
-        m_directoryBrowserWindow->render();
-    }
+    // Directory browser moved to the OSD layer (rendered above the
+    // m_uiVisible gate at the top of this function). No render call
+    // here — having two would either double-render or eat input on
+    // alternating frames.
 
     // Renderizar janela de presets
     if (m_capturePresetsWindow)

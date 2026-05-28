@@ -300,6 +300,16 @@ public:
         return true;
     }
     void requestOpenChatProfile()                    { m_openChatProfileRequested = true; }
+    // #84 — Same one-shot pattern for the Chat Rooms window. Set by
+    // the QuickActions overlay; consumed by OSDChat on the next frame
+    // (also forces the chat panel itself visible if it was hidden).
+    bool consumeOpenChatRoomsRequest()
+    {
+        if (!m_openChatRoomsRequested) return false;
+        m_openChatRoomsRequested = false;
+        return true;
+    }
+    void requestOpenChatRooms()                      { m_openChatRoomsRequested = true; }
     // #84 — "Open the chat alongside the stream" master toggle. When
     // off, Application skips chat provisioning entirely; /meta omits
     // chat.roomSlug so viewers don't auto-bind. Default ON so the
@@ -1144,6 +1154,7 @@ private:
     // settings; OSDChat consumes it on the next frame and opens
     // the Profile window even if the chat panel itself is hidden.
     bool        m_openChatProfileRequested = false;
+    bool        m_openChatRoomsRequested   = false;
     // #84 — Open the chat alongside the stream. ON by default for
     // backwards-compatible behaviour.
     bool        m_streamChatEnabled       = true;

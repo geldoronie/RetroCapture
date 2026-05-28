@@ -236,7 +236,10 @@
   "quickactions.title":    "Quick actions",
   "quickactions.viewers":  "viewers",
   "quickactions.disconnect": "Disconnect",
-  "quickactions.browse":   "Browse directory",
+  "quickactions.browse":   "Browse streams",
+  "quickactions.open_chat": "Open chat",
+  "quickactions.chat_rooms": "Chat rooms",
+  "quickactions.browse_disabled_streaming": "Stop the stream first to browse other streams",
   "quickactions.record_client.tip": "Records what's on screen (post-decode video).\nAudio is captured from the local input device, NOT\nfrom the remote stream — without system loopback\nthe recording will be silent. Configure a loopback\nsource in your OS to capture stream audio too.",
 
   "shortcuts.title":       "Keyboard shortcuts",
