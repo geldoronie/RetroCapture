@@ -192,16 +192,26 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			p.IsHost = true
 		}
 	}
-	// #84 — Owner role for standalone rooms. Owner identity is
-	// stored on the room at create time; any join carrying the
-	// matching client_id gets IsOwner = true. Trust model: the
-	// server doesn't verify ownership against a signed token (v1
-	// adds that); for v0.5 holding the rc_<id> means you own it.
-	if roomRow.Kind == store.RoomKindStandalone &&
-		roomRow.OwnerAccountID != "" &&
-		first.Hello.ClientID != "" &&
-		first.Hello.ClientID == roomRow.OwnerAccountID {
-		p.IsOwner = true
+	// #84 — Owner role for standalone rooms. Two paths grant it,
+	// either match is sufficient:
+	//   1. hello.client_id matches room.owner_account_id (identity-
+	//      based, granted on the rc_<id> proving who the user is).
+	//   2. hello.owner_secret hashes to room.owner_secret_hash
+	//      (per-room secret, granted on possession of the secret
+	//      stored locally in owned_rooms.json). This path survives
+	//      identity loss as long as the user kept their secret.
+	if roomRow.Kind == store.RoomKindStandalone {
+		if roomRow.OwnerAccountID != "" &&
+			first.Hello.ClientID != "" &&
+			first.Hello.ClientID == roomRow.OwnerAccountID {
+			p.IsOwner = true
+		}
+		if !p.IsOwner &&
+			roomRow.OwnerSecretHash != "" &&
+			first.Hello.OwnerSecret != "" &&
+			sha256Hex(first.Hello.OwnerSecret) == roomRow.OwnerSecretHash {
+			p.IsOwner = true
+		}
 	}
 	if !roomLive.TryJoin(p) {
 		writeFrame(ctx, conn, wsFrame{

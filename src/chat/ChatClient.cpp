@@ -203,7 +203,8 @@ void ChatClient::connect(const std::string &streamId,
 
 void ChatClient::connectBySlug(const std::string &slug,
                                const std::string &nickname,
-                               const std::string &password)
+                               const std::string &password,
+                               const std::string &ownerSecret)
 {
     if (slug.empty()) return;
     if (nickname.empty()) return; // same profile gate as connect()
@@ -228,6 +229,7 @@ void ChatClient::connectBySlug(const std::string &slug,
         m_streamId.clear();
         m_nickname        = nickname;
         m_password        = password;
+        m_ownerSecret     = ownerSecret;
         m_asHost          = false;
         m_iAmHost         = false;
         m_messages.clear();
@@ -446,15 +448,18 @@ void ChatClient::onMessage(const ix::WebSocketMessage &msg)
             }
             std::string clientId;
             std::string password;
+            std::string ownerSecret;
             {
                 std::lock_guard<std::mutex> lk(m_mu);
-                clientId = m_clientId;
-                password = m_password;
+                clientId    = m_clientId;
+                password    = m_password;
+                ownerSecret = m_ownerSecret;
             }
             nlohmann::json helloPayload = { {"nickname", nick} };
-            if (asHost)            helloPayload["role"]      = "host";
-            if (!clientId.empty()) helloPayload["client_id"] = clientId;
-            if (!password.empty()) helloPayload["password"]  = password;
+            if (asHost)               helloPayload["role"]         = "host";
+            if (!clientId.empty())    helloPayload["client_id"]    = clientId;
+            if (!password.empty())    helloPayload["password"]     = password;
+            if (!ownerSecret.empty()) helloPayload["owner_secret"] = ownerSecret;
             nlohmann::json hello = {
                 {"kind",  "hello"},
                 {"hello", helloPayload},
@@ -714,6 +719,8 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
                                       const std::string &password,
                                       bool               listed,
                                       const std::string &ownerClientId,
+                                      const std::string &ownerSecret,
+                                      std::string       &outRoomId,
                                       std::string       &outSlug,
                                       std::string       &outError)
 {
@@ -733,6 +740,7 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
     if (!slug.empty())          body["slug"]             = slug;
     if (!password.empty())      body["password"]         = password;
     if (!ownerClientId.empty()) body["owner_client_id"]  = ownerClientId;
+    if (!ownerSecret.empty())   body["owner_secret"]     = ownerSecret;
     body["listed"] = listed;
 
     const std::string url = deriveHttpFromWs(baseUrl) + "/rooms";
@@ -764,7 +772,9 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
     try
     {
         auto j = nlohmann::json::parse(resp.body);
-        outSlug = j.at("data").value("slug", std::string{});
+        const auto data = j.value("data", nlohmann::json::object());
+        outSlug   = data.value("slug",    std::string{});
+        outRoomId = data.value("room_id", std::string{});
     }
     catch (const std::exception &e)
     {

@@ -233,11 +233,15 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Password: hash here so the plaintext never lands in storage.
-	// Empty plaintext == no password.
+	// Password + owner secret: both hashed here so plaintexts never
+	// land in storage. Empty plaintext == no gate.
 	passHash := ""
 	if pw := strings.TrimSpace(req.Password); pw != "" {
 		passHash = sha256Hex(pw)
+	}
+	secretHash := ""
+	if sec := strings.TrimSpace(req.OwnerSecret); sec != "" {
+		secretHash = sha256Hex(sec)
 	}
 
 	listed := true
@@ -248,9 +252,10 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 	roomID := "r_" + shortID()
 	room, err := s.Store.CreateStandaloneRoom(r.Context(), roomID, slug, title,
 		store.StandaloneRoomOptions{
-			OwnerClientID: owner,
-			PasswordHash:  passHash,
-			Listed:        listed,
+			OwnerClientID:   owner,
+			PasswordHash:    passHash,
+			OwnerSecretHash: secretHash,
+			Listed:          listed,
 		})
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {

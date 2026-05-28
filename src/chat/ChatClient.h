@@ -153,29 +153,32 @@ public:
 
     /// Connect to a standalone room by its slug. Optional `password`
     /// rides the next hello for password-protected rooms; empty
-    /// means "no password" and is the default. v0.5 standalone
-    /// rooms have no host role — asHost is implicitly false. Same
+    /// means "no password" and is the default. `ownerSecret` is the
+    /// per-room key from owned_rooms.json — when present and
+    /// matching, the server grants is_owner. v0.5 standalone rooms
+    /// have no host role — asHost is implicitly false. Same
     /// idempotency rules as connect().
     void connectBySlug(const std::string &slug,
                        const std::string &nickname,
-                       const std::string &password = "");
+                       const std::string &password    = "",
+                       const std::string &ownerSecret = "");
 
     /// Create a standalone room via POST /rooms. Synchronous: blocks
     /// the calling thread on the HTTP round-trip (~50 ms in dev).
-    /// Returns true on success and writes the server-assigned slug
-    /// into `outSlug`; the caller is expected to follow up with
-    /// connectBySlug(outSlug, nickname). On failure returns false
-    /// and writes the human-readable reason into `outError`.
-    /// `title` and `slug` may both be empty — server auto-fills
-    /// either when missing. `password` plaintext is hashed
-    /// server-side; empty == no password. `ownerClientId` is the
-    /// caller's persistent id; the server flags subsequent joins
-    /// from the same identity as is_owner.
+    /// Returns true on success; writes the server-assigned room_id
+    /// + slug into the out params. `password` is hashed server-side;
+    /// empty == no password. `ownerClientId` flags subsequent joins
+    /// from the same identity as is_owner. `ownerSecret` is the
+    /// per-room key the client is about to persist in
+    /// owned_rooms.json; the server stores its hash and flags any
+    /// hello carrying the matching plaintext as is_owner.
     bool createStandaloneRoom(const std::string &title,
                               const std::string &slug,
                               const std::string &password,
                               bool               listed,
                               const std::string &ownerClientId,
+                              const std::string &ownerSecret,
+                              std::string       &outRoomId,
                               std::string       &outSlug,
                               std::string       &outError);
 
@@ -246,6 +249,7 @@ private:
     std::string                 m_roomTitle;     // populated from resolve response
     std::string                 m_ownerClientId; // standalone-room owner from welcome, empty otherwise
     std::string                 m_password;      // plaintext to send in hello (password-protected rooms)
+    std::string                 m_ownerSecret;   // per-room secret from owned_rooms.json, sent in hello
     bool                        m_iAmOwner       = false;
     std::string                 m_myParticipantId;
     std::string                 m_hostParticipantId;

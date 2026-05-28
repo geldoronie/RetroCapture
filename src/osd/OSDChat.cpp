@@ -1,6 +1,7 @@
 #include "OSDChat.h"
 
 #include "../chat/ChatClient.h"
+#include "../identity/OwnedRooms.h"
 #include "../ui/UIManager.h"
 #include "../ui/UISectionHeader.h" // ui_status_bullet — emoji-safe dot
 
@@ -312,7 +313,15 @@ void OSDChat::render()
                                 const std::string nick = m_uiManager
                                     ? m_uiManager->getChatNickname()
                                     : snap.nickname;
-                                m_chat->connectBySlug(r.slug, nick);
+                                // Auto-apply owner secret if we own
+                                // this room locally — server flags
+                                // us as is_owner without prompting.
+                                OwnedRoom owned;
+                                const std::string sec =
+                                    ownedrooms::findBySlug(r.slug, owned)
+                                        ? owned.ownerSecret
+                                        : std::string{};
+                                m_chat->connectBySlug(r.slug, nick, "", sec);
                                 m_showRoomsWindow = false;
                             }
                         }
@@ -355,7 +364,12 @@ void OSDChat::render()
                     const std::string nick = m_uiManager
                         ? m_uiManager->getChatNickname()
                         : snap.nickname;
-                    m_chat->connectBySlug(slug, nick, m_joinPasswordBuf);
+                    OwnedRoom owned;
+                    const std::string sec =
+                        ownedrooms::findBySlug(slug, owned)
+                            ? owned.ownerSecret
+                            : std::string{};
+                    m_chat->connectBySlug(slug, nick, m_joinPasswordBuf, sec);
                     m_joinPasswordBuf[0] = '\0';
                     m_standaloneError.clear();
                     m_showRoomsWindow = false;
@@ -385,15 +399,20 @@ void OSDChat::render()
             {
                 m_standaloneError.clear();
                 m_createInFlight = true;
+                std::string newRoomId;
                 std::string newSlug;
                 std::string err;
-                // Owner client id is whatever the Profile saved; passing
-                // empty (no identity yet) is allowed by the server.
-                const std::string ownerId = m_identity.id;
+                const std::string ownerId     = m_identity.id;
+                // Mint the per-room secret BEFORE the POST so we
+                // can persist it the moment the server confirms.
+                // The server hashes its copy; we keep plaintext on
+                // disk in owned_rooms.json.
+                const std::string ownerSecret = ownedrooms::generateSecret();
                 const bool ok = m_chat->createStandaloneRoom(
                     m_createTitleBuf, m_createSlugBuf,
                     m_createPasswordBuf, m_createListed, ownerId,
-                    newSlug, err);
+                    ownerSecret,
+                    newRoomId, newSlug, err);
                 m_createInFlight = false;
                 if (!ok)
                 {
@@ -401,17 +420,26 @@ void OSDChat::render()
                 }
                 else
                 {
+                    // Persist the local record BEFORE the join, so
+                    // the connect path picks up the secret via
+                    // findBySlug and the server grants is_owner on
+                    // the very first hello.
+                    OwnedRoom rec;
+                    rec.roomId      = newRoomId;
+                    rec.slug        = newSlug;
+                    rec.title       = m_createTitleBuf;
+                    rec.ownerSecret = ownerSecret;
+                    ownedrooms::append(rec);
+
                     const std::string nick = m_uiManager
                         ? m_uiManager->getChatNickname()
                         : snap.nickname;
-                    m_chat->connectBySlug(newSlug, nick, m_createPasswordBuf);
+                    m_chat->connectBySlug(newSlug, nick,
+                                          m_createPasswordBuf, ownerSecret);
                     m_createTitleBuf[0]    = '\0';
                     m_createSlugBuf[0]     = '\0';
                     m_createPasswordBuf[0] = '\0';
                     m_showRoomsWindow      = false;
-                    // Trigger a refresh next time the user opens the
-                    // window so the new room shows up in the browse
-                    // list right away.
                     m_roomsListRequested   = false;
                 }
             }

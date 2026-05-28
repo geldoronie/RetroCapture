@@ -86,6 +86,11 @@ type createRoomRequest struct {
 	Password      string `json:"password"`
 	Listed        *bool  `json:"listed"` // pointer so caller can omit and we default true
 	OwnerClientID string `json:"owner_client_id"`
+	// OwnerSecret is generated client-side at create time. Sent in
+	// plaintext on the create call (over TLS in prod); server
+	// hashes + stores. Subsequent joins from any client that
+	// possesses the same secret get the is_owner flag.
+	OwnerSecret   string `json:"owner_secret"`
 }
 
 type createRoomPayload struct {
@@ -158,6 +163,13 @@ type wsHello struct {
 	// stored hash; mismatch / missing on a protected room → error
 	// frame code:"password_required" / "password_wrong" and close.
 	Password string `json:"password,omitempty"`
+	// OwnerSecret is the per-room secret the client persisted at
+	// create-time (owned_rooms.json). Server compares sha256 against
+	// the room's owner_secret_hash; a match grants is_owner. Wrong
+	// or missing secret is NOT an error — the user just joins as a
+	// regular participant. This is a privilege gate, not an
+	// authentication gate.
+	OwnerSecret string `json:"owner_secret,omitempty"`
 }
 
 // isValidClientID enforces the rc_<6..32 hex chars> shape the

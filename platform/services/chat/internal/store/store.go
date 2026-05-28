@@ -51,6 +51,7 @@ type Room struct {
 	Description     string
 	SettingsJSON    string
 	PasswordHash    string // sha256-hex of plaintext, empty == no password
+	OwnerSecretHash string // sha256-hex of plaintext owner secret, empty == none
 	Listed          bool   // public-listing opt-in (defaults true at create)
 	CreatedAt       time.Time
 	ArchivedAt      *time.Time // nil while active
@@ -179,7 +180,8 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
         SELECT id, kind, COALESCE(linked_stream_id, ''),
                COALESCE(owner_account_id, ''), COALESCE(slug, ''),
                title, description, settings_json,
-               COALESCE(password_hash, ''), listed,
+               COALESCE(password_hash, ''),
+               COALESCE(owner_secret_hash, ''), listed,
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE id = ?
@@ -194,7 +196,7 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 	if err := row.Scan(
 		&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
 		&r.Title, &r.Description, &r.SettingsJSON,
-		&r.PasswordHash, &listedInt,
+		&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
 		&createdMs, &archivedMs,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -223,7 +225,8 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
         SELECT id, kind, COALESCE(linked_stream_id, ''),
                COALESCE(owner_account_id, ''), COALESCE(slug, ''),
                title, description, settings_json,
-               COALESCE(password_hash, ''), listed,
+               COALESCE(password_hash, ''),
+               COALESCE(owner_secret_hash, ''), listed,
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE kind = ?
@@ -248,7 +251,7 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
 		if err := rows.Scan(
 			&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
 			&r.Title, &r.Description, &r.SettingsJSON,
-			&r.PasswordHash, &listedInt,
+			&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
 			&createdMs, &archivedMs,
 		); err != nil {
 			return nil, err
@@ -331,9 +334,10 @@ var ErrSlugTaken = errors.New("slug already in use")
 // room appears in GET /rooms). The Title/Slug live as positional
 // args because they're always required.
 type StandaloneRoomOptions struct {
-	OwnerClientID string
-	PasswordHash  string
-	Listed        bool
+	OwnerClientID   string
+	PasswordHash    string
+	OwnerSecretHash string
+	Listed          bool
 }
 
 // CreateStandaloneRoom inserts a kind=standalone row with the given
@@ -360,14 +364,18 @@ func (s *Store) CreateStandaloneRoom(
 	// schema level but we pass through explicitly so the caller can
 	// flip it off via the create form.
 	var (
-		ownerArg interface{} = nil
-		passArg  interface{} = nil
+		ownerArg  interface{} = nil
+		passArg   interface{} = nil
+		secretArg interface{} = nil
 	)
 	if opts.OwnerClientID != "" {
 		ownerArg = opts.OwnerClientID
 	}
 	if opts.PasswordHash != "" {
 		passArg = opts.PasswordHash
+	}
+	if opts.OwnerSecretHash != "" {
+		secretArg = opts.OwnerSecretHash
 	}
 	listedInt := 1
 	if !opts.Listed {
@@ -378,12 +386,12 @@ func (s *Store) CreateStandaloneRoom(
         INSERT INTO chat_rooms(
             id, kind, linked_stream_id, owner_account_id, slug,
             title, description, settings_json,
-            password_hash, listed,
+            password_hash, owner_secret_hash, listed,
             created_at_ms, archived_at_ms
         )
-        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, NULL)
+        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, NULL)
     `, roomID, string(RoomKindStandalone), ownerArg, slug, title,
-		passArg, listedInt, now.UnixMilli()); err != nil {
+		passArg, secretArg, listedInt, now.UnixMilli()); err != nil {
 		return nil, fmt.Errorf("insert standalone room: %w", err)
 	}
 	return s.GetRoom(ctx, roomID)
