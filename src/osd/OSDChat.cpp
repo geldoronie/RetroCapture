@@ -227,7 +227,14 @@ void OSDChat::render()
                         {
                             for (const auto &r : m_roomsList)
                             {
-                                const bool isStream =
+                                // [STREAM] now comes from the
+                                // server-side is_stream_room flag
+                                // (#84). The legacy kind ==
+                                // "stream_linked" path is dead
+                                // since the identity-bound rework;
+                                // both rooms are kind=standalone
+                                // now, the boolean discriminates.
+                                const bool isStream = r.isStreamRoom ||
                                     (r.kind == "stream_linked");
                                 // Stream-linked rooms have no slug;
                                 // fall back to the streamId for a
@@ -367,6 +374,7 @@ void OSDChat::render()
                                                 /*password=*/"", /*listed=*/true,
                                                 /*ownerClientId=*/m_identity.id,
                                                 r.ownerSecret,
+                                                /*isStreamRoom=*/false,
                                                 newRoomId, newSlug, err))
                                         {
                                             OwnedRoom rec = r;
@@ -538,6 +546,7 @@ void OSDChat::render()
                     m_createTitleBuf, m_createSlugBuf,
                     m_createPasswordBuf, m_createListed, ownerId,
                     ownerSecret,
+                    /*isStreamRoom=*/false,
                     newRoomId, newSlug, err);
 
                 // Revive fallback: if the POST failed AND the slug is
@@ -658,7 +667,9 @@ void OSDChat::render()
                                     /*password=*/m_joinPasswordBuf,
                                     /*listed=*/true,
                                     /*ownerClientId=*/m_identity.id,
-                                    sec, newRoomId, newSlug, err))
+                                    sec,
+                                    /*isStreamRoom=*/false,
+                                    newRoomId, newSlug, err))
                             {
                                 OwnedRoom rec = owned;
                                 rec.roomId = newRoomId;

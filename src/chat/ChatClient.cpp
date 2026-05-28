@@ -130,6 +130,7 @@ bool ChatClient::listPublicRooms(int limit,
             lr.streamId         = r.value("linked_stream_id",  std::string{});
             lr.title            = r.value("title",             std::string{});
             lr.hasPassword      = r.value("has_password",      false);
+            lr.isStreamRoom     = r.value("is_stream_room",    false);
             lr.participantCount = r.value("participant_count", 0);
             lr.createdAtMs      = r.value("created_at_ms",     int64_t{0});
             out.push_back(std::move(lr));
@@ -747,6 +748,7 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
                                       bool               listed,
                                       const std::string &ownerClientId,
                                       const std::string &ownerSecret,
+                                      bool               isStreamRoom,
                                       std::string       &outRoomId,
                                       std::string       &outSlug,
                                       std::string       &outError)
@@ -768,7 +770,8 @@ bool ChatClient::createStandaloneRoom(const std::string &title,
     if (!password.empty())      body["password"]         = password;
     if (!ownerClientId.empty()) body["owner_client_id"]  = ownerClientId;
     if (!ownerSecret.empty())   body["owner_secret"]     = ownerSecret;
-    body["listed"] = listed;
+    body["listed"]         = listed;
+    body["is_stream_room"] = isStreamRoom;
 
     const std::string url = deriveHttpFromWs(baseUrl) + "/rooms";
     auto resp = HttpClient::send(HttpClient::Method::POST, url, body.dump(), 5000);

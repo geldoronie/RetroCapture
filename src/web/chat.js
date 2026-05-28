@@ -501,7 +501,11 @@
             }
             $roomsList.innerHTML = '';
             for (const r of rooms) {
-                const isStream = (r.kind === 'stream_linked');
+                // is_stream_room is the canonical flag (#84). Fall
+                // back to the legacy kind for any rows that
+                // pre-date the boolean column.
+                const isStream = !!r.is_stream_room ||
+                                 (r.kind === 'stream_linked');
                 const row = document.createElement('div');
                 row.className = 'home-chat-rooms-item';
                 const kindBadge = isStream

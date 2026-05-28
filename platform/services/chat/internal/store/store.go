@@ -53,6 +53,12 @@ type Room struct {
 	PasswordHash    string // sha256-hex of plaintext, empty == no password
 	OwnerSecretHash string // sha256-hex of plaintext owner secret, empty == none
 	Listed          bool   // public-listing opt-in (defaults true at create)
+	// IsStreamRoom flags rooms auto-provisioned by a streaming host
+	// (Application::syncDirectoryClient) so the in-app browser can
+	// render a [STREAM] badge distinct from user-created [ROOM]
+	// entries. Both kinds share the same standalone-room shape;
+	// this is purely a UI / discovery hint.
+	IsStreamRoom    bool
 	CreatedAt       time.Time
 	ArchivedAt      *time.Time // nil while active
 }
@@ -182,21 +188,24 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
                title, description, settings_json,
                COALESCE(password_hash, ''),
                COALESCE(owner_secret_hash, ''), listed,
+               is_stream_room,
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE id = ?
     `, id)
 	r := &Room{}
 	var (
-		createdMs  int64
-		archivedMs sql.NullInt64
-		kind       string
-		listedInt  int
+		createdMs    int64
+		archivedMs   sql.NullInt64
+		kind         string
+		listedInt    int
+		streamRoomI  int
 	)
 	if err := row.Scan(
 		&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
 		&r.Title, &r.Description, &r.SettingsJSON,
 		&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
+		&streamRoomI,
 		&createdMs, &archivedMs,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -204,6 +213,7 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 		}
 		return nil, err
 	}
+	r.IsStreamRoom = streamRoomI != 0
 	r.Kind = RoomKind(kind)
 	r.Listed = listedInt != 0
 	r.CreatedAt = time.UnixMilli(createdMs).UTC()
@@ -235,6 +245,7 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
                title, description, settings_json,
                COALESCE(password_hash, ''),
                COALESCE(owner_secret_hash, ''), listed,
+               is_stream_room,
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE archived_at_ms IS NULL
@@ -250,22 +261,25 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
 	out := make([]Room, 0, limit)
 	for rows.Next() {
 		var (
-			r          Room
-			createdMs  int64
-			archivedMs sql.NullInt64
-			kind       string
-			listedInt  int
+			r           Room
+			createdMs   int64
+			archivedMs  sql.NullInt64
+			kind        string
+			listedInt   int
+			streamRoomI int
 		)
 		if err := rows.Scan(
 			&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
 			&r.Title, &r.Description, &r.SettingsJSON,
 			&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
+			&streamRoomI,
 			&createdMs, &archivedMs,
 		); err != nil {
 			return nil, err
 		}
 		r.Kind = RoomKind(kind)
 		r.Listed = listedInt != 0
+		r.IsStreamRoom = streamRoomI != 0
 		r.CreatedAt = time.UnixMilli(createdMs).UTC()
 		if archivedMs.Valid {
 			t := time.UnixMilli(archivedMs.Int64).UTC()
@@ -346,6 +360,10 @@ type StandaloneRoomOptions struct {
 	PasswordHash    string
 	OwnerSecretHash string
 	Listed          bool
+	// IsStreamRoom flags the row as the host's stream-chat room
+	// rather than a user-created chat room. Pure UI / discovery
+	// hint; doesn't change the room's behaviour.
+	IsStreamRoom    bool
 }
 
 // CreateStandaloneRoom inserts a kind=standalone row with the given
@@ -389,18 +407,23 @@ func (s *Store) CreateStandaloneRoom(
 	if !opts.Listed {
 		listedInt = 0
 	}
+	streamRoomI := 0
+	if opts.IsStreamRoom {
+		streamRoomI = 1
+	}
 
 	if _, err := s.db.ExecContext(ctx, `
         INSERT INTO chat_rooms(
             id, kind, linked_stream_id, owner_account_id, slug,
             title, description, settings_json,
             password_hash, owner_secret_hash, listed,
+            is_stream_room,
             created_at_ms, archived_at_ms, last_activity_ms
         )
-        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, NULL, ?)
+        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, ?, NULL, ?)
     `, roomID, string(RoomKindStandalone), ownerArg, slug, title,
-		passArg, secretArg, listedInt, now.UnixMilli(),
-		now.UnixMilli()); err != nil {
+		passArg, secretArg, listedInt, streamRoomI,
+		now.UnixMilli(), now.UnixMilli()); err != nil {
 		return nil, fmt.Errorf("insert standalone room: %w", err)
 	}
 	return s.GetRoom(ctx, roomID)

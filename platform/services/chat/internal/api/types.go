@@ -91,6 +91,13 @@ type createRoomRequest struct {
 	// hashes + stores. Subsequent joins from any client that
 	// possesses the same secret get the is_owner flag.
 	OwnerSecret   string `json:"owner_secret"`
+	// IsStreamRoom flags the new row as the host's stream-chat
+	// room rather than a free-standing chat room. Used by the
+	// streamer's Application::syncDirectoryClient provisioning
+	// path; the OSDChat "Create new..." dialog leaves it false.
+	// Surfaced back in GET /rooms so the browser can render the
+	// right badge.
+	IsStreamRoom  bool   `json:"is_stream_room"`
 }
 
 type createRoomPayload struct {
@@ -114,6 +121,7 @@ type listedRoomPayload struct {
 	LinkedStreamID   string `json:"linked_stream_id,omitempty"`
 	Title            string `json:"title"`
 	HasPassword      bool   `json:"has_password"`
+	IsStreamRoom     bool   `json:"is_stream_room"`
 	ParticipantCount int    `json:"participant_count"`
 	CreatedAtMs      int64  `json:"created_at_ms"`
 }

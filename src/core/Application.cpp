@@ -6225,6 +6225,7 @@ void Application::syncDirectoryClient()
                                 /*password=*/"", /*listed=*/true,
                                 /*ownerClientId=*/m_chatClient->getClientId(),
                                 owned.ownerSecret,
+                                /*isStreamRoom=*/true,
                                 newRoomId, newSlug, err))
                         {
                             // Refresh the local registry entry —
@@ -6280,6 +6281,7 @@ void Application::syncDirectoryClient()
                             /*password=*/"", /*listed=*/true,
                             /*ownerClientId=*/m_chatClient->getClientId(),
                             ownerSecret,
+                            /*isStreamRoom=*/true,
                             newRoomId, newSlug, err))
                     {
                         OwnedRoom rec;

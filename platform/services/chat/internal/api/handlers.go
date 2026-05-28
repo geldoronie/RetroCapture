@@ -204,6 +204,7 @@ func (s *Server) handleRoomsList(w http.ResponseWriter, r *http.Request) {
 			LinkedStreamID:   rm.LinkedStreamID,
 			Title:            rm.Title,
 			HasPassword:      rm.PasswordHash != "",
+			IsStreamRoom:     rm.IsStreamRoom,
 			ParticipantCount: count,
 			CreatedAtMs:      rm.CreatedAt.UnixMilli(),
 		})
@@ -268,6 +269,7 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 			PasswordHash:    passHash,
 			OwnerSecretHash: secretHash,
 			Listed:          listed,
+			IsStreamRoom:    req.IsStreamRoom,
 		})
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {

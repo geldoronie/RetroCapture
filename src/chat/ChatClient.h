@@ -97,6 +97,11 @@ public:
         std::string streamId;
         std::string title;
         bool        hasPassword      = false;
+        // True when the row was provisioned by a streaming host
+        // (server-side flag). Drives the [STREAM] vs [ROOM] badge
+        // in the in-app browser. Both kinds are otherwise
+        // standalone-shaped (slug + owner_secret).
+        bool        isStreamRoom     = false;
         int         participantCount = 0;
         int64_t     createdAtMs      = 0;
     };
@@ -182,6 +187,7 @@ public:
                               bool               listed,
                               const std::string &ownerClientId,
                               const std::string &ownerSecret,
+                              bool               isStreamRoom,
                               std::string       &outRoomId,
                               std::string       &outSlug,
                               std::string       &outError);
