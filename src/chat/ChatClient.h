@@ -197,6 +197,14 @@ public:
                               const std::string &ownerSecret,
                               std::string       &outError);
 
+    /// Promote / demote a standalone room's public-listing flag via
+    /// PATCH /rooms/<id>. Same auth as deleteStandaloneRoom — server
+    /// gates on sha256(ownerSecret). Returns true on success.
+    bool setStandaloneRoomListed(const std::string &roomId,
+                                 const std::string &ownerSecret,
+                                 bool               listed,
+                                 std::string       &outError);
+
     /// Fetch the public-room listing (GET /rooms). Synchronous;
     /// fills `out` with the response and returns true on success.
     bool listPublicRooms(int limit, std::vector<ListedRoom> &out,

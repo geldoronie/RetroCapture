@@ -6195,6 +6195,21 @@ void Application::syncDirectoryClient()
                 if (ownedrooms::findBySlug(configuredSlug, owned))
                 {
                     ownerSecret = owned.ownerSecret;
+                    // The streamer-rooms-are-public default landed
+                    // partway through #84. Rooms provisioned before
+                    // that fix are still listed=0 in the DB and
+                    // viewers won't find them via Rooms → Public.
+                    // Fire-and-forget PATCH to flip the flag on
+                    // every bind — server treats it as idempotent,
+                    // failures are logged and don't block the join.
+                    std::string patchErr;
+                    if (!m_chatClient->setStandaloneRoomListed(
+                            owned.roomId, ownerSecret,
+                            /*listed=*/true, patchErr))
+                    {
+                        LOG_INFO("Chat: PATCH listed=true skipped/failed: " +
+                                 patchErr);
+                    }
                 }
                 else
                 {

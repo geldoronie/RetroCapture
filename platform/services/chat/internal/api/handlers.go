@@ -327,6 +327,55 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// handleRoomPatch serves PATCH /rooms/<roomId>. Same secret-only
+// auth as DELETE. v1 only exposes the `listed` flag — title/slug
+// stay frozen because the wire history would have stale denorm'd
+// copies. The host's RetroCapture client uses this to promote a
+// stream chat that was provisioned with listed=false (before the
+// streamer-rooms-are-public default landed in #84) without
+// having to delete + recreate.
+func (s *Server) handleRoomPatch(w http.ResponseWriter, r *http.Request, roomID string) {
+	type patchReq struct {
+		OwnerSecret string `json:"owner_secret"`
+		Listed      *bool  `json:"listed"`
+	}
+	var req patchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	row, err := s.Store.GetRoom(r.Context(), roomID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "room_not_found", "no such room")
+			return
+		}
+		s.Logger.Error("patch_room get", "err", err, "room_id", roomID)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+		return
+	}
+	if row.OwnerSecretHash == "" {
+		s.writeError(w, http.StatusForbidden, "not_owner",
+			"room has no owner_secret on file; cannot be patched")
+		return
+	}
+	if req.OwnerSecret == "" || sha256Hex(req.OwnerSecret) != row.OwnerSecretHash {
+		s.writeError(w, http.StatusForbidden, "not_owner",
+			"owner_secret required and must match the room")
+		return
+	}
+	if req.Listed != nil {
+		if err := s.Store.SetRoomListed(r.Context(), roomID, *req.Listed); err != nil {
+			s.Logger.Error("patch_room listed", "err", err, "room_id", roomID)
+			s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
+			return
+		}
+	}
+	s.writeData(w, http.StatusOK, struct {
+		Updated bool `json:"updated"`
+	}{Updated: true})
+}
+
 // handleRoomDelete serves DELETE /rooms/<roomId>. Authorized strictly
 // via the room's owner_secret — the plaintext must hash to the stored
 // owner_secret_hash. Unlike the WS hello's is_owner grant, we
@@ -403,9 +452,19 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		s.handleRoomDelete(w, r, rest)
 		return
 	}
+	if r.Method == http.MethodPatch {
+		rest := strings.TrimPrefix(r.URL.Path, "/rooms/")
+		if rest == "" || strings.Contains(rest, "/") {
+			s.writeError(w, http.StatusBadRequest, "bad_request",
+				"PATCH /rooms/<roomId>")
+			return
+		}
+		s.handleRoomPatch(w, r, rest)
+		return
+	}
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
-			"GET or DELETE only")
+			"GET, PATCH or DELETE only")
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/rooms/")

@@ -430,6 +430,32 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// SetRoomListed flips the public-listed flag on an existing room.
+// Used by the owner-initiated room-update flow (PATCH /rooms/{id})
+// so streamers can promote a previously-hidden room (e.g. the
+// stream chat that was provisioned with listed=false before #84
+// changed the default) without having to delete + recreate. Caller
+// is responsible for the owner_secret check.
+func (s *Store) SetRoomListed(ctx context.Context, roomID string, listed bool) error {
+	v := 0
+	if listed {
+		v = 1
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_rooms SET listed = ? WHERE id = ?`, v, roomID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteRoom removes the room AND all of its messages from the
 // database — true cascade delete; no archived_at marker, no soft
 // remnants. Used by the owner-initiated delete flow (#84). The

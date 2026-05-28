@@ -869,6 +869,50 @@ bool ChatClient::deleteStandaloneRoom(const std::string &roomId,
     return true;
 }
 
+bool ChatClient::setStandaloneRoomListed(const std::string &roomId,
+                                         const std::string &ownerSecret,
+                                         bool               listed,
+                                         std::string       &outError)
+{
+    std::string baseUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        baseUrl = m_baseUrl;
+    }
+    if (baseUrl.empty() || roomId.empty() || ownerSecret.empty())
+    {
+        outError = "missing baseUrl, roomId or ownerSecret";
+        return false;
+    }
+    nlohmann::json body = {
+        {"owner_secret", ownerSecret},
+        {"listed",       listed},
+    };
+    const std::string url = deriveHttpFromWs(baseUrl) + "/rooms/" + roomId;
+    auto resp = HttpClient::send(HttpClient::Method::PATCH, url, body.dump(), 5000);
+    if (!resp.ok)
+    {
+        outError = resp.error.empty() ? "network failure" : resp.error;
+        return false;
+    }
+    if (resp.statusCode != 200)
+    {
+        std::string serverMsg;
+        try
+        {
+            auto j = nlohmann::json::parse(resp.body);
+            const auto err = j.value("error", nlohmann::json::object());
+            serverMsg = err.value("message", std::string{});
+        }
+        catch (...) { /* swallow */ }
+        outError = serverMsg.empty()
+            ? ("HTTP " + std::to_string(resp.statusCode))
+            : serverMsg;
+        return false;
+    }
+    return true;
+}
+
 ChatClient::Snapshot ChatClient::getSnapshot() const
 {
     std::lock_guard<std::mutex> lk(m_mu);
