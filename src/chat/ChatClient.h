@@ -87,10 +87,14 @@ public:
 
     /// Single entry in the public room listing returned by
     /// listPublicRooms. Mirrors the server's GET /rooms payload.
+    /// `kind` is "standalone" or "stream_linked"; for stream-linked
+    /// rows the slug is empty and `streamId` carries the link.
     struct ListedRoom
     {
         std::string roomId;
+        std::string kind;
         std::string slug;
+        std::string streamId;
         std::string title;
         bool        hasPassword      = false;
         int         participantCount = 0;

@@ -1330,6 +1330,13 @@ body.home-page .card .text-muted {
     color: #F3C93E;
     font-size: 0.75rem;
 }
+.home-chat-rooms-item .kind {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.home-chat-rooms-item .kind.stream { color: #F3C93E; }
+.home-chat-rooms-item .kind.room   { color: #9bb2d8; }
 .home-chat-rooms-item .count {
     margin-left: auto;
     color: #8ea2ad;

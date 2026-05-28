@@ -104,10 +104,14 @@ type createRoomPayload struct {
 
 // Single entry in the public room listing returned by GET /rooms.
 // password_hash is never exposed — only the boolean has_password
-// so the client can show a lock icon.
+// so the client can show a lock icon. `kind` discriminates between
+// standalone and stream-linked rows so clients can render a
+// different badge + take a different join path (slug vs streamId).
 type listedRoomPayload struct {
 	RoomID           string `json:"room_id"`
+	Kind             string `json:"kind"`
 	Slug             string `json:"slug"`
+	LinkedStreamID   string `json:"linked_stream_id,omitempty"`
 	Title            string `json:"title"`
 	HasPassword      bool   `json:"has_password"`
 	ParticipantCount int    `json:"participant_count"`

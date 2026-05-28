@@ -214,9 +214,17 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 	return r, nil
 }
 
-// ListPublicRooms returns standalone rooms whose `listed` flag is on,
-// most-recently-created first. Used by GET /rooms to power the in-app
-// room browser. limit is clamped to [1, 200], default 50.
+// ListPublicRooms returns rooms eligible for the in-app browser,
+// most-recently-created first. Two kinds qualify:
+//
+//   - Standalone rooms with `listed = 1` — explicit opt-in.
+//   - Stream-linked rooms (always) — they exist iff someone has
+//     touched the chat for a live stream, and the stream itself
+//     is by definition public. The caller (handlers.go) is
+//     expected to filter these by live participant count so dead
+//     streams' chat rooms don't pollute the listing.
+//
+// limit is clamped to [1, 200], default 50.
 func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -229,12 +237,12 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
                COALESCE(owner_secret_hash, ''), listed,
                created_at_ms, archived_at_ms
           FROM chat_rooms
-         WHERE kind = ?
-           AND listed = 1
-           AND archived_at_ms IS NULL
+         WHERE archived_at_ms IS NULL
+           AND ((kind = ? AND listed = 1)
+                OR kind = ?)
          ORDER BY created_at_ms DESC
          LIMIT ?
-    `, string(RoomKindStandalone), limit)
+    `, string(RoomKindStandalone), string(RoomKindStreamLinked), limit)
 	if err != nil {
 		return nil, err
 	}

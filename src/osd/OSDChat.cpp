@@ -326,9 +326,30 @@ void OSDChat::render()
                         {
                             for (const auto &r : m_roomsList)
                             {
-                                const std::string label = r.title.empty()
-                                    ? ("#" + r.slug)
-                                    : r.title;
+                                const bool isStream =
+                                    (r.kind == "stream_linked");
+                                // Stream-linked rooms have no slug;
+                                // fall back to the streamId for a
+                                // human-pointable label. Title is
+                                // empty for v0.5 stream rooms (the
+                                // chat service has no link to the
+                                // directory's title field yet).
+                                std::string label;
+                                if (!r.title.empty())          label = r.title;
+                                else if (!r.slug.empty())      label = "#" + r.slug;
+                                else if (!r.streamId.empty())  label = "stream " + r.streamId;
+                                else                           label = r.roomId;
+
+                                // Colour-coded kind badge so the
+                                // user instantly sees standalone vs
+                                // stream-linked entries.
+                                const ImVec4 kindCol = isStream
+                                    ? ImVec4(0.95f, 0.78f, 0.30f, 1.0f)
+                                    : ImVec4(0.65f, 0.75f, 0.95f, 1.0f);
+                                ImGui::TextColored(kindCol, "%s",
+                                    isStream ? "[STREAM]" : "[ROOM]");
+                                ImGui::SameLine();
+
                                 char selBuf[256];
                                 std::snprintf(selBuf, sizeof(selBuf),
                                               "%s%s##%s",
@@ -336,20 +357,29 @@ void OSDChat::render()
                                               label.c_str(), r.roomId.c_str());
                                 if (ImGui::Selectable(selBuf))
                                 {
-                                    // Click → pre-fill the join form so
-                                    // the user can supply a password.
-                                    std::snprintf(m_joinSlugBuf,
-                                                  sizeof(m_joinSlugBuf),
-                                                  "%s", r.slug.c_str());
-                                    if (r.hasPassword)
+                                    const std::string nick = m_uiManager
+                                        ? m_uiManager->getChatNickname()
+                                        : snap.nickname;
+                                    if (isStream)
                                     {
+                                        // Stream-linked rooms are
+                                        // password-less by design;
+                                        // join straight via streamId.
+                                        m_chat->connect(r.streamId, nick,
+                                                        /*asHost=*/false);
+                                    }
+                                    else if (r.hasPassword)
+                                    {
+                                        // Pre-fill the join form so
+                                        // the user can supply a
+                                        // password.
+                                        std::snprintf(m_joinSlugBuf,
+                                                      sizeof(m_joinSlugBuf),
+                                                      "%s", r.slug.c_str());
                                         m_showJoinCustomWindow = true;
                                     }
                                     else
                                     {
-                                        const std::string nick = m_uiManager
-                                            ? m_uiManager->getChatNickname()
-                                            : snap.nickname;
                                         OwnedRoom owned;
                                         const std::string sec =
                                             ownedrooms::findBySlug(r.slug, owned)

@@ -187,9 +187,21 @@ func (s *Server) handleRoomsList(w http.ResponseWriter, r *http.Request) {
 		if live := s.Registry.Get(rm.ID); live != nil {
 			count = live.Count()
 		}
+		// Stream-linked rooms are gated by live participants — the
+		// chat service can't tell whether the stream itself is live
+		// (that's the directory service's call), so an empty room
+		// means "nobody is currently chatting", which is the closest
+		// proxy for "this stream isn't worth surfacing". Standalone
+		// rooms are always shown so creators can drop a fresh empty
+		// room and tell people about it.
+		if rm.Kind == store.RoomKindStreamLinked && count == 0 {
+			continue
+		}
 		out = append(out, listedRoomPayload{
 			RoomID:           rm.ID,
+			Kind:             string(rm.Kind),
 			Slug:             rm.Slug,
+			LinkedStreamID:   rm.LinkedStreamID,
 			Title:            rm.Title,
 			HasPassword:      rm.PasswordHash != "",
 			ParticipantCount: count,

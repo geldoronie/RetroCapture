@@ -501,16 +501,40 @@
             }
             $roomsList.innerHTML = '';
             for (const r of rooms) {
+                const isStream = (r.kind === 'stream_linked');
                 const row = document.createElement('div');
                 row.className = 'home-chat-rooms-item';
+                const kindBadge = isStream
+                    ? '<span class="kind stream">[STREAM]</span> '
+                    : '<span class="kind room">[ROOM]</span> ';
                 const lock = r.has_password
                     ? '<span class="lock">[lock]</span> '
                     : '';
-                const label = r.title || `#${r.slug}`;
-                row.innerHTML = lock + escapeHtml(label) +
+                // Stream-linked rooms don't carry a slug — fall back
+                // to the linked_stream_id so the user has something
+                // to point at. v0.5 stream rooms also lack a title
+                // (the chat service can't reach into the directory),
+                // so the streamId is often what the user sees.
+                let label;
+                if (r.title) {
+                    label = r.title;
+                } else if (r.slug) {
+                    label = '#' + r.slug;
+                } else if (r.linked_stream_id) {
+                    label = 'stream ' + r.linked_stream_id;
+                } else {
+                    label = r.room_id;
+                }
+                row.innerHTML = kindBadge + lock + escapeHtml(label) +
                     `<span class="count">${r.participant_count}</span>`;
                 row.addEventListener('click', () => {
-                    if (r.has_password) {
+                    if (isStream) {
+                        // Stream-linked rooms are password-less by
+                        // design; bind to the streamId directly.
+                        // joinStreamId mirrors joinSlug but for the
+                        // stream-linked path.
+                        joinStreamId(r.linked_stream_id);
+                    } else if (r.has_password) {
                         $roomsJoinSlug.value = r.slug;
                         openJoinCustom();
                         if ($roomsJoinPass) $roomsJoinPass.focus();
@@ -674,6 +698,25 @@
         closeRooms();
         closeCreate();
         closeJoinCustom();
+        openSession();
+    }
+    // Join a stream-linked chat directly by stream id (clicked from
+    // the [STREAM]-badged entries in the Public listing). No slug,
+    // no password — stream rooms are public-by-design.
+    function joinStreamId(streamId) {
+        if (!streamId) return;
+        state.streamId = streamId;
+        state.slug     = '';
+        state.pendingPassword    = '';
+        state.pendingOwnerSecret = '';
+        state.userDisconnected   = false;
+        // Drop any hash that pinned us to a standalone slug — the
+        // /meta poll's stream-linked path will keep us bound now.
+        if (window.location.hash) {
+            try { history.replaceState(null, '', window.location.pathname); }
+            catch (_) { window.location.hash = ''; }
+        }
+        closeRooms();
         openSession();
     }
     // User-initiated disconnect. Closes the live WS, drops the slug
