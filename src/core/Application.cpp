@@ -6208,14 +6208,18 @@ void Application::syncDirectoryClient()
                     if (title.empty())
                         title = m_ui->getDirectoryStreamName();
 
-                    // Mint a fresh secret + POST /rooms. listed=false
-                    // keeps the room out of the public listing — the
-                    // /meta hint is how viewers find it.
+                    // Mint a fresh secret + POST /rooms. listed=true:
+                    // the streamer's room is intentionally public so
+                    // viewers can find it both through /meta (linked
+                    // to the active stream) AND through the Public
+                    // tab of the in-app room browser (so people who
+                    // already know the streamer can drop into chat
+                    // even when the stream isn't live).
                     ownerSecret = ownedrooms::generateSecret();
                     std::string newRoomId, newSlug, err;
                     if (m_chatClient->createStandaloneRoom(
                             title, configuredSlug,
-                            /*password=*/"", /*listed=*/false,
+                            /*password=*/"", /*listed=*/true,
                             /*ownerClientId=*/m_chatClient->getClientId(),
                             ownerSecret,
                             newRoomId, newSlug, err))
