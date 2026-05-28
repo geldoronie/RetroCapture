@@ -481,7 +481,21 @@ void UIManager::render()
     // continues to work; the only behavioural change is "outside
     // m_uiVisible". p_open binding inside UIDirectoryBrowser::render
     // gives it the standard title-bar X.
-    if (m_directoryBrowserWindow) m_directoryBrowserWindow->render();
+    if (m_directoryBrowserWindow)
+    {
+        // Per-frame invariant: a host who's actively streaming
+        // shouldn't have the browser open — picking another stream
+        // would fight the capture pipeline, and the QuickActions
+        // button that opens it is already disabled in that state.
+        // Forcing it closed every frame is cheap and avoids the
+        // "I opened it before clicking Start, now it's stuck" case.
+        if (getStreamingActive() && !isRemoteSource() &&
+            m_directoryBrowserWindow->isVisible())
+        {
+            m_directoryBrowserWindow->setVisible(false);
+        }
+        m_directoryBrowserWindow->render();
+    }
 
     if (!m_uiVisible)
     {
