@@ -5,6 +5,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -148,14 +150,56 @@ func (s *Server) handleRoomBySlug(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRoomsCollection serves POST /rooms — creates a new standalone
-// room. v0.5 has no authentication; anyone can create. v1 ties room
-// ownership to the directory account that posted.
+// handleRoomsCollection serves POST /rooms (create) and GET /rooms
+// (public listing). v0.5 has no authentication; anyone can create
+// and the owner field carries the creator's rc_<id> verbatim — v1
+// ties ownership to a directory-account signed token.
 func (s *Server) handleRoomsCollection(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
+	switch r.Method {
+	case http.MethodGet:
+		s.handleRoomsList(w, r)
+	case http.MethodPost:
+		s.handleRoomsCreate(w, r)
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"GET or POST only")
+	}
+}
+
+func (s *Server) handleRoomsList(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	rooms, err := s.Store.ListPublicRooms(r.Context(), limit)
+	if err != nil {
+		s.Logger.Error("list_public_rooms", "err", err)
+		s.writeError(w, http.StatusInternalServerError, "internal_error",
+			"store failure")
 		return
 	}
+	out := make([]listedRoomPayload, 0, len(rooms))
+	for _, rm := range rooms {
+		count := 0
+		if live := s.Registry.Get(rm.ID); live != nil {
+			count = live.Count()
+		}
+		out = append(out, listedRoomPayload{
+			RoomID:           rm.ID,
+			Slug:             rm.Slug,
+			Title:            rm.Title,
+			HasPassword:      rm.PasswordHash != "",
+			ParticipantCount: count,
+			CreatedAtMs:      rm.CreatedAt.UnixMilli(),
+		})
+	}
+	s.writeData(w, http.StatusOK, roomsListPayload{Rooms: out})
+}
+
+func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRoomRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
@@ -179,8 +223,35 @@ func (s *Server) handleRoomsCollection(w http.ResponseWriter, r *http.Request) {
 		title = slug
 	}
 
+	// Optional owner client_id — same shape validator the WS hello
+	// uses so creator identity matches the chat protocol's
+	// participant_id format. Empty owner is allowed (anonymous room).
+	owner := strings.TrimSpace(req.OwnerClientID)
+	if owner != "" && !isValidClientID(owner) {
+		s.writeError(w, http.StatusBadRequest, "bad_request",
+			"owner_client_id must match rc_<lowercase hex>")
+		return
+	}
+
+	// Password: hash here so the plaintext never lands in storage.
+	// Empty plaintext == no password.
+	passHash := ""
+	if pw := strings.TrimSpace(req.Password); pw != "" {
+		passHash = sha256Hex(pw)
+	}
+
+	listed := true
+	if req.Listed != nil {
+		listed = *req.Listed
+	}
+
 	roomID := "r_" + shortID()
-	room, err := s.Store.CreateStandaloneRoom(r.Context(), roomID, slug, title)
+	room, err := s.Store.CreateStandaloneRoom(r.Context(), roomID, slug, title,
+		store.StandaloneRoomOptions{
+			OwnerClientID: owner,
+			PasswordHash:  passHash,
+			Listed:        listed,
+		})
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
 			s.writeError(w, http.StatusConflict, "slug_taken", "slug already in use")
@@ -192,9 +263,12 @@ func (s *Server) handleRoomsCollection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeData(w, http.StatusCreated, createRoomPayload{
-		RoomID: room.ID,
-		Slug:   room.Slug,
-		Title:  room.Title,
+		RoomID:        room.ID,
+		Slug:          room.Slug,
+		Title:         room.Title,
+		HasPassword:   room.PasswordHash != "",
+		Listed:        room.Listed,
+		OwnerClientID: room.OwnerAccountID,
 	})
 }
 
@@ -226,6 +300,14 @@ func isValidSlug(s string) bool {
 // entropy which is enough for the v0.5 namespace.
 func generateSlug() string {
 	return shortID()[:8]
+}
+
+// sha256Hex returns the hex-encoded SHA-256 of s. Used for hashing
+// room passwords before they hit storage — the plaintext never
+// leaves this function.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // handleRoom serves GET /rooms/<roomId> and GET /rooms/<roomId>/history.
@@ -322,6 +404,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, roomID st
 			Body:          m.Body,
 			PostedAtMs:    m.PostedAt.UnixMilli(),
 			IsHost:        m.IsHost,
+			IsOwner:       m.IsOwner,
 		}
 		if m.DeletedAt != nil {
 			mp.Deleted = true

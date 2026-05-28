@@ -45,11 +45,13 @@ type Room struct {
 	ID              string
 	Kind            RoomKind
 	LinkedStreamID  string // empty for standalone
-	OwnerAccountID  string // empty in v0.5 (no accounts yet)
+	OwnerAccountID  string // v0.5 reused to store the creator's rc_<...> client_id
 	Slug            string // empty for stream-linked rooms
 	Title           string
 	Description     string
 	SettingsJSON    string
+	PasswordHash    string // sha256-hex of plaintext, empty == no password
+	Listed          bool   // public-listing opt-in (defaults true at create)
 	CreatedAt       time.Time
 	ArchivedAt      *time.Time // nil while active
 }
@@ -64,6 +66,7 @@ type Message struct {
 	PostedAt      time.Time
 	DeletedAt     *time.Time
 	IsHost        bool
+	IsOwner       bool
 }
 
 // Store is the public handle. Safe for concurrent use; SQLite
@@ -176,6 +179,7 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
         SELECT id, kind, COALESCE(linked_stream_id, ''),
                COALESCE(owner_account_id, ''), COALESCE(slug, ''),
                title, description, settings_json,
+               COALESCE(password_hash, ''), listed,
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE id = ?
@@ -185,10 +189,12 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 		createdMs  int64
 		archivedMs sql.NullInt64
 		kind       string
+		listedInt  int
 	)
 	if err := row.Scan(
 		&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
 		&r.Title, &r.Description, &r.SettingsJSON,
+		&r.PasswordHash, &listedInt,
 		&createdMs, &archivedMs,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -197,12 +203,66 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 		return nil, err
 	}
 	r.Kind = RoomKind(kind)
+	r.Listed = listedInt != 0
 	r.CreatedAt = time.UnixMilli(createdMs).UTC()
 	if archivedMs.Valid {
 		t := time.UnixMilli(archivedMs.Int64).UTC()
 		r.ArchivedAt = &t
 	}
 	return r, nil
+}
+
+// ListPublicRooms returns standalone rooms whose `listed` flag is on,
+// most-recently-created first. Used by GET /rooms to power the in-app
+// room browser. limit is clamped to [1, 200], default 50.
+func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, kind, COALESCE(linked_stream_id, ''),
+               COALESCE(owner_account_id, ''), COALESCE(slug, ''),
+               title, description, settings_json,
+               COALESCE(password_hash, ''), listed,
+               created_at_ms, archived_at_ms
+          FROM chat_rooms
+         WHERE kind = ?
+           AND listed = 1
+           AND archived_at_ms IS NULL
+         ORDER BY created_at_ms DESC
+         LIMIT ?
+    `, string(RoomKindStandalone), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Room, 0, limit)
+	for rows.Next() {
+		var (
+			r          Room
+			createdMs  int64
+			archivedMs sql.NullInt64
+			kind       string
+			listedInt  int
+		)
+		if err := rows.Scan(
+			&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
+			&r.Title, &r.Description, &r.SettingsJSON,
+			&r.PasswordHash, &listedInt,
+			&createdMs, &archivedMs,
+		); err != nil {
+			return nil, err
+		}
+		r.Kind = RoomKind(kind)
+		r.Listed = listedInt != 0
+		r.CreatedAt = time.UnixMilli(createdMs).UTC()
+		if archivedMs.Valid {
+			t := time.UnixMilli(archivedMs.Int64).UTC()
+			r.ArchivedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetOrCreateRoomForStream looks up the stream-linked room for the
@@ -265,12 +325,25 @@ func (s *Store) GetRoomBySlug(ctx context.Context, slug string) (*Room, error) {
 // requested slug already exists. Callers map it to HTTP 409.
 var ErrSlugTaken = errors.New("slug already in use")
 
+// StandaloneRoomOptions wraps the optional knobs the creator can
+// set: ownerClientID (their rc_<...>), passwordHash (sha256 hex of
+// the plaintext; empty == no password), and listed (whether the
+// room appears in GET /rooms). The Title/Slug live as positional
+// args because they're always required.
+type StandaloneRoomOptions struct {
+	OwnerClientID string
+	PasswordHash  string
+	Listed        bool
+}
+
 // CreateStandaloneRoom inserts a kind=standalone row with the given
-// slug + title. Returns ErrSlugTaken when slug is already taken.
-// The caller is expected to have validated slug shape ahead of time.
+// slug + title + optional settings. Returns ErrSlugTaken when slug
+// is already taken. The caller is expected to have validated slug
+// shape and hashed the password ahead of time.
 func (s *Store) CreateStandaloneRoom(
 	ctx context.Context,
 	roomID, slug, title string,
+	opts StandaloneRoomOptions,
 ) (*Room, error) {
 	// Pre-check so we can return a typed error instead of relying on
 	// the SQLite UNIQUE-constraint error text.
@@ -281,15 +354,36 @@ func (s *Store) CreateStandaloneRoom(
 	}
 
 	now := time.Now().UTC()
+
+	// owner_account_id v0.5 carries the creator's rc_<id>. password_hash
+	// stays NULL when no password was set. listed defaults true at the
+	// schema level but we pass through explicitly so the caller can
+	// flip it off via the create form.
+	var (
+		ownerArg interface{} = nil
+		passArg  interface{} = nil
+	)
+	if opts.OwnerClientID != "" {
+		ownerArg = opts.OwnerClientID
+	}
+	if opts.PasswordHash != "" {
+		passArg = opts.PasswordHash
+	}
+	listedInt := 1
+	if !opts.Listed {
+		listedInt = 0
+	}
+
 	if _, err := s.db.ExecContext(ctx, `
         INSERT INTO chat_rooms(
             id, kind, linked_stream_id, owner_account_id, slug,
             title, description, settings_json,
+            password_hash, listed,
             created_at_ms, archived_at_ms
         )
-        VALUES (?, ?, NULL, NULL, ?, ?, '', '{}', ?, NULL)
-    `, roomID, string(RoomKindStandalone), slug, title,
-		now.UnixMilli()); err != nil {
+        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, NULL)
+    `, roomID, string(RoomKindStandalone), ownerArg, slug, title,
+		passArg, listedInt, now.UnixMilli()); err != nil {
 		return nil, fmt.Errorf("insert standalone room: %w", err)
 	}
 	return s.GetRoom(ctx, roomID)
@@ -306,10 +400,10 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO chat_messages(
             id, room_id, participant_id, nickname, body,
-            posted_at_ms, deleted_at_ms, is_host
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+            posted_at_ms, deleted_at_ms, is_host, is_owner
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
     `, m.ID, m.RoomID, m.ParticipantID, m.Nickname, m.Body,
-		m.PostedAt.UnixMilli(), boolToInt(m.IsHost))
+		m.PostedAt.UnixMilli(), boolToInt(m.IsHost), boolToInt(m.IsOwner))
 	return err
 }
 
@@ -384,7 +478,7 @@ func (s *Store) ListMessages(
 	if hasBefore {
 		rows, err = s.db.QueryContext(ctx, `
             SELECT id, room_id, participant_id, nickname, body,
-                   posted_at_ms, deleted_at_ms, is_host
+                   posted_at_ms, deleted_at_ms, is_host, is_owner
               FROM chat_messages
              WHERE room_id = ?
                AND (posted_at_ms, id) < (?, ?)
@@ -394,7 +488,7 @@ func (s *Store) ListMessages(
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
             SELECT id, room_id, participant_id, nickname, body,
-                   posted_at_ms, deleted_at_ms, is_host
+                   posted_at_ms, deleted_at_ms, is_host, is_owner
               FROM chat_messages
              WHERE room_id = ?
              ORDER BY posted_at_ms DESC, id DESC
@@ -413,10 +507,11 @@ func (s *Store) ListMessages(
 			postedMs  int64
 			deletedMs sql.NullInt64
 			isHost    int
+			isOwner   int
 		)
 		if err := rows.Scan(
 			&m.ID, &m.RoomID, &m.ParticipantID, &m.Nickname, &m.Body,
-			&postedMs, &deletedMs, &isHost,
+			&postedMs, &deletedMs, &isHost, &isOwner,
 		); err != nil {
 			return nil, "", err
 		}
@@ -425,7 +520,8 @@ func (s *Store) ListMessages(
 			t := time.UnixMilli(deletedMs.Int64).UTC()
 			m.DeletedAt = &t
 		}
-		m.IsHost = isHost != 0
+		m.IsHost  = isHost  != 0
+		m.IsOwner = isOwner != 0
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {

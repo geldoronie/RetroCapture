@@ -54,6 +54,7 @@ type messagePayload struct {
 	PostedAtMs    int64  `json:"posted_at_ms"`
 	Deleted       bool   `json:"deleted,omitempty"`
 	IsHost        bool   `json:"is_host,omitempty"`
+	IsOwner       bool   `json:"is_owner,omitempty"`
 }
 
 type historyPayload struct {
@@ -73,18 +74,43 @@ type roomBySlugPayload struct {
 	Title  string `json:"title"`
 }
 
-// Request body for POST /rooms — both fields are optional. An empty
-// slug triggers server-side autogeneration; an empty title falls
-// back to the slug.
+// Request body for POST /rooms. Title + slug are optional (server
+// auto-generates either when empty). Password is the plaintext we
+// hash with sha256; empty means no password. Listed defaults true.
+// OwnerClientID is the rc_<...> identity of whoever is creating
+// the room — gets carried so subsequent joins from the same
+// identity get the is_owner flag.
 type createRoomRequest struct {
-	Title string `json:"title"`
-	Slug  string `json:"slug"`
+	Title         string `json:"title"`
+	Slug          string `json:"slug"`
+	Password      string `json:"password"`
+	Listed        *bool  `json:"listed"` // pointer so caller can omit and we default true
+	OwnerClientID string `json:"owner_client_id"`
 }
 
 type createRoomPayload struct {
-	RoomID string `json:"room_id"`
-	Slug   string `json:"slug"`
-	Title  string `json:"title"`
+	RoomID         string `json:"room_id"`
+	Slug           string `json:"slug"`
+	Title          string `json:"title"`
+	HasPassword    bool   `json:"has_password"`
+	Listed         bool   `json:"listed"`
+	OwnerClientID  string `json:"owner_client_id,omitempty"`
+}
+
+// Single entry in the public room listing returned by GET /rooms.
+// password_hash is never exposed — only the boolean has_password
+// so the client can show a lock icon.
+type listedRoomPayload struct {
+	RoomID           string `json:"room_id"`
+	Slug             string `json:"slug"`
+	Title            string `json:"title"`
+	HasPassword      bool   `json:"has_password"`
+	ParticipantCount int    `json:"participant_count"`
+	CreatedAtMs      int64  `json:"created_at_ms"`
+}
+
+type roomsListPayload struct {
+	Rooms []listedRoomPayload `json:"rooms"`
 }
 
 // --- WebSocket envelope ---------------------------------------------
@@ -127,6 +153,11 @@ type wsHello struct {
 	// Same trust model as Role — server doesn't verify ownership;
 	// v1 ties it to a directory-account signed token.
 	ClientID string `json:"client_id,omitempty"`
+	// Password is the plaintext credential for password-protected
+	// rooms. Server compares sha256(Password) against the room's
+	// stored hash; mismatch / missing on a protected room → error
+	// frame code:"password_required" / "password_wrong" and close.
+	Password string `json:"password,omitempty"`
 }
 
 // isValidClientID enforces the rc_<6..32 hex chars> shape the
@@ -173,6 +204,10 @@ type wsWelcome struct {
 	// is the room's current host id, empty if no one has claimed.
 	IsHost            bool   `json:"is_host,omitempty"`
 	HostParticipantID string `json:"host_participant_id,omitempty"`
+	// IsOwner mirrors IsHost for standalone rooms — set when the
+	// connecting client_id matches the room's owner_client_id.
+	IsOwner           bool   `json:"is_owner,omitempty"`
+	OwnerClientID     string `json:"owner_client_id,omitempty"`
 }
 
 type wsMessage struct {
@@ -186,6 +221,7 @@ type wsMessage struct {
 	// poster's room-host status; stays true across server restarts
 	// even if the host's session id has since changed.
 	IsHost        bool   `json:"is_host,omitempty"`
+	IsOwner       bool   `json:"is_owner,omitempty"`
 }
 
 type wsPresence struct {
@@ -193,6 +229,7 @@ type wsPresence struct {
 	Nickname      string `json:"nickname"`
 	Event         string `json:"event"` // "join" | "leave"
 	IsHost        bool   `json:"is_host,omitempty"`
+	IsOwner       bool   `json:"is_owner,omitempty"`
 }
 
 type wsDeleted struct {
@@ -214,12 +251,17 @@ type wsRoomState struct {
 	// claimed the room yet). Lets the client mark seeded backlog
 	// messages whose participant_id matches.
 	HostParticipantID string         `json:"host_participant_id,omitempty"`
+	// Standalone room's owner identity (rc_<...>). Empty for
+	// stream-linked or for standalone rooms that didn't carry an
+	// owner at creation.
+	OwnerClientID    string          `json:"owner_client_id,omitempty"`
 }
 
 type wsParticipant struct {
 	ID       string `json:"id"`
 	Nickname string `json:"nickname"`
 	IsHost   bool   `json:"is_host,omitempty"`
+	IsOwner  bool   `json:"is_owner,omitempty"`
 }
 
 type wsRoomSettings struct {

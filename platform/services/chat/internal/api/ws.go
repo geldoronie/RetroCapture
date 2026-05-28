@@ -126,6 +126,32 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		})
 		return
 	}
+	// Password gate (#84). Rooms created with a password reject the
+	// hello unless it carries the matching plaintext. Mismatch and
+	// missing-on-protected-room are distinguished via the code so
+	// the UI can prompt vs flag a typo.
+	if roomRow.PasswordHash != "" {
+		if first.Hello.Password == "" {
+			writeFrame(ctx, conn, wsFrame{
+				Kind: "error",
+				Error: &wsError{
+					Code:    "password_required",
+					Message: "this room requires a password",
+				},
+			})
+			return
+		}
+		if sha256Hex(first.Hello.Password) != roomRow.PasswordHash {
+			writeFrame(ctx, conn, wsFrame{
+				Kind: "error",
+				Error: &wsError{
+					Code:    "password_wrong",
+					Message: "wrong password",
+				},
+			})
+			return
+		}
+	}
 	roomLive := s.Registry.Get(roomID)
 	// Participant id selection (#84):
 	//   - When the client sent a validly shaped persistent ClientID
@@ -160,13 +186,22 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		JoinedAt: time.Now().UTC(),
 		Send:     make(chan []byte, sendBufferSize),
 	}
-	// #84 — Host role claim. Only meaningful on stream_linked rooms;
-	// standalone rooms can re-use the same field later for room
-	// owners but v0.5 doesn't expose that path.
+	// #84 — Host role claim. Only meaningful on stream_linked rooms.
 	if first.Hello.Role == "host" && roomRow.Kind == store.RoomKindStreamLinked {
 		if roomLive.TryClaimHost(p.ID) {
 			p.IsHost = true
 		}
+	}
+	// #84 — Owner role for standalone rooms. Owner identity is
+	// stored on the room at create time; any join carrying the
+	// matching client_id gets IsOwner = true. Trust model: the
+	// server doesn't verify ownership against a signed token (v1
+	// adds that); for v0.5 holding the rc_<id> means you own it.
+	if roomRow.Kind == store.RoomKindStandalone &&
+		roomRow.OwnerAccountID != "" &&
+		first.Hello.ClientID != "" &&
+		first.Hello.ClientID == roomRow.OwnerAccountID {
+		p.IsOwner = true
 	}
 	if !roomLive.TryJoin(p) {
 		writeFrame(ctx, conn, wsFrame{
@@ -198,6 +233,8 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			ProtocolVersion:   ProtocolVersion,
 			IsHost:            p.IsHost,
 			HostParticipantID: roomLive.HostID(),
+			IsOwner:           p.IsOwner,
+			OwnerClientID:     roomRow.OwnerAccountID,
 		},
 	}); err != nil {
 		return
@@ -209,6 +246,7 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			ID:       sp.ID,
 			Nickname: sp.Nickname,
 			IsHost:   sp.IsHost,
+			IsOwner:  sp.IsOwner,
 		})
 	}
 	if err := writeFrame(ctx, conn, wsFrame{
@@ -217,6 +255,7 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			Participants:      parts,
 			Settings:          wsRoomSettings{SlowModeSecs: 0, WordFilter: []string{}},
 			HostParticipantID: roomLive.HostID(),
+			OwnerClientID:     roomRow.OwnerAccountID,
 		},
 	}); err != nil {
 		return
@@ -230,6 +269,7 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			Nickname:      p.Nickname,
 			Event:         "join",
 			IsHost:        p.IsHost,
+			IsOwner:       p.IsOwner,
 		},
 	}); err == nil {
 		roomLive.BroadcastExcept(presence, p.ID)
@@ -346,6 +386,7 @@ func (s *Server) handlePost(
 		Body:          body,
 		PostedAt:      time.Now().UTC(),
 		IsHost:        p.IsHost,
+		IsOwner:       p.IsOwner,
 	}
 	if err := s.Store.InsertMessage(ctx, msg); err != nil {
 		s.Logger.Error("insert_message", "err", err, "room_id", roomRow.ID)
@@ -371,6 +412,7 @@ func (s *Server) handlePost(
 			Body:          msg.Body,
 			PostedAtMs:    msg.PostedAt.UnixMilli(),
 			IsHost:        msg.IsHost,
+			IsOwner:       msg.IsOwner,
 		},
 	})
 	if err != nil {

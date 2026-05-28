@@ -22,6 +22,9 @@ type Participant struct {
 	// (and won) for the room. Set once at hello-time; never flips
 	// during the session.
 	IsHost   bool
+	// IsOwner mirrors IsHost for standalone rooms — set when the
+	// participant's client_id matches the room's owner_client_id.
+	IsOwner  bool
 
 	// Send is the per-connection outbound channel. The WebSocket
 	// writer goroutine reads from this; the hub writes to it during
@@ -156,6 +159,7 @@ type ParticipantInfo struct {
 	ID       string
 	Nickname string
 	IsHost   bool
+	IsOwner  bool
 }
 
 func (r *Room) Snapshot() []ParticipantInfo {
@@ -167,6 +171,7 @@ func (r *Room) Snapshot() []ParticipantInfo {
 			ID:       p.ID,
 			Nickname: p.Nickname,
 			IsHost:   p.IsHost,
+			IsOwner:  p.IsOwner,
 		})
 	}
 	return out
