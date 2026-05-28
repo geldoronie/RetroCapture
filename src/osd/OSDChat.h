@@ -39,13 +39,34 @@ public:
     void render();
 
 private:
-    // Profile window is rendered before the chat panel's visibility
-    // gate so external callers (e.g. Streaming → Configure Profile)
-    // can pop it even when the chat overlay is hidden. Internal —
-    // never called from outside the class.
+    // Each of the satellite windows (Profile, Rooms, Create, Join
+    // Custom) is rendered BEFORE the chat panel's m_visible gate so
+    // they can be opened / kept open independently of the chat
+    // panel itself. Result: ticking "Chat" off in the View menu
+    // only hides the chat panel, not the whole chat surface.
     void renderProfileWindow();
+    void renderRoomsWindow();
+    void renderCreateRoomWindow();
+    void renderJoinCustomWindow();
 
 public:
+    // View-menu hooks — let UIManager surface separate menu items
+    // per chat window so the user can show/hide each independently.
+    bool isRoomsWindowVisible() const          { return m_showRoomsWindow; }
+    void setRoomsWindowVisible(bool v)
+    {
+        m_showRoomsWindow = v;
+        if (v)
+        {
+            // Match the QuickActions / header-button flow: lazy
+            // refresh of the cached lists when the window opens.
+            m_standaloneError.clear();
+            m_roomsListRequested = false;
+            m_ownedRoomsLoaded   = false;
+        }
+    }
+    bool isProfileWindowVisible() const        { return m_showProfileWindow; }
+    void setProfileWindowVisible(bool v)       { m_showProfileWindow = v; }
 
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const        { return m_visible; }

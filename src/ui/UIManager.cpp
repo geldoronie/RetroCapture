@@ -588,6 +588,21 @@ void UIManager::render()
                 {
                     m_chatOverlay->setVisible(!visible);
                 }
+                // #84 — Satellite chat windows have their own
+                // visibility flags now (refactor split them out of
+                // the chat panel's m_visible gate). Surface each so
+                // the user can toggle Rooms / Profile independently
+                // from the chat panel itself.
+                bool roomsVis = m_chatOverlay->isRoomsWindowVisible();
+                if (ImGui::MenuItem("Chat Rooms", nullptr, roomsVis))
+                {
+                    m_chatOverlay->setRoomsWindowVisible(!roomsVis);
+                }
+                bool profVis = m_chatOverlay->isProfileWindowVisible();
+                if (ImGui::MenuItem("Chat Profile", nullptr, profVis))
+                {
+                    m_chatOverlay->setProfileWindowVisible(!profVis);
+                }
             }
             if (m_shortcutsHelpWindow)
             {

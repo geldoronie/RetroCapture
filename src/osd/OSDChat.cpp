@@ -152,140 +152,8 @@ void OSDChat::render()
     // it should stay reachable until the user closes it.
     renderProfileWindow();
 
-    if (!m_visible) return;
-
     const auto snap = m_chat->getSnapshot();
-    // No more auto-hide — the user controls visibility via F8 / View
-    // menu. Standalone rooms break the old "auto-hide when no
-    // streamId" rule because the user needs the Rooms... button to
-    // even be reachable. When the panel is idle the empty state
-    // tells them to click Rooms....
 
-    // Initial placement only — top-right corner with a reasonable
-    // size. After that the user is free to drag and resize; imgui.ini
-    // persists position/size by window id across launches. The OSD
-    // distinction here isn't "pinned, no chrome" (#84 amendment) but
-    // "lives outside the m_uiVisible gate so F12 doesn't hide it".
-    const ImGuiViewport *vp = ImGui::GetMainViewport();
-    const float initialW = 340.0f;
-    const float initialH = std::clamp(vp->WorkSize.y * 0.45f, 240.0f, 480.0f);
-    const ImVec2 initialPos(vp->WorkPos.x + vp->WorkSize.x - initialW - 16.0f,
-                            vp->WorkPos.y + 16.0f);
-    ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(initialW, initialH), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(240, 160), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::SetNextWindowBgAlpha(0.88f);
-
-    // Title bar gives the user an obvious drag handle. NoCollapse so
-    // the chevron doesn't appear (the View → Chat menu / F8 already
-    // toggles the panel). NoNav keeps arrow keys out of ImGui nav
-    // while the input box has focus.
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
-                                   ImGuiWindowFlags_NoFocusOnAppearing |
-                                   ImGuiWindowFlags_NoNav;
-
-    // Stable id (the part after ##) so imgui.ini round-trips the
-    // window's geometry. Visible title ("Chat") is what the user
-    // reads on the title bar. p_open is bound to m_visible so the
-    // native title-bar X closes the panel cleanly — the user can
-    // reopen via View → Chat or the F8 hotkey.
-    if (!ImGui::Begin("Chat##osdChat", &m_visible, flags))
-    {
-        ImGui::End();
-        return;
-    }
-
-    // ---- status line (title bar already says "Chat") -----------------
-    // Bullet drawn through ImDrawList instead of a U+25CF glyph,
-    // because Dear ImGui's bundled Proggy Clean font has no data
-    // for that codepoint — the glyph would render as the missing
-    // box. Same approach UISectionHeader::ui_status_bullet uses
-    // for the Configuration-window section indicators.
-    ui_status_bullet(stateColor(snap.state));
-    ImGui::SameLine();
-    ImGui::TextColored(stateColor(snap.state), "%s", stateLabel(snap.state));
-    if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("- %s", snap.lastError.c_str());
-    }
-    // Participant count doubles as the panel toggle: click to expand
-    // a small list below the header showing everyone in the room.
-    if (!snap.participants.empty())
-    {
-        ImGui::SameLine();
-        char countBuf[32];
-        std::snprintf(countBuf, sizeof(countBuf), "%s %zu##chatPart",
-                      m_showParticipants ? "v" : ">", snap.participants.size());
-        if (ImGui::SmallButton(countBuf))
-        {
-            m_showParticipants = !m_showParticipants;
-        }
-    }
-    // Header buttons — Profile + Rooms + (when connected) Disconnect,
-    // right-aligned with a tiny breathing space from the title bar X.
-    // Disconnect lives in the chat window itself rather than inside
-    // Rooms because that's where the user's attention is during a
-    // session.
-    ImGui::SameLine();
-    {
-        const bool connected = (snap.state != ChatClient::State::Idle) &&
-                               (!snap.streamId.empty() || !snap.slug.empty());
-        const float profW   = 64.0f;
-        const float roomsW  = 64.0f;
-        const float discW   = connected ? 80.0f : 0.0f;
-        const float gap     = ImGui::GetStyle().ItemSpacing.x;
-        const float rightPad = 8.0f;
-        const float regionW  = ImGui::GetContentRegionAvail().x;
-        const float gapsTotal = gap * (connected ? 2.0f : 1.0f);
-        const float spacer   = regionW - profW - roomsW - discW - gapsTotal - rightPad;
-        if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Profile"))
-        {
-            // Lazy-load identity on first open so the buffers reflect
-            // disk state. Subsequent opens keep whatever the user
-            // typed (m_identityLoaded gate).
-            if (!m_identityLoaded)
-            {
-                m_identity = identity::load();
-                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
-                              m_identity.name.c_str());
-                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
-                              m_identity.nickname.c_str());
-                m_profileAge       = m_identity.age;
-                m_identityLoaded   = true;
-            }
-            m_showProfileWindow = true;
-            m_profileError.clear();
-            m_profileSavedHint.clear();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Rooms..."))
-        {
-            m_showRoomsWindow    = true;
-            m_standaloneError.clear();
-            m_roomsListRequested = false; // re-fetch on open
-            m_ownedRoomsLoaded   = false; // re-load owned list on open
-        }
-        if (connected)
-        {
-            ImGui::SameLine();
-            // Tinted red so it reads as the session-terminating action
-            // it is, but still a SmallButton to stay in the header.
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.55f, 0.22f, 0.22f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.70f, 0.28f, 0.28f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.45f, 0.18f, 0.18f, 1.0f));
-            if (ImGui::SmallButton("Disconnect"))
-            {
-                m_chat->disconnect();
-            }
-            ImGui::PopStyleColor(3);
-        }
-    }
     // Render the Rooms window OUTSIDE the chat panel's Begin/End so
     // it lives as its own draggable top-level window with a native
     // close button (X). The window is now slim: a header strip with
@@ -856,6 +724,145 @@ void OSDChat::render()
         }
         ImGui::End();
     }
+
+    if (!m_visible) return;
+
+    // No more auto-hide — the user controls visibility via F8 / View
+    // menu. Standalone rooms break the old "auto-hide when no
+    // streamId" rule because the user needs the Rooms... button to
+    // even be reachable. When the panel is idle the empty state
+    // tells them to click Rooms....
+
+    // Initial placement only — top-right corner with a reasonable
+    // size. After that the user is free to drag and resize; imgui.ini
+    // persists position/size by window id across launches. The OSD
+    // distinction here isn't "pinned, no chrome" (#84 amendment) but
+    // "lives outside the m_uiVisible gate so F12 doesn't hide it".
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    const float initialW = 340.0f;
+    const float initialH = std::clamp(vp->WorkSize.y * 0.45f, 240.0f, 480.0f);
+    const ImVec2 initialPos(vp->WorkPos.x + vp->WorkSize.x - initialW - 16.0f,
+                            vp->WorkPos.y + 16.0f);
+    ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(initialW, initialH), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(240, 160), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowBgAlpha(0.88f);
+
+    // Title bar gives the user an obvious drag handle. NoCollapse so
+    // the chevron doesn't appear (the View → Chat menu / F8 already
+    // toggles the panel). NoNav keeps arrow keys out of ImGui nav
+    // while the input box has focus.
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
+                                   ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav;
+
+    // Stable id (the part after ##) so imgui.ini round-trips the
+    // window's geometry. Visible title ("Chat") is what the user
+    // reads on the title bar. p_open is bound to m_visible so the
+    // native title-bar X closes the panel cleanly — the user can
+    // reopen via View → Chat or the F8 hotkey.
+    if (!ImGui::Begin("Chat##osdChat", &m_visible, flags))
+    {
+        ImGui::End();
+        return;
+    }
+
+    // ---- status line (title bar already says "Chat") -----------------
+    // Bullet drawn through ImDrawList instead of a U+25CF glyph,
+    // because Dear ImGui's bundled Proggy Clean font has no data
+    // for that codepoint — the glyph would render as the missing
+    // box. Same approach UISectionHeader::ui_status_bullet uses
+    // for the Configuration-window section indicators.
+    ui_status_bullet(stateColor(snap.state));
+    ImGui::SameLine();
+    ImGui::TextColored(stateColor(snap.state), "%s", stateLabel(snap.state));
+    if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("- %s", snap.lastError.c_str());
+    }
+    // Participant count doubles as the panel toggle: click to expand
+    // a small list below the header showing everyone in the room.
+    if (!snap.participants.empty())
+    {
+        ImGui::SameLine();
+        char countBuf[32];
+        std::snprintf(countBuf, sizeof(countBuf), "%s %zu##chatPart",
+                      m_showParticipants ? "v" : ">", snap.participants.size());
+        if (ImGui::SmallButton(countBuf))
+        {
+            m_showParticipants = !m_showParticipants;
+        }
+    }
+    // Header buttons — Profile + Rooms + (when connected) Disconnect,
+    // right-aligned with a tiny breathing space from the title bar X.
+    // Disconnect lives in the chat window itself rather than inside
+    // Rooms because that's where the user's attention is during a
+    // session.
+    ImGui::SameLine();
+    {
+        const bool connected = (snap.state != ChatClient::State::Idle) &&
+                               (!snap.streamId.empty() || !snap.slug.empty());
+        const float profW   = 64.0f;
+        const float roomsW  = 64.0f;
+        const float discW   = connected ? 80.0f : 0.0f;
+        const float gap     = ImGui::GetStyle().ItemSpacing.x;
+        const float rightPad = 8.0f;
+        const float regionW  = ImGui::GetContentRegionAvail().x;
+        const float gapsTotal = gap * (connected ? 2.0f : 1.0f);
+        const float spacer   = regionW - profW - roomsW - discW - gapsTotal - rightPad;
+        if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Profile"))
+        {
+            // Lazy-load identity on first open so the buffers reflect
+            // disk state. Subsequent opens keep whatever the user
+            // typed (m_identityLoaded gate).
+            if (!m_identityLoaded)
+            {
+                m_identity = identity::load();
+                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
+                              m_identity.name.c_str());
+                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
+                              m_identity.nickname.c_str());
+                m_profileAge       = m_identity.age;
+                m_identityLoaded   = true;
+            }
+            m_showProfileWindow = true;
+            m_profileError.clear();
+            m_profileSavedHint.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Rooms..."))
+        {
+            m_showRoomsWindow    = true;
+            m_standaloneError.clear();
+            m_roomsListRequested = false; // re-fetch on open
+            m_ownedRoomsLoaded   = false; // re-load owned list on open
+        }
+        if (connected)
+        {
+            ImGui::SameLine();
+            // Tinted red so it reads as the session-terminating action
+            // it is, but still a SmallButton to stay in the header.
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.55f, 0.22f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.70f, 0.28f, 0.28f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.45f, 0.18f, 0.18f, 1.0f));
+            if (ImGui::SmallButton("Disconnect"))
+            {
+                m_chat->disconnect();
+            }
+            ImGui::PopStyleColor(3);
+        }
+    }
+    // Standalone windows (Chat rooms / Create / Join custom) render
+    // BEFORE this chat panel scope so they can stay open after the
+    // user closes the chat panel itself. See the start of render().
+
+
 
     // Profile window now lives in renderProfileWindow() and is
     // rendered ABOVE this gate so it can be opened even when the
