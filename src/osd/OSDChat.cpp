@@ -165,18 +165,32 @@ void OSDChat::render()
         ImGui::SameLine();
         ImGui::TextDisabled("- %s", snap.lastError.c_str());
     }
+    // Room identity line — title when the server gave us one
+    // (standalone rooms always have it; stream-linked rooms may or
+    // may not), otherwise fall back to slug for standalone, or
+    // nothing for stream-linked (the host stream is implicit).
+    if (!snap.roomTitle.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("- %s", snap.roomTitle.c_str());
+    }
+    else if (!snap.slug.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("- #%s", snap.slug.c_str());
+    }
+    // Participant count doubles as the panel toggle: click to expand
+    // a small list below the header showing everyone in the room.
     if (!snap.participants.empty())
     {
         ImGui::SameLine();
-        ImGui::TextDisabled("* %zu", snap.participants.size());
-    }
-    // Show which room we're in (slug when standalone, otherwise the
-    // host stream is implicit). The header gets crowded fast so this
-    // sits on its own line when there's something to surface.
-    if (!snap.slug.empty())
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("* #%s", snap.slug.c_str());
+        char countBuf[32];
+        std::snprintf(countBuf, sizeof(countBuf), "%s %zu##chatPart",
+                      m_showParticipants ? "v" : ">", snap.participants.size());
+        if (ImGui::SmallButton(countBuf))
+        {
+            m_showParticipants = !m_showParticipants;
+        }
     }
     // Room-picker button — opens a separate window with Join-by-slug
     // + Create. Right-aligned so it doesn't shift the status line on
@@ -358,6 +372,64 @@ void OSDChat::render()
                            m_nickError.c_str());
     }
     ImGui::Separator();
+
+    // ---- participants panel (toggled via header count) ----------------
+    // Sorted list with the host pinned first; rest alphabetical so
+    // the panel doesn't jitter as people come and go in random order.
+    float partsHeight = 0.0f;
+    if (m_showParticipants && !snap.participants.empty())
+    {
+        std::vector<ChatClient::Participant> sorted = snap.participants;
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const ChatClient::Participant &a,
+                     const ChatClient::Participant &b)
+                  {
+                      if (a.host != b.host) return a.host && !b.host;
+                      return a.nickname < b.nickname;
+                  });
+        // Cap visible rows at 6 — anything larger scrolls internally
+        // so the message log keeps useful real estate.
+        const int visibleRows = std::min<int>(6, static_cast<int>(sorted.size()));
+        partsHeight = ImGui::GetTextLineHeightWithSpacing() *
+                          static_cast<float>(visibleRows) +
+                      ImGui::GetStyle().FramePadding.y * 2.0f;
+
+        if (ImGui::BeginChild("##chatParts", ImVec2(0, partsHeight), true))
+        {
+            for (const auto &p : sorted)
+            {
+                if (p.host)
+                {
+                    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                                       "[HOST]");
+                    ImGui::SameLine();
+                }
+                const bool isMe = !snap.myParticipantId.empty() &&
+                                  p.id == snap.myParticipantId;
+                const ImVec4 nameColor = p.host
+                    ? ImVec4(0.95f, 0.78f, 0.30f, 1.0f)
+                    : (isMe ? ImVec4(0.45f, 0.85f, 0.50f, 1.0f)
+                            : ImVec4(0.48f, 0.78f, 0.94f, 1.0f));
+                ImGui::TextColored(nameColor, "%s", p.nickname.c_str());
+                if (isMe)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(you)");
+                }
+                // Double-click a nick here to insert a mention into
+                // the input — same UX shortcut the message list has.
+                if (!isMe && !p.nickname.empty() &&
+                    ImGui::IsItemHovered() &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                {
+                    m_inputCb.pendingInsert =
+                        std::string("@") + p.nickname + " ";
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::Separator();
+    }
 
     // ---- message list -------------------------------------------------
     const float footerHeight = ImGui::GetFrameHeightWithSpacing() + 8.0f;

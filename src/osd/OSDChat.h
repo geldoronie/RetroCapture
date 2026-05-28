@@ -69,6 +69,10 @@ private:
     // mirrors ImGui::Begin's p_open so the title-bar X closes it
     // cleanly.
     bool        m_showRoomsWindow   = false;
+    // Participants panel toggle (#84). When true, a small list is
+    // rendered between the header and the message log showing
+    // everyone in the room with their host marker.
+    bool        m_showParticipants  = false;
     char        m_joinSlugBuf[64]   = {0};
     char        m_createTitleBuf[128] = {0};
     char        m_createSlugBuf[64] = {0};

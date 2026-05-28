@@ -96,8 +96,10 @@
                             <i class="bi bi-chat-dots me-1"></i>
                             <span data-i18n="web.home.chat">Live chat</span>
                             <span id="chatStateBadge" class="home-chat-state">offline</span>
-                            <span id="chatParticipantCount" class="home-chat-count"></span>
+                            <span id="chatRoomTitle" class="home-chat-title"></span>
+                            <button id="chatParticipantCount" type="button" class="home-chat-count" title="Toggle participants list"></button>
                         </header>
+                        <div id="chatParticipantsPanel" class="home-chat-parts d-none"></div>
                         <div id="chatLog" class="home-chat-log"></div>
                         <div id="chatUnavailable" class="home-chat-empty d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
                         <div class="home-chat-nick-row">

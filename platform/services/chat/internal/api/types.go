@@ -64,6 +64,7 @@ type historyPayload struct {
 type roomByStreamPayload struct {
 	RoomID  string `json:"room_id"`
 	Created bool   `json:"created"`
+	Title   string `json:"title"`
 }
 
 type roomBySlugPayload struct {

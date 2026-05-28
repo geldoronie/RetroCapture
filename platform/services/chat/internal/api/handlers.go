@@ -114,6 +114,7 @@ func (s *Server) handleRoomByStream(w http.ResponseWriter, r *http.Request) {
 	s.writeData(w, http.StatusOK, roomByStreamPayload{
 		RoomID:  room.ID,
 		Created: created,
+		Title:   room.Title,
 	})
 }
 

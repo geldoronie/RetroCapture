@@ -119,6 +119,7 @@ void ChatClient::connect(const std::string &streamId,
         m_myParticipantId.clear();
         m_hostParticipantId.clear();
         m_roomId.clear();
+        m_roomTitle.clear();
         m_helloSent       = false;
         m_helloAcked      = false;
         m_unreadCount     = 0;
@@ -162,6 +163,7 @@ void ChatClient::connectBySlug(const std::string &slug,
         m_myParticipantId.clear();
         m_hostParticipantId.clear();
         m_roomId.clear();
+        m_roomTitle.clear();
         m_helloSent       = false;
         m_helloAcked      = false;
         m_unreadCount     = 0;
@@ -238,10 +240,13 @@ void ChatClient::resolveAndConnect()
     }
 
     std::string roomId;
+    std::string roomTitle;
     try
     {
         auto j = nlohmann::json::parse(resp.body);
-        roomId = j.at("data").value("room_id", std::string{});
+        const auto data = j.value("data", nlohmann::json::object());
+        roomId    = data.value("room_id", std::string{});
+        roomTitle = data.value("title",   std::string{}); // both by-stream and by-slug return it
     }
     catch (const std::exception &e)
     {
@@ -258,7 +263,8 @@ void ChatClient::resolveAndConnect()
 
     {
         std::lock_guard<std::mutex> lk(m_mu);
-        m_roomId = roomId;
+        m_roomId    = roomId;
+        m_roomTitle = roomTitle;
     }
 
     // Seed history before opening the WS so the panel can show
@@ -682,6 +688,7 @@ ChatClient::Snapshot ChatClient::getSnapshot() const
     s.streamId          = m_streamId;
     s.slug              = m_slug;
     s.roomId            = m_roomId;
+    s.roomTitle         = m_roomTitle;
     s.nickname          = m_nickname;
     s.myParticipantId   = m_myParticipantId;
     s.hostParticipantId = m_hostParticipantId;

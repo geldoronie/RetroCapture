@@ -32,6 +32,8 @@
     const $log         = document.getElementById('chatLog');
     const $stateBadge  = document.getElementById('chatStateBadge');
     const $count       = document.getElementById('chatParticipantCount');
+    const $title       = document.getElementById('chatRoomTitle');
+    const $parts       = document.getElementById('chatParticipantsPanel');
     const $unavailable = document.getElementById('chatUnavailable');
     const $nick        = document.getElementById('chatNickInput');
     const $nickApply   = document.getElementById('chatNickApply');
@@ -52,6 +54,7 @@
                                 // pins the panel to a standalone room and
                                 // suppresses the /meta stream-linked auto-bind
         roomId:            '',
+        roomTitle:         '',
         nickname:          localStorage.getItem(NICK_KEY) || '',
         ws:                null,
         myParticipantId:   '',
@@ -216,9 +219,49 @@
     }
 
     function updateCount() {
-        $count.textContent = state.participants.length
-            ? `• ${state.participants.length}`
-            : '';
+        const n = state.participants.length;
+        $count.textContent = n ? String(n) : '';
+        $count.style.display = n ? '' : 'none';
+        if ($parts && !$parts.classList.contains('d-none')) {
+            renderParticipantsPanel();
+        }
+    }
+
+    function renderParticipantsPanel() {
+        if (!$parts) return;
+        // Host first, rest alphabetical so the list doesn't jitter
+        // as people come and go in random join order.
+        const sorted = [...state.participants].sort((a, b) => {
+            if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+            return (a.nickname || '').localeCompare(b.nickname || '');
+        });
+        $parts.innerHTML = '';
+        for (const p of sorted) {
+            const row = document.createElement('div');
+            row.className = 'home-chat-part';
+            if (p.isHost) row.classList.add('host');
+            if (p.id === state.myParticipantId) row.classList.add('self');
+            row.dataset.nick = p.nickname || '';
+            const badge = p.isHost ? '<span class="home-chat-part-badge">Host</span>' : '';
+            const meTag = (p.id === state.myParticipantId) ? ' <span class="text-muted small">(you)</span>' : '';
+            row.innerHTML = badge + escapeHtml(p.nickname || '(anon)') + meTag;
+            // Double-click drops "@nick " into the input — same as
+            // double-clicking a name in the message list.
+            row.addEventListener('dblclick', () => {
+                if (p.id === state.myParticipantId) return;
+                if (!p.nickname) return;
+                $msg.value = ($msg.value || '') + '@' + p.nickname + ' ';
+                $msg.focus();
+            });
+            $parts.appendChild(row);
+        }
+    }
+
+    function setTitle() {
+        if (!$title) return;
+        $title.textContent = state.roomTitle
+            ? `— ${state.roomTitle}`
+            : (state.slug ? `— #${state.slug}` : '');
     }
 
     // --- Transport ------------------------------------------------------
@@ -249,6 +292,10 @@
         if (!resp.ok) throw new Error('resolve HTTP ' + resp.status);
         const j = await resp.json();
         if (!j || !j.data || !j.data.room_id) throw new Error('resolve missing room_id');
+        // Both by-stream and by-slug return the room title for v0.5+;
+        // empty when the room was never given one (legacy stream-linked).
+        state.roomTitle = (j.data.title || '').trim();
+        setTitle();
         return j.data.room_id;
     }
 
@@ -259,6 +306,17 @@
     // detected new URL, user changed nickname) — those paths follow
     // up with a fresh openSession that wires its own handlers on a
     // new socket.
+    // Toggle button for the participants panel.
+    if ($count) {
+        $count.addEventListener('click', () => {
+            if (!$parts) return;
+            const willOpen = $parts.classList.contains('d-none');
+            $parts.classList.toggle('d-none', !willOpen);
+            $count.classList.toggle('open', willOpen);
+            if (willOpen) renderParticipantsPanel();
+        });
+    }
+
     function teardown() {
         if (state.reconnectTimer) {
             clearTimeout(state.reconnectTimer);
@@ -278,6 +336,8 @@
         state.hostParticipantId = '';
         state.helloAcked        = false;
         state.participants      = [];
+        state.roomTitle         = '';
+        setTitle();
         updateCount();
     }
 

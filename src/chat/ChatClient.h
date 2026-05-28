@@ -91,6 +91,7 @@ public:
         std::string               streamId;     // empty when standalone room
         std::string               slug;         // non-empty when standalone room
         std::string               roomId;
+        std::string               roomTitle;    // server-supplied; empty for unnamed stream-linked rooms
         std::string               nickname;
         std::string               myParticipantId;
         // #84 — Current room's host participant id (empty if no host
@@ -202,6 +203,7 @@ private:
     std::string                 m_nickname;
     std::string                 m_slug;          // non-empty == standalone
     std::string                 m_roomId;
+    std::string                 m_roomTitle;     // populated from resolve response
     std::string                 m_myParticipantId;
     std::string                 m_hostParticipantId;
     bool                        m_asHost          = false;
