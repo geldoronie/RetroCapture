@@ -66,7 +66,7 @@ public:
         }
     }
     bool isProfileWindowVisible() const        { return m_showProfileWindow; }
-    void setProfileWindowVisible(bool v)       { m_showProfileWindow = v; }
+    void setProfileWindowVisible(bool v);
 
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const        { return m_visible; }

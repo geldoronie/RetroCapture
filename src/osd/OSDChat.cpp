@@ -120,19 +120,9 @@ void OSDChat::render()
     // the dialog opens even when the chat panel itself is hidden.
     if (m_uiManager && m_uiManager->consumeOpenChatProfileRequest())
     {
-        if (!m_identityLoaded)
-        {
-            m_identity = identity::load();
-            std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
-                          m_identity.name.c_str());
-            std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
-                          m_identity.nickname.c_str());
-            m_profileAge     = m_identity.age;
-            m_identityLoaded = true;
-        }
-        m_showProfileWindow = true;
-        m_profileError.clear();
-        m_profileSavedHint.clear();
+        // setProfileWindowVisible(true) reloads identity.json from
+        // disk every time — guarantees the dialog never opens stale.
+        setProfileWindowVisible(true);
     }
     // #84 — External "open Chat Rooms" requests from QuickActions.
     // Force the chat panel itself visible too — the rooms window
@@ -815,22 +805,10 @@ void OSDChat::render()
         ImGui::SameLine();
         if (ImGui::SmallButton("Profile"))
         {
-            // Lazy-load identity on first open so the buffers reflect
-            // disk state. Subsequent opens keep whatever the user
-            // typed (m_identityLoaded gate).
-            if (!m_identityLoaded)
-            {
-                m_identity = identity::load();
-                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
-                              m_identity.name.c_str());
-                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
-                              m_identity.nickname.c_str());
-                m_profileAge       = m_identity.age;
-                m_identityLoaded   = true;
-            }
-            m_showProfileWindow = true;
-            m_profileError.clear();
-            m_profileSavedHint.clear();
+            // setProfileWindowVisible(true) reloads identity.json
+            // from disk every time — the dialog always opens with
+            // the current identity, never a stale buffer.
+            setProfileWindowVisible(true);
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Rooms..."))
@@ -942,24 +920,12 @@ void OSDChat::render()
         ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
                            "Profile required");
         ImGui::TextWrapped(
-            "You need a chat profile before you can send or receive "
-            "messages. Click below to set your nickname.");
+            "You need a RetroCapture profile before you can send "
+            "or receive messages. Click below to set your nickname.");
         ImGui::Spacing();
         if (ImGui::Button("Open Profile", ImVec2(-1.0f, 0.0f)))
         {
-            if (!m_identityLoaded)
-            {
-                m_identity = identity::load();
-                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
-                              m_identity.name.c_str());
-                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
-                              m_identity.nickname.c_str());
-                m_profileAge     = m_identity.age;
-                m_identityLoaded = true;
-            }
-            m_showProfileWindow = true;
-            m_profileError.clear();
-            m_profileSavedHint.clear();
+            setProfileWindowVisible(true);
         }
         ImGui::End();
         return;
@@ -1299,26 +1265,92 @@ void OSDChat::render()
     ImGui::End();
 }
 
+// setProfileWindowVisible — out-of-line because opening the window
+// also reloads identity.json into the edit buffers. Without this
+// the dialog could come up empty (or with stale buffers) the very
+// first time the View-menu toggle is the trigger — the legacy
+// header/QuickActions entry points all did their own lazy load,
+// but the menu toggle didn't, which is exactly the "abre vazia"
+// behaviour the user reported.
+void OSDChat::setProfileWindowVisible(bool v)
+{
+    m_showProfileWindow = v;
+    if (!v) return;
+    // Always pull fresh from disk — identity.json could have been
+    // touched out-of-band (a manual edit, a different RetroCapture
+    // instance, a restore-from-backup). Cheap; only happens on
+    // dialog open.
+    m_identity = identity::load();
+    std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
+                  m_identity.name.c_str());
+    std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
+                  m_identity.nickname.c_str());
+    m_profileAge       = m_identity.age;
+    m_identityLoaded   = true;
+    m_profileError.clear();
+    m_profileSavedHint.clear();
+}
+
 // Standalone Profile dialog — rendered unconditionally from render()
-// so external triggers (Streaming → Configure Profile) can pop it
-// even when the chat panel is hidden. The body is the same edit
-// form the header's Profile button used to inline.
+// so external triggers (Streaming → Configure Profile, View menu
+// toggle, QuickActions) can pop it even when the chat panel is
+// hidden. This is the RetroCapture-wide identity, not a "chat
+// profile" — the rc_<id> minted here ties the user's owned rooms,
+// stream chat, and chat history to a single persistent handle.
 void OSDChat::renderProfileWindow()
 {
     if (!m_showProfileWindow) return;
-    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Chat profile##chatProfileWindow",
+    ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_FirstUseEver);
+    // Keep the ##chatProfileWindow suffix as the imgui-ini key so
+    // window position/size persist across the rename. Visible title
+    // is the source of truth for what this dialog *is*.
+    if (ImGui::Begin("RetroCapture Profile##chatProfileWindow",
                      &m_showProfileWindow,
                      ImGuiWindowFlags_NoCollapse))
     {
         m_inputFocused = true;
 
+        const bool hasIdentity = !m_identity.id.empty();
+
+        // ---- Identity block (top, prominent) -------------------------
+        if (hasIdentity)
+        {
+            ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                               "Identity loaded");
+            ImGui::TextDisabled("rc_id (immutable):");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.90f, 1.0f),
+                               "%s", m_identity.id.c_str());
+            if (!m_identity.createdAt.empty())
+            {
+                ImGui::TextDisabled("Created: %s",
+                                    m_identity.createdAt.c_str());
+            }
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                               "No identity yet");
+            ImGui::TextWrapped(
+                "Fill in your name, nickname, and age below, then "
+                "click \"Create profile\" to mint your permanent "
+                "rc_<id>. It identifies you across chat, owned "
+                "rooms, and the directory listing — and cannot be "
+                "changed after creation.");
+        }
+        ImGui::TextDisabled("File: %s", identity::filePath().c_str());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ---- Editable fields -----------------------------------------
         ImGui::TextDisabled("Display name");
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##profName", "Your real name",
                                  m_profileNameBuf, sizeof(m_profileNameBuf));
 
-        ImGui::TextDisabled("Nickname (visible in chat)");
+        ImGui::TextDisabled("Nickname (visible in chat + directory)");
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##profNick", "geldo",
                                  m_profileNickBuf, sizeof(m_profileNickBuf));
@@ -1333,33 +1365,57 @@ void OSDChat::renderProfileWindow()
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::TextDisabled("Identity (read-only)");
-        if (m_identity.id.empty())
+        // ---- Disclaimers — contextual to the identity state ----------
+        if (hasIdentity)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
-                               "Not generated yet - click Save to mint one");
+            ImGui::TextDisabled("What changes when you save:");
+            ImGui::Bullet();
+            ImGui::TextWrapped(
+                "Display name, nickname, and age are updated. The "
+                "rc_id stays the same — your ownership of rooms and "
+                "your chat history remain tied to you.");
+            ImGui::Bullet();
+            ImGui::TextWrapped(
+                "Nickname is the label other people see in chat AND "
+                "your directory listing. It can be edited freely; "
+                "no rename frame is sent server-side beyond your "
+                "next chat reconnect.");
         }
         else
         {
-            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f),
-                               "%s", m_identity.id.c_str());
-            if (!m_identity.createdAt.empty())
-            {
-                ImGui::TextDisabled("Created: %s",
-                                    m_identity.createdAt.c_str());
-            }
+            ImGui::TextDisabled("What happens on Create:");
+            ImGui::Bullet();
+            ImGui::TextWrapped(
+                "A permanent rc_<id> is minted from your inputs + "
+                "a timestamp + random bytes. It is unique to you, "
+                "stored locally in identity.json, and used to claim "
+                "ownership of every chat room you create.");
+            ImGui::Bullet();
+            ImGui::TextWrapped(
+                "Your nickname will show up across the directory "
+                "listing AND in chat. Edit it later from this same "
+                "window without affecting the rc_id.");
         }
-        ImGui::TextDisabled("File: %s", identity::filePath().c_str());
-        ImGui::TextDisabled(
-            "Back this file up - losing it loses your chat identity.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Backup tip:");
+        ImGui::TextWrapped(
+            "Copy identity.json and owned_rooms.json (same folder) "
+            "to another machine to keep your identity AND your "
+            "room ownership portable. Losing identity.json loses "
+            "the id; losing owned_rooms.json loses the per-room "
+            "secrets that protect your created rooms from "
+            "impersonators.");
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
+        // ---- Save button — label adapts to state ---------------------
         const bool nickEmpty = (m_profileNickBuf[0] == '\0');
         ImGui::BeginDisabled(nickEmpty);
-        if (ImGui::Button("Save", ImVec2(-1.0f, 0.0f)))
+        const char *saveLabel = hasIdentity ? "Save changes"
+                                            : "Create profile";
+        if (ImGui::Button(saveLabel, ImVec2(-1.0f, 0.0f)))
         {
             m_identity.name     = m_profileNameBuf;
             m_identity.nickname = m_profileNickBuf;

@@ -599,7 +599,13 @@ void UIManager::render()
                     m_chatOverlay->setRoomsWindowVisible(!roomsVis);
                 }
                 bool profVis = m_chatOverlay->isProfileWindowVisible();
-                if (ImGui::MenuItem("Chat Profile", nullptr, profVis))
+                // "Profile" (not "Chat Profile") — this is the
+                // RetroCapture-wide identity (rc_<id>, nickname,
+                // name, age). It's exposed under the chat overlay
+                // for now because that's where the window code
+                // lives, but conceptually it spans chat + directory
+                // listing + room ownership.
+                if (ImGui::MenuItem("Profile", nullptr, profVis))
                 {
                     m_chatOverlay->setProfileWindowVisible(!profVis);
                 }
