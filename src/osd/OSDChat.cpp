@@ -645,13 +645,44 @@ void OSDChat::render()
                 std::string newRoomId;
                 std::string newSlug;
                 std::string err;
-                const std::string ownerId     = m_identity.id;
-                const std::string ownerSecret = ownedrooms::generateSecret();
-                const bool ok = m_chat->createStandaloneRoom(
+                const std::string ownerId = m_identity.id;
+
+                // #84 — Revive-aware create. If the user typed a slug
+                // they already own (matches owned_rooms.json), reuse
+                // the saved secret instead of minting a new one. That
+                // way:
+                //   - if the server still has the room: the POST hits
+                //     a slug-collision; we fall back to connecting
+                //     directly with the saved secret (still owner);
+                //   - if the server reaped it: the POST succeeds with
+                //     same slug + same secret, ownership preserved.
+                OwnedRoom existingOwned;
+                const bool reviving = m_createSlugBuf[0] != '\0' &&
+                                      ownedrooms::findBySlug(m_createSlugBuf,
+                                                             existingOwned);
+                const std::string ownerSecret = reviving
+                    ? existingOwned.ownerSecret
+                    : ownedrooms::generateSecret();
+
+                bool ok = m_chat->createStandaloneRoom(
                     m_createTitleBuf, m_createSlugBuf,
                     m_createPasswordBuf, m_createListed, ownerId,
                     ownerSecret,
                     newRoomId, newSlug, err);
+
+                // Revive fallback: if the POST failed AND the slug is
+                // one we own, the server probably still has the room
+                // (slug-collision against our previous registration).
+                // Connect directly — our owner_secret in the hello
+                // grants is_owner without needing the POST to succeed.
+                if (!ok && reviving)
+                {
+                    newSlug   = existingOwned.slug;
+                    newRoomId = existingOwned.roomId;
+                    ok        = true;
+                    err.clear();
+                }
+
                 m_createInFlight = false;
                 if (!ok)
                 {
@@ -662,7 +693,9 @@ void OSDChat::render()
                     OwnedRoom rec;
                     rec.roomId      = newRoomId;
                     rec.slug        = newSlug;
-                    rec.title       = m_createTitleBuf;
+                    rec.title       = m_createTitleBuf[0] != '\0'
+                                          ? std::string(m_createTitleBuf)
+                                          : existingOwned.title;
                     rec.ownerSecret = ownerSecret;
                     ownedrooms::append(rec);
 
@@ -735,16 +768,45 @@ void OSDChat::render()
                         ? m_uiManager->getChatNickname()
                         : snap.nickname;
                     OwnedRoom owned;
-                    const std::string sec =
-                        ownedrooms::findBySlug(slug, owned)
-                            ? owned.ownerSecret
-                            : std::string{};
+                    std::string sec;
+                    if (ownedrooms::findBySlug(slug, owned))
+                    {
+                        sec = owned.ownerSecret;
+                        // #84 — Revive: if the user is joining a slug
+                        // they own and the server doesn't have it
+                        // anymore (sweep, manual delete elsewhere),
+                        // recreate transparently with the saved
+                        // secret so ownership survives.
+                        std::string probeErr;
+                        const bool exists = m_chat->roomExistsBySlug(
+                            slug, probeErr);
+                        if (!exists && probeErr.empty())
+                        {
+                            std::string newRoomId, newSlug, err;
+                            if (m_chat->createStandaloneRoom(
+                                    owned.title, slug,
+                                    /*password=*/m_joinPasswordBuf,
+                                    /*listed=*/true,
+                                    /*ownerClientId=*/m_identity.id,
+                                    sec, newRoomId, newSlug, err))
+                            {
+                                OwnedRoom rec = owned;
+                                rec.roomId = newRoomId;
+                                ownedrooms::append(rec);
+                            }
+                            else
+                            {
+                                m_standaloneError =
+                                    "Revive failed: " + err;
+                            }
+                        }
+                    }
                     m_chat->connectBySlug(slug, nick,
                                           m_joinPasswordBuf, sec);
                     // Window stays open so the user sees password
                     // errors inline; m_joinPasswordBuf is kept too in
                     // case they want to fix a typo and retry.
-                    m_standaloneError.clear();
+                    if (m_standaloneError.empty()) m_standaloneError.clear();
                 }
             }
             if (!m_standaloneError.empty())
