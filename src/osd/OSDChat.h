@@ -64,8 +64,11 @@ private:
     char        m_nickBuf[64]  = {0};
     bool        m_nickInitialized = false;
 
-    // Standalone-room popup buffers (#84). Live across frames so what
-    // the user typed doesn't reset on every render.
+    // Standalone-room window state (#84). Buffers live across frames
+    // so what the user typed doesn't reset on every render; the bool
+    // mirrors ImGui::Begin's p_open so the title-bar X closes it
+    // cleanly.
+    bool        m_showRoomsWindow   = false;
     char        m_joinSlugBuf[64]   = {0};
     char        m_createTitleBuf[128] = {0};
     char        m_createSlugBuf[64] = {0};
@@ -78,4 +81,20 @@ private:
     // Apply button. Cleared next frame when the user resumes typing
     // or successfully reconnects.
     std::string m_nickError;
+
+    // InputTextMultiline callback shared state. Must live across
+    // frames AND be in scope of the message loop (which writes
+    // pendingInsert on a nick double-click). Hence a member, not
+    // a function-local static.
+    //   - pendingPost: body captured by CallbackEdit when it found
+    //     a '\n' in the buffer; posted right after InputText
+    //     returns, then cleared.
+    //   - pendingInsert: text the double-click handler wants
+    //     injected at the cursor (`@<nick> `). Consumed by the
+    //     CallbackAlways path, then cleared.
+    struct InputEditCb {
+        std::string pendingPost;
+        std::string pendingInsert;
+    };
+    InputEditCb m_inputCb;
 };

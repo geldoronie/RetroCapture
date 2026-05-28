@@ -115,9 +115,9 @@ void OSDChat::render()
     const auto snap = m_chat->getSnapshot();
     // No more auto-hide — the user controls visibility via F8 / View
     // menu. Standalone rooms break the old "auto-hide when no
-    // streamId" rule because the user needs the Rooms… button to
+    // streamId" rule because the user needs the Rooms... button to
     // even be reachable. When the panel is idle the empty state
-    // tells them to click Rooms….
+    // tells them to click Rooms....
 
     // Initial placement only — top-right corner with a reasonable
     // size. After that the user is free to drag and resize; imgui.ini
@@ -163,12 +163,12 @@ void OSDChat::render()
     if (!snap.lastError.empty() && snap.state != ChatClient::State::Connected)
     {
         ImGui::SameLine();
-        ImGui::TextDisabled("— %s", snap.lastError.c_str());
+        ImGui::TextDisabled("- %s", snap.lastError.c_str());
     }
     if (!snap.participants.empty())
     {
         ImGui::SameLine();
-        ImGui::TextDisabled("• %zu", snap.participants.size());
+        ImGui::TextDisabled("* %zu", snap.participants.size());
     }
     // Show which room we're in (slug when standalone, otherwise the
     // host stream is implicit). The header gets crowded fast so this
@@ -176,99 +176,119 @@ void OSDChat::render()
     if (!snap.slug.empty())
     {
         ImGui::SameLine();
-        ImGui::TextDisabled("• #%s", snap.slug.c_str());
+        ImGui::TextDisabled("* #%s", snap.slug.c_str());
     }
-    // Room-picker button — opens a popup with Join-by-slug + Create.
-    // Right-aligned so it doesn't shift the status line on narrow
-    // panels.
+    // Room-picker button — opens a separate window with Join-by-slug
+    // + Create. Right-aligned so it doesn't shift the status line on
+    // narrow panels, with a small breathing space from the right edge.
     ImGui::SameLine();
     {
-        const float btnW = 60.0f;
-        float regionW = ImGui::GetContentRegionAvail().x;
-        if (regionW > btnW) ImGui::Dummy(ImVec2(regionW - btnW, 1));
+        const float btnW = 64.0f;
+        const float rightPad = 8.0f;
+        const float regionW = ImGui::GetContentRegionAvail().x;
+        const float spacer  = regionW - btnW - rightPad;
+        if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
         ImGui::SameLine();
-        if (ImGui::SmallButton("Rooms…"))
+        if (ImGui::SmallButton("Rooms..."))
         {
-            ImGui::OpenPopup("##chatRoomsPopup");
+            m_showRoomsWindow = true;
             m_standaloneError.clear();
         }
     }
-    if (ImGui::BeginPopup("##chatRoomsPopup"))
+    // Render the Rooms window OUTSIDE the chat panel's Begin/End so
+    // it lives as its own draggable top-level window with a native
+    // close button (X). The bool is wired into ImGui::Begin's p_open
+    // so clicking X closes it cleanly.
+    if (m_showRoomsWindow)
     {
-        m_inputFocused = true; // keep F8 toggle from firing while in popup
+        ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Chat rooms##chatRoomsWindow", &m_showRoomsWindow,
+                         ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoSavedSettings))
+        {
+            // Suppress the F8 chat-toggle hotkey while the user is
+            // typing into this window's inputs.
+            m_inputFocused = true;
 
-        ImGui::Text("Join existing room");
-        ImGui::SetNextItemWidth(220.0f);
-        const bool joinEnter = ImGui::InputText(
-            "##joinSlug", m_joinSlugBuf, sizeof(m_joinSlugBuf),
-            ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        const bool joinClick = ImGui::Button("Join");
-        if (joinEnter || joinClick)
-        {
-            std::string slug = m_joinSlugBuf;
-            // Trim + lowercase to match server-side validation.
-            while (!slug.empty() && std::isspace((unsigned char)slug.back())) slug.pop_back();
-            for (auto &c : slug) c = static_cast<char>(std::tolower((unsigned char)c));
-            if (slug.empty())
+            ImGui::TextDisabled("Join existing room");
+            ImGui::SetNextItemWidth(-60.0f);
+            const bool joinEnter = ImGui::InputText(
+                "##joinSlug", m_joinSlugBuf, sizeof(m_joinSlugBuf),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine();
+            const bool joinClick = ImGui::Button("Join", ImVec2(-1.0f, 0.0f));
+            if (joinEnter || joinClick)
             {
-                m_standaloneError = "Slug can't be empty";
+                std::string slug = m_joinSlugBuf;
+                // Trim + lowercase to match server-side validation.
+                while (!slug.empty() && std::isspace((unsigned char)slug.back())) slug.pop_back();
+                for (auto &c : slug) c = static_cast<char>(std::tolower((unsigned char)c));
+                if (slug.empty())
+                {
+                    m_standaloneError = "Slug can't be empty";
+                }
+                else
+                {
+                    m_chat->connectBySlug(slug, snap.nickname);
+                    m_standaloneError.clear();
+                    m_showRoomsWindow = false;
+                }
             }
-            else
-            {
-                m_chat->connectBySlug(slug, snap.nickname);
-                m_standaloneError.clear();
-                ImGui::CloseCurrentPopup();
-            }
-        }
 
-        ImGui::Separator();
-        ImGui::Text("Create new room");
-        ImGui::SetNextItemWidth(220.0f);
-        ImGui::InputText("##createTitle", m_createTitleBuf, sizeof(m_createTitleBuf));
-        ImGui::SetNextItemWidth(220.0f);
-        ImGui::InputTextWithHint(
-            "##createSlug", "slug (optional, auto-generated)",
-            m_createSlugBuf, sizeof(m_createSlugBuf));
-        ImGui::BeginDisabled(m_createInFlight);
-        if (ImGui::Button("Create + Join"))
-        {
-            m_standaloneError.clear();
-            m_createInFlight = true;
-            std::string newSlug;
-            std::string err;
-            const bool ok = m_chat->createStandaloneRoom(
-                m_createTitleBuf, m_createSlugBuf, newSlug, err);
-            m_createInFlight = false;
-            if (!ok)
-            {
-                m_standaloneError = err;
-            }
-            else
-            {
-                m_chat->connectBySlug(newSlug, snap.nickname);
-                m_createTitleBuf[0] = '\0';
-                m_createSlugBuf[0]  = '\0';
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::EndDisabled();
-
-        if (!m_standaloneError.empty())
-        {
-            ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
-                               "%s", m_standaloneError.c_str());
-        }
-        if (!snap.streamId.empty() || !snap.slug.empty())
-        {
+            ImGui::Spacing();
             ImGui::Separator();
-            if (ImGui::Button("Leave / disconnect"))
+            ImGui::Spacing();
+            ImGui::TextDisabled("Create new room");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint(
+                "##createTitle", "title",
+                m_createTitleBuf, sizeof(m_createTitleBuf));
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint(
+                "##createSlug", "slug (optional, auto-generated)",
+                m_createSlugBuf, sizeof(m_createSlugBuf));
+            ImGui::BeginDisabled(m_createInFlight);
+            if (ImGui::Button("Create + Join", ImVec2(-1.0f, 0.0f)))
             {
-                m_chat->disconnect();
-                ImGui::CloseCurrentPopup();
+                m_standaloneError.clear();
+                m_createInFlight = true;
+                std::string newSlug;
+                std::string err;
+                const bool ok = m_chat->createStandaloneRoom(
+                    m_createTitleBuf, m_createSlugBuf, newSlug, err);
+                m_createInFlight = false;
+                if (!ok)
+                {
+                    m_standaloneError = err;
+                }
+                else
+                {
+                    m_chat->connectBySlug(newSlug, snap.nickname);
+                    m_createTitleBuf[0] = '\0';
+                    m_createSlugBuf[0]  = '\0';
+                    m_showRoomsWindow = false;
+                }
+            }
+            ImGui::EndDisabled();
+
+            if (!m_standaloneError.empty())
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "%s", m_standaloneError.c_str());
+            }
+            if (!snap.streamId.empty() || !snap.slug.empty())
+            {
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                if (ImGui::Button("Leave / disconnect", ImVec2(-1.0f, 0.0f)))
+                {
+                    m_chat->disconnect();
+                    m_showRoomsWindow = false;
+                }
             }
         }
-        ImGui::EndPopup();
+        ImGui::End();
     }
     ImGui::Separator();
 
@@ -348,10 +368,26 @@ void OSDChat::render()
     {
         if (snap.messages.empty())
         {
-            ImGui::TextDisabled("(no messages yet — say hi)");
+            ImGui::TextDisabled("(no messages yet - say hi)");
         }
         for (const auto &m : snap.messages)
         {
+            // Mention check: someone else cited @<myNick>. We want
+            // a full-row background tint (amber) + a gold stripe on
+            // the left so the row pops at a glance, matching the
+            // web portal's `.mention` styling. Tinted body text
+            // alone is too subtle to catch in scrolling chat.
+            const bool isMention = !m.deleted &&
+                                   !m.local &&
+                                   !snap.nickname.empty() &&
+                                   mentionsNick(m.body, snap.nickname);
+
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            if (isMention) dl->ChannelsSplit(2);
+            if (isMention) dl->ChannelsSetCurrent(1); // foreground
+
+            ImGui::BeginGroup();
+
             const std::string when = formatTime(m.postedAtMs);
             if (!when.empty())
             {
@@ -378,13 +414,19 @@ void OSDChat::render()
             else if (isHostMsg) nameColor = ImVec4(0.95f, 0.78f, 0.30f, 1.0f);
             else                nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
             ImGui::TextColored(nameColor, "%s:", m.nickname.c_str());
+
+            // Double-click the nick to drop "@<nick> " at the cursor
+            // of the input. Routed through m_inputCb.pendingInsert so
+            // the InputTextMultiline's CallbackAlways path picks it
+            // up the next frame — direct writes to m_inputBuf are
+            // lost while the widget is active.
+            if (!m.local && !m.nickname.empty() &&
+                ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_inputCb.pendingInsert = std::string("@") + m.nickname + " ";
+            }
             ImGui::SameLine();
-            // Mention check: someone else cited @<myNick>. Renders the
-            // body in a warm tint so the row stands out at a glance.
-            const bool isMention = !m.deleted &&
-                                   !m.local &&
-                                   !snap.nickname.empty() &&
-                                   mentionsNick(m.body, snap.nickname);
             if (m.deleted)
             {
                 ImGui::TextDisabled("%s", m.body.c_str());
@@ -392,13 +434,33 @@ void OSDChat::render()
             else if (isMention)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text,
-                                      ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
+                                      ImVec4(0.98f, 0.92f, 0.65f, 1.0f));
                 ImGui::TextWrapped("%s", m.body.c_str());
                 ImGui::PopStyleColor();
             }
             else
             {
                 ImGui::TextWrapped("%s", m.body.c_str());
+            }
+
+            ImGui::EndGroup();
+
+            if (isMention)
+            {
+                const ImVec2 rmin = ImGui::GetItemRectMin();
+                const ImVec2 rmax = ImGui::GetItemRectMax();
+                const float padX  = 6.0f;
+                const float padY  = 2.0f;
+                dl->ChannelsSetCurrent(0); // background, drawn behind text
+                dl->AddRectFilled(
+                    ImVec2(rmin.x - padX, rmin.y - padY),
+                    ImVec2(rmax.x + padX, rmax.y + padY),
+                    IM_COL32(243, 201, 62, 28));            // soft amber
+                dl->AddRectFilled(
+                    ImVec2(rmin.x - padX, rmin.y - padY),
+                    ImVec2(rmin.x - padX + 3.0f, rmax.y + padY),
+                    IM_COL32(243, 201, 62, 255));           // gold stripe
+                dl->ChannelsMerge();
             }
         }
 
@@ -436,25 +498,33 @@ void OSDChat::render()
     // scan for '\n'; on finding one we capture everything before it
     // into pendingPost, then DeleteChars from 0..BufTextLen so the
     // buffer ends frame empty AND ImGui's cached state agrees.
-    struct EditCb
-    {
-        std::string pendingPost;
-    };
-    static EditCb editCb; // function-local static; the OSD chat is
-                          // a singleton from the user's POV and the
-                          // pendingPost is consumed every frame.
     auto editCallback = [](ImGuiInputTextCallbackData *data) -> int {
-        auto *cb = static_cast<EditCb *>(data->UserData);
-        if (data->EventFlag != ImGuiInputTextFlags_CallbackEdit) return 0;
-        for (int i = 0; i < data->BufTextLen; ++i)
+        auto *cb = static_cast<InputEditCb *>(data->UserData);
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways)
         {
-            if (data->Buf[i] == '\n')
+            if (!cb->pendingInsert.empty())
             {
-                cb->pendingPost.assign(data->Buf, data->Buf + i);
-                // Strip everything from 0 onwards — clears the line
-                // that just got submitted (and any junk after \n).
-                data->DeleteChars(0, data->BufTextLen);
-                break;
+                data->InsertChars(data->CursorPos,
+                                  cb->pendingInsert.c_str(),
+                                  cb->pendingInsert.c_str() +
+                                      cb->pendingInsert.size());
+                cb->pendingInsert.clear();
+            }
+            return 0;
+        }
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackEdit)
+        {
+            for (int i = 0; i < data->BufTextLen; ++i)
+            {
+                if (data->Buf[i] == '\n')
+                {
+                    cb->pendingPost.assign(data->Buf, data->Buf + i);
+                    // Strip everything from 0 onwards — clears the
+                    // line that just got submitted (and any junk
+                    // after \n).
+                    data->DeleteChars(0, data->BufTextLen);
+                    break;
+                }
             }
         }
         return 0;
@@ -470,8 +540,9 @@ void OSDChat::render()
         "##chatInput", m_inputBuf, sizeof(m_inputBuf),
         inputSize,
         ImGuiInputTextFlags_NoHorizontalScroll |
-            ImGuiInputTextFlags_CallbackEdit,
-        editCallback, &editCb);
+            ImGuiInputTextFlags_CallbackEdit       |
+            ImGuiInputTextFlags_CallbackAlways,
+        editCallback, &m_inputCb);
     if (ImGui::IsItemActive()) m_inputFocused = true;
     ImGui::SameLine();
     const bool sendClicked = ImGui::Button("Send", ImVec2(-1.0f, rowH));
@@ -480,11 +551,11 @@ void OSDChat::render()
     // 1) Enter path — body was captured by the callback, buffer
     //    already cleared via DeleteChars while the widget was
     //    rendering. Post once, drop the pending body.
-    if (!editCb.pendingPost.empty())
+    if (!m_inputCb.pendingPost.empty())
     {
         if (sendable)
         {
-            std::string body = std::move(editCb.pendingPost);
+            std::string body = std::move(m_inputCb.pendingPost);
             // Trim trailing whitespace (the line never contained a
             // newline — that was the submit trigger and got stripped).
             while (!body.empty() &&
@@ -494,7 +565,7 @@ void OSDChat::render()
             }
             if (!body.empty()) m_chat->post(body);
         }
-        editCb.pendingPost.clear();
+        m_inputCb.pendingPost.clear();
     }
 
     // 2) Send button path — widget isn't active during the click,
