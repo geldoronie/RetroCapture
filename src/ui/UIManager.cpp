@@ -581,35 +581,10 @@ void UIManager::render()
                     m_quickActionsOverlay->setVisible(!visible);
                 }
             }
-            if (m_chatOverlay)
-            {
-                bool visible = m_chatOverlay->isVisible();
-                if (ImGui::MenuItem("Chat", "F8", visible))
-                {
-                    m_chatOverlay->setVisible(!visible);
-                }
-                // #84 — Satellite chat windows have their own
-                // visibility flags now (refactor split them out of
-                // the chat panel's m_visible gate). Surface each so
-                // the user can toggle Rooms / Profile independently
-                // from the chat panel itself.
-                bool roomsVis = m_chatOverlay->isRoomsWindowVisible();
-                if (ImGui::MenuItem("Chat Rooms", nullptr, roomsVis))
-                {
-                    m_chatOverlay->setRoomsWindowVisible(!roomsVis);
-                }
-                bool profVis = m_chatOverlay->isProfileWindowVisible();
-                // "Profile" (not "Chat Profile") — this is the
-                // RetroCapture-wide identity (rc_<id>, nickname,
-                // name, age). It's exposed under the chat overlay
-                // for now because that's where the window code
-                // lives, but conceptually it spans chat + directory
-                // listing + room ownership.
-                if (ImGui::MenuItem("Profile", nullptr, profVis))
-                {
-                    m_chatOverlay->setProfileWindowVisible(!profVis);
-                }
-            }
+            // Profile / Chat / Chat Rooms moved to the top-level
+            // "Social" menu — they're a coherent group that's not
+            // about toggling local widgets, so the View menu was
+            // the wrong drawer for them.
             if (m_shortcutsHelpWindow)
             {
                 bool visible = m_shortcutsHelpWindow->isVisible();
@@ -647,6 +622,34 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+
+        // Social — Profile / Chat / Chat Rooms. Conceptually about
+        // identity + communication with other users; the View menu
+        // was being used as a catch-all and these items got buried.
+        if (m_chatOverlay && ImGui::BeginMenu(T("menu.social").c_str()))
+        {
+            bool profVis = m_chatOverlay->isProfileWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.profile").c_str(),
+                                nullptr, profVis))
+            {
+                m_chatOverlay->setProfileWindowVisible(!profVis);
+            }
+            ImGui::Separator();
+            bool chatVis = m_chatOverlay->isVisible();
+            if (ImGui::MenuItem(T("menu.social.chat").c_str(),
+                                "F8", chatVis))
+            {
+                m_chatOverlay->setVisible(!chatVis);
+            }
+            bool roomsVis = m_chatOverlay->isRoomsWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.chatrooms").c_str(),
+                                nullptr, roomsVis))
+            {
+                m_chatOverlay->setRoomsWindowVisible(!roomsVis);
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu(T("menu.remote").c_str()))
         {
             const bool clientEntryAllowed = !m_streamingActive;
