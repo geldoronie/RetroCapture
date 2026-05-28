@@ -35,6 +35,16 @@
     const $title       = document.getElementById('chatRoomTitle');
     const $parts       = document.getElementById('chatParticipantsPanel');
     const $unavailable = document.getElementById('chatUnavailable');
+    const $profileBtn   = document.getElementById('chatProfileBtn');
+    const $profileModal = document.getElementById('chatProfileModal');
+    const $profileName  = document.getElementById('chatProfileName');
+    const $profileNick  = document.getElementById('chatProfileNick');
+    const $profileAge   = document.getElementById('chatProfileAge');
+    const $profileId    = document.getElementById('chatProfileId');
+    const $profileSave  = document.getElementById('chatProfileSave');
+    const $profileClose = document.getElementById('chatProfileClose');
+    const $profileError = document.getElementById('chatProfileError');
+    const $profileSaved = document.getElementById('chatProfileSaved');
     const $nick        = document.getElementById('chatNickInput');
     const $nickApply   = document.getElementById('chatNickApply');
     const $nickError   = document.getElementById('chatNickError');
@@ -45,17 +55,68 @@
 
     // --- State ----------------------------------------------------------
 
-    const NICK_KEY = 'rc_chat_nick';
+    const NICK_KEY     = 'rc_chat_nick';
+    const IDENTITY_KEY = 'rc_chat_identity';
+
+    // --- Identity (#84) -------------------------------------------------
+    // Persisted in localStorage. The first save mints an immutable
+    // rc_<12-hex> id from name + nickname + age + timestamp + random;
+    // every subsequent save keeps the id and just refreshes the
+    // editable fields. The server uses the id as participant_id, so
+    // posts stay tied to "this browser-user" across sessions.
+
+    function loadIdentity() {
+        try {
+            const raw = localStorage.getItem(IDENTITY_KEY);
+            if (!raw) return { id: '', name: '', nickname: '', age: 0, createdAt: '' };
+            const j = JSON.parse(raw);
+            return {
+                id:        j.id        || '',
+                name:      j.name      || '',
+                nickname:  j.nickname  || '',
+                age:       parseInt(j.age, 10) || 0,
+                createdAt: j.createdAt || '',
+            };
+        } catch (err) {
+            console.warn('identity load failed:', err);
+            return { id: '', name: '', nickname: '', age: 0, createdAt: '' };
+        }
+    }
+
+    async function sha256Hex(input) {
+        const enc = new TextEncoder();
+        const buf = await crypto.subtle.digest('SHA-256', enc.encode(input));
+        return [...new Uint8Array(buf)]
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    }
+
+    async function saveIdentity(idObj) {
+        if (!idObj.id) {
+            const ts   = new Date().toISOString();
+            const rand = [...crypto.getRandomValues(new Uint32Array(4))]
+                .map(n => n.toString(16).padStart(8, '0')).join('');
+            const src  = `${idObj.name}\0${idObj.nickname}\0${idObj.age}\0${ts}\0${rand}`;
+            const hash = await sha256Hex(src);
+            idObj.id        = 'rc_' + hash.slice(0, 12);
+            idObj.createdAt = ts;
+        }
+        localStorage.setItem(IDENTITY_KEY, JSON.stringify(idObj));
+        return idObj;
+    }
+
+    const identityStored = loadIdentity();
 
     const state = {
         chatUrl:           '',
+        identity:          identityStored,
         streamId:          '',
         slug:              '',  // set from window.location.hash; non-empty
                                 // pins the panel to a standalone room and
                                 // suppresses the /meta stream-linked auto-bind
         roomId:            '',
         roomTitle:         '',
-        nickname:          localStorage.getItem(NICK_KEY) || '',
+        nickname:          identityStored.nickname || localStorage.getItem(NICK_KEY) || '',
         ws:                null,
         myParticipantId:   '',
         hostParticipantId: '',
@@ -178,10 +239,11 @@
             ? '<span class="home-chat-host-badge">Host</span>'
             : '';
 
+        const pid = m.participant_id || '';
         row.innerHTML =
             (time ? `<span class="home-chat-time">${escapeHtml(time)}</span>` : '') +
             hostBadge +
-            `<span class="${nickClass}">${escapeHtml(m.nickname)}</span>` +
+            `<span class="${nickClass}" title="${escapeHtml(pid)}">${escapeHtml(m.nickname)}</span>` +
             `<span class="home-chat-body">${escapeHtml(m.deleted ? deletedLabel() : m.body)}</span>`;
 
         $log.appendChild(row);
@@ -242,6 +304,7 @@
             if (p.isHost) row.classList.add('host');
             if (p.id === state.myParticipantId) row.classList.add('self');
             row.dataset.nick = p.nickname || '';
+            row.title = p.id || '';
             const badge = p.isHost ? '<span class="home-chat-part-badge">Host</span>' : '';
             const meTag = (p.id === state.myParticipantId) ? ' <span class="text-muted small">(you)</span>' : '';
             row.innerHTML = badge + escapeHtml(p.nickname || '(anon)') + meTag;
@@ -306,6 +369,59 @@
     // detected new URL, user changed nickname) — those paths follow
     // up with a fresh openSession that wires its own handlers on a
     // new socket.
+    // Profile modal wiring (#84). Open populates fields from
+    // state.identity; Save persists + reconnects so the next hello
+    // carries the (possibly new) client_id and nickname.
+    function openProfile() {
+        if (!$profileModal) return;
+        $profileName.value = state.identity.name || '';
+        $profileNick.value = state.identity.nickname || '';
+        $profileAge.value  = state.identity.age || '';
+        $profileId.textContent = state.identity.id || 'not generated';
+        $profileError.classList.add('d-none');
+        $profileSaved.classList.add('d-none');
+        $profileModal.classList.remove('d-none');
+    }
+    function closeProfile() {
+        if (!$profileModal) return;
+        $profileModal.classList.add('d-none');
+    }
+    if ($profileBtn)   $profileBtn.addEventListener('click', openProfile);
+    if ($profileClose) $profileClose.addEventListener('click', closeProfile);
+    if ($profileSave) {
+        $profileSave.addEventListener('click', async () => {
+            const nick = ($profileNick.value || '').trim();
+            $profileError.classList.add('d-none');
+            $profileSaved.classList.add('d-none');
+            if (!nick) {
+                $profileError.textContent = 'Nickname is required.';
+                $profileError.classList.remove('d-none');
+                return;
+            }
+            const next = {
+                id:        state.identity.id || '',
+                name:      ($profileName.value || '').trim(),
+                nickname:  nick,
+                age:       parseInt($profileAge.value, 10) || 0,
+                createdAt: state.identity.createdAt || '',
+            };
+            try {
+                const saved = await saveIdentity(next);
+                state.identity = saved;
+                state.nickname = saved.nickname;
+                localStorage.setItem(NICK_KEY, saved.nickname);
+                $profileId.textContent = saved.id;
+                $profileSaved.classList.remove('d-none');
+                // Reconnect so the server picks up the new
+                // client_id / nickname on the next hello.
+                openSession();
+            } catch (err) {
+                $profileError.textContent = 'Save failed: ' + err.message;
+                $profileError.classList.remove('d-none');
+            }
+        });
+    }
+
     // Toggle button for the participants panel.
     if ($count) {
         $count.addEventListener('click', () => {
@@ -386,9 +502,13 @@
 
         ws.onopen = () => {
             try {
+                const helloPayload = { nickname: state.nickname };
+                if (state.identity && state.identity.id) {
+                    helloPayload.client_id = state.identity.id;
+                }
                 ws.send(JSON.stringify({
                     kind:  'hello',
-                    hello: { nickname: state.nickname },
+                    hello: helloPayload,
                 }));
             } catch (err) {
                 console.warn('hello send failed:', err);

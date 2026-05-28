@@ -97,8 +97,34 @@
                             <span data-i18n="web.home.chat">Live chat</span>
                             <span id="chatStateBadge" class="home-chat-state">offline</span>
                             <span id="chatRoomTitle" class="home-chat-title"></span>
+                            <button id="chatProfileBtn" type="button" class="home-chat-headerbtn" title="Profile">Profile</button>
                             <button id="chatParticipantCount" type="button" class="home-chat-count" title="Toggle participants list"></button>
                         </header>
+                        <div id="chatProfileModal" class="home-chat-profile d-none">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Display name</label>
+                                <input id="chatProfileName" type="text" maxlength="120" placeholder="Your real name">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Nickname (visible)</label>
+                                <input id="chatProfileNick" type="text" maxlength="32" placeholder="nickname">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Age</label>
+                                <input id="chatProfileAge" type="number" min="0" max="130" step="1">
+                            </div>
+                            <div class="home-chat-profile-id">
+                                <small class="text-muted">Identity (read-only):</small>
+                                <code id="chatProfileId" class="home-chat-profile-id-value">not generated</code>
+                            </div>
+                            <small class="text-muted d-block">Persisted in this browser's localStorage. Open the same page in another browser/device to get a separate identity.</small>
+                            <div id="chatProfileError" class="text-danger small d-none"></div>
+                            <div id="chatProfileSaved" class="text-success small d-none">Saved.</div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatProfileSave" type="button" class="btn btn-primary btn-sm">Save</button>
+                                <button id="chatProfileClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
                         <div class="home-chat-body">
                             <aside id="chatParticipantsPanel" class="home-chat-parts d-none"></aside>
                             <div id="chatLog" class="home-chat-log"></div>

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../identity/ChatIdentity.h"
+
 #include <string>
 
 class ChatClient;
@@ -63,6 +65,20 @@ private:
     // Edit buffer for the nickname row. Same lifetime semantics.
     char        m_nickBuf[64]  = {0};
     bool        m_nickInitialized = false;
+
+    // Profile window state (#84). Mirrors ImGui::Begin's p_open so
+    // the title-bar X closes it cleanly. Buffers live across frames
+    // (and across opens within a session) so the user's typing isn't
+    // dropped if they close + reopen the window. The cached identity
+    // is what we last loaded from disk OR last persisted via Save.
+    bool        m_showProfileWindow = false;
+    char        m_profileNameBuf[120] = {0};
+    char        m_profileNickBuf[64]  = {0};
+    int         m_profileAge          = 0;
+    ChatIdentity m_identity;
+    bool        m_identityLoaded      = false;
+    std::string m_profileError;
+    std::string m_profileSavedHint;
 
     // Standalone-room window state (#84). Buffers live across frames
     // so what the user typed doesn't reset on every render; the bool

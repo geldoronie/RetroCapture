@@ -166,6 +166,15 @@ public:
     /// Change nickname mid-session. Re-sends `hello` with the new value.
     void setNickname(const std::string &nick);
 
+    /// Persistent identity token (rc_<hex>). Sent as client_id on
+    /// every hello so the server adopts it as the participant_id —
+    /// posts survive reconnects with the same identity. Empty
+    /// disables the field; server falls back to its anon-id
+    /// generator. Must be set before connect() to take effect on
+    /// the current session.
+    void setClientId(const std::string &clientId);
+    std::string getClientId() const;
+
     /// Thread-safe snapshot copy. UI calls this once per frame.
     Snapshot getSnapshot() const;
 
@@ -202,6 +211,7 @@ private:
     std::string                 m_streamId;
     std::string                 m_nickname;
     std::string                 m_slug;          // non-empty == standalone
+    std::string                 m_clientId;      // rc_<hex> persistent identity, empty == anon
     std::string                 m_roomId;
     std::string                 m_roomTitle;     // populated from resolve response
     std::string                 m_myParticipantId;

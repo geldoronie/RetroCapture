@@ -117,6 +117,36 @@ type wsHello struct {
 	// wins (v0.5 trust model: same level as streamId secrecy; v1
 	// validates against the directory ownerToken).
 	Role string `json:"role,omitempty"`
+	// ClientID is the persistent identity token the client
+	// generated locally on first run (rc_<short-hex>). When present
+	// AND validly shaped AND not already in use in this room, the
+	// server adopts it as the connection's participant_id so the
+	// user's identity stays stable across reconnects. Anonymous
+	// connections (no ClientID) fall back to the server-generated
+	// p_<random> per-session id as before.
+	// Same trust model as Role — server doesn't verify ownership;
+	// v1 ties it to a directory-account signed token.
+	ClientID string `json:"client_id,omitempty"`
+}
+
+// isValidClientID enforces the rc_<6..32 hex chars> shape the
+// native + web clients produce. Rejects anything that could shadow
+// the server's own p_* / m_* / r_* prefixes or open a DoS vector
+// via overly long ids.
+func isValidClientID(s string) bool {
+	if len(s) < 9 || len(s) > 35 {
+		return false
+	}
+	if s[0] != 'r' || s[1] != 'c' || s[2] != '_' {
+		return false
+	}
+	for _, c := range s[3:] {
+		ok := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 type wsPost struct {

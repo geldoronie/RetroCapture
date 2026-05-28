@@ -87,6 +87,18 @@ std::string ChatClient::getBaseUrl() const
     return m_baseUrl;
 }
 
+void ChatClient::setClientId(const std::string &clientId)
+{
+    std::lock_guard<std::mutex> lk(m_mu);
+    m_clientId = clientId;
+}
+
+std::string ChatClient::getClientId() const
+{
+    std::lock_guard<std::mutex> lk(m_mu);
+    return m_clientId;
+}
+
 void ChatClient::connect(const std::string &streamId,
                          const std::string &nickname,
                          bool               asHost)
@@ -369,8 +381,14 @@ void ChatClient::onMessage(const ix::WebSocketMessage &msg)
                 m_helloAcked = false;
                 setStateLocked(State::Connecting);
             }
+            std::string clientId;
+            {
+                std::lock_guard<std::mutex> lk(m_mu);
+                clientId = m_clientId;
+            }
             nlohmann::json helloPayload = { {"nickname", nick} };
-            if (asHost) helloPayload["role"] = "host";
+            if (asHost)            helloPayload["role"]      = "host";
+            if (!clientId.empty()) helloPayload["client_id"] = clientId;
             nlohmann::json hello = {
                 {"kind",  "hello"},
                 {"hello", helloPayload},

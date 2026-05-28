@@ -72,11 +72,27 @@ func (r *Room) HostID() string {
 	return r.hostID
 }
 
-// Join adds the participant to the room.
+// Join adds the participant to the room. Caller must ensure p.ID is
+// unique; use TryJoin if collisions are possible (client-supplied
+// persistent ids).
 func (r *Room) Join(p *Participant) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.participants[p.ID] = p
+}
+
+// TryJoin atomically rejects the join when p.ID is already in use
+// in the room — returns false and DOES NOT add the participant.
+// Used for client-supplied persistent ids (rc_<...>) where two
+// connections from the same identity must not collide.
+func (r *Room) TryJoin(p *Participant) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, taken := r.participants[p.ID]; taken {
+		return false
+	}
+	r.participants[p.ID] = p
+	return true
 }
 
 // Leave removes the participant and closes its Send channel.

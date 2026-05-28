@@ -192,16 +192,37 @@ void OSDChat::render()
             m_showParticipants = !m_showParticipants;
         }
     }
-    // Room-picker button — opens a separate window with Join-by-slug
-    // + Create. Right-aligned so it doesn't shift the status line on
-    // narrow panels, with a small breathing space from the right edge.
+    // Header buttons — Profile + Rooms, right-aligned with a tiny
+    // breathing space from the title bar X.
     ImGui::SameLine();
     {
-        const float btnW = 64.0f;
+        const float profW  = 64.0f;
+        const float roomsW = 64.0f;
+        const float gap    = ImGui::GetStyle().ItemSpacing.x;
         const float rightPad = 8.0f;
-        const float regionW = ImGui::GetContentRegionAvail().x;
-        const float spacer  = regionW - btnW - rightPad;
+        const float regionW  = ImGui::GetContentRegionAvail().x;
+        const float spacer   = regionW - profW - roomsW - gap - rightPad;
         if (spacer > 0.0f) ImGui::Dummy(ImVec2(spacer, 1));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Profile"))
+        {
+            // Lazy-load identity on first open so the buffers reflect
+            // disk state. Subsequent opens keep whatever the user
+            // typed (m_identityLoaded gate).
+            if (!m_identityLoaded)
+            {
+                m_identity = identity::load();
+                std::snprintf(m_profileNameBuf, sizeof(m_profileNameBuf), "%s",
+                              m_identity.name.c_str());
+                std::snprintf(m_profileNickBuf, sizeof(m_profileNickBuf), "%s",
+                              m_identity.nickname.c_str());
+                m_profileAge       = m_identity.age;
+                m_identityLoaded   = true;
+            }
+            m_showProfileWindow = true;
+            m_profileError.clear();
+            m_profileSavedHint.clear();
+        }
         ImGui::SameLine();
         if (ImGui::SmallButton("Rooms..."))
         {
@@ -304,74 +325,126 @@ void OSDChat::render()
         }
         ImGui::End();
     }
+
+    // Profile window (#84). Standalone top-level window with native
+    // X close (p_open bound to m_showProfileWindow). The user fills
+    // Name / Nickname / Age and clicks Save; the first save derives
+    // the immutable ID from those inputs + timestamp + random bytes.
+    // Subsequent saves keep the ID and just refresh editable fields.
+    if (m_showProfileWindow)
+    {
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Chat profile##chatProfileWindow",
+                         &m_showProfileWindow,
+                         ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoSavedSettings))
+        {
+            m_inputFocused = true;
+
+            ImGui::TextDisabled("Display name");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint("##profName", "Your real name",
+                                     m_profileNameBuf, sizeof(m_profileNameBuf));
+
+            ImGui::TextDisabled("Nickname (visible in chat)");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint("##profNick", "geldo",
+                                     m_profileNickBuf, sizeof(m_profileNickBuf));
+
+            ImGui::TextDisabled("Age");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputInt("##profAge", &m_profileAge);
+            if (m_profileAge < 0)  m_profileAge = 0;
+            if (m_profileAge > 130) m_profileAge = 130;
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ID block. Shown read-only — generated on first save,
+            // immutable afterwards. The disk path is surfaced so the
+            // user knows what to back up.
+            ImGui::TextDisabled("Identity (read-only)");
+            if (m_identity.id.empty())
+            {
+                ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                                   "Not generated yet - click Save to mint one");
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f),
+                                   "%s", m_identity.id.c_str());
+                if (!m_identity.createdAt.empty())
+                {
+                    ImGui::TextDisabled("Created: %s",
+                                        m_identity.createdAt.c_str());
+                }
+            }
+            ImGui::TextDisabled("File: %s", identity::filePath().c_str());
+            ImGui::TextDisabled(
+                "Back this file up - losing it loses your chat identity.");
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Save button. Validates nickname (non-empty) before
+            // calling identity::save which mints the ID on first
+            // save. Pushes the result into ChatClient so the next
+            // hello carries it.
+            const bool nickEmpty = (m_profileNickBuf[0] == '\0');
+            ImGui::BeginDisabled(nickEmpty);
+            if (ImGui::Button("Save", ImVec2(-1.0f, 0.0f)))
+            {
+                m_identity.name     = m_profileNameBuf;
+                m_identity.nickname = m_profileNickBuf;
+                m_identity.age      = m_profileAge;
+                if (identity::save(m_identity))
+                {
+                    if (m_chat) m_chat->setClientId(m_identity.id);
+                    // Mirror nickname into UIManager so the chat
+                    // connect path picks the same value up across
+                    // reconnects.
+                    if (m_uiManager)
+                    {
+                        m_uiManager->setChatNickname(m_identity.nickname);
+                        m_uiManager->saveConfig();
+                    }
+                    if (m_chat) m_chat->setNickname(m_identity.nickname);
+                    m_profileSavedHint = "Saved.";
+                    m_profileError.clear();
+                }
+                else
+                {
+                    m_profileError = "Failed to write identity.json";
+                    m_profileSavedHint.clear();
+                }
+            }
+            ImGui::EndDisabled();
+            if (nickEmpty)
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "Nickname is required.");
+            }
+            if (!m_profileError.empty())
+            {
+                ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
+                                   "%s", m_profileError.c_str());
+            }
+            if (!m_profileSavedHint.empty())
+            {
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                                   "%s", m_profileSavedHint.c_str());
+            }
+        }
+        ImGui::End();
+    }
+
     ImGui::Separator();
 
-    // ---- nickname row -------------------------------------------------
-    if (!m_nickInitialized)
-    {
-        std::snprintf(m_nickBuf, sizeof(m_nickBuf), "%s", snap.nickname.c_str());
-        m_nickInitialized = true;
-    }
-    ImGui::TextDisabled("as");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-60.0f);
-    const bool nickEnterSubmit =
-        ImGui::InputText("##chatNick", m_nickBuf, sizeof(m_nickBuf),
-                         ImGuiInputTextFlags_EnterReturnsTrue);
-    if (ImGui::IsItemActive()) m_inputFocused = true;
-    if (ImGui::IsItemEdited())  m_nickError.clear();
-    ImGui::SameLine();
-    const std::string typedNick = m_nickBuf;
-    const bool nickChanged      = (typedNick != snap.nickname);
-    const bool nickEmpty        = typedNick.empty();
-    ImGui::BeginDisabled(!nickChanged || nickEmpty);
-    const bool applyClicked = ImGui::Button("Apply", ImVec2(-1.0f, 0.0f));
-    ImGui::EndDisabled();
-    if (nickEnterSubmit || applyClicked)
-    {
-        // Client-side dedup: refuse if the typed nickname is held by
-        // any OTHER participant in the room. Self-match (same id) is
-        // allowed because that's just a no-op rename to the current
-        // value. v0.5 doesn't validate server-side — race conditions
-        // can let two clients pick the same name; v1 will add a
-        // server `nickname_taken` error frame.
-        bool collision = false;
-        for (const auto &part : snap.participants)
-        {
-            if (part.id != snap.myParticipantId && part.nickname == typedNick)
-            {
-                collision = true;
-                break;
-            }
-        }
-        if (nickEmpty)
-        {
-            m_nickError = "Nickname can't be empty";
-        }
-        else if (collision)
-        {
-            m_nickError = "Nickname already in use";
-        }
-        else if (nickChanged)
-        {
-            m_nickError.clear();
-            // Persist BEFORE poking the transport — saveConfig writes
-            // synchronously, and if the user kills the app mid-
-            // reconnect the new nick is still in config.json.
-            if (m_uiManager)
-            {
-                m_uiManager->setChatNickname(typedNick);
-                m_uiManager->saveConfig();
-            }
-            m_chat->setNickname(typedNick);
-        }
-    }
-    if (!m_nickError.empty())
-    {
-        ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f), "%s",
-                           m_nickError.c_str());
-    }
-    ImGui::Separator();
+    // (#84) Inline "as <nick> [Apply]" removed — identity now lives
+    // in a dedicated Profile window opened via the header button.
+    // Nickname/Name/Age/ID all set there; persisted to identity.json.
 
     // ---- two-column body: participants (left) + messages (right) ------
     //
@@ -424,6 +497,13 @@ void OSDChat::render()
                     : (isMe ? ImVec4(0.45f, 0.85f, 0.50f, 1.0f)
                             : ImVec4(0.48f, 0.78f, 0.94f, 1.0f));
                 ImGui::TextColored(nameColor, "%s", p.nickname.c_str());
+                // Hover shows the participant's id (rc_<…> when
+                // persistent, p_<…> when anon). Same affordance as
+                // the message list.
+                if (!p.id.empty() && ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("%s", p.id.c_str());
+                }
                 // Double-click a nick to insert a mention into the
                 // input — same shortcut the message list has.
                 if (!isMe && !p.nickname.empty() &&
@@ -498,6 +578,14 @@ void OSDChat::render()
             else if (isHostMsg) nameColor = ImVec4(0.95f, 0.78f, 0.30f, 1.0f);
             else                nameColor = ImVec4(0.48f, 0.78f, 0.94f, 1.0f);
             ImGui::TextColored(nameColor, "%s:", m.nickname.c_str());
+            // Hover shows the persistent identity (rc_<id>) when the
+            // poster sent one, or the per-session p_<random> id for
+            // anonymous posters. Lets viewers tell "two alices in
+            // different sessions" apart.
+            if (!m.participantId.empty() && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", m.participantId.c_str());
+            }
 
             // Double-click the nick to drop "@<nick> " at the cursor
             // of the input. Routed through m_inputCb.pendingInsert so

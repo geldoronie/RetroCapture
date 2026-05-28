@@ -127,8 +127,35 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 		return
 	}
 	roomLive := s.Registry.Get(roomID)
+	// Participant id selection (#84):
+	//   - When the client sent a validly shaped persistent ClientID
+	//     (rc_<hex>), use that — gives the user a stable identity
+	//     across reconnects. Collision (another connection in the
+	//     room already has it) is a hard reject; the user has to
+	//     close the duplicate tab/window before joining again.
+	//   - Otherwise fall back to a server-generated p_<random> id
+	//     scoped to this connection only — same anon behaviour the
+	//     v0.5 protocol shipped with.
+	participantID := ""
+	if first.Hello.ClientID != "" {
+		if isValidClientID(first.Hello.ClientID) {
+			participantID = first.Hello.ClientID
+		} else {
+			writeFrame(ctx, conn, wsFrame{
+				Kind: "error",
+				Error: &wsError{
+					Code:    "bad_request",
+					Message: "client_id must match rc_<lowercase hex>",
+				},
+			})
+			return
+		}
+	}
+	if participantID == "" {
+		participantID = "p_" + shortID()
+	}
 	p := &room.Participant{
-		ID:       "p_" + shortID(),
+		ID:       participantID,
 		Nickname: nick,
 		JoinedAt: time.Now().UTC(),
 		Send:     make(chan []byte, sendBufferSize),
@@ -141,7 +168,17 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			p.IsHost = true
 		}
 	}
-	roomLive.Join(p)
+	if !roomLive.TryJoin(p) {
+		writeFrame(ctx, conn, wsFrame{
+			Kind: "error",
+			Error: &wsError{
+				Code: "identity_in_use",
+				Message: "client_id already connected to this room; " +
+					"close the other tab/window and retry",
+			},
+		})
+		return
+	}
 	defer func() {
 		roomLive.Leave(p.ID)
 		if s.LimitPost != nil {

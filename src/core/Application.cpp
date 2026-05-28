@@ -23,6 +23,7 @@
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/OSDChat.h"
 #include "../chat/ChatClient.h"
+#include "../identity/ChatIdentity.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -149,6 +150,26 @@ bool Application::init()
     else
     {
         m_chatClient->setBaseUrl(m_chatBaseUrl);
+    }
+
+    // Persistent chat identity (#84). The OSD Profile window will
+    // populate fields and re-save on first launch; we just load
+    // whatever's on disk here so an existing user's rc_<id> goes
+    // out with every hello from the get-go.
+    {
+        const ChatIdentity ident = identity::load();
+        if (ident.isInitialized())
+        {
+            m_chatClient->setClientId(ident.id);
+            // Mirror the saved nickname into UIManager so the chat
+            // connect path picks it up. The Profile window stays the
+            // source of truth; this just primes the existing
+            // m_chatNickname channel until that UI is wired through.
+            if (m_ui && !ident.nickname.empty())
+            {
+                m_ui->setChatNickname(ident.nickname);
+            }
+        }
     }
 
     // Connect ShaderEngine to UI for parameters
