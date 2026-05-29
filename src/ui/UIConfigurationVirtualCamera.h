@@ -2,6 +2,8 @@
 
 #include "../output/VirtualCameraOutput.h"  // for DeviceInfo on the cache
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -48,6 +50,34 @@ private:
     void renderFormatSelector();
     void renderStatus();
     void renderNoDeviceHelp();
+    void renderModuleManagement();
 
     void refreshDevices();
+
+    // Module load/remove via pkexec — async because the polkit
+    // password prompt blocks. Worker thread fills `result` + flips
+    // `done`; render() drains it next frame, surfaces the message,
+    // and refreshes the device list on success.
+    struct ModuleOp
+    {
+        std::atomic<bool> inFlight{false};
+        std::atomic<bool> done{false};
+        std::mutex        mu;
+        VirtualCameraOutput::ModuleOpResult result;
+        const char       *kind = "";   // "load" or "remove" — for status text
+    };
+    ModuleOp m_moduleOp;
+
+    // Two-step confirm for the remove button — first click flips
+    // this to true and the next render shows "Confirm remove?".
+    bool m_removeConfirm = false;
+
+    // Sticky status from the last completed pkexec call. Cleared
+    // on the next op start.
+    std::string m_moduleOpMessage;
+    bool        m_moduleOpOk      = false;
+
+    void submitLoadModule();
+    void submitUnloadModule();
+    void pumpModuleOp();
 };

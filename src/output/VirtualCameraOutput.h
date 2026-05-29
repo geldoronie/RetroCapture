@@ -68,6 +68,37 @@ public:
     /// few ms even with many entries.
     static std::vector<DeviceInfo> enumerateDevices();
 
+    /// Result envelope for the modprobe / rmmod helpers below.
+    struct ModuleOpResult
+    {
+        bool        ok = false;
+        int         exitCode = -1;       // 127 = command not found, 126 = user cancel
+        std::string message;             // stderr / friendly text for the UI
+    };
+
+    /// True iff /usr/bin/pkexec exists and is executable. The UI
+    /// uses this to decide whether to surface the auto-install
+    /// button at all — fall back to "copy command" otherwise.
+    static bool pkexecAvailable();
+
+    /// Run `pkexec modprobe v4l2loopback exclusive_caps=1
+    /// card_label="<cardLabel>"`. Blocking on the polkit graphical
+    /// prompt — caller is expected to run this on a worker thread
+    /// (UIConfigurationVirtualCamera does). Returns exit + a
+    /// human-readable message; the device list should be re-
+    /// enumerated on ok=true.
+    ///
+    /// cardLabel goes through a strict allowlist (alnum + space +
+    /// dash + underscore) so it can never escape the shell quoting
+    /// the call uses internally.
+    static ModuleOpResult loadV4l2LoopbackModule(const std::string &cardLabel);
+
+    /// Run `pkexec rmmod v4l2loopback`. Same blocking semantics.
+    /// Fails with EBUSY when any process still has a loopback
+    /// device open — surface message verbatim so the user knows
+    /// to close OBS / Chrome / etc. first.
+    static ModuleOpResult unloadV4l2LoopbackModule();
+
     VirtualCameraOutput();
     ~VirtualCameraOutput();
 

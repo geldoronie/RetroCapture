@@ -9,6 +9,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -16,6 +17,7 @@ extern "C" {
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace
@@ -433,4 +435,192 @@ bool VirtualCameraOutput::pushFrame(const uint8_t *rgba,
         return false;
     }
     return true;
+}
+
+// ---- Module load/unload via pkexec --------------------------------
+
+bool VirtualCameraOutput::pkexecAvailable()
+{
+    // pkexec on every reasonable Linux desktop lives at
+    // /usr/bin/pkexec — the polkit package owns it. We don't fall
+    // back to $PATH because if it isn't there, the desktop doesn't
+    // ship a graphical auth agent either and the UX wouldn't work.
+    return ::access("/usr/bin/pkexec", X_OK) == 0;
+}
+
+namespace
+{
+// Forks pkexec with the given argv (argv[0] must be "pkexec"; we
+// don't free its descendants explicitly because polkit reaps them
+// when the auth dialog closes). Captures combined stdout+stderr
+// via a pipe. Returns the child's exit status (or -1 on a setup
+// failure with errno preserved). Output is appended to `outText`.
+//
+// Why fork+exec instead of system(): we want both the exit code
+// AND the textual error message (e.g. "ERROR: could not insert
+// 'v4l2loopback': Operation not permitted"). system() merges
+// stderr into the shell's stderr; we'd lose it.
+int runPkexec(const std::vector<std::string> &argv, std::string &outText)
+{
+    int pipefd[2] = {-1, -1};
+    if (::pipe(pipefd) != 0)
+    {
+        outText = std::string("pipe() failed: ") + std::strerror(errno);
+        return -1;
+    }
+    const pid_t pid = ::fork();
+    if (pid < 0)
+    {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        outText = std::string("fork() failed: ") + std::strerror(errno);
+        return -1;
+    }
+    if (pid == 0)
+    {
+        // child — redirect stdout + stderr to write end of pipe
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        // Build a NULL-terminated argv. We're about to be replaced
+        // by exec so heap leaks here are harmless.
+        std::vector<char *> cargv;
+        cargv.reserve(argv.size() + 1);
+        for (const auto &s : argv) cargv.push_back(const_cast<char *>(s.c_str()));
+        cargv.push_back(nullptr);
+        ::execvp(cargv[0], cargv.data());
+        // execvp only returns on failure.
+        std::fprintf(stderr, "execvp(%s) failed: %s\n",
+                     cargv[0], std::strerror(errno));
+        ::_exit(127);
+    }
+    // parent — close write end, read until EOF, wait for child.
+    ::close(pipefd[1]);
+    char buf[1024];
+    for (;;)
+    {
+        const ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+        if (n > 0) outText.append(buf, static_cast<size_t>(n));
+        else if (n == 0) break;
+        else if (errno != EINTR) break;
+    }
+    ::close(pipefd[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) { /* retry */ }
+    if (WIFEXITED(status))   return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
+}
+
+// Trim trailing whitespace + collapse multiple blank lines so the
+// UI surface stays compact.
+std::string tidy(std::string s)
+{
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+        s.pop_back();
+    return s;
+}
+
+// Strict allowlist for the cardLabel passed into modprobe — letters,
+// digits, space, dash, underscore. modprobe's KV parser accepts
+// arbitrary text for card_label but we keep it boring so the
+// downstream consumer UIs render predictably AND so there's never
+// any shell-escape concern about what we pass to execvp (which
+// doesn't go through a shell, but defence in depth).
+std::string sanitizeCardLabel(const std::string &in)
+{
+    std::string out;
+    out.reserve(in.size());
+    for (char c : in)
+    {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (std::isalnum(u) || c == ' ' || c == '-' || c == '_')
+            out.push_back(c);
+    }
+    if (out.empty()) out = "RetroCapture";
+    return out;
+}
+} // namespace
+
+VirtualCameraOutput::ModuleOpResult
+VirtualCameraOutput::loadV4l2LoopbackModule(const std::string &cardLabel)
+{
+    ModuleOpResult r;
+    if (!pkexecAvailable())
+    {
+        r.message = "pkexec not found at /usr/bin/pkexec. Install "
+                    "the polkit package or run the modprobe command "
+                    "manually in a terminal.";
+        r.exitCode = 127;
+        return r;
+    }
+    const std::string label = sanitizeCardLabel(cardLabel);
+    // execvp argv: ["pkexec", "modprobe", "v4l2loopback",
+    //               "exclusive_caps=1", "card_label=<label>"]
+    std::string text;
+    const int   rc = runPkexec(
+        {"pkexec", "modprobe", "v4l2loopback",
+         "exclusive_caps=1",
+         std::string("card_label=") + label},
+        text);
+    r.exitCode = rc;
+    r.ok       = (rc == 0);
+    if (r.ok)
+    {
+        r.message = "Module loaded.";
+    }
+    else
+    {
+        // pkexec uses 126 for "user cancelled the auth dialog";
+        // surface a friendly note instead of dumping pkexec's
+        // own English message.
+        if (rc == 126)
+            r.message = "Authentication cancelled.";
+        else if (rc == 127)
+            r.message = "pkexec failed to launch.";
+        else
+            r.message = tidy(text);
+        if (r.message.empty())
+            r.message = "modprobe failed with exit code " +
+                        std::to_string(rc) + ".";
+    }
+    return r;
+}
+
+VirtualCameraOutput::ModuleOpResult
+VirtualCameraOutput::unloadV4l2LoopbackModule()
+{
+    ModuleOpResult r;
+    if (!pkexecAvailable())
+    {
+        r.message = "pkexec not found at /usr/bin/pkexec.";
+        r.exitCode = 127;
+        return r;
+    }
+    std::string text;
+    // -f forces removal but only succeeds if no process still
+    // holds a file descriptor on a loopback device. We DON'T
+    // pass -f — the error path that surfaces "Resource busy"
+    // is informative ("close OBS / Chrome and try again").
+    const int rc = runPkexec({"pkexec", "rmmod", "v4l2loopback"}, text);
+    r.exitCode = rc;
+    r.ok       = (rc == 0);
+    if (r.ok)
+    {
+        r.message = "Module removed.";
+    }
+    else
+    {
+        if (rc == 126)
+            r.message = "Authentication cancelled.";
+        else if (rc == 127)
+            r.message = "pkexec failed to launch.";
+        else
+            r.message = tidy(text);
+        if (r.message.empty())
+            r.message = "rmmod failed with exit code " +
+                        std::to_string(rc) + ".";
+    }
+    return r;
 }
