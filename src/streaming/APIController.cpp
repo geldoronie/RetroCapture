@@ -1151,6 +1151,20 @@ std::string APIController::buildMetaSnapshotJSON()
          // OSD quick-actions widget. No security concern since
          // browsing the directory already exposes per-stream counts.
          <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
+         << "}, "
+         // #84 — Chat-room hint. roomSlug is the streamer's chosen
+         // persistent slug (UIManager::getStreamRoomSlug), populated
+         // only when the streamer ticked "Enable chat alongside this
+         // stream" and the slug has been provisioned. Empty means
+         // viewers should NOT auto-bind; they can still join any
+         // public room manually. We dropped the per-session streamId
+         // here in #84 because it produced one orphan chat_rooms
+         // row per stream session.
+         << "\"chat\": {"
+         <<   "\"roomSlug\": " << jsonString(m_uiManager->getStreamChatEnabled()
+                                              ? m_uiManager->getStreamRoomSlug()
+                                              : std::string{}) << ", "
+         <<   "\"url\": "      << jsonString(m_uiManager->getChatBaseUrl())
          << "}"
          << "}";
 

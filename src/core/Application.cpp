@@ -21,6 +21,10 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../osd/QuickActionsOverlay.h"
+#include "../osd/OSDChat.h"
+#include "../chat/ChatClient.h"
+#include "../identity/ChatIdentity.h"
+#include "../identity/OwnedRooms.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -119,6 +123,58 @@ bool Application::init()
     }
     LOG_INFO("UI initialized");
 
+    // Chat transport (#84). Created up front so the OSD panel has a
+    // live pointer even before publish/connect; the client self-idles
+    // until connect(streamId) is called by the publish or remote-meta
+    // path.
+    //
+    // URL precedence:
+    //   1. --chat-url (non-empty m_chatBaseUrl) wins on launch and is
+    //      written into UIManager so the Streaming → Advanced field
+    //      reflects the live value. The user can then edit it from
+    //      there.
+    //   2. Otherwise UIManager's value (loaded from config.json, or
+    //      the built-in default ws://localhost:8082) is the source
+    //      of truth.
+    // After init, the UI is the canonical value — syncDirectoryClient
+    // reads it every frame and pushes any change down to ChatClient.
+    m_chatClient = std::make_unique<ChatClient>();
+    if (m_ui)
+    {
+        if (!m_chatBaseUrl.empty())
+        {
+            m_ui->setChatBaseUrl(m_chatBaseUrl);
+        }
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+        m_ui->setChatClient(m_chatClient.get());
+    }
+    else
+    {
+        m_chatClient->setBaseUrl(m_chatBaseUrl);
+    }
+
+    // Persistent chat identity (#84). The OSD Profile window will
+    // populate fields and re-save on first launch; we just load
+    // whatever's on disk here so an existing user's rc_<id> goes
+    // out with every hello from the get-go.
+    {
+        const ChatIdentity ident = identity::load();
+        if (ident.isInitialized())
+        {
+            m_chatClient->setClientId(ident.id);
+            // Push the saved nickname into ChatClient AND UIManager —
+            // the OSD's Rooms-browse click + manual join paths read
+            // snap.nickname; without this seeding, connectBySlug
+            // bails on the empty-nickname guard and silently does
+            // nothing on first launch.
+            if (!ident.nickname.empty())
+            {
+                m_chatClient->setNickname(ident.nickname);
+                if (m_ui) m_ui->setChatNickname(ident.nickname);
+            }
+        }
+    }
+
     // Connect ShaderEngine to UI for parameters
     if (m_ui && m_shaderEngine)
     {
@@ -197,10 +253,14 @@ void Application::updateCursorVisibility()
     // the underlying clicks register.
     if (m_ui && m_window)
     {
-        const bool osdInteractive =
+        const bool quickInteractive =
             m_ui->getQuickActionsOverlay() &&
             m_ui->getQuickActionsOverlay()->isVisible();
-        m_window->setCursorVisible(m_ui->isVisible() || osdInteractive);
+        const bool chatInteractive =
+            m_ui->getChatOverlay() &&
+            m_ui->getChatOverlay()->isVisible();
+        m_window->setCursorVisible(
+            m_ui->isVisible() || quickInteractive || chatInteractive);
     }
 }
 
@@ -668,6 +728,29 @@ bool Application::initCapture()
                 // mode. Bypasses the pending-snapshot apply path
                 // because there's no GL state involved.
                 if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                // #84 — Chat: if the host advertised a roomSlug in
+                // /meta, bind the local chat client to that room.
+                // Empty roomSlug means the host has chat disabled or
+                // hasn't picked a slug yet — close any session we
+                // might have had from a previous host.
+                if (m_chatClient)
+                {
+                    const std::string &slug = snap.chatRoomSlug;
+                    if (!slug.empty() && slug != m_chatBoundSlug)
+                    {
+                        m_chatBoundSlug = slug;
+                        // Viewer nick: persistent chat name only.
+                        const std::string nick = m_ui
+                            ? m_ui->getChatNickname()
+                            : std::string{};
+                        m_chatClient->connectBySlug(slug, nick);
+                    }
+                    else if (slug.empty() && !m_chatBoundSlug.empty())
+                    {
+                        m_chatBoundSlug.clear();
+                        m_chatClient->disconnect();
+                    }
+                }
             });
     }
 
@@ -2590,6 +2673,27 @@ bool Application::initUI()
                         // Browse leaves the OSD's "watching with N
                         // others" stuck at 0 forever.
                         if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                        // #84 — same chat-binding logic as the
+                        // initCapture-side callback. Reconnect when
+                        // the host's roomSlug arrives or changes;
+                        // disconnect when it goes empty.
+                        if (m_chatClient)
+                        {
+                            const std::string &slug = snap.chatRoomSlug;
+                            if (!slug.empty() && slug != m_chatBoundSlug)
+                            {
+                                m_chatBoundSlug = slug;
+                                const std::string nick = m_ui
+                                    ? m_ui->getChatNickname()
+                                    : std::string{};
+                                m_chatClient->connectBySlug(slug, nick);
+                            }
+                            else if (slug.empty() && !m_chatBoundSlug.empty())
+                            {
+                                m_chatBoundSlug.clear();
+                                m_chatClient->disconnect();
+                            }
+                        }
                     });
             }
             else
@@ -2820,6 +2924,23 @@ void Application::handleKeyInput()
         {
             f11Pressed = false;
         }
+
+        // F8 toggles the chat overlay (#84). Suppressed while the
+        // chat input box has focus — otherwise pressing F8 to send a
+        // funny line just toggles the panel.
+        static bool f8Pressed = false;
+        bool f8Now = sdlWindow->isKeyPressed(SDLK_F8);
+        if (f8Now && !f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+        else if (!f8Now)
+        {
+            f8Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2859,6 +2980,25 @@ void Application::handleKeyInput()
     else
     {
         f11Pressed = false;
+    }
+
+    // F8 toggles the chat overlay (#84). Suppressed while the chat
+    // input box has focus so typing "F8" in a message doesn't toggle
+    // the panel mid-sentence.
+    static bool f8Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS)
+    {
+        if (!f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+    }
+    else
+    {
+        f8Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -5637,6 +5777,18 @@ void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
 
+    // #84 — Keep ChatClient's base URL in sync with the editable
+    // Streaming → Advanced field. setBaseUrl is a no-op when the
+    // value hasn't changed; on change it tears down the WS and
+    // reconnects against the new URL. Runs at the top of the
+    // function (before any of the publish-gated early returns)
+    // so chat works whether or not the user has the directory
+    // publish toggle on.
+    if (m_chatClient)
+    {
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+    }
+
     // Mirror the remote capture's reconnect-backoff flag and the
     // "currently decoding frames" flag onto UIManager so the Info
     // panel and the connection overlay can read them without holding
@@ -5939,6 +6091,225 @@ void Application::syncDirectoryClient()
                             stats.heartbeatOk, stats.heartbeatFail,
                             stats.patchOk, stats.patchFail,
                             stats.secondsSinceLastHeartbeat);
+
+    // #84 — Chat lifecycle on the host side. As of the identity-
+    // bound rework, the chat room is no longer keyed by per-session
+    // streamId — it's a standalone room with a user-chosen slug,
+    // provisioned once and reused across every stream. The slug
+    // (m_ui->getStreamRoomSlug()) lives in the user's config and the
+    // host always reconnects to that same room when the toggle is on.
+    //
+    // BYPASS: when the user has manually joined a *different* room
+    // via the OSD popup (snap.slug non-empty AND different from the
+    // configured stream slug), the auto-bind stays out of the way —
+    // otherwise we'd fight the user's intent.
+    if (m_chatClient)
+    {
+        const bool chatEnabled = m_ui->getStreamChatEnabled();
+        const bool active = (state == DirectoryClient::State::Active);
+        std::string configuredSlug = m_ui->getStreamRoomSlug();
+        const auto snap   = m_chatClient->getSnapshot();
+        // Keep DirectoryStreamId updated so other consumers (UI
+        // labels, the host's own indicator) still see the session
+        // id — we just don't key chat on it anymore.
+        m_ui->setDirectoryStreamId(m_directoryClient->getStreamId());
+
+        // First stream start after the user ticked "Create chat room"
+        // with no slug derived yet — derive one from the title (user
+        // text or fallback "Stream of <nick>") so the rest of this
+        // function has something to bind to. Stored back into
+        // UIManager so subsequent reconnects skip the derivation.
+        if (active && chatEnabled && configuredSlug.empty())
+        {
+            const std::string nick = m_ui->getChatNickname();
+            std::string source = m_ui->getStreamRoomTitle();
+            if (source.empty() && !nick.empty())
+            {
+                source = std::string("Stream of ") + nick;
+            }
+            // Slugify: lowercase ASCII alnum + dashes, collapse
+            // runs of separators, strip leading/trailing dash,
+            // clamp to 32 chars to leave room for the suffix. Matches
+            // the server's isValidSlug shape (handlers.go).
+            auto slugify = [](const std::string &in) {
+                std::string out;
+                out.reserve(in.size());
+                bool lastWasDash = false;
+                for (char c : in)
+                {
+                    const unsigned char uc = static_cast<unsigned char>(c);
+                    if ((uc >= 'A' && uc <= 'Z') ||
+                        (uc >= 'a' && uc <= 'z') ||
+                        (uc >= '0' && uc <= '9'))
+                    {
+                        out.push_back(static_cast<char>(std::tolower(uc)));
+                        lastWasDash = false;
+                    }
+                    else if (!lastWasDash && !out.empty())
+                    {
+                        out.push_back('-');
+                        lastWasDash = true;
+                    }
+                }
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                if (out.size() > 32) out.resize(32);
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                return out;
+            };
+            std::string slug = slugify(source);
+            // Anything below 2 chars fails the server's isValidSlug.
+            // Backstop with a hex-suffix slug so the user isn't
+            // blocked just because their inputs were unusable.
+            if (slug.size() < 2)
+            {
+                slug = ownedrooms::generateSecret().substr(0, 8);
+            }
+            else
+            {
+                // Disambiguate against collisions by appending the
+                // first 4 hex chars of a random secret. Cheap and
+                // makes the slug effectively unique-per-creation.
+                slug += "-" + ownedrooms::generateSecret().substr(0, 4);
+                if (slug.size() > 41) slug.resize(41);
+                while (!slug.empty() && slug.back() == '-') slug.pop_back();
+            }
+            m_ui->setStreamRoomSlug(slug);
+            m_ui->saveConfig();
+            configuredSlug = slug;
+        }
+
+        const bool userPinnedElsewhere = !snap.slug.empty() &&
+                                         snap.slug != configuredSlug;
+
+        if (!userPinnedElsewhere)
+        {
+            if (active && chatEnabled && !configuredSlug.empty() &&
+                configuredSlug != m_chatBoundSlug)
+            {
+                m_chatBoundSlug = configuredSlug;
+                // Move the whole probe/provision/patch/connect
+                // sequence off the main thread — used to block the
+                // render loop for several hundred ms on every
+                // stream-start. Worker does the HTTP, then calls
+                // connectBySlug (itself async) at the end. All
+                // ChatClient HTTP helpers are thread-safe.
+                ChatClient *chat       = m_chatClient.get();
+                const std::string slug = configuredSlug;
+                const std::string clientId  = chat->getClientId();
+                std::string nick = m_ui->getChatNickname();
+                if (nick.empty()) nick = m_ui->getDirectoryHostNickname();
+                std::string titleHint = m_ui->getStreamRoomTitle();
+                if (titleHint.empty() && !m_ui->getChatNickname().empty())
+                    titleHint = std::string("Stream of ") +
+                                m_ui->getChatNickname();
+                if (titleHint.empty())
+                    titleHint = m_ui->getDirectoryStreamName();
+                // Bump the bind epoch and capture the new value.
+                // The worker checks it at the end before calling
+                // connectBySlug; if the user has hit Stop Streaming
+                // (or otherwise transitioned away) in the meantime,
+                // m_chatBindEpoch will have advanced and the
+                // worker drops the connect to avoid undoing the
+                // disconnect that ran on the main thread.
+                const uint64_t epoch = m_chatBindEpoch.fetch_add(1) + 1;
+                std::atomic<uint64_t> *epochPtr = &m_chatBindEpoch;
+
+                std::thread([chat, slug, clientId, nick, titleHint,
+                             epoch, epochPtr]() {
+                    OwnedRoom owned;
+                    std::string ownerSecret;
+                    if (ownedrooms::findBySlug(slug, owned))
+                    {
+                        ownerSecret = owned.ownerSecret;
+                        // Revive if reaped.
+                        std::string probeErr;
+                        const bool exists = chat->roomExistsBySlug(slug, probeErr);
+                        if (!exists && probeErr.empty())
+                        {
+                            LOG_INFO("Chat: room '" + slug +
+                                     "' missing on server, reviving");
+                            std::string title = titleHint;
+                            if (title.empty()) title = owned.title;
+                            std::string newRoomId, newSlug, err;
+                            if (chat->createStandaloneRoom(
+                                    title, slug,
+                                    /*password=*/"", /*listed=*/true,
+                                    /*ownerClientId=*/clientId,
+                                    owned.ownerSecret,
+                                    /*isStreamRoom=*/true,
+                                    newRoomId, newSlug, err))
+                            {
+                                OwnedRoom rec = owned;
+                                rec.roomId = newRoomId;
+                                rec.title  = title;
+                                ownedrooms::append(rec);
+                                owned = rec;
+                            }
+                            else
+                            {
+                                LOG_WARN("Chat: revive failed: " + err);
+                            }
+                        }
+                        // Idempotent listed=true bump.
+                        std::string patchErr;
+                        if (!chat->setStandaloneRoomListed(
+                                owned.roomId, ownerSecret,
+                                /*listed=*/true, patchErr))
+                        {
+                            LOG_INFO("Chat: PATCH listed=true skipped/failed: " +
+                                     patchErr);
+                        }
+                    }
+                    else
+                    {
+                        // First-time provision.
+                        ownerSecret = ownedrooms::generateSecret();
+                        std::string newRoomId, newSlug, err;
+                        if (chat->createStandaloneRoom(
+                                titleHint, slug,
+                                /*password=*/"", /*listed=*/true,
+                                /*ownerClientId=*/clientId,
+                                ownerSecret,
+                                /*isStreamRoom=*/true,
+                                newRoomId, newSlug, err))
+                        {
+                            OwnedRoom rec;
+                            rec.roomId      = newRoomId;
+                            rec.slug        = newSlug;
+                            rec.title       = titleHint;
+                            rec.ownerSecret = ownerSecret;
+                            ownedrooms::append(rec);
+                        }
+                        else
+                        {
+                            LOG_WARN("Chat: stream-room provision failed: " + err);
+                        }
+                    }
+                    // Late-arrival cancel: main thread may have
+                    // disconnected or rebound during the HTTP
+                    // sequence. Don't undo that by reconnecting
+                    // here.
+                    if (epochPtr->load() != epoch)
+                    {
+                        LOG_INFO("Chat: bind worker stale (epoch "
+                                 "advanced), skipping connectBySlug");
+                        return;
+                    }
+                    chat->connectBySlug(slug, nick,
+                                        /*password=*/"", ownerSecret);
+                }).detach();
+            }
+            else if ((!active || !chatEnabled) && !m_chatBoundSlug.empty())
+            {
+                m_chatBoundSlug.clear();
+                // Advance the epoch so any in-flight bind worker
+                // notices its slug was abandoned and skips the
+                // tail connect.
+                m_chatBindEpoch.fetch_add(1);
+                m_chatClient->disconnect();
+            }
+        }
+    }
 }
 
 // Recording methods

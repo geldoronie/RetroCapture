@@ -63,6 +63,9 @@ public:
     void setFullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
     void setMonitorIndex(int index) { m_monitorIndex = index; }
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
+    // #84 — Chat service base URL plumbing from --chat-url.
+    void setChatBaseUrl(const std::string &url) { m_chatBaseUrl = url; }
+    std::string getChatBaseUrl() const          { return m_chatBaseUrl; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
     void setTextureFilterLinear(bool linear) { m_textureFilterLinear = linear; }
@@ -181,10 +184,30 @@ private:
     std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
     std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
     std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
+    std::unique_ptr<class ChatClient>      m_chatClient;             // #84
     // #69 — Cache the URL each subsystem was started against so a
     // runtime edit in the UI reconfigures both immediately instead of
     // waiting for an app restart.
     std::string m_publishedDirectoryUrl;
+    // #84 — Chat-service base URL override from --chat-url. Empty
+    // means "no CLI override; let UIManager (loaded from config.json)
+    // pick the value". UIManager owns the persistent default and the
+    // runtime-editable field; Application syncs the UI value into
+    // m_chatClient every frame via syncChatTransport().
+    std::string m_chatBaseUrl;
+    // #84 — Tracks the slug the chat client is currently bound to
+    // (was streamId before the identity-bound rework). syncDirectory-
+    // Client uses this to detect transitions on the host side; on
+    // the viewer side, the remote /meta snapshot path uses the same
+    // member to detect roomSlug changes.
+    std::string m_chatBoundSlug;
+    // #84 — Monotonic generation incremented on every chat
+    // bind/unbind transition. The async stream-bind worker captures
+    // it at spawn time and re-checks before calling connectBySlug
+    // at the end; if the user clicked "Stop streaming" mid-flight
+    // (or the slug otherwise changed), the worker's connect is
+    // dropped so it doesn't undo the disconnect.
+    std::atomic<uint64_t> m_chatBindEpoch{0};
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

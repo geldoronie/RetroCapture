@@ -1,6 +1,7 @@
 #include "UIConfigurationStreaming.h"
 #include "UIManager.h"
 #include "UISectionHeader.h"
+#include "../identity/OwnedRooms.h"
 #include "../utils/Logger.h"
 #include "../utils/TranslationManager.h"
 #include "../encoding/MediaEncoder.h"
@@ -142,6 +143,7 @@ void UIConfigurationStreaming::render()
     renderCodecSettings();
     renderBitrateSettings();
     renderDirectoryPublish();      // #49 Phase 2
+    renderChatRoom();              // #84 — Chat room section
     // Buffer tuning (max video/audio buffer, max buffer time, AVIO buffer)
     // is not surfaced in the UI anymore — defaults work for the vast
     // majority of cases. Power users can still override via config.json.
@@ -928,13 +930,38 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             m_uiManager->saveConfig();
         }
     }
+    // #84 — Nickname now comes from the chat Profile (single source
+    // of truth for the user's display name across stream + chat).
+    // Show a read-only label and a button that pops the Profile
+    // window via UIManager's one-shot request flag.
     {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s", m_uiManager->getDirectoryHostNickname().c_str());
-        if (ImGui::InputText("Nickname (optional)", buf, sizeof(buf)))
+        const std::string &nick = m_uiManager->getChatNickname();
+        if (nick.empty())
         {
-            m_uiManager->setDirectoryHostNickname(buf);
-            m_uiManager->saveConfig();
+            ImGui::TextDisabled("Nickname: ");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                               "(not set)");
+        }
+        else
+        {
+            ImGui::TextDisabled("Nickname:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.90f, 1.0f),
+                               "%s", nick.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Configure Profile"))
+        {
+            m_uiManager->requestOpenChatProfile();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Your display name is taken from the chat Profile\n"
+                "(name + nickname + persistent rc_<id>). Click to\n"
+                "edit it; the same nickname is used in the directory\n"
+                "listing AND in chat.");
         }
     }
     {
@@ -953,6 +980,11 @@ void UIConfigurationStreaming::renderDirectoryPublish()
                 "required — never the password itself.");
         }
     }
+
+    // #84 — Chat room is now its own section, rendered separately
+    // (renderChatRoom). Keeps Public directory focused on directory
+    // concerns; chat-room knobs live in their own visually-anchored
+    // block below.
 
     // Endpoint-mode dropdown.
     //
@@ -1113,7 +1145,7 @@ void UIConfigurationStreaming::renderDirectoryPublish()
             "(port-forwarding) — won't work behind CGNAT.");
     }
 
-    // Advanced: directory URL override + TLS dev toggle.
+    // Advanced: directory URL override + chat URL + TLS dev toggle.
     if (ImGui::TreeNode("Advanced"))
     {
         char buf[256];
@@ -1122,6 +1154,27 @@ void UIConfigurationStreaming::renderDirectoryPublish()
         {
             m_uiManager->setDirectoryUrl(buf);
             m_uiManager->saveConfig();
+        }
+        // #84 — Chat service URL. Default: production.
+        // Accepts any of https:// / http:// / wss:// / ws:// — the
+        // client normalizes internally between the REST resolve /
+        // history endpoints (http/https) and the WS upgrade (ws/wss).
+        char chatBuf[256];
+        std::snprintf(chatBuf, sizeof(chatBuf), "%s",
+                      m_uiManager->getChatBaseUrl().c_str());
+        if (ImGui::InputText("Chat URL", chatBuf, sizeof(chatBuf)))
+        {
+            m_uiManager->setChatBaseUrl(chatBuf);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Chat service base URL. Accepts https:// / http:// /\n"
+                "wss:// / ws:// — the client picks the right scheme\n"
+                "for each endpoint internally.\n"
+                "Default: https://chat.retrocapture.com\n"
+                "Local dev: http://localhost:8082");
         }
         // Dev escape hatch — only meaningful for https:// URLs.
         // Off by default. The label spells out "self-signed" because
@@ -1190,6 +1243,21 @@ void UIConfigurationStreaming::renderDirectoryPublish()
     {
         if (enabled)
         {
+            // #84 — Safety-net auto-fill: the chat-toggle handler
+            // already seeds "Stream of <nick>" but only if both the
+            // toggle AND a nickname were set at that moment. If the
+            // user did it the other way around (configured profile
+            // AFTER ticking chat, or just left the field empty), do
+            // the fill one more time here so they don't get rejected
+            // by the empty-name validation.
+            if (m_uiManager->getStreamChatEnabled() &&
+                m_uiManager->getDirectoryStreamName().empty() &&
+                !m_uiManager->getChatNickname().empty())
+            {
+                m_uiManager->setDirectoryStreamName(
+                    std::string("Stream of ") +
+                    m_uiManager->getChatNickname());
+            }
             if (!m_uiManager->getDirectoryPrivacyAcked())
             {
                 // Need consent first. Modal flips the toggle on once
@@ -1290,6 +1358,102 @@ void UIConfigurationStreaming::renderDirectoryPublish()
 // ─────────────────────────────────────────────────────────────────────
 // Cloudflared auto-download UI (#53 / Phase 2.5b)
 //
+// ─────────────────────────────────────────────────────────────────────
+// Chat room — standalone section sibling to "Public directory" (#84).
+// One checkbox + one human-readable name field. The public slug
+// (server identifier) is *not* exposed: it's derived deterministically
+// from the name, or from a fallback like "stream-of-<nick>" when the
+// user leaves the field empty, at first stream start. Locking once
+// provisioned keeps the same room across reboots — renaming after
+// would orphan it server-side (v0.5 has no rename endpoint).
+// ─────────────────────────────────────────────────────────────────────
+void UIConfigurationStreaming::renderChatRoom()
+{
+    ui_section_header("Chat room",
+                      "Create a chat room for this stream. Viewers' "
+                      "panels auto-bind to it; the room persists across "
+                      "every stream you publish.");
+
+    bool chatOn = m_uiManager->getStreamChatEnabled();
+    if (ImGui::Checkbox("Create chat room", &chatOn))
+    {
+        m_uiManager->setStreamChatEnabled(chatOn);
+        // Seed a default stream name when the user turns chat on
+        // but hasn't named the stream yet — saves them from a
+        // "Stream name *" rejection at publish time.
+        if (chatOn &&
+            m_uiManager->getDirectoryStreamName().empty() &&
+            !m_uiManager->getChatNickname().empty())
+        {
+            m_uiManager->setDirectoryStreamName(
+                std::string("Stream of ") + m_uiManager->getChatNickname());
+        }
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Provision a chat room on your next stream start. The\n"
+            "room belongs to you (rc_<id>-bound owner secret) and\n"
+            "is reused for every following stream — no orphan rooms.");
+    }
+
+    if (!chatOn) return;
+
+    // Title field. Slug is derived; we don't surface it here. Once
+    // the room has been provisioned the title locks — v0.5 has no
+    // rename endpoint, and editing it locally would just confuse
+    // the user when viewers still see the original.
+    OwnedRoom owned;
+    const bool alreadyProvisioned =
+        !m_uiManager->getStreamRoomSlug().empty() &&
+        ownedrooms::findBySlug(m_uiManager->getStreamRoomSlug(), owned);
+
+    char titleBuf[128];
+    std::snprintf(titleBuf, sizeof(titleBuf), "%s",
+                  m_uiManager->getStreamRoomTitle().c_str());
+    ImGui::BeginDisabled(alreadyProvisioned);
+    if (ImGui::InputText("Room name", titleBuf, sizeof(titleBuf)))
+    {
+        m_uiManager->setStreamRoomTitle(titleBuf);
+        m_uiManager->saveConfig();
+    }
+    ImGui::EndDisabled();
+
+    if (alreadyProvisioned)
+    {
+        ImGui::TextDisabled(
+            "Room created. Public address: #%s",
+            m_uiManager->getStreamRoomSlug().c_str());
+        ImGui::TextDisabled(
+            "To pick a different name, delete the room from\n"
+            "Chat -> Rooms -> Owned first.");
+    }
+    else if (m_uiManager->getStreamRoomTitle().empty())
+    {
+        const std::string &nick = m_uiManager->getChatNickname();
+        if (nick.empty())
+        {
+            ImGui::TextDisabled(
+                "Optional. If left empty, the room will be named\n"
+                "after your stream and nickname at create time.\n"
+                "Configure your Profile first to enable the default.");
+        }
+        else
+        {
+            ImGui::TextDisabled(
+                "Optional. If left empty, the room will be named\n"
+                "\"Stream of %s\" (your nickname) at create time.",
+                nick.c_str());
+        }
+    }
+    else
+    {
+        ImGui::TextDisabled(
+            "Room will be created on your next stream start.");
+    }
+}
+
 // Rendered inline inside the Cloudflare Tunnel branch of the endpoint
 // dropdown rather than as a modal, because:
 //   * the user is already looking at this row of the config — popping

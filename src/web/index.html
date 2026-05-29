@@ -66,22 +66,155 @@
     <!-- Alert Container -->
     <div class="alert-container" id="alertContainer"></div>
 
-    <!-- Hero: live player -->
+    <!-- Hero: live player + chat sidebar (#84). On desktop the chat
+         sits to the right of the player, matching its height (YouTube
+         live layout). On tablets/phones it stacks below the player at
+         full width. -->
     <section class="home-hero">
         <div class="container-fluid px-3 px-md-4 py-3">
-            <div class="home-player-wrapper">
-                <video id="livePlayer" controls autoplay muted playsinline class="home-player"></video>
-                <div class="home-player-overlay" id="livePlayerIdleOverlay">
-                    <div class="text-center">
-                        <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
-                        <h3 class="text-light" data-i18n="web.home.offline.title">Stream is offline</h3>
-                        <p class="text-light opacity-75 mb-3" data-i18n="web.home.offline.body">Start streaming from the Configuration page or click Play to try anyway.</p>
-                        <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i><span data-i18n="web.home.play">Play</span></button>
+            <div class="row g-3 home-hero-row align-items-stretch">
+                <div class="col-lg-9 home-hero-player-col">
+                    <div class="home-player-wrapper">
+                        <video id="livePlayer" controls autoplay muted playsinline class="home-player"></video>
+                        <div class="home-player-overlay" id="livePlayerIdleOverlay">
+                            <div class="text-center">
+                                <i class="bi bi-broadcast display-3 text-light opacity-50 mb-3 d-block"></i>
+                                <h3 class="text-light" data-i18n="web.home.offline.title">Stream is offline</h3>
+                                <p class="text-light opacity-75 mb-3" data-i18n="web.home.offline.body">Start streaming from the Configuration page or click Play to try anyway.</p>
+                                <button class="btn btn-primary" id="livePlayerStartBtn"><i class="bi bi-play-fill me-1"></i><span data-i18n="web.home.play">Play</span></button>
+                            </div>
+                        </div>
+                        <div class="home-player-controls" id="livePlayerControls">
+                            <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i><span data-i18n="web.home.stop">Stop</span></button>
+                            <span class="text-light small ms-2" id="livePlayerStatus" data-i18n="web.home.ready">Ready.</span>
+                        </div>
                     </div>
                 </div>
-                <div class="home-player-controls" id="livePlayerControls">
-                    <button class="btn btn-sm btn-outline-light" id="livePlayerStopBtn" disabled><i class="bi bi-stop-fill me-1"></i><span data-i18n="web.home.stop">Stop</span></button>
-                    <span class="text-light small ms-2" id="livePlayerStatus" data-i18n="web.home.ready">Ready.</span>
+                <div class="col-lg-3 home-hero-chat-col">
+                    <aside class="home-chat-panel">
+                        <header class="home-chat-header">
+                            <i class="bi bi-chat-dots me-1"></i>
+                            <span data-i18n="web.home.chat">Live chat</span>
+                            <span id="chatStateBadge" class="home-chat-state">offline</span>
+                            <span id="chatRoomTitle" class="home-chat-title"></span>
+                            <button id="chatProfileBtn" type="button" class="home-chat-headerbtn" title="Profile">Profile</button>
+                            <button id="chatRoomsBtn" type="button" class="home-chat-headerbtn" title="Rooms">Rooms</button>
+                            <button id="chatDisconnectBtn" type="button" class="home-chat-headerbtn home-chat-disconnect d-none" title="Disconnect">Disconnect</button>
+                            <button id="chatParticipantCount" type="button" class="home-chat-count open" title="Toggle participants list"></button>
+                        </header>
+                        <div id="chatRoomBanner" class="home-chat-room-banner d-none">
+                            <span id="chatRoomBannerKind" class="home-chat-room-kind">[ROOM]</span>
+                            <span id="chatRoomBannerLabel" class="home-chat-room-label">Room</span>
+                            <span id="chatRoomBannerSub" class="home-chat-room-sub"></span>
+                        </div>
+                        <div id="chatProfileGate" class="home-chat-gate d-none">
+                            <div class="home-chat-gate-title">Profile required</div>
+                            <p class="home-chat-gate-body">You need a chat profile before you can send or receive messages.</p>
+                            <button id="chatProfileGateBtn" type="button" class="btn btn-primary btn-sm">Open Profile</button>
+                        </div>
+                        <div id="chatProfileModal" class="home-chat-profile d-none">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Display name</label>
+                                <input id="chatProfileName" type="text" maxlength="120" placeholder="Your real name">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Nickname (visible)</label>
+                                <input id="chatProfileNick" type="text" maxlength="32" placeholder="nickname">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Age</label>
+                                <input id="chatProfileAge" type="number" min="0" max="130" step="1">
+                            </div>
+                            <div class="home-chat-profile-id">
+                                <small class="text-muted">Identity (read-only):</small>
+                                <code id="chatProfileId" class="home-chat-profile-id-value">not generated</code>
+                            </div>
+                            <small class="text-muted d-block">Persisted in this browser's localStorage. Open the same page in another browser/device to get a separate identity.</small>
+                            <div id="chatProfileError" class="text-danger small d-none"></div>
+                            <div id="chatProfileSaved" class="text-success small d-none">Saved.</div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatProfileSave" type="button" class="btn btn-primary btn-sm">Save</button>
+                                <button id="chatProfileClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
+                        <div id="chatRoomsModal" class="home-chat-profile d-none">
+                            <div class="home-chat-rooms-head">
+                                <button id="chatRoomsOpenCreate" type="button" class="btn btn-primary btn-sm">Create new...</button>
+                                <button id="chatRoomsOpenJoin"   type="button" class="btn btn-outline-secondary btn-sm">Join custom...</button>
+                                <button id="chatRoomsRefresh"    type="button" class="btn btn-outline-secondary btn-sm ms-auto">Refresh</button>
+                            </div>
+                            <div class="home-chat-rooms-tabs">
+                                <button id="chatRoomsTabPublic" type="button" class="home-chat-rooms-tab is-active" data-tab="public">Public</button>
+                                <button id="chatRoomsTabOwned"  type="button" class="home-chat-rooms-tab" data-tab="owned">Owned</button>
+                            </div>
+                            <div id="chatRoomsTabPanelPublic" class="home-chat-rooms-panel">
+                                <div id="chatRoomsList" class="home-chat-rooms-list"></div>
+                            </div>
+                            <div id="chatRoomsTabPanelOwned" class="home-chat-rooms-panel d-none">
+                                <div id="chatOwnedList" class="home-chat-rooms-list"></div>
+                                <div id="chatOwnedError" class="text-danger small d-none"></div>
+                            </div>
+                            <div id="chatRoomsError" class="text-danger small d-none"></div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
+                        <div id="chatCreateModal" class="home-chat-profile d-none">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Title</label>
+                                <input id="chatRoomsCreateTitle" type="text" maxlength="120" placeholder="Friday Smash Bros">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Slug (optional)</label>
+                                <input id="chatRoomsCreateSlug" type="text" maxlength="42" placeholder="auto-generated">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Password</label>
+                                <input id="chatRoomsCreatePass" type="password" maxlength="64" placeholder="leave blank for none">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">List publicly</label>
+                                <input id="chatRoomsCreateListed" type="checkbox" checked>
+                            </div>
+                            <div id="chatCreateError" class="text-danger small d-none"></div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsCreate" type="button" class="btn btn-primary btn-sm">Create + Join</button>
+                                <button id="chatCreateClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
+                        <div id="chatJoinCustomModal" class="home-chat-profile d-none">
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Slug</label>
+                                <input id="chatRoomsJoinSlug" type="text" maxlength="42" placeholder="smash-sun">
+                            </div>
+                            <div class="home-chat-profile-row">
+                                <label class="home-chat-profile-label">Password (if required)</label>
+                                <input id="chatRoomsJoinPass" type="password" maxlength="64">
+                            </div>
+                            <div id="chatJoinError" class="text-danger small d-none"></div>
+                            <div class="home-chat-profile-actions">
+                                <button id="chatRoomsJoin" type="button" class="btn btn-primary btn-sm">Join</button>
+                                <button id="chatJoinClose" type="button" class="btn btn-outline-secondary btn-sm">Close</button>
+                            </div>
+                        </div>
+                        <div class="home-chat-body">
+                            <aside id="chatParticipantsPanel" class="home-chat-parts"></aside>
+                            <div id="chatLog" class="home-chat-log"></div>
+                        </div>
+                        <div id="chatUnavailable" class="home-chat-empty d-none" data-i18n="web.chat.unavailable">Chat is unavailable: the stream isn't being published to the directory.</div>
+                        <div class="home-chat-nick-row">
+                            <span class="home-chat-nick-prefix" data-i18n="web.chat.as">as</span>
+                            <input id="chatNickInput" type="text" maxlength="32" placeholder="" data-i18n-placeholder="web.chat.nickname_placeholder">
+                            <button id="chatNickApply" type="button" data-i18n="web.chat.apply">Apply</button>
+                        </div>
+                        <div id="chatNickError" class="home-chat-error d-none"></div>
+                        <div class="home-chat-compose">
+                            <input id="chatMessageInput" type="text" maxlength="800" placeholder="" data-i18n-placeholder="web.chat.message_placeholder">
+                            <button id="chatSendBtn" type="button" title="Send" data-i18n-title="web.chat.send">
+                                <i class="bi bi-send-fill"></i>
+                            </button>
+                        </div>
+                    </aside>
                 </div>
             </div>
         </div>
@@ -151,6 +284,7 @@
     <script src="/vendor/bootstrap.bundle.min.js"></script>
     <script src="/vendor/mpegts.min.js"></script>
     <script src="/home.js"></script>
+    <script src="/chat.js"></script>
 
     <!-- Service Worker registration -->
     <script src="/sw-register.js"></script>

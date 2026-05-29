@@ -14,6 +14,7 @@
 #include "UIShortcutsHelp.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
+#include "../osd/OSDChat.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -174,6 +175,53 @@ bool UIManager::init(void *window)
     // fallback. The bullets are now drawn via ImDrawList primitives
     // through ui_status_bullet() in UISectionHeader.h — same
     // technique UIDirectoryBrowser::drawPadlockIcon uses.
+    //
+    // Optional emoji font (#84) — chat messages routinely contain
+    // emojis the default font can't render either. We don't bundle a
+    // font (Noto Emoji's monochrome TTF is ~530 KB and adding it
+    // would grow every release), but we DO honour one if the user
+    // drops it under assets/fonts/. The expected file is
+    // NotoEmoji-Regular.ttf (download from
+    // https://fonts.google.com/noto/specimen/Noto+Emoji). When
+    // present we merge a broad emoji + dingbats + supplemental
+    // symbols range into the default atlas so chat content lands
+    // with proper glyphs instead of fallback boxes.
+    {
+        const fs::path fontPath =
+            fs::path(Paths::getReadOnlyAssetsDir()) / "assets" / "fonts" /
+            "NotoEmoji-Regular.ttf";
+        if (fs::exists(fontPath))
+        {
+            ImGuiIO &io = ImGui::GetIO();
+            io.Fonts->AddFontDefault();
+            ImFontConfig cfg;
+            cfg.MergeMode  = true;
+            cfg.PixelSnapH = true;
+            // ImGui's atlas only supports the Basic Multilingual Plane
+            // (U+0000..U+FFFF) plus surrogate-paired codepoints up to
+            // U+10FFFF that ImWchar32 can address; the runtime build
+            // here uses ImWchar = 16-bit by default. Cover the BMP
+            // symbol ranges that don't need surrogates so the merge
+            // takes effect even on a stock build.
+            static const ImWchar ranges[] = {
+                0x2000, 0x206F,   // general punctuation
+                0x2190, 0x21FF,   // arrows
+                0x2300, 0x23FF,   // misc technical (⏎ etc.)
+                0x2500, 0x257F,   // box drawing
+                0x2580, 0x259F,   // block elements
+                0x25A0, 0x25FF,   // geometric shapes (●, ○, …)
+                0x2600, 0x26FF,   // misc symbols (☀, ★, ♥…)
+                0x2700, 0x27BF,   // dingbats (✓, ✦…)
+                0x2B00, 0x2BFF,   // misc symbols + arrows
+                0x3000, 0x303F,   // CJK punctuation
+                0xFB00, 0xFB06,   // Latin ligatures
+                0,
+            };
+            io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(),
+                                         13.0f, &cfg, ranges);
+            LOG_INFO("UIManager: merged emoji font from " + fontPath.string());
+        }
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -240,6 +288,12 @@ bool UIManager::init(void *window)
     m_quickActionsOverlay->setVisible(m_quickActionsVisible);
     m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
         this, m_quickActionsOverlay.get());
+    // Chat overlay (#84) — needs the ChatClient pointer Application
+    // installs via setChatClient(). Always constructed; the overlay
+    // self-hides while the client is Idle, so a null/unconfigured
+    // pointer renders as nothing.
+    m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+    m_chatOverlay->setVisible(m_chatOverlayVisible);
     // Shortcuts orientation widget — UI layer, top-right corner,
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
@@ -262,6 +316,20 @@ bool UIManager::init(void *window)
     m_initialized = true;
     LOG_INFO("UIManager initialized");
     return true;
+}
+
+void UIManager::setChatClient(ChatClient *chat)
+{
+    m_chatClient = chat;
+    if (m_chatOverlay)
+    {
+        // The overlay was constructed before init() finished if
+        // setChatClient ran first; reconstruct it so it picks up the
+        // pointer. Cheaper to swap than to expose another setter that
+        // most callers wouldn't touch.
+        m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+        m_chatOverlay->setVisible(m_chatOverlayVisible);
+    }
 }
 
 void UIManager::shutdown()
@@ -304,7 +372,8 @@ void UIManager::beginFrame()
     // (UI hidden AND no interactive OSD on screen) rather than on
     // UI alone, and skip the mouse-position scrub that would prevent
     // any widget from seeing hover at all.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     const bool blockMouse     = !m_uiVisible && !osdInteractive;
     ImGuiIO& io = ImGui::GetIO();
     if (blockMouse)
@@ -365,7 +434,8 @@ void UIManager::endFrame()
     // buttons must respond to clicks even with the rest of the UI
     // hidden via F12. So gate NoMouse on (UI hidden AND no
     // interactive OSD visible) rather than UI alone.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     ImGuiIO& io = ImGui::GetIO();
     if (!m_uiVisible && !osdInteractive)
     {
@@ -402,6 +472,30 @@ void UIManager::render()
     // queries it for anti-collision math.
     if (m_quickActionsOverlay) m_quickActionsOverlay->render();
     renderConnectionOverlay();
+    // Chat overlay (#84) — also outside the m_uiVisible gate so the
+    // user can keep an eye on chat while everything else is hidden.
+    if (m_chatOverlay) m_chatOverlay->render();
+    // Directory browser (#84) — promoted from the regular UI layer
+    // to the OSD layer so it stays reachable when F12 hides the
+    // config windows. Same one-button entry from QuickActions
+    // continues to work; the only behavioural change is "outside
+    // m_uiVisible". p_open binding inside UIDirectoryBrowser::render
+    // gives it the standard title-bar X.
+    if (m_directoryBrowserWindow)
+    {
+        // Per-frame invariant: a host who's actively streaming
+        // shouldn't have the browser open — picking another stream
+        // would fight the capture pipeline, and the QuickActions
+        // button that opens it is already disabled in that state.
+        // Forcing it closed every frame is cheap and avoids the
+        // "I opened it before clicking Start, now it's stuck" case.
+        if (getStreamingActive() && !isRemoteSource() &&
+            m_directoryBrowserWindow->isVisible())
+        {
+            m_directoryBrowserWindow->setVisible(false);
+        }
+        m_directoryBrowserWindow->render();
+    }
 
     if (!m_uiVisible)
     {
@@ -487,6 +581,10 @@ void UIManager::render()
                     m_quickActionsOverlay->setVisible(!visible);
                 }
             }
+            // Profile / Chat / Chat Rooms moved to the top-level
+            // "Social" menu — they're a coherent group that's not
+            // about toggling local widgets, so the View menu was
+            // the wrong drawer for them.
             if (m_shortcutsHelpWindow)
             {
                 bool visible = m_shortcutsHelpWindow->isVisible();
@@ -524,6 +622,34 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+
+        // Social — Profile / Chat / Chat Rooms. Conceptually about
+        // identity + communication with other users; the View menu
+        // was being used as a catch-all and these items got buried.
+        if (m_chatOverlay && ImGui::BeginMenu(T("menu.social").c_str()))
+        {
+            bool profVis = m_chatOverlay->isProfileWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.profile").c_str(),
+                                nullptr, profVis))
+            {
+                m_chatOverlay->setProfileWindowVisible(!profVis);
+            }
+            ImGui::Separator();
+            bool chatVis = m_chatOverlay->isVisible();
+            if (ImGui::MenuItem(T("menu.social.chat").c_str(),
+                                "F8", chatVis))
+            {
+                m_chatOverlay->setVisible(!chatVis);
+            }
+            bool roomsVis = m_chatOverlay->isRoomsWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.chatrooms").c_str(),
+                                nullptr, roomsVis))
+            {
+                m_chatOverlay->setRoomsWindowVisible(!roomsVis);
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu(T("menu.remote").c_str()))
         {
             const bool clientEntryAllowed = !m_streamingActive;
@@ -626,10 +752,10 @@ void UIManager::render()
         m_remoteConnectionWindow->render();
     }
 
-    if (m_directoryBrowserWindow)
-    {
-        m_directoryBrowserWindow->render();
-    }
+    // Directory browser moved to the OSD layer (rendered above the
+    // m_uiVisible gate at the top of this function). No render call
+    // here — having two would either double-render or eat input on
+    // alternating frames.
 
     // Renderizar janela de presets
     if (m_capturePresetsWindow)
@@ -2515,6 +2641,28 @@ void UIManager::loadConfig()
                 if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
                 if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
             }
+            // Chat URL (#84) — sibling to the directory block.
+            if (streaming.contains("chat"))
+            {
+                auto &chat = streaming["chat"];
+                if (chat.contains("baseUrl"))  m_chatBaseUrl  = chat["baseUrl"].get<std::string>();
+                if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
+                if (chat.contains("streamChatEnabled"))
+                    m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
+                if (chat.contains("streamRoomTitle"))
+                    m_streamRoomTitle   = chat["streamRoomTitle"].get<std::string>();
+                if (chat.contains("streamRoomSlug"))
+                    m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
+            }
+            // #84 — One-shot migration: pre-rework configs stored
+            // the directory's display nickname in a separate field
+            // (m_directoryHostNickname). The chat Profile now owns
+            // it; copy across when the chat nickname is empty so
+            // legacy configs don't suddenly look "unnamed".
+            if (m_chatNickname.empty() && !m_directoryHostNickname.empty())
+            {
+                m_chatNickname = m_directoryHostNickname;
+            }
         }
 
         // Preferences (#45 placeholder + window restructure)
@@ -2531,6 +2679,10 @@ void UIManager::loadConfig()
                 m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
             if (prefs.contains("shortcutsHelpVisible"))
                 m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
+            // Chat overlay visibility (#84). Default true — same
+            // discoverability story as the quick-actions widget.
+            if (prefs.contains("chatOverlayVisible"))
+                m_chatOverlayVisible = prefs["chatOverlayVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2956,6 +3108,14 @@ void UIManager::saveConfig()
                 {"namedTunnelId",       m_directoryNamedTunnelId},
                 {"namedTunnelHostname", m_directoryNamedTunnelHostname},
                 {"privacyAcked",   m_directoryPrivacyAcked},
+            }},
+            // Chat service URL + persistent nickname (#84).
+            {"chat", {
+                {"baseUrl",            m_chatBaseUrl},
+                {"nickname",           m_chatNickname},
+                {"streamChatEnabled",  m_streamChatEnabled},
+                {"streamRoomTitle",    m_streamRoomTitle},
+                {"streamRoomSlug",     m_streamRoomSlug},
             }}};
 
         // Preferences (#45 placeholder + window restructure)
@@ -2968,6 +3128,9 @@ void UIManager::saveConfig()
             {"shortcutsHelpVisible",
              m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
                                    : m_shortcutsHelpVisible},
+            {"chatOverlayVisible",
+             m_chatOverlay ? m_chatOverlay->isVisible()
+                           : m_chatOverlayVisible},
         };
 
         // Salvar configurações de imagem

@@ -274,6 +274,62 @@ public:
     void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
     bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
     void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    // #84 — Chat service base URL (ws:// or wss://). Editable under
+    // Configurations → Streaming → Advanced, mirroring the directory
+    // URL field. Application reads this every frame and reconfigures
+    // the ChatClient when it changes (cheap no-op when unchanged).
+    const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
+    void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
+    // #84 — Persistent chat nickname. Shared between host and viewer
+    // modes (you're "geldo" regardless of which side you're on); the
+    // OSD chat panel writes here when the user clicks Apply. Empty
+    // means "use a fallback": Application falls back to the directory
+    // host nickname when publishing, or sends an empty hello (server
+    // generates anon-<rand>) when viewing.
+    const std::string &getChatNickname() const       { return m_chatNickname; }
+    void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    // #84 — Cross-window request to open the Chat Profile dialog.
+    // Set by UIConfigurationStreaming when the user clicks
+    // "Configure Profile"; consumed by OSDChat on the next frame.
+    // The flag is a one-shot — the consumer clears it so a stale
+    // request from minutes ago doesn't pop the dialog every frame.
+    bool consumeOpenChatProfileRequest()
+    {
+        if (!m_openChatProfileRequested) return false;
+        m_openChatProfileRequested = false;
+        return true;
+    }
+    void requestOpenChatProfile()                    { m_openChatProfileRequested = true; }
+    // #84 — Same one-shot pattern for the Chat Rooms window. Set by
+    // the QuickActions overlay; consumed by OSDChat on the next frame
+    // (also forces the chat panel itself visible if it was hidden).
+    bool consumeOpenChatRoomsRequest()
+    {
+        if (!m_openChatRoomsRequested) return false;
+        m_openChatRoomsRequested = false;
+        return true;
+    }
+    void requestOpenChatRooms()                      { m_openChatRoomsRequested = true; }
+    // #84 — "Open the chat alongside the stream" master toggle. When
+    // off, Application skips chat provisioning entirely; /meta omits
+    // chat.roomSlug so viewers don't auto-bind. Default ON so the
+    // out-of-the-box experience matches the prior auto-create-room
+    // behaviour. Editable under Streaming → Public Directory.
+    bool getStreamChatEnabled() const                { return m_streamChatEnabled; }
+    void setStreamChatEnabled(bool v)                { m_streamChatEnabled = v; }
+    // #84 — Human-readable name of the streamer's chat room. User-
+    // editable in Streaming → Chat room. Empty == "use default
+    // 'Stream of <nick>' at provision time".
+    const std::string &getStreamRoomTitle() const    { return m_streamRoomTitle; }
+    void setStreamRoomTitle(const std::string &v)    { m_streamRoomTitle = v; }
+    // #84 — Auto-derived public slug for the streamer's room. Not
+    // user-editable; computed from the room title (or the fallback
+    // "Stream of <nick>") at first stream start, persisted here so
+    // every reconnect lands on the same room. Empty == "not yet
+    // provisioned"; Application fills it on the first stream start
+    // with chat enabled.
+    const std::string &getStreamRoomSlug() const     { return m_streamRoomSlug; }
+    void setStreamRoomSlug(const std::string &v)     { m_streamRoomSlug = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -283,7 +339,16 @@ public:
     void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
     const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
-    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    // #84 — As of the profile unification, the directory's "host
+    // nickname" is derived from the chat Profile (m_chatNickname).
+    // The setter is still here for ConfigJSON round-trips of legacy
+    // configs that have a separate hostNickname field; on first
+    // load we mirror it into m_chatNickname when the latter is
+    // empty, then the chat profile owns the value going forward.
+    const std::string &getDirectoryHostNickname() const
+    {
+        return m_chatNickname.empty() ? m_directoryHostNickname : m_chatNickname;
+    }
     void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
     const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
     void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
@@ -306,6 +371,12 @@ public:
     void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
     const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
     void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    // #84 — Currently-published directory streamId (empty when not
+    // Active). Application mirrors DirectoryClient::getStreamId() here
+    // every frame so APIController can embed it in /meta for the chat
+    // panel on remote clients.
+    const std::string &getDirectoryStreamId() const   { return m_directoryStreamId; }
+    void setDirectoryStreamId(const std::string &v)   { m_directoryStreamId = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
 
@@ -547,6 +618,11 @@ public:
     // OSD layer accessor — Application needs it to gate cursor
     // visibility on whether an interactive overlay is on screen (#68).
     QuickActionsOverlay *getQuickActionsOverlay() const { return m_quickActionsOverlay.get(); }
+    class OSDChat       *getChatOverlay()        const { return m_chatOverlay.get(); }
+    // Chat-overlay wiring (#84). Application creates the ChatClient
+    // and hands the pointer here so the OSD has a transport to draw
+    // from. Safe to call before or after init().
+    void setChatClient(class ChatClient *chat);
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -868,11 +944,18 @@ private:
     // accessors.
     std::unique_ptr<class QuickActionsOverlay>      m_quickActionsOverlay;
     std::unique_ptr<class ConnectionStatusOverlay>  m_connectionOverlay;
+    // Chat overlay (#84) — OSD layer like the two above, owns its
+    // input/scroll state but reads message data from the shared
+    // ChatClient (held by Application; pointer wired via
+    // setChatClient).
+    std::unique_ptr<class OSDChat>                  m_chatOverlay;
+    class ChatClient                               *m_chatClient = nullptr;
     // Loaded from config.json before m_quickActionsOverlay exists,
     // applied via setVisible() right after construction. Defaults to
     // true so first-time users see the overlay; subsequent toggles
     // round-trip through saveConfig().
     bool m_quickActionsVisible = true;
+    bool m_chatOverlayVisible  = true;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the
     // keyboard hints on first launch.
@@ -1058,6 +1141,29 @@ private:
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
     std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // #84 — Chat URL. Production default; --chat-url overrides at
+    // launch; the Streaming → Advanced field overrides at runtime.
+    // Accepts https://, http://, wss://, ws:// — ChatClient
+    // normalizes the scheme when building REST vs WS endpoints.
+    std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
+    // #84 — Persistent chat display name. Default empty; OSD chat
+    // panel's Apply button writes here + saveConfig.
+    std::string m_chatNickname            = "";
+    // #84 — One-shot flag: UIConfigurationStreaming raises it when
+    // the user clicks "Configure Profile" from the streaming
+    // settings; OSDChat consumes it on the next frame and opens
+    // the Profile window even if the chat panel itself is hidden.
+    bool        m_openChatProfileRequested = false;
+    bool        m_openChatRoomsRequested   = false;
+    // #84 — Open the chat alongside the stream. ON by default for
+    // backwards-compatible behaviour.
+    bool        m_streamChatEnabled       = true;
+    // #84 — Human-readable title for the streamer's chat room.
+    std::string m_streamRoomTitle         = "";
+    // #84 — The streamer's persistent room slug, auto-derived at
+    // provision time. Provisioned on the first stream-with-chat
+    // start, then reused forever.
+    std::string m_streamRoomSlug          = "";
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.
@@ -1076,6 +1182,7 @@ private:
     std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+    std::string m_directoryStreamId       = "";       // #84 — mirrored from DirectoryClient for /meta
 
     // Per-session telemetry counters mirrored from DirectoryClient
     // (#49 Phase 5). Application writes each frame; UI reads.

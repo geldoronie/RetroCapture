@@ -60,6 +60,12 @@ public:
         // mode. Optional; older hosts that don't send this field
         // leave it at 0.
         uint32_t                     upstreamClientCount = 0;
+        // chat block (#84) — the host's persistent chat-room slug
+        // (UIManager::streamRoomSlug). Empty when the host has chat
+        // turned off, or hasn't chosen a slug yet. Replaces the
+        // earlier per-session chatStreamId, which produced one
+        // orphan chat_rooms row per stream restart.
+        std::string                  chatRoomSlug;
     };
 
     using SnapshotCallback = std::function<void(const Snapshot &)>;

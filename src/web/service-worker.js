@@ -33,8 +33,12 @@
  * activate-time cleanup of older caches.
  */
 
-const CACHE_NAME = 'retrocapture-v6';
-const RUNTIME_CACHE = 'retrocapture-runtime-v6';
+// Bumped v6 → v7 for the #84 web chat overhaul (chat.js rewrite, new
+// YouTube-style layout, removed localhost-hostname rewrite). Without
+// this bump, browsers carry the old chat.js until the user manually
+// clears storage or closes every open tab.
+const CACHE_NAME = 'retrocapture-v14';
+const RUNTIME_CACHE = 'retrocapture-runtime-v7';
 
 // Resources to precache so the PWA shell works offline. Keep small
 // — every entry has to fetch successfully or install fails.
@@ -43,6 +47,10 @@ const PRECACHE_URLS = [
   '/index.html',
   '/style.css',
   '/manifest.json',
+  '/api.js',
+  '/home.js',
+  '/chat.js',
+  '/i18n.js',
   '/vendor/bootstrap.min.css',
   '/vendor/bootstrap.bundle.min.js',
   '/vendor/bootstrap-icons.css',

@@ -37,6 +37,7 @@ private:
     void renderAdvancedBufferSettings();
     void renderStartStopButton();
     void renderDirectoryPublish();        // #49 Phase 2
+    void renderChatRoom();                // #84 — standalone "Chat room" section
 
     // Codec-specific settings
     void renderH264Settings();

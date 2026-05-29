@@ -37,6 +37,10 @@ void printUsage(const char *programName)
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
     std::cout << "  --directory-url <url>  Override the directory service URL (default https://directory.retrocapture.com).\n";
     std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
+    std::cout << "  --chat-url <url>       Chat service base URL (default https://chat.retrocapture.com).\n";
+    std::cout << "                         Accepts https:// / http:// / wss:// / ws://; the client picks\n";
+    std::cout << "                         the right scheme for REST vs WebSocket internally.\n";
+    std::cout << "                         Local dev: http://localhost:8082.\n";
     std::cout << "  --cloudflared-binary <path>\n";
     std::cout << "                         Use the given cloudflared binary verbatim (skip download + sha256 check).\n";
     std::cout << "                         For air-gapped setups where GitHub releases aren't reachable.\n";
@@ -135,6 +139,7 @@ int main(int argc, char *argv[])
     std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
     bool        browseDirectory = false;     // #49 Phase 4: --browse-directory
     std::string browseDirectoryUrl;          // optional, defaults to https://directory.retrocapture.com
+    std::string chatBaseUrl;                 // #84: --chat-url, empty = let UIManager pick (default https://chat.retrocapture.com)
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
@@ -274,6 +279,13 @@ int main(int argc, char *argv[])
             // Overrides the URL --browse-directory queries (and the
             // default the app uses internally when launched normally).
             browseDirectoryUrl = argv[++i];
+        }
+        else if (arg == "--chat-url" && i + 1 < argc)
+        {
+            // #84 — Chat service URL. ws:// or wss:// for the WS
+            // endpoint; the REST endpoints used to resolve the room
+            // and seed history are derived by scheme swap.
+            chatBaseUrl = argv[++i];
         }
         else if (arg == "--cloudflared-binary" && i + 1 < argc)
         {
@@ -846,6 +858,10 @@ int main(int argc, char *argv[])
     app.setMaintainAspect(maintainAspect);
     app.setBrightness(brightness);
     app.setContrast(contrast);
+    if (!chatBaseUrl.empty())
+    {
+        app.setChatBaseUrl(chatBaseUrl);
+    }
 
     // Configurar dispositivo e controles apenas se a fonte for apropriada
 #ifdef __linux__

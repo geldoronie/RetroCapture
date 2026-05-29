@@ -131,6 +131,13 @@ namespace
                 const auto &st = j["streaming"];
                 out.upstreamClientCount = st.value("clientCount", 0u);
             }
+            if (j.contains("chat") && j["chat"].is_object())
+            {
+                // #84 — Chat-room hint. Empty when the host isn't
+                // publishing publicly; the client overlay will stay
+                // idle in that case.
+                out.chatRoomSlug = j["chat"].value("roomSlug", std::string{});
+            }
             return true;
         }
         catch (const std::exception &e)
