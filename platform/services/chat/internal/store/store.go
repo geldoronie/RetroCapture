@@ -30,21 +30,21 @@ var (
 	ErrNotFound = errors.New("store: room not found")
 )
 
-// RoomKind enumerates the two flavours of room. Stream-linked rooms
-// auto-spawn alongside a directory stream and are owned by the host;
-// standalone rooms (v1+ UI) are user-created persistent channels.
+// RoomKind survives the identity-bound rework as a single-valued
+// enum — every row is standalone now. The "stream-linked" kind was
+// retired (migration 0005 wiped the rows, 0008 dropped the
+// linked_stream_id column); stream chats are flagged via the
+// is_stream_room boolean on the standalone row instead.
 type RoomKind string
 
 const (
-	RoomKindStreamLinked RoomKind = "stream_linked"
-	RoomKindStandalone   RoomKind = "standalone"
+	RoomKindStandalone RoomKind = "standalone"
 )
 
 // Room mirrors the chat_rooms row.
 type Room struct {
 	ID              string
 	Kind            RoomKind
-	LinkedStreamID  string // empty for standalone
 	OwnerAccountID  string // v0.5 reused to store the creator's rc_<...> client_id
 	Slug            string // empty for stream-linked rooms
 	Title           string
@@ -183,7 +183,7 @@ func (s *Store) applyMigrations() error {
 // GetRoom returns the room by id. ErrNotFound if missing.
 func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 	row := s.db.QueryRowContext(ctx, `
-        SELECT id, kind, COALESCE(linked_stream_id, ''),
+        SELECT id, kind,
                COALESCE(owner_account_id, ''), COALESCE(slug, ''),
                title, description, settings_json,
                COALESCE(password_hash, ''),
@@ -202,7 +202,7 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*Room, error) {
 		streamRoomI  int
 	)
 	if err := row.Scan(
-		&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
+		&r.ID, &kind, &r.OwnerAccountID, &r.Slug,
 		&r.Title, &r.Description, &r.SettingsJSON,
 		&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
 		&streamRoomI,
@@ -240,7 +240,7 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-        SELECT id, kind, COALESCE(linked_stream_id, ''),
+        SELECT id, kind,
                COALESCE(owner_account_id, ''), COALESCE(slug, ''),
                title, description, settings_json,
                COALESCE(password_hash, ''),
@@ -249,11 +249,10 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
                created_at_ms, archived_at_ms
           FROM chat_rooms
          WHERE archived_at_ms IS NULL
-           AND ((kind = ? AND listed = 1)
-                OR kind = ?)
+           AND listed = 1
          ORDER BY created_at_ms DESC
          LIMIT ?
-    `, string(RoomKindStandalone), string(RoomKindStreamLinked), limit)
+    `, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +268,7 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
 			streamRoomI int
 		)
 		if err := rows.Scan(
-			&r.ID, &kind, &r.LinkedStreamID, &r.OwnerAccountID, &r.Slug,
+			&r.ID, &kind, &r.OwnerAccountID, &r.Slug,
 			&r.Title, &r.Description, &r.SettingsJSON,
 			&r.PasswordHash, &r.OwnerSecretHash, &listedInt,
 			&streamRoomI,
@@ -288,46 +287,6 @@ func (s *Store) ListPublicRooms(ctx context.Context, limit int) ([]Room, error) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// GetOrCreateRoomForStream looks up the stream-linked room for the
-// given stream id, creating it if missing. The `created` return
-// value is true iff this call inserted the row.
-func (s *Store) GetOrCreateRoomForStream(
-	ctx context.Context,
-	streamID, generatedRoomID, title string,
-) (*Room, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
-        SELECT id FROM chat_rooms WHERE linked_stream_id = ? LIMIT 1
-    `, streamID)
-	var existingID string
-	switch err := row.Scan(&existingID); {
-	case err == nil:
-		r, err := s.GetRoom(ctx, existingID)
-		return r, false, err
-	case errors.Is(err, sql.ErrNoRows):
-		// fallthrough — create.
-	default:
-		return nil, false, err
-	}
-
-	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(ctx, `
-        INSERT INTO chat_rooms(
-            id, kind, linked_stream_id, owner_account_id, slug,
-            title, description, settings_json,
-            created_at_ms, archived_at_ms
-        )
-        VALUES (?, ?, ?, NULL, NULL, ?, '', '{}', ?, NULL)
-    `, generatedRoomID, string(RoomKindStreamLinked), streamID, title,
-		now.UnixMilli()); err != nil {
-		return nil, false, fmt.Errorf("insert room: %w", err)
-	}
-	r, err := s.GetRoom(ctx, generatedRoomID)
-	if err != nil {
-		return nil, false, err
-	}
-	return r, true, nil
 }
 
 // GetRoomBySlug resolves a standalone room by its human-readable
@@ -414,13 +373,13 @@ func (s *Store) CreateStandaloneRoom(
 
 	if _, err := s.db.ExecContext(ctx, `
         INSERT INTO chat_rooms(
-            id, kind, linked_stream_id, owner_account_id, slug,
+            id, kind, owner_account_id, slug,
             title, description, settings_json,
             password_hash, owner_secret_hash, listed,
             is_stream_room,
             created_at_ms, archived_at_ms, last_activity_ms
         )
-        VALUES (?, ?, NULL, ?, ?, ?, '', '{}', ?, ?, ?, ?, ?, NULL, ?)
+        VALUES (?, ?, ?, ?, ?, '', '{}', ?, ?, ?, ?, ?, NULL, ?)
     `, roomID, string(RoomKindStandalone), ownerArg, slug, title,
 		passArg, secretArg, listedInt, streamRoomI,
 		now.UnixMilli(), now.UnixMilli()); err != nil {

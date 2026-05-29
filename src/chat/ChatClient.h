@@ -94,7 +94,6 @@ public:
         std::string roomId;
         std::string kind;
         std::string slug;
-        std::string streamId;
         std::string title;
         bool        hasPassword      = false;
         // True when the row was provisioned by a streaming host

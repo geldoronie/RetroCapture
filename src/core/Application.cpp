@@ -6204,8 +6204,18 @@ void Application::syncDirectoryClient()
                                 m_ui->getChatNickname();
                 if (titleHint.empty())
                     titleHint = m_ui->getDirectoryStreamName();
+                // Bump the bind epoch and capture the new value.
+                // The worker checks it at the end before calling
+                // connectBySlug; if the user has hit Stop Streaming
+                // (or otherwise transitioned away) in the meantime,
+                // m_chatBindEpoch will have advanced and the
+                // worker drops the connect to avoid undoing the
+                // disconnect that ran on the main thread.
+                const uint64_t epoch = m_chatBindEpoch.fetch_add(1) + 1;
+                std::atomic<uint64_t> *epochPtr = &m_chatBindEpoch;
 
-                std::thread([chat, slug, clientId, nick, titleHint]() {
+                std::thread([chat, slug, clientId, nick, titleHint,
+                             epoch, epochPtr]() {
                     OwnedRoom owned;
                     std::string ownerSecret;
                     if (ownedrooms::findBySlug(slug, owned))
@@ -6275,6 +6285,16 @@ void Application::syncDirectoryClient()
                             LOG_WARN("Chat: stream-room provision failed: " + err);
                         }
                     }
+                    // Late-arrival cancel: main thread may have
+                    // disconnected or rebound during the HTTP
+                    // sequence. Don't undo that by reconnecting
+                    // here.
+                    if (epochPtr->load() != epoch)
+                    {
+                        LOG_INFO("Chat: bind worker stale (epoch "
+                                 "advanced), skipping connectBySlug");
+                        return;
+                    }
                     chat->connectBySlug(slug, nick,
                                         /*password=*/"", ownerSecret);
                 }).detach();
@@ -6282,6 +6302,10 @@ void Application::syncDirectoryClient()
             else if ((!active || !chatEnabled) && !m_chatBoundSlug.empty())
             {
                 m_chatBoundSlug.clear();
+                // Advance the epoch so any in-flight bind worker
+                // notices its slug was abandoned and skips the
+                // tail connect.
+                m_chatBindEpoch.fetch_add(1);
                 m_chatClient->disconnect();
             }
         }

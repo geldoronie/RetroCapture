@@ -201,6 +201,13 @@ private:
     // the viewer side, the remote /meta snapshot path uses the same
     // member to detect roomSlug changes.
     std::string m_chatBoundSlug;
+    // #84 — Monotonic generation incremented on every chat
+    // bind/unbind transition. The async stream-bind worker captures
+    // it at spawn time and re-checks before calling connectBySlug
+    // at the end; if the user clicked "Stop streaming" mid-flight
+    // (or the slug otherwise changed), the worker's connect is
+    // dropped so it doesn't undo the disconnect.
+    std::atomic<uint64_t> m_chatBindEpoch{0};
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

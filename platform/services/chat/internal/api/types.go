@@ -37,7 +37,6 @@ type healthPayload struct {
 type roomDetailPayload struct {
 	RoomID           string `json:"room_id"`
 	Kind             string `json:"kind"`
-	LinkedStreamID   string `json:"linked_stream_id,omitempty"`
 	OwnerAccountID   string `json:"owner_account_id,omitempty"`
 	Title            string `json:"title"`
 	CreatedAtMs      int64  `json:"created_at_ms"`
@@ -60,12 +59,6 @@ type messagePayload struct {
 type historyPayload struct {
 	Messages   []messagePayload `json:"messages"`
 	NextCursor string           `json:"next_cursor,omitempty"`
-}
-
-type roomByStreamPayload struct {
-	RoomID  string `json:"room_id"`
-	Created bool   `json:"created"`
-	Title   string `json:"title"`
 }
 
 type roomBySlugPayload struct {
@@ -118,7 +111,6 @@ type listedRoomPayload struct {
 	RoomID           string `json:"room_id"`
 	Kind             string `json:"kind"`
 	Slug             string `json:"slug"`
-	LinkedStreamID   string `json:"linked_stream_id,omitempty"`
 	Title            string `json:"title"`
 	HasPassword      bool   `json:"has_password"`
 	IsStreamRoom     bool   `json:"is_stream_room"`
@@ -219,7 +211,6 @@ type wsWelcome struct {
 	ParticipantID     string `json:"participant_id"`
 	RoomID            string `json:"room_id"`
 	RoomKind          string `json:"room_kind"`
-	LinkedStreamID    string `json:"linked_stream_id,omitempty"`
 	ServerTimeMs      int64  `json:"server_time_ms"`
 	ProtocolVersion   int    `json:"protocol_version"`
 	// #84 — Host role plumbing. IsHost echoes whether this welcome's

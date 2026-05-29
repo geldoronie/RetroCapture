@@ -34,37 +34,24 @@ const (
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	roomID := q.Get("room")
-	streamID := q.Get("stream")
-	if roomID == "" && streamID == "" {
+	if roomID == "" {
+		// #84 — `?stream=<id>` was the v0 entry point that auto-
+		// created a stream_linked room. The identity-bound rework
+		// dropped that flow entirely; all clients pass `?room=<id>`
+		// after resolving via GET /rooms/by-slug.
 		s.writeError(w, http.StatusBadRequest, "bad_request",
-			"need ?room=<id> or ?stream=<id>")
+			"need ?room=<id>")
 		return
 	}
-
-	// Resolve room id if the client only gave us a stream id.
-	if roomID == "" {
-		generatedID := "r_" + shortID()
-		row, _, err := s.Store.GetOrCreateRoomForStream(
-			r.Context(), streamID, generatedID, "",
-		)
-		if err != nil {
-			s.Logger.Error("ws_resolve_room", "err", err, "stream_id", streamID)
-			s.writeError(w, http.StatusInternalServerError, "internal_error",
-				"could not resolve room for stream")
+	if _, err := s.Store.GetRoom(r.Context(), roomID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "room_not_found", "no such room")
 			return
 		}
-		roomID = row.ID
-	} else {
-		if _, err := s.Store.GetRoom(r.Context(), roomID); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				s.writeError(w, http.StatusNotFound, "room_not_found", "no such room")
-				return
-			}
-			s.Logger.Error("ws_get_room", "err", err, "room_id", roomID)
-			s.writeError(w, http.StatusInternalServerError, "internal_error",
-				"store failure")
-			return
-		}
+		s.Logger.Error("ws_get_room", "err", err, "room_id", roomID)
+		s.writeError(w, http.StatusInternalServerError, "internal_error",
+			"store failure")
+		return
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -251,7 +238,6 @@ func (s *Server) serveSession(conn *websocket.Conn, roomID string) {
 			ParticipantID:     p.ID,
 			RoomID:            roomRow.ID,
 			RoomKind:          string(roomRow.Kind),
-			LinkedStreamID:    roomRow.LinkedStreamID,
 			ServerTimeMs:      time.Now().UnixMilli(),
 			ProtocolVersion:   ProtocolVersion,
 			IsHost:            p.IsHost,

@@ -127,7 +127,6 @@ bool ChatClient::listPublicRooms(int limit,
             lr.roomId           = r.value("room_id",           std::string{});
             lr.kind             = r.value("kind",              std::string{});
             lr.slug             = r.value("slug",              std::string{});
-            lr.streamId         = r.value("linked_stream_id",  std::string{});
             lr.title            = r.value("title",             std::string{});
             lr.hasPassword      = r.value("has_password",      false);
             lr.isStreamRoom     = r.value("is_stream_room",    false);

@@ -2,14 +2,14 @@
 
 Wire format for the `chat.retrocapture.com` service. Tracking issue: [#84](../../../issues/84).
 
-`v0.5` is the minimal protocol that exists to validate the design end-to-end with anonymous identity and stream-linked rooms only. The full `v1` (directory-account identity, moderation REST, slow-mode UI, word filter) is a strict superset — the v0.5 envelope and message kinds will be extended without renames.
+`v0.5` is the minimal protocol that exists to validate the design end-to-end. As of the late-#84 refactor it covers persistent identity (`rc_<id>`-bound profile), owner-secret room ownership, identity-bound stream chat rooms, password gating, the public-room browser, host badge, and server-side inactivity sweep. The full `v1` (directory-account identity, moderation REST, slow-mode UI, word filter) is a strict superset.
 
 ## Transport
 
 - **WebSocket** for live message flow: `wss://chat.retrocapture.com/ws?room=<roomId>`.
-  - Alternative resolver: `?stream=<streamId>` — the gateway looks up the stream-linked room and joins it (creating it if it doesn't exist yet).
+  - `roomId` is required. Clients resolve it via `GET /rooms/by-slug/<slug>` first. The legacy `?stream=<streamId>` resolver was removed when stream chats moved to slug-keyed standalone rooms.
   - Origin check: any origin allowed for v0.5 (CORS / Origin enforcement comes with v1 directory-account auth).
-- **HTTP** for state queries: `GET /rooms/:roomId/history`, `GET /rooms/by-stream/:streamId`, `GET /health`.
+- **HTTP** for state queries: `GET /rooms`, `POST /rooms`, `GET /rooms/:roomId`, `PATCH /rooms/:roomId`, `DELETE /rooms/:roomId`, `GET /rooms/:roomId/history`, `GET /rooms/by-slug/:slug`, `GET /health`.
 - TLS terminated at the reverse proxy (Cloudflare / nginx / Caddy in front).
 - One service-protocol version number per `Server` build; `GET /health` returns `{"protocol_version": 1, …}`. Bumped on every backwards-incompatible change; the service must keep accepting `previous_version` for at least one release.
 
@@ -43,8 +43,7 @@ Server responses share the same shape:
   "welcome": {
     "participant_id": "p_8af1c4",
     "room_id":        "r_d4c1f0",
-    "room_kind":      "stream_linked",     // "stream_linked" | "standalone"
-    "linked_stream_id": "s_3e9aab",        // null for standalone rooms
+    "room_kind":      "standalone",        // only kind in v0.5+
     "server_time_ms": 1716665490123,
     "protocol_version": 1,
     "is_host":            true,            // optional; this connection won the host claim
@@ -119,16 +118,72 @@ Paginated chat history, newest-first.
 }
 ```
 
-### `GET /rooms/by-stream/:streamId`
+### `GET /rooms`
 
-Resolve a stream id to its room id; creates the room if it doesn't exist.
+Public room listing for the in-app browser. Query: `?limit=N` (1..200, default 50). Returns every standalone row with `listed = 1`. The `is_stream_room` boolean discriminates between user-created chat rooms and streamer-provisioned ones so the UI can show different badges.
 
 ```jsonc
 200 OK
 {
-  "data": { "room_id": "r_…", "created": true },
+  "data": {
+    "rooms": [
+      {
+        "room_id":           "r_…",
+        "kind":              "standalone",
+        "slug":              "retro-arcade",
+        "title":             "Stream of geldo",
+        "has_password":      false,
+        "is_stream_room":    true,
+        "participant_count": 3,
+        "created_at_ms":     1716665490123
+      }
+    ]
+  },
   "error": null
 }
+```
+
+### `POST /rooms`
+
+Create a standalone room. The slug is auto-generated when the request omits it. Body:
+
+```jsonc
+{
+  "title":            "Stream of geldo",
+  "slug":             "retro-arcade",       // optional
+  "password":         "hunter2",            // optional; server hashes
+  "listed":           true,                 // default true
+  "is_stream_room":   true,                 // streamer-provisioned vs user-created
+  "owner_client_id":  "rc_3f1a2b…",         // creator's persistent identity
+  "owner_secret":     "deadbeef…"           // client-minted plaintext; server hashes + stores
+}
+```
+
+The `owner_secret` is the trust-bearing handle: subsequent joins that present the same plaintext are flagged `is_owner=true` regardless of `client_id`, and `DELETE`/`PATCH` require it.
+
+### `GET /rooms/by-slug/:slug`
+
+Resolve a public slug to its room id. `404 room_not_found` when the slug isn't taken — used by the client's *revive* probe to detect a room that was reaped by the inactivity sweep so it can be recreated locally with the saved secret.
+
+```jsonc
+200 OK
+{ "data": { "room_id": "r_…", "slug": "retro-arcade" }, "error": null }
+```
+
+### `PATCH /rooms/:roomId`
+
+Owner-initiated room update. Same secret-only auth as `DELETE`. Today only the `listed` flag is editable — title/slug stay frozen because the wire history carries denormalised copies. Used by the host's client to promote a previously-hidden room when the streamer-public default flipped.
+
+```jsonc
+PATCH /rooms/r_abc123
+Content-Type: application/json
+{
+  "owner_secret": "deadbeefcafef00ddeadbeefcafef00d",
+  "listed":       true
+}
+
+200 OK
+{ "data": { "updated": true }, "error": null }
 ```
 
 ### `DELETE /rooms/:roomId`
@@ -170,10 +225,9 @@ Room metadata (visible to anyone — not moderation-gated).
 {
   "data": {
     "room_id":          "r_…",
-    "kind":             "stream_linked",
-    "linked_stream_id": "s_…",
-    "owner_account_id": null,
-    "title":            "<host's stream title>",
+    "kind":             "standalone",
+    "owner_account_id": "rc_3f1a2b…",
+    "title":            "Stream of geldo",
     "created_at_ms":    1716665490123,
     "archived_at_ms":   null,
     "participant_count": 12
@@ -181,6 +235,21 @@ Room metadata (visible to anyone — not moderation-gated).
   "error": null
 }
 ```
+
+### Identity-bound stream chat (host integration)
+
+When a RetroCapture host starts streaming with chat enabled, the desktop client provisions a single persistent room per identity (slug derived from the user-chosen "Room name" + 4-hex disambiguator) and publishes the slug via `/meta.chat.roomSlug` on the host's own metadata endpoint. Viewers' clients poll `/meta`, pick up `roomSlug`, resolve via `GET /rooms/by-slug/:slug`, and `ConnectBySlug` to it. There is intentionally no per-session room — restarting the stream binds to the same chat across reboots.
+
+The host's local `owned_rooms.json` (sibling to `identity.json` under `$XDG_DATA_HOME/retrocapture/`) caches each room's `owner_secret`. If the inactivity sweep wipes the room while the host is away, the next stream-start probes `GET /rooms/by-slug/<slug>` and re-`POST /rooms`s with the saved secret — ownership survives the reaping.
+
+### Inactivity sweep
+
+The chat service runs a background goroutine that periodically deletes rooms with no participant joins and no message posts inside a configurable window. Two env vars control it:
+
+  - `CHAT_ROOM_INACTIVITY_DAYS` (default `3`, `0` disables the sweep entirely).
+  - `CHAT_ROOM_SWEEP_INTERVAL_MINUTES` (default `60`).
+
+Rooms with at least one currently-connected participant are skipped even if their stored `last_activity_ms` is past the cutoff. Sweep deletions are full cascades (`chat_messages` + `chat_rooms` + `Registry.Forget`) — clients see their WebSocket close.
 
 ## Data flow
 

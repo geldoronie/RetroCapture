@@ -243,30 +243,22 @@ void OSDChat::render()
                         {
                             for (const auto &r : m_roomsList)
                             {
-                                // [STREAM] now comes from the
-                                // server-side is_stream_room flag
-                                // (#84). The legacy kind ==
-                                // "stream_linked" path is dead
-                                // since the identity-bound rework;
-                                // both rooms are kind=standalone
-                                // now, the boolean discriminates.
-                                const bool isStream = r.isStreamRoom ||
-                                    (r.kind == "stream_linked");
+                                const bool isStream = r.isStreamRoom;
                                 // Stream-linked rooms have no slug;
-                                // fall back to the streamId for a
-                                // human-pointable label. Title is
-                                // empty for v0.5 stream rooms (the
-                                // chat service has no link to the
-                                // directory's title field yet).
+                                // Title first, then slug fallback,
+                                // then room_id as a last resort —
+                                // every standalone row has a slug
+                                // now, so the room_id path is purely
+                                // defensive.
                                 std::string label;
-                                if (!r.title.empty())          label = r.title;
-                                else if (!r.slug.empty())      label = "#" + r.slug;
-                                else if (!r.streamId.empty())  label = "stream " + r.streamId;
-                                else                           label = r.roomId;
+                                if (!r.title.empty())     label = r.title;
+                                else if (!r.slug.empty()) label = "#" + r.slug;
+                                else                      label = r.roomId;
 
-                                // Colour-coded kind badge so the
-                                // user instantly sees standalone vs
-                                // stream-linked entries.
+                                // Colour-coded kind badge: gold for
+                                // a streamer's room (is_stream_room),
+                                // blue for a plain user-created
+                                // standalone room.
                                 const ImVec4 kindCol = isStream
                                     ? ImVec4(0.95f, 0.78f, 0.30f, 1.0f)
                                     : ImVec4(0.65f, 0.75f, 0.95f, 1.0f);
@@ -284,15 +276,7 @@ void OSDChat::render()
                                     const std::string nick = m_uiManager
                                         ? m_uiManager->getChatNickname()
                                         : snap.nickname;
-                                    if (isStream)
-                                    {
-                                        // Stream-linked rooms are
-                                        // password-less by design;
-                                        // join straight via streamId.
-                                        m_chat->connect(r.streamId, nick,
-                                                        /*asHost=*/false);
-                                    }
-                                    else if (r.hasPassword)
+                                    if (r.hasPassword)
                                     {
                                         // Pre-fill the join form so
                                         // the user can supply a

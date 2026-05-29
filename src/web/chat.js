@@ -149,6 +149,62 @@
         const rooms = loadOwned().filter(r => r.slug !== slug);
         return saveOwned(rooms);
     }
+    // Probe whether a standalone room with `slug` exists on the
+    // server. Used by the revive paths: if we own a slug locally
+    // (entry in rc_chat_owned_rooms) and the server returns 404,
+    // we re-POST with the saved secret to claim the slug back —
+    // ownership survives the inactivity sweep. Returns one of
+    // 'exists' / 'missing' / 'error'.
+    async function probeRoomBySlug(slug) {
+        if (!slug || !state.chatUrl) return 'error';
+        try {
+            const url = toHttpBase(state.chatUrl) +
+                        '/rooms/by-slug/' + encodeURIComponent(slug);
+            const resp = await fetch(url, { credentials: 'omit' });
+            if (resp.status === 200) return 'exists';
+            if (resp.status === 404) return 'missing';
+            return 'error';
+        } catch (_err) {
+            return 'error';
+        }
+    }
+
+    // POST /rooms with a known owner_secret to revive a swept
+    // room. Re-uses the same shape as the create flow; the caller
+    // is expected to already have the owned_rooms entry handy.
+    async function reviveOwnedRoom(owned) {
+        const httpBase = toHttpBase(state.chatUrl);
+        const body = {
+            slug:            owned.slug,
+            title:           owned.title || '',
+            owner_secret:    owned.owner_secret,
+            owner_client_id: state.identity.id || '',
+            listed:          true,
+            is_stream_room:  false,
+        };
+        const resp = await fetch(httpBase + '/rooms', {
+            method:      'POST',
+            headers:     { 'Content-Type': 'application/json' },
+            body:        JSON.stringify(body),
+            credentials: 'omit',
+        });
+        const j = await resp.json().catch(() => ({}));
+        if (resp.ok && j.data && j.data.slug) {
+            // Refresh the local entry — fresh room_id, same
+            // slug + secret.
+            appendOwned({
+                room_id:      j.data.room_id,
+                slug:         j.data.slug,
+                title:        owned.title || '',
+                owner_secret: owned.owner_secret,
+                createdAt:    owned.createdAt ||
+                              new Date().toISOString(),
+            });
+            return true;
+        }
+        return false;
+    }
+
     function generateOwnerSecret() {
         // 16 bytes via crypto.getRandomValues → 32 hex chars; same
         // entropy budget as the native std::random_device path.
@@ -501,11 +557,7 @@
             }
             $roomsList.innerHTML = '';
             for (const r of rooms) {
-                // is_stream_room is the canonical flag (#84). Fall
-                // back to the legacy kind for any rows that
-                // pre-date the boolean column.
-                const isStream = !!r.is_stream_room ||
-                                 (r.kind === 'stream_linked');
+                const isStream = !!r.is_stream_room;
                 const row = document.createElement('div');
                 row.className = 'home-chat-rooms-item';
                 const kindBadge = isStream
@@ -582,7 +634,17 @@
                 `<button type="button" class="btn btn-sm btn-outline-danger action-del">Delete</button>`;
             const $join = row.querySelector('.action-join');
             const $del  = row.querySelector('.action-del');
-            $join.addEventListener('click', () => {
+            $join.addEventListener('click', async () => {
+                // Probe + revive before joining. Server may have
+                // reaped the room via the inactivity sweep while
+                // we kept the local entry. Recreate transparently
+                // with the saved secret so ownership survives.
+                if (r.owner_secret) {
+                    const probe = await probeRoomBySlug(r.slug);
+                    if (probe === 'missing') {
+                        await reviveOwnedRoom(r);
+                    }
+                }
                 joinSlug(r.slug, '', r.owner_secret || '');
             });
             let armed = false;
@@ -756,7 +818,7 @@
     if ($joinClose)   $joinClose.addEventListener('click',   closeJoinCustom);
     if ($disconnectBtn) $disconnectBtn.addEventListener('click', userDisconnect);
     if ($roomsJoinBtn) {
-        $roomsJoinBtn.addEventListener('click', () => {
+        $roomsJoinBtn.addEventListener('click', async () => {
             const slug = ($roomsJoinSlug.value || '').trim().toLowerCase();
             const pw   = $roomsJoinPass.value || '';
             if (!slug) {
@@ -766,25 +828,40 @@
             }
             const owned  = findOwnedBySlug(slug);
             const secret = owned ? owned.owner_secret : '';
+            // Revive: if we own the slug and the server returned
+            // a 404 (sweep ate it), recreate transparently with
+            // the saved secret so ownership survives.
+            if (owned && secret) {
+                const probe = await probeRoomBySlug(slug);
+                if (probe === 'missing') {
+                    await reviveOwnedRoom(owned);
+                }
+            }
             joinSlug(slug, pw, secret);
         });
     }
     if ($roomsCreateBtn) {
         $roomsCreateBtn.addEventListener('click', async () => {
             $createError.classList.add('d-none');
+            const slug = $roomsCreateSlug.value.trim();
+            // Revive-aware create: if the typed slug matches one
+            // we already own, reuse the saved secret so the POST
+            // either revives (slug free server-side) or hits a
+            // slug-collision that we treat as "still ours".
+            const existingOwned = slug ? findOwnedBySlug(slug) : null;
+            const ownerSecret   = existingOwned
+                ? existingOwned.owner_secret
+                : generateOwnerSecret();
             const body = {};
             if ($roomsCreateTitle.value.trim()) body.title = $roomsCreateTitle.value.trim();
-            if ($roomsCreateSlug.value.trim())  body.slug  = $roomsCreateSlug.value.trim();
+            if (slug)                           body.slug  = slug;
             if ($roomsCreatePass.value)         body.password = $roomsCreatePass.value;
-            body.listed = $roomsCreateListed.checked;
+            body.listed         = $roomsCreateListed.checked;
+            body.is_stream_room = false;
+            body.owner_secret   = ownerSecret;
             if (state.identity && state.identity.id) {
                 body.owner_client_id = state.identity.id;
             }
-            // Mint the per-room secret BEFORE the POST so we can
-            // persist it the moment the server confirms — server
-            // hashes its copy, plaintext lives only in localStorage.
-            const ownerSecret = generateOwnerSecret();
-            body.owner_secret = ownerSecret;
             try {
                 const httpBase = toHttpBase(state.chatUrl);
                 const resp = await fetch(httpBase + '/rooms', {
@@ -794,7 +871,18 @@
                     credentials: 'omit',
                 });
                 const j = await resp.json();
-                if (!resp.ok || !j.data || !j.data.slug) {
+                let landedSlug, landedRoomId;
+                if (resp.ok && j.data && j.data.slug) {
+                    landedSlug   = j.data.slug;
+                    landedRoomId = j.data.room_id;
+                } else if (existingOwned) {
+                    // Collision on a slug we own — the room
+                    // still exists; the owner_secret in the
+                    // hello will get us is_owner anyway. Skip
+                    // the create error and fall through.
+                    landedSlug   = existingOwned.slug;
+                    landedRoomId = existingOwned.room_id;
+                } else {
                     const code = (j.error && j.error.code) || resp.status;
                     const msg  = (j.error && j.error.message) || 'create failed';
                     $createError.textContent = `${code}: ${msg}`;
@@ -802,16 +890,18 @@
                     return;
                 }
                 appendOwned({
-                    room_id:      j.data.room_id,
-                    slug:         j.data.slug,
-                    title:        body.title || '',
+                    room_id:      landedRoomId,
+                    slug:         landedSlug,
+                    title:        body.title ||
+                                  (existingOwned ? existingOwned.title : ''),
                     owner_secret: ownerSecret,
-                    createdAt:    new Date().toISOString(),
+                    createdAt:    (existingOwned && existingOwned.createdAt) ||
+                                  new Date().toISOString(),
                 });
                 $roomsCreateTitle.value = '';
                 $roomsCreateSlug.value  = '';
                 $roomsCreatePass.value  = '';
-                joinSlug(j.data.slug, body.password || '', ownerSecret);
+                joinSlug(landedSlug, body.password || '', ownerSecret);
             } catch (err) {
                 $createError.textContent = 'Create failed: ' + err.message;
                 $createError.classList.remove('d-none');

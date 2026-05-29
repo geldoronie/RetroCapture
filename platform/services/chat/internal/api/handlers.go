@@ -1,7 +1,7 @@
 // HTTP handlers for the chat service. The WebSocket upgrade lives in
 // ws.go; this file covers the REST endpoints documented in
-// docs/CHAT_PROTOCOL.md (`/health`, `/rooms/:id`, `/rooms/:id/history`,
-// `/rooms/by-stream/:id`).
+// docs/CHAT_PROTOCOL.md (`/health`, `/rooms`, `/rooms/:id`,
+// `/rooms/:id/history`, `/rooms/by-slug/:slug`).
 package api
 
 import (
@@ -49,7 +49,6 @@ func (s *Server) Routes() http.Handler {
 
 	// /rooms/* — pattern matching is intentionally manual so we keep
 	// the dep on http.ServeMux without pulling chi/gorilla/etc.
-	mux.HandleFunc("/rooms/by-stream/", s.handleRoomByStream)
 	mux.HandleFunc("/rooms/by-slug/",   s.handleRoomBySlug)
 	mux.HandleFunc("/rooms",            s.handleRoomsCollection)
 	mux.HandleFunc("/rooms/",           s.handleRoom)
@@ -91,37 +90,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRoomByStream serves GET /rooms/by-stream/<streamId>. Creates
-// the linked room if it doesn't exist.
-func (s *Server) handleRoomByStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-	streamID := strings.TrimPrefix(r.URL.Path, "/rooms/by-stream/")
-	if streamID == "" || strings.Contains(streamID, "/") {
-		s.writeError(w, http.StatusBadRequest, "bad_request", "missing streamId in path")
-		return
-	}
-
-	roomID := "r_" + shortID()
-	room, created, err := s.Store.GetOrCreateRoomForStream(
-		r.Context(), streamID, roomID, "",
-	)
-	if err != nil {
-		s.Logger.Error("get_or_create_room", "err", err, "stream_id", streamID)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "store failure")
-		return
-	}
-	s.writeData(w, http.StatusOK, roomByStreamPayload{
-		RoomID:  room.ID,
-		Created: created,
-		Title:   room.Title,
-	})
-}
-
-// handleRoomBySlug serves GET /rooms/by-slug/<slug> — the standalone-
-// room analog of by-stream. 404 if no room owns the slug.
+// handleRoomBySlug serves GET /rooms/by-slug/<slug>. 404 when no
+// room owns the slug. (The legacy GET /rooms/by-stream/<id> endpoint
+// + GetOrCreateRoomForStream went away with the identity-bound
+// rework — every chat target now resolves through a slug.)
 func (s *Server) handleRoomBySlug(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
@@ -187,21 +159,14 @@ func (s *Server) handleRoomsList(w http.ResponseWriter, r *http.Request) {
 		if live := s.Registry.Get(rm.ID); live != nil {
 			count = live.Count()
 		}
-		// Stream-linked rooms are gated by live participants — the
-		// chat service can't tell whether the stream itself is live
-		// (that's the directory service's call), so an empty room
-		// means "nobody is currently chatting", which is the closest
-		// proxy for "this stream isn't worth surfacing". Standalone
-		// rooms are always shown so creators can drop a fresh empty
-		// room and tell people about it.
-		if rm.Kind == store.RoomKindStreamLinked && count == 0 {
-			continue
-		}
+		// The stream_linked kind-and-empty filter went away with the
+		// identity-bound rework — every row is standalone now, and
+		// the store's WHERE clause already gates on listed=1, so
+		// hidden rooms never reach here.
 		out = append(out, listedRoomPayload{
 			RoomID:           rm.ID,
 			Kind:             string(rm.Kind),
 			Slug:             rm.Slug,
-			LinkedStreamID:   rm.LinkedStreamID,
 			Title:            rm.Title,
 			HasPassword:      rm.PasswordHash != "",
 			IsStreamRoom:     rm.IsStreamRoom,
@@ -507,7 +472,6 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	s.writeData(w, http.StatusOK, roomDetailPayload{
 		RoomID:           roomRow.ID,
 		Kind:             string(roomRow.Kind),
-		LinkedStreamID:   roomRow.LinkedStreamID,
 		OwnerAccountID:   roomRow.OwnerAccountID,
 		Title:            roomRow.Title,
 		CreatedAtMs:      roomRow.CreatedAt.UnixMilli(),
