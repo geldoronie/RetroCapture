@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstring>
 #include <ctime>
+#include <thread>
 
 namespace
 {
@@ -113,6 +114,10 @@ void OSDChat::render()
     m_inputFocused = false;
     if (!m_chat) return;
 
+    // Drain any HTTP ops that completed since last frame. Runs at
+    // the top so the same frame's UI sees fresh m_roomsList etc.
+    pumpAsyncOps();
+
     // #84 — External "open Profile" requests (e.g. from the Streaming
     // settings' "Configure Profile" button). Consumed once per
     // request; lazy-load identity into the buffers exactly like the
@@ -195,21 +200,32 @@ void OSDChat::render()
             {
                 if (ImGui::BeginTabItem("Public"))
                 {
-                    // Lazy load on first open of the window or after a
-                    // Refresh click.
-                    if (!m_roomsListRequested)
+                    // Lazy load on first open of the window or after
+                    // a Refresh click — but on a background thread
+                    // so the UI doesn't freeze for the duration of
+                    // the GET /rooms roundtrip. pumpAsyncOps() picks
+                    // up the result and flips m_roomsListRequested.
+                    if (!m_roomsListRequested &&
+                        !m_publicListOp.inFlight.exchange(true))
                     {
-                        std::string err;
-                        m_roomsList.clear();
-                        if (!m_chat->listPublicRooms(50, m_roomsList, err))
-                        {
-                            m_roomsListError = err;
-                        }
-                        else
-                        {
-                            m_roomsListError.clear();
-                        }
-                        m_roomsListRequested = true;
+                        ChatClient *chat = m_chat;
+                        auto       *op   = &m_publicListOp;
+                        std::thread([chat, op]() {
+                            std::vector<ChatClient::ListedRoom> rs;
+                            std::string err;
+                            chat->listPublicRooms(50, rs, err);
+                            {
+                                std::lock_guard<std::mutex> lk(op->mu);
+                                op->result = std::move(rs);
+                                op->error  = std::move(err);
+                            }
+                            op->done.store(true);
+                            op->inFlight.store(false);
+                        }).detach();
+                    }
+                    if (m_publicListOp.inFlight.load() && m_roomsList.empty())
+                    {
+                        ImGui::TextDisabled("Loading...");
                     }
                     if (!m_roomsListError.empty())
                     {
@@ -348,50 +364,67 @@ void OSDChat::render()
                                 ImGui::SameLine();
                                 ImGui::TextDisabled("  #%s", r.slug.c_str());
 
-                                // Action row
+                                // Action row — async probe + revive
+                                // sequence so the UI doesn't freeze.
+                                // Worker fills m_ownedJoinOp; the
+                                // pump on next frame calls
+                                // connectBySlug with the inputs.
+                                ImGui::BeginDisabled(
+                                    m_ownedJoinOp.inFlight.load());
                                 if (ImGui::SmallButton("Join"))
                                 {
-                                    const std::string nick = m_uiManager
-                                        ? m_uiManager->getChatNickname()
-                                        : snap.nickname;
-                                    // #84 — Revive path: the server
-                                    // may have reaped this room via
-                                    // the inactivity sweep while we
-                                    // kept the local entry. Probe
-                                    // first; if gone, recreate with
-                                    // the same slug + saved secret
-                                    // so we transparently keep
-                                    // ownership.
-                                    std::string probeErr;
-                                    const bool exists =
-                                        m_chat->roomExistsBySlug(
-                                            r.slug, probeErr);
-                                    if (!exists && probeErr.empty())
+                                    auto *op = &m_ownedJoinOp;
                                     {
-                                        std::string newRoomId, newSlug, err;
-                                        if (m_chat->createStandaloneRoom(
-                                                r.title, r.slug,
-                                                /*password=*/"", /*listed=*/true,
-                                                /*ownerClientId=*/m_identity.id,
-                                                r.ownerSecret,
-                                                /*isStreamRoom=*/false,
-                                                newRoomId, newSlug, err))
-                                        {
-                                            OwnedRoom rec = r;
-                                            rec.roomId = newRoomId;
-                                            ownedrooms::append(rec);
-                                            m_ownedRoomsLoaded = false;
-                                        }
-                                        else
-                                        {
-                                            m_deleteError =
-                                                "Revive failed: " + err;
-                                        }
+                                        std::lock_guard<std::mutex> lk(op->mu);
+                                        op->slug        = r.slug;
+                                        op->ownerSecret = r.ownerSecret;
+                                        op->title       = r.title;
+                                        op->password.clear();
+                                        op->nick = m_uiManager
+                                            ? m_uiManager->getChatNickname()
+                                            : snap.nickname;
+                                        op->error.clear();
                                     }
-                                    m_chat->connectBySlug(
-                                        r.slug, nick, "", r.ownerSecret);
-                                    m_pendingDeleteSlug.clear();
+                                    if (!op->inFlight.exchange(true))
+                                    {
+                                        ChatClient *chat = m_chat;
+                                        const std::string clientId = m_identity.id;
+                                        std::thread([chat, op, clientId]() {
+                                            std::string probeErr;
+                                            const bool exists =
+                                                chat->roomExistsBySlug(
+                                                    op->slug, probeErr);
+                                            std::string err;
+                                            if (!exists && probeErr.empty())
+                                            {
+                                                std::string newRoomId, newSlug;
+                                                if (chat->createStandaloneRoom(
+                                                        op->title, op->slug,
+                                                        /*password=*/"",
+                                                        /*listed=*/true,
+                                                        /*ownerClientId=*/clientId,
+                                                        op->ownerSecret,
+                                                        /*isStreamRoom=*/false,
+                                                        newRoomId, newSlug, err))
+                                                {
+                                                    OwnedRoom rec;
+                                                    rec.slug        = newSlug;
+                                                    rec.roomId      = newRoomId;
+                                                    rec.title       = op->title;
+                                                    rec.ownerSecret = op->ownerSecret;
+                                                    ownedrooms::append(rec);
+                                                }
+                                            }
+                                            {
+                                                std::lock_guard<std::mutex> lk(op->mu);
+                                                op->error = std::move(err);
+                                            }
+                                            op->done.store(true);
+                                            op->inFlight.store(false);
+                                        }).detach();
+                                    }
                                 }
+                                ImGui::EndDisabled();
                                 ImGui::SameLine();
                                 const bool pendingThis =
                                     (m_pendingDeleteSlug == r.slug);
@@ -416,48 +449,37 @@ void OSDChat::render()
                                     }
                                     else
                                     {
-                                        // Fire the server-side delete.
-                                        // Order: server first (so we
-                                        // don't lose the secret if the
-                                        // network fails); then erase
-                                        // the local entry; finally
-                                        // disconnect if we're still in
-                                        // the doomed room.
-                                        std::string err;
-                                        const bool ok =
-                                            m_chat->deleteStandaloneRoom(
-                                                r.roomId, r.ownerSecret, err);
-                                        if (!ok)
+                                        // Submit async delete. pump
+                                        // applies the local cleanup
+                                        // (owned_rooms.json wipe,
+                                        // disconnect-if-current,
+                                        // list-refresh) once the
+                                        // server replies.
+                                        auto *op = &m_deleteOp;
+                                        if (!op->inFlight.exchange(true))
                                         {
-                                            m_deleteError = err;
-                                        }
-                                        else
-                                        {
-                                            const std::string doomedSlug =
-                                                r.slug;
-                                            ownedrooms::remove(doomedSlug);
-                                            m_ownedRoomsLoaded   = false;
-                                            m_roomsListRequested = false;
-                                            m_pendingDeleteSlug.clear();
-                                            m_deleteError.clear();
-                                            // If we're currently in
-                                            // that room, drop the
-                                            // session — the server
-                                            // already evicted us, but
-                                            // the client state is
-                                            // still pointing at it.
-                                            if (snap.slug == doomedSlug)
                                             {
-                                                m_chat->disconnect();
+                                                std::lock_guard<std::mutex> lk(op->mu);
+                                                op->roomId      = r.roomId;
+                                                op->slug        = r.slug;
+                                                op->ownerSecret = r.ownerSecret;
+                                                op->error.clear();
+                                                op->ok          = false;
                                             }
-                                            ImGui::PopID();
-                                            if (pendingThis)
-                                                ImGui::PopStyleColor(3);
-                                            // Re-read the (possibly
-                                            // shrunk) vector on the
-                                            // next frame — bail out
-                                            // of the for-loop now.
-                                            break;
+                                            ChatClient *chat = m_chat;
+                                            std::thread([chat, op]() {
+                                                std::string err;
+                                                const bool ok =
+                                                    chat->deleteStandaloneRoom(
+                                                        op->roomId, op->ownerSecret, err);
+                                                {
+                                                    std::lock_guard<std::mutex> lk(op->mu);
+                                                    op->ok    = ok;
+                                                    op->error = std::move(err);
+                                                }
+                                                op->done.store(true);
+                                                op->inFlight.store(false);
+                                            }).detach();
                                         }
                                     }
                                 }
@@ -515,85 +537,87 @@ void OSDChat::render()
             ImGui::Checkbox("List publicly", &m_createListed);
             ImGui::Spacing();
 
-            ImGui::BeginDisabled(m_createInFlight);
+            ImGui::BeginDisabled(m_createOp.inFlight.load());
             if (ImGui::Button("Create + Join", ImVec2(-1.0f, 0.0f)))
             {
                 m_standaloneError.clear();
-                m_createInFlight = true;
-                std::string newRoomId;
-                std::string newSlug;
-                std::string err;
-                const std::string ownerId = m_identity.id;
 
-                // #84 — Revive-aware create. If the user typed a slug
-                // they already own (matches owned_rooms.json), reuse
-                // the saved secret instead of minting a new one. That
-                // way:
-                //   - if the server still has the room: the POST hits
-                //     a slug-collision; we fall back to connecting
-                //     directly with the saved secret (still owner);
-                //   - if the server reaped it: the POST succeeds with
-                //     same slug + same secret, ownership preserved.
+                // Revive-aware create: if the typed slug is in
+                // owned_rooms.json, reuse the saved secret so the
+                // POST either revives (slug free server-side) or
+                // hits a slug-collision the pump treats as "still
+                // ours, just connect". Lookup happens here on the
+                // main thread because owned_rooms.json is cheap
+                // disk I/O, not HTTP.
                 OwnedRoom existingOwned;
                 const bool reviving = m_createSlugBuf[0] != '\0' &&
-                                      ownedrooms::findBySlug(m_createSlugBuf,
-                                                             existingOwned);
-                const std::string ownerSecret = reviving
-                    ? existingOwned.ownerSecret
-                    : ownedrooms::generateSecret();
+                                      ownedrooms::findBySlug(
+                                          m_createSlugBuf, existingOwned);
 
-                bool ok = m_chat->createStandaloneRoom(
-                    m_createTitleBuf, m_createSlugBuf,
-                    m_createPasswordBuf, m_createListed, ownerId,
-                    ownerSecret,
-                    /*isStreamRoom=*/false,
-                    newRoomId, newSlug, err);
-
-                // Revive fallback: if the POST failed AND the slug is
-                // one we own, the server probably still has the room
-                // (slug-collision against our previous registration).
-                // Connect directly — our owner_secret in the hello
-                // grants is_owner without needing the POST to succeed.
-                if (!ok && reviving)
+                auto *op = &m_createOp;
                 {
-                    newSlug   = existingOwned.slug;
-                    newRoomId = existingOwned.roomId;
-                    ok        = true;
-                    err.clear();
-                }
-
-                m_createInFlight = false;
-                if (!ok)
-                {
-                    m_standaloneError = err;
-                }
-                else
-                {
-                    OwnedRoom rec;
-                    rec.roomId      = newRoomId;
-                    rec.slug        = newSlug;
-                    rec.title       = m_createTitleBuf[0] != '\0'
+                    std::lock_guard<std::mutex> lk(op->mu);
+                    op->title       = m_createTitleBuf[0] != '\0'
                                           ? std::string(m_createTitleBuf)
                                           : existingOwned.title;
-                    rec.ownerSecret = ownerSecret;
-                    ownedrooms::append(rec);
-
-                    const std::string nick = m_uiManager
+                    op->slug        = m_createSlugBuf;
+                    op->password    = m_createPasswordBuf;
+                    op->listed      = m_createListed;
+                    op->reviving    = reviving;
+                    op->ownerSecret = reviving
+                        ? existingOwned.ownerSecret
+                        : ownedrooms::generateSecret();
+                    op->ownerId     = m_identity.id;
+                    op->nick        = m_uiManager
                         ? m_uiManager->getChatNickname()
                         : snap.nickname;
-                    m_chat->connectBySlug(newSlug, nick,
-                                          m_createPasswordBuf, ownerSecret);
-                    m_createTitleBuf[0]    = '\0';
-                    m_createSlugBuf[0]     = '\0';
-                    m_createPasswordBuf[0] = '\0';
-                    // Window stays open — the user closes when ready.
-                    // Refresh the cached lists so the new room shows
-                    // up immediately when they switch to Owned/Public.
-                    m_roomsListRequested   = false;
-                    m_ownedRoomsLoaded     = false;
+                    op->error.clear();
+                    op->resultRoomId.clear();
+                    op->resultSlug.clear();
+                }
+                if (!op->inFlight.exchange(true))
+                {
+                    ChatClient *chat = m_chat;
+                    // Capture the local existingOwned so the
+                    // collision-fallback path can use it without
+                    // touching disk again from the worker.
+                    const std::string fallbackRoomId =
+                        reviving ? existingOwned.roomId : std::string{};
+                    const std::string fallbackSlug =
+                        reviving ? existingOwned.slug : std::string{};
+                    std::thread([chat, op, fallbackRoomId, fallbackSlug]() {
+                        std::string newRoomId, newSlug, err;
+                        const bool ok = chat->createStandaloneRoom(
+                            op->title, op->slug, op->password,
+                            op->listed, op->ownerId, op->ownerSecret,
+                            /*isStreamRoom=*/false,
+                            newRoomId, newSlug, err);
+                        // Revive fallback: POST collision against
+                        // our own slug means the room still exists;
+                        // the secret in the hello will get us
+                        // ownership without needing a POST.
+                        if (!ok && op->reviving)
+                        {
+                            newRoomId = fallbackRoomId;
+                            newSlug   = fallbackSlug;
+                            err.clear();
+                        }
+                        {
+                            std::lock_guard<std::mutex> lk(op->mu);
+                            op->resultRoomId = std::move(newRoomId);
+                            op->resultSlug   = std::move(newSlug);
+                            op->error        = std::move(err);
+                        }
+                        op->done.store(true);
+                        op->inFlight.store(false);
+                    }).detach();
                 }
             }
             ImGui::EndDisabled();
+            if (m_createOp.inFlight.load())
+            {
+                ImGui::TextDisabled("Working...");
+            }
             if (!m_standaloneError.empty())
             {
                 ImGui::TextColored(ImVec4(0.85f, 0.33f, 0.31f, 1.0f),
@@ -643,52 +667,67 @@ void OSDChat::render()
                 }
                 else
                 {
-                    const std::string nick = m_uiManager
-                        ? m_uiManager->getChatNickname()
-                        : snap.nickname;
                     OwnedRoom owned;
-                    std::string sec;
-                    if (ownedrooms::findBySlug(slug, owned))
+                    const bool ownsSlug = ownedrooms::findBySlug(slug, owned);
+                    auto *op = &m_joinCustomOp;
                     {
-                        sec = owned.ownerSecret;
-                        // #84 — Revive: if the user is joining a slug
-                        // they own and the server doesn't have it
-                        // anymore (sweep, manual delete elsewhere),
-                        // recreate transparently with the saved
-                        // secret so ownership survives.
-                        std::string probeErr;
-                        const bool exists = m_chat->roomExistsBySlug(
-                            slug, probeErr);
-                        if (!exists && probeErr.empty())
-                        {
-                            std::string newRoomId, newSlug, err;
-                            if (m_chat->createStandaloneRoom(
-                                    owned.title, slug,
-                                    /*password=*/m_joinPasswordBuf,
-                                    /*listed=*/true,
-                                    /*ownerClientId=*/m_identity.id,
-                                    sec,
-                                    /*isStreamRoom=*/false,
-                                    newRoomId, newSlug, err))
-                            {
-                                OwnedRoom rec = owned;
-                                rec.roomId = newRoomId;
-                                ownedrooms::append(rec);
-                            }
-                            else
-                            {
-                                m_standaloneError =
-                                    "Revive failed: " + err;
-                            }
-                        }
+                        std::lock_guard<std::mutex> lk(op->mu);
+                        op->slug        = slug;
+                        op->ownerSecret = ownsSlug ? owned.ownerSecret
+                                                   : std::string{};
+                        op->title       = ownsSlug ? owned.title
+                                                   : std::string{};
+                        op->password    = m_joinPasswordBuf;
+                        op->nick        = m_uiManager
+                            ? m_uiManager->getChatNickname()
+                            : snap.nickname;
+                        op->error.clear();
                     }
-                    m_chat->connectBySlug(slug, nick,
-                                          m_joinPasswordBuf, sec);
-                    // Window stays open so the user sees password
-                    // errors inline; m_joinPasswordBuf is kept too in
-                    // case they want to fix a typo and retry.
-                    if (m_standaloneError.empty()) m_standaloneError.clear();
+                    if (!op->inFlight.exchange(true))
+                    {
+                        ChatClient *chat = m_chat;
+                        const std::string clientId = m_identity.id;
+                        std::thread([chat, op, clientId, ownsSlug]() {
+                            std::string err;
+                            if (ownsSlug && !op->ownerSecret.empty())
+                            {
+                                std::string probeErr;
+                                const bool exists = chat->roomExistsBySlug(
+                                    op->slug, probeErr);
+                                if (!exists && probeErr.empty())
+                                {
+                                    std::string newRoomId, newSlug;
+                                    if (chat->createStandaloneRoom(
+                                            op->title, op->slug,
+                                            op->password, /*listed=*/true,
+                                            /*ownerClientId=*/clientId,
+                                            op->ownerSecret,
+                                            /*isStreamRoom=*/false,
+                                            newRoomId, newSlug, err))
+                                    {
+                                        OwnedRoom rec;
+                                        rec.slug        = newSlug;
+                                        rec.roomId      = newRoomId;
+                                        rec.title       = op->title;
+                                        rec.ownerSecret = op->ownerSecret;
+                                        ownedrooms::append(rec);
+                                    }
+                                }
+                            }
+                            {
+                                std::lock_guard<std::mutex> lk(op->mu);
+                                op->error = std::move(err);
+                            }
+                            op->done.store(true);
+                            op->inFlight.store(false);
+                        }).detach();
+                    }
+                    m_standaloneError.clear();
                 }
+            }
+            if (m_joinCustomOp.inFlight.load())
+            {
+                ImGui::TextDisabled("Working...");
             }
             if (!m_standaloneError.empty())
             {
@@ -1467,4 +1506,108 @@ void OSDChat::renderProfileWindow()
         }
     }
     ImGui::End();
+}
+
+// pumpAsyncOps drains each in-flight async HTTP op once per frame.
+// Workers stash their result + clear inFlight; we pick it up here on
+// the main thread and apply the side-effects (mutate m_roomsList,
+// touch owned_rooms.json, call connectBySlug, etc) so the UI never
+// races with the worker on shared state.
+//
+// `done.exchange(false)` is the gate — true exactly once per
+// completion, after which the slot is free to be re-submitted.
+void OSDChat::pumpAsyncOps()
+{
+    // ---- Public-room listing (#84) ------------------------------------
+    if (m_publicListOp.done.exchange(false))
+    {
+        std::lock_guard<std::mutex> lk(m_publicListOp.mu);
+        m_roomsList          = std::move(m_publicListOp.result);
+        m_roomsListError     = std::move(m_publicListOp.error);
+        m_roomsListRequested = true;
+    }
+
+    // ---- Owned-tab Join (probe + maybe revive + connect) --------------
+    if (m_ownedJoinOp.done.exchange(false))
+    {
+        std::lock_guard<std::mutex> lk(m_ownedJoinOp.mu);
+        if (!m_ownedJoinOp.error.empty())
+        {
+            m_deleteError = "Revive failed: " + m_ownedJoinOp.error;
+        }
+        // connectBySlug is itself async (spawns a resolver thread)
+        // so calling it from main here is safe + cheap.
+        m_chat->connectBySlug(m_ownedJoinOp.slug,
+                              m_ownedJoinOp.nick,
+                              /*password=*/"",
+                              m_ownedJoinOp.ownerSecret);
+        m_ownedRoomsLoaded = false;
+        m_pendingDeleteSlug.clear();
+    }
+
+    // ---- Join Custom (slug from user input, may revive) ---------------
+    if (m_joinCustomOp.done.exchange(false))
+    {
+        std::lock_guard<std::mutex> lk(m_joinCustomOp.mu);
+        if (!m_joinCustomOp.error.empty())
+        {
+            m_standaloneError = "Revive failed: " + m_joinCustomOp.error;
+        }
+        m_chat->connectBySlug(m_joinCustomOp.slug,
+                              m_joinCustomOp.nick,
+                              m_joinCustomOp.password,
+                              m_joinCustomOp.ownerSecret);
+    }
+
+    // ---- Create room (Create dialog) ----------------------------------
+    if (m_createOp.done.exchange(false))
+    {
+        std::lock_guard<std::mutex> lk(m_createOp.mu);
+        if (!m_createOp.error.empty())
+        {
+            m_standaloneError = m_createOp.error;
+        }
+        else
+        {
+            OwnedRoom rec;
+            rec.roomId      = m_createOp.resultRoomId;
+            rec.slug        = m_createOp.resultSlug;
+            rec.title       = m_createOp.title;
+            rec.ownerSecret = m_createOp.ownerSecret;
+            ownedrooms::append(rec);
+
+            m_chat->connectBySlug(m_createOp.resultSlug,
+                                  m_createOp.nick,
+                                  m_createOp.password,
+                                  m_createOp.ownerSecret);
+            m_createTitleBuf[0]    = '\0';
+            m_createSlugBuf[0]     = '\0';
+            m_createPasswordBuf[0] = '\0';
+            m_roomsListRequested   = false;
+            m_ownedRoomsLoaded     = false;
+            m_standaloneError.clear();
+        }
+    }
+
+    // ---- Delete confirm ------------------------------------------------
+    if (m_deleteOp.done.exchange(false))
+    {
+        std::lock_guard<std::mutex> lk(m_deleteOp.mu);
+        if (!m_deleteOp.ok)
+        {
+            m_deleteError = m_deleteOp.error;
+        }
+        else
+        {
+            ownedrooms::remove(m_deleteOp.slug);
+            m_ownedRoomsLoaded   = false;
+            m_roomsListRequested = false;
+            m_pendingDeleteSlug.clear();
+            m_deleteError.clear();
+            // If the killed room is the active session, drop it —
+            // the server already evicted us.
+            const auto snap = m_chat->getSnapshot();
+            if (snap.slug == m_deleteOp.slug) m_chat->disconnect();
+        }
+    }
 }

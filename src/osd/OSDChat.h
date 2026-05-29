@@ -4,6 +4,8 @@
 #include "../identity/ChatIdentity.h"
 #include "../identity/OwnedRooms.h"
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -178,4 +180,86 @@ private:
         std::string pendingInsert;
     };
     InputEditCb m_inputCb;
+
+    // --- Async chat-REST plumbing (#84) ------------------------------
+    // Every HTTP call into ChatClient used to run on the main render
+    // thread; even a 200 ms roundtrip felt like a freeze during
+    // browse / join / create. Each `*Op` here represents a single
+    // outstanding REST call: render flips inFlight on click + spawns
+    // a detached worker thread; the worker fills `done` + the
+    // result-specific fields under `mu`; the next frame's render
+    // drains via `done.exchange(false)` and acts.
+    struct ListRoomsOp
+    {
+        std::atomic<bool>                   inFlight{false};
+        std::atomic<bool>                   done{false};
+        std::mutex                          mu;
+        std::vector<ChatClient::ListedRoom> result;
+        std::string                         error;
+    };
+    ListRoomsOp m_publicListOp;
+
+    // Owned-tab Join button — probe + maybe revive + then connect.
+    // We keep the slug separate from the in-flight bool so multiple
+    // rapid clicks on different rows don't fight; the worker reads
+    // pendingSlug under mu and clears it on completion.
+    struct JoinReviveOp
+    {
+        std::atomic<bool> inFlight{false};
+        std::atomic<bool> done{false};
+        std::mutex        mu;
+        // Inputs (set on submit by main thread; read on worker)
+        std::string       slug;
+        std::string       ownerSecret;
+        std::string       title;
+        std::string       password;  // empty for owned-join, set for join-custom
+        std::string       nick;
+        // Outputs (filled by worker, drained on main thread)
+        std::string       error;
+    };
+    JoinReviveOp m_ownedJoinOp;
+    JoinReviveOp m_joinCustomOp;
+
+    // Create-room dialog. Already had m_createInFlight as a bool;
+    // promote to an Op so the call truly runs off-thread.
+    struct CreateRoomOp
+    {
+        std::atomic<bool> inFlight{false};
+        std::atomic<bool> done{false};
+        std::mutex        mu;
+        // Inputs
+        std::string       title;
+        std::string       slug;        // may be empty (server assigns)
+        std::string       password;
+        bool              listed       = true;
+        bool              reviving     = false;
+        std::string       ownerSecret; // pre-minted on submit
+        std::string       ownerId;
+        std::string       nick;
+        // Outputs
+        std::string       resultRoomId;
+        std::string       resultSlug;
+        std::string       error;
+    };
+    CreateRoomOp m_createOp;
+
+    // Delete confirm flow.
+    struct DeleteRoomOp
+    {
+        std::atomic<bool> inFlight{false};
+        std::atomic<bool> done{false};
+        std::mutex        mu;
+        // Inputs
+        std::string       roomId;
+        std::string       slug;        // for owned-rooms wipe + current-session check
+        std::string       ownerSecret;
+        // Outputs
+        bool              ok           = false;
+        std::string       error;
+    };
+    DeleteRoomOp m_deleteOp;
+
+    // Pump every Op once per frame. Called from render() before any
+    // op-dependent UI runs so the same frame can pick up results.
+    void pumpAsyncOps();
 };
