@@ -25,6 +25,9 @@
 #include "../chat/ChatClient.h"
 #include "../identity/ChatIdentity.h"
 #include "../identity/OwnedRooms.h"
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"
+#endif
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -3429,6 +3432,9 @@ void Application::run()
         // transition is needed (just compares two booleans and a few
         // strings).
         syncDirectoryClient();
+#if defined(__linux__)
+        syncVirtualCamera();
+#endif
         // Cursor visibility tracks BOTH UIManager::isVisible() and the
         // OSD overlay (#68). The setOnVisibilityChanged callback only
         // fires on F12 toggles — toggling the quick-actions widget via
@@ -4488,6 +4494,21 @@ void Application::run()
                                                                   textureWidth, textureHeight,
                                                                   /*flipY=*/false))
                                     {
+                                        // #85 — Virtual camera piggybacks on
+                                        // this RGBA readback. Push happens
+                                        // BEFORE the RGB strip below so the
+                                        // sink keeps the alpha channel intact
+                                        // (it does its own RGBA→YUYV via sws).
+                                        // Skipped when the sink isn't running
+                                        // (toggle off / no device).
+#if defined(__linux__)
+                                        if (m_virtcam && m_virtcam->isRunning())
+                                        {
+                                            m_virtcam->pushFrame(
+                                                rgbaData.data(),
+                                                textureWidth, textureHeight);
+                                        }
+#endif
                                         frameData.resize(rgbDataSize);
                                         for (uint32_t row = 0; row < textureHeight; row++)
                                         {
@@ -5773,6 +5794,88 @@ void Application::applyPendingRemoteMeta()
 // Always cheap when there's no transition; just compares the toggle
 // against the current state.
 // ─────────────────────────────────────────────────────────────────────
+#if defined(__linux__)
+// #85 — Virtual camera (v4l2loopback) lifecycle. Mirrors the
+// directory-client sync's "reconcile UI toggle with sink state"
+// pattern. Cheap when nothing changes; on a toggle / device /
+// dims transition does a stop + start. Status text is written
+// back into UIManager for the configuration window to display.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool        enabled = m_ui->getVirtcamEnabled();
+    const std::string &cfgDev = m_ui->getVirtcamDevicePath();
+    const std::string &fmtStr = m_ui->getVirtcamPixelFormat();
+    const VirtualCameraOutput::PixelFormat fmt =
+        (fmtStr == "rgb24") ? VirtualCameraOutput::PixelFormat::RGB24
+                            : VirtualCameraOutput::PixelFormat::YUYV;
+
+    // Resolve "0 = follow shader" sentinels. The shader output is
+    // what the user actually sees in the viewport; default to
+    // UIManager's outputWidth/Height which already track it.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    uint32_t f = m_ui->getVirtcamOutputFps();
+    if (f == 0) f = 30; // cosmetic only; loopback doesn't enforce pacing
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (w == 0 || h == 0)
+    {
+        // Output dims aren't ready yet (no capture / no shader).
+        // Don't error — just wait silently for the next frame.
+        return;
+    }
+
+    // Resolve device path: empty config = auto-pick first loopback.
+    std::string devicePath = cfgDev;
+    if (devicePath.empty())
+    {
+        const auto devices = VirtualCameraOutput::enumerateDevices();
+        if (devices.empty())
+        {
+            m_ui->setVirtcamErrorText(
+                "No v4l2loopback device. Run "
+                "`sudo modprobe v4l2loopback exclusive_caps=1`.");
+            return;
+        }
+        devicePath = devices.front().path;
+    }
+
+    // Lazy construct the sink.
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutput>();
+
+    std::string err;
+    if (!m_virtcam->start(devicePath, w, h, f, fmt, err))
+    {
+        m_ui->setVirtcamErrorText(err);
+        return;
+    }
+    m_ui->setVirtcamErrorText("");
+    // Status line for the configuration window.
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u %s to %s",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight(),
+                  (fmt == VirtualCameraOutput::PixelFormat::YUYV ? "YUYV" : "RGB24"),
+                  devicePath.c_str());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __linux__
+
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;

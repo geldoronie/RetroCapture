@@ -208,6 +208,17 @@ private:
     // (or the slug otherwise changed), the worker's connect is
     // dropped so it doesn't undo the disconnect.
     std::atomic<uint64_t> m_chatBindEpoch{0};
+
+    // #85 — Virtual-camera output sink. Linux-only Phase 1 (v4l2
+    // loopback). syncVirtualCamera() starts/stops it according to
+    // m_ui->getVirtcamEnabled(); the main render loop calls
+    // pushFrame() on the RGBA scratch right after PBOManager
+    // readback so the work piggybacks on the existing readback
+    // path.
+#if defined(__linux__)
+    std::unique_ptr<class VirtualCameraOutput> m_virtcam;
+    void syncVirtualCamera();
+#endif
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;

@@ -476,6 +476,8 @@ if(PLATFORM_LINUX)
 elseif(PLATFORM_WINDOWS)
     # No Windows, excluir implementações Linux e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*UIConfigurationVirtualCamera\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
@@ -503,6 +505,8 @@ elseif(PLATFORM_MACOS)
     # used by both AudioCapturePulse on Linux and AudioCaptureCoreAudio
     # on macOS, so it is NOT excluded here.
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*UIConfigurationVirtualCamera\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")

@@ -10,6 +10,7 @@
   "menu.configurations.recording":  "Recording",
   "menu.configurations.webportal":  "Web Portal",
   "menu.configurations.audio":      "Audio",
+  "menu.configurations.virtcam":    "Virtual Camera",
   "menu.view":              "View",
   "menu.view.toggleui":     "Toggle UI",
   "menu.view.quickactions": "Quick actions",

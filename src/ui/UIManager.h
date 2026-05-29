@@ -26,6 +26,7 @@ class UIConfigurationStreaming;
 class UIConfigurationRecording;
 class UIConfigurationWebPortal;
 class UIConfigurationAudio;
+class UIConfigurationVirtualCamera;
 class UIInfoPanel;
 class QuickActionsOverlay;
 class UIPreferences;
@@ -330,6 +331,29 @@ public:
     // with chat enabled.
     const std::string &getStreamRoomSlug() const     { return m_streamRoomSlug; }
     void setStreamRoomSlug(const std::string &v)     { m_streamRoomSlug = v; }
+
+    // #85 — Virtual camera (Linux v4l2loopback in Phase 1). Config
+    // round-trips through streaming.virtcam in retrocapture.conf.
+    // Runtime state (status / error text) lives here too, written
+    // by Application after each syncVirtualCamera tick so the
+    // configuration window can render a live status line.
+    bool getVirtcamEnabled() const                   { return m_virtcamEnabled; }
+    void setVirtcamEnabled(bool v)                   { m_virtcamEnabled = v; }
+    const std::string &getVirtcamDevicePath() const  { return m_virtcamDevicePath; }
+    void setVirtcamDevicePath(const std::string &v)  { m_virtcamDevicePath = v; }
+    uint32_t getVirtcamOutputWidth() const           { return m_virtcamOutputWidth; }
+    void setVirtcamOutputWidth(uint32_t v)           { m_virtcamOutputWidth = v; }
+    uint32_t getVirtcamOutputHeight() const          { return m_virtcamOutputHeight; }
+    void setVirtcamOutputHeight(uint32_t v)          { m_virtcamOutputHeight = v; }
+    uint32_t getVirtcamOutputFps() const             { return m_virtcamOutputFps; }
+    void setVirtcamOutputFps(uint32_t v)             { m_virtcamOutputFps = v; }
+    const std::string &getVirtcamPixelFormat() const { return m_virtcamPixelFormat; }
+    void setVirtcamPixelFormat(const std::string &v) { m_virtcamPixelFormat = v; }
+    // Status surface (written by Application; read by UI).
+    const std::string &getVirtcamStatusText() const  { return m_virtcamStatusText; }
+    void setVirtcamStatusText(const std::string &v)  { m_virtcamStatusText = v; }
+    const std::string &getVirtcamErrorText() const   { return m_virtcamErrorText; }
+    void setVirtcamErrorText(const std::string &v)   { m_virtcamErrorText = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -931,6 +955,9 @@ private:
     std::unique_ptr<class UIConfigurationShader>    m_shaderWindow;
     std::unique_ptr<class UIConfigurationImage>     m_imageWindow;
     std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
+#if defined(__linux__)
+    std::unique_ptr<class UIConfigurationVirtualCamera> m_virtcamWindow;
+#endif
     std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
     std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
 #if defined(__linux__) || defined(__APPLE__)
@@ -1164,6 +1191,15 @@ private:
     // provision time. Provisioned on the first stream-with-chat
     // start, then reused forever.
     std::string m_streamRoomSlug          = "";
+    // #85 — Virtual camera config + runtime status.
+    bool        m_virtcamEnabled          = false;
+    std::string m_virtcamDevicePath       = "";       // empty = auto-pick first loopback
+    uint32_t    m_virtcamOutputWidth      = 0;        // 0 = follow shader output
+    uint32_t    m_virtcamOutputHeight     = 0;
+    uint32_t    m_virtcamOutputFps        = 0;        // 0 = follow capture FPS
+    std::string m_virtcamPixelFormat      = "yuyv";   // "yuyv" | "rgb24"
+    std::string m_virtcamStatusText;                  // populated by Application
+    std::string m_virtcamErrorText;
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.
