@@ -11,6 +11,14 @@ option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
 option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
 option(BUILD_COMPATIBLE_ARM64 "Build with portable ARMv8-A flags (no SVE/crypto, works on Pi 3/4/5)" OFF)
+# #85 Phase 2 — DirectShow source filter DLL gate. OFF by default
+# because it pulls strmbase (DirectShow BaseClasses) which isn't
+# in our MXE cross-compile toolchain. Set ON in a Windows dev
+# environment that has BaseClasses available (Windows SDK Samples
+# / vendored third_party/strmbase).
+option(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER
+    "Build the Windows DirectShow virtual-camera source filter DLL (#85 Phase 2)"
+    OFF)
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -453,12 +461,19 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
+# #85 Phase 2 — the DirectShow filter DLL lives under src/dshow_filter/
+# and is its OWN target (built via add_subdirectory when the option is
+# set). Always remove its sources from the main retrocapture executable
+# build so the SOURCES glob doesn't drag them in.
+list(FILTER SOURCES EXCLUDE REGEX ".*/dshow_filter/.*\\.(cpp|h)$")
+
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
     # No Linux, excluir implementações Windows e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
@@ -506,6 +521,7 @@ elseif(PLATFORM_MACOS)
     # on macOS, so it is NOT excluded here.
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*UIConfigurationVirtualCamera\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
