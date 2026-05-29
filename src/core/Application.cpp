@@ -5852,14 +5852,25 @@ void Application::syncVirtualCamera()
         (fmtStr == "rgb24") ? VirtualCameraOutput::PixelFormat::RGB24
                             : VirtualCameraOutput::PixelFormat::YUYV;
 
-    // Resolve "0 = follow shader" sentinels. The shader output is
-    // what the user actually sees in the viewport; default to
-    // UIManager's outputWidth/Height which already track it.
+    // Resolve "0 = follow upstream" sentinels. Cascade:
+    //   user-configured override (virtcam.outputWidth)
+    //     → shader/image output (outputWidth, only set when the
+    //       user picked an output resolution under Image)
+    //     → raw capture dims (captureWidth, always populated as
+    //       soon as a source is open).
+    // The shader-output fallback alone wasn't enough — many
+    // users don't configure an output resolution, so getOutputWidth
+    // sits at 0 forever and we silently never started. Capture
+    // dims is the right last-resort: it tracks the actual frame
+    // size we're feeding through the pipeline.
     uint32_t w = m_ui->getVirtcamOutputWidth();
     uint32_t h = m_ui->getVirtcamOutputHeight();
     if (w == 0) w = m_ui->getOutputWidth();
     if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
     uint32_t f = m_ui->getVirtcamOutputFps();
+    if (f == 0) f = m_ui->getCaptureFps();
     if (f == 0) f = 30; // cosmetic only; loopback doesn't enforce pacing
 
     if (!enabled)
@@ -5875,8 +5886,11 @@ void Application::syncVirtualCamera()
 
     if (w == 0 || h == 0)
     {
-        // Output dims aren't ready yet (no capture / no shader).
-        // Don't error — just wait silently for the next frame.
+        // Truly nothing to push yet — no source open and no
+        // override configured. Surface the wait so the user
+        // doesn't think the click did nothing.
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
         return;
     }
 
