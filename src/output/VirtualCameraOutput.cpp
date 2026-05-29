@@ -111,27 +111,39 @@ VirtualCameraOutput::enumerateDevices()
         {
             const std::string driver(
                 reinterpret_cast<const char *>(cap.driver));
-            // v4l2loopback with exclusive_caps=1 narrows device_caps
-            // to a single role based on the open mode (CAPTURE when
-            // O_RDONLY, OUTPUT when O_WRONLY). cap.capabilities is
-            // the *union* the driver exposes and is the right field
-            // for "does this device support output?".
-            const uint32_t caps = cap.capabilities;
+            // v4l2loopback with exclusive_caps=1 narrows BOTH
+            // cap.capabilities AND cap.device_caps to a single role
+            // based on the open mode: O_RDONLY → only CAPTURE
+            // surfaces in both fields, O_WRONLY → only OUTPUT.
+            // We can't tell from the bits alone that this device
+            // can also act as OUTPUT — they only appear if you
+            // re-open with O_WRONLY, which would fight whatever
+            // OBS / browser is consuming.
+            //
+            // The driver name is the reliable identifier:
+            // v4l2loopback is the only mainline kernel video
+            // driver that uses "loopback" in its name (vivid +
+            // akvcam use different strings). If it's a loopback
+            // node, it always supports output by construction.
             const bool isLoopback = driver.find(kLoopbackDrv) != std::string::npos;
-            const bool canOutput  = (caps & V4L2_CAP_VIDEO_OUTPUT) != 0;
-            if (isLoopback && canOutput)
+            char hexCaps[16];
+            std::snprintf(hexCaps, sizeof(hexCaps), "0x%08x",
+                          cap.capabilities);
+            if (isLoopback)
             {
                 DeviceInfo info;
                 info.path      = path;
                 info.cardLabel = reinterpret_cast<const char *>(cap.card);
                 out.push_back(std::move(info));
+                LOG_DEBUG(std::string("virtcam scan: found ") + path +
+                          " driver=\"" + driver +
+                          "\" caps=" + hexCaps);
             }
             else
             {
                 LOG_DEBUG(std::string("virtcam scan: skipping ") + path +
                           " driver=\"" + driver +
-                          "\" caps=0x" +
-                          std::to_string(caps));
+                          "\" caps=" + hexCaps);
             }
         }
         else
