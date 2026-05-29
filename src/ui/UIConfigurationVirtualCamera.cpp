@@ -6,6 +6,7 @@
 
 #include <imgui.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -267,8 +268,22 @@ void UIConfigurationVirtualCamera::submitLoadModule()
     // friendly name. The sanitiser in VirtualCameraOutput will
     // pass it through unchanged.
     std::thread([this]() {
-        const auto r =
-            VirtualCameraOutput::loadV4l2LoopbackModule("RetroCapture");
+        auto r = VirtualCameraOutput::loadV4l2LoopbackModule("RetroCapture");
+        // udev creates /dev/videoN asynchronously after modprobe
+        // returns — wait up to ~600 ms for the node to appear so
+        // pumpModuleOp's refreshDevices() actually sees it. Cap
+        // the loop tight; if udev never delivers (containerised
+        // environment, missing udev rules) we still finish and
+        // report success — the UI just stays empty.
+        if (r.ok)
+        {
+            for (int i = 0; i < 30; ++i)
+            {
+                if (!VirtualCameraOutput::enumerateDevices().empty())
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
         {
             std::lock_guard<std::mutex> lk(m_moduleOp.mu);
             m_moduleOp.result = r;
@@ -282,7 +297,29 @@ void UIConfigurationVirtualCamera::submitUnloadModule()
 {
     if (m_moduleOp.inFlight.exchange(true)) return;
     m_moduleOp.kind = "remove";
-    std::thread([this]() {
+
+    // Tell Application to stop the sink (and clear the user
+    // toggle so syncVirtualCamera doesn't re-open after rmmod).
+    // The worker spins on virtcamStopped before launching pkexec
+    // — without this, rmmod fails with EBUSY because we're still
+    // holding the device's fd.
+    m_uiManager->setVirtcamEnabled(false);
+    m_uiManager->saveConfig();
+    m_uiManager->setVirtcamStopped(false);
+    m_uiManager->requestVirtcamStop();
+
+    UIManager *ui = m_uiManager;
+    std::thread([this, ui]() {
+        // Poll up to ~500 ms (50 × 10 ms) for the sink to release
+        // the device. The render thread typically picks up the
+        // request within 1-2 frames; the timeout is generous so a
+        // briefly-stalled render loop doesn't dump the user into
+        // an EBUSY error.
+        for (int i = 0; i < 50; ++i)
+        {
+            if (ui->isVirtcamStopped()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
         const auto r = VirtualCameraOutput::unloadV4l2LoopbackModule();
         {
             std::lock_guard<std::mutex> lk(m_moduleOp.mu);

@@ -5804,6 +5804,23 @@ void Application::syncVirtualCamera()
 {
     if (!m_ui) return;
 
+    // Synchronous "stop now" handshake (UI module-remove flow).
+    // When the UI fires the request, force the sink down THIS
+    // tick and post a notice the UI's worker spins on before
+    // running pkexec rmmod. Without this, rmmod fails with
+    // EBUSY because RetroCapture is still holding /dev/videoN
+    // through m_virtcam's fd.
+    if (m_ui->consumeVirtcamStopRequest())
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        m_ui->setVirtcamStopped(true);
+    }
+
     const bool        enabled = m_ui->getVirtcamEnabled();
     const std::string &cfgDev = m_ui->getVirtcamDevicePath();
     const std::string &fmtStr = m_ui->getVirtcamPixelFormat();

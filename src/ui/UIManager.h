@@ -354,6 +354,23 @@ public:
     void setVirtcamStatusText(const std::string &v)  { m_virtcamStatusText = v; }
     const std::string &getVirtcamErrorText() const   { return m_virtcamErrorText; }
     void setVirtcamErrorText(const std::string &v)   { m_virtcamErrorText = v; }
+    // #85 — Synchronous handshake for "stop the sink right now so
+    // I can `rmmod` the kernel module". UI sets requestVirtcamStop,
+    // Application::syncVirtualCamera consumes it on the next render
+    // frame: forces m_virtcam->stop() AND sets virtcamStoppedNotice
+    // so the UI worker can poll until it's safe to fire pkexec
+    // rmmod. Two atomic-ish bools (bool is fine here — UI thread
+    // and render thread is the same thread; the worker reads the
+    // *Notice flag but only after spinning a sleep, no race).
+    bool consumeVirtcamStopRequest()
+    {
+        if (!m_virtcamStopRequested) return false;
+        m_virtcamStopRequested = false;
+        return true;
+    }
+    void requestVirtcamStop()                        { m_virtcamStopRequested = true; }
+    bool isVirtcamStopped() const                    { return m_virtcamStoppedNotice; }
+    void setVirtcamStopped(bool v)                   { m_virtcamStoppedNotice = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -1200,6 +1217,8 @@ private:
     std::string m_virtcamPixelFormat      = "yuyv";   // "yuyv" | "rgb24"
     std::string m_virtcamStatusText;                  // populated by Application
     std::string m_virtcamErrorText;
+    bool        m_virtcamStopRequested    = false;    // UI -> Application
+    bool        m_virtcamStoppedNotice    = false;    // Application -> UI
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.

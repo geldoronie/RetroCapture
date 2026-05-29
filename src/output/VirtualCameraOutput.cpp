@@ -98,11 +98,13 @@ VirtualCameraOutput::enumerateDevices()
         {
             const std::string driver(
                 reinterpret_cast<const char *>(cap.driver));
-            // v4l2loopback nodes advertise BOTH capture + output on
-            // the same fd. We need the output bit.
-            const uint32_t caps = cap.capabilities & V4L2_CAP_DEVICE_CAPS
-                ? cap.device_caps
-                : cap.capabilities;
+            // v4l2loopback with exclusive_caps=1 reports a *narrow*
+            // device_caps that depends on the open mode — opening
+            // O_RDWR can leave VIDEO_OUTPUT off device_caps even
+            // though the device supports it. cap.capabilities is
+            // the union the driver actually exposes and is the
+            // right field for "does this device support output?".
+            const uint32_t caps = cap.capabilities;
             const bool isLoopback = driver.find(kLoopbackDrv) != std::string::npos;
             const bool canOutput  = (caps & V4L2_CAP_VIDEO_OUTPUT) != 0;
             if (isLoopback && canOutput)
