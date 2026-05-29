@@ -26,10 +26,12 @@ namespace
 // devices register here too.
 const char *kDevDir       = "/dev";
 const char *kDevPrefix    = "video";
-// Driver string v4l2loopback reports in cap.driver. The trailing
-// underscore is just defensive — the actual driver string is
-// "v4l2 loopback", we substring-match.
-const char *kLoopbackDrv  = "v4l2 loopback";
+// Driver string v4l2loopback reports in cap.driver. Older module
+// builds spell it "v4l2 loopback" (with space); the current
+// upstream uses "v4l2loopback" (no space). Substring-match on
+// "loopback" alone — there's no other video driver in mainline
+// that uses that token, so the loose match is safe.
+const char *kLoopbackDrv  = "loopback";
 
 int xioctl(int fd, unsigned long req, void *arg)
 {
@@ -88,22 +90,32 @@ VirtualCameraOutput::enumerateDevices()
         if (name.rfind(kDevPrefix, 0) != 0) continue; // not "video*"
         const std::string path = std::string(kDevDir) + "/" + name;
 
-        // O_NONBLOCK so a busy device doesn't stall the scan; we
-        // only need QUERYCAP which is a cheap synchronous ioctl.
-        int fd = ::open(path.c_str(), O_RDWR | O_NONBLOCK);
-        if (fd < 0) continue;
+        // Open O_RDONLY (not O_RDWR) for the scan: QUERYCAP needs
+        // no write access, and an O_RDWR open against a device
+        // some other app (OBS, a browser preview) is already
+        // consuming as CAPTURE fails with EBUSY under v4l2loopback's
+        // exclusive_caps mode. We'd then skip the device silently
+        // and the UI would render "no device" while the device is
+        // visibly present to every other app on the system. Read-
+        // only open lets multiple scanners coexist.
+        int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
+        if (fd < 0)
+        {
+            LOG_DEBUG(std::string("virtcam scan: open(") + path +
+                      ") failed: " + std::strerror(errno));
+            continue;
+        }
 
         v4l2_capability cap{};
         if (xioctl(fd, VIDIOC_QUERYCAP, &cap) == 0)
         {
             const std::string driver(
                 reinterpret_cast<const char *>(cap.driver));
-            // v4l2loopback with exclusive_caps=1 reports a *narrow*
-            // device_caps that depends on the open mode — opening
-            // O_RDWR can leave VIDEO_OUTPUT off device_caps even
-            // though the device supports it. cap.capabilities is
-            // the union the driver actually exposes and is the
-            // right field for "does this device support output?".
+            // v4l2loopback with exclusive_caps=1 narrows device_caps
+            // to a single role based on the open mode (CAPTURE when
+            // O_RDONLY, OUTPUT when O_WRONLY). cap.capabilities is
+            // the *union* the driver exposes and is the right field
+            // for "does this device support output?".
             const uint32_t caps = cap.capabilities;
             const bool isLoopback = driver.find(kLoopbackDrv) != std::string::npos;
             const bool canOutput  = (caps & V4L2_CAP_VIDEO_OUTPUT) != 0;
@@ -114,6 +126,18 @@ VirtualCameraOutput::enumerateDevices()
                 info.cardLabel = reinterpret_cast<const char *>(cap.card);
                 out.push_back(std::move(info));
             }
+            else
+            {
+                LOG_DEBUG(std::string("virtcam scan: skipping ") + path +
+                          " driver=\"" + driver +
+                          "\" caps=0x" +
+                          std::to_string(caps));
+            }
+        }
+        else
+        {
+            LOG_DEBUG(std::string("virtcam scan: QUERYCAP(") + path +
+                      ") failed: " + std::strerror(errno));
         }
         ::close(fd);
     }
