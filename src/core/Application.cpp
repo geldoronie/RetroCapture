@@ -4484,6 +4484,23 @@ void Application::run()
                                     frameData.resize(rgbDataSize);
                                     frameDataReady = m_pboManager->getReadData(
                                         frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                    // #85 — Virtual camera also gets fed from
+                                    // the RGB path (no-shader / direct capture
+                                    // passthrough). Without this branch the
+                                    // consumer sees uninitialised buffer
+                                    // contents (black / static) whenever a
+                                    // shader is off, which was the symptom
+                                    // user hit on first end-to-end test.
+#if defined(__linux__)
+                                    if (frameDataReady && m_virtcam &&
+                                        m_virtcam->isRunning())
+                                    {
+                                        m_virtcam->pushFrame(
+                                            frameData.data(),
+                                            textureWidth, textureHeight,
+                                            VirtualCameraOutput::SourceFormat::RGB);
+                                    }
+#endif
                                 }
                                 else
                                 {
@@ -4495,18 +4512,17 @@ void Application::run()
                                                                   /*flipY=*/false))
                                     {
                                         // #85 — Virtual camera piggybacks on
-                                        // this RGBA readback. Push happens
-                                        // BEFORE the RGB strip below so the
-                                        // sink keeps the alpha channel intact
-                                        // (it does its own RGBA→YUYV via sws).
-                                        // Skipped when the sink isn't running
-                                        // (toggle off / no device).
+                                        // this RGBA readback (shader path).
+                                        // Push happens BEFORE the RGB strip
+                                        // below so the sink keeps the alpha
+                                        // channel intact (sws RGBA → YUYV).
 #if defined(__linux__)
                                         if (m_virtcam && m_virtcam->isRunning())
                                         {
                                             m_virtcam->pushFrame(
                                                 rgbaData.data(),
-                                                textureWidth, textureHeight);
+                                                textureWidth, textureHeight,
+                                                VirtualCameraOutput::SourceFormat::RGBA);
                                         }
 #endif
                                         frameData.resize(rgbDataSize);

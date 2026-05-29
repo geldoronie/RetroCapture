@@ -277,15 +277,22 @@ void VirtualCameraOutput::unmapBuffers()
 
 // ---- sws conversion -----------------------------------------------
 
-bool VirtualCameraOutput::ensureSws(uint32_t srcW, uint32_t srcH)
+bool VirtualCameraOutput::ensureSws(uint32_t srcW, uint32_t srcH,
+                                     SourceFormat srcFmt)
 {
-    // Rebuild only on size change (or first call). Conversion
-    // pipeline is RGBA → (output format). sws handles both
-    // colour-conversion and rescaling in one pass.
-    if (m_sws && m_swsSrcW == srcW && m_swsSrcH == srcH) return true;
+    // Rebuild on size OR source-format change. m_swsSrcW=0 marks
+    // "no context yet". Conversion handles both colour-conversion
+    // and rescaling in one pass.
+    const AVPixelFormat avSrc = (srcFmt == SourceFormat::RGBA)
+        ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24;
+    if (m_sws && m_swsSrcW == srcW && m_swsSrcH == srcH &&
+        m_swsSrcAvFmt == static_cast<int>(avSrc))
+    {
+        return true;
+    }
     freeSws();
     m_sws = sws_getContext(
-        static_cast<int>(srcW), static_cast<int>(srcH), AV_PIX_FMT_RGBA,
+        static_cast<int>(srcW), static_cast<int>(srcH), avSrc,
         static_cast<int>(m_outWidth), static_cast<int>(m_outHeight),
         toAvPixFmt(m_outFormat),
         SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -294,8 +301,9 @@ bool VirtualCameraOutput::ensureSws(uint32_t srcW, uint32_t srcH)
         setError("sws_getContext failed");
         return false;
     }
-    m_swsSrcW = srcW;
-    m_swsSrcH = srcH;
+    m_swsSrcW     = srcW;
+    m_swsSrcH     = srcH;
+    m_swsSrcAvFmt = static_cast<int>(avSrc);
     // Resize the scratch to the OUTPUT framesize; the converter
     // writes there before we memcpy into the mmap'd kernel buffer.
     m_convertScratch.resize(
@@ -425,33 +433,53 @@ void VirtualCameraOutput::stop()
 
 // ---- Per-frame push ------------------------------------------------
 
-bool VirtualCameraOutput::pushFrame(const uint8_t *rgba,
-                                     uint32_t       rgbaWidth,
-                                     uint32_t       rgbaHeight)
+bool VirtualCameraOutput::pushFrame(const uint8_t *pixels,
+                                     uint32_t       srcWidth,
+                                     uint32_t       srcHeight,
+                                     SourceFormat   srcFormat)
 {
-    if (!m_running.load() || !rgba) return false;
+    if (!m_running.load() || !pixels) return false;
 
-    if (!ensureSws(rgbaWidth, rgbaHeight)) return false;
+    // Diagnostic log: very chatty if a consumer flaps, so throttle
+    // to first-3-frames + 1-in-300 thereafter. Tied to a static so
+    // multiple sinks (we never have more than one today) would
+    // share the counter — fine for diagnostics.
+    static thread_local uint64_t pushCount = 0;
+    ++pushCount;
+    const bool wantLog = (pushCount <= 3) || (pushCount % 300 == 0);
 
-    // Convert + rescale RGBA → output format in one pass.
-    const uint8_t *srcSlice[1] = { rgba };
-    int            srcStride[1]= { static_cast<int>(rgbaWidth) * 4 };
+    if (!ensureSws(srcWidth, srcHeight, srcFormat)) return false;
+
+    // Convert + rescale source → output format in one pass.
+    const int srcStridePx = (srcFormat == SourceFormat::RGBA) ? 4 : 3;
+    const uint8_t *srcSlice[1] = { pixels };
+    int            srcStride[1]= { static_cast<int>(srcWidth) * srcStridePx };
     uint8_t       *dstSlice[1] = { m_convertScratch.data() };
     int            dstStride[1]= {
         static_cast<int>(m_outWidth) * static_cast<int>(bytesPerPixel(m_outFormat)) };
     sws_scale(m_sws, srcSlice, srcStride, 0,
-              static_cast<int>(rgbaHeight), dstSlice, dstStride);
+              static_cast<int>(srcHeight), dstSlice, dstStride);
 
     // DQBUF the next available output buffer; if none is ready
-    // (consumer is slow) drop the frame — better latency than
-    // backpressuring the render loop. EAGAIN is the expected
+    // (consumer hasn't read the last one yet, or there isn't a
+    // consumer connected at all) drop the frame — better latency
+    // than backpressuring the render loop. EAGAIN is the expected
     // "no buffer ready" return on non-blocking fd.
     v4l2_buffer buf{};
     buf.type   = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     buf.memory = V4L2_MEMORY_MMAP;
     if (xioctl(m_fd, VIDIOC_DQBUF, &buf) < 0)
     {
-        if (errno == EAGAIN) return true; // drop, not an error
+        if (errno == EAGAIN)
+        {
+            if (wantLog)
+            {
+                LOG_DEBUG("virtcam push: DQBUF EAGAIN (no consumer "
+                          "reading yet, or buffer round-trip slow) "
+                          "at frame #" + std::to_string(pushCount));
+            }
+            return true; // drop, not an error
+        }
         setError(std::string("VIDIOC_DQBUF failed: ") +
                  std::strerror(errno));
         return false;
@@ -471,6 +499,17 @@ bool VirtualCameraOutput::pushFrame(const uint8_t *rgba,
         setError(std::string("VIDIOC_QBUF failed: ") +
                  std::strerror(errno));
         return false;
+    }
+    if (wantLog)
+    {
+        LOG_DEBUG("virtcam push: ok frame #" +
+                  std::to_string(pushCount) + " src=" +
+                  std::to_string(srcWidth) + "x" +
+                  std::to_string(srcHeight) + " " +
+                  (srcFormat == SourceFormat::RGBA ? "RGBA" : "RGB") +
+                  " -> out=" + std::to_string(m_outWidth) + "x" +
+                  std::to_string(m_outHeight) + " bytesused=" +
+                  std::to_string(buf.bytesused));
     }
     return true;
 }

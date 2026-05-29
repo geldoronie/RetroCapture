@@ -121,19 +121,31 @@ public:
                PixelFormat        format,
                std::string       &outError);
 
+    /// Source pixel format for pushFrame. The Application drains
+    /// RGBA from the PBOManager when a shader is active and RGB
+    /// directly from V4L2/UVC capture otherwise — pushFrame
+    /// accepts both and sws converts to the negotiated OUTPUT
+    /// format internally.
+    enum class SourceFormat
+    {
+        RGBA, // packed RGBA, srcWidth*4 bytes per row
+        RGB,  // packed RGB,  srcWidth*3 bytes per row
+    };
+
     /// Drop a frame into the next available output buffer.
-    /// rgbaWidth / rgbaHeight describe the SOURCE; if they differ
+    /// srcWidth / srcHeight describe the SOURCE; if they differ
     /// from the device's negotiated dims we sws_scale to the
-    /// device dims. Stride is assumed packed (rgbaWidth*4 bytes
-    /// per row) — matches PBOManager's output.
+    /// device dims. Stride is assumed packed (srcWidth*bpp bytes
+    /// per row) — matches PBOManager + V4L2 capture output.
     ///
     /// Safe to call at the source FPS; the kernel drops backed-up
     /// frames so a slow consumer doesn't backpressure us.
     /// Returns false on a hard error (device gone, ioctl failed
     /// repeatedly); caller can decide whether to stop().
-    bool pushFrame(const uint8_t *rgba,
-                   uint32_t       rgbaWidth,
-                   uint32_t       rgbaHeight);
+    bool pushFrame(const uint8_t *pixels,
+                   uint32_t       srcWidth,
+                   uint32_t       srcHeight,
+                   SourceFormat   srcFormat = SourceFormat::RGBA);
 
     /// VIDIOC_STREAMOFF + munmap + close. Safe to call when not
     /// started; idempotent.
@@ -167,7 +179,7 @@ private:
                          std::string &outError);
     bool requestAndMapBuffers(std::string &outError);
     void unmapBuffers();
-    bool ensureSws(uint32_t srcW, uint32_t srcH);
+    bool ensureSws(uint32_t srcW, uint32_t srcH, SourceFormat srcFmt);
     void freeSws();
 
     int               m_fd          = -1;
@@ -180,11 +192,13 @@ private:
 
     std::vector<OutBuffer> m_buffers;
 
-    // sws conversion state — rebuilt on input-size change. swsSrcW
-    // == 0 means "uninitialised, will lazy-build on first push".
-    SwsContext *m_sws     = nullptr;
-    uint32_t    m_swsSrcW = 0;
-    uint32_t    m_swsSrcH = 0;
+    // sws conversion state — rebuilt on input-size OR input-format
+    // change. m_swsSrcW == 0 means "uninitialised, will lazy-build
+    // on first push".
+    SwsContext *m_sws         = nullptr;
+    uint32_t    m_swsSrcW     = 0;
+    uint32_t    m_swsSrcH     = 0;
+    int         m_swsSrcAvFmt = 0; // AVPixelFormat enum value
 
     // Scratch buffer the converted frame lives in before the
     // memcpy into the mmap'd output buffer. Single-allocated on
