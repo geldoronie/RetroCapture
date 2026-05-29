@@ -79,18 +79,49 @@ void UIConfigurationVirtualCamera::render()
 
 void UIConfigurationVirtualCamera::renderToggle()
 {
-    bool enabled = m_uiManager->getVirtcamEnabled();
-    if (ImGui::Checkbox("Enable virtual camera", &enabled))
+    // Explicit Start/Stop instead of a checkbox — mirrors the
+    // streaming + recording UX so the user has the same mental
+    // model across all three capture surfaces. Underneath it's
+    // still the same boolean on UIManager that syncVirtualCamera
+    // reconciles per frame; the button just flips it.
+    const bool enabled = m_uiManager->getVirtcamEnabled();
+    if (!enabled)
     {
-        m_uiManager->setVirtcamEnabled(enabled);
-        m_uiManager->saveConfig();
+        if (ImGui::Button("Start Capture", ImVec2(-1.0f, 0)))
+        {
+            m_uiManager->setVirtcamEnabled(true);
+            m_uiManager->saveConfig();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Start pushing the processed frame to the\n"
+                "v4l2loopback device. OBS / Chrome / Discord /\n"
+                "Zoom will list it as a webcam from this moment.");
+        }
     }
-    if (ImGui::IsItemHovered())
+    else
     {
-        ImGui::SetTooltip(
-            "When on, RetroCapture pushes every rendered frame into\n"
-            "the selected v4l2loopback device. OBS / Chrome / Discord\n"
-            "/ Zoom will list it as a webcam.");
+        // Red-tinted stop button for symmetry with the chat
+        // Disconnect treatment.
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              ImVec4(0.55f, 0.22f, 0.22f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              ImVec4(0.70f, 0.28f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              ImVec4(0.45f, 0.18f, 0.18f, 1.0f));
+        if (ImGui::Button("Stop Capture", ImVec2(-1.0f, 0)))
+        {
+            m_uiManager->setVirtcamEnabled(false);
+            m_uiManager->saveConfig();
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Release the v4l2loopback device. Consumers will\n"
+                "see the camera as disconnected.");
+        }
     }
 }
 

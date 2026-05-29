@@ -245,6 +245,8 @@
   "quickactions.open_chat": "Abrir chat",
   "quickactions.chat_rooms": "Salas de chat",
   "quickactions.browse_disabled_streaming": "Pare a stream antes de navegar outras",
+  "quickactions.virtcam.start": "Iniciar câmera virtual",
+  "quickactions.virtcam.stop":  "Parar câmera virtual",
   "quickactions.record_client.tip": "Grava o que está na tela (vídeo pós-decode).\nO áudio vem do dispositivo de entrada local, NÃO\ndo stream remoto — sem loopback do sistema a gravação\nficará muda. Configure uma fonte loopback no OS\npara capturar o áudio do stream também.",
 
   "shortcuts.title":       "Atalhos do teclado",

@@ -4182,7 +4182,11 @@ void Application::run()
             // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
-                                    (m_recordingManager && m_recordingManager->isRecording());
+                                    (m_recordingManager && m_recordingManager->isRecording())
+#if defined(__linux__)
+                                    || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                    ;
 
             // Log para debug: verificar tamanho da textura final antes da captura
             static int finalTextureSizeLogCount = 0;
@@ -4255,7 +4259,11 @@ void Application::run()
                         // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
                         // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
                         bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
-                                                (m_streamManager && m_streamManager->isActive());
+                                                (m_streamManager && m_streamManager->isActive())
+#if defined(__linux__)
+                                                || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                                ;
                         
                         if (needsFrameCapture)
                         {
