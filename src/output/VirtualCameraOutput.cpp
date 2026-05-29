@@ -99,12 +99,7 @@ VirtualCameraOutput::enumerateDevices()
         // visibly present to every other app on the system. Read-
         // only open lets multiple scanners coexist.
         int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0)
-        {
-            LOG_DEBUG(std::string("virtcam scan: open(") + path +
-                      ") failed: " + std::strerror(errno));
-            continue;
-        }
+        if (fd < 0) continue;
 
         v4l2_capability cap{};
         if (xioctl(fd, VIDIOC_QUERYCAP, &cap) == 0)
@@ -113,43 +108,19 @@ VirtualCameraOutput::enumerateDevices()
                 reinterpret_cast<const char *>(cap.driver));
             // v4l2loopback with exclusive_caps=1 narrows BOTH
             // cap.capabilities AND cap.device_caps to a single role
-            // based on the open mode: O_RDONLY → only CAPTURE
-            // surfaces in both fields, O_WRONLY → only OUTPUT.
-            // We can't tell from the bits alone that this device
-            // can also act as OUTPUT — they only appear if you
-            // re-open with O_WRONLY, which would fight whatever
-            // OBS / browser is consuming.
-            //
-            // The driver name is the reliable identifier:
-            // v4l2loopback is the only mainline kernel video
-            // driver that uses "loopback" in its name (vivid +
-            // akvcam use different strings). If it's a loopback
-            // node, it always supports output by construction.
-            const bool isLoopback = driver.find(kLoopbackDrv) != std::string::npos;
-            char hexCaps[16];
-            std::snprintf(hexCaps, sizeof(hexCaps), "0x%08x",
-                          cap.capabilities);
-            if (isLoopback)
+            // based on the open mode — bits alone don't tell us
+            // "this is a loopback". The driver name does:
+            // v4l2loopback is the only mainline kernel video driver
+            // that uses "loopback" in its name (vivid + akvcam use
+            // different strings). If it's a loopback node, it
+            // always supports output by construction.
+            if (driver.find(kLoopbackDrv) != std::string::npos)
             {
                 DeviceInfo info;
                 info.path      = path;
                 info.cardLabel = reinterpret_cast<const char *>(cap.card);
                 out.push_back(std::move(info));
-                LOG_DEBUG(std::string("virtcam scan: found ") + path +
-                          " driver=\"" + driver +
-                          "\" caps=" + hexCaps);
             }
-            else
-            {
-                LOG_DEBUG(std::string("virtcam scan: skipping ") + path +
-                          " driver=\"" + driver +
-                          "\" caps=" + hexCaps);
-            }
-        }
-        else
-        {
-            LOG_DEBUG(std::string("virtcam scan: QUERYCAP(") + path +
-                      ") failed: " + std::strerror(errno));
         }
         ::close(fd);
     }
@@ -440,14 +411,6 @@ bool VirtualCameraOutput::pushFrame(const uint8_t *pixels,
 {
     if (!m_running.load() || !pixels) return false;
 
-    // Diagnostic log: very chatty if a consumer flaps, so throttle
-    // to first-3-frames + 1-in-300 thereafter. Tied to a static so
-    // multiple sinks (we never have more than one today) would
-    // share the counter — fine for diagnostics.
-    static thread_local uint64_t pushCount = 0;
-    ++pushCount;
-    const bool wantLog = (pushCount <= 3) || (pushCount % 300 == 0);
-
     if (!ensureSws(srcWidth, srcHeight, srcFormat)) return false;
 
     // Convert + rescale source → output format in one pass.
@@ -470,16 +433,7 @@ bool VirtualCameraOutput::pushFrame(const uint8_t *pixels,
     buf.memory = V4L2_MEMORY_MMAP;
     if (xioctl(m_fd, VIDIOC_DQBUF, &buf) < 0)
     {
-        if (errno == EAGAIN)
-        {
-            if (wantLog)
-            {
-                LOG_DEBUG("virtcam push: DQBUF EAGAIN (no consumer "
-                          "reading yet, or buffer round-trip slow) "
-                          "at frame #" + std::to_string(pushCount));
-            }
-            return true; // drop, not an error
-        }
+        if (errno == EAGAIN) return true; // drop, not an error
         setError(std::string("VIDIOC_DQBUF failed: ") +
                  std::strerror(errno));
         return false;
@@ -499,17 +453,6 @@ bool VirtualCameraOutput::pushFrame(const uint8_t *pixels,
         setError(std::string("VIDIOC_QBUF failed: ") +
                  std::strerror(errno));
         return false;
-    }
-    if (wantLog)
-    {
-        LOG_DEBUG("virtcam push: ok frame #" +
-                  std::to_string(pushCount) + " src=" +
-                  std::to_string(srcWidth) + "x" +
-                  std::to_string(srcHeight) + " " +
-                  (srcFormat == SourceFormat::RGBA ? "RGBA" : "RGB") +
-                  " -> out=" + std::to_string(m_outWidth) + "x" +
-                  std::to_string(m_outHeight) + " bytesused=" +
-                  std::to_string(buf.bytesused));
     }
     return true;
 }

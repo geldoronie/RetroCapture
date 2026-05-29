@@ -4332,8 +4332,91 @@ void Application::run()
                             }
                         }
                         
+                        // #85 — Apply Image-tab adjustments (brightness,
+                        // contrast) to the capture frame. The window
+                        // render path at the bottom of this loop runs
+                        // them via m_renderer->renderTexture, but the
+                        // texture we'd otherwise attach here is the
+                        // pre-adjustment finalTexture. Render it once
+                        // more into a side framebuffer with the
+                        // adjustments baked in, then capture from THAT.
+                        // Single extra render pass per frame; the
+                        // texture is RGBA so the downstream readback
+                        // always pulls 4 bpp.
+                        //
+                        // Without this, virtcam consumers + recordings
+                        // + streamed frames all reflect the un-adjusted
+                        // image — user tweaks brightness expecting it
+                        // to land in OBS and it doesn't.
+                        static GLuint postImageFBO     = 0;
+                        static GLuint postImageTex     = 0;
+                        static uint32_t postImageW     = 0;
+                        static uint32_t postImageH     = 0;
+                        const bool postImageActive =
+                            (m_brightness != 1.0f) || (m_contrast != 1.0f);
+
+                        GLuint fboTextureToAttach = textureToCapture;
+                        if (postImageActive)
+                        {
+                            if (postImageFBO == 0 || postImageTex == 0 ||
+                                postImageW != captureTextureWidth ||
+                                postImageH != captureTextureHeight)
+                            {
+                                if (postImageFBO) glDeleteFramebuffers(1, &postImageFBO);
+                                if (postImageTex) glDeleteTextures(1, &postImageTex);
+                                postImageFBO = 0; postImageTex = 0;
+                                glGenTextures(1, &postImageTex);
+                                glBindTexture(GL_TEXTURE_2D, postImageTex);
+                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                                             captureTextureWidth,
+                                             captureTextureHeight, 0,
+                                             GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                                glGenFramebuffers(1, &postImageFBO);
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                                       GL_COLOR_ATTACHMENT0,
+                                                       GL_TEXTURE_2D, postImageTex, 0);
+                                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+                                    GL_FRAMEBUFFER_COMPLETE)
+                                {
+                                    glDeleteFramebuffers(1, &postImageFBO);
+                                    glDeleteTextures(1, &postImageTex);
+                                    postImageFBO = 0; postImageTex = 0;
+                                }
+                                else
+                                {
+                                    postImageW = captureTextureWidth;
+                                    postImageH = captureTextureHeight;
+                                }
+                            }
+                            if (postImageFBO && postImageTex)
+                            {
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glViewport(0, 0, postImageW, postImageH);
+                                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                                glClear(GL_COLOR_BUFFER_BIT);
+                                m_renderer->renderTexture(
+                                    textureToCapture,
+                                    postImageW, postImageH,
+                                    /*flipY=*/false, /*enableBlend=*/false,
+                                    m_brightness, m_contrast,
+                                    /*maintainAspect=*/false,
+                                    captureTextureWidth, captureTextureHeight,
+                                    /*preserveViewport=*/true);
+                                fboTextureToAttach = postImageTex;
+                                // Re-bind the original captureFBO so the
+                                // attach-and-read below operates on it
+                                // unchanged.
+                                glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+                            }
+                        }
+
                         // Anexar a textura escolhida ao FBO
-                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureToCapture, 0);
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTextureToAttach, 0);
 
                             // Verificar se o FBO está completo
                             GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -4402,8 +4485,14 @@ void Application::run()
                                 // textureToCapture is the source RGB texture, so treat as RGB.
                                 const bool pipelineEnabled = (!m_ui || m_ui->getShaderPipelineEnabled());
                                 bool isShaderTexture = (pipelineEnabled && m_shaderEngine && m_shaderEngine->isShaderActive());
-                                GLenum readFormat = isShaderTexture ? GL_RGBA : GL_RGB;
-                                uint32_t bytesPerPixel = isShaderTexture ? 4 : 3;
+                                // #85 — When the post-image render pass
+                                // ran above, what's attached to captureFBO
+                                // is RGBA regardless of source. Otherwise
+                                // keep the original RGB/RGBA decision.
+                                const bool readAsRgba = isShaderTexture ||
+                                    (postImageActive && fboTextureToAttach == postImageTex);
+                                GLenum readFormat = readAsRgba ? GL_RGBA : GL_RGB;
+                                uint32_t bytesPerPixel = readAsRgba ? 4 : 3;
 
                                 static int formatLogCount = 0;
                                 if (formatLogCount++ < 3)
