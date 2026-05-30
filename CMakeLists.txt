@@ -400,6 +400,47 @@ else()
         endif()
     endif()
 
+    # IXWebSocket — mirror of the FetchContent branch above for CMake
+    # 3.10 (dockcross/Windows). Cache vars must be set before the
+    # add_subdirectory call so they take effect on the first configure.
+    # On Linux we'd pick OpenSSL explicitly; this branch only runs on
+    # the Windows cross-build, where ixwebsocket defaults to SChannel.
+    set(IXWS_DIR ${CMAKE_BINARY_DIR}/_deps/ixwebsocket-src)
+    if(NOT EXISTS ${IXWS_DIR}/CMakeLists.txt)
+        message(STATUS "Baixando IXWebSocket...")
+        if(EXISTS ${IXWS_DIR})
+            file(REMOVE_RECURSE ${IXWS_DIR})
+        endif()
+        file(MAKE_DIRECTORY ${IXWS_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch v11.4.5 https://github.com/machinezone/IXWebSocket.git ${IXWS_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar IXWebSocket")
+        endif()
+    endif()
+
+    # ixwebsocket hardcodes `Crypt32` (capital C) in its Windows link
+    # block. On real MSVC the file system is case-insensitive so that
+    # works, but the MinGW cross-toolchain in MXE ships the import
+    # lib as `libcrypt32.a` and the Linux host FS *is* case-sensitive,
+    # so `-lCrypt32` fails to resolve. Rewrite to lowercase in place.
+    # `string(REPLACE)` is a no-op once the patch is already applied,
+    # so this stays idempotent on subsequent configures.
+    file(READ ${IXWS_DIR}/CMakeLists.txt _IXWS_CML)
+    string(REPLACE "PRIVATE Crypt32" "PRIVATE crypt32" _IXWS_CML "${_IXWS_CML}")
+    file(WRITE ${IXWS_DIR}/CMakeLists.txt "${_IXWS_CML}")
+    # ixwebsocket v11.4.5 doesn't auto-pick a Windows backend, it
+    # defaults to mbedtls (which MXE doesn't ship). Force OpenSSL
+    # since MXE builds it and our HTTPS support already links it.
+    set(USE_TLS         ON  CACHE BOOL "ixwebsocket: TLS support"           FORCE)
+    set(USE_WS          OFF CACHE BOOL "ixwebsocket: build the ws CLI demo" FORCE)
+    set(USE_ZLIB        OFF CACHE BOOL "ixwebsocket: permessage-deflate"    FORCE)
+    set(USE_OPEN_SSL    ON  CACHE BOOL "ixwebsocket: OpenSSL backend"       FORCE)
+    set(USE_MBED_TLS    OFF CACHE BOOL "ixwebsocket: mbedTLS backend"       FORCE)
+    add_subdirectory(${IXWS_DIR} ${CMAKE_BINARY_DIR}/_deps/ixwebsocket-build EXCLUDE_FROM_ALL)
+
     set(imgui_SOURCE_DIR ${IMGUI_DIR})
     set(json_SOURCE_DIR ${JSON_DIR})
 endif()
