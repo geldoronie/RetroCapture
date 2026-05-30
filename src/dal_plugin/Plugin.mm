@@ -393,6 +393,15 @@ CFArrayRef formatDescriptionsArray(CMFormatDescriptionRef fmt)
 // 30 fps as a Float64 — used for the frame-rate properties.
 constexpr Float64 kFps64 = static_cast<Float64>(kStreamFps);
 
+// CoreAudio-mirrored device selectors CMIO reuses but doesn't expose
+// as named constants in all SDK headers. Consumers query these while
+// deciding whether the device is usable; returning unknown for
+// 'dflt' makes the consumer give up before starting the stream (seen
+// in the bring-up log). Spelled as FourCC char literals exactly like
+// the Apple headers do.
+constexpr CMIOObjectPropertySelector kSelCanBeDefault       = 'dflt';
+constexpr CMIOObjectPropertySelector kSelCanBeDefaultSystem = 'sflt';
+
 OSStatus getDataSize(CMIOObjectID objectID,
                      const CMIOObjectPropertyAddress *addr,
                      UInt32 *dataSize)
@@ -437,6 +446,8 @@ OSStatus getDataSize(CMIOObjectID objectID,
         case kCMIODevicePropertyCanProcessRS422Command:
         case kCMIODevicePropertyLatency:
         case kCMIODevicePropertyTransportType:
+        case kSelCanBeDefault:
+        case kSelCanBeDefaultSystem:
         case kCMIOStreamPropertyDirection:
             *dataSize = sizeof(UInt32);
             return noErr;
@@ -558,6 +569,14 @@ OSStatus getData(CMIOObjectID objectID,
             // constant that may not be in every SDK.
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
             return copyUInt32(0x76697274u /* 'virt' */, cap, used, out);
+
+        case kSelCanBeDefault:
+        case kSelCanBeDefaultSystem:
+            // "Can this be the default (system) camera?" Yes — a
+            // consumer that gets unknown here treats the device as
+            // unusable and never starts the stream.
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(1, cap, used, out);
 
         case kCMIODevicePropertyHogMode:
         case kCMIODevicePropertyDeviceMaster:
@@ -780,11 +799,23 @@ OSStatus cbObjectGetPropertyData(CMIOHardwarePlugInRef /*self*/,
 }
 
 OSStatus cbObjectSetPropertyData(CMIOHardwarePlugInRef /*self*/,
-                                 CMIOObjectID /*objectID*/,
-                                 const CMIOObjectPropertyAddress * /*addr*/,
+                                 CMIOObjectID objectID,
+                                 const CMIOObjectPropertyAddress *addr,
                                  UInt32 /*qSize*/, const void * /*q*/,
                                  UInt32 /*dataSize*/, const void * /*data*/)
 {
+    // Log what the consumer tries to set — if it needs to set a
+    // property (e.g. the stream format) and we reject it, that can
+    // be why the stream never starts.
+    if (addr != nullptr)
+    {
+        const uint32_t s = addr->mSelector;
+        vclog("SetPropertyData on %s: selector '%c%c%c%c' (rejected)",
+              objectID == g_plugin.deviceID ? "device"
+                  : objectID == g_plugin.streamID ? "stream" : "other",
+              (char)((s >> 24) & 0xff), (char)((s >> 16) & 0xff),
+              (char)((s >> 8) & 0xff), (char)(s & 0xff));
+    }
     return kCMIOHardwareIllegalOperationError;
 }
 
