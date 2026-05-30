@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../output/VirtualCameraOutput.h"  // for DeviceInfo on the cache
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"  // for DeviceInfo on the cache
+#endif
 
 #include <atomic>
 #include <mutex>
@@ -10,16 +12,21 @@
 class UIManager;
 
 /**
- * Configurations → Virtual Camera (#85 Phase 1).
+ * Configurations → Virtual Camera (#85).
  *
  * Standalone configuration window — sibling of Streaming /
  * Recording / Web Portal — that publishes RetroCapture's
- * processed framebuffer to a v4l2loopback device on Linux so
- * downstream apps (OBS, Chrome, Discord, Zoom, …) can pick it
- * as a webcam source.
+ * processed framebuffer as a webcam consumers (OBS, Chrome,
+ * Discord, Zoom, …) can pick up.
  *
- * Owns the persistent UI state (the buffers + the device-list
- * cache) but NOT the VirtualCameraOutput sink itself — that
+ * - Linux (Phase 1): v4l2loopback device, with module load/remove
+ *   helpers + a device picker.
+ * - Windows (Phase 2): single shared-memory IPC channel consumed
+ *   by RetroCaptureVCam.dll. No device picker; instead we surface
+ *   whether the DirectShow filter DLL is registered.
+ *
+ * Owns the persistent UI state (the buffers + Linux's device-list
+ * cache) but NOT the VirtualCameraOutput* sink itself — that
  * lives on Application, driven by syncVirtualCamera() the same
  * way DirectoryClient is driven. The window is purely the
  * settings + status surface.
@@ -38,17 +45,19 @@ private:
     UIManager *m_uiManager = nullptr;
     bool       m_visible   = false;
 
+    void renderToggle();
+    void renderOutputDims();
+    void renderStatus();
+
+#if defined(__linux__)
     // Cached enumeration. Refreshed on window-open and via the
     // "Rescan" button. Cheap (~ms) but we don't want to fire it
     // every frame either.
     std::vector<VirtualCameraOutput::DeviceInfo> m_deviceCache;
     bool m_deviceCacheLoaded = false;
 
-    void renderToggle();
     void renderDeviceSelector();
-    void renderOutputDims();
     void renderFormatSelector();
-    void renderStatus();
     void renderNoDeviceHelp();
     void renderModuleManagement();
 
@@ -80,4 +89,14 @@ private:
     void submitLoadModule();
     void submitUnloadModule();
     void pumpModuleOp();
+#endif // __linux__
+
+#if defined(_WIN32)
+    // Windows path is simpler — one virtual device, no device
+    // picker, no kernel module ops. The "driver status" is just
+    // "is the DLL registered with COM" (which the installer does
+    // post-install). The user can re-run regsvr32 manually if
+    // they need to.
+    void renderDriverStatus();
+#endif
 };

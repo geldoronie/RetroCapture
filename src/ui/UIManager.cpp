@@ -3,7 +3,7 @@
 #include "UIConfigurationShader.h"
 #include "UIConfigurationImage.h"
 #include "UIConfigurationStreaming.h"
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
 #  include "UIConfigurationVirtualCamera.h"
 #endif
 #include "UIConfigurationRecording.h"
@@ -280,7 +280,7 @@ bool UIManager::init(void *window)
     m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
     m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
     m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     m_virtcamWindow     = std::make_unique<UIConfigurationVirtualCamera>(this);
 #endif
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
@@ -567,7 +567,7 @@ void UIManager::render()
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
                 toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
 #endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
@@ -729,7 +729,7 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
         if (m_virtcamWindow)   m_virtcamWindow->setVisible(false);
 #endif
         // Recording window stays openable in client mode (#68).
@@ -745,7 +745,7 @@ void UIManager::render()
     if (m_shaderWindow)      m_shaderWindow->render();
     if (m_imageWindow)       m_imageWindow->render();
     if (m_streamingWindow)   m_streamingWindow->render();
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     if (m_virtcamWindow)     m_virtcamWindow->render();
 #endif
     if (m_recordingWindow)   m_recordingWindow->render();

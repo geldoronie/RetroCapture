@@ -531,10 +531,12 @@ if(PLATFORM_LINUX)
         list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
     endif()
 elseif(PLATFORM_WINDOWS)
-    # No Windows, excluir implementações Linux e macOS
+    # No Windows, excluir implementações Linux e macOS.
+    # `VirtualCameraOutput\\.cpp` (NOT VirtualCameraOutputWin) is the
+    # Linux v4l2loopback sink — must be excluded. UIConfigurationVirtualCamera
+    # is now compiled on both platforms (#85 Phase 2 surface).
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
-    list(FILTER SOURCES EXCLUDE REGEX ".*UIConfigurationVirtualCamera\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
@@ -1138,6 +1140,21 @@ if(PLATFORM_WINDOWS)
     # set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
     # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
     # )
+
+    # #85 Phase 2 — register / unregister the DirectShow virtual
+    # camera filter DLL post-install. NSIS runs elevated
+    # (RequestExecutionLevel admin) so regsvr32 has the rights it
+    # needs to write under HKCR. /s = silent; the user shouldn't
+    # see a "DLL registered successfully" popup on every install.
+    # Guarded by RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER so a
+    # build without the filter doesn't ship a broken post-install
+    # call pointing at a missing DLL.
+    if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+        set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+        set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /u /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+    endif()
 
     # Incluir CPack APÓS todas as configurações CPACK_*
     include(CPack)

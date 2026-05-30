@@ -4,6 +4,10 @@
 #include "UISectionHeader.h"
 #include "../utils/Logger.h"
 
+#if defined(_WIN32)
+#  include "../output/VirtualCameraOutputWin.h"
+#endif
+
 #include <imgui.h>
 
 #include <chrono>
@@ -18,16 +22,19 @@ UIConfigurationVirtualCamera::UIConfigurationVirtualCamera(UIManager *uiManager)
 
 UIConfigurationVirtualCamera::~UIConfigurationVirtualCamera() = default;
 
+#if defined(__linux__)
 void UIConfigurationVirtualCamera::refreshDevices()
 {
     m_deviceCache       = VirtualCameraOutput::enumerateDevices();
     m_deviceCacheLoaded = true;
 }
+#endif
 
 void UIConfigurationVirtualCamera::render()
 {
     if (!m_visible || !m_uiManager) return;
 
+#if defined(__linux__)
     // Drain any pkexec op that completed since last frame so the
     // result + refreshed device list are visible THIS frame.
     pumpModuleOp();
@@ -35,6 +42,7 @@ void UIConfigurationVirtualCamera::render()
     // Lazy refresh on first paint. The user hits Rescan if they
     // modprobe'd v4l2loopback while the window was already open.
     if (!m_deviceCacheLoaded) refreshDevices();
+#endif
 
     ImGui::SetNextWindowSize(ImVec2(540, 540), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Virtual Camera##virtcam", &m_visible))
@@ -46,8 +54,10 @@ void UIConfigurationVirtualCamera::render()
     ui_section_header("Virtual Camera",
                       "Publish the processed (post-shader, post-image) "
                       "output as a webcam other apps on this machine "
-                      "can pick up. Linux uses v4l2loopback.");
+                      "can pick up. Linux uses v4l2loopback; Windows "
+                      "uses RetroCaptureVCam.dll (DirectShow filter).");
 
+#if defined(__linux__)
     // Empty cache → install hint, no toggle.
     if (m_deviceCache.empty())
     {
@@ -73,6 +83,39 @@ void UIConfigurationVirtualCamera::render()
     ImGui::Separator();
     ImGui::Spacing();
     renderModuleManagement();
+#elif defined(_WIN32)
+    // Windows path: driver state up top, then the toggle (gated
+    // off if the DLL isn't registered), output dims, and status.
+    // No device picker — one CLSID, one virtual camera.
+    renderDriverStatus();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const bool driverReady = VirtualCameraOutputWin::isFilterDllRegistered();
+    if (!driverReady)
+    {
+        ImGui::BeginDisabled();
+        renderToggle();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Register RetroCaptureVCam.dll first (see Driver above).");
+        }
+    }
+    else
+    {
+        renderToggle();
+    }
+
+    ImGui::Spacing();
+    renderOutputDims();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    renderStatus();
+#endif
 
     ImGui::End();
 }
@@ -125,6 +168,7 @@ void UIConfigurationVirtualCamera::renderToggle()
     }
 }
 
+#if defined(__linux__)
 void UIConfigurationVirtualCamera::renderDeviceSelector()
 {
     ImGui::TextDisabled("Device");
@@ -180,6 +224,7 @@ void UIConfigurationVirtualCamera::renderDeviceSelector()
         refreshDevices();
     }
 }
+#endif // __linux__
 
 void UIConfigurationVirtualCamera::renderOutputDims()
 {
@@ -220,6 +265,7 @@ void UIConfigurationVirtualCamera::renderOutputDims()
     }
 }
 
+#if defined(__linux__)
 void UIConfigurationVirtualCamera::renderFormatSelector()
 {
     // Persisted as a string for round-trip simplicity; the sink
@@ -247,6 +293,7 @@ void UIConfigurationVirtualCamera::renderFormatSelector()
             "(notably browsers via getUserMedia) may reject it.");
     }
 }
+#endif // __linux__
 
 void UIConfigurationVirtualCamera::renderStatus()
 {
@@ -271,6 +318,7 @@ void UIConfigurationVirtualCamera::renderStatus()
     }
 }
 
+#if defined(__linux__)
 void UIConfigurationVirtualCamera::renderNoDeviceHelp()
 {
     ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
@@ -492,3 +540,39 @@ void UIConfigurationVirtualCamera::renderModuleManagement()
         ImGui::TextColored(col, "%s", m_moduleOpMessage.c_str());
     }
 }
+#endif // __linux__
+
+#if defined(_WIN32)
+void UIConfigurationVirtualCamera::renderDriverStatus()
+{
+    // The DirectShow filter DLL is registered post-install by
+    // NSIS's regsvr32 step. If it's missing the user can't toggle
+    // capture on — explain how to fix it.
+    const bool registered = VirtualCameraOutputWin::isFilterDllRegistered();
+
+    ImGui::TextDisabled("Driver");
+    if (registered)
+    {
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f),
+                           "Registered — RetroCaptureVCam.dll is "
+                           "available to consumers (OBS, Chrome, …).");
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                           "Not registered — RetroCaptureVCam.dll "
+                           "is missing from the COM registry.");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Run the RetroCapture installer (it registers the DLL "
+            "via regsvr32 in its post-install step). If you're on a "
+            "portable / non-installed build, open an Administrator "
+            "command prompt in the install folder and run:");
+        ImGui::Spacing();
+        ImGui::TextDisabled("    regsvr32 RetroCaptureVCam.dll");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Uninstall later with: regsvr32 /u RetroCaptureVCam.dll");
+    }
+}
+#endif // _WIN32

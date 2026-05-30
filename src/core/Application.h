@@ -209,14 +209,22 @@ private:
     // dropped so it doesn't undo the disconnect.
     std::atomic<uint64_t> m_chatBindEpoch{0};
 
-    // #85 — Virtual-camera output sink. Linux-only Phase 1 (v4l2
-    // loopback). syncVirtualCamera() starts/stops it according to
-    // m_ui->getVirtcamEnabled(); the main render loop calls
-    // pushFrame() on the RGBA scratch right after PBOManager
-    // readback so the work piggybacks on the existing readback
-    // path.
+    // #85 — Virtual-camera output sink. Linux uses v4l2loopback
+    // (VirtualCameraOutput), Windows uses the shared-memory IPC
+    // consumed by RetroCaptureVCam.dll (VirtualCameraOutputWin).
+    // syncVirtualCamera() starts/stops it per m_ui->getVirtcamEnabled();
+    // the main render loop calls pushFrame() on the RGBA scratch
+    // right after PBOManager readback so the work piggybacks on
+    // the existing readback path. Both sink classes expose the
+    // same isRunning() / pushFrame(SourceFormat::RGB|RGBA) shape
+    // so the call sites stay platform-agnostic.
 #if defined(__linux__)
-    std::unique_ptr<class VirtualCameraOutput> m_virtcam;
+    using VirtcamSinkT = class VirtualCameraOutput;
+#elif defined(_WIN32)
+    using VirtcamSinkT = class VirtualCameraOutputWin;
+#endif
+#if defined(__linux__) || defined(_WIN32)
+    std::unique_ptr<VirtcamSinkT> m_virtcam;
     void syncVirtualCamera();
 #endif
     std::unique_ptr<IAudioCapture> m_audioCapture;

@@ -972,7 +972,7 @@ private:
     std::unique_ptr<class UIConfigurationShader>    m_shaderWindow;
     std::unique_ptr<class UIConfigurationImage>     m_imageWindow;
     std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     std::unique_ptr<class UIConfigurationVirtualCamera> m_virtcamWindow;
 #endif
     std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
