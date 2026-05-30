@@ -804,19 +804,26 @@ OSStatus cbObjectSetPropertyData(CMIOHardwarePlugInRef /*self*/,
                                  UInt32 /*qSize*/, const void * /*q*/,
                                  UInt32 /*dataSize*/, const void * /*data*/)
 {
-    // Log what the consumer tries to set — if it needs to set a
-    // property (e.g. the stream format) and we reject it, that can
-    // be why the stream never starts.
+    // Accept (and ignore) sets we don't specifically handle.
+    // Returning an error here is fatal: the bring-up trace showed
+    // the consumer hammering SetPropertyData('lisa') on the device
+    // and stream during initialisation, and our
+    // kCMIOHardwareIllegalOperationError put it in a retry loop that
+    // never reached DeviceStartStream. A read-only virtual camera
+    // has a fixed format, so silently no-op'ing unknown sets (the
+    // consumer reads our real format back via GetPropertyData) is
+    // the right, tolerant behaviour. Still logged so we can see what
+    // the consumer wanted.
     if (addr != nullptr)
     {
         const uint32_t s = addr->mSelector;
-        vclog("SetPropertyData on %s: selector '%c%c%c%c' (rejected)",
+        vclog("SetPropertyData on %s: selector '%c%c%c%c' (accepted/no-op)",
               objectID == g_plugin.deviceID ? "device"
                   : objectID == g_plugin.streamID ? "stream" : "other",
               (char)((s >> 24) & 0xff), (char)((s >> 16) & 0xff),
               (char)((s >> 8) & 0xff), (char)(s & 0xff));
     }
-    return kCMIOHardwareIllegalOperationError;
+    return noErr;
 }
 
 OSStatus cbDeviceSuspend(CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { return noErr; }
