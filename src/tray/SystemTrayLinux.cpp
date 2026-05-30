@@ -20,9 +20,12 @@
 
 #include "ISystemTray.h"
 #include "../utils/Logger.h"
+#include "../utils/Paths.h"
 
 #include <dbus/dbus.h>
+#include <png.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -98,6 +101,95 @@ void appendMenuPropInt(DBusMessageIter *dict, const char *key, int32_t value)
     dbus_message_iter_close_container(dict, &entry);
 }
 
+// ── icon pixmap (our logo → SNI IconPixmap) ───────────────────────
+
+// Decode an RGBA8 PNG. Returns false on any error. Output is tightly
+// packed width*height*4 RGBA.
+bool loadPngRgba(const std::string &path, uint32_t &w, uint32_t &h,
+                 std::vector<uint8_t> &rgba)
+{
+    FILE *fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+
+    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!png) { std::fclose(fp); return false; }
+    png_infop info = png_create_info_struct(png);
+    if (!info) { png_destroy_read_struct(&png, nullptr, nullptr); std::fclose(fp); return false; }
+    if (setjmp(png_jmpbuf(png)))
+    {
+        png_destroy_read_struct(&png, &info, nullptr);
+        std::fclose(fp);
+        return false;
+    }
+
+    png_init_io(png, fp);
+    png_read_info(png, info);
+
+    w = png_get_image_width(png, info);
+    h = png_get_image_height(png, info);
+    png_byte colorType = png_get_color_type(png, info);
+    png_byte bitDepth  = png_get_bit_depth(png, info);
+
+    // Normalise everything to 8-bit RGBA.
+    if (bitDepth == 16) png_set_strip_16(png);
+    if (colorType == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(png);
+    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8) png_set_expand_gray_1_2_4_to_8(png);
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(png);
+    if (colorType == PNG_COLOR_TYPE_RGB || colorType == PNG_COLOR_TYPE_GRAY ||
+        colorType == PNG_COLOR_TYPE_PALETTE)
+        png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
+    if (colorType == PNG_COLOR_TYPE_GRAY || colorType == PNG_COLOR_TYPE_GRAY_ALPHA)
+        png_set_gray_to_rgb(png);
+    png_read_update_info(png, info);
+
+    rgba.resize(static_cast<size_t>(w) * h * 4);
+    std::vector<png_bytep> rows(h);
+    for (uint32_t y = 0; y < h; ++y)
+        rows[y] = rgba.data() + static_cast<size_t>(y) * w * 4;
+    png_read_image(png, rows.data());
+
+    png_destroy_read_struct(&png, &info, nullptr);
+    std::fclose(fp);
+    return true;
+}
+
+// Nearest-neighbour downscale RGBA → RGBA. Tray hosts re-scale the
+// pixmap anyway, so a cheap resample to ~48px keeps the D-Bus payload
+// small without visible quality loss at icon sizes.
+std::vector<uint8_t> downscaleRgba(const std::vector<uint8_t> &src,
+                                   uint32_t sw, uint32_t sh,
+                                   uint32_t dw, uint32_t dh)
+{
+    std::vector<uint8_t> dst(static_cast<size_t>(dw) * dh * 4);
+    for (uint32_t y = 0; y < dh; ++y)
+    {
+        const uint32_t sy = (y * sh) / dh;
+        for (uint32_t x = 0; x < dw; ++x)
+        {
+            const uint32_t sx = (x * sw) / dw;
+            const uint8_t *s = &src[(static_cast<size_t>(sy) * sw + sx) * 4];
+            uint8_t *d = &dst[(static_cast<size_t>(y) * dw + x) * 4];
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+        }
+    }
+    return dst;
+}
+
+// Build the SNI IconPixmap byte buffer (ARGB32, network/big-endian
+// byte order: A,R,G,B per pixel) from RGBA8.
+std::vector<uint8_t> rgbaToArgbNetwork(const std::vector<uint8_t> &rgba)
+{
+    std::vector<uint8_t> argb(rgba.size());
+    for (size_t i = 0; i < rgba.size(); i += 4)
+    {
+        argb[i + 0] = rgba[i + 3]; // A
+        argb[i + 1] = rgba[i + 0]; // R
+        argb[i + 2] = rgba[i + 1]; // G
+        argb[i + 3] = rgba[i + 2]; // B
+    }
+    return argb;
+}
+
 class SystemTrayLinux : public ISystemTray
 {
 public:
@@ -134,10 +226,20 @@ private:
     DBusHandlerResult sniGetAll(DBusMessage *msg);
     void appendSniProp(DBusMessageIter *iter, const char *prop);
 
+    void loadIconPixmap();
+    void appendVariantIconPixmap(DBusMessageIter *iter);
+
     DBusConnection *m_conn = nullptr;
     std::string     m_iconName;
     std::string     m_tooltip;
     std::string     m_busName;
+
+    // Branded icon as an SNI IconPixmap (ARGB32, network byte order).
+    // Loaded from the bundled logo.png so the tray shows our icon on
+    // any desktop without needing a themed icon installed.
+    uint32_t             m_iconW = 0;
+    uint32_t             m_iconH = 0;
+    std::vector<uint8_t> m_iconArgb;
 
     std::vector<TrayMenuItem> m_items;
     uint32_t                  m_menuRevision = 1;
@@ -159,6 +261,7 @@ bool SystemTrayLinux::start(const std::string &iconName, const std::string &tool
 {
     m_iconName = iconName;
     m_tooltip  = tooltip;
+    loadIconPixmap();
 
     DBusError err;
     dbus_error_init(&err);
@@ -279,6 +382,61 @@ void SystemTrayLinux::emitLayoutUpdated()
 
 // ── StatusNotifierItem object ─────────────────────────────────────
 
+void SystemTrayLinux::loadIconPixmap()
+{
+    std::string path = Paths::getReadOnlyAssetsDir();
+    if (!path.empty() && path.back() != '/') path += '/';
+    path += "logo.png";
+
+    uint32_t w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+    if (!loadPngRgba(path, w, h, rgba) || w == 0 || h == 0)
+    {
+        LOG_WARN("tray(linux): couldn't load icon " + path +
+                 " — falling back to themed name '" + m_iconName + "'");
+        return;
+    }
+
+    // Downscale large source (logo.png is 1024²) to a tray-friendly
+    // size; hosts re-scale but a smaller payload keeps D-Bus light.
+    constexpr uint32_t kTarget = 48;
+    if (w > kTarget || h > kTarget)
+    {
+        rgba = downscaleRgba(rgba, w, h, kTarget, kTarget);
+        w = kTarget; h = kTarget;
+    }
+
+    m_iconArgb = rgbaToArgbNetwork(rgba);
+    m_iconW = w;
+    m_iconH = h;
+    LOG_INFO("tray(linux): loaded icon pixmap " + std::to_string(w) + "x" +
+             std::to_string(h));
+}
+
+// Build a variant of type "a(iiay)" holding our single ARGB pixmap.
+void SystemTrayLinux::appendVariantIconPixmap(DBusMessageIter *iter)
+{
+    DBusMessageIter var, arr, strct, bytes;
+    dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT, "a(iiay)", &var);
+    dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "(iiay)", &arr);
+    dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, nullptr, &strct);
+    dbus_int32_t w = static_cast<dbus_int32_t>(m_iconW);
+    dbus_int32_t h = static_cast<dbus_int32_t>(m_iconH);
+    dbus_message_iter_append_basic(&strct, DBUS_TYPE_INT32, &w);
+    dbus_message_iter_append_basic(&strct, DBUS_TYPE_INT32, &h);
+    dbus_message_iter_open_container(&strct, DBUS_TYPE_ARRAY, "y", &bytes);
+    if (!m_iconArgb.empty())
+    {
+        const uint8_t *p = m_iconArgb.data();
+        int n = static_cast<int>(m_iconArgb.size());
+        dbus_message_iter_append_fixed_array(&bytes, DBUS_TYPE_BYTE, &p, n);
+    }
+    dbus_message_iter_close_container(&strct, &bytes);
+    dbus_message_iter_close_container(&arr, &strct);
+    dbus_message_iter_close_container(&var, &arr);
+    dbus_message_iter_close_container(iter, &var);
+}
+
 void SystemTrayLinux::appendSniProp(DBusMessageIter *iter, const char *prop)
 {
     if (std::strcmp(prop, "Category") == 0)        appendVariantString(iter, "ApplicationStatus");
@@ -286,6 +444,7 @@ void SystemTrayLinux::appendSniProp(DBusMessageIter *iter, const char *prop)
     else if (std::strcmp(prop, "Title") == 0)      appendVariantString(iter, m_tooltip.c_str());
     else if (std::strcmp(prop, "Status") == 0)     appendVariantString(iter, "Active");
     else if (std::strcmp(prop, "IconName") == 0)   appendVariantString(iter, m_iconName.c_str());
+    else if (std::strcmp(prop, "IconPixmap") == 0) appendVariantIconPixmap(iter);
     else if (std::strcmp(prop, "Menu") == 0)       appendVariantObjectPath(iter, kMenuPath);
     else if (std::strcmp(prop, "ItemIsMenu") == 0) appendVariantBool(iter, false);
     else                                            appendVariantString(iter, "");
@@ -304,9 +463,10 @@ DBusHandlerResult SystemTrayLinux::sniGetProperty(DBusMessage *msg, const char *
 
 DBusHandlerResult SystemTrayLinux::sniGetAll(DBusMessage *msg)
 {
-    static const char *props[] = {
+    std::vector<const char *> props = {
         "Category", "Id", "Title", "Status", "IconName", "Menu", "ItemIsMenu"
     };
+    if (!m_iconArgb.empty()) props.push_back("IconPixmap");
     DBusMessage *reply = dbus_message_new_method_return(msg);
     DBusMessageIter iter, dict;
     dbus_message_iter_init_append(reply, &iter);

@@ -3453,9 +3453,10 @@ void Application::setupSystemTray()
         return;
     }
 
-    // v1 uses a stock themed icon name so something always renders on
-    // any desktop; #183 installs the branded "retrocapture" icon and
-    // switches to it.
+    // The Linux backend loads our branded logo.png and serves it as
+    // the SNI IconPixmap (the actual visual). The name passed here is
+    // only the themed-icon fallback used if that asset can't be found
+    // at runtime — "camera-video" exists in every icon theme.
     if (!m_tray->start("camera-video", "RetroCapture"))
     {
         LOG_WARN("System tray: no tray host available — the close "
