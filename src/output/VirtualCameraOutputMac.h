@@ -12,9 +12,8 @@
 // This sink writes frames to a POSIX shared-memory region + signals
 // a named semaphore; the bundle reads from there.
 //
-// See docs/VIRTCAM_MACOS.md (TODO — design doc per Windows) for the
-// architecture, IPC layout, and the work still needed on the
-// plug-in side.
+// See docs/VIRTCAM_MACOS.md for the architecture, IPC layout, and
+// the work still needed on the plug-in side.
 
 #include <atomic>
 #include <cstdint>
