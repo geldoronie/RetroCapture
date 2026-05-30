@@ -55,6 +55,11 @@ constexpr uint32_t kLayoutVersion = 1u;
 constexpr uint32_t kPixelFormatRGBA  = 1u;
 constexpr uint32_t kPixelFormatRGB24 = 2u;
 constexpr uint32_t kPixelFormatYUYV  = 3u;
+// BGRA — byte order B,G,R,A. Added for the macOS DAL path: maps
+// 1:1 to kCVPixelFormatType_32BGRA, the most widely-rendered
+// uncompressed format across CMIO consumers (24RGB, which we tried
+// first, is poorly supported and showed the device but no image).
+constexpr uint32_t kPixelFormatBGRA  = 4u;
 
 // Slot geometry — fixed so the filter can address slots without
 // computing offsets from runtime fields. `kSlotMaxBytes` is sized

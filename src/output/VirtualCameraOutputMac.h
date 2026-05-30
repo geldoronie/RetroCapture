@@ -35,6 +35,7 @@ public:
         RGBA  = 1,
         RGB24 = 2,
         YUYV  = 3,
+        BGRA  = 4,   // kCVPixelFormatType_32BGRA — the macOS DAL default
     };
 
     /// Source pixel format for pushFrame — mirrors the other sinks'

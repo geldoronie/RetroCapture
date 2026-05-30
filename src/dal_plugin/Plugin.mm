@@ -153,7 +153,7 @@ CMFormatDescriptionRef ensureFormatDescription()
 CVPixelBufferRef makePixelBuffer(const uint8_t *bytes, size_t /*bytesLen*/)
 {
     CVPixelBufferRef pb = nullptr;
-    const size_t bytesPerRow = static_cast<size_t>(kStreamWidth) * 3;
+    const size_t bytesPerRow = static_cast<size_t>(kStreamWidth) * kStreamBytesPerPixel;
     CVPixelBufferCreateWithBytes(
         kCFAllocatorDefault,
         kStreamWidth, kStreamHeight,
@@ -264,10 +264,10 @@ void frameThreadProc()
             continue;
         }
 
-        // We only support RGB24 today. If the writer is in another
-        // format, skip — the consumer's screen will freeze on the
-        // last delivered frame, which is acceptable for v1.
-        if (fh.pixelFormat != retrocapture::virtcam_ipc::kPixelFormatRGB24 ||
+        // We only support BGRA today (matches kStreamCVPixelFormat).
+        // If the writer is in another format/geometry, skip — the
+        // consumer's screen will freeze on the last delivered frame.
+        if (fh.pixelFormat != retrocapture::virtcam_ipc::kPixelFormatBGRA ||
             static_cast<int>(fh.width)  != kStreamWidth ||
             static_cast<int>(fh.height) != kStreamHeight)
         {
@@ -276,7 +276,7 @@ void frameThreadProc()
                 vclog("frameThread: got frame but mismatch "
                       "(fmt=%u %ux%u; want fmt=%u %dx%d) — skipping",
                       fh.pixelFormat, fh.width, fh.height,
-                      retrocapture::virtcam_ipc::kPixelFormatRGB24,
+                      retrocapture::virtcam_ipc::kPixelFormatBGRA,
                       kStreamWidth, kStreamHeight);
                 loggedFirstFrame = true;
             }

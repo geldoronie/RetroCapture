@@ -53,13 +53,15 @@ const CFStringRef kModelUID =
 constexpr int   kStreamWidth      = 1280;
 constexpr int   kStreamHeight     = 720;
 constexpr int   kStreamFps        = 30;
-// kCVPixelFormatType_24RGB (== 0x00000018, the literal value 24).
-// R8 G8 B8 byte order, matching the writer-side RGB24 path. Spelled
-// as the literal rather than the CoreVideo enum so this header
-// doesn't need to drag in <CoreVideo/CVPixelBuffer.h>. If the
-// writer is configured to push YUYV or RGBA we currently fall back
-// to a frozen frame; future iterations should add YUYV
-// (kCVPixelFormatType_422YpCbCr8 = '2vuy') as a second format.
-constexpr uint32_t kStreamCVPixelFormat = 0x00000018u; // kCVPixelFormatType_24RGB
+// kCVPixelFormatType_32BGRA (== 'BGRA' == 0x42475241). The most
+// widely-rendered uncompressed format across CMIO consumers. We
+// started with 24RGB (0x18) but it's poorly supported — the device
+// appeared but no consumer rendered an image. Spelled as the FourCC
+// literal so this header needn't drag in <CoreVideo/CVPixelBuffer.h>.
+// Byte order B,G,R,A — the host sink converts into this via
+// libswscale (AV_PIX_FMT_BGRA). A future iteration may add 2vuy
+// (kCVPixelFormatType_422YpCbCr8) for consumers that prefer YUV.
+constexpr uint32_t kStreamCVPixelFormat = 0x42475241u; // 'BGRA'
+constexpr uint32_t kStreamBytesPerPixel = 4u;
 
 }} // namespace retrocapture::dal_plugin

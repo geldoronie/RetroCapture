@@ -49,8 +49,9 @@ AVPixelFormat toAvPixFmtOut(VirtualCameraOutputMac::PixelFormat f)
         case VirtualCameraOutputMac::PixelFormat::RGBA:  return AV_PIX_FMT_RGBA;
         case VirtualCameraOutputMac::PixelFormat::RGB24: return AV_PIX_FMT_RGB24;
         case VirtualCameraOutputMac::PixelFormat::YUYV:  return AV_PIX_FMT_YUYV422;
+        case VirtualCameraOutputMac::PixelFormat::BGRA:  return AV_PIX_FMT_BGRA;
     }
-    return AV_PIX_FMT_RGBA;
+    return AV_PIX_FMT_BGRA;
 }
 
 size_t bytesPerPixelOut(VirtualCameraOutputMac::PixelFormat f)
@@ -60,6 +61,7 @@ size_t bytesPerPixelOut(VirtualCameraOutputMac::PixelFormat f)
         case VirtualCameraOutputMac::PixelFormat::RGBA:  return 4;
         case VirtualCameraOutputMac::PixelFormat::RGB24: return 3;
         case VirtualCameraOutputMac::PixelFormat::YUYV:  return 2;
+        case VirtualCameraOutputMac::PixelFormat::BGRA:  return 4;
     }
     return 4;
 }
