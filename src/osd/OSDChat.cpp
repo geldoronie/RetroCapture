@@ -764,7 +764,10 @@ void OSDChat::render()
     // "lives outside the m_uiVisible gate so F12 doesn't hide it".
     const ImGuiViewport *vp = ImGui::GetMainViewport();
     const float initialW = 340.0f;
-    const float initialH = std::clamp(vp->WorkSize.y * 0.45f, 240.0f, 480.0f);
+    // std::clamp is C++17; the MinGW 5.5 used by the Windows
+    // cross-build predates it, so use the std::min(std::max(...))
+    // pattern already established elsewhere in the codebase.
+    const float initialH = std::max(240.0f, std::min(480.0f, vp->WorkSize.y * 0.45f));
     const ImVec2 initialPos(vp->WorkPos.x + vp->WorkSize.x - initialW - 16.0f,
                             vp->WorkPos.y + 16.0f);
     ImGui::SetNextWindowPos(initialPos, ImGuiCond_FirstUseEver);
@@ -981,7 +984,7 @@ void OSDChat::render()
     const float bodyAvailY   = ImGui::GetContentRegionAvail().y - footerHeight;
     const bool  showParts    = m_showParticipants && !snap.participants.empty();
     const float partsW       = showParts
-                                   ? std::clamp(bodyAvailX * 0.30f, 110.0f, 180.0f)
+                                   ? std::max(110.0f, std::min(180.0f, bodyAvailX * 0.30f))
                                    : 0.0f;
     const float gap          = showParts ? ImGui::GetStyle().ItemSpacing.x : 0.0f;
     const float logW         = bodyAvailX - partsW - gap;
