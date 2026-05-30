@@ -12,10 +12,11 @@ option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer suppo
 option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
 option(BUILD_COMPATIBLE_ARM64 "Build with portable ARMv8-A flags (no SVE/crypto, works on Pi 3/4/5)" OFF)
 # #85 Phase 2 — DirectShow source filter DLL gate. OFF by default
-# because it pulls strmbase (DirectShow BaseClasses) which isn't
-# in our MXE cross-compile toolchain. Set ON in a Windows dev
-# environment that has BaseClasses available (Windows SDK Samples
-# / vendored third_party/strmbase).
+# because it pulls strmbase (DirectShow BaseClasses). We carry a
+# MinGW-patched snapshot under third_party/baseclasses/ so the
+# Windows cross-build (MXE) can produce the DLL when this flag is
+# ON; it stays OFF by default to keep configure-time cheap and
+# avoid surprising native Linux builds.
 option(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER
     "Build the Windows DirectShow virtual-camera source filter DLL (#85 Phase 2)"
     OFF)
@@ -1227,4 +1228,23 @@ else()
             FILES_MATCHING PATTERN "*"
         )
     endif()
+endif()
+
+# ---------------------------------------------------------------------
+# #85 Phase 2 — Windows DirectShow virtual-camera source filter DLL.
+#
+# Two add_subdirectory calls in order: strmbase first (the DirectShow
+# BaseClasses static lib), then the filter sources that link against
+# it. Gated by the option so a default Linux build doesn't pay the
+# configure-time cost of an irrelevant target tree.
+# ---------------------------------------------------------------------
+if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+    if(NOT PLATFORM_WINDOWS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER=ON only makes "
+            "sense on a Windows target build (cross-compile via MXE "
+            "or native MSVC). Current platform is not Windows.")
+    endif()
+    add_subdirectory(third_party/baseclasses)
+    add_subdirectory(src/dshow_filter)
 endif()
