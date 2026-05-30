@@ -105,6 +105,15 @@ bool SystemTrayMac::start(const std::string &iconName, const std::string &toolti
         iconPath += "assets/logo.png";
         NSString *p = [NSString stringWithUTF8String:iconPath.c_str()];
         NSImage *img = [[NSImage alloc] initWithContentsOfFile:p];
+        if (img == nil)
+        {
+            // Fallback: resolve via the app bundle's Resources/assets/
+            // regardless of CWD / install layout.
+            NSString *bp = [[NSBundle mainBundle] pathForResource:@"logo"
+                                                           ofType:@"png"
+                                                      inDirectory:@"assets"];
+            if (bp) img = [[NSImage alloc] initWithContentsOfFile:bp];
+        }
         if (img)
         {
             [img setSize:NSMakeSize(18, 18)]; // menu-bar height-ish

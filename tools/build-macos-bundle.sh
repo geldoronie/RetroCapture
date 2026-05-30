@@ -112,9 +112,13 @@ for d in shaders web; do
         cp -R "$REPO_ROOT/$d" "$APP_DIR/Contents/Resources/"
     fi
 done
-if [ -d "$REPO_ROOT/assets/i18n" ]; then
-    mkdir -p "$APP_DIR/Contents/Resources/assets"
-    cp -R "$REPO_ROOT/assets/i18n" "$APP_DIR/Contents/Resources/assets/"
+# Copy the whole assets/ dir (i18n + logo.png/logo.ico) into
+# Resources/assets/ — getReadOnlyAssetsDir() returns Resources/ in the
+# bundle, and callers compose <Resources>/assets/... The tray icon
+# (#86) loads <Resources>/assets/logo.png; before this it only got
+# i18n and the tray fell back to a text "RC" title on macOS.
+if [ -d "$REPO_ROOT/assets" ]; then
+    cp -R "$REPO_ROOT/assets" "$APP_DIR/Contents/Resources/"
 fi
 # ssl/ ships templates for the optional HTTPS web portal. Include if
 # present (developer dirs only — not always populated).
