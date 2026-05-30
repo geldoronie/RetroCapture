@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- RetroCaptureVCam.plugin / Contents/Info.plist
+  CoreMediaIO DAL plug-in metadata. DAL scans
+  /Library/CoreMediaIO/Plug-Ins/DAL/*.plugin at consumer-process
+  startup, reads this Info.plist, and loads the binary referenced
+  by CFBundleExecutable. The CFPlugInFactories + CFPlugInTypes
+  pair tells DAL "this binary exports a function named
+  `PluginCreateInstance` that returns an object conforming to the
+  CMIO plug-in interface type".
+
+  See src/dal_plugin/Plugin.mm for the implementation.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+
+  <key>CFBundleExecutable</key>
+  <string>RetroCaptureVCam</string>
+
+  <key>CFBundleIdentifier</key>
+  <string>com.retrocapture.virtualcamera</string>
+
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+
+  <key>CFBundleName</key>
+  <string>RetroCapture Virtual Camera</string>
+
+  <key>CFBundlePackageType</key>
+  <string>BNDL</string>
+
+  <key>CFBundleShortVersionString</key>
+  <string>@PROJECT_VERSION@</string>
+
+  <key>CFBundleVersion</key>
+  <string>@PROJECT_VERSION@</string>
+
+  <!-- One factory: our plug-in. Its UUID is the one we invented
+       once and never change (registered devices stored against
+       it would otherwise dangle). -->
+  <key>CFPlugInFactories</key>
+  <dict>
+    <key>5C8F2A3D-1B4E-4F9A-9C2D-DC85DA1FCA42</key>
+    <string>PluginCreateInstance</string>
+  </dict>
+
+  <!-- The kCMIOHardwarePlugInTypeID — the CMIO DAL plug-in
+       interface type. We register our factory under it so DAL
+       picks it up. -->
+  <key>CFPlugInTypes</key>
+  <dict>
+    <key>30010C1C-93BF-11D8-8B5B-000A95AF9C6A</key>
+    <array>
+      <string>5C8F2A3D-1B4E-4F9A-9C2D-DC85DA1FCA42</string>
+    </array>
+  </dict>
+</dict>
+</plist>

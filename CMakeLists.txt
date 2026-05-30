@@ -21,6 +21,19 @@ option(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER
     "Build the Windows DirectShow virtual-camera source filter DLL (#85 Phase 2)"
     OFF)
 
+# #85 macOS path — CoreMediaIO DAL plug-in. Default ON on macOS
+# because the host-side sink (VirtualCameraOutputMac) is useless
+# without the plug-in that exposes the shared memory to consumers.
+# OFF elsewhere so the configure step ignores src/dal_plugin/.
+if(APPLE)
+    set(_DAL_DEFAULT ON)
+else()
+    set(_DAL_DEFAULT OFF)
+endif()
+option(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN
+    "Build the macOS CoreMediaIO DAL virtual-camera plug-in (#85 macOS)"
+    ${_DAL_DEFAULT})
+
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -503,11 +516,14 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
-# #85 Phase 2 — the DirectShow filter DLL lives under src/dshow_filter/
-# and is its OWN target (built via add_subdirectory when the option is
-# set). Always remove its sources from the main retrocapture executable
-# build so the SOURCES glob doesn't drag them in.
+# #85 — the platform-specific virtcam filter/plug-in lives under
+# its own subdirectory (src/dshow_filter for Windows, src/dal_plugin
+# for macOS) and is its OWN target (built via add_subdirectory when
+# the matching option is set). Always remove these sources from the
+# main retrocapture executable build so the SOURCES glob doesn't
+# drag them in.
 list(FILTER SOURCES EXCLUDE REGEX ".*/dshow_filter/.*\\.(cpp|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/dal_plugin/.*\\.(cpp|h|mm)$")
 
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
@@ -516,6 +532,7 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
@@ -537,6 +554,7 @@ elseif(PLATFORM_WINDOWS)
     # is now compiled on both platforms (#85 Phase 2 surface).
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
@@ -560,13 +578,16 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
 elseif(PLATFORM_MACOS)
     # No macOS, excluir implementações Linux e Windows.
+    # `VirtualCameraOutput\\.cpp` (Linux v4l2 sink) and `VirtualCameraOutputWin\\.cpp`
+    # (Windows DShow sink) must be excluded. `VirtualCameraOutputMac\\.cpp`
+    # stays — it's the new POSIX-shm sink for the DAL plug-in path.
+    # UIConfigurationVirtualCamera now compiles on all three (#85).
     # Note: `AudioBus` is platform-agnostic (std::deque + mutex) and is
     # used by both AudioCapturePulse on Linux and AudioCaptureCoreAudio
     # on macOS, so it is NOT excluded here.
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
-    list(FILTER SOURCES EXCLUDE REGEX ".*UIConfigurationVirtualCamera\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
@@ -1264,4 +1285,14 @@ if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
     endif()
     add_subdirectory(third_party/baseclasses)
     add_subdirectory(src/dshow_filter)
+endif()
+
+if(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN)
+    if(NOT PLATFORM_MACOS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN=ON only makes "
+            "sense on a macOS target build. Current platform is "
+            "not macOS.")
+    endif()
+    add_subdirectory(src/dal_plugin)
 endif()

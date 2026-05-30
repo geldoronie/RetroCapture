@@ -29,6 +29,8 @@
 #  include "../output/VirtualCameraOutput.h"
 #elif defined(_WIN32)
 #  include "../output/VirtualCameraOutputWin.h"
+#elif defined(__APPLE__)
+#  include "../output/VirtualCameraOutputMac.h"
 #endif
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
@@ -3434,7 +3436,7 @@ void Application::run()
         // transition is needed (just compares two booleans and a few
         // strings).
         syncDirectoryClient();
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
         syncVirtualCamera();
 #endif
         // Cursor visibility tracks BOTH UIManager::isVisible() and the
@@ -4185,7 +4187,7 @@ void Application::run()
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
                                     (m_recordingManager && m_recordingManager->isRecording())
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                                     || (m_virtcam && m_virtcam->isRunning())
 #endif
                                     ;
@@ -4262,7 +4264,7 @@ void Application::run()
                         // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
                         bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
                                                 (m_streamManager && m_streamManager->isActive())
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                                                 || (m_virtcam && m_virtcam->isRunning())
 #endif
                                                 ;
@@ -4590,7 +4592,7 @@ void Application::run()
                                     // contents (black / static) whenever a
                                     // shader is off, which was the symptom
                                     // user hit on first end-to-end test.
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                                     if (frameDataReady && m_virtcam &&
                                         m_virtcam->isRunning())
                                     {
@@ -4615,7 +4617,7 @@ void Application::run()
                                         // Push happens BEFORE the RGB strip
                                         // below so the sink keeps the alpha
                                         // channel intact (sws RGBA → YUYV).
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                                         if (m_virtcam && m_virtcam->isRunning())
                                         {
                                             m_virtcam->pushFrame(
@@ -6101,6 +6103,82 @@ void Application::syncVirtualCamera()
     m_ui->setVirtcamStatusText(buf);
 }
 #endif // _WIN32
+
+#if defined(__APPLE__)
+// #85 macOS — virtual camera lifecycle. Mirrors the Windows path:
+// single device (the CoreMediaIO DAL plug-in at
+// /Library/CoreMediaIO/Plug-Ins/DAL/RetroCaptureVCam.plugin), no
+// device picker. The host writes frames into POSIX shm; the
+// plug-in inside every consumer process reads them.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool enabled = m_ui->getVirtcamEnabled();
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (!VirtualCameraOutputMac::isPluginInstalled())
+    {
+        m_ui->setVirtcamErrorText(
+            "RetroCaptureVCam.plugin is not installed in "
+            "/Library/CoreMediaIO/Plug-Ins/DAL/. Run the "
+            "install-virtcam.sh helper (it copies the bundle "
+            "from the .app and requires sudo).");
+        return;
+    }
+
+    // Resolve dims using the same cascade as Linux/Windows: UI
+    // override → shader/image output → capture dims. The DAL
+    // plug-in currently only advertises one fixed format (RGB24
+    // @ 1280x720) so anything wildly off-spec will fall back to
+    // a frozen frame on the consumer side.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+
+    if (w == 0 || h == 0)
+    {
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    constexpr auto fmt = VirtualCameraOutputMac::PixelFormat::RGB24;
+
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputMac>();
+
+    if (!m_virtcam->isRunning())
+    {
+        std::string err;
+        if (!m_virtcam->start(w, h, fmt, err))
+        {
+            m_ui->setVirtcamErrorText(err);
+            return;
+        }
+    }
+    m_ui->setVirtcamErrorText("");
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u RGB24 to RetroCaptureVCam.plugin",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __APPLE__
 
 void Application::syncDirectoryClient()
 {

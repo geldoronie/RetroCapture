@@ -21,13 +21,25 @@ namespace retrocapture { namespace virtcam_ipc {
 // are used as values, not ODR-used (no address-taken, no const-ref
 // bind). If a TU ever needs &kSharedMagic etc., promote to inline.
 
-// Named objects — both `Local\`-scoped so two users on the same
-// Windows host get independent virtual cameras. `_v1` is a forward
-// compat hook: bump the suffix the day the layout changes
-// incompatibly so old + new RetroCapture instances coexist
-// without colliding on the same names.
+// Named objects — both versioned with `_v1` so the day the layout
+// changes incompatibly we can bump the suffix and old + new
+// RetroCapture instances coexist without colliding on the same
+// names. On Windows the names are wide-char + `Local\` prefixed
+// (per-session scope so two users on the same machine get
+// independent virtual cameras). On macOS the equivalents are
+// POSIX names that have to start with `/` and stay under
+// PSHMNAMLEN (~31 chars on most Macs) — chosen short.
+#if defined(_WIN32)
 constexpr wchar_t kMapName[]   = L"Local\\RetroCaptureVCam_FrameMap_v1";
 constexpr wchar_t kEventName[] = L"Local\\RetroCaptureVCam_FrameReady_v1";
+#elif defined(__APPLE__)
+// Per-user scope would be nicer but `Local\`-equivalent on macOS
+// (per-user `shm_open`) requires baking the user id into the name.
+// Keeping system-wide for now matches OBS Virtual Cam's behaviour
+// and is simple.
+constexpr char    kShmName[]   = "/RCVcamShm_v1";
+constexpr char    kSemName[]   = "/RCVcamEvt_v1";
+#endif
 
 // Magic numbers double as torn-write guards. A reader that sees
 // 0x00000000 in either field knows the writer hasn't laid down

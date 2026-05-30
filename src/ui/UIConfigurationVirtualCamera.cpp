@@ -6,6 +6,8 @@
 
 #if defined(_WIN32)
 #  include "../output/VirtualCameraOutputWin.h"
+#elif defined(__APPLE__)
+#  include "../output/VirtualCameraOutputMac.h"
 #endif
 
 #include <imgui.h>
@@ -102,6 +104,39 @@ void UIConfigurationVirtualCamera::render()
         {
             ImGui::SetTooltip(
                 "Register RetroCaptureVCam.dll first (see Driver above).");
+        }
+    }
+    else
+    {
+        renderToggle();
+    }
+
+    ImGui::Spacing();
+    renderOutputDims();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    renderStatus();
+#elif defined(__APPLE__)
+    // macOS path: same shape as Windows (driver status → toggle →
+    // dims → status) but the driver here is the CoreMediaIO DAL
+    // plug-in instead of a COM-registered DLL.
+    renderDriverStatus();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const bool driverReady = VirtualCameraOutputMac::isPluginInstalled();
+    if (!driverReady)
+    {
+        ImGui::BeginDisabled();
+        renderToggle();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Install RetroCaptureVCam.plugin first (see Driver "
+                "above).");
         }
     }
     else
@@ -542,9 +577,10 @@ void UIConfigurationVirtualCamera::renderModuleManagement()
 }
 #endif // __linux__
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__APPLE__)
 void UIConfigurationVirtualCamera::renderDriverStatus()
 {
+#  if defined(_WIN32)
     // The DirectShow filter DLL is registered post-install by
     // NSIS's regsvr32 step. If it's missing the user can't toggle
     // capture on — explain how to fix it.
@@ -574,5 +610,42 @@ void UIConfigurationVirtualCamera::renderDriverStatus()
         ImGui::TextWrapped(
             "Uninstall later with: regsvr32 /u RetroCaptureVCam.dll");
     }
+#  elif defined(__APPLE__)
+    // The CoreMediaIO DAL plug-in is a .plugin bundle in
+    // /Library/CoreMediaIO/Plug-Ins/DAL/. Install requires sudo
+    // (the directory is owned by root). The .app's bundled
+    // helper script does this for the user.
+    const bool installed = VirtualCameraOutputMac::isPluginInstalled();
+    const std::string path = VirtualCameraOutputMac::pluginInstallPath();
+
+    ImGui::TextDisabled("Driver");
+    if (installed)
+    {
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f),
+                           "Installed at %s", path.c_str());
+        ImGui::TextWrapped(
+            "Plug-in is loaded by CoreMediaIO at consumer-process "
+            "startup. Consumers (OBS, Discord, Zoom, Chrome legacy "
+            "path) will see it as \"RetroCapture Virtual Camera\".");
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.30f, 1.0f),
+                           "Not installed");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Run the install-virtcam.sh helper that ships with the "
+            ".app bundle (requires sudo):");
+        ImGui::Spacing();
+        ImGui::TextDisabled(
+            "    sudo /Applications/RetroCapture.app/Contents/Resources/install-virtcam.sh");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Or copy RetroCaptureVCam.plugin from the .app's "
+            "Resources directory to %s manually. Consumers need "
+            "to be restarted to re-scan the DAL directory.",
+            path.c_str());
+    }
+#  endif
 }
-#endif // _WIN32
+#endif // _WIN32 || __APPLE__

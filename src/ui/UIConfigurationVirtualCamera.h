@@ -91,12 +91,15 @@ private:
     void pumpModuleOp();
 #endif // __linux__
 
-#if defined(_WIN32)
-    // Windows path is simpler — one virtual device, no device
-    // picker, no kernel module ops. The "driver status" is just
-    // "is the DLL registered with COM" (which the installer does
-    // post-install). The user can re-run regsvr32 manually if
-    // they need to.
+#if defined(_WIN32) || defined(__APPLE__)
+    // Windows + macOS path is simpler than Linux — one virtual
+    // device, no device picker, no kernel module ops. The
+    // "driver status" line is:
+    //   - Windows: "is the DLL registered with COM" (regsvr32
+    //     post-install).
+    //   - macOS:  "is the DAL plug-in present in
+    //     /Library/CoreMediaIO/Plug-Ins/DAL/" (install-virtcam.sh
+    //     post-install).
     void renderDriverStatus();
 #endif
 };

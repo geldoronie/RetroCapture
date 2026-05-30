@@ -222,8 +222,10 @@ private:
     using VirtcamSinkT = class VirtualCameraOutput;
 #elif defined(_WIN32)
     using VirtcamSinkT = class VirtualCameraOutputWin;
+#elif defined(__APPLE__)
+    using VirtcamSinkT = class VirtualCameraOutputMac;
 #endif
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
     std::unique_ptr<VirtcamSinkT> m_virtcam;
     void syncVirtualCamera();
 #endif
