@@ -2547,36 +2547,36 @@ bool Application::initUI()
                 m_frameProcessor->deleteTexture();
             }
 
-            // Tear down any existing remote pipeline on a background
-            // thread so the main loop doesn't stall while
-            // VideoCaptureRemote joins its decode thread (up to ~1.5 s
-            // with the interrupt callback). We move ownership of both
-            // objects into a detached worker; the main thread
-            // continues immediately to spin up the new capture.
-            //
-            // Switching from one remote URL straight to another used
-            // to freeze the UI for the full join duration; this is
-            // what made "click another stream while connected" feel
-            // unresponsive even though the new connection itself was
-            // already fast.
-            if (m_remoteMetaSync || m_capture)
+            // Tear down any existing remote pipeline SYNCHRONOUSLY
+            // before we open the next one (#92/#95). This used to run
+            // on a detached worker so the main loop wouldn't stall on
+            // VideoCaptureRemote's decode-thread join — but that left
+            // the old /raw connection (a real "viewer" on the host)
+            // alive while the new one opened, so:
+            //   - #92: rapidly reconnecting / switching URLs stacked
+            //     several live connections; the host counted each as a
+            //     separate viewer.
+            //   - #95: on Disconnect (empty URL) nothing waited for the
+            //     teardown, so the socket / decode thread lingered and
+            //     the client stayed "connected".
+            // The teardown is actually fast: stopCapture() trips the
+            // ffmpeg interrupt callback so the blocking read returns at
+            // once, and RemoteMetaSync's poll loop sleeps in 100 ms
+            // slices that check its stop flag. Doing it inline closes
+            // the old socket (and joins both threads) before the next
+            // open — exactly one live connection at any time. The
+            // on-screen frame was already wiped above, so the brief
+            // (~100-300 ms) join isn't visible as a freeze.
+            if (m_remoteMetaSync)
             {
-                auto deadCapture = std::move(m_capture);
-                auto deadMeta    = std::move(m_remoteMetaSync);
-                std::thread([cap = std::move(deadCapture),
-                             meta = std::move(deadMeta)]() mutable {
-                    if (meta)
-                    {
-                        meta->stop();
-                        meta.reset();
-                    }
-                    if (cap)
-                    {
-                        cap->stopCapture();
-                        cap->close();
-                        cap.reset();
-                    }
-                }).detach();
+                m_remoteMetaSync->stop();
+                m_remoteMetaSync.reset();
+            }
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture.reset();
             }
 
             m_devicePath = devicePath;
