@@ -3453,7 +3453,10 @@ void Application::setupSystemTray()
         return;
     }
 
-    if (!m_tray->start("retrocapture", "RetroCapture"))
+    // v1 uses a stock themed icon name so something always renders on
+    // any desktop; #183 installs the branded "retrocapture" icon and
+    // switches to it.
+    if (!m_tray->start("camera-video", "RetroCapture"))
     {
         LOG_WARN("System tray: no tray host available — the close "
                  "button will quit the application. Install an "
