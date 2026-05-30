@@ -493,6 +493,18 @@ OSStatus getData(CMIOObjectID objectID,
     const bool isStream = (objectID == g_plugin.streamID);
     const UInt32 running = g_plugin.streamActive.load() ? 1u : 0u;
 
+    // Full trace of every device/stream query, in order, so we can
+    // see what the consumer reads last before deciding not to start
+    // the stream. (Diagnostic — noisier than the MISS-only logging.)
+    if (isDevice || isStream)
+    {
+        const uint32_t s = addr->mSelector;
+        vclog("getData %s '%c%c%c%c'",
+              isDevice ? "device" : "stream",
+              (char)((s >> 24) & 0xff), (char)((s >> 16) & 0xff),
+              (char)((s >> 8) & 0xff), (char)(s & 0xff));
+    }
+
     switch (addr->mSelector)
     {
         // ---- base CMIOObject properties (all objects) ----------------
@@ -826,8 +838,8 @@ OSStatus cbObjectSetPropertyData(CMIOHardwarePlugInRef /*self*/,
     return noErr;
 }
 
-OSStatus cbDeviceSuspend(CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { return noErr; }
-OSStatus cbDeviceResume (CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { return noErr; }
+OSStatus cbDeviceSuspend(CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { vclog("cbDeviceSuspend"); return noErr; }
+OSStatus cbDeviceResume (CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { vclog("cbDeviceResume");  return noErr; }
 
 OSStatus cbDeviceStartStream(CMIOHardwarePlugInRef /*self*/,
                              CMIODeviceID /*d*/, CMIOStreamID /*s*/)
