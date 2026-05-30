@@ -378,6 +378,15 @@ public:
     void setLanguage(const std::string &v)           { m_language = v; }
     bool getStartFullscreen() const                  { return m_startFullscreen; }
     void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
+    // #86 — system tray / background operation preferences.
+    bool getTrayEnabled() const                      { return m_trayEnabled; }
+    void setTrayEnabled(bool v)                      { m_trayEnabled = v; }
+    bool getTrayMinimizeOnClose() const              { return m_trayMinimizeOnClose; }
+    void setTrayMinimizeOnClose(bool v)              { m_trayMinimizeOnClose = v; }
+    bool getTrayStartMinimized() const               { return m_trayStartMinimized; }
+    void setTrayStartMinimized(bool v)               { m_trayStartMinimized = v; }
+    bool getTrayNotifications() const                { return m_trayNotifications; }
+    void setTrayNotifications(bool v)                { m_trayNotifications = v; }
     const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
     // #84 — As of the profile unification, the directory's "host
@@ -1226,6 +1235,14 @@ private:
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;
+    // #86 system tray. Default trayEnabled=true (the backend itself
+    // reports unsupported and falls back cleanly when there's no
+    // tray host); minimizeOnClose=true makes the X button background
+    // the app instead of quitting.
+    bool        m_trayEnabled             = true;
+    bool        m_trayMinimizeOnClose     = true;
+    bool        m_trayStartMinimized      = false;
+    bool        m_trayNotifications       = false;
     std::string m_directoryStreamName     = "";
     std::string m_directoryHostNickname   = "";
     std::string m_directoryPassword       = "";       // optional; empty = no password

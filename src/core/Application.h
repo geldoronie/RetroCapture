@@ -35,6 +35,9 @@ class RecordingManager;
 // Forward declaration for API
 struct ShaderParameter;
 
+// #86 — system tray abstraction (src/tray/ISystemTray.h)
+namespace retrocapture { class ISystemTray; }
+
 class Application
 {
 public:
@@ -179,6 +182,19 @@ private:
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;
+
+    // #86 — system tray + hide-to-tray. m_tray is always non-null
+    // (factory returns a no-op stub when the platform/DE has no tray
+    // host). setupSystemTray() builds the icon + menu and wires the
+    // window close callback; refreshTrayMenu() re-pushes labels/
+    // enabled state each frame; m_trayActive reflects whether a real
+    // tray host accepted the icon.
+    std::unique_ptr<retrocapture::ISystemTray> m_tray;
+    bool m_trayActive = false;
+    uint32_t m_trayMenuSig = 0;      // change-detection for refreshTrayMenu
+    bool m_trayMenuBuilt = false;
+    void setupSystemTray();
+    void refreshTrayMenu();
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2

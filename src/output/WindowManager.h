@@ -25,6 +25,26 @@ public:
     void swapBuffers();
     void pollEvents();
 
+    // Hide-to-tray support (#86). hide() unmaps the window without
+    // tearing down the GL context — the capture/render pipelines keep
+    // running; the main loop skips the viewport swap while hidden.
+    // show() re-maps + refocuses.
+    void hide();
+    void show();
+    bool isVisible() const;
+
+    // Close-button interception. When a callback is installed, the
+    // GLFW window-close request does NOT set shouldClose; instead the
+    // callback runs and decides (hide-to-tray vs real quit). Without
+    // a callback, the default GLFW behaviour (shouldClose = true)
+    // stands. Returning the callback lets Application implement the
+    // "minimize to tray vs quit" preference.
+    void setCloseCallback(std::function<void()> callback);
+
+    // Force a real close (used by the tray "Quit" action and by the
+    // close callback when the user chose quit-on-close).
+    void requestClose();
+
     // Runtime vsync toggle. Mirrors what config.vsync did at init but
     // lets the rest of the app switch the swap interval mid-session —
     // remote-source playback wants vsync ON so frames land on display
@@ -71,7 +91,10 @@ private:
     bool m_initialized = false;
     
     std::function<void(int, int)> m_resizeCallback = nullptr;
+    std::function<void()> m_closeCallback = nullptr; // #86 hide-to-tray
     void* m_userData = nullptr; // User data para callbacks
+
+    bool m_visible = true; // tracked locally; GLFW has no portable query
     
     // Cache cursor visibility state to avoid unnecessary glfwSetInputMode calls
     mutable bool m_cursorVisible = true;
