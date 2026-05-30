@@ -42,6 +42,8 @@
 #include "PluginConstants.h"
 #include "SharedMemoryReader.h"
 
+#include <mach/mach_time.h>
+
 #include <atomic>
 #include <cstring>
 #include <thread>
@@ -79,6 +81,12 @@ struct PluginState
     // first frame. CMVideoFormatDescriptionCreate reads the
     // pixel format + dims; we recreate only on geometry change.
     CMFormatDescriptionRef formatDescription = nullptr;
+
+    // CMIO stream clock — CMIO needs a clock per stream to pace
+    // playback. Created in InitializeWithObjectID, handed to the
+    // consumer via kCMIOStreamPropertyClock, advanced once per
+    // delivered frame via CMIOStreamClockPostTimingEvent.
+    CFTypeRef streamClock = nullptr;
 
     // Frame thread state. Spun up by DeviceStartStream, torn
     // down by DeviceStopStream.
@@ -167,6 +175,18 @@ bool enqueueFrame(CVPixelBufferRef pb)
     {
         CFRelease(sb);
         return false;
+    }
+
+    // Advance the stream clock so the consumer's IReferenceClock-
+    // equivalent paces correctly. resynchronize on the very first
+    // frame to anchor the timeline to "now".
+    if (g_plugin.streamClock != nullptr)
+    {
+        CMIOStreamClockPostTimingEvent(
+            pts,
+            mach_absolute_time(),
+            /*resynchronize=*/(g_plugin.frameSequence == 0),
+            g_plugin.streamClock);
     }
 
     // Notify the consumer there's something new in the queue.
@@ -277,11 +297,70 @@ OSStatus copyObjectIDs(const CMIOObjectID *ids, UInt32 count,
     return noErr;
 }
 
+OSStatus copyInt32(int32_t value, UInt32 cap, UInt32 *used, void *out)
+{
+    if (cap < sizeof(int32_t)) return kCMIOHardwareBadPropertySizeError;
+    *static_cast<int32_t *>(out) = value;
+    if (used != nullptr) *used = sizeof(int32_t);
+    return noErr;
+}
+
+OSStatus copyFloat64(Float64 value, UInt32 cap, UInt32 *used, void *out)
+{
+    if (cap < sizeof(Float64)) return kCMIOHardwareBadPropertySizeError;
+    *static_cast<Float64 *>(out) = value;
+    if (used != nullptr) *used = sizeof(Float64);
+    return noErr;
+}
+
+// Hand the caller a +1 CFTypeRef (CFString / CMFormatDescription /
+// clock / CFArray). Caller releases per CMIO's "Copy" contract.
+OSStatus copyCFType(CFTypeRef value, UInt32 cap, UInt32 *used, void *out)
+{
+    if (value == nullptr) return kCMIOHardwareUnknownPropertyError;
+    if (cap < sizeof(CFTypeRef)) return kCMIOHardwareBadPropertySizeError;
+    *static_cast<CFTypeRef *>(out) = CFRetain(value);
+    if (used != nullptr) *used = sizeof(CFTypeRef);
+    return noErr;
+}
+
+OSStatus copyAudioValueRange(Float64 lo, Float64 hi,
+                             UInt32 cap, UInt32 *used, void *out)
+{
+    if (cap < sizeof(AudioValueRange)) return kCMIOHardwareBadPropertySizeError;
+    AudioValueRange r = { lo, hi };
+    std::memcpy(out, &r, sizeof(r));
+    if (used != nullptr) *used = sizeof(AudioValueRange);
+    return noErr;
+}
+
+// A single-element CFArray holding the stream's format description.
+// Built lazily, cached for the process lifetime (the format never
+// changes in this first cut).
+CFArrayRef formatDescriptionsArray(CMFormatDescriptionRef fmt)
+{
+    static CFArrayRef s_arr = nullptr;
+    if (s_arr == nullptr && fmt != nullptr)
+    {
+        const void *vals[1] = { fmt };
+        s_arr = CFArrayCreate(kCFAllocatorDefault, vals, 1,
+                              &kCFTypeArrayCallBacks);
+    }
+    return s_arr;
+}
+
+// 30 fps as a Float64 — used for the frame-rate properties.
+constexpr Float64 kFps64 = static_cast<Float64>(kStreamFps);
+
 OSStatus getDataSize(CMIOObjectID objectID,
                      const CMIOObjectPropertyAddress *addr,
                      UInt32 *dataSize)
 {
     if (dataSize == nullptr || addr == nullptr) return kCMIOHardwareIllegalOperationError;
+
+    const bool isPlugin = (objectID == g_plugin.pluginID);
+    const bool isDevice = (objectID == g_plugin.deviceID);
+    const bool isStream = (objectID == g_plugin.streamID);
 
     switch (addr->mSelector)
     {
@@ -291,19 +370,60 @@ OSStatus getDataSize(CMIOObjectID objectID,
         case kCMIODevicePropertyModelUID:
             *dataSize = sizeof(CFStringRef);
             return noErr;
+
+        case kCMIOObjectPropertyClass:
+            *dataSize = sizeof(CMIOClassID);
+            return noErr;
+
+        case kCMIOObjectPropertyOwner:
+            *dataSize = sizeof(CMIOObjectID);
+            return noErr;
+
+        case kCMIOObjectPropertyOwnedObjects:
+            // plugin owns 1 device; device owns 1 stream; stream owns 0.
+            *dataSize = (isStream ? 0u : 1u) * sizeof(CMIOObjectID);
+            return noErr;
+
+        case kCMIODevicePropertyStreams:
+            *dataSize = (isDevice ? 1u : 0u) * sizeof(CMIOObjectID);
+            return noErr;
+
         case kCMIODevicePropertyDeviceIsAlive:
+        case kCMIODevicePropertyDeviceIsRunning:
+        case kCMIODevicePropertyDeviceIsRunningSomewhere:
+        case kCMIODevicePropertyExcludeNonDALAccess:
+        case kCMIODevicePropertyCanProcessAVCCommand:
+        case kCMIODevicePropertyCanProcessRS422Command:
+        case kCMIODevicePropertyLatency:
+        case kCMIOStreamPropertyDirection:
             *dataSize = sizeof(UInt32);
             return noErr;
-        case kCMIODevicePropertyStreams:
-            *dataSize = sizeof(CMIOObjectID); // one stream
+
+        case kCMIODevicePropertyHogMode:
+        case kCMIODevicePropertyDeviceMaster:
+            *dataSize = sizeof(pid_t);
             return noErr;
+
+        case kCMIOStreamPropertyFrameRate:
+        case kCMIOStreamPropertyMinimumFrameRate:
+            *dataSize = sizeof(Float64);
+            return noErr;
+
+        case kCMIOStreamPropertyFrameRates:
+        case kCMIOStreamPropertyFrameRateRanges:
+            *dataSize = sizeof(AudioValueRange);
+            return noErr;
+
         case kCMIOStreamPropertyFormatDescription:
-            *dataSize = sizeof(CMFormatDescriptionRef);
+        case kCMIOStreamPropertyFormatDescriptions:
+        case kCMIOStreamPropertyClock:
+            *dataSize = sizeof(CFTypeRef);
             return noErr;
+
         default:
+            (void)isPlugin;
             return kCMIOHardwareUnknownPropertyError;
     }
-    (void)objectID;
 }
 
 OSStatus getData(CMIOObjectID objectID,
@@ -318,48 +438,118 @@ OSStatus getData(CMIOObjectID objectID,
     const bool isPlugin = (objectID == g_plugin.pluginID);
     const bool isDevice = (objectID == g_plugin.deviceID);
     const bool isStream = (objectID == g_plugin.streamID);
+    const UInt32 running = g_plugin.streamActive.load() ? 1u : 0u;
 
     switch (addr->mSelector)
     {
+        // ---- base CMIOObject properties (all objects) ----------------
         case kCMIOObjectPropertyName:
-        case kCMIOObjectPropertyManufacturer:
-            return copyString(
-                addr->mSelector == kCMIOObjectPropertyName
-                    ? kPluginFriendlyName : kManufacturerName,
-                cap, used, out);
+            return copyCFType(kPluginFriendlyName, cap, used, out);
 
+        case kCMIOObjectPropertyManufacturer:
+            return copyCFType(kManufacturerName, cap, used, out);
+
+        case kCMIOObjectPropertyClass:
+            if (isDevice) return copyUInt32(kCMIODeviceClassID, cap, used, out);
+            if (isStream) return copyUInt32(kCMIOStreamClassID, cap, used, out);
+            if (isPlugin) return copyUInt32(kCMIOPlugInClassID, cap, used, out);
+            return kCMIOHardwareUnknownPropertyError;
+
+        case kCMIOObjectPropertyOwner:
+            // device owned by system object; stream owned by device;
+            // plugin owned by system object.
+            if (isDevice || isPlugin)
+            {
+                const CMIOObjectID sys = kCMIOObjectSystemObject;
+                return copyObjectIDs(&sys, 1, cap, used, out);
+            }
+            if (isStream)
+                return copyObjectIDs(&g_plugin.deviceID, 1, cap, used, out);
+            return kCMIOHardwareUnknownPropertyError;
+
+        case kCMIOObjectPropertyOwnedObjects:
+            if (isPlugin)
+                return copyObjectIDs(&g_plugin.deviceID, 1, cap, used, out);
+            if (isDevice)
+                return copyObjectIDs(&g_plugin.streamID, 1, cap, used, out);
+            // stream owns nothing.
+            if (used != nullptr) *used = 0;
+            return noErr;
+
+        // ---- device properties ---------------------------------------
         case kCMIODevicePropertyDeviceUID:
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
-            return copyString(kDeviceUID, cap, used, out);
+            return copyCFType(kDeviceUID, cap, used, out);
 
         case kCMIODevicePropertyModelUID:
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
-            return copyString(kModelUID, cap, used, out);
+            return copyCFType(kModelUID, cap, used, out);
 
         case kCMIODevicePropertyDeviceIsAlive:
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
             return copyUInt32(1, cap, used, out);
 
+        case kCMIODevicePropertyDeviceIsRunning:
+        case kCMIODevicePropertyDeviceIsRunningSomewhere:
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(running, cap, used, out);
+
+        case kCMIODevicePropertyExcludeNonDALAccess:
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(0, cap, used, out);
+
+        case kCMIODevicePropertyCanProcessAVCCommand:
+        case kCMIODevicePropertyCanProcessRS422Command:
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(0, cap, used, out);
+
+        case kCMIODevicePropertyLatency:
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(0, cap, used, out);
+
+        case kCMIODevicePropertyHogMode:
+        case kCMIODevicePropertyDeviceMaster:
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            // -1 == not hogged / no master.
+            return copyInt32(-1, cap, used, out);
+
         case kCMIODevicePropertyStreams:
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
             return copyObjectIDs(&g_plugin.streamID, 1, cap, used, out);
 
+        // ---- stream properties ---------------------------------------
+        case kCMIOStreamPropertyDirection:
+            if (!isStream) return kCMIOHardwareUnknownPropertyError;
+            // 0 = output (device produces data the consumer reads).
+            // If the device shows up but isn't usable as a camera,
+            // this is the first thing to try flipping to 1.
+            return copyUInt32(0, cap, used, out);
+
         case kCMIOStreamPropertyFormatDescription:
             if (!isStream) return kCMIOHardwareUnknownPropertyError;
-            {
-                CMFormatDescriptionRef fmt = ensureFormatDescription();
-                if (cap < sizeof(CMFormatDescriptionRef))
-                {
-                    return kCMIOHardwareBadPropertySizeError;
-                }
-                *static_cast<CMFormatDescriptionRef *>(out) =
-                    static_cast<CMFormatDescriptionRef>(CFRetain(fmt));
-                if (used) *used = sizeof(CMFormatDescriptionRef);
-                return noErr;
-            }
+            return copyCFType(ensureFormatDescription(), cap, used, out);
+
+        case kCMIOStreamPropertyFormatDescriptions:
+            if (!isStream) return kCMIOHardwareUnknownPropertyError;
+            return copyCFType(
+                formatDescriptionsArray(ensureFormatDescription()),
+                cap, used, out);
+
+        case kCMIOStreamPropertyFrameRate:
+        case kCMIOStreamPropertyMinimumFrameRate:
+            if (!isStream) return kCMIOHardwareUnknownPropertyError;
+            return copyFloat64(kFps64, cap, used, out);
+
+        case kCMIOStreamPropertyFrameRates:
+        case kCMIOStreamPropertyFrameRateRanges:
+            if (!isStream) return kCMIOHardwareUnknownPropertyError;
+            return copyAudioValueRange(kFps64, kFps64, cap, used, out);
+
+        case kCMIOStreamPropertyClock:
+            if (!isStream) return kCMIOHardwareUnknownPropertyError;
+            return copyCFType(g_plugin.streamClock, cap, used, out);
 
         default:
-            (void)isPlugin;
             return kCMIOHardwareUnknownPropertyError;
     }
 }
@@ -411,18 +601,46 @@ OSStatus cbInitialize(CMIOHardwarePlugInRef /*self*/)
     return noErr;
 }
 
-OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef /*self*/,
+OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef self,
                                   CMIOObjectID objectID)
 {
     g_plugin.pluginID = objectID;
 
-    // Mint Device + Stream IDs. CMIO requires us to call
-    // CMIOObjectCreate and stash the returned IDs. This part
-    // is delicate on first run — the exact CMIOObjectCreate
-    // overload and the parent linking are easy to get wrong;
-    // verify on a real Mac. (TODO).
-    g_plugin.deviceID = 0;  // TODO: CMIOObjectCreate(...)
-    g_plugin.streamID = 0;  // TODO: CMIOObjectCreate(...)
+    // Mint the Device as a child of the system object, then the
+    // Stream as a child of the Device. CMIOObjectCreate registers
+    // the object with the CMIO runtime and assigns its id; we then
+    // publish them so consumers enumerating the system object see
+    // the device and, drilling in, its stream.
+    OSStatus err = CMIOObjectCreate(self, kCMIOObjectSystemObject,
+                                    kCMIODeviceClassID, &g_plugin.deviceID);
+    if (err != noErr)
+    {
+        return err;
+    }
+    err = CMIOObjectCreate(self, g_plugin.deviceID,
+                           kCMIOStreamClassID, &g_plugin.streamID);
+    if (err != noErr)
+    {
+        return err;
+    }
+
+    // Stream clock — paces playback for the consumer. minimum time
+    // between getTime calls = one frame; light rate smoothing.
+    CMIOStreamClockCreate(
+        kCFAllocatorDefault,
+        CFSTR("RetroCaptureVCamClock"),
+        /*sourceIdentifier=*/&g_plugin,            // any unique ptr
+        CMTimeMake(1, kStreamFps),
+        /*numberOfEventsForRateSmoothing=*/10,
+        /*numberOfAveragesForRateSmoothing=*/4,
+        &g_plugin.streamClock);
+
+    // Publish: device under the system object, stream under the
+    // device. This is what makes them visible to consumers.
+    CMIOObjectsPublishedAndDied(self, kCMIOObjectSystemObject,
+                                1, &g_plugin.deviceID, 0, nullptr);
+    CMIOObjectsPublishedAndDied(self, g_plugin.deviceID,
+                                1, &g_plugin.streamID, 0, nullptr);
     return noErr;
 }
 
@@ -440,6 +658,12 @@ OSStatus cbTeardown(CMIOHardwarePlugInRef /*self*/)
     {
         CFRelease(g_plugin.formatDescription);
         g_plugin.formatDescription = nullptr;
+    }
+    if (g_plugin.streamClock != nullptr)
+    {
+        CMIOStreamClockInvalidate(g_plugin.streamClock);
+        CFRelease(g_plugin.streamClock);
+        g_plugin.streamClock = nullptr;
     }
     return noErr;
 }
