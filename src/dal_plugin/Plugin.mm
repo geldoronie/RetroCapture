@@ -43,8 +43,11 @@
 #include "SharedMemoryReader.h"
 
 #include <mach/mach_time.h>
+#include <unistd.h>
 
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -53,6 +56,30 @@ using namespace retrocapture::dal_plugin;
 using retrocapture::virtcam_ipc::FrameHeader;
 
 namespace {
+
+// ---------------------------------------------------------------------
+// Diagnostic logging
+//
+// The plug-in runs INSIDE the consumer process (OBS, etc.), so we
+// can't just printf to a terminal we control. Append to a fixed
+// world-readable file the user can `cat` back to us. Each consumer
+// that loads the plug-in writes its pid so concurrent loaders don't
+// confuse the trace. This is debugging scaffolding for the first
+// real bring-up; once the camera works end-to-end we can switch to
+// os_log or strip it.
+// ---------------------------------------------------------------------
+void vclog(const char *fmt, ...)
+{
+    FILE *f = std::fopen("/tmp/RetroCaptureVCam.log", "a");
+    if (f == nullptr) return;
+    std::fprintf(f, "[pid %d] ", getpid());
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
 
 // One global instance — DAL only ever instantiates one plug-in
 // per loaded bundle. Keeps the C-callback world simple (no per-
@@ -203,11 +230,10 @@ bool enqueueFrame(CVPixelBufferRef pb)
 void frameThreadProc()
 {
     std::string err;
-    if (!g_plugin.reader.open(err))
-    {
-        // Host isn't writing yet — keep trying. The thread exits
-        // only when streamActive flips false.
-    }
+    const bool opened = g_plugin.reader.open(err);
+    vclog("frameThread start: reader.open=%d (%s)",
+          opened ? 1 : 0, opened ? "ok" : err.c_str());
+    bool loggedFirstFrame = false;
 
     while (g_plugin.streamActive.load())
     {
@@ -245,6 +271,15 @@ void frameThreadProc()
             static_cast<int>(fh.width)  != kStreamWidth ||
             static_cast<int>(fh.height) != kStreamHeight)
         {
+            if (!loggedFirstFrame)
+            {
+                vclog("frameThread: got frame but mismatch "
+                      "(fmt=%u %ux%u; want fmt=%u %dx%d) — skipping",
+                      fh.pixelFormat, fh.width, fh.height,
+                      retrocapture::virtcam_ipc::kPixelFormatRGB24,
+                      kStreamWidth, kStreamHeight);
+                loggedFirstFrame = true;
+            }
             continue;
         }
 
@@ -257,6 +292,12 @@ void frameThreadProc()
         CFRelease(pb);
         if (ok)
         {
+            if (!loggedFirstFrame)
+            {
+                vclog("frameThread: first frame enqueued OK (%dx%d)",
+                      kStreamWidth, kStreamHeight);
+                loggedFirstFrame = true;
+            }
             ++g_plugin.frameSequence;
         }
     }
@@ -550,6 +591,17 @@ OSStatus getData(CMIOObjectID objectID,
             return copyCFType(g_plugin.streamClock, cap, used, out);
 
         default:
+            // Log only misses on OUR device/stream — a miss there can
+            // be why a consumer rejects the device. System-object
+            // misses are normal and would just spam.
+            if (isDevice || isStream)
+            {
+                const uint32_t s = addr->mSelector;
+                vclog("getData MISS on %s: selector '%c%c%c%c'",
+                      isDevice ? "device" : "stream",
+                      (char)((s >> 24) & 0xff), (char)((s >> 16) & 0xff),
+                      (char)((s >> 8) & 0xff), (char)(s & 0xff));
+            }
             return kCMIOHardwareUnknownPropertyError;
     }
 }
@@ -598,6 +650,7 @@ ULONG cbRelease(void *self)
 
 OSStatus cbInitialize(CMIOHardwarePlugInRef /*self*/)
 {
+    vclog("cbInitialize called");
     return noErr;
 }
 
@@ -605,6 +658,7 @@ OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef self,
                                   CMIOObjectID objectID)
 {
     g_plugin.pluginID = objectID;
+    vclog("cbInitializeWithObjectID: pluginID=%u", (unsigned)objectID);
 
     // Mint the Device as a child of the system object, then the
     // Stream as a child of the Device. CMIOObjectCreate registers
@@ -613,12 +667,16 @@ OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef self,
     // the device and, drilling in, its stream.
     OSStatus err = CMIOObjectCreate(self, kCMIOObjectSystemObject,
                                     kCMIODeviceClassID, &g_plugin.deviceID);
+    vclog("  CMIOObjectCreate(device) err=%d id=%u",
+          (int)err, (unsigned)g_plugin.deviceID);
     if (err != noErr)
     {
         return err;
     }
     err = CMIOObjectCreate(self, g_plugin.deviceID,
                            kCMIOStreamClassID, &g_plugin.streamID);
+    vclog("  CMIOObjectCreate(stream) err=%d id=%u",
+          (int)err, (unsigned)g_plugin.streamID);
     if (err != noErr)
     {
         return err;
@@ -626,7 +684,7 @@ OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef self,
 
     // Stream clock — paces playback for the consumer. minimum time
     // between getTime calls = one frame; light rate smoothing.
-    CMIOStreamClockCreate(
+    OSStatus clkErr = CMIOStreamClockCreate(
         kCFAllocatorDefault,
         CFSTR("RetroCaptureVCamClock"),
         /*sourceIdentifier=*/&g_plugin,            // any unique ptr
@@ -634,13 +692,16 @@ OSStatus cbInitializeWithObjectID(CMIOHardwarePlugInRef self,
         /*numberOfEventsForRateSmoothing=*/10,
         /*numberOfAveragesForRateSmoothing=*/4,
         &g_plugin.streamClock);
+    vclog("  CMIOStreamClockCreate err=%d clock=%p",
+          (int)clkErr, (void *)g_plugin.streamClock);
 
     // Publish: device under the system object, stream under the
     // device. This is what makes them visible to consumers.
-    CMIOObjectsPublishedAndDied(self, kCMIOObjectSystemObject,
+    OSStatus pubD = CMIOObjectsPublishedAndDied(self, kCMIOObjectSystemObject,
                                 1, &g_plugin.deviceID, 0, nullptr);
-    CMIOObjectsPublishedAndDied(self, g_plugin.deviceID,
+    OSStatus pubS = CMIOObjectsPublishedAndDied(self, g_plugin.deviceID,
                                 1, &g_plugin.streamID, 0, nullptr);
+    vclog("  published device(err=%d) stream(err=%d)", (int)pubD, (int)pubS);
     return noErr;
 }
 
@@ -722,6 +783,7 @@ OSStatus cbDeviceResume (CMIOHardwarePlugInRef /*self*/, CMIODeviceID /*d*/) { r
 OSStatus cbDeviceStartStream(CMIOHardwarePlugInRef /*self*/,
                              CMIODeviceID /*d*/, CMIOStreamID /*s*/)
 {
+    vclog("cbDeviceStartStream");
     if (g_plugin.streamActive.exchange(true))
     {
         return noErr;
@@ -762,6 +824,7 @@ OSStatus cbStreamCopyBufferQueue(CMIOHardwarePlugInRef /*self*/,
                                  void *refCon,
                                  CMSimpleQueueRef *queue)
 {
+    vclog("cbStreamCopyBufferQueue");
     if (g_plugin.bufferQueue == nullptr)
     {
         // 30 entries = 1s of headroom at 30fps. If the consumer
@@ -833,7 +896,9 @@ extern "C" __attribute__((visibility("default")))
 void *PluginCreateInstance(CFAllocatorRef /*allocator*/,
                            CFUUIDRef       requestedTypeUUID)
 {
-    if (!CFEqual(requestedTypeUUID, kCMIOHardwarePlugInTypeID))
+    const bool typeMatch = CFEqual(requestedTypeUUID, kCMIOHardwarePlugInTypeID);
+    vclog("PluginCreateInstance called, typeMatch=%d", typeMatch ? 1 : 0);
+    if (!typeMatch)
     {
         return nullptr;
     }
