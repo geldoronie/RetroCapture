@@ -32,6 +32,7 @@
 #elif defined(__APPLE__)
 #  include "../output/VirtualCameraOutputMac.h"
 #endif
+#include "../tray/ISystemTray.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -3398,6 +3399,224 @@ void Application::restoreAudioDeviceConnections()
     // step to restore. Kept as a no-op for callers that still invoke it.
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// #86 — system tray + hide-to-tray
+// ─────────────────────────────────────────────────────────────────────
+namespace {
+// Open a URL in the user's default browser. Mirrors the pattern used
+// by UIRecordings / UICredits.
+void openUrlInBrowser(const std::string &url)
+{
+#if defined(PLATFORM_LINUX)
+    std::string cmd = "xdg-open \"" + url + "\" &";
+    if (std::system(cmd.c_str()) != 0) { /* best-effort */ }
+#elif defined(PLATFORM_MACOS)
+    std::string cmd = "open \"" + url + "\" &";
+    if (std::system(cmd.c_str()) != 0) { /* best-effort */ }
+#elif defined(_WIN32)
+    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOW);
+#endif
+}
+} // namespace
+
+void Application::setupSystemTray()
+{
+    using retrocapture::ISystemTray;
+    using retrocapture::TrayMenuItem;
+
+    m_tray = retrocapture::createSystemTray();
+
+    const bool wantTray = m_ui && m_ui->getTrayEnabled();
+
+    // Window close-button policy. Installed regardless of tray host:
+    //  - tray on + minimize-on-close + a real tray host → hide.
+    //  - otherwise → real quit (so a user with no tray host isn't
+    //    trapped with a close button that does nothing).
+    m_window->setCloseCallback([this]()
+    {
+        const bool minimize = m_ui && m_ui->getTrayEnabled() &&
+                              m_ui->getTrayMinimizeOnClose() && m_trayActive;
+        if (minimize)
+        {
+            m_window->hide();
+            refreshTrayMenu();
+        }
+        else
+        {
+            m_window->requestClose();
+        }
+    });
+
+    if (!wantTray)
+    {
+        LOG_INFO("System tray disabled in preferences");
+        return;
+    }
+
+    // The Linux backend loads our branded logo.png and serves it as
+    // the SNI IconPixmap (the actual visual). The name passed here is
+    // only the themed-icon fallback used if that asset can't be found
+    // at runtime — "camera-video" exists in every icon theme.
+    if (!m_tray->start("camera-video", "RetroCapture"))
+    {
+        LOG_WARN("System tray: no tray host available — the close "
+                 "button will quit the application. Install an "
+                 "AppIndicator/StatusNotifier host to enable "
+                 "minimize-to-tray.");
+        m_trayActive = false;
+        return;
+    }
+    m_trayActive = true;
+
+    // Left-click activation: toggle window visibility.
+    m_tray->setOnActivate([this]()
+    {
+        if (m_window->isVisible()) m_window->hide();
+        else                       m_window->show();
+        refreshTrayMenu();
+    });
+
+    refreshTrayMenu();
+
+    // Start-minimized: launch straight to the tray.
+    if (m_ui->getTrayStartMinimized())
+    {
+        m_window->hide();
+    }
+
+    LOG_INFO("System tray active");
+}
+
+void Application::refreshTrayMenu()
+{
+    using retrocapture::TrayMenuItem;
+    if (!m_tray || !m_trayActive) return;
+
+    const bool streaming   = m_ui && m_ui->getStreamingActive();
+    const bool recording   = m_ui && m_ui->getRecordingActive();
+
+    // Tray notifications (#86) — fire on streaming/recording edges,
+    // gated by the user preference. Runs before the menu-signature
+    // early-return below so a visibility-only change doesn't suppress
+    // it. The first pass just seeds the previous-state baseline.
+    if (m_notifyInit && m_ui && m_ui->getTrayNotifications())
+    {
+        if (streaming != m_notifyPrevStreaming)
+        {
+            m_tray->notify("RetroCapture",
+                           streaming ? "Streaming started" : "Streaming stopped");
+        }
+        if (recording != m_notifyPrevRecording)
+        {
+            if (recording)
+            {
+                m_tray->notify("RetroCapture", "Recording started");
+            }
+            else
+            {
+                const std::string fn = m_ui->getRecordingFilename();
+                m_tray->notify("RetroCapture",
+                               fn.empty() ? "Recording saved"
+                                          : ("Recording saved: " + fn));
+            }
+        }
+    }
+    m_notifyPrevStreaming = streaming;
+    m_notifyPrevRecording = recording;
+    m_notifyInit = true;
+
+    const bool hasSource    = m_ui && !m_ui->getCurrentDevice().empty();
+    const bool clientMode  = m_ui && m_ui->isRemoteSource() && hasSource;
+    const bool windowShown = m_window && m_window->isVisible();
+
+    // Only re-push when something the menu reflects actually changed —
+    // updateMenu() emits a D-Bus signal on Linux, not worth doing every
+    // frame.
+    const uint32_t sig =
+        (streaming ? 1u : 0u) | (recording ? 2u : 0u) |
+        (hasSource ? 4u : 0u) | (clientMode ? 8u : 0u) |
+        (windowShown ? 16u : 0u);
+    if (m_trayMenuSig == sig && m_trayMenuBuilt) return;
+    m_trayMenuSig   = sig;
+    m_trayMenuBuilt = true;
+
+    std::vector<TrayMenuItem> items;
+
+    // Streaming toggle — hidden in client mode (nothing local to
+    // broadcast), disabled until a source is configured.
+    if (!clientMode)
+    {
+        TrayMenuItem stream;
+        stream.id      = "streaming";
+        stream.label   = streaming ? "Stop Streaming" : "Start Streaming";
+        stream.enabled = hasSource;
+        stream.onClick = [this]()
+        {
+            if (m_ui) m_ui->triggerStreamingStartStop(!m_ui->getStreamingActive());
+        };
+        items.push_back(std::move(stream));
+    }
+
+    // Recording toggle — available in client mode too (records whatever
+    // is in the framebuffer).
+    {
+        TrayMenuItem rec;
+        rec.id      = "recording";
+        rec.label   = recording ? "Stop Recording" : "Start Recording";
+        rec.enabled = true;
+        rec.onClick = [this]()
+        {
+            if (m_ui) m_ui->triggerRecordingStartStop(!m_ui->getRecordingActive());
+        };
+        items.push_back(std::move(rec));
+    }
+
+    // Open Web Portal.
+    {
+        TrayMenuItem portal;
+        portal.id      = "webportal";
+        portal.label   = "Open Web Portal";
+        portal.enabled = m_ui && m_ui->getWebPortalEnabled();
+        portal.onClick = [this]()
+        {
+            const uint16_t port = m_ui ? m_ui->getStreamingPort() : 8080;
+            openUrlInBrowser("http://localhost:" + std::to_string(port) + "/");
+        };
+        items.push_back(std::move(portal));
+    }
+
+    { TrayMenuItem sep; sep.type = TrayMenuItem::Type::Separator; sep.id = "sep1"; items.push_back(std::move(sep)); }
+
+    // Show / Hide window.
+    {
+        TrayMenuItem vis;
+        vis.id      = "visibility";
+        vis.label   = windowShown ? "Hide Window" : "Show Window";
+        vis.onClick = [this]()
+        {
+            if (m_window->isVisible()) m_window->hide();
+            else                       m_window->show();
+            refreshTrayMenu();
+        };
+        items.push_back(std::move(vis));
+    }
+
+    { TrayMenuItem sep; sep.type = TrayMenuItem::Type::Separator; sep.id = "sep2"; items.push_back(std::move(sep)); }
+
+    // Quit — set shouldClose so the main loop exits and shutdown()
+    // runs the orderly teardown (finalize recording, leave directory,
+    // join chat, release virtcam).
+    {
+        TrayMenuItem quit;
+        quit.id      = "quit";
+        quit.label   = "Quit";
+        quit.onClick = [this]() { m_window->requestClose(); };
+        items.push_back(std::move(quit));
+    }
+
+    m_tray->setMenu(items);
+}
+
 void Application::run()
 {
     if (!m_initialized)
@@ -3407,6 +3626,10 @@ void Application::run()
     }
 
     LOG_INFO("Starting main loop...");
+
+    // #86 — bring up the system tray + hide-to-tray wiring now that
+    // the window, UI and all pipelines are initialised.
+    setupSystemTray();
 
     // IMPORTANT: Ensure viewport is updated before first frame
     // This is especially important when window is created in fullscreen
@@ -3449,11 +3672,35 @@ void Application::run()
         updateCursorVisibility();
 
         m_window->pollEvents();
-        
+
+        // #86 — drain tray events (menu clicks / activation) on this
+        // thread, then refresh the menu labels/enabled if state moved.
+        if (m_tray)
+        {
+            m_tray->pump();
+            refreshTrayMenu();
+        }
+
         // Check again after polling events (window may have been invalidated)
         if (m_window->shouldClose())
         {
             break;
+        }
+
+        // Hide-to-tray pacing (#86): while the window is hidden,
+        // swapBuffers() is a no-op, so there's no vsync/compositor
+        // pacing to lean on and the loop would spin at 100% CPU.
+        // Sleep a frame's worth here so the capture/shader/streaming/
+        // recording/virtcam pipelines keep running at a sane rate
+        // while we're backgrounded. ~60 Hz upper bound; lower-FPS
+        // capture just sees more no-new-frame polls, which is cheap.
+        if (m_window && !m_window->isVisible())
+        {
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+            usleep(16000);
+#else
+            Sleep(16);
+#endif
         }
 
         // Process pending preset applications (from API threads)
@@ -5140,6 +5387,14 @@ void Application::shutdown()
     }
 
     LOG_INFO("Shutting down Application...");
+
+    // #86 — tear down the tray icon early so it disappears the moment
+    // the user picks Quit, before the (slower) pipeline teardown runs.
+    if (m_tray)
+    {
+        m_tray->stop();
+        m_tray.reset();
+    }
 
     if (m_shaderSourceTexture != 0)
     {

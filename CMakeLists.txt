@@ -163,6 +163,16 @@ endif()
 if(PLATFORM_LINUX)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PNG REQUIRED libpng)
+    # #86 system tray — StatusNotifierItem over D-Bus. Optional: if
+    # libdbus-1 isn't present the tray backend compiles out and the
+    # app falls back to the no-op stub (close button quits).
+    pkg_check_modules(DBUS dbus-1)
+    if(DBUS_FOUND)
+        message(STATUS "libdbus-1 found — Linux system-tray backend ENABLED")
+    else()
+        message(WARNING "libdbus-1 not found — Linux system-tray disabled "
+                        "(install libdbus-1-dev / dbus). Close button will quit.")
+    endif()
 elseif(PLATFORM_MACOS)
     # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
     find_package(PkgConfig QUIET)
@@ -533,6 +543,12 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
+    # #86 tray: the Linux SNI backend needs libdbus; drop it when absent.
+    if(NOT DBUS_FOUND)
+        list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$")
+    endif()
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayWindows\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
@@ -555,6 +571,8 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$") # #86 Linux-only tray backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")    # #86 macOS-only tray backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
@@ -588,6 +606,8 @@ elseif(PLATFORM_MACOS)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$")   # #86 Linux-only tray backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayWindows\\.(cpp|h)$") # #86 Windows-only tray backend
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
@@ -653,6 +673,26 @@ elseif(PLATFORM_WINDOWS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_WINDOWS)
 elseif(PLATFORM_MACOS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
+endif()
+
+# #86 — Linux system-tray backend (StatusNotifierItem over D-Bus).
+# Enable the backend + link libdbus only when it was found; otherwise
+# the SystemTrayLinux.cpp source was already filtered out above and the
+# no-op stub stands in.
+if(PLATFORM_LINUX AND DBUS_FOUND)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_LINUX)
+    target_include_directories(retrocapture PRIVATE ${DBUS_INCLUDE_DIRS})
+    target_link_libraries(retrocapture PRIVATE ${DBUS_LIBRARIES})
+elseif(PLATFORM_WINDOWS)
+    # Shell_NotifyIcon + TrackPopupMenu — shell32/user32/gdi32 are part
+    # of the standard Win32 link set (MXE links them by default, but be
+    # explicit).
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_WINDOWS)
+    target_link_libraries(retrocapture PRIVATE shell32 user32 gdi32)
+elseif(PLATFORM_MACOS)
+    # NSStatusItem lives in AppKit.
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_MACOS)
+    target_link_libraries(retrocapture PRIVATE "-framework AppKit")
 endif()
 
 # Propagar versão do projeto pro código (usado pelo endpoint /meta e afins)

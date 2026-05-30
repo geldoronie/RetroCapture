@@ -71,6 +71,34 @@ had via `AudioPlaybackPulse`.
 
 ### Added
 
+- **System tray + minimize-to-tray for background operation** (#86) —
+  RetroCapture can now hide its window and keep every pipeline
+  (capture, shader, streaming, recording, virtual camera, chat)
+  running in the background while a tray icon stays in the system
+  tray. A new cross-platform `ISystemTray` abstraction (`src/tray/`)
+  with native backends:
+  - **Linux**: StatusNotifierItem over D-Bus (no GTK dep — drives
+    libdbus directly). Native on KDE/Plasma, XFCE, Cinnamon, MATE;
+    GNOME needs the AppIndicator extension. Serves the bundled logo
+    as the SNI IconPixmap so the branded icon shows on any desktop
+    without a themed-icon install.
+  - **Windows**: `Shell_NotifyIcon` + `TrackPopupMenu` (no new deps).
+  - **macOS**: `NSStatusItem` + `NSMenu`.
+  - Context menu: Start/Stop Streaming, Start/Stop Recording, Open
+    Web Portal, Show/Hide Window, and **Quit** (orderly teardown).
+    Items grey out when the matching pipeline isn't ready.
+  - The window close button minimizes to tray (configurable) instead
+    of quitting; the render loop skips the viewport swap while hidden
+    (a hidden window's swap can block on a parked compositor vsync)
+    and paces itself so the pipelines keep feeding consumers.
+  - Falls back cleanly to quit-on-close when the desktop has no tray
+    host, with a one-line warning.
+  - Desktop notifications on streaming/recording start/stop/saved,
+    gated by a preference — native per platform (freedesktop
+    Notifications over D-Bus on Linux, Shell_NotifyIcon balloon on
+    Windows, NSUserNotification on macOS), no extra deps.
+  - New Preferences → System tray section: show tray icon, minimize
+    on close, start minimized, show notifications (all persisted).
 - **macOS x86_64 port — first working build of host + client modes**
   (#18). Cherry-picked the older `18-port-to-macos-13-or-later-x86_64`
   branch's backend files onto current 0.8.0-alpha and rebuilt the

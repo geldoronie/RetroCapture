@@ -2706,6 +2706,11 @@ void UIManager::loadConfig()
             auto &prefs = config["preferences"];
             if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
             if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
+            // #86 system tray / background operation.
+            if (prefs.contains("trayEnabled"))         m_trayEnabled         = prefs["trayEnabled"].get<bool>();
+            if (prefs.contains("trayMinimizeOnClose")) m_trayMinimizeOnClose = prefs["trayMinimizeOnClose"].get<bool>();
+            if (prefs.contains("trayStartMinimized"))  m_trayStartMinimized  = prefs["trayStartMinimized"].get<bool>();
+            if (prefs.contains("trayNotifications"))   m_trayNotifications   = prefs["trayNotifications"].get<bool>();
             // #68 — Quick actions widget visibility persists. Default
             // true so users discover the widget on first launch; once
             // they toggle it off via View, the choice survives across
@@ -3166,6 +3171,10 @@ void UIManager::saveConfig()
         config["preferences"] = {
             {"language",        m_language},
             {"startFullscreen", m_startFullscreen},
+            {"trayEnabled",         m_trayEnabled},
+            {"trayMinimizeOnClose", m_trayMinimizeOnClose},
+            {"trayStartMinimized",  m_trayStartMinimized},
+            {"trayNotifications",   m_trayNotifications},
             {"quickActionsVisible",
              m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
                                   : m_quickActionsVisible},

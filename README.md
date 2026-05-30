@@ -294,6 +294,33 @@ See [`ssl/README.md`](ssl/README.md) for certificate generation.
 
 ---
 
+## Background operation
+
+RetroCapture can run in the background with its window hidden — handy
+when you've armed the virtual camera and just want it feeding OBS /
+Zoom / Discord all day, or you're hosting a stream and want the screen
+back.
+
+- A **system-tray icon** appears on launch (configurable). Right-click
+  it for quick actions — start/stop streaming, start/stop recording,
+  open the web portal, show/hide the window, and **quit**.
+- The window's **close button minimizes to the tray** by default
+  (toggle to quit-on-close under **Preferences → System tray**). While
+  hidden, capture, shaders, streaming, recording, the virtual camera
+  and chat all keep running — only the on-screen view is paused.
+- Left-click the tray icon to toggle the window.
+
+Platform notes:
+
+- **Linux** uses StatusNotifierItem (D-Bus). KDE/Plasma, XFCE, Cinnamon
+  and MATE support it natively; on GNOME install the *AppIndicator and
+  KStatusNotifierItem Support* extension. If your desktop has no tray
+  host, the icon won't show and the close button quits instead.
+- **Windows** and **macOS** use the native tray (`Shell_NotifyIcon` /
+  `NSStatusItem`).
+
+---
+
 ## Building
 
 > Production builds use the Docker scripts, which default to a portable
