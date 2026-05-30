@@ -183,6 +183,14 @@ private:
     uint32_t m_swsDstHeight = 0;
     int m_swsDstFormat = 0; // AVPixelFormat — invalidate sws ctx when destination format changes too
 
+    // Padded scratch for the sws_scale source. libswscale's AVX2 RGB
+    // fastpath reads a few SIMD chunks past the last row; if the
+    // caller's buffer is allocated exactly width*height*3 and ends on
+    // a page boundary that over-read segfaults. We copy the source in
+    // here with trailing padding so the over-read lands in allocated
+    // memory. See convertRGBToYUV.
+    std::vector<uint8_t> m_swsSrcPadded;
+
     // Timestamps de referência (primeiro frame/chunk) - apenas para referência
     int64_t m_firstVideoTimestampUs = 0;
     int64_t m_firstAudioTimestampUs = 0;
