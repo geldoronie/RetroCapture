@@ -53,15 +53,18 @@ const CFStringRef kModelUID =
 constexpr int   kStreamWidth      = 1280;
 constexpr int   kStreamHeight     = 720;
 constexpr int   kStreamFps        = 30;
-// kCVPixelFormatType_32BGRA (== 'BGRA' == 0x42475241). The most
-// widely-rendered uncompressed format across CMIO consumers. We
-// started with 24RGB (0x18) but it's poorly supported — the device
-// appeared but no consumer rendered an image. Spelled as the FourCC
-// literal so this header needn't drag in <CoreVideo/CVPixelBuffer.h>.
-// Byte order B,G,R,A — the host sink converts into this via
-// libswscale (AV_PIX_FMT_BGRA). A future iteration may add 2vuy
-// (kCVPixelFormatType_422YpCbCr8) for consumers that prefer YUV.
-constexpr uint32_t kStreamCVPixelFormat = 0x42475241u; // 'BGRA'
-constexpr uint32_t kStreamBytesPerPixel = 4u;
+// kCVPixelFormatType_422YpCbCr8 (== '2vuy' == 0x32767579), the
+// camera-native 4:2:2 YUV format (UYVY byte order). Real webcams
+// output this, and some consumers will only *activate* a capture
+// session for a camera-native format. Byte order matters: '2vuy'
+// is UYVY, fed from libswscale AV_PIX_FMT_UYVY422 on the host side
+// (NOT YUYV). Spelled as the FourCC literal so this header needn't
+// drag in <CoreVideo/CVPixelBuffer.h>.
+//   History: 24RGB showed the device but no image; 32BGRA was
+//   recognised (OBS showed the format) but the consumer still never
+//   started the stream. Trying 2vuy as the camera-native format.
+// 4:2:2 packs 2 bytes per pixel (one full Y per pixel, shared CbCr).
+constexpr uint32_t kStreamCVPixelFormat = 0x32767579u; // '2vuy'
+constexpr uint32_t kStreamBytesPerPixel = 2u;
 
 }} // namespace retrocapture::dal_plugin

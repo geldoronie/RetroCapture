@@ -6156,10 +6156,11 @@ void Application::syncVirtualCamera()
         return;
     }
 
-    // BGRA — must match the DAL plug-in's advertised
-    // kCVPixelFormatType_32BGRA. 24RGB (the first attempt) showed
-    // the device but no consumer rendered an image.
-    constexpr auto fmt = VirtualCameraOutputMac::PixelFormat::BGRA;
+    // UYVY — must match the DAL plug-in's advertised '2vuy'
+    // (kCVPixelFormatType_422YpCbCr8), the camera-native YUV format.
+    // History: 24RGB → device shown, no image; BGRA → format
+    // recognised but consumer never started the stream.
+    constexpr auto fmt = VirtualCameraOutputMac::PixelFormat::UYVY;
 
     if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputMac>();
 
@@ -6176,7 +6177,7 @@ void Application::syncVirtualCamera()
 
     char buf[160];
     std::snprintf(buf, sizeof(buf),
-                  "Publishing %ux%u BGRA to RetroCaptureVCam.plugin",
+                  "Publishing %ux%u UYVY to RetroCaptureVCam.plugin",
                   m_virtcam->outputWidth(),
                   m_virtcam->outputHeight());
     m_ui->setVirtcamStatusText(buf);

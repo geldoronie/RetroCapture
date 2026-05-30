@@ -264,10 +264,10 @@ void frameThreadProc()
             continue;
         }
 
-        // We only support BGRA today (matches kStreamCVPixelFormat).
-        // If the writer is in another format/geometry, skip — the
-        // consumer's screen will freeze on the last delivered frame.
-        if (fh.pixelFormat != retrocapture::virtcam_ipc::kPixelFormatBGRA ||
+        // We only support UYVY today (matches kStreamCVPixelFormat
+        // '2vuy'). If the writer is in another format/geometry, skip
+        // — the consumer's screen freezes on the last delivered frame.
+        if (fh.pixelFormat != retrocapture::virtcam_ipc::kPixelFormatUYVY ||
             static_cast<int>(fh.width)  != kStreamWidth ||
             static_cast<int>(fh.height) != kStreamHeight)
         {
@@ -276,7 +276,7 @@ void frameThreadProc()
                 vclog("frameThread: got frame but mismatch "
                       "(fmt=%u %ux%u; want fmt=%u %dx%d) — skipping",
                       fh.pixelFormat, fh.width, fh.height,
-                      retrocapture::virtcam_ipc::kPixelFormatBGRA,
+                      retrocapture::virtcam_ipc::kPixelFormatUYVY,
                       kStreamWidth, kStreamHeight);
                 loggedFirstFrame = true;
             }

@@ -60,6 +60,13 @@ constexpr uint32_t kPixelFormatYUYV  = 3u;
 // uncompressed format across CMIO consumers (24RGB, which we tried
 // first, is poorly supported and showed the device but no image).
 constexpr uint32_t kPixelFormatBGRA  = 4u;
+// UYVY (Cb Y0 Cr Y1) — the "camera native" 4:2:2 YUV layout, maps
+// 1:1 to macOS kCVPixelFormatType_422YpCbCr8 ('2vuy') and to
+// libswscale AV_PIX_FMT_UYVY422. NOTE the order: this is UYVY, not
+// the YUYV that kPixelFormatYUYV/AV_PIX_FMT_YUYV422 encode —
+// '2vuy' specifically wants UYVY, and mixing them up yields
+// scrambled colour.
+constexpr uint32_t kPixelFormatUYVY  = 5u;
 
 // Slot geometry — fixed so the filter can address slots without
 // computing offsets from runtime fields. `kSlotMaxBytes` is sized
