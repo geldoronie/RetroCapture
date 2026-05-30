@@ -25,6 +25,13 @@
 #include "../chat/ChatClient.h"
 #include "../identity/ChatIdentity.h"
 #include "../identity/OwnedRooms.h"
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"
+#elif defined(_WIN32)
+#  include "../output/VirtualCameraOutputWin.h"
+#elif defined(__APPLE__)
+#  include "../output/VirtualCameraOutputMac.h"
+#endif
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -3429,6 +3436,9 @@ void Application::run()
         // transition is needed (just compares two booleans and a few
         // strings).
         syncDirectoryClient();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+        syncVirtualCamera();
+#endif
         // Cursor visibility tracks BOTH UIManager::isVisible() and the
         // OSD overlay (#68). The setOnVisibilityChanged callback only
         // fires on F12 toggles — toggling the quick-actions widget via
@@ -4176,7 +4186,11 @@ void Application::run()
             // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
-                                    (m_recordingManager && m_recordingManager->isRecording());
+                                    (m_recordingManager && m_recordingManager->isRecording())
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                    || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                    ;
 
             // Log para debug: verificar tamanho da textura final antes da captura
             static int finalTextureSizeLogCount = 0;
@@ -4249,7 +4263,11 @@ void Application::run()
                         // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
                         // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
                         bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
-                                                (m_streamManager && m_streamManager->isActive());
+                                                (m_streamManager && m_streamManager->isActive())
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                                || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                                ;
                         
                         if (needsFrameCapture)
                         {
@@ -4318,8 +4336,91 @@ void Application::run()
                             }
                         }
                         
+                        // #85 — Apply Image-tab adjustments (brightness,
+                        // contrast) to the capture frame. The window
+                        // render path at the bottom of this loop runs
+                        // them via m_renderer->renderTexture, but the
+                        // texture we'd otherwise attach here is the
+                        // pre-adjustment finalTexture. Render it once
+                        // more into a side framebuffer with the
+                        // adjustments baked in, then capture from THAT.
+                        // Single extra render pass per frame; the
+                        // texture is RGBA so the downstream readback
+                        // always pulls 4 bpp.
+                        //
+                        // Without this, virtcam consumers + recordings
+                        // + streamed frames all reflect the un-adjusted
+                        // image — user tweaks brightness expecting it
+                        // to land in OBS and it doesn't.
+                        static GLuint postImageFBO     = 0;
+                        static GLuint postImageTex     = 0;
+                        static uint32_t postImageW     = 0;
+                        static uint32_t postImageH     = 0;
+                        const bool postImageActive =
+                            (m_brightness != 1.0f) || (m_contrast != 1.0f);
+
+                        GLuint fboTextureToAttach = textureToCapture;
+                        if (postImageActive)
+                        {
+                            if (postImageFBO == 0 || postImageTex == 0 ||
+                                postImageW != captureTextureWidth ||
+                                postImageH != captureTextureHeight)
+                            {
+                                if (postImageFBO) glDeleteFramebuffers(1, &postImageFBO);
+                                if (postImageTex) glDeleteTextures(1, &postImageTex);
+                                postImageFBO = 0; postImageTex = 0;
+                                glGenTextures(1, &postImageTex);
+                                glBindTexture(GL_TEXTURE_2D, postImageTex);
+                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                                             captureTextureWidth,
+                                             captureTextureHeight, 0,
+                                             GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                                glGenFramebuffers(1, &postImageFBO);
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                                       GL_COLOR_ATTACHMENT0,
+                                                       GL_TEXTURE_2D, postImageTex, 0);
+                                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+                                    GL_FRAMEBUFFER_COMPLETE)
+                                {
+                                    glDeleteFramebuffers(1, &postImageFBO);
+                                    glDeleteTextures(1, &postImageTex);
+                                    postImageFBO = 0; postImageTex = 0;
+                                }
+                                else
+                                {
+                                    postImageW = captureTextureWidth;
+                                    postImageH = captureTextureHeight;
+                                }
+                            }
+                            if (postImageFBO && postImageTex)
+                            {
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glViewport(0, 0, postImageW, postImageH);
+                                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                                glClear(GL_COLOR_BUFFER_BIT);
+                                m_renderer->renderTexture(
+                                    textureToCapture,
+                                    postImageW, postImageH,
+                                    /*flipY=*/false, /*enableBlend=*/false,
+                                    m_brightness, m_contrast,
+                                    /*maintainAspect=*/false,
+                                    captureTextureWidth, captureTextureHeight,
+                                    /*preserveViewport=*/true);
+                                fboTextureToAttach = postImageTex;
+                                // Re-bind the original captureFBO so the
+                                // attach-and-read below operates on it
+                                // unchanged.
+                                glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+                            }
+                        }
+
                         // Anexar a textura escolhida ao FBO
-                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureToCapture, 0);
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTextureToAttach, 0);
 
                             // Verificar se o FBO está completo
                             GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -4388,8 +4489,14 @@ void Application::run()
                                 // textureToCapture is the source RGB texture, so treat as RGB.
                                 const bool pipelineEnabled = (!m_ui || m_ui->getShaderPipelineEnabled());
                                 bool isShaderTexture = (pipelineEnabled && m_shaderEngine && m_shaderEngine->isShaderActive());
-                                GLenum readFormat = isShaderTexture ? GL_RGBA : GL_RGB;
-                                uint32_t bytesPerPixel = isShaderTexture ? 4 : 3;
+                                // #85 — When the post-image render pass
+                                // ran above, what's attached to captureFBO
+                                // is RGBA regardless of source. Otherwise
+                                // keep the original RGB/RGBA decision.
+                                const bool readAsRgba = isShaderTexture ||
+                                    (postImageActive && fboTextureToAttach == postImageTex);
+                                GLenum readFormat = readAsRgba ? GL_RGBA : GL_RGB;
+                                uint32_t bytesPerPixel = readAsRgba ? 4 : 3;
 
                                 static int formatLogCount = 0;
                                 if (formatLogCount++ < 3)
@@ -4478,6 +4585,23 @@ void Application::run()
                                     frameData.resize(rgbDataSize);
                                     frameDataReady = m_pboManager->getReadData(
                                         frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                    // #85 — Virtual camera also gets fed from
+                                    // the RGB path (no-shader / direct capture
+                                    // passthrough). Without this branch the
+                                    // consumer sees uninitialised buffer
+                                    // contents (black / static) whenever a
+                                    // shader is off, which was the symptom
+                                    // user hit on first end-to-end test.
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                    if (frameDataReady && m_virtcam &&
+                                        m_virtcam->isRunning())
+                                    {
+                                        m_virtcam->pushFrame(
+                                            frameData.data(),
+                                            textureWidth, textureHeight,
+                                            VirtcamSinkT::SourceFormat::RGB);
+                                    }
+#endif
                                 }
                                 else
                                 {
@@ -4488,6 +4612,20 @@ void Application::run()
                                                                   textureWidth, textureHeight,
                                                                   /*flipY=*/false))
                                     {
+                                        // #85 — Virtual camera piggybacks on
+                                        // this RGBA readback (shader path).
+                                        // Push happens BEFORE the RGB strip
+                                        // below so the sink keeps the alpha
+                                        // channel intact (sws RGBA → YUYV).
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                        if (m_virtcam && m_virtcam->isRunning())
+                                        {
+                                            m_virtcam->pushFrame(
+                                                rgbaData.data(),
+                                                textureWidth, textureHeight,
+                                                VirtcamSinkT::SourceFormat::RGBA);
+                                        }
+#endif
                                         frameData.resize(rgbDataSize);
                                         for (uint32_t row = 0; row < textureHeight; row++)
                                         {
@@ -5773,6 +5911,279 @@ void Application::applyPendingRemoteMeta()
 // Always cheap when there's no transition; just compares the toggle
 // against the current state.
 // ─────────────────────────────────────────────────────────────────────
+#if defined(__linux__)
+// #85 — Virtual camera (v4l2loopback) lifecycle. Mirrors the
+// directory-client sync's "reconcile UI toggle with sink state"
+// pattern. Cheap when nothing changes; on a toggle / device /
+// dims transition does a stop + start. Status text is written
+// back into UIManager for the configuration window to display.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    // Synchronous "stop now" handshake (UI module-remove flow).
+    // When the UI fires the request, force the sink down THIS
+    // tick and post a notice the UI's worker spins on before
+    // running pkexec rmmod. Without this, rmmod fails with
+    // EBUSY because RetroCapture is still holding /dev/videoN
+    // through m_virtcam's fd.
+    if (m_ui->consumeVirtcamStopRequest())
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        m_ui->setVirtcamStopped(true);
+    }
+
+    const bool        enabled = m_ui->getVirtcamEnabled();
+    const std::string &cfgDev = m_ui->getVirtcamDevicePath();
+    const std::string &fmtStr = m_ui->getVirtcamPixelFormat();
+    const VirtualCameraOutput::PixelFormat fmt =
+        (fmtStr == "rgb24") ? VirtualCameraOutput::PixelFormat::RGB24
+                            : VirtualCameraOutput::PixelFormat::YUYV;
+
+    // Resolve "0 = follow upstream" sentinels. Cascade:
+    //   user-configured override (virtcam.outputWidth)
+    //     → shader/image output (outputWidth, only set when the
+    //       user picked an output resolution under Image)
+    //     → raw capture dims (captureWidth, always populated as
+    //       soon as a source is open).
+    // The shader-output fallback alone wasn't enough — many
+    // users don't configure an output resolution, so getOutputWidth
+    // sits at 0 forever and we silently never started. Capture
+    // dims is the right last-resort: it tracks the actual frame
+    // size we're feeding through the pipeline.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+    uint32_t f = m_ui->getVirtcamOutputFps();
+    if (f == 0) f = m_ui->getCaptureFps();
+    if (f == 0) f = 30; // cosmetic only; loopback doesn't enforce pacing
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (w == 0 || h == 0)
+    {
+        // Truly nothing to push yet — no source open and no
+        // override configured. Surface the wait so the user
+        // doesn't think the click did nothing.
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // Resolve device path: empty config = auto-pick first loopback.
+    std::string devicePath = cfgDev;
+    if (devicePath.empty())
+    {
+        const auto devices = VirtualCameraOutput::enumerateDevices();
+        if (devices.empty())
+        {
+            m_ui->setVirtcamErrorText(
+                "No v4l2loopback device. Run "
+                "`sudo modprobe v4l2loopback exclusive_caps=1`.");
+            return;
+        }
+        devicePath = devices.front().path;
+    }
+
+    // Lazy construct the sink.
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutput>();
+
+    std::string err;
+    if (!m_virtcam->start(devicePath, w, h, f, fmt, err))
+    {
+        m_ui->setVirtcamErrorText(err);
+        return;
+    }
+    m_ui->setVirtcamErrorText("");
+    // Status line for the configuration window.
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u %s to %s",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight(),
+                  (fmt == VirtualCameraOutput::PixelFormat::YUYV ? "YUYV" : "RGB24"),
+                  devicePath.c_str());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __linux__
+
+#if defined(_WIN32)
+// #85 Phase 2 — Windows virtual camera lifecycle. Simpler than the
+// Linux side: there's exactly one virtual device (the
+// RetroCaptureVCam.dll filter), no device picker. Driver state is
+// determined by whether the DLL is registered. The sink writes
+// frames to shared memory; the DirectShow filter inside every
+// consumer process reads them out.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool enabled = m_ui->getVirtcamEnabled();
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (!VirtualCameraOutputWin::isFilterDllRegistered())
+    {
+        m_ui->setVirtcamErrorText(
+            "RetroCaptureVCam.dll is not registered. Run the "
+            "installer (or `regsvr32 RetroCaptureVCam.dll` as admin) "
+            "to expose the virtual camera to consumers.");
+        return;
+    }
+
+    // Resolve dims using the same cascade as Linux: UI override →
+    // shader/image output → capture dims. Filter side advertises a
+    // fixed set (640x480, 1280x720, 1920x1080) so any sink dims
+    // outside that will fall back to the frozen frame in the
+    // filter. UI surfaces this caveat next to the resolution field.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+
+    if (w == 0 || h == 0)
+    {
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // Filter currently only advertises RGB24; offer it as the
+    // wire format regardless of what the UI cached. Once the
+    // filter learns RGBA / YUYV we can route the UI's choice
+    // through here.
+    constexpr auto fmt = VirtualCameraOutputWin::PixelFormat::RGB24;
+
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputWin>();
+
+    if (!m_virtcam->isRunning())
+    {
+        std::string err;
+        if (!m_virtcam->start(w, h, fmt, err))
+        {
+            m_ui->setVirtcamErrorText(err);
+            return;
+        }
+    }
+    m_ui->setVirtcamErrorText("");
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u RGB24 to RetroCaptureVCam.dll",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // _WIN32
+
+#if defined(__APPLE__)
+// #85 macOS — virtual camera lifecycle. Mirrors the Windows path:
+// single device (the CoreMediaIO DAL plug-in at
+// /Library/CoreMediaIO/Plug-Ins/DAL/RetroCaptureVCam.plugin), no
+// device picker. The host writes frames into POSIX shm; the
+// plug-in inside every consumer process reads them.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool enabled = m_ui->getVirtcamEnabled();
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (!VirtualCameraOutputMac::isPluginInstalled())
+    {
+        m_ui->setVirtcamErrorText(
+            "RetroCaptureVCam.plugin is not installed in "
+            "/Library/CoreMediaIO/Plug-Ins/DAL/. Run the "
+            "install-virtcam.sh helper (it copies the bundle "
+            "from the .app and requires sudo).");
+        return;
+    }
+
+    // Resolve dims using the same cascade as Linux/Windows: UI
+    // override → shader/image output → capture dims. The DAL
+    // plug-in currently only advertises one fixed format (RGB24
+    // @ 1280x720) so anything wildly off-spec will fall back to
+    // a frozen frame on the consumer side.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+
+    if (w == 0 || h == 0)
+    {
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // UYVY — must match the DAL plug-in's advertised '2vuy'
+    // (kCVPixelFormatType_422YpCbCr8), the camera-native YUV format.
+    // History: 24RGB → device shown, no image; BGRA → format
+    // recognised but consumer never started the stream.
+    constexpr auto fmt = VirtualCameraOutputMac::PixelFormat::UYVY;
+
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputMac>();
+
+    if (!m_virtcam->isRunning())
+    {
+        std::string err;
+        if (!m_virtcam->start(w, h, fmt, err))
+        {
+            m_ui->setVirtcamErrorText(err);
+            return;
+        }
+    }
+    m_ui->setVirtcamErrorText("");
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u UYVY to RetroCaptureVCam.plugin",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __APPLE__
+
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;

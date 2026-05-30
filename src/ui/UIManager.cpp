@@ -3,6 +3,9 @@
 #include "UIConfigurationShader.h"
 #include "UIConfigurationImage.h"
 #include "UIConfigurationStreaming.h"
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+#  include "UIConfigurationVirtualCamera.h"
+#endif
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
 #if defined(__linux__) || defined(__APPLE__)
@@ -70,6 +73,9 @@ UIManager::~UIManager()
     m_shaderWindow.reset();
     m_imageWindow.reset();
     m_streamingWindow.reset();
+#if defined(__linux__)
+    m_virtcamWindow.reset();
+#endif
     m_recordingWindow.reset();
     m_webPortalWindow.reset();
 #if defined(__linux__) || defined(__APPLE__)
@@ -274,6 +280,9 @@ bool UIManager::init(void *window)
     m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
     m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
     m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    m_virtcamWindow     = std::make_unique<UIConfigurationVirtualCamera>(this);
+#endif
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
     m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
 #if defined(__linux__) || defined(__APPLE__)
@@ -558,6 +567,9 @@ void UIManager::render()
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
+#endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
 #if defined(__linux__) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
@@ -717,6 +729,9 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+        if (m_virtcamWindow)   m_virtcamWindow->setVisible(false);
+#endif
         // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
 #if defined(__linux__) || defined(__APPLE__)
@@ -730,6 +745,9 @@ void UIManager::render()
     if (m_shaderWindow)      m_shaderWindow->render();
     if (m_imageWindow)       m_imageWindow->render();
     if (m_streamingWindow)   m_streamingWindow->render();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    if (m_virtcamWindow)     m_virtcamWindow->render();
+#endif
     if (m_recordingWindow)   m_recordingWindow->render();
     if (m_webPortalWindow)   m_webPortalWindow->render();
 #if defined(__linux__) || defined(__APPLE__)
@@ -2654,6 +2672,23 @@ void UIManager::loadConfig()
                 if (chat.contains("streamRoomSlug"))
                     m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
             }
+            // #85 — Virtual camera config, sibling block.
+            if (streaming.contains("virtcam"))
+            {
+                auto &vc = streaming["virtcam"];
+                if (vc.contains("enabled"))
+                    m_virtcamEnabled      = vc["enabled"].get<bool>();
+                if (vc.contains("devicePath"))
+                    m_virtcamDevicePath   = vc["devicePath"].get<std::string>();
+                if (vc.contains("outputWidth"))
+                    m_virtcamOutputWidth  = vc["outputWidth"].get<uint32_t>();
+                if (vc.contains("outputHeight"))
+                    m_virtcamOutputHeight = vc["outputHeight"].get<uint32_t>();
+                if (vc.contains("outputFps"))
+                    m_virtcamOutputFps    = vc["outputFps"].get<uint32_t>();
+                if (vc.contains("pixelFormat"))
+                    m_virtcamPixelFormat  = vc["pixelFormat"].get<std::string>();
+            }
             // #84 — One-shot migration: pre-rework configs stored
             // the directory's display nickname in a separate field
             // (m_directoryHostNickname). The chat Profile now owns
@@ -3116,6 +3151,15 @@ void UIManager::saveConfig()
                 {"streamChatEnabled",  m_streamChatEnabled},
                 {"streamRoomTitle",    m_streamRoomTitle},
                 {"streamRoomSlug",     m_streamRoomSlug},
+            }},
+            // Virtual camera (#85).
+            {"virtcam", {
+                {"enabled",      m_virtcamEnabled},
+                {"devicePath",   m_virtcamDevicePath},
+                {"outputWidth",  m_virtcamOutputWidth},
+                {"outputHeight", m_virtcamOutputHeight},
+                {"outputFps",    m_virtcamOutputFps},
+                {"pixelFormat",  m_virtcamPixelFormat},
             }}};
 
         // Preferences (#45 placeholder + window restructure)

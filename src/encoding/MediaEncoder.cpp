@@ -13,6 +13,7 @@ extern "C"
 }
 
 #include "../utils/FFmpegCompat.h"
+#include <cstring>
 #include <mutex>
 
 const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
@@ -882,21 +883,20 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         return false;
     }
 
-    // sws_scale's AVX2-fastpath on macOS (libswscale 9.x from Homebrew
-    // FFmpeg 7) crashes with EXC_BAD_ACCESS when the source height is
-    // odd — it reads 32 bytes past the last row through `vinserti128`.
-    // The window framebuffer on a macOS host can easily be 1920x953
-    // (1080 minus the menu bar / title bar), which trips this. Clamp
-    // source height to even before any sws_getContext / sws_scale call;
-    // the lost row is one pixel at the bottom edge, negligible. We
-    // don't touch width because the source row stride is derived from
-    // the caller's allocation, and changing width here would desync
-    // it from the actual buffer layout.
-    if (height & 1u)
-    {
-        --height;
-    }
-    if (height == 0)
+    // libswscale's AVX2 RGB fastpath (macOS Homebrew FFmpeg) reads a
+    // few SIMD chunks (up to ~32 bytes) PAST the last source row via
+    // vinserti128/vmovdqa. When the caller's RGB buffer is allocated
+    // exactly width*height*3 and happens to end on a page boundary,
+    // that over-read hits an unmapped page and segfaults (observed on
+    // a macOS host with a 1280x720 buffer = exactly 2700K, crashing
+    // 1 byte past the MALLOC region). An earlier fix only clamped odd
+    // heights, which doesn't cover this: the over-read happens off the
+    // last row regardless of parity.
+    //
+    // Robust fix: copy the source into a scratch buffer with trailing
+    // padding so the fastpath's over-read always lands in allocated
+    // memory. The pad bytes are read into discarded (off-image) pixels.
+    if (height == 0 || width == 0 || !rgbData)
     {
         return false;
     }
@@ -966,8 +966,22 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         return false;
     }
 
-    const uint8_t *srcData[1] = {rgbData};
-    int srcLinesize[1] = {static_cast<int>(width * 3)};
+    const int srcStride = static_cast<int>(width * 3);
+    const size_t srcBytes = static_cast<size_t>(srcStride) * height;
+
+    // Copy into the padded scratch so libswscale's AVX2 fastpath can
+    // safely over-read past the last row (see the note above). 64 is
+    // FFmpeg's AV_INPUT_BUFFER_PADDING_SIZE; the fastpath reads at most
+    // a couple of SIMD registers past the end, well within that.
+    constexpr size_t kSwsTailPad = 64;
+    if (m_swsSrcPadded.size() < srcBytes + kSwsTailPad)
+    {
+        m_swsSrcPadded.resize(srcBytes + kSwsTailPad);
+    }
+    std::memcpy(m_swsSrcPadded.data(), rgbData, srcBytes);
+
+    const uint8_t *srcData[1] = {m_swsSrcPadded.data()};
+    int srcLinesize[1] = {srcStride};
 
     int ret = sws_scale(swsCtx, srcData, srcLinesize, 0, height, frame->data, frame->linesize);
     if (ret < 0)

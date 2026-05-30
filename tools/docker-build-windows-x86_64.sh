@@ -48,15 +48,24 @@ cd build-windows-x86_64
 echo "⚙️  Configurando CMake..."
 # dockcross usa MXE em /usr/src/mxe com target static
 export PKG_CONFIG_PATH=/usr/src/mxe/usr/x86_64-w64-mingw32.static/lib/pkgconfig
+
+# Virtcam DLL (#85 Phase 2) — defaults ON for the Windows cross-build
+# because the host-side sink is meaningless without the DirectShow
+# filter that exposes it to consumers. Set BUILD_VIRTCAM_DSHOW=OFF
+# explicitly when bisecting unrelated build issues.
+BUILD_VIRTCAM_DSHOW="${BUILD_VIRTCAM_DSHOW:-ON}"
+
 if [ "$BUILD_COMPATIBLE" = "ON" ]; then
     cmake .. \
     -DCMAKE_TOOLCHAIN_FILE=/usr/src/mxe/usr/x86_64-w64-mingw32.static/share/cmake/mxe-conf.cmake \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    -DBUILD_COMPATIBLE_X86_64=ON
+    -DBUILD_COMPATIBLE_X86_64=ON \
+    -DRETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER="$BUILD_VIRTCAM_DSHOW"
 else
     cmake .. \
     -DCMAKE_TOOLCHAIN_FILE=/usr/src/mxe/usr/x86_64-w64-mingw32.static/share/cmake/mxe-conf.cmake \
-    -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    -DRETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER="$BUILD_VIRTCAM_DSHOW"
 fi
 
 echo ""

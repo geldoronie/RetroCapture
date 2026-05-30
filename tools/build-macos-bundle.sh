@@ -122,6 +122,24 @@ if [ -d "$REPO_ROOT/ssl" ]; then
     cp -R "$REPO_ROOT/ssl" "$APP_DIR/Contents/Resources/"
 fi
 
+# 2d — virtcam DAL plug-in (#85 macOS). The plug-in itself lives at
+# /Library/CoreMediaIO/Plug-Ins/DAL/ — root-owned — so we can't just
+# put it inside the .app and call it done. Instead we ship the bundle
+# under Resources/ along with an install helper the user runs once
+# (sudo) to copy it into place. UI detects whether install has
+# happened via VirtualCameraOutputMac::isPluginInstalled().
+PLUGIN_BUILT="$REPO_ROOT/$BUILD_DIR/bin/RetroCaptureVCam.plugin"
+if [ -d "$PLUGIN_BUILT" ]; then
+    cp -R "$PLUGIN_BUILT" "$APP_DIR/Contents/Resources/"
+    cp "$SCRIPT_DIR/install-virtcam-macos.sh" \
+       "$APP_DIR/Contents/Resources/install-virtcam.sh"
+    chmod +x "$APP_DIR/Contents/Resources/install-virtcam.sh"
+    echo "   virtcam : Contents/Resources/RetroCaptureVCam.plugin + install-virtcam.sh"
+else
+    echo "   virtcam : (skipped — plug-in not built; pass"
+    echo "            -DRETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN=ON to cmake)"
+fi
+
 echo "   binary  : Contents/MacOS/retrocapture"
 echo "   plist   : Contents/Info.plist"
 echo "   assets  : Contents/Resources/{shaders,web,assets/i18n,ssl}"

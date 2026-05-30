@@ -4,6 +4,9 @@
 #include "../ui/UIDirectoryBrowser.h"
 #include "../ui/UISectionHeader.h"
 #include "../utils/TranslationManager.h"
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"
+#endif
 
 #include <imgui.h>
 
@@ -234,6 +237,44 @@ void QuickActionsOverlay::render()
             ImGui::SetTooltip("%s", T("quickactions.record_client.tip").c_str());
         }
     }
+
+    // Virtual camera start/stop (#85, Linux only). Visible only
+    // when the kernel module has at least one loopback device
+    // available — otherwise the button would do nothing on
+    // click. Mirrors the Streaming + Recording button shape so
+    // it slots into the overlay's existing rhythm.
+#if defined(__linux__)
+    if (!clientMode)
+    {
+        // Cheap O(N) over a handful of /dev/video* nodes; runs
+        // only when QuickActions is open, every frame. Could be
+        // cached but the overhead is invisible in profiles.
+        const bool haveLoopback =
+            !VirtualCameraOutput::enumerateDevices().empty();
+        if (haveLoopback)
+        {
+            const bool vcamOn = m_uiManager->getVirtcamEnabled();
+            if (vcamOn)
+            {
+                if (ImGui::Button(T("quickactions.virtcam.stop").c_str(),
+                                  ImVec2(-1, 0)))
+                {
+                    m_uiManager->setVirtcamEnabled(false);
+                    m_uiManager->saveConfig();
+                }
+            }
+            else
+            {
+                if (ImGui::Button(T("quickactions.virtcam.start").c_str(),
+                                  ImVec2(-1, 0)))
+                {
+                    m_uiManager->setVirtcamEnabled(true);
+                    m_uiManager->saveConfig();
+                }
+            }
+        }
+    }
+#endif
 
     m_lastRenderedHeight = ImGui::GetWindowHeight();
 

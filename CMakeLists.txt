@@ -11,6 +11,28 @@ option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
 option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
 option(BUILD_COMPATIBLE_ARM64 "Build with portable ARMv8-A flags (no SVE/crypto, works on Pi 3/4/5)" OFF)
+# #85 Phase 2 — DirectShow source filter DLL gate. OFF by default
+# because it pulls strmbase (DirectShow BaseClasses). We carry a
+# MinGW-patched snapshot under third_party/baseclasses/ so the
+# Windows cross-build (MXE) can produce the DLL when this flag is
+# ON; it stays OFF by default to keep configure-time cheap and
+# avoid surprising native Linux builds.
+option(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER
+    "Build the Windows DirectShow virtual-camera source filter DLL (#85 Phase 2)"
+    OFF)
+
+# #85 macOS path — CoreMediaIO DAL plug-in. Default ON on macOS
+# because the host-side sink (VirtualCameraOutputMac) is useless
+# without the plug-in that exposes the shared memory to consumers.
+# OFF elsewhere so the configure step ignores src/dal_plugin/.
+if(APPLE)
+    set(_DAL_DEFAULT ON)
+else()
+    set(_DAL_DEFAULT OFF)
+endif()
+option(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN
+    "Build the macOS CoreMediaIO DAL virtual-camera plug-in (#85 macOS)"
+    ${_DAL_DEFAULT})
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -494,12 +516,23 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
+# #85 — the platform-specific virtcam filter/plug-in lives under
+# its own subdirectory (src/dshow_filter for Windows, src/dal_plugin
+# for macOS) and is its OWN target (built via add_subdirectory when
+# the matching option is set). Always remove these sources from the
+# main retrocapture executable build so the SOURCES glob doesn't
+# drag them in.
+list(FILTER SOURCES EXCLUDE REGEX ".*/dshow_filter/.*\\.(cpp|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/dal_plugin/.*\\.(cpp|h|mm)$")
+
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
     # No Linux, excluir implementações Windows e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
@@ -515,8 +548,13 @@ if(PLATFORM_LINUX)
         list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
     endif()
 elseif(PLATFORM_WINDOWS)
-    # No Windows, excluir implementações Linux e macOS
+    # No Windows, excluir implementações Linux e macOS.
+    # `VirtualCameraOutput\\.cpp` (NOT VirtualCameraOutputWin) is the
+    # Linux v4l2loopback sink — must be excluded. UIConfigurationVirtualCamera
+    # is now compiled on both platforms (#85 Phase 2 surface).
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
@@ -540,10 +578,16 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
 elseif(PLATFORM_MACOS)
     # No macOS, excluir implementações Linux e Windows.
+    # `VirtualCameraOutput\\.cpp` (Linux v4l2 sink) and `VirtualCameraOutputWin\\.cpp`
+    # (Windows DShow sink) must be excluded. `VirtualCameraOutputMac\\.cpp`
+    # stays — it's the new POSIX-shm sink for the DAL plug-in path.
+    # UIConfigurationVirtualCamera now compiles on all three (#85).
     # Note: `AudioBus` is platform-agnostic (std::deque + mutex) and is
     # used by both AudioCapturePulse on Linux and AudioCaptureCoreAudio
     # on macOS, so it is NOT excluded here.
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
@@ -1118,6 +1162,21 @@ if(PLATFORM_WINDOWS)
     # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
     # )
 
+    # #85 Phase 2 — register / unregister the DirectShow virtual
+    # camera filter DLL post-install. NSIS runs elevated
+    # (RequestExecutionLevel admin) so regsvr32 has the rights it
+    # needs to write under HKCR. /s = silent; the user shouldn't
+    # see a "DLL registered successfully" popup on every install.
+    # Guarded by RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER so a
+    # build without the filter doesn't ship a broken post-install
+    # call pointing at a missing DLL.
+    if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+        set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+        set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /u /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+    endif()
+
     # Incluir CPack APÓS todas as configurações CPACK_*
     include(CPack)
 
@@ -1207,4 +1266,33 @@ else()
             FILES_MATCHING PATTERN "*"
         )
     endif()
+endif()
+
+# ---------------------------------------------------------------------
+# #85 Phase 2 — Windows DirectShow virtual-camera source filter DLL.
+#
+# Two add_subdirectory calls in order: strmbase first (the DirectShow
+# BaseClasses static lib), then the filter sources that link against
+# it. Gated by the option so a default Linux build doesn't pay the
+# configure-time cost of an irrelevant target tree.
+# ---------------------------------------------------------------------
+if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+    if(NOT PLATFORM_WINDOWS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER=ON only makes "
+            "sense on a Windows target build (cross-compile via MXE "
+            "or native MSVC). Current platform is not Windows.")
+    endif()
+    add_subdirectory(third_party/baseclasses)
+    add_subdirectory(src/dshow_filter)
+endif()
+
+if(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN)
+    if(NOT PLATFORM_MACOS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN=ON only makes "
+            "sense on a macOS target build. Current platform is "
+            "not macOS.")
+    endif()
+    add_subdirectory(src/dal_plugin)
 endif()
