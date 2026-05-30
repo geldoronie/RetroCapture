@@ -73,6 +73,14 @@ public:
     // Primary activation (left-click on most platforms). Optional.
     virtual void setOnActivate(std::function<void()> cb) = 0;
 
+    // Show a desktop notification (e.g. "Streaming started"). Backends
+    // route to the platform-native facility: org.freedesktop.Notifications
+    // on Linux, the Shell_NotifyIcon balloon on Windows, NSUserNotification
+    // on macOS. Callers gate this on the user's "tray notifications"
+    // preference; a backend with no notification facility is free to
+    // no-op.
+    virtual void notify(const std::string &title, const std::string &body) = 0;
+
     // Drain backend events and invoke pending callbacks on the
     // calling thread. Call once per main-loop iteration. No-op for
     // backends that deliver on their own thread.

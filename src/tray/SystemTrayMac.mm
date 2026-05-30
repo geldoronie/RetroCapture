@@ -71,6 +71,7 @@ public:
         rebuildMenu();
     }
     void setOnActivate(std::function<void()> cb) override { m_onActivate = std::move(cb); }
+    void notify(const std::string &title, const std::string &body) override;
     void pump() override {}  // Cocoa run loop (driven by glfwPollEvents) delivers actions.
 
 private:
@@ -155,6 +156,25 @@ void SystemTrayMac::stop()
             [m_target release];
             m_target = nil;
         }
+    }
+}
+
+void SystemTrayMac::notify(const std::string &title, const std::string &body)
+{
+    @autoreleasepool {
+        // NSUserNotification is deprecated (macOS 11) but, unlike
+        // UNUserNotificationCenter, it still delivers for an unsigned
+        // app on macOS <=13 without an authorization prompt. Migrate to
+        // UserNotifications once the app is signed/notarized.
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        NSUserNotification *n = [[NSUserNotification alloc] init];
+        n.title           = [NSString stringWithUTF8String:title.c_str()];
+        n.informativeText = [NSString stringWithUTF8String:body.c_str()];
+        [[NSUserNotificationCenter defaultUserNotificationCenter]
+            deliverNotification:n];
+        [n release];
+        #pragma clang diagnostic pop
     }
 }
 

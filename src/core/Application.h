@@ -193,6 +193,10 @@ private:
     bool m_trayActive = false;
     uint32_t m_trayMenuSig = 0;      // change-detection for refreshTrayMenu
     bool m_trayMenuBuilt = false;
+    // Edge-detect streaming/recording for tray notifications (#86).
+    bool m_notifyPrevStreaming = false;
+    bool m_notifyPrevRecording = false;
+    bool m_notifyInit = false;       // skip the first frame's "transition"
     void setupSystemTray();
     void refreshTrayMenu();
     std::unique_ptr<FrameProcessor> m_frameProcessor;

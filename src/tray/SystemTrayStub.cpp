@@ -20,6 +20,7 @@ public:
     void setMenu(const std::vector<TrayMenuItem> &) override {}
     void updateMenu(const std::vector<TrayMenuItem> &) override {}
     void setOnActivate(std::function<void()>) override {}
+    void notify(const std::string &, const std::string &) override {}
     void pump() override {}
 };
 

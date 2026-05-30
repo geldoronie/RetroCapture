@@ -211,6 +211,7 @@ public:
         setMenu(items);
     }
     void setOnActivate(std::function<void()> cb) override { m_onActivate = std::move(cb); }
+    void notify(const std::string &title, const std::string &body) override;
 
     void pump() override;
 
@@ -342,6 +343,50 @@ void SystemTrayLinux::stop()
         dbus_connection_unref(m_conn);
         m_conn = nullptr;
     }
+}
+
+void SystemTrayLinux::notify(const std::string &title, const std::string &body)
+{
+    if (!m_conn) return;
+    // org.freedesktop.Notifications.Notify(
+    //   s app_name, u replaces_id, s app_icon, s summary, s body,
+    //   as actions, a{sv} hints, i expire_timeout) -> u id
+    DBusMessage *msg = dbus_message_new_method_call(
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify");
+    if (!msg) return;
+
+    DBusMessageIter args;
+    dbus_message_iter_init_append(msg, &args);
+    const char *appName = "RetroCapture";
+    const char *appIcon = m_iconName.c_str(); // themed fallback name
+    const char *summary = title.c_str();
+    const char *bodyC   = body.c_str();
+    dbus_uint32_t replacesId = 0;
+    dbus_int32_t  expireMs   = 5000;
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &appName);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &replacesId);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &appIcon);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &summary);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &bodyC);
+    // empty actions (as)
+    DBusMessageIter actions;
+    dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "s", &actions);
+    dbus_message_iter_close_container(&args, &actions);
+    // empty hints (a{sv})
+    DBusMessageIter hints;
+    dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "{sv}", &hints);
+    dbus_message_iter_close_container(&args, &hints);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_INT32, &expireMs);
+
+    // Fire-and-forget; the notification daemon may be absent and that's
+    // fine (best-effort).
+    dbus_message_set_no_reply(msg, TRUE);
+    dbus_connection_send(m_conn, msg, nullptr);
+    dbus_message_unref(msg);
+    dbus_connection_flush(m_conn);
 }
 
 void SystemTrayLinux::pump()

@@ -57,6 +57,7 @@ public:
         // each right-click so label/enabled changes are picked up live.
     }
     void setOnActivate(std::function<void()> cb) override { m_onActivate = std::move(cb); }
+    void notify(const std::string &title, const std::string &body) override;
     void pump() override;
 
     LRESULT wndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -172,6 +173,24 @@ void SystemTrayWindows::stop()
         DestroyIcon(m_icon);
         m_icon = nullptr;
     }
+}
+
+void SystemTrayWindows::notify(const std::string &title, const std::string &body)
+{
+    if (!m_added || !m_hwnd) return;
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize      = sizeof(nid);
+    nid.hWnd        = m_hwnd;
+    nid.uID         = kTrayIconId;
+    nid.uFlags      = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    std::wstring titleW = utf8ToWide(title);
+    std::wstring bodyW  = utf8ToWide(body);
+    lstrcpynW(nid.szInfoTitle, titleW.c_str(),
+              (int)(sizeof(nid.szInfoTitle) / sizeof(wchar_t)));
+    lstrcpynW(nid.szInfo, bodyW.c_str(),
+              (int)(sizeof(nid.szInfo) / sizeof(wchar_t)));
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 void SystemTrayWindows::pump()

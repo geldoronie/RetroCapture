@@ -3494,6 +3494,37 @@ void Application::refreshTrayMenu()
 
     const bool streaming   = m_ui && m_ui->getStreamingActive();
     const bool recording   = m_ui && m_ui->getRecordingActive();
+
+    // Tray notifications (#86) — fire on streaming/recording edges,
+    // gated by the user preference. Runs before the menu-signature
+    // early-return below so a visibility-only change doesn't suppress
+    // it. The first pass just seeds the previous-state baseline.
+    if (m_notifyInit && m_ui && m_ui->getTrayNotifications())
+    {
+        if (streaming != m_notifyPrevStreaming)
+        {
+            m_tray->notify("RetroCapture",
+                           streaming ? "Streaming started" : "Streaming stopped");
+        }
+        if (recording != m_notifyPrevRecording)
+        {
+            if (recording)
+            {
+                m_tray->notify("RetroCapture", "Recording started");
+            }
+            else
+            {
+                const std::string fn = m_ui->getRecordingFilename();
+                m_tray->notify("RetroCapture",
+                               fn.empty() ? "Recording saved"
+                                          : ("Recording saved: " + fn));
+            }
+        }
+    }
+    m_notifyPrevStreaming = streaming;
+    m_notifyPrevRecording = recording;
+    m_notifyInit = true;
+
     const bool hasSource    = m_ui && !m_ui->getCurrentDevice().empty();
     const bool clientMode  = m_ui && m_ui->isRemoteSource() && hasSource;
     const bool windowShown = m_window && m_window->isVisible();
