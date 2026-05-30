@@ -241,6 +241,7 @@ private:
     uint32_t             m_iconW = 0;
     uint32_t             m_iconH = 0;
     std::vector<uint8_t> m_iconArgb;
+    std::string          m_iconPath;   // resolved logo.png path, for notifications
 
     std::vector<TrayMenuItem> m_items;
     uint32_t                  m_menuRevision = 1;
@@ -361,7 +362,11 @@ void SystemTrayLinux::notify(const std::string &title, const std::string &body)
     DBusMessageIter args;
     dbus_message_iter_init_append(msg, &args);
     const char *appName = "RetroCapture";
-    const char *appIcon = m_iconName.c_str(); // themed fallback name
+    // Prefer our branded logo via a file:// URI (spec-compliant
+    // app_icon form, resolved by every common daemon); fall back to
+    // the themed name only when the logo asset wasn't found.
+    std::string iconUri = m_iconPath.empty() ? m_iconName : ("file://" + m_iconPath);
+    const char *appIcon = iconUri.c_str();
     const char *summary = title.c_str();
     const char *bodyC   = body.c_str();
     dbus_uint32_t replacesId = 0;
@@ -457,6 +462,7 @@ void SystemTrayLinux::loadIconPixmap()
     m_iconArgb = rgbaToArgbNetwork(rgba);
     m_iconW = w;
     m_iconH = h;
+    m_iconPath = path;   // used as the notification app_icon (file:// URI)
     LOG_INFO("tray(linux): loaded icon pixmap " + std::to_string(w) + "x" +
              std::to_string(h));
 }

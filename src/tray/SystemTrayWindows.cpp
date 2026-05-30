@@ -183,6 +183,11 @@ void SystemTrayWindows::notify(const std::string &title, const std::string &body
     nid.hWnd        = m_hwnd;
     nid.uID         = kTrayIconId;
     nid.uFlags      = NIF_INFO;
+    // Ideally NIIF_USER + hBalloonIcon would put our app icon in the
+    // balloon, but the MXE/MinGW shellapi.h ships the older
+    // NOTIFYICONDATA without hBalloonIcon, so we use the standard info
+    // glyph. On Windows 10+ the toast still shows the app's tray icon
+    // (our logo) alongside it. Revisit if the toolchain is bumped.
     nid.dwInfoFlags = NIIF_INFO;
     std::wstring titleW = utf8ToWide(title);
     std::wstring bodyW  = utf8ToWide(body);
