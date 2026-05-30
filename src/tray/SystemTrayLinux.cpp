@@ -384,9 +384,12 @@ void SystemTrayLinux::emitLayoutUpdated()
 
 void SystemTrayLinux::loadIconPixmap()
 {
+    // Assets live under <base>/assets/ (getReadOnlyAssetsDir() returns
+    // the dev/install BASE, not the assets dir itself — same as the
+    // i18n/font loaders compose it).
     std::string path = Paths::getReadOnlyAssetsDir();
     if (!path.empty() && path.back() != '/') path += '/';
-    path += "logo.png";
+    path += "assets/logo.png";
 
     uint32_t w = 0, h = 0;
     std::vector<uint8_t> rgba;
@@ -443,7 +446,12 @@ void SystemTrayLinux::appendSniProp(DBusMessageIter *iter, const char *prop)
     else if (std::strcmp(prop, "Id") == 0)         appendVariantString(iter, "retrocapture");
     else if (std::strcmp(prop, "Title") == 0)      appendVariantString(iter, m_tooltip.c_str());
     else if (std::strcmp(prop, "Status") == 0)     appendVariantString(iter, "Active");
-    else if (std::strcmp(prop, "IconName") == 0)   appendVariantString(iter, m_iconName.c_str());
+    // When we have our branded pixmap, advertise an EMPTY IconName so
+    // hosts that prefer a themed name don't override the pixmap with
+    // the generic "camera-video" fallback. The themed name is only
+    // used when the pixmap failed to load.
+    else if (std::strcmp(prop, "IconName") == 0)
+        appendVariantString(iter, m_iconArgb.empty() ? m_iconName.c_str() : "");
     else if (std::strcmp(prop, "IconPixmap") == 0) appendVariantIconPixmap(iter);
     else if (std::strcmp(prop, "Menu") == 0)       appendVariantObjectPath(iter, kMenuPath);
     else if (std::strcmp(prop, "ItemIsMenu") == 0) appendVariantBool(iter, false);
