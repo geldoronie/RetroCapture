@@ -93,8 +93,12 @@ had via `AudioPlaybackPulse`.
     and paces itself so the pipelines keep feeding consumers.
   - Falls back cleanly to quit-on-close when the desktop has no tray
     host, with a one-line warning.
+  - Desktop notifications on streaming/recording start/stop/saved,
+    gated by a preference — native per platform (freedesktop
+    Notifications over D-Bus on Linux, Shell_NotifyIcon balloon on
+    Windows, NSUserNotification on macOS), no extra deps.
   - New Preferences → System tray section: show tray icon, minimize
-    on close, start minimized, tray notifications (persisted).
+    on close, start minimized, show notifications (all persisted).
 - **macOS x86_64 port — first working build of host + client modes**
   (#18). Cherry-picked the older `18-port-to-macos-13-or-later-x86_64`
   branch's backend files onto current 0.8.0-alpha and rebuilt the
