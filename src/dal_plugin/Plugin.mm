@@ -61,15 +61,22 @@ namespace {
 // Diagnostic logging
 //
 // The plug-in runs INSIDE the consumer process (OBS, etc.), so we
-// can't just printf to a terminal we control. Append to a fixed
-// world-readable file the user can `cat` back to us. Each consumer
-// that loads the plug-in writes its pid so concurrent loaders don't
-// confuse the trace. This is debugging scaffolding for the first
-// real bring-up; once the camera works end-to-end we can switch to
-// os_log or strip it.
+// can't just printf to a terminal we control. When enabled, append
+// to a fixed world-readable file the user can `cat` back, pid-
+// prefixed so concurrent loaders don't confuse the trace.
+//
+// OFF by default: this writes on every camera enumeration in every
+// consumer process system-wide, which is far too noisy for a build
+// that ships. Flip RETROCAPTURE_VCAM_DEBUG_LOG to 1 to re-enable it
+// when resuming the macOS bring-up (see docs/VIRTCAM_MACOS.md).
 // ---------------------------------------------------------------------
+#ifndef RETROCAPTURE_VCAM_DEBUG_LOG
+#  define RETROCAPTURE_VCAM_DEBUG_LOG 0
+#endif
+
 void vclog(const char *fmt, ...)
 {
+#if RETROCAPTURE_VCAM_DEBUG_LOG
     FILE *f = std::fopen("/tmp/RetroCaptureVCam.log", "a");
     if (f == nullptr) return;
     std::fprintf(f, "[pid %d] ", getpid());
@@ -79,6 +86,9 @@ void vclog(const char *fmt, ...)
     va_end(ap);
     std::fputc('\n', f);
     std::fclose(f);
+#else
+    (void)fmt;
+#endif
 }
 
 // One global instance — DAL only ever instantiates one plug-in

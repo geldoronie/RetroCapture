@@ -102,7 +102,7 @@ consumers must quit + relaunch to re-scan the DAL directory.
 `VirtualCameraOutputMac::isPluginInstalled()` drives the UI driver-
 status line (Configurations → Virtual Camera).
 
-## Status
+## Status — PAUSED (enumerates, won't activate on Ventura)
 
 | Step | Status |
 |------|--------|
@@ -113,10 +113,70 @@ status line (Configurations → Virtual Camera).
 | `.app` packaging + install helper | done |
 | Application + UI wiring | done |
 | Builds + installs on macOS (Intel) | done |
-| **End-to-end verify (OBS sees camera, frames flow)** | **needs confirming on real consumers** |
-| `CMIOObjectCreate` Device/Stream id minting | revisit — see TODO in `Plugin.mm::InitializeWithObjectID` |
-| YUYV second advertised format | follow-up |
-| Camera Extension (sandboxed-consumer support) | deferred (needs Developer cert) |
+| Device **enumerates** + appears in consumers w/ format | **done** |
+| Stream **activates** + frames flow | **BLOCKED on macOS 13 (Ventura)** |
+| Camera Extension (the path that actually works on 12.3+) | deferred (needs Developer cert) |
+
+### What works
+
+The full CMIO DAL object lifecycle is implemented and correct enough
+to enumerate: `CMIOObjectCreate` for device + stream,
+`CMIOStreamClockCreate`, `CMIOObjectsPublishedAndDied`, and a property
+table that answers **everything** a consumer queries (verified via the
+debug trace — zero `MISS` lines during a full OBS interrogation).
+The device shows up in OBS with the advertised format.
+
+### Where it's blocked
+
+The consumer (OBS, via AVFoundation) reads the entire device + stream
+property set successfully and then **declines to start the stream** —
+`DeviceStartStream` is never called, so no frames ever flow. This is
+consistent with macOS 12.3+ deprecating DAL: the system camera path
+has moved to **CMIOExtension** (Camera Extensions), and DAL device
+*activation* via AVFoundation is unreliable/restricted on Ventura even
+when *enumeration* still works. The system log shows the camera
+subsystem using `CMIOExtensionProvider`/`CMIOExtensionStream`.
+
+Bring-up findings worth keeping (each was a real round-trip):
+
+- **TransportType ('tran')** is queried during the device publish and
+  is *fatal* if missing — the publish returns `'who?'` and the device
+  never appears. Must return something (we return 'virt').
+- **CanBeDefaultDevice ('dflt') / CanBeDefaultSystemDevice ('sflt')**
+  must be answered (return 1) or the consumer treats the device as
+  unusable.
+- **SetPropertyData for unknown selectors must return `noErr`**, not
+  an error. The consumer hammers `SetPropertyData('lisa')` (listener
+  bookkeeping) during init; rejecting it put the consumer in a retry
+  loop that never reached activation.
+- **Pixel format**: 24RGB → device shown but no image (poorly
+  supported); 32BGRA → recognised but didn't help activation;
+  '2vuy'/UYVY (camera-native) is what's wired now. Format was NOT the
+  activation blocker (the consumer reads the format fine and still
+  doesn't start).
+- The full property selector set the consumer queries (all answered):
+  `uid `, `muid`, `tran`, `sdir`, `dflt`, `oink` (hog), `gone`
+  (running-somewhere), `livn` (alive), `stm#` (streams), `lnam`,
+  `lmak`, `pfta`/`pft ` (format descs), `frrg`/`nfrt`/`mfrt` (rates).
+
+### To resume
+
+1. Re-enable the trace: build the plug-in with
+   `-DRETROCAPTURE_VCAM_DEBUG_LOG=1` (the `vclog` scaffolding in
+   `Plugin.mm` is gated off by default now) and/or
+   `log stream --predicate 'subsystem == "com.apple.cmio"'` to capture
+   the *framework-level* reason AVFoundation won't activate the
+   stream — that reason is invisible to the in-plug-in log and is the
+   missing piece.
+2. If it's the DAL-deprecation wall (likely on 13+), the real fix is
+   to implement the **Camera Extension** variant (CMIOExtension):
+   a System Extension in the `.app`'s
+   `Contents/Library/SystemExtensions/`, activated via
+   `OSSystemExtensionRequest`. Requires an Apple Developer ID, the
+   `com.apple.developer.system-extension.install` entitlement, and
+   notarization for distribution. Works in OBS, Discord, Safari,
+   FaceTime — everything, including sandboxed/hardened consumers
+   (which DAL never will).
 
 ## References (for whoever picks up the CMIO internals)
 
