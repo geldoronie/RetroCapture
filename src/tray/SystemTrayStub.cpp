@@ -27,18 +27,27 @@ public:
 
 // Platform backends provide their own factory symbol; the build wires
 // exactly one of these in. When none is compiled, we fall back to the
-// stub. Declared weak-ish via the macro the CMake sets.
+// stub.
 #if defined(RETROCAPTURE_TRAY_BACKEND_LINUX)
 std::unique_ptr<ISystemTray> createSystemTrayLinux();
+#endif
+#if defined(RETROCAPTURE_TRAY_BACKEND_WINDOWS)
+std::unique_ptr<ISystemTray> createSystemTrayWindows();
+#endif
+#if defined(RETROCAPTURE_TRAY_BACKEND_MACOS)
+std::unique_ptr<ISystemTray> createSystemTrayMac();
 #endif
 
 std::unique_ptr<ISystemTray> createSystemTray()
 {
 #if defined(RETROCAPTURE_TRAY_BACKEND_LINUX)
-    if (auto tray = createSystemTrayLinux())
-    {
-        return tray;
-    }
+    if (auto tray = createSystemTrayLinux())   return tray;
+#endif
+#if defined(RETROCAPTURE_TRAY_BACKEND_WINDOWS)
+    if (auto tray = createSystemTrayWindows()) return tray;
+#endif
+#if defined(RETROCAPTURE_TRAY_BACKEND_MACOS)
+    if (auto tray = createSystemTrayMac())     return tray;
 #endif
     return std::make_unique<SystemTrayStub>();
 }
