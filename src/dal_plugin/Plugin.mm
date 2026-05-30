@@ -436,6 +436,7 @@ OSStatus getDataSize(CMIOObjectID objectID,
         case kCMIODevicePropertyCanProcessAVCCommand:
         case kCMIODevicePropertyCanProcessRS422Command:
         case kCMIODevicePropertyLatency:
+        case kCMIODevicePropertyTransportType:
         case kCMIOStreamPropertyDirection:
             *dataSize = sizeof(UInt32);
             return noErr;
@@ -547,6 +548,16 @@ OSStatus getData(CMIOObjectID objectID,
         case kCMIODevicePropertyLatency:
             if (!isDevice) return kCMIOHardwareUnknownPropertyError;
             return copyUInt32(0, cap, used, out);
+
+        case kCMIODevicePropertyTransportType:
+            // CMIO queries this during the device publish and treats
+            // a missing value as fatal (the publish returns 'who?'/
+            // kCMIOHardwareUnknownPropertyError and the device never
+            // appears). 'virt' == kCMIODeviceTransportTypeVirtual —
+            // spelled as the FourCC literal to avoid depending on a
+            // constant that may not be in every SDK.
+            if (!isDevice) return kCMIOHardwareUnknownPropertyError;
+            return copyUInt32(0x76697274u /* 'virt' */, cap, used, out);
 
         case kCMIODevicePropertyHogMode:
         case kCMIODevicePropertyDeviceMaster:
