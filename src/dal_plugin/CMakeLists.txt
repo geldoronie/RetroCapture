@@ -48,7 +48,17 @@ target_include_directories(retrocapture_dal_plugin PRIVATE
 # ARC isn't needed (we don't allocate Obj-C objects). Keep the
 # default MRC behaviour explicit so a future maintainer doesn't
 # enable ARC and break the CFRetain/CFRelease balance.
-target_compile_options(retrocapture_dal_plugin PRIVATE -fno-objc-arc)
+#
+# -Wno-deprecated-declarations: the entire CMIOHardwarePlugInInterface
+# DAL API was deprecated in macOS 12.3 in favour of Camera Extensions
+# (CMIOExtension). We chose DAL deliberately because it needs no
+# Apple Developer cert / notarization; the deprecation is expected,
+# not actionable, so silence it to keep the build output clean. The
+# Camera Extension follow-up (see CMakeLists.txt top-level comment)
+# is where we'd move off the deprecated API.
+target_compile_options(retrocapture_dal_plugin PRIVATE
+    -fno-objc-arc
+    -Wno-deprecated-declarations)
 
 # Plug-in lives next to retrocapture in the build tree so
 # build-macos-bundle.sh can pick it up by relative path.

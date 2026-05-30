@@ -26,18 +26,24 @@ inline CFUUIDRef pluginFactoryUUID()
 
 // Friendly name surfaced to consumers via
 // kCMIODevicePropertyDeviceMaster, kCMIOObjectPropertyName, etc.
-constexpr CFStringRef kPluginFriendlyName =
+// NOT constexpr — CFSTR expands to a reinterpret_cast
+// (__builtin___CFStringMakeConstantString) which isn't a constant
+// expression. `const` at namespace scope (internal linkage, this
+// header is only included by Plugin.mm) is the right shape: the
+// CFString is a compile-time-constant section object, just not a
+// C++ constant-expression.
+const CFStringRef kPluginFriendlyName =
     CFSTR("RetroCapture Virtual Camera");
 
-constexpr CFStringRef kManufacturerName = CFSTR("RetroCapture");
+const CFStringRef kManufacturerName = CFSTR("RetroCapture");
 
 // Device UID — opaque identifier consumers use to remember the
 // device. Stays stable forever (same reasoning as the factory
 // UUID).
-constexpr CFStringRef kDeviceUID =
+const CFStringRef kDeviceUID =
     CFSTR("com.retrocapture.virtualcamera.device.v1");
 
-constexpr CFStringRef kModelUID =
+const CFStringRef kModelUID =
     CFSTR("com.retrocapture.virtualcamera.model.v1");
 
 // Fixed output geometry/format for Phase 1. Consumers can be
@@ -47,10 +53,13 @@ constexpr CFStringRef kModelUID =
 constexpr int   kStreamWidth      = 1280;
 constexpr int   kStreamHeight     = 720;
 constexpr int   kStreamFps        = 30;
-// kCVPixelFormatType_24RGB — matches the writer-side RGB24 path.
-// If the writer is configured to push YUYV or RGBA we currently
-// fall back to a frozen frame; future iterations should add YUYV
-// (kCVPixelFormatType_422YpCbCr8) as a second advertised format.
-constexpr uint32_t kStreamCVPixelFormat = 0x32344247u; // '24BG' = 24RGB on macOS BE order
+// kCVPixelFormatType_24RGB (== 0x00000018, the literal value 24).
+// R8 G8 B8 byte order, matching the writer-side RGB24 path. Spelled
+// as the literal rather than the CoreVideo enum so this header
+// doesn't need to drag in <CoreVideo/CVPixelBuffer.h>. If the
+// writer is configured to push YUYV or RGBA we currently fall back
+// to a frozen frame; future iterations should add YUYV
+// (kCVPixelFormatType_422YpCbCr8 = '2vuy') as a second format.
+constexpr uint32_t kStreamCVPixelFormat = 0x00000018u; // kCVPixelFormatType_24RGB
 
 }} // namespace retrocapture::dal_plugin

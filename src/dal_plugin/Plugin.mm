@@ -34,6 +34,7 @@
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreMediaIO/CMIOHardwarePlugIn.h>
+#import <CoreMediaIO/CMIOSampleBuffer.h>   // CMIOSampleBufferCreateForImageBuffer + kCMIOSampleBufferNoDiscontinuities
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreVideo/CVPixelBuffer.h>
@@ -547,7 +548,12 @@ OSStatus cbStreamCopyBufferQueue(CMIOHardwarePlugInRef /*self*/,
     g_plugin.queueAlteredRefCon  = refCon;
     if (queue != nullptr)
     {
-        *queue = static_cast<CMSimpleQueueRef>(CFRetain(g_plugin.bufferQueue));
+        // Hand the consumer a +1 reference. CFRetain returns a
+        // CFTypeRef (const void*); assigning the already-typed
+        // member avoids the cast-away-qualifiers error a
+        // static_cast on the CFRetain result would trip.
+        CFRetain(g_plugin.bufferQueue);
+        *queue = g_plugin.bufferQueue;
     }
     return noErr;
 }
