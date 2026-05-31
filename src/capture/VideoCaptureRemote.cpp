@@ -177,25 +177,29 @@ bool VideoCaptureRemote::initDecoder()
     }
 
     AVCodecParameters *codecPar = m_formatCtx->streams[m_videoStreamIdx]->codecpar;
-    // Reject the open when probe didn't resolve video dimensions. The
-    // demuxer is allowed to surface a stream that's still being
-    // analyzed (the FFmpeg log line is 'Could not find codec
-    // parameters ... none: unspecified size'). If we proceed with
-    // width/height = 0, m_width/m_height are stuck at zero for the
-    // whole session and the consumer dead-locks at
-    //   decoded=N/s consumed=0/s drops=N queueDepth=20
-    // because nothing downstream can route 0x0 frames. Better to fail
-    // initDecoder and let the outer reconnect loop try again — by the
-    // time the next attempt fires, the upstream MPEG-TS is usually
-    // past the partial-PMT region that caused the first probe to
-    // give up.
+    // The probe sometimes can't resolve the video dimensions in its
+    // budget — FFmpeg logs 'Could not find codec parameters ... none:
+    // unspecified size'. This happens when the client joins mid-GOP
+    // and no SPS/keyframe lands inside the 2.5 s window. We USED to
+    // reject + reconnect here, but for a host with a long GOP every
+    // probe misses the keyframe and the client never connects at all
+    // ("não se conecta de jeito nenhum").
+    //
+    // Instead, proceed: the H.264 decoder derives width/height from
+    // the in-band SPS of the first decoded keyframe (which always
+    // arrives within one GOP), and decodeLoop sets m_width/m_height +
+    // the per-frame queue dims from frame->width/height once it does.
+    // So a 0x0 probe just delays the first visible frame by up to one
+    // GOP instead of blocking the connection forever. (The old
+    // dead-lock that motivated the reject is gone now that the consumer
+    // routes by per-frame dims, not the at-open m_width.)
     if (codecPar->width <= 0 || codecPar->height <= 0)
     {
         LOG_WARN("VideoCaptureRemote: probe returned " +
                  std::to_string(codecPar->width) + "x" +
                  std::to_string(codecPar->height) +
-                 " for video stream — rejecting and forcing reconnect");
-        return false;
+                 " for video stream — opening anyway; size resolves "
+                 "from the first decoded keyframe");
     }
     const AVCodec *codec = avcodec_find_decoder(codecPar->codec_id);
     if (!codec)
