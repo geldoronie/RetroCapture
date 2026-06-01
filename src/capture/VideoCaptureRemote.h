@@ -276,6 +276,23 @@ public:
      * Cleared as soon as any reconnect succeeds.
      */
     bool isHostLikelyOffline() const override { return m_hostLikelyOffline.load(); }
+
+    /**
+     * #77 follow-up — true while the *initial* connect (this armed URL
+     * has never produced a frame) has failed a couple of times in a
+     * row. Distinguishes a genuine can't-connect (bad URL / host down /
+     * wrong password) from a mid-session reconnect, which the overlay
+     * already labels "Reconnecting…". Lets the UI surface a clear
+     * failure within a few seconds instead of spinning "Connecting…"
+     * forever or waiting ~15 min for the offline hint.
+     *
+     * Goes false again the moment the first frame arrives (m_everReceivedFrame).
+     */
+    bool isInitialConnectFailing() const
+    {
+        return !m_everReceivedFrame.load() &&
+               m_consecutiveReconnectFailures.load() >= 2;
+    }
     // 'Are we actively decoding right now?' — combines the
     // m_streamAnchored handshake bit (true once the first frame
     // decoded, reset in cleanupDecoder() / av_read_frame failure)
@@ -304,4 +321,11 @@ private:
     // offline hint clears with it).
     std::atomic<uint32_t> m_consecutiveReconnectFailures{0};
     std::atomic<bool>     m_hostLikelyOffline{false};
+
+    // Sticky 'a frame has arrived at least once since the current URL
+    // was armed' flag. Unlike m_streamAnchored (reset on every drop),
+    // this stays true across mid-session reconnects so the UI can tell
+    // a first-time connect failure apart from a reconnect. Reset in
+    // open() when a new URL is armed.
+    std::atomic<bool>     m_everReceivedFrame{false};
 };

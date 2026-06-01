@@ -589,6 +589,11 @@ public:
     // VideoCaptureRemote::isReceivingFrames() every frame.
     bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
     void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+    // First-connect-failing mirror: true while a brand-new connection
+    // (no frame ever received yet) has failed a few times. Mirrored
+    // from VideoCaptureRemote::isInitialConnectFailing() every frame.
+    bool getRemoteInitialConnectFailing() const { return m_remoteInitialConnectFailing; }
+    void setRemoteInitialConnectFailing(bool v) { m_remoteInitialConnectFailing = v; }
 
     // Host's current viewer count, parsed from /meta when we're in
     // client mode (#68). Application piggybacks the
@@ -1122,6 +1127,7 @@ private:
     uint32_t m_captureFps = 0;
     bool     m_remoteHostLikelyOffline = false;
     bool     m_remoteReceivingFrames   = false;
+    bool     m_remoteInitialConnectFailing = false;
     uint32_t m_remoteUpstreamClientCount = 0;
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to

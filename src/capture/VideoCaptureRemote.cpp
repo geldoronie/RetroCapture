@@ -52,14 +52,23 @@ bool VideoCaptureRemote::open(const std::string &url)
         m_url.pop_back();
     }
 
-    LOG_INFO("VideoCaptureRemote: connecting to remote base URL " + m_url);
+    // Non-blocking connect: we do NOT run the (potentially multi-second)
+    // avformat_open_input / find_stream_info here, because open() is
+    // called synchronously on the UI thread — blocking it froze the
+    // whole app during connect, so the "Connecting…" overlay never got
+    // a frame to paint and the user got no feedback at all.
+    //
+    // Instead we just arm the URL and let decodeLoop() do the open on
+    // its own thread, reusing the exact path reconnect already uses
+    // (the `if (!m_formatCtx)` branch). The UI keeps rendering, the
+    // overlay shows progress, and a first-connect failure surfaces via
+    // isInitialConnectFailing() instead of a synchronous false return.
+    LOG_INFO("VideoCaptureRemote: arming remote base URL " + m_url +
+             " (connect runs on the decode thread)");
 
-    if (!initDecoder())
-    {
-        cleanupDecoder();
-        return false;
-    }
-
+    m_everReceivedFrame.store(false);
+    m_consecutiveReconnectFailures.store(0);
+    m_hostLikelyOffline.store(false);
     m_open.store(true);
     return true;
 }
@@ -766,7 +775,9 @@ void VideoCaptureRemote::decodeLoop()
             // hiccup starts from the 2 s slot again.
             m_consecutiveReconnectFailures.store(0);
             m_hostLikelyOffline.store(false);
-            LOG_INFO("VideoCaptureRemote: reconnected to " + m_url);
+            LOG_INFO(std::string("VideoCaptureRemote: ") +
+                     (m_everReceivedFrame.load() ? "reconnected to " : "connected to ") +
+                     m_url);
         }
 
         int rc = av_read_frame(m_formatCtx, packet);
@@ -954,6 +965,10 @@ void VideoCaptureRemote::decodeLoop()
             // overlay can tell a live stream from a stalled one
             // even when m_streamAnchored hasn't been reset yet.
             m_lastFrameAtSteadyUs.store(nowWallUs);
+            // Sticky 'we've connected for real at least once' — clears
+            // the initial-connect-failing state and marks subsequent
+            // drops as reconnects rather than first-connect failures.
+            m_everReceivedFrame.store(true);
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

@@ -272,6 +272,7 @@
   "overlay.reconnecting":  "Reconectando...",
   "overlay.disconnecting": "Desconectando...",
   "overlay.connected":     "Conectado",
+  "overlay.connect_failed": "Não foi possível conectar — tentando de novo",
   "overlay.host_offline":  "Host parece offline",
 
   "web.lang.label":            "Idioma",
