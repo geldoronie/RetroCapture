@@ -29,6 +29,42 @@ extern "C"
 #include <libswresample/swresample.h>
 }
 
+// Enable aggressive TCP keep-alive on a client socket so a viewer that
+// vanishes WITHOUT a clean FIN (network drop, a remote client whose
+// TLS read errored and was reaped over the internet) is detected by
+// the kernel in ~25 s instead of the default ~2 h. The disconnect
+// monitor loop's blocking recv() then returns and the client is
+// reaped, so the viewer count converges to reality.
+//
+// Without this, half-open connections from failed/repeated connects
+// pile up in m_clientSockets / m_rawClientSockets and inflate the
+// reported viewer count (the symptom: "counter already >6 even
+// without completing a connection"). #92.
+static void enableClientKeepalive(int fd)
+{
+    if (fd < 0) return;
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+#  if defined(PLATFORM_LINUX)
+    int idle  = 10; // begin probing after 10 s idle
+    int intvl = 5;  // probe every 5 s
+    int cnt   = 3;  // 3 missed probes → dead (~25 s total)
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt));
+#  elif defined(PLATFORM_MACOS)
+    int idle = 10; // macOS: seconds before first probe
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+#  endif
+#else
+    // Windows: SO_KEEPALIVE via the winsock fd (host build links winsock).
+    DWORD on = 1;
+    setsockopt(static_cast<SOCKET>(fd), SOL_SOCKET, SO_KEEPALIVE,
+               reinterpret_cast<const char *>(&on), sizeof(on));
+#endif
+}
+
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
 // Diferentes versões do FFmpeg têm assinaturas diferentes:
 // - FFmpeg 6.1+ (libavformat 61+): const uint8_t*
@@ -1135,6 +1171,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             }
         }
 
+        enableClientKeepalive(clientFd);
         {
             std::lock_guard<std::mutex> lock(m_rawOutputMutex);
             m_rawClientSockets.push_back(clientFd);
@@ -1194,6 +1231,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
 
     // Adicionar cliente à lista
+    enableClientKeepalive(clientFd);
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         m_clientSockets.push_back(clientFd);
