@@ -2739,6 +2739,8 @@ void UIManager::loadConfig()
             // runs.
             if (prefs.contains("quickActionsVisible"))
                 m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
+            if (prefs.contains("quickActionsAutoHide"))
+                m_quickActionsAutoHide = prefs["quickActionsAutoHide"].get<bool>();
             if (prefs.contains("shortcutsHelpVisible"))
                 m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
             // Chat overlay visibility (#84). Default true — same
@@ -3211,6 +3213,7 @@ void UIManager::saveConfig()
             {"quickActionsVisible",
              m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
                                   : m_quickActionsVisible},
+            {"quickActionsAutoHide", m_quickActionsAutoHide},
             {"shortcutsHelpVisible",
              m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
                                    : m_shortcutsHelpVisible},

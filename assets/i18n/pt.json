@@ -37,6 +37,8 @@
   "preferences.window":        "Janela",
   "preferences.start_fullscreen": "Iniciar em tela cheia",
   "preferences.start_fullscreen.tip": "Quando ligado, o RetroCapture abre em tela cheia.\nEquivalente a passar --fullscreen na linha de comando.\nF11 alterna tela cheia em tempo de execução de qualquer forma.",
+  "preferences.quickactions_autohide": "Esconder ações rápidas automaticamente",
+  "preferences.quickactions_autohide.tip": "Quando ligado, o overlay de ações rápidas some após o mouse ficar parado e reaparece no próximo movimento. Desligue para mantê-lo sempre visível.",
   "preferences.tray":          "Bandeja do sistema",
   "preferences.tray.enabled":  "Mostrar ícone na bandeja",
   "preferences.tray.enabled.tip": "Mostra um ícone na bandeja do sistema para o RetroCapture\nseguir rodando em segundo plano. Se o seu ambiente não tiver\nbandeja, o ícone não aparece e o botão de fechar encerra o app.",

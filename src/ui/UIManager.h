@@ -378,6 +378,9 @@ public:
     void setLanguage(const std::string &v)           { m_language = v; }
     bool getStartFullscreen() const                  { return m_startFullscreen; }
     void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
+    // #68 follow-up — auto-hide the quick-actions OSD after mouse idle.
+    bool getQuickActionsAutoHide() const             { return m_quickActionsAutoHide; }
+    void setQuickActionsAutoHide(bool v)             { m_quickActionsAutoHide = v; }
     // #86 — system tray / background operation preferences.
     bool getTrayEnabled() const                      { return m_trayEnabled; }
     void setTrayEnabled(bool v)                      { m_trayEnabled = v; }
@@ -1018,6 +1021,10 @@ private:
     // true so first-time users see the overlay; subsequent toggles
     // round-trip through saveConfig().
     bool m_quickActionsVisible = true;
+    // Auto-hide the quick-actions overlay after the mouse goes idle, and
+    // reveal it again on the next movement. Default on; toggled in
+    // Preferences and persisted.
+    bool m_quickActionsAutoHide = true;
     bool m_chatOverlayVisible  = true;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the

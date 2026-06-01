@@ -58,6 +58,17 @@ void UIPreferences::render()
         ImGui::SetTooltip("%s", T("preferences.start_fullscreen.tip").c_str());
     }
 
+    bool quickActionsAutoHide = m_uiManager->getQuickActionsAutoHide();
+    if (ImGui::Checkbox(T("preferences.quickactions_autohide").c_str(), &quickActionsAutoHide))
+    {
+        m_uiManager->setQuickActionsAutoHide(quickActionsAutoHide);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.quickactions_autohide.tip").c_str());
+    }
+
     // ── System tray / background operation (#86) ──────────────────
     ui_section_header(T("preferences.tray").c_str());
 

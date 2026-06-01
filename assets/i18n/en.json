@@ -37,6 +37,8 @@
   "preferences.window":        "Window",
   "preferences.start_fullscreen": "Start in fullscreen",
   "preferences.start_fullscreen.tip": "When on, RetroCapture opens fullscreen on launch.\nEquivalent to passing --fullscreen on the CLI.\nF11 toggles fullscreen at runtime regardless.",
+  "preferences.quickactions_autohide": "Auto-hide quick actions",
+  "preferences.quickactions_autohide.tip": "When on, the quick-actions overlay fades out after the mouse goes idle and reappears on the next mouse movement. Turn off to keep it always visible.",
   "preferences.tray":          "System tray",
   "preferences.tray.enabled":  "Show tray icon",
   "preferences.tray.enabled.tip": "Show a system-tray icon so RetroCapture can keep\nrunning in the background. If your desktop has no tray\nhost the icon won't appear and the close button quits.",

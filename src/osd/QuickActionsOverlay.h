@@ -52,4 +52,13 @@ private:
     UIManager *m_uiManager = nullptr;
     bool       m_visible = true;
     float      m_lastRenderedHeight = 0.0f;
+
+    // Auto-hide bookkeeping. m_lastActivityTime is an ImGui::GetTime()
+    // (seconds since start, monotonic) stamp of the last mouse movement
+    // / click / hover; the overlay holds full opacity for a few seconds
+    // after it, then fades out. m_activityPrimed defers the very first
+    // stamp to the first rendered frame so the overlay doesn't start the
+    // idle clock from time 0 and hide before the user touches anything.
+    double m_lastActivityTime = 0.0;
+    bool   m_activityPrimed   = false;
 };

@@ -23,6 +23,41 @@ void QuickActionsOverlay::render()
 {
     if (!m_visible || !m_uiManager) return;
 
+    // ── Auto-hide (#68 follow-up) ──────────────────────────────────
+    // Fade the overlay out after the mouse goes idle and bring it back
+    // on the next movement/click/scroll. Time base is ImGui::GetTime()
+    // (monotonic seconds), so no wall-clock plumbing needed.
+    ImGuiIO     &io  = ImGui::GetIO();
+    const double now = ImGui::GetTime();
+    if (!m_activityPrimed) { m_lastActivityTime = now; m_activityPrimed = true; }
+
+    const bool mouseActive =
+        io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f ||
+        io.MouseWheel != 0.0f ||
+        io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
+    if (mouseActive) m_lastActivityTime = now;
+
+    float alpha = 1.0f;
+    if (m_uiManager->getQuickActionsAutoHide())
+    {
+        constexpr double kHoldSeconds = 3.0;  // full opacity after activity
+        constexpr double kFadeSeconds = 0.4;  // fade-out duration
+        const double idle = now - m_lastActivityTime;
+        if (idle > kHoldSeconds)
+        {
+            const double t = (idle - kHoldSeconds) / kFadeSeconds;
+            alpha = (t >= 1.0) ? 0.0f : static_cast<float>(1.0 - t);
+        }
+        // Fully faded: skip the window entirely so it can't eat clicks
+        // while invisible. The activity check above keeps running and
+        // wakes it on the next movement.
+        if (alpha <= 0.0f)
+        {
+            m_lastRenderedHeight = 0.0f;
+            return;
+        }
+    }
+
     // Pinned to the bottom-right of the main viewport every frame.
     // The connection-status overlay shares this corner — it queries
     // renderedHeight() and shifts itself up to avoid overlap.
@@ -32,6 +67,9 @@ void QuickActionsOverlay::render()
     ImGui::SetNextWindowPos(anchor, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(240, 0), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
+    // Uniform fade of the whole overlay (bg + text + buttons). The bg
+    // alpha above is multiplied by this global style alpha.
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
 
     // No decoration. NoSavedSettings keeps imgui.ini clean — the
     // per-frame anchor is the only source of truth for position.
@@ -49,8 +87,14 @@ void QuickActionsOverlay::render()
     if (!ImGui::Begin("##quickActions", nullptr, flags))
     {
         ImGui::End();
+        ImGui::PopStyleVar();
         return;
     }
+
+    // Hovering the overlay keeps it awake even without movement, so it
+    // doesn't fade while the user is reading it or aiming for a button.
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+        m_lastActivityTime = now;
 
     const bool clientMode      = m_uiManager->isRemoteSource() &&
                                  !m_uiManager->getCurrentDevice().empty();
@@ -297,4 +341,5 @@ void QuickActionsOverlay::render()
     m_lastRenderedHeight = ImGui::GetWindowHeight();
 
     ImGui::End();
+    ImGui::PopStyleVar();
 }
