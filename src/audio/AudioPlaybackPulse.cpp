@@ -115,9 +115,23 @@ size_t AudioPlaybackPulse::submit(const float *interleaved,
     std::shared_lock<std::shared_mutex> streamLock(m_streamMutex);
     if (!m_stream) return 0;
 
-    const size_t bytes = sampleCount * m_channels * sizeof(float);
+    const size_t floats = sampleCount * m_channels;
+    const size_t bytes  = floats * sizeof(float);
+
+    // Apply the client-side gain just before the OS write. At unity we
+    // write the decoder buffer straight through; otherwise scale into a
+    // reused scratch buffer so the caller's data stays intact.
+    const float    gain = volume();
+    const float   *out  = interleaved;
+    if (gain != 1.0f)
+    {
+        if (m_gainBuf.size() < floats) m_gainBuf.resize(floats);
+        for (size_t i = 0; i < floats; ++i) m_gainBuf[i] = interleaved[i] * gain;
+        out = m_gainBuf.data();
+    }
+
     int err = 0;
-    if (pa_simple_write(m_stream, interleaved, bytes, &err) < 0)
+    if (pa_simple_write(m_stream, out, bytes, &err) < 0)
     {
         static int logCount = 0;
         if (logCount++ < 3)

@@ -101,6 +101,16 @@ public:
     void setInterpolationMode(InterpolationMode mode);
 
     /**
+     * #77 — client-side playback gain for the incoming audio, linear
+     * in [0.0, 1.0] (1.0 = unity). Stored in an atomic and pushed to
+     * the audio sink by the decode thread, so it can be called live
+     * from the UI thread without touching the sink pointer directly.
+     * Applied lazily too: a value set before the sink exists (e.g. from
+     * config at connect time) is carried into ensureAudioOutput().
+     */
+    void setAudioVolume(float linear);
+
+    /**
      * #49 Phase 3 — bearer token sent to the host's /raw endpoint
      * for password-protected streams. Set before open(); empty
      * string disables the header (the host's open-by-default path
@@ -200,6 +210,10 @@ private:
     std::atomic<bool>       m_hasFrame{false};
 
     std::atomic<InterpolationMode> m_interpolationMode{InterpolationMode::Linear};
+
+    // #77 client-side audio gain, written by the UI thread, read by the
+    // decode thread which forwards it to m_audioPlayback each frame.
+    std::atomic<float> m_audioVolume{1.0f};
 
     // Per-refresh interpolation output buffer. The classic 3:2 pulldown
     // problem (60 fps stream into a 144 Hz panel = 2.4 refreshes per

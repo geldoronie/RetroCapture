@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 
@@ -78,4 +79,27 @@ public:
      * session.
      */
     virtual void flush() = 0;
+
+    /**
+     * Set the linear playback gain in [0.0, 1.0] (1.0 = unity, the
+     * default; 0.0 = silence). Applied as a per-sample multiply inside
+     * submit(), just before the buffer is handed to the OS sink, so the
+     * playback-clock math (getClockUs) is unaffected.
+     *
+     * Thread-safe: the value lives in an atomic that submit() reads on
+     * the audio thread while the UI thread writes it here. Out-of-range
+     * inputs are clamped.
+     */
+    void setVolume(float linear)
+    {
+        if (linear < 0.0f) linear = 0.0f;
+        if (linear > 1.0f) linear = 1.0f;
+        m_volumeLinear.store(linear, std::memory_order_relaxed);
+    }
+
+    /** Current linear gain, as last set by setVolume(). */
+    float volume() const { return m_volumeLinear.load(std::memory_order_relaxed); }
+
+protected:
+    std::atomic<float> m_volumeLinear{1.0f};
 };

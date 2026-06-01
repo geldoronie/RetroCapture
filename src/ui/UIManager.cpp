@@ -2392,6 +2392,28 @@ void UIManager::triggerRemoteInterpolationChange(const std::string &v)
     saveConfig();
 }
 
+void UIManager::triggerRemoteAudioVolumeChange(float volume)
+{
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 1.0f) volume = 1.0f;
+    m_remoteAudioVolume = volume;
+    // Moving the slider above zero is an implicit unmute.
+    if (volume > 0.0f) m_remoteAudioMuted = false;
+    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
+    saveConfig();
+}
+
+void UIManager::triggerRemoteAudioMuteChange(bool muted)
+{
+    m_remoteAudioMuted = muted;
+    // Mute zeroes the effective gain but keeps m_remoteAudioVolume so
+    // the slider position (and the value restored on unmute) survives.
+    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -3008,6 +3030,17 @@ void UIManager::loadConfig()
             {
                 m_audioInputSourceId = audio["inputSourceId"].get<std::string>();
             }
+            // #77 client-side remote audio volume + mute.
+            if (audio.contains("remoteVolume") && audio["remoteVolume"].is_number())
+            {
+                m_remoteAudioVolume = audio["remoteVolume"].get<float>();
+                if (m_remoteAudioVolume < 0.0f) m_remoteAudioVolume = 0.0f;
+                if (m_remoteAudioVolume > 1.0f) m_remoteAudioVolume = 1.0f;
+            }
+            if (audio.contains("remoteMuted") && audio["remoteMuted"].is_boolean())
+            {
+                m_remoteAudioMuted = audio["remoteMuted"].get<bool>();
+            }
         }
 
         // AVFoundation persistence (macOS device + format selection).
@@ -3237,7 +3270,9 @@ void UIManager::saveConfig()
 
         // Salvar configurações de áudio
         config["audio"] = {
-            {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+            {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId},
+            {"remoteVolume", m_remoteAudioVolume},
+            {"remoteMuted", m_remoteAudioMuted}};
 
         // AVFoundation device + format selection (macOS).
         config["avfoundation"] = {

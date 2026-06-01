@@ -361,6 +361,9 @@ bool VideoCaptureRemote::ensureAudioOutput()
         m_audioPlayback.reset();
         return false;
     }
+    // Carry any volume already chosen (config default / a live change
+    // made before the sink came up) into the freshly opened sink.
+    m_audioPlayback->setVolume(m_audioVolume.load(std::memory_order_relaxed));
     LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
              " Hz x " + std::to_string(channels) + " ch");
     return true;
@@ -498,6 +501,16 @@ void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
     // the previous timing window into the new one (would briefly
     // glitch the clock until the buffer drained).
     if (m_audioPlayback) m_audioPlayback->flush();
+}
+
+void VideoCaptureRemote::setAudioVolume(float linear)
+{
+    if (linear < 0.0f) linear = 0.0f;
+    if (linear > 1.0f) linear = 1.0f;
+    // UI-thread write; the decode thread reads this and forwards it to
+    // the sink each audio frame, so we never touch m_audioPlayback from
+    // here (it may be torn down concurrently by the decode thread).
+    m_audioVolume.store(linear, std::memory_order_relaxed);
 }
 
 void VideoCaptureRemote::setTargetResolution(uint32_t width, uint32_t height)
@@ -797,6 +810,10 @@ void VideoCaptureRemote::decodeLoop()
                         av_frame_unref(aFrame);
                         continue;
                     }
+                    // Forward the latest client-side gain to the sink.
+                    // Cheap relaxed load + store (~once per AAC frame);
+                    // keeps slider/mute changes live without a restart.
+                    m_audioPlayback->setVolume(m_audioVolume.load(std::memory_order_relaxed));
                     const int nbIn    = aFrame->nb_samples;
                     const int outRate = m_audioCodecCtx->sample_rate;
                     // Resampler may need extra output samples — ask

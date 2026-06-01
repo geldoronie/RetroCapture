@@ -503,6 +503,9 @@ public:
     std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
     std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
     std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
+    // #77 client-side volume for the incoming remote audio stream.
+    float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
+    bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -525,6 +528,11 @@ public:
     void triggerStreamingQsvPresetChange(const std::string &v);
     void triggerStreamingAmfQualityChange(const std::string &v);
     void triggerRemoteInterpolationChange(const std::string &v);
+    // #77 — volume in [0,1]; mute is a separate latch that overrides
+    // the slider value (so unmuting restores the last level). Both push
+    // the effective gain (muted ? 0 : volume) through the callback.
+    void triggerRemoteAudioVolumeChange(float volume);
+    void triggerRemoteAudioMuteChange(bool muted);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -659,6 +667,8 @@ public:
     void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
     void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
     void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
+    // #77 — receives the effective linear gain (muted ? 0 : volume).
+    void setOnRemoteAudioVolumeChanged   (std::function<void(float)> cb) { m_onRemoteAudioVolumeChanged = cb; }
 
     // Accessor used by Application to keep the connection-window's
     // capture pointer current — the window reads .isOpen() / dims to
@@ -1181,6 +1191,11 @@ private:
     //   "nearest" — show the closer frame (clean image, 3:2 stutter)
     //   "off"     — strict PTS gate, hold prev until next is due
     std::string m_remoteInterpolation = "linear";
+    // #77 client-side remote audio volume. m_remoteAudioVolume holds the
+    // slider level [0,1]; m_remoteAudioMuted overrides it to 0 while
+    // preserving the level so unmuting restores it.
+    float m_remoteAudioVolume = 1.0f;
+    bool  m_remoteAudioMuted  = false;
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -1303,6 +1318,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
     std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
     std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
+    std::function<void(float)> m_onRemoteAudioVolumeChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

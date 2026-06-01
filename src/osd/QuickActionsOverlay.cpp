@@ -87,6 +87,24 @@ void QuickActionsOverlay::render()
         ImGui::Text("Watching");
         ImGui::SameLine();
         ImGui::TextDisabled("- %u %s", upstream, T("quickactions.viewers").c_str());
+
+        // #77 Audio volume + mute — mirrors UIRemoteConnection so the
+        // user can ride the level from the OSD when the main UI is
+        // hidden. Same UIManager triggers (persist + forward gain).
+        bool  muted     = m_uiManager->getRemoteAudioMuted();
+        float volumePct = m_uiManager->getRemoteAudioVolume() * 100.0f;
+        if (ImGui::Checkbox(T("remote.audio_mute").c_str(), &muted))
+        {
+            m_uiManager->triggerRemoteAudioMuteChange(muted);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(muted);
+        if (ImGui::SliderFloat("##qaAudioVol", &volumePct, 0.0f, 100.0f, "%.0f%%"))
+        {
+            m_uiManager->triggerRemoteAudioVolumeChange(volumePct / 100.0f);
+        }
+        ImGui::EndDisabled();
     }
     if (recordingActive)
     {

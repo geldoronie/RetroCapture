@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
+#include <vector>
 
 struct pa_simple;
 
@@ -50,6 +51,9 @@ private:
     pa_simple        *m_stream      = nullptr;
     uint32_t          m_sampleRate  = 0;
     uint32_t          m_channels    = 0;
+    // Reused scratch for the gain pass; only touched on the single
+    // decode/submit thread, so it needs no lock.
+    std::vector<float> m_gainBuf;
     // Last PTS we handed to pa_simple_write, in stream-origin-relative
     // microseconds. Updated under m_clockMutex so the video thread can
     // sample it consistently.
