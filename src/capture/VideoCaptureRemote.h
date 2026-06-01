@@ -112,6 +112,13 @@ private:
     void decodeLoop();
     bool initDecoder();
     void cleanupDecoder();
+    // Bring up the audio sink + resampler from the audio decoder's
+    // current params (m_audioCodecCtx). Returns false (and leaves
+    // m_audioPlayback/m_swrCtx null) when the params aren't resolved
+    // yet — e.g. a mid-join AAC probe that reports 0 channels. Called
+    // eagerly in initDecoder and lazily from the decode loop once the
+    // first decoded frame populates the codec context. #98.
+    bool ensureAudioOutput();
 
     std::string m_url;        // base URL — "/raw" is appended internally
     std::string m_authToken;  // sha256 hex of password, empty == no auth

@@ -266,94 +266,18 @@ bool VideoCaptureRemote::initDecoder()
             const int  openRet   = gotParams ? avcodec_open2(m_audioCodecCtx, aCodec, nullptr) : -1;
             if (gotCtx && gotParams && openRet >= 0)
             {
-                // Open the system sink at the decoder's native format
-                // (e.g. AAC stereo 44.1 kHz). Shared-mode WASAPI /
-                // PulseAudio both auto-resample to whatever the device
-                // is configured for.
-#ifdef __linux__
-                m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
-#elif defined(_WIN32)
-                m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
-#elif defined(__APPLE__)
-                m_audioPlayback = std::make_unique<AudioPlaybackCoreAudio>();
-#endif
-                const uint32_t rate     = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
-                // Channel count compat: AVCodecContext.channels was
-                // deprecated in FFmpeg 5.1 in favour of ch_layout.nb_channels.
-                // Use whichever the build exposes.
-#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
-                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->channels);
-#else
-                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->ch_layout.nb_channels);
-#endif
-                if (!m_audioPlayback || !m_audioPlayback->open(rate, channels))
+                // Bring the sink up now if the probe already resolved the
+                // AAC params. On a mid-join the probe often reports
+                // "aac, 0 channels: unspecified sample format" — in that
+                // case ensureAudioOutput() returns false and we DEFER:
+                // the decode loop retries it once the first decoded frame
+                // populates the codec context, instead of dropping audio
+                // for the whole session. #98 (sibling of the #100 video fix).
+                if (!ensureAudioOutput())
                 {
-                    LOG_WARN("VideoCaptureRemote: audio playback open failed — continuing video-only");
-                    m_audioPlayback.reset();
-                }
-                else
-                {
-                    // Resampler: decoder may emit planar floats / s16,
-                    // but the sink wants packed float32. swr_convert
-                    // handles both layout and sample-format conversions
-                    // transparently per audio frame.
-                    // Resampler setup with explicit channel layout —
-                    // setSwrChannelLayout wrapper was leaving the layout
-                    // unset on some ffmpeg builds ('swr_init failed:
-                    // Input channel count and layout are unset' in the
-                    // user log). swr_alloc_set_opts2 / the input-frame
-                    // path takes the layout directly from the codec
-                    // context, which is what the decoder actually emits,
-                    // so we hand the codec's layout in verbatim and tell
-                    // the output to mirror it.
-#if FFMPEG_USE_NEW_CHANNEL_LAYOUT
-                    int allocRet = swr_alloc_set_opts2(
-                        &m_swrCtx,
-                        &m_audioCodecCtx->ch_layout,   // out layout
-                        AV_SAMPLE_FMT_FLT,             // out fmt
-                        static_cast<int>(rate),        // out rate
-                        &m_audioCodecCtx->ch_layout,   // in layout
-                        m_audioCodecCtx->sample_fmt,   // in fmt
-                        m_audioCodecCtx->sample_rate,  // in rate
-                        0, nullptr);
-                    if (allocRet < 0)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts2 failed (" + std::to_string(allocRet) + ") — disabling audio");
-                        if (m_swrCtx) swr_free(&m_swrCtx);
-                        m_audioPlayback.reset();
-                        m_swrCtx = nullptr;
-                    }
-                    else
-#else
-                    int64_t layout = av_get_default_channel_layout(static_cast<int>(channels));
-                    m_swrCtx = swr_alloc_set_opts(
-                        nullptr,
-                        layout,                        // out layout
-                        AV_SAMPLE_FMT_FLT,             // out fmt
-                        static_cast<int>(rate),        // out rate
-                        layout,                        // in layout (assume same)
-                        m_audioCodecCtx->sample_fmt,   // in fmt
-                        m_audioCodecCtx->sample_rate,  // in rate
-                        0, nullptr);
-                    if (!m_swrCtx)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts failed — disabling audio");
-                        m_audioPlayback.reset();
-                    }
-                    else
-#endif
-                    if (swr_init(m_swrCtx) < 0)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
-                        swr_free(&m_swrCtx);
-                        m_audioPlayback.reset();
-                    }
-                    else
-                    {
-                        LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
-                                 " Hz x " + std::to_string(channels) + " ch, codec=" +
-                                 std::string(aCodec->name));
-                    }
+                    LOG_INFO("VideoCaptureRemote: audio params not ready at "
+                             "probe (likely mid-join) — deferring sink open "
+                             "to the first decoded frame");
                 }
             }
             else
@@ -364,6 +288,81 @@ bool VideoCaptureRemote::initDecoder()
         }
     }
 
+    return true;
+}
+
+bool VideoCaptureRemote::ensureAudioOutput()
+{
+    if (m_audioPlayback) return true;       // already up
+    if (!m_audioCodecCtx) return false;
+
+    const uint32_t rate = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
+#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
+    const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->channels);
+#else
+    const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->ch_layout.nb_channels);
+#endif
+    // Params not resolved yet (mid-join probe) — caller retries on the
+    // next decoded frame.
+    if (rate == 0 || channels == 0) return false;
+
+    // Open the system sink at the decoder's native format. Shared-mode
+    // WASAPI / PulseAudio both auto-resample to the device config.
+#ifdef __linux__
+    m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
+#elif defined(_WIN32)
+    m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
+#elif defined(__APPLE__)
+    m_audioPlayback = std::make_unique<AudioPlaybackCoreAudio>();
+#endif
+    if (!m_audioPlayback || !m_audioPlayback->open(rate, channels))
+    {
+        LOG_WARN("VideoCaptureRemote: audio playback open failed — continuing video-only");
+        m_audioPlayback.reset();
+        return false;
+    }
+
+    // Resampler: decoder may emit planar floats / s16 but the sink
+    // wants packed float32; swr handles layout + sample-format. Hand
+    // the codec's own layout in verbatim (some ffmpeg builds left the
+    // layout unset via the wrapper).
+#if FFMPEG_USE_NEW_CHANNEL_LAYOUT
+    int allocRet = swr_alloc_set_opts2(
+        &m_swrCtx,
+        &m_audioCodecCtx->ch_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(rate),
+        &m_audioCodecCtx->ch_layout, m_audioCodecCtx->sample_fmt, m_audioCodecCtx->sample_rate,
+        0, nullptr);
+    if (allocRet < 0)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts2 failed (" + std::to_string(allocRet) + ") — disabling audio");
+        if (m_swrCtx) { swr_free(&m_swrCtx); m_swrCtx = nullptr; }
+        m_audioPlayback.reset();
+        return false;
+    }
+#else
+    int64_t layout = av_get_default_channel_layout(static_cast<int>(channels));
+    m_swrCtx = swr_alloc_set_opts(
+        nullptr,
+        layout, AV_SAMPLE_FMT_FLT, static_cast<int>(rate),
+        layout, m_audioCodecCtx->sample_fmt, m_audioCodecCtx->sample_rate,
+        0, nullptr);
+    if (!m_swrCtx)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts failed — disabling audio");
+        m_audioPlayback.reset();
+        return false;
+    }
+#endif
+    if (swr_init(m_swrCtx) < 0)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
+        swr_free(&m_swrCtx);
+        m_swrCtx = nullptr;
+        m_audioPlayback.reset();
+        return false;
+    }
+    LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
+             " Hz x " + std::to_string(channels) + " ch");
     return true;
 }
 
@@ -778,13 +777,26 @@ void VideoCaptureRemote::decodeLoop()
         // Audio packets: decode, resample to packed float32, push to
         // the playback sink. The sink's getClockUs() is the A/V master
         // clock for the video gating below.
-        if (packet->stream_index == m_audioStreamIdx && m_audioCodecCtx && m_audioPlayback)
+        // Gate on the decoder, not the sink: when the mid-join probe
+        // couldn't resolve the AAC params, m_audioPlayback is still
+        // null here. We decode anyway and bring the sink up lazily
+        // (ensureAudioOutput) from the first decoded frame, which DOES
+        // carry valid channels/rate. #98.
+        if (packet->stream_index == m_audioStreamIdx && m_audioCodecCtx)
         {
             if (avcodec_send_packet(m_audioCodecCtx, packet) >= 0)
             {
                 AVFrame *aFrame = av_frame_alloc();
                 while (aFrame && avcodec_receive_frame(m_audioCodecCtx, aFrame) >= 0)
                 {
+                    // Deferred sink bring-up: the codec context now has
+                    // real params. If it still can't open, skip this
+                    // frame and retry on the next.
+                    if (!m_audioPlayback && !ensureAudioOutput())
+                    {
+                        av_frame_unref(aFrame);
+                        continue;
+                    }
                     const int nbIn    = aFrame->nb_samples;
                     const int outRate = m_audioCodecCtx->sample_rate;
                     // Resampler may need extra output samples — ask
