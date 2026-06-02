@@ -2666,6 +2666,20 @@ bool Application::initUI()
         // VideoCaptureScreen pointed at it. Empty target == stop.
         if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
         {
+            // Dedup: if we're already capturing this exact target, don't
+            // tear the portal session down and re-create it (that popped
+            // a fresh portal dialog and interrupted PipeWire format
+            // negotiation, leaving the stream with no frames). The
+            // source-type switch already auto-opened the target, so the
+            // UI re-selecting the same one must be a no-op. #107.
+            if (!devicePath.empty() && devicePath == m_devicePath &&
+                dynamic_cast<VideoCaptureScreen *>(m_capture.get()) &&
+                m_capture->isOpen())
+            {
+                processingDeviceChange = false;
+                return;
+            }
+
             LOG_INFO("Screen target change: " +
                      (devicePath.empty() ? std::string("(stop)") : devicePath));
             if (m_capture)
