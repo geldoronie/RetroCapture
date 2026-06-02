@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IVideoCapture.h"
+#include "ScreenBackend.h"
 
 #include <atomic>
 #include <cstdint>
@@ -17,27 +18,21 @@
  * by V4L2 / DirectShow / AVFoundation / Remote, so shaders, streaming,
  * recording and the virtual camera all compose with it for free.
  *
- * Target model
- * ------------
- * open(device) takes an identifier string describing what to capture:
- *   - "monitor:N"      capture display index N (N from listDevices())
- *   - "window:<id>"    capture a single window (platform-native handle)
- *   - ""               platform default (primary monitor, or — on
- *                      Wayland — let the portal's own picker decide)
+ * The actual grabbing is delegated to a platform ScreenBackend
+ * (PipeWire/portal on Linux, DXGI/WGC on Windows, ScreenCaptureKit on
+ * macOS). The backend pushes packed-32-bit frames to onScreenFrame();
+ * this class crops them to the region and converts to RGB24 for the
+ * downstream FrameProcessor (same format the DirectShow / Remote paths
+ * already deliver).
+ *
+ * Target model — open(device):
+ *   - "monitor:N"   capture display index N
+ *   - "window:<id>" capture a single window
+ *   - ""            platform default (or, on Wayland, let the portal pick)
  * A region crop (x, y, w, h in target pixels) layered on top of any
- * target is set via setRegion(); (0,0,0,0) means "no crop / full target".
- *
- * Platform backends (selected at compile time, hidden behind a pimpl):
- *   - Linux:   PipeWire + xdg-desktop-portal ScreenCast (Wayland + X11)
- *   - Windows: DXGI Desktop Duplication (monitor) / WGC|GDI (window)
- *   - macOS:   ScreenCaptureKit (display / window / region)
- *
- * Frames are delivered as packed 32-bit BGRA/RGBA (see getPixelFormat);
- * the FrameProcessor converts to RGB24 like every other source. Sizes
- * are dynamic — getWidth()/getHeight() report the live captured size
- * (after crop), which can change if the user switches target.
+ * target is set via setRegion(); (0,0,0,0) means "no crop".
  */
-class VideoCaptureScreen : public IVideoCapture
+class VideoCaptureScreen : public IVideoCapture, public IScreenFrameSink
 {
 public:
     VideoCaptureScreen();
@@ -73,13 +68,16 @@ public:
     uint32_t getHeight() const override { return m_height.load(); }
     uint32_t getPixelFormat() const override { return m_pixelFormat; }
 
-    bool isReceivingFrames() const override;
+    bool isReceivingFrames() const override { return m_open.load() && m_receiving.load(); }
+
+    // IScreenFrameSink — called by the backend on its capture thread.
+    void onScreenFrame(const uint8_t *data, uint32_t width, uint32_t height,
+                       uint32_t stride, ScreenPixelFormat format) override;
 
     /**
      * Region crop, in target pixels, applied on top of whatever target
-     * open() selected. (0,0,0,0) disables cropping (capture full target).
-     * Safe to call before or after open(); takes effect on the next
-     * delivered frame.
+     * open() selected. (0,0,0,0) disables cropping. Safe to call any
+     * time; takes effect on the next delivered frame.
      */
     void setRegion(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
@@ -87,32 +85,27 @@ public:
     void setCaptureCursor(bool on) { m_captureCursor.store(on); }
 
 private:
-    // Platform backend, pimpl so the PipeWire / DXGI / ScreenCaptureKit
-    // headers stay out of this .h. Defined per-platform in the matching
-    // VideoCaptureScreen_*.cpp.
-    struct Backend;
-    std::unique_ptr<Backend> m_backend;
+    std::unique_ptr<ScreenBackend> m_backend;
 
     std::string        m_target;          // last opened identifier
     std::atomic<bool>  m_open{false};
     bool               m_dummyMode = false;
 
-    // Live captured dimensions (after crop), updated by the backend.
+    // Live captured dimensions (after crop), updated as frames arrive.
     std::atomic<uint32_t> m_width{0};
     std::atomic<uint32_t> m_height{0};
-    // Packed 32-bit; downstream treats this as BGRA→RGB in FrameProcessor.
-    uint32_t           m_pixelFormat = 0;
+    uint32_t           m_pixelFormat = 0;   // 0 == RGB24 downstream
 
-    // Region crop (target pixels). Guarded because the UI thread sets it
-    // while the capture thread reads it.
+    // Region crop (target pixels). Guarded — the UI thread sets it while
+    // the capture thread reads it in onScreenFrame().
     std::mutex            m_regionMutex;
     uint32_t              m_regionX = 0, m_regionY = 0, m_regionW = 0, m_regionH = 0;
 
     std::atomic<bool>  m_captureCursor{true};
     std::atomic<bool>  m_receiving{false};
 
-    // Latest decoded frame, RGB24. The backend writes under the lock;
-    // captureLatestFrame() hands a pointer to it back to the pipeline.
+    // Latest frame, RGB24. onScreenFrame() writes under the lock;
+    // captureLatestFrame() hands a pointer to it to the pipeline.
     std::mutex            m_frameMutex;
     std::vector<uint8_t>  m_frameBuf;
     bool                  m_haveFrame = false;
