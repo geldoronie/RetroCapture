@@ -48,6 +48,13 @@ API_AVAILABLE(macos(12.3))
     const uint32_t stride = static_cast<uint32_t>(CVPixelBufferGetBytesPerRow(px));
     if (base && w && h)
     {
+        static bool loggedDims = false;
+        if (!loggedDims)
+        {
+            loggedDims = true;
+            LOG_INFO("VideoCaptureScreen(sck): delivering " + std::to_string(w) + "x" +
+                     std::to_string(h) + " (stride " + std::to_string(stride) + ")");
+        }
         sink->onScreenFrame(base, w, h, stride, ScreenPixelFormat::BGRA);
     }
     CVPixelBufferUnlockBaseAddress(px, kCVPixelBufferLock_ReadOnly);
@@ -179,8 +186,33 @@ private:
                 if ((unsigned long)win.windowID == wantId)
                 {
                     filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:win];
-                    capW = (uint32_t)win.frame.size.width;
-                    capH = (uint32_t)win.frame.size.height;
+                    // win.frame is in POINTS. Capture at native pixels so a
+                    // Retina (2x) window isn't grabbed at half resolution —
+                    // which made shaders (scanlines) space wrong. Scale by
+                    // the backing factor of the display the window sits on.
+                    double scale = 1.0;
+                    for (SCDisplay *d in content.displays)
+                    {
+                        if (CGRectContainsPoint(d.frame,
+                                CGPointMake(CGRectGetMidX(win.frame), CGRectGetMidY(win.frame))))
+                        {
+                            CGDisplayModeRef m = CGDisplayCopyDisplayMode(d.displayID);
+                            if (m)
+                            {
+                                // True backing scale from the mode itself
+                                // (pixels / points), independent of how
+                                // SCDisplay reports its size.
+                                const double ptW = CGDisplayModeGetWidth(m);
+                                if (ptW > 0)
+                                    scale = (double)CGDisplayModeGetPixelWidth(m) / ptW;
+                                CGDisplayModeRelease(m);
+                            }
+                            break;
+                        }
+                    }
+                    if (scale < 1.0) scale = 1.0;
+                    capW = (uint32_t)(win.frame.size.width  * scale);
+                    capH = (uint32_t)(win.frame.size.height * scale);
                     break;
                 }
             }
