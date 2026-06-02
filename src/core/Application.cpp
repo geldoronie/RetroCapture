@@ -6481,12 +6481,14 @@ void Application::syncDirectoryClient()
     {
         bool offline   = false;
         bool receiving = false;
+        bool failing   = false;
         if (m_capture)
         {
             if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
             {
                 offline   = remote->isHostLikelyOffline();
                 receiving = remote->isReceivingFrames();
+                failing   = remote->isInitialConnectFailing();
             }
             else
             {
@@ -6495,6 +6497,7 @@ void Application::syncDirectoryClient()
         }
         m_ui->setRemoteHostLikelyOffline(offline);
         m_ui->setRemoteReceivingFrames(receiving);
+        m_ui->setRemoteInitialConnectFailing(failing);
     }
 
     // #49 Phase 3 — keep the server-side password gate in sync with

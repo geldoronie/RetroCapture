@@ -132,6 +132,12 @@ private:
 
     std::thread         m_thread;
     std::atomic<bool>   m_running{false};
+    // Live SSE socket fd, registered by runSSE() while it's blocked in a
+    // no-timeout recv(). stop() shuts it down to break that recv at once
+    // so the join() doesn't hang until the host's next event/keepalive
+    // (which froze the UI on Disconnect). Stored as intptr_t so the
+    // header doesn't pull in socket headers; -1 == none. #104.
+    std::atomic<std::intptr_t> m_sseSock{-1};
 
     // Dedup state — only fire the callback when the snapshot actually
     // changed. Compared against the new snapshot before dispatch.

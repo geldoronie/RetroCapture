@@ -58,10 +58,14 @@ namespace httpinternal
     // no ODR issue.
     static constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
     inline int closeSocket(socket_t s) { return ::closesocket(s); }
+    // Half-close to wake a thread blocked in recv() on this socket from
+    // another thread (the socket stays valid; the blocked recv returns).
+    inline int shutdownSocket(socket_t s) { return ::shutdown(s, SD_BOTH); }
 #else
     using socket_t = int;
     static constexpr socket_t INVALID_SOCK = -1;
     inline int closeSocket(socket_t s) { return ::close(s); }
+    inline int shutdownSocket(socket_t s) { return ::shutdown(s, SHUT_RDWR); }
 #endif
 
     struct UrlParts

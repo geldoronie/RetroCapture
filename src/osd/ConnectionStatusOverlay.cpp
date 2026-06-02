@@ -37,6 +37,10 @@ void ConnectionStatusOverlay::render()
     // honest liveness signal.
     const bool hasFrames  = m_uiManager->getRemoteReceivingFrames();
     const bool offline    = m_uiManager->getRemoteHostLikelyOffline();
+    // First-connect failure: this armed URL has never produced a frame
+    // and the async connect has failed a few times. Distinct from a
+    // mid-session reconnect (which keeps the calmer "Reconnecting…").
+    const bool firstConnectFailing = m_uiManager->getRemoteInitialConnectFailing();
 
     // Disconnect tail — when the user clears the device, hold the
     // "Disconnecting…" label for a short window so the detached
@@ -72,6 +76,15 @@ void ConnectionStatusOverlay::render()
     else if (offline)
     {
         label    = T("overlay.host_offline");
+        spinning = true;
+    }
+    else if (!hasFrames && firstConnectFailing)
+    {
+        // Never connected and the retries are failing — tell the user
+        // plainly rather than spinning "Connecting…" indefinitely. The
+        // URL stays armed and keeps retrying in the background.
+        label    = T("overlay.connect_failed");
+        color    = ImVec4(0.95f, 0.45f, 0.40f, 1.0f); // red-ish
         spinning = true;
     }
     else if (!hasFrames)

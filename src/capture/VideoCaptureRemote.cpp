@@ -52,14 +52,31 @@ bool VideoCaptureRemote::open(const std::string &url)
         m_url.pop_back();
     }
 
-    LOG_INFO("VideoCaptureRemote: connecting to remote base URL " + m_url);
+    // Non-blocking connect: we do NOT run the (potentially multi-second)
+    // avformat_open_input / find_stream_info here, because open() is
+    // called synchronously on the UI thread — blocking it froze the
+    // whole app during connect, so the "Connecting…" overlay never got
+    // a frame to paint and the user got no feedback at all.
+    //
+    // Instead we just arm the URL and let decodeLoop() do the open on
+    // its own thread, reusing the exact path reconnect already uses
+    // (the `if (!m_formatCtx)` branch). The UI keeps rendering, the
+    // overlay shows progress, and a first-connect failure surfaces via
+    // isInitialConnectFailing() instead of a synchronous false return.
+    LOG_INFO("VideoCaptureRemote: arming remote base URL " + m_url +
+             " (connect runs on the decode thread)");
 
-    if (!initDecoder())
-    {
-        cleanupDecoder();
-        return false;
-    }
-
+    m_everReceivedFrame.store(false);
+    m_consecutiveReconnectFailures.store(0);
+    m_hostLikelyOffline.store(false);
+    // Arm a clean abort state once here, NOT per-initDecoder pass. The
+    // decode thread now runs the (blocking) avformat_open_input itself
+    // on every connect; if initDecoder reset this flag right before that
+    // call, a stopCapture() from a Disconnect click could land in the
+    // gap and get wiped, leaving open_input to run to its full 5 s
+    // timeout while the UI thread froze on the join. Resetting here means
+    // a later abort always sticks. (Disconnect-freeze fix, #104.)
+    m_decodeAborted.store(false);
     m_open.store(true);
     return true;
 }
@@ -98,9 +115,11 @@ bool VideoCaptureRemote::initDecoder()
         };
     static_cast<AVFormatContext *>(m_formatCtx)->interrupt_callback.opaque = this;
 
-    // Clear any stale abort flag from a previous teardown so this
-    // initDecoder pass starts with permission to block in I/O.
-    m_decodeAborted.store(false);
+    // NOTE: m_decodeAborted is intentionally NOT reset here. It's armed
+    // once in open() (and only ever set true by stopCapture()/close()).
+    // Resetting it per pass used to race with a Disconnect landing
+    // during avformat_open_input — see open(). Within a live decodeLoop
+    // it's always false anyway, so reconnect passes start clean.
 
     // Probing budget: must see at least one packet of each expected
     // stream so audio is detected, but every byte the probe consumes
@@ -766,7 +785,9 @@ void VideoCaptureRemote::decodeLoop()
             // hiccup starts from the 2 s slot again.
             m_consecutiveReconnectFailures.store(0);
             m_hostLikelyOffline.store(false);
-            LOG_INFO("VideoCaptureRemote: reconnected to " + m_url);
+            LOG_INFO(std::string("VideoCaptureRemote: ") +
+                     (m_everReceivedFrame.load() ? "reconnected to " : "connected to ") +
+                     m_url);
         }
 
         int rc = av_read_frame(m_formatCtx, packet);
@@ -954,6 +975,10 @@ void VideoCaptureRemote::decodeLoop()
             // overlay can tell a live stream from a stalled one
             // even when m_streamAnchored hasn't been reset yet.
             m_lastFrameAtSteadyUs.store(nowWallUs);
+            // Sticky 'we've connected for real at least once' — clears
+            // the initial-connect-failing state and marks subsequent
+            // drops as reconnects rather than first-connect failures.
+            m_everReceivedFrame.store(true);
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);
