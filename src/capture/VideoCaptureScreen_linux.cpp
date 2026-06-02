@@ -125,9 +125,13 @@ private:
         spa_zero(self->m_format);
         if (spa_format_video_raw_parse(param, &self->m_format) < 0) return;
 
+        const auto &fr  = self->m_format.framerate;
+        const auto &mfr = self->m_format.max_framerate;
         LOG_INFO("VideoCaptureScreen(pw): negotiated " +
                  std::to_string(self->m_format.size.width) + "x" +
-                 std::to_string(self->m_format.size.height));
+                 std::to_string(self->m_format.size.height) +
+                 " @ " + std::to_string(fr.num) + "/" + std::to_string(fr.denom) +
+                 " (max " + std::to_string(mfr.num) + "/" + std::to_string(mfr.denom) + ")");
     }
 
     static void onStreamProcess(void *data)
@@ -501,8 +505,11 @@ private:
         struct spa_rectangle defSize = SPA_RECTANGLE(1920, 1080);
         struct spa_rectangle minSize = SPA_RECTANGLE(1, 1);
         struct spa_rectangle maxSize = SPA_RECTANGLE(8192, 8192);
+        // Preferred 60 fps; min 1 (not 0 — some portals treat 0/1 as
+        // "unspecified" and fall back to a low rate). The compositor
+        // ultimately decides, but stating a real preference helps.
         struct spa_fraction  defRate = SPA_FRACTION(60, 1);
-        struct spa_fraction  minRate = SPA_FRACTION(0, 1);
+        struct spa_fraction  minRate = SPA_FRACTION(1, 1);
         struct spa_fraction  maxRate = SPA_FRACTION(360, 1);
         const struct spa_pod *params[1];
         params[0] = static_cast<const spa_pod *>(spa_pod_builder_add_object(&b,
