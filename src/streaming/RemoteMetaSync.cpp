@@ -190,6 +190,16 @@ void RemoteMetaSync::stop()
 {
     if (!m_running.load()) return;
     m_running.store(false);
+    // Break the SSE thread out of its no-timeout recv() immediately.
+    // Without this the join() below blocks until the host happens to
+    // send the next event/keepalive — which froze the UI on Disconnect.
+    // shutdownSocket() makes the in-flight recv return at once; the loop
+    // then sees m_running == false and exits. #104.
+    const std::intptr_t s = m_sseSock.load();
+    if (s != -1)
+    {
+        httpinternal::shutdownSocket(static_cast<httpinternal::socket_t>(s));
+    }
     if (m_thread.joinable())
     {
         m_thread.join();
@@ -281,6 +291,18 @@ bool RemoteMetaSync::runSSE()
         // reconnect attempt when the host is offline.
         return false;
     }
+
+    // Register the live socket so stop() (on the UI thread) can break our
+    // blocking, no-timeout recv() by shutting it down. The guard clears
+    // the registration on every exit path; declared AFTER `conn` so it
+    // destructs FIRST — m_sseSock is back to -1 before `conn` closes the
+    // fd, so stop() can never shut down a closed/reused descriptor. #104.
+    m_sseSock.store(static_cast<std::intptr_t>(conn.sock));
+    struct SseSockGuard
+    {
+        std::atomic<std::intptr_t> &ref;
+        ~SseSockGuard() { ref.store(-1); }
+    } sseSockGuard{m_sseSock};
 
     // No recv timeout — SSE is intentionally long-lived. We rely on
     // peer-side keepalive comments and OS-level RST/FIN to notice
