@@ -38,27 +38,40 @@ API_AVAILABLE(macos(13.0))
         kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block);
     if (s != noErr || !block) return;
 
+    // The AudioBus stores interleaved int16; SCK delivers float32. Convert
+    // (clamp + scale) into int16 before pushing.
+    auto toI16 = [](float f) -> int16_t {
+        if (f >  1.0f) f =  1.0f;
+        if (f < -1.0f) f = -1.0f;
+        return static_cast<int16_t>(f * 32767.0f);
+    };
+
     if (abl.mNumberBuffers == 1)
     {
-        // Interleaved float already — push as-is.
+        // Single buffer: interleaved float for all channels.
         const float *src = static_cast<const float *>(abl.mBuffers[0].mData);
         const size_t n   = abl.mBuffers[0].mDataByteSize / sizeof(float);
-        if (src && n) bus->push(src, n);
+        if (src && n)
+        {
+            std::vector<int16_t> out(n);
+            for (size_t i = 0; i < n; ++i) out[i] = toI16(src[i]);
+            bus->push(out.data(), out.size());
+        }
     }
     else
     {
-        // Planar float (one buffer per channel) — interleave for the bus.
+        // Planar float (one buffer per channel) — interleave to int16.
         const uint32_t ch     = abl.mNumberBuffers;
         const uint32_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
         if (frames)
         {
-            std::vector<float> inter(static_cast<size_t>(frames) * ch);
+            std::vector<int16_t> inter(static_cast<size_t>(frames) * ch);
             for (uint32_t c = 0; c < ch; ++c)
             {
                 const float *src = static_cast<const float *>(abl.mBuffers[c].mData);
                 if (!src) continue;
                 for (uint32_t f = 0; f < frames; ++f)
-                    inter[static_cast<size_t>(f) * ch + c] = src[f];
+                    inter[static_cast<size_t>(f) * ch + c] = toI16(src[f]);
             }
             bus->push(inter.data(), inter.size());
         }
