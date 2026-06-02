@@ -73,6 +73,12 @@ public:
     // IScreenFrameSink — called by the backend on its capture thread.
     void onScreenFrame(const uint8_t *data, uint32_t width, uint32_t height,
                        uint32_t stride, ScreenPixelFormat format) override;
+    void onScreenDmabuf(const ScreenDmabufFrame &frame) override;
+
+    // Zero-copy GPU path: import the latest DMABUF into a GL texture
+    // (EGL) on the GL thread. Returns 0 when there's no DMABUF build /
+    // frame, so the caller uses the CPU path.
+    unsigned int getGpuTexture(uint32_t &width, uint32_t &height) override;
 
     /**
      * Region crop, in target pixels, applied on top of whatever target
@@ -109,4 +115,12 @@ private:
     std::mutex            m_frameMutex;
     std::vector<uint8_t>  m_frameBuf;
     bool                  m_haveFrame = false;
+
+    // DMABUF zero-copy path. The backend hands a dup'd fd (we own it);
+    // getGpuTexture() imports it into m_glTex via EGL on the GL thread.
+    std::mutex          m_dmabufMutex;
+    ScreenDmabufFrame   m_pendingDmabuf;          // fd >= 0 == new frame pending
+    unsigned int        m_glTex = 0;              // imported GL texture
+    uint32_t            m_glW = 0, m_glH = 0;
+    void               *m_eglImage = nullptr;     // EGLImageKHR of m_glTex
 };

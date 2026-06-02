@@ -41,7 +41,9 @@ public:
      * 
      * @return OpenGL texture ID, or 0 if no texture exists
      */
-    GLuint getTexture() const { return m_texture; }
+    // Returns the external (zero-copy DMABUF) texture when the capture
+    // provided one this frame, else the internally-uploaded texture.
+    GLuint getTexture() const { return m_externalTexture ? m_externalTexture : m_texture; }
 
     /**
      * Get the texture width.
@@ -84,6 +86,9 @@ public:
 private:
     OpenGLRenderer* m_renderer = nullptr;
     GLuint m_texture = 0;
+    // Externally-owned texture (capture's DMABUF zero-copy path, #107).
+    // When non-zero, getTexture() returns it and we never delete it.
+    GLuint m_externalTexture = 0;
     uint32_t m_textureWidth = 0;
     uint32_t m_textureHeight = 0;
     bool m_hasValidFrame = false;

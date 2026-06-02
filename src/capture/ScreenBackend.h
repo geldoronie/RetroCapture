@@ -26,21 +26,44 @@ enum class ScreenPixelFormat
     RGBX  // R,G,B,unused
 };
 
+// A captured frame delivered as a DMABUF handle (zero-copy GPU buffer)
+// instead of CPU pixels. The receiver imports `fd` into a GL texture via
+// EGL and OWNS the fd (must close it). drmFourcc/modifier describe the
+// buffer layout for EGL_LINUX_DMA_BUF import.
+struct ScreenDmabufFrame
+{
+    int      fd        = -1;
+    uint32_t width     = 0;
+    uint32_t height    = 0;
+    uint32_t stride    = 0;
+    uint32_t offset    = 0;
+    uint32_t drmFourcc = 0;
+    uint64_t modifier  = 0; // DRM_FORMAT_MOD_INVALID when implicit
+    bool     hasModifier = false;
+};
+
 class IScreenFrameSink
 {
 public:
     virtual ~IScreenFrameSink() = default;
 
     /**
-     * Deliver one captured frame. `data` is `height` rows of `stride`
-     * bytes; the visible pixels are the first width*4 bytes of each row.
-     * Called on the backend's capture thread.
+     * Deliver one captured frame as CPU pixels. `data` is `height` rows
+     * of `stride` bytes; the visible pixels are the first width*4 bytes
+     * of each row. Called on the backend's capture thread.
      */
     virtual void onScreenFrame(const uint8_t *data,
                                uint32_t width,
                                uint32_t height,
                                uint32_t stride,
                                ScreenPixelFormat format) = 0;
+
+    /**
+     * Deliver one captured frame as a DMABUF (zero-copy). The sink takes
+     * ownership of frame.fd. Default ignores it (CPU path only). Called
+     * on the backend's capture thread.
+     */
+    virtual void onScreenDmabuf(const ScreenDmabufFrame &frame) { (void)frame; }
 };
 
 class ScreenBackend

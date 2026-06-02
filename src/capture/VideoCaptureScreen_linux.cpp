@@ -19,13 +19,37 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <unistd.h>
 
+// DRM fourccs / modifier (defined here to avoid a hard libdrm header dep).
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+#endif
+
 namespace
 {
+inline uint32_t drmFourccCC(char a, char b, char c, char d)
+{
+    return static_cast<uint32_t>(a) | (static_cast<uint32_t>(b) << 8) |
+           (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
+}
+// SPA byte-order → DRM fourcc (the standard PipeWire↔DRM mapping).
+inline uint32_t spaFormatToDrmFourcc(uint32_t spaFmt)
+{
+    switch (spaFmt)
+    {
+        case SPA_VIDEO_FORMAT_BGRA: return drmFourccCC('A', 'R', '2', '4'); // ARGB8888
+        case SPA_VIDEO_FORMAT_BGRx: return drmFourccCC('X', 'R', '2', '4'); // XRGB8888
+        case SPA_VIDEO_FORMAT_RGBA: return drmFourccCC('A', 'B', '2', '4'); // ABGR8888
+        case SPA_VIDEO_FORMAT_RGBx: return drmFourccCC('X', 'B', '2', '4'); // XBGR8888
+        default:                    return drmFourccCC('A', 'R', '2', '4');
+    }
+}
+
 constexpr const char *kPortalService = "org.freedesktop.portal.Desktop";
 constexpr const char *kPortalPath    = "/org/freedesktop/portal/desktop";
 constexpr const char *kScreenCastIf  = "org.freedesktop.portal.ScreenCast";
@@ -141,7 +165,7 @@ private:
         if (!b) return;
 
         struct spa_buffer *buf = b->buffer;
-        if (buf && buf->n_datas > 0 && buf->datas[0].data)
+        if (buf && buf->n_datas > 0)
         {
             const struct spa_data &d = buf->datas[0];
             const uint32_t w = self->m_format.size.width;
@@ -149,11 +173,31 @@ private:
             uint32_t stride = d.chunk ? static_cast<uint32_t>(d.chunk->stride) : 0;
             if (stride == 0 && w) stride = w * 4;
 
-            ScreenPixelFormat fmt;
-            if (w && h && stride && spaFormatToSink(self->m_format.format, fmt))
+            if (d.type == SPA_DATA_DmaBuf && d.fd >= 0 && w && h)
             {
-                self->m_sink.onScreenFrame(static_cast<const uint8_t *>(d.data),
-                                           w, h, stride, fmt);
+                // Zero-copy: hand the DMABUF fd to the sink (it imports it
+                // into a GL texture via EGL). dup() it — the original
+                // belongs to the buffer and is recycled on queue.
+                ScreenDmabufFrame df;
+                df.fd          = ::dup(static_cast<int>(d.fd));
+                df.width       = w;
+                df.height      = h;
+                df.stride      = stride;
+                df.offset      = d.chunk ? static_cast<uint32_t>(d.chunk->offset) : 0;
+                df.drmFourcc   = spaFormatToDrmFourcc(self->m_format.format);
+                df.hasModifier = (self->m_format.modifier != 0 &&
+                                  self->m_format.modifier != DRM_FORMAT_MOD_INVALID);
+                df.modifier    = self->m_format.modifier;
+                if (df.fd >= 0) self->m_sink.onScreenDmabuf(df);
+            }
+            else if (d.data)
+            {
+                ScreenPixelFormat fmt;
+                if (w && h && stride && spaFormatToSink(self->m_format.format, fmt))
+                {
+                    self->m_sink.onScreenFrame(static_cast<const uint8_t *>(d.data),
+                                               w, h, stride, fmt);
+                }
             }
         }
         pw_stream_queue_buffer(self->m_stream, b);
@@ -498,21 +542,52 @@ private:
         }();
         pw_stream_add_listener(m_stream, &m_streamListener, &kEvents, this);
 
-        // Offer the packed-32-bit formats we can convert, no DMABUF
-        // modifiers so the buffers come back as mappable memory.
-        uint8_t buffer[1024];
+        uint8_t buffer[2048];
         struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
         struct spa_rectangle defSize = SPA_RECTANGLE(1920, 1080);
         struct spa_rectangle minSize = SPA_RECTANGLE(1, 1);
         struct spa_rectangle maxSize = SPA_RECTANGLE(8192, 8192);
-        // Preferred 60 fps. min stays 0/1 — the compositor decides the
-        // actual rate; a tighter floor was observed to break format
-        // negotiation on some portals (no frames).
+        // Preferred 60 fps. min stays 0/1 — the compositor decides.
         struct spa_fraction  defRate = SPA_FRACTION(60, 1);
         struct spa_fraction  minRate = SPA_FRACTION(0, 1);
         struct spa_fraction  maxRate = SPA_FRACTION(360, 1);
-        const struct spa_pod *params[1];
-        params[0] = static_cast<const spa_pod *>(spa_pod_builder_add_object(&b,
+
+        const struct spa_pod *params[2];
+        int nParams = 0;
+
+#ifdef RETROCAPTURE_SCREEN_DMABUF
+        // DMABUF format (preferred): advertise the modifier property with
+        // DONT_FIXATE so the compositor picks an implicit modifier and
+        // hands us GPU buffers we import zero-copy via EGL.
+        // Opt-in for now (RC_SCREEN_DMABUF=1) while the EGL import is
+        // validated on real hardware — default stays on the safe SHM path
+        // so a failed import can't black-screen the capture.
+        if (::getenv("RC_SCREEN_DMABUF"))
+        {
+            struct spa_pod_frame fObj;
+            spa_pod_builder_push_object(&b, &fObj, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
+            spa_pod_builder_add(&b,
+                SPA_FORMAT_mediaType,    SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(5,
+                    SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRA,
+                    SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_RGBA),
+                SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&defSize, &minSize, &maxSize),
+                SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&defRate, &minRate, &maxRate),
+                0);
+            spa_pod_builder_prop(&b, SPA_FORMAT_VIDEO_modifier,
+                                 SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
+            struct spa_pod_frame fChoice;
+            spa_pod_builder_push_choice(&b, &fChoice, SPA_CHOICE_Enum, 0);
+            spa_pod_builder_long(&b, static_cast<int64_t>(DRM_FORMAT_MOD_INVALID));
+            spa_pod_builder_long(&b, static_cast<int64_t>(DRM_FORMAT_MOD_INVALID));
+            spa_pod_builder_pop(&b, &fChoice);
+            params[nParams++] = static_cast<const spa_pod *>(spa_pod_builder_pop(&b, &fObj));
+        }
+#endif
+
+        // SHM format (fallback): mappable memory, CPU path.
+        params[nParams++] = static_cast<const spa_pod *>(spa_pod_builder_add_object(&b,
             SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
             SPA_FORMAT_mediaType,    SPA_POD_Id(SPA_MEDIA_TYPE_video),
             SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
@@ -525,7 +600,7 @@ private:
         pw_stream_connect(m_stream, PW_DIRECTION_INPUT, nodeId,
                           static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT |
                                                        PW_STREAM_FLAG_MAP_BUFFERS),
-                          params, 1);
+                          params, static_cast<uint32_t>(nParams));
         pw_thread_loop_unlock(m_loop);
         pw_thread_loop_start(m_loop);
 

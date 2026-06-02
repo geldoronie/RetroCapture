@@ -55,6 +55,22 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         return false; // Device is closed, cannot process frames
     }
 
+    // #107 zero-copy GPU path: if the capture hands us a ready GL texture
+    // (DMABUF imported via EGL), use it directly and skip the CPU upload.
+    {
+        uint32_t gw = 0, gh = 0;
+        const unsigned int gpuTex = capture->getGpuTexture(gw, gh);
+        if (gpuTex != 0 && gw > 0 && gh > 0)
+        {
+            m_externalTexture = gpuTex;
+            m_textureWidth    = gw;
+            m_textureHeight   = gh;
+            m_hasValidFrame   = true;
+            return true;
+        }
+        m_externalTexture = 0; // not on the GPU path this frame
+    }
+
     Frame frame;
     // Usar captureLatestFrame para descartar frames antigos e pegar apenas o mais recente
     bool captured = capture->captureLatestFrame(frame);

@@ -3,6 +3,16 @@
 
 #include <cstring>
 
+#ifdef RETROCAPTURE_SCREEN_DMABUF
+#include "../renderer/glad_loader.h"
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <unistd.h>
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+#endif
+#endif
+
 // ─────────────────────────────────────────────────────────────────────
 // Cross-platform glue for the screen-capture source (#107). The actual
 // grabbing lives in the platform ScreenBackend (createScreenBackend);
@@ -146,4 +156,104 @@ void VideoCaptureScreen::onScreenFrame(const uint8_t *data, uint32_t w, uint32_t
     m_height.store(rh);
     m_haveFrame = true;
     m_receiving.store(true);
+}
+
+void VideoCaptureScreen::onScreenDmabuf(const ScreenDmabufFrame &frame)
+{
+#ifdef RETROCAPTURE_SCREEN_DMABUF
+    std::lock_guard<std::mutex> lock(m_dmabufMutex);
+    if (m_pendingDmabuf.fd >= 0) ::close(m_pendingDmabuf.fd); // drop unconsumed
+    m_pendingDmabuf = frame;        // we now own frame.fd
+    m_width.store(frame.width);
+    m_height.store(frame.height);
+    m_receiving.store(true);
+#else
+    // No DMABUF build → backend never produces these; nothing to own.
+    (void)frame;
+#endif
+}
+
+unsigned int VideoCaptureScreen::getGpuTexture(uint32_t &w, uint32_t &h)
+{
+#ifdef RETROCAPTURE_SCREEN_DMABUF
+    ScreenDmabufFrame f;
+    {
+        std::lock_guard<std::mutex> lock(m_dmabufMutex);
+        if (m_pendingDmabuf.fd < 0)
+        {
+            if (m_glTex) { w = m_glW; h = m_glH; } // reuse last imported
+            return m_glTex;
+        }
+        f = m_pendingDmabuf;
+        m_pendingDmabuf.fd = -1; // consumed
+    }
+
+    static auto pCreate =
+        reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+    static auto pDestroy =
+        reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+    typedef void (*RC_TargetTex)(GLenum, void *);
+    static auto pTarget =
+        reinterpret_cast<RC_TargetTex>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+
+    EGLDisplay dpy = eglGetCurrentDisplay();
+    if (!pCreate || !pTarget || dpy == EGL_NO_DISPLAY)
+    {
+        if (f.fd >= 0) ::close(f.fd);
+        static bool warned = false;
+        if (!warned) { warned = true; LOG_WARN("VideoCaptureScreen: EGL DMABUF import unavailable — falling back"); }
+        return 0;
+    }
+
+    EGLint attribs[40];
+    int n = 0;
+    attribs[n++] = EGL_WIDTH;                     attribs[n++] = static_cast<EGLint>(f.width);
+    attribs[n++] = EGL_HEIGHT;                    attribs[n++] = static_cast<EGLint>(f.height);
+    attribs[n++] = EGL_LINUX_DRM_FOURCC_EXT;      attribs[n++] = static_cast<EGLint>(f.drmFourcc);
+    attribs[n++] = EGL_DMA_BUF_PLANE0_FD_EXT;     attribs[n++] = f.fd;
+    attribs[n++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[n++] = static_cast<EGLint>(f.offset);
+    attribs[n++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;  attribs[n++] = static_cast<EGLint>(f.stride);
+    if (f.hasModifier)
+    {
+        attribs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+        attribs[n++] = static_cast<EGLint>(f.modifier & 0xFFFFFFFFu);
+        attribs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+        attribs[n++] = static_cast<EGLint>(f.modifier >> 32);
+    }
+    attribs[n++] = EGL_NONE;
+
+    EGLImageKHR img = pCreate(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
+                              static_cast<EGLClientBuffer>(nullptr), attribs);
+    ::close(f.fd); // EGL holds its own reference to the buffer
+    if (img == EGL_NO_IMAGE_KHR)
+    {
+        static bool warned = false;
+        if (!warned) { warned = true; LOG_WARN("VideoCaptureScreen: eglCreateImage(DMABUF) failed — falling back"); }
+        return 0;
+    }
+
+    if (m_glTex == 0)
+    {
+        glGenTextures(1, &m_glTex);
+        glBindTexture(GL_TEXTURE_2D, m_glTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+    glBindTexture(GL_TEXTURE_2D, m_glTex);
+    pTarget(GL_TEXTURE_2D, img);
+
+    // Bind first, then drop the previous image (the texture now samples
+    // the new one).
+    if (m_eglImage && pDestroy) pDestroy(dpy, static_cast<EGLImageKHR>(m_eglImage));
+    m_eglImage = img;
+
+    m_glW = f.width; m_glH = f.height;
+    w = m_glW; h = m_glH;
+    return m_glTex;
+#else
+    (void)w; (void)h;
+    return 0;
+#endif
 }

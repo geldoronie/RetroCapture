@@ -183,6 +183,15 @@ if(PLATFORM_LINUX)
     else()
         message(WARNING "PipeWire or libdbus missing — screen capture uses the test-pattern stub")
     endif()
+    # #107 — EGL enables the DMABUF zero-copy path (import the compositor's
+    # GPU buffer straight into a GL texture, no per-frame CPU/SHM copy).
+    # Optional: without it the screen backend falls back to the SHM copy.
+    pkg_check_modules(EGL egl)
+    if(EGL_FOUND AND PIPEWIRE_FOUND AND DBUS_FOUND)
+        message(STATUS "EGL found — screen capture DMABUF zero-copy ENABLED")
+    else()
+        message(WARNING "EGL missing — screen capture uses the SHM copy path (slower)")
+    endif()
 elseif(PLATFORM_MACOS)
     # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
     find_package(PkgConfig QUIET)
@@ -702,6 +711,11 @@ if(PLATFORM_LINUX AND PIPEWIRE_FOUND AND DBUS_FOUND)
     target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_PIPEWIRE)
     target_include_directories(retrocapture PRIVATE ${PIPEWIRE_INCLUDE_DIRS} ${DBUS_INCLUDE_DIRS})
     target_link_libraries(retrocapture PRIVATE ${PIPEWIRE_LIBRARIES} ${DBUS_LIBRARIES})
+    if(EGL_FOUND)
+        target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DMABUF)
+        target_include_directories(retrocapture PRIVATE ${EGL_INCLUDE_DIRS})
+        target_link_libraries(retrocapture PRIVATE ${EGL_LIBRARIES})
+    endif()
 endif()
 
 if(PLATFORM_WINDOWS)

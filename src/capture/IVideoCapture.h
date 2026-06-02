@@ -97,6 +97,22 @@ public:
      */
     virtual bool isReceivingFrames() const { return isOpen(); }
 
+    /**
+     * Zero-copy GPU path (#107 screen capture). If the backend can hand
+     * the current frame as a ready GL texture (e.g. a DMABUF imported via
+     * EGL), it returns the texture id and sets w/h; FrameProcessor then
+     * uses it directly and skips the CPU upload. Returns 0 when there's
+     * no GPU frame this call (the caller falls back to captureLatestFrame).
+     * MUST be called on the GL thread — it may issue GL/EGL calls.
+     * The returned texture stays owned by the capture; the caller must
+     * not delete it.
+     */
+    virtual unsigned int getGpuTexture(uint32_t &width, uint32_t &height)
+    {
+        (void)width; (void)height;
+        return 0;
+    }
+
     // AVFoundation-specific extensions. Default no-op so V4L2,
     // DirectShow and Remote captures don't need to implement them.
     virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "")
