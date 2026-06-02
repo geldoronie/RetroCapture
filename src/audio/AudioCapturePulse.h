@@ -84,6 +84,11 @@ private:
     static void sourceInfoCallback(pa_context *c, const pa_source_info *i, int eol, void *userdata);
     static void operationCallback(pa_context *c, uint32_t index, void *userdata);
 
+    // #109 — start the local monitor playback (taps the bus to the
+    // default sink). Skipped / stopped when capturing a system-output
+    // monitor source, to avoid a feedback loop.
+    void startMonitorPlayback();
+
     // Internal methods
     void contextStateChanged();
     void streamStateChanged();

@@ -29,9 +29,10 @@ private:
     UIManager *m_uiManager = nullptr;
     IAudioCapture *m_audioCapture = nullptr;
     
-    // Input sources
+    // Input sources (and, #109, output monitors flagged via m_inputSourceIsMonitor)
     std::vector<std::string> m_inputSourceNames;
     std::vector<std::string> m_inputSourceIds;
+    std::vector<bool>        m_inputSourceIsMonitor; // true = system-audio monitor
     int m_selectedInputSourceIndex = -1;
     bool m_inputSourcesListNeedsRefresh = true;
     
