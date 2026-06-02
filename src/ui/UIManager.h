@@ -520,6 +520,23 @@ public:
     {
         m_onScreenRegionChanged = cb;
     }
+    // Apply a region to the live capture WITHOUT persisting or updating
+    // the stored values — used by the visual region selector to show the
+    // full (uncropped) frame while picking. saveConfig happens only on
+    // the final triggerScreenRegionChange().
+    void applyScreenRegionLive(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+    {
+        if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    }
+    // Live capture GL texture, published each frame by Application so the
+    // region selector can draw the current frame. 0 == none.
+    void setCaptureTexture(unsigned int tex, uint32_t w, uint32_t h)
+    {
+        m_captureTex = tex; m_captureTexW = w; m_captureTexH = h;
+    }
+    unsigned int getCaptureTextureId() const { return m_captureTex; }
+    uint32_t getCaptureTextureWidth() const  { return m_captureTexW; }
+    uint32_t getCaptureTextureHeight() const { return m_captureTexH; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -1222,6 +1239,10 @@ private:
     bool  m_remoteAudioMuted  = false;
     // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
     uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
+    // Live capture texture published by Application for the region selector.
+    unsigned int m_captureTex  = 0;
+    uint32_t     m_captureTexW = 0;
+    uint32_t     m_captureTexH = 0;
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;

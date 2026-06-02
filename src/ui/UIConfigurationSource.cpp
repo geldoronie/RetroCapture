@@ -862,6 +862,129 @@ void UIConfigurationSource::renderScreenControls()
         m_screenRegion[0] = m_screenRegion[1] = m_screenRegion[2] = m_screenRegion[3] = 0;
         m_uiManager->triggerScreenRegionChange(0, 0, 0, 0);
     }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Select region visually…"))
+    {
+        // Remember the current crop, then show the full (uncropped) frame
+        // live so the user marquees against the whole target.
+        for (int i = 0; i < 4; ++i) m_savedRegion[i] = m_screenRegion[i];
+        m_uiManager->applyScreenRegionLive(0, 0, 0, 0);
+        m_haveSelection   = false;
+        m_marqueeActive   = false;
+        m_regionSelectorOpen = true;
+    }
+
+    renderRegionSelector();
+}
+
+void UIConfigurationSource::renderRegionSelector()
+{
+    if (!m_regionSelectorOpen) return;
+
+    ImGui::SetNextWindowSize(ImVec2(820, 640), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (ImGui::Begin("Select capture region", &open, ImGuiWindowFlags_NoSavedSettings))
+    {
+        const unsigned int tex = m_uiManager->getCaptureTextureId();
+        const float fullW = static_cast<float>(m_uiManager->getCaptureTextureWidth());
+        const float fullH = static_cast<float>(m_uiManager->getCaptureTextureHeight());
+
+        if (tex == 0 || fullW < 1.0f || fullH < 1.0f)
+        {
+            ImGui::TextWrapped("Waiting for a frame — make sure a screen target is "
+                               "being captured.");
+        }
+        else
+        {
+            ImGui::TextDisabled("Drag on the image to mark the region. Full frame: %d x %d",
+                                static_cast<int>(fullW), static_cast<int>(fullH));
+
+            float availW = ImGui::GetContentRegionAvail().x;
+            if (availW < 64.0f) availW = 720.0f;
+            float scale = availW / fullW;
+            if (scale > 1.0f) scale = 1.0f;
+            const float dispW = fullW * scale;
+            const float dispH = fullH * scale;
+
+            const ImVec2 imgPos = ImGui::GetCursorScreenPos();
+            ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(dispW, dispH));
+
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            auto clampf = [](float v, float hi) { return v < 0.0f ? 0.0f : (v > hi ? hi : v); };
+            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+            {
+                m_selX0 = clampf(mouse.x - imgPos.x, dispW);
+                m_selY0 = clampf(mouse.y - imgPos.y, dispH);
+                m_selX1 = m_selX0;
+                m_selY1 = m_selY0;
+                m_marqueeActive = true;
+                m_haveSelection = true;
+            }
+            if (m_marqueeActive && ImGui::IsMouseDown(0))
+            {
+                m_selX1 = clampf(mouse.x - imgPos.x, dispW);
+                m_selY1 = clampf(mouse.y - imgPos.y, dispH);
+            }
+            if (m_marqueeActive && ImGui::IsMouseReleased(0)) m_marqueeActive = false;
+
+            if (m_haveSelection)
+            {
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                const ImVec2 a(imgPos.x + std::min(m_selX0, m_selX1),
+                               imgPos.y + std::min(m_selY0, m_selY1));
+                const ImVec2 b(imgPos.x + std::max(m_selX0, m_selX1),
+                               imgPos.y + std::max(m_selY0, m_selY1));
+                dl->AddRectFilled(a, b, IM_COL32(64, 160, 255, 40));
+                dl->AddRect(a, b, IM_COL32(64, 160, 255, 255), 0.0f, 0, 2.0f);
+            }
+
+            const int rx = static_cast<int>(std::min(m_selX0, m_selX1) / scale);
+            const int ry = static_cast<int>(std::min(m_selY0, m_selY1) / scale);
+            const int rw = static_cast<int>((std::max(m_selX0, m_selX1) - std::min(m_selX0, m_selX1)) / scale);
+            const int rh = static_cast<int>((std::max(m_selY0, m_selY1) - std::min(m_selY0, m_selY1)) / scale);
+            ImGui::Text("X %d   Y %d   W %d   H %d", rx, ry, rw, rh);
+
+            const bool valid = m_haveSelection && rw >= 8 && rh >= 8;
+            ImGui::BeginDisabled(!valid);
+            if (ImGui::Button("Apply"))
+            {
+                m_screenRegion[0] = rx; m_screenRegion[1] = ry;
+                m_screenRegion[2] = rw; m_screenRegion[3] = rh;
+                m_uiManager->triggerScreenRegionChange(
+                    static_cast<uint32_t>(rx), static_cast<uint32_t>(ry),
+                    static_cast<uint32_t>(rw), static_cast<uint32_t>(rh));
+                m_regionSelectorOpen = false;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Use full frame"))
+            {
+                for (int i = 0; i < 4; ++i) m_screenRegion[i] = 0;
+                m_uiManager->triggerScreenRegionChange(0, 0, 0, 0);
+                m_regionSelectorOpen = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                m_uiManager->triggerScreenRegionChange(
+                    static_cast<uint32_t>(m_savedRegion[0]), static_cast<uint32_t>(m_savedRegion[1]),
+                    static_cast<uint32_t>(m_savedRegion[2]), static_cast<uint32_t>(m_savedRegion[3]));
+                m_regionSelectorOpen = false;
+            }
+        }
+    }
+    ImGui::End();
+
+    // Closed via the window's X → treat as Cancel: restore the crop the
+    // user had before opening the selector.
+    if (!open && m_regionSelectorOpen)
+    {
+        m_uiManager->triggerScreenRegionChange(
+            static_cast<uint32_t>(m_savedRegion[0]), static_cast<uint32_t>(m_savedRegion[1]),
+            static_cast<uint32_t>(m_savedRegion[2]), static_cast<uint32_t>(m_savedRegion[3]));
+        m_regionSelectorOpen = false;
+    }
 }
 
 #ifdef __APPLE__

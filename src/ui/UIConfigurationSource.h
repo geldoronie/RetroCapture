@@ -73,6 +73,15 @@ private:
     int  m_screenRegion[4] = {0, 0, 0, 0};   // x, y, w, h ImGui input scratch
     bool m_screenRegionSeeded = false;
 
+    // Visual region selector: a window that shows the full (uncropped)
+    // frame and lets the user marquee-drag the crop rectangle.
+    void renderRegionSelector();
+    bool  m_regionSelectorOpen   = false;
+    int   m_savedRegion[4]       = {0, 0, 0, 0}; // restore on cancel
+    bool  m_marqueeActive        = false;        // mid-drag
+    bool  m_haveSelection        = false;
+    float m_selX0 = 0, m_selY0 = 0, m_selX1 = 0, m_selY1 = 0; // image-widget px
+
     // Persistent buffer for the URL ImGui input. Static-on-stack inside
     // render() would lose the typed value across re-renders, so keep it
     // here.

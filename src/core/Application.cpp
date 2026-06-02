@@ -4155,6 +4155,14 @@ void Application::run()
         // Skip rendering during reconfiguration to avoid accessing deleted textures
         if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
+            // #107 — publish the live capture texture for the screen
+            // region selector (it draws the current frame to pick on).
+            if (m_ui)
+            {
+                m_ui->setCaptureTexture(m_frameProcessor->getTexture(),
+                                        m_frameProcessor->getTextureWidth(),
+                                        m_frameProcessor->getTextureHeight());
+            }
             // Log resolução de captura original (antes de qualquer processamento)
             static int originalCaptureLogCount = 0;
             if (originalCaptureLogCount++ < 3)
