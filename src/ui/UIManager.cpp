@@ -40,12 +40,14 @@
 #ifdef USE_SDL2
 #include <SDL2/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #endif
@@ -371,6 +373,48 @@ void UIManager::shutdown()
     m_initialized = false;
 }
 
+// Keep every movable top-level window reachable: if its position drifted
+// outside the viewport (stale imgui.ini after a resolution/monitor change,
+// etc.) nudge it back so at least a grabbable strip of the title bar stays
+// on screen. Runs each frame on last frame's positions and applies before
+// the windows are submitted this frame, so they never paint off-screen.
+static void clampImGuiWindowsToViewport()
+{
+    ImGuiContext *gp = ImGui::GetCurrentContext();
+    if (!gp) return;
+    ImGuiContext &g = *gp;
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    if (!vp) return;
+    const float minX0 = vp->WorkPos.x;
+    const float minY0 = vp->WorkPos.y;
+    const float maxX0 = vp->WorkPos.x + vp->WorkSize.x;
+    const float maxY0 = vp->WorkPos.y + vp->WorkSize.y;
+    const float keep  = 48.0f; // px of the window that must remain on-screen
+
+    for (ImGuiWindow *w : g.Windows)
+    {
+        if (!w || !w->WasActive) continue;
+        if (w->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip |
+                        ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoMove))
+            continue; // children/popups/pinned OSD overlays manage themselves
+        if (w->Size.x <= 0.0f || w->Size.y <= 0.0f) continue;
+
+        ImVec2 pos = w->Pos;
+        const float minX = minX0 - w->Size.x + keep; // allow off the left/right
+        const float maxX = maxX0 - keep;             // edges, keep `keep` visible
+        const float minY = minY0;                    // title must stay below top
+        const float maxY = maxY0 - keep;
+        if (pos.x < minX) pos.x = minX;
+        if (pos.x > maxX) pos.x = maxX;
+        if (pos.y < minY) pos.y = minY;
+        if (pos.y > maxY) pos.y = maxY;
+
+        if (pos.x != w->Pos.x || pos.y != w->Pos.y)
+            ImGui::SetWindowPos(w, pos, ImGuiCond_Always);
+    }
+}
+
 void UIManager::beginFrame()
 {
     if (!m_initialized)
@@ -422,6 +466,10 @@ void UIManager::beginFrame()
         io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
         io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
+
+    // Pull any window that drifted off-screen back into the viewport so it
+    // can't get lost at a position that no longer exists on screen.
+    clampImGuiWindowsToViewport();
 }
 
 void UIManager::endFrame()
