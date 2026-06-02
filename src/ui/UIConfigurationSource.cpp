@@ -838,8 +838,16 @@ void UIConfigurationSource::renderScreenControls()
         m_screenRegionSeeded = true;
     }
 
-    ImGui::InputInt2("x, y", &m_screenRegion[0]);
-    ImGui::InputInt2("w, h", &m_screenRegion[2]);
+    // Spin edits (±1 / ±10 with the step buttons) so fine adjustments
+    // are easy without dragging. Pairs on a line to stay compact.
+    ImGui::PushItemWidth(130.0f);
+    ImGui::InputInt("X", &m_screenRegion[0], 1, 10);
+    ImGui::SameLine();
+    ImGui::InputInt("Y", &m_screenRegion[1], 1, 10);
+    ImGui::InputInt("W", &m_screenRegion[2], 1, 10);
+    ImGui::SameLine();
+    ImGui::InputInt("H", &m_screenRegion[3], 1, 10);
+    ImGui::PopItemWidth();
     for (int i = 0; i < 4; ++i) if (m_screenRegion[i] < 0) m_screenRegion[i] = 0;
 
     if (ImGui::Button("Apply region"))

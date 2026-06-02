@@ -66,7 +66,7 @@ public:
 
     uint32_t getWidth() const override { return m_width.load(); }
     uint32_t getHeight() const override { return m_height.load(); }
-    uint32_t getPixelFormat() const override { return m_pixelFormat; }
+    uint32_t getPixelFormat() const override { return m_pixelFormat.load(); }
 
     bool isReceivingFrames() const override { return m_open.load() && m_receiving.load(); }
 
@@ -94,7 +94,7 @@ private:
     // Live captured dimensions (after crop), updated as frames arrive.
     std::atomic<uint32_t> m_width{0};
     std::atomic<uint32_t> m_height{0};
-    uint32_t           m_pixelFormat = 0;   // 0 == RGB24 downstream
+    std::atomic<uint32_t> m_pixelFormat{0};  // RC_PIXFMT_* set per frame
 
     // Region crop (target pixels). Guarded — the UI thread sets it while
     // the capture thread reads it in onScreenFrame().

@@ -99,7 +99,7 @@ bool VideoCaptureScreen::captureLatestFrame(Frame &frame)
     frame.size   = m_frameBuf.size();
     frame.width  = m_width.load();
     frame.height = m_height.load();
-    frame.format = m_pixelFormat; // 0 == RGB24
+    frame.format = m_pixelFormat.load();
     return true;
 }
 
@@ -121,33 +121,27 @@ void VideoCaptureScreen::onScreenFrame(const uint8_t *data, uint32_t w, uint32_t
     if (ry + rh > h) rh = h - ry;
     if (rw == 0 || rh == 0) return;
 
-    // Source byte indices for R/G/B inside each 4-byte pixel.
-    int rIdx, gIdx, bIdx;
-    switch (format)
-    {
-        case ScreenPixelFormat::BGRA:
-        case ScreenPixelFormat::BGRX: rIdx = 2; gIdx = 1; bIdx = 0; break;
-        case ScreenPixelFormat::RGBA:
-        case ScreenPixelFormat::RGBX:
-        default:                      rIdx = 0; gIdx = 1; bIdx = 2; break;
-    }
+    // Keep the packed 32-bit data as-is — no per-pixel colour conversion
+    // here (it ran on the PipeWire process callback and throttled the
+    // whole stream on large monitors). The GPU does the BGRA/RGBA→RGB
+    // swizzle on upload (FrameProcessor). We only copy out the cropped
+    // sub-rect, row by row.
+    const uint32_t outFmt = (format == ScreenPixelFormat::RGBA ||
+                             format == ScreenPixelFormat::RGBX)
+                                ? RC_PIXFMT_RGBA
+                                : RC_PIXFMT_BGRA;
 
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    m_frameBuf.resize(static_cast<size_t>(rw) * rh * 3);
+    const size_t dstStride = static_cast<size_t>(rw) * 4;
+    m_frameBuf.resize(dstStride * rh);
     uint8_t *dst = m_frameBuf.data();
     for (uint32_t y = 0; y < rh; ++y)
     {
         const uint8_t *srow = data + static_cast<size_t>(ry + y) * stride +
                               static_cast<size_t>(rx) * 4;
-        uint8_t *drow = dst + static_cast<size_t>(y) * rw * 3;
-        for (uint32_t x = 0; x < rw; ++x)
-        {
-            const uint8_t *p = srow + static_cast<size_t>(x) * 4;
-            drow[x * 3 + 0] = p[rIdx];
-            drow[x * 3 + 1] = p[gIdx];
-            drow[x * 3 + 2] = p[bIdx];
-        }
+        std::memcpy(dst + static_cast<size_t>(y) * dstStride, srow, dstStride);
     }
+    m_pixelFormat.store(outFmt);
     m_width.store(rw);
     m_height.store(rh);
     m_haveFrame = true;

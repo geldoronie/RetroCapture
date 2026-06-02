@@ -14,6 +14,14 @@ struct Frame
     uint32_t format = 0; // Platform-specific pixel format
 };
 
+// Packed 32-bit pixel formats used by the screen-capture source (#107).
+// FrameProcessor uploads these straight to GL with GL_BGRA / GL_RGBA and
+// lets the driver swizzle to the RGB texture — no CPU colour conversion
+// on the hot path, which is what keeps large-monitor capture at full
+// frame rate. Sentinel values chosen to not collide with V4L2 fourccs.
+static constexpr uint32_t RC_PIXFMT_BGRA = 0xB07A0001u;
+static constexpr uint32_t RC_PIXFMT_RGBA = 0xB07A0002u;
+
 struct DeviceInfo
 {
     std::string id;        // Device identifier (path, GUID, etc.)

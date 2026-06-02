@@ -153,6 +153,22 @@ private:
             }
         }
         pw_stream_queue_buffer(self->m_stream, b);
+
+        // Lightweight delivered-rate log (every ~2 s) to make the
+        // compositor's actual capture rate visible while tuning.
+        if (++self->m_frameCount == 1)
+            self->m_fpsClock = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        const double secs =
+            std::chrono::duration<double>(now - self->m_fpsClock).count();
+        if (secs >= 2.0)
+        {
+            LOG_INFO("VideoCaptureScreen(pw): " +
+                     std::to_string(static_cast<int>(self->m_frameCount / secs)) +
+                     " fps delivered");
+            self->m_frameCount = 0;
+            self->m_fpsClock = now;
+        }
     }
 
     // ── worker thread: portal handshake then pipewire loop ───────────
@@ -548,6 +564,10 @@ private:
     struct pw_stream      *m_stream = nullptr;
     struct spa_hook        m_streamListener {};
     struct spa_video_info_raw m_format {};
+
+    // Delivered-fps instrumentation.
+    unsigned long          m_frameCount = 0;
+    std::chrono::steady_clock::time_point m_fpsClock {};
 };
 } // namespace
 
