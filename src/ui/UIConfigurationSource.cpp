@@ -908,11 +908,19 @@ void UIConfigurationSource::renderRegionSelector()
             const float dispH = fullH * scale;
 
             const ImVec2 imgPos = ImGui::GetCursorScreenPos();
-            ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(dispW, dispH));
+            // Cover the frame with an InvisibleButton so the marquee drag
+            // is captured here instead of moving the window (ImGui::Image
+            // doesn't capture drags, so dragging on it would drag the
+            // window). The texture is drawn underneath via the draw list;
+            // the window then only moves from its title bar.
+            ImGui::InvisibleButton("##regionCanvas", ImVec2(dispW, dispH));
+            ImGui::GetWindowDrawList()->AddImage(
+                static_cast<ImTextureID>(tex), imgPos,
+                ImVec2(imgPos.x + dispW, imgPos.y + dispH));
 
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             auto clampf = [](float v, float hi) { return v < 0.0f ? 0.0f : (v > hi ? hi : v); };
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+            if (ImGui::IsItemActivated())
             {
                 m_selX0 = clampf(mouse.x - imgPos.x, dispW);
                 m_selY0 = clampf(mouse.y - imgPos.y, dispH);
@@ -921,12 +929,12 @@ void UIConfigurationSource::renderRegionSelector()
                 m_marqueeActive = true;
                 m_haveSelection = true;
             }
-            if (m_marqueeActive && ImGui::IsMouseDown(0))
+            if (m_marqueeActive && ImGui::IsItemActive())
             {
                 m_selX1 = clampf(mouse.x - imgPos.x, dispW);
                 m_selY1 = clampf(mouse.y - imgPos.y, dispH);
             }
-            if (m_marqueeActive && ImGui::IsMouseReleased(0)) m_marqueeActive = false;
+            if (ImGui::IsItemDeactivated()) m_marqueeActive = false;
 
             if (m_haveSelection)
             {
