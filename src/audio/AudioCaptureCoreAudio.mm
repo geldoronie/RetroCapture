@@ -126,12 +126,28 @@ AudioComponentInstance AudioCaptureCoreAudio::getAudioUnit() const
 }
 #endif
 
+// #109 — synthetic device id for capturing the system audio output.
+static const char *kSystemAudioId = "system-audio";
+
 bool AudioCaptureCoreAudio::open(const std::string &deviceName)
 {
     if (m_isOpen)
     {
         LOG_WARN("Dispositivo de áudio já aberto, fechando primeiro");
         close();
+    }
+
+    // #109 — system audio (output) uses ScreenCaptureKit, not the mic
+    // AudioUnit. No mic permission, no local monitor playback (the user
+    // already hears the system; playing it back would feed back). The
+    // SCStream is started in startCapture().
+    m_systemAudio = (deviceName == kSystemAudioId);
+    if (m_systemAudio)
+    {
+        m_isOpen = true;
+        LOG_INFO("AudioCaptureCoreAudio: system-audio source (ScreenCaptureKit) — "
+                 "local monitor disabled to avoid feedback");
+        return true;
     }
 
 #ifdef __APPLE__
@@ -360,6 +376,18 @@ std::vector<AudioDeviceInfo> AudioCaptureCoreAudio::listDevices()
         defaultDevice.available = true;
         devices.push_back(defaultDevice);
     }
+
+    // #109 — synthetic "system audio" capture (ScreenCaptureKit loopback
+    // of the whole computer's output). Flagged isMonitor so the UI groups
+    // it and shows the feedback note.
+    {
+        AudioDeviceInfo sysAudio;
+        sysAudio.id        = kSystemAudioId;
+        sysAudio.name      = "System audio (ScreenCaptureKit)";
+        sysAudio.available = true;
+        sysAudio.isMonitor = true;
+        devices.push_back(sysAudio);
+    }
 #endif
 
     return devices;
@@ -376,6 +404,18 @@ bool AudioCaptureCoreAudio::startCapture()
     {
         LOG_ERROR("Dispositivo de áudio não aberto");
         return false;
+    }
+
+    if (m_systemAudio)
+    {
+        m_sckAudio = std::make_unique<SystemAudioCaptureSCK>();
+        if (!m_sckAudio->start(m_bus.get(), m_sampleRate, m_channels))
+        {
+            m_sckAudio.reset();
+            return false;
+        }
+        m_isCapturing = true;
+        return true;
     }
 
 #ifdef __APPLE__
@@ -399,6 +439,12 @@ bool AudioCaptureCoreAudio::startCapture()
 void AudioCaptureCoreAudio::stopCapture()
 {
     m_isCapturing = false;
+    if (m_sckAudio)
+    {
+        m_sckAudio->stop();
+        m_sckAudio.reset();
+        return;
+    }
 #ifdef __APPLE__
     if (m_audioUnit)
     {
