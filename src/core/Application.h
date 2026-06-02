@@ -386,6 +386,9 @@ private:
     std::string m_streamingQsvPreset   = "veryfast";
     std::string m_streamingAmfQuality  = "speed";
     std::string m_remoteInterpolation  = "linear";
+    // #77 effective client-side audio gain (muted ? 0 : volume), kept in
+    // sync with UIManager and applied to each VideoCaptureRemote created.
+    float m_remoteAudioGain = 1.0f;
     bool        m_remoteWindowFocused  = true;  // tracks vsync toggle state in the Remote main-loop branch
 
     // Buffer configuration

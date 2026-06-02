@@ -449,6 +449,7 @@ bool Application::initCapture()
         if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
         else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
         remote->setInterpolationMode(imode);
+        remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
     }
     else
@@ -1260,6 +1261,7 @@ bool Application::initUI()
     m_streamingQsvPreset   = m_ui->getStreamingQsvPreset();
     m_streamingAmfQuality  = m_ui->getStreamingAmfQuality();
     m_remoteInterpolation  = m_ui->getRemoteInterpolation();
+    m_remoteAudioGain      = m_ui->getRemoteAudioMuted() ? 0.0f : m_ui->getRemoteAudioVolume();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1752,6 +1754,17 @@ bool Application::initUI()
             if (v == "nearest") mode = VideoCaptureRemote::InterpolationMode::Nearest;
             else if (v == "off") mode = VideoCaptureRemote::InterpolationMode::Off;
             remote->setInterpolationMode(mode);
+        }
+    });
+
+    // #77 Remote audio volume — UIManager hands us the effective gain
+    // (muted ? 0 : volume); push it live to the active VideoCaptureRemote
+    // (and remember it for any remote created later this session).
+    m_ui->setOnRemoteAudioVolumeChanged([this](float gain) {
+        m_remoteAudioGain = gain;
+        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        {
+            remote->setAudioVolume(gain);
         }
     });
 
@@ -2504,6 +2517,7 @@ bool Application::initUI()
                                              if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                                              else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                                              remote->setInterpolationMode(imode);
+                                             remote->setAudioVolume(m_remoteAudioGain);
                                              m_capture = std::move(remote);
                                          }
                                          m_devicePath.clear();
@@ -2618,6 +2632,7 @@ bool Application::initUI()
                 if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                 else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                 remote->setInterpolationMode(imode);
+                remote->setAudioVolume(m_remoteAudioGain);
                 remote->setAuthToken(authToken);
                 m_capture = std::move(remote);
             }

@@ -88,10 +88,13 @@ size_t AudioPlaybackCoreAudio::submit(const float *interleaved,
     // Convert interleaved float [-1,1] to interleaved int16. sampleCount
     // is the *frame* count, so total values = sampleCount * channels.
     const size_t totalSamples = sampleCount * m_channels;
+    // Fold the client-side gain into the float→int16 conversion: one
+    // multiply per sample, no extra pass.
+    const float gain = volume();
     std::vector<int16_t> pcm(totalSamples);
     for (size_t i = 0; i < totalSamples; ++i)
     {
-        const float v = std::max(-1.0f, std::min(1.0f, interleaved[i]));
+        const float v = std::max(-1.0f, std::min(1.0f, interleaved[i] * gain));
         pcm[i] = static_cast<int16_t>(v * 32767.0f);
     }
 
