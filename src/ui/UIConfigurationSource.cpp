@@ -154,6 +154,15 @@ void UIConfigurationSource::renderSourceTypeSelection()
 
 void UIConfigurationSource::renderV4L2Controls()
 {
+    // Re-fetch the live capture pointer. render() caches it at the top
+    // of the frame, but renderSourceTypeSelection() (called just before
+    // the dispatch here) can switch the source type and rebuild the
+    // backend mid-frame — leaving the cached pointer dangling at the
+    // just-destroyed instance. renderDSControls/AVFoundation already
+    // re-fetch for the same reason; V4L2 didn't, and dereferencing the
+    // stale pointer below segfaulted right after a Screen→V4L2 switch.
+    m_capture = m_uiManager->getCapture();
+
     // Sempre mostrar controles, mesmo sem dispositivo
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
