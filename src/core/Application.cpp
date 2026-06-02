@@ -4,6 +4,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
+#include "../capture/VideoCaptureScreen.h"
 #include "../streaming/RemoteMetaSync.h"
 #include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
@@ -451,6 +452,17 @@ bool Application::initCapture()
         remote->setInterpolationMode(imode);
         remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
+    }
+    else if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+    {
+        // #107 — screen capture is its own backend (not in the
+        // platform factory, like Remote). Target + region come from the
+        // UI/config; open() happens below via the shared device path.
+        LOG_INFO("Source is screen — creating VideoCaptureScreen");
+        auto screen = std::make_unique<VideoCaptureScreen>();
+        screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                          m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+        m_capture = std::move(screen);
     }
     else
     {
@@ -1768,6 +1780,15 @@ bool Application::initUI()
         }
     });
 
+    // #107 — live screen-capture region crop. Push the new rect to the
+    // active VideoCaptureScreen so the crop changes without a restart.
+    m_ui->setOnScreenRegionChanged([this](uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        if (auto *screen = dynamic_cast<VideoCaptureScreen *>(m_capture.get()))
+        {
+            screen->setRegion(x, y, w, h);
+        }
+    });
+
     // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
                                                   {
@@ -2538,6 +2559,54 @@ bool Application::initUI()
             return;
         }
         processingDeviceChange = true;
+
+        // #107 — Screen source: the callback carries the capture target
+        // ("monitor:N" / "window:<id>" / ""). Replace the capture with a
+        // VideoCaptureScreen pointed at it. Empty target == stop.
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+        {
+            LOG_INFO("Screen target change: " +
+                     (devicePath.empty() ? std::string("(stop)") : devicePath));
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture.reset();
+            }
+            m_devicePath = devicePath;
+
+            if (devicePath.empty())
+            {
+                if (m_ui) m_ui->setCaptureInfo(0, 0, 0, "");
+                processingDeviceChange = false;
+                return;
+            }
+
+            auto screen = std::make_unique<VideoCaptureScreen>();
+            screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                              m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+            m_capture = std::move(screen);
+            if (m_capture->open(devicePath))
+            {
+                m_capture->startCapture();
+                const uint32_t w = m_capture->getWidth();
+                const uint32_t h = m_capture->getHeight();
+                if (w > 0 && h > 0) { m_captureWidth = w; m_captureHeight = h; }
+                if (m_ui) m_ui->setCaptureInfo(w, h, m_captureFps, devicePath);
+            }
+            else
+            {
+                LOG_WARN("VideoCaptureScreen: failed to open target " + devicePath);
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(0, 0, 0, "Screen (failed)");
+                    m_ui->setCurrentDeviceSilent("");
+                }
+                m_devicePath.clear();
+            }
+            processingDeviceChange = false;
+            return;
+        }
 
         // Phase 5b/#47: when the active source is Remote, this callback
         // carries the remote BASE URL — not a V4L2 / DirectShow device

@@ -2392,6 +2392,13 @@ void UIManager::triggerRemoteInterpolationChange(const std::string &v)
     saveConfig();
 }
 
+void UIManager::triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    m_screenRegionX = x; m_screenRegionY = y; m_screenRegionW = w; m_screenRegionH = h;
+    if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    saveConfig();
+}
+
 void UIManager::triggerRemoteAudioVolumeChange(float volume)
 {
     if (volume < 0.0f) volume = 0.0f;
@@ -2986,6 +2993,7 @@ void UIManager::loadConfig()
                 const bool isPlatformNative =
                     loaded == SourceType::None ||
                     loaded == SourceType::Remote ||
+                    loaded == SourceType::Screen ||   // #107 cross-platform
 #ifdef __linux__
                     loaded == SourceType::V4L2;
 #elif defined(_WIN32)
@@ -3022,6 +3030,28 @@ void UIManager::loadConfig()
             {
                 m_currentDevice = ds["device"].get<std::string>();
             }
+        }
+
+        // #107 — screen-capture target + region crop. Region always
+        // round-trips; the target only seeds m_currentDevice when the
+        // active source is Screen (m_currentDevice is shared and the
+        // v4l2/ds blocks above also write it).
+        if (config.contains("screen"))
+        {
+            auto &screen = config["screen"];
+            if (m_sourceType == SourceType::Screen &&
+                screen.contains("target") && !screen["target"].is_null())
+            {
+                m_currentDevice = screen["target"].get<std::string>();
+            }
+            auto getU = [&](const char *k, uint32_t &dst) {
+                if (screen.contains(k) && screen[k].is_number_unsigned())
+                    dst = screen[k].get<uint32_t>();
+            };
+            getU("regionX", m_screenRegionX);
+            getU("regionY", m_screenRegionY);
+            getU("regionW", m_screenRegionW);
+            getU("regionH", m_screenRegionH);
         }
 
         // Carregar configurações de áudio
@@ -3270,6 +3300,14 @@ void UIManager::saveConfig()
         // Salvar dispositivo DirectShow
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // #107 — screen-capture target + region crop.
+        config["screen"] = {
+            {"target",  (m_sourceType == SourceType::Screen) ? m_currentDevice : std::string()},
+            {"regionX", m_screenRegionX},
+            {"regionY", m_screenRegionY},
+            {"regionW", m_screenRegionW},
+            {"regionH", m_screenRegionH}};
 
         // Salvar configurações de áudio
         config["audio"] = {

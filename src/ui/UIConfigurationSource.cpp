@@ -3,6 +3,7 @@
 #include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include "../capture/IVideoCapture.h"
+#include "../capture/VideoCaptureScreen.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
@@ -47,6 +48,12 @@ void UIConfigurationSource::render()
     if (sourceType == UIManager::SourceType::Remote)
     {
         renderRemoteControls();
+        ImGui::End();
+        return;
+    }
+    if (sourceType == UIManager::SourceType::Screen)
+    {
+        renderScreenControls();
         ImGui::End();
         return;
     }
@@ -98,25 +105,30 @@ void UIConfigurationSource::renderSourceTypeSelection()
     // ('Remote → Connect to Remote...') with a dedicated window for URL
     // and interpolation. The Source tab focuses only on physical capture
     // options local to the machine.
+    // 'Screen' (#107) is cross-platform and offered everywhere.
 #ifdef __linux__
-    const char *sourceTypeNames[] = {"None", "V4L2"};
+    const char *sourceTypeNames[] = {"None", "V4L2", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::V4L2};
+        UIManager::SourceType::V4L2,
+        UIManager::SourceType::Screen};
 #elif defined(_WIN32)
-    const char *sourceTypeNames[] = {"None", "DirectShow"};
+    const char *sourceTypeNames[] = {"None", "DirectShow", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::DS};
+        UIManager::SourceType::DS,
+        UIManager::SourceType::Screen};
 #elif defined(__APPLE__)
-    const char *sourceTypeNames[] = {"None", "AVFoundation"};
+    const char *sourceTypeNames[] = {"None", "AVFoundation", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::AVFoundation};
+        UIManager::SourceType::AVFoundation,
+        UIManager::SourceType::Screen};
 #else
-    const char *sourceTypeNames[] = {"None"};
+    const char *sourceTypeNames[] = {"None", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None};
+        UIManager::SourceType::None,
+        UIManager::SourceType::Screen};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -745,6 +757,93 @@ void UIConfigurationSource::renderRemoteControls()
     else
     {
         ImGui::TextDisabled("not connected");
+    }
+}
+
+void UIConfigurationSource::renderScreenControls()
+{
+    ui_section_header("Screen Capture",
+                      "Capture the desktop — a whole monitor, a window, "
+                      "or a cropped region — as the source.");
+
+    // Target enumeration. Cached so we don't re-enumerate every frame;
+    // a Refresh re-scans (windows come and go). On Wayland the portal's
+    // own picker ultimately decides, so this list may be a single entry.
+    if (!m_screenTargetsLoaded)
+    {
+        VideoCaptureScreen probe;
+        m_screenTargets       = probe.listDevices();
+        m_screenTargetsLoaded = true;
+    }
+
+    if (ImGui::Button("Refresh targets"))
+    {
+        VideoCaptureScreen probe;
+        m_screenTargets = probe.listDevices();
+    }
+
+    const std::string current = m_uiManager->getCurrentDevice();
+    std::string preview = current.empty() ? "(none)" : current;
+    for (const auto &d : m_screenTargets)
+        if (d.id == current) { preview = d.name; break; }
+
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##screenTarget", preview.c_str()))
+    {
+        for (const auto &d : m_screenTargets)
+        {
+            const bool selected = (d.id == current);
+            if (ImGui::Selectable(d.name.c_str(), selected))
+            {
+                m_uiManager->triggerDeviceChange(d.id);
+                m_uiManager->saveConfig();
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Target");
+
+    if (!current.empty())
+    {
+        if (ImGui::Button("Stop capture"))
+        {
+            m_uiManager->triggerDeviceChange("");
+            m_uiManager->saveConfig();
+        }
+    }
+
+    ImGui::Separator();
+    ui_section_header("Region (crop)",
+                      "Limit the captured area, in target pixels. "
+                      "All zero = capture the full target.");
+
+    // Seed the ImGui scratch from persisted config once.
+    if (!m_screenRegionSeeded)
+    {
+        m_screenRegion[0] = static_cast<int>(m_uiManager->getScreenRegionX());
+        m_screenRegion[1] = static_cast<int>(m_uiManager->getScreenRegionY());
+        m_screenRegion[2] = static_cast<int>(m_uiManager->getScreenRegionW());
+        m_screenRegion[3] = static_cast<int>(m_uiManager->getScreenRegionH());
+        m_screenRegionSeeded = true;
+    }
+
+    ImGui::InputInt2("x, y", &m_screenRegion[0]);
+    ImGui::InputInt2("w, h", &m_screenRegion[2]);
+    for (int i = 0; i < 4; ++i) if (m_screenRegion[i] < 0) m_screenRegion[i] = 0;
+
+    if (ImGui::Button("Apply region"))
+    {
+        m_uiManager->triggerScreenRegionChange(
+            static_cast<uint32_t>(m_screenRegion[0]), static_cast<uint32_t>(m_screenRegion[1]),
+            static_cast<uint32_t>(m_screenRegion[2]), static_cast<uint32_t>(m_screenRegion[3]));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear region"))
+    {
+        m_screenRegion[0] = m_screenRegion[1] = m_screenRegion[2] = m_screenRegion[3] = 0;
+        m_uiManager->triggerScreenRegionChange(0, 0, 0, 0);
     }
 }
 

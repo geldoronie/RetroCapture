@@ -510,6 +510,16 @@ public:
     // #77 client-side volume for the incoming remote audio stream.
     float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
     bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
+    // #107 screen-capture region crop (target pixels; 0,0,0,0 = full).
+    uint32_t getScreenRegionX() const { return m_screenRegionX; }
+    uint32_t getScreenRegionY() const { return m_screenRegionY; }
+    uint32_t getScreenRegionW() const { return m_screenRegionW; }
+    uint32_t getScreenRegionH() const { return m_screenRegionH; }
+    void triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void setOnScreenRegionChanged(std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> cb)
+    {
+        m_onScreenRegionChanged = cb;
+    }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -1210,6 +1220,8 @@ private:
     // preserving the level so unmuting restores it.
     float m_remoteAudioVolume = 1.0f;
     bool  m_remoteAudioMuted  = false;
+    // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
+    uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -1333,6 +1345,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
     std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
     std::function<void(float)> m_onRemoteAudioVolumeChanged;
+    std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> m_onScreenRegionChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;
