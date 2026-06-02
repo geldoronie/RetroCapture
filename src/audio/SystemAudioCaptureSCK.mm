@@ -31,6 +31,13 @@ API_AVAILABLE(macos(13.0))
     if (type != SCStreamOutputTypeAudio || bus == nullptr) return;
     if (!CMSampleBufferIsValid(sampleBuffer)) return;
 
+    static bool loggedFirst = false;
+    if (!loggedFirst)
+    {
+        loggedFirst = true;
+        LOG_INFO("SystemAudioCaptureSCK: first audio buffer received");
+    }
+
     AudioBufferList abl;
     CMBlockBufferRef block = nullptr;
     const OSStatus s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -129,10 +136,11 @@ bool SystemAudioCaptureSCK::start(AudioBus *bus, uint32_t sampleRate, uint32_t c
         cfg.sampleRate    = (NSInteger)sampleRate;
         cfg.channelCount  = (NSInteger)channels;
         cfg.excludesCurrentProcessAudio = YES; // never capture ourselves
-        // Minimal video — we only consume audio, but a filter/stream
-        // always has a video plane. Keep it tiny and slow.
-        cfg.width  = 2;
-        cfg.height = 2;
+        // We only consume audio, but an SCStream always has a video plane.
+        // Keep it small but valid (2x2 can be rejected and stop the stream
+        // from starting) and slow.
+        cfg.width  = 128;
+        cfg.height = 72;
         cfg.minimumFrameInterval = CMTimeMake(1, 1);
 
         m_impl->delegate = [[RCSystemAudioDelegate alloc] init];
