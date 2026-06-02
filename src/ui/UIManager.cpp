@@ -142,6 +142,11 @@ bool UIManager::init(void *window)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // Move windows only by dragging their title bar (standard desktop
+    // window behaviour). Without this, dragging anywhere in a window's
+    // body moves it — which fought the region-selector marquee and is
+    // generally surprising. Applies to every RetroCapture window.
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Anchor the ImGui ini to the user-data dir so window
     // positions/sizes/collapse state survive across runs regardless
