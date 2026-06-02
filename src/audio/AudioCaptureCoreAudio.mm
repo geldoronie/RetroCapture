@@ -144,6 +144,10 @@ bool AudioCaptureCoreAudio::open(const std::string &deviceName)
     m_systemAudio = (deviceName == kSystemAudioId);
     if (m_systemAudio)
     {
+        // ScreenCaptureKit delivers 48 kHz stereo float; report that so
+        // the encoder/muxer and the SCStream(s) all agree on the rate.
+        m_sampleRate = 48000;
+        m_channels   = 2;
         m_isOpen = true;
         LOG_INFO("AudioCaptureCoreAudio: system-audio source (ScreenCaptureKit) — "
                  "local monitor disabled to avoid feedback");
@@ -408,12 +412,10 @@ bool AudioCaptureCoreAudio::startCapture()
 
     if (m_systemAudio)
     {
-        m_sckAudio = std::make_unique<SystemAudioCaptureSCK>();
-        if (!m_sckAudio->start(m_bus.get(), m_sampleRate, m_channels))
-        {
-            m_sckAudio.reset();
-            return false;
-        }
+        // Brokered by the hub: routes the screen-capture stream's audio
+        // when screen capture is active, else runs its own audio-only
+        // SCStream — never two SCStreams at once (#109).
+        SckSystemAudioHub::instance().requestSystemAudio(m_bus.get(), m_sampleRate, m_channels);
         m_isCapturing = true;
         return true;
     }
@@ -439,10 +441,9 @@ bool AudioCaptureCoreAudio::startCapture()
 void AudioCaptureCoreAudio::stopCapture()
 {
     m_isCapturing = false;
-    if (m_sckAudio)
+    if (m_systemAudio)
     {
-        m_sckAudio->stop();
-        m_sckAudio.reset();
+        SckSystemAudioHub::instance().releaseSystemAudio();
         return;
     }
 #ifdef __APPLE__

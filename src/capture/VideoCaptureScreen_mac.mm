@@ -14,6 +14,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 
 #include "../utils/Logger.h"
+#include "../audio/SckSystemAudioHub.h" // #109 route screen audio → system-audio
 
 #include <atomic>
 #include <cstdint>
@@ -35,8 +36,59 @@ API_AVAILABLE(macos(12.3))
                    ofType:(SCStreamOutputType)type
 {
     (void)stream;
-    if (type != SCStreamOutputTypeScreen || sink == nullptr) return;
     if (!CMSampleBufferIsValid(sampleBuffer)) return;
+
+    // #109 — audio rides on the same SCStream (running a second stream
+    // just for audio makes it go silent). Forward it to the hub, which
+    // hands it to the system-audio source.
+    if (type == SCStreamOutputTypeAudio)
+    {
+        AudioBufferList abl;
+        CMBlockBufferRef block = nullptr;
+        if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+                sampleBuffer, nullptr, &abl, sizeof(abl), nullptr, nullptr,
+                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block) == noErr &&
+            block)
+        {
+            auto toI16 = [](float f) -> int16_t {
+                if (f >  1.0f) f =  1.0f;
+                if (f < -1.0f) f = -1.0f;
+                return static_cast<int16_t>(f * 32767.0f);
+            };
+            if (abl.mNumberBuffers == 1)
+            {
+                const float *src = static_cast<const float *>(abl.mBuffers[0].mData);
+                const size_t n   = abl.mBuffers[0].mDataByteSize / sizeof(float);
+                if (src && n)
+                {
+                    std::vector<int16_t> out(n);
+                    for (size_t i = 0; i < n; ++i) out[i] = toI16(src[i]);
+                    SckSystemAudioHub::instance().onScreenAudio(out.data(), out.size());
+                }
+            }
+            else
+            {
+                const uint32_t ch     = abl.mNumberBuffers;
+                const uint32_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
+                if (frames)
+                {
+                    std::vector<int16_t> inter(static_cast<size_t>(frames) * ch);
+                    for (uint32_t c = 0; c < ch; ++c)
+                    {
+                        const float *src = static_cast<const float *>(abl.mBuffers[c].mData);
+                        if (!src) continue;
+                        for (uint32_t f = 0; f < frames; ++f)
+                            inter[static_cast<size_t>(f) * ch + c] = toI16(src[f]);
+                    }
+                    SckSystemAudioHub::instance().onScreenAudio(inter.data(), inter.size());
+                }
+            }
+            CFRelease(block);
+        }
+        return;
+    }
+
+    if (type != SCStreamOutputTypeScreen || sink == nullptr) return;
 
     CVImageBufferRef px = CMSampleBufferGetImageBuffer(sampleBuffer);
     if (!px) return;
@@ -107,6 +159,9 @@ public:
     void stop() override
     {
         if (!m_running.exchange(false)) return;
+        // #109 — tell the hub the screen audio producer is gone (it will
+        // fall back to its own audio-only stream if a consumer remains).
+        SckSystemAudioHub::instance().setScreenProducerActive(false);
         if (@available(macOS 12.3, *))
         {
             if (m_stream)
@@ -252,6 +307,19 @@ private:
         cfg.queueDepth = 5;
         cfg.showsCursor = captureCursor ? YES : NO;
 
+        // #109 — capture system audio on this same stream (macOS 13+) so
+        // the system-audio source doesn't need a second SCStream (two
+        // conflict). 48 kHz stereo to match the audio bus.
+        bool wantAudio = false;
+        if (@available(macOS 13.0, *))
+        {
+            cfg.capturesAudio = YES;
+            cfg.sampleRate    = 48000;
+            cfg.channelCount  = 2;
+            cfg.excludesCurrentProcessAudio = YES; // never capture ourselves
+            wantAudio = true;
+        }
+
         m_delegate = [[RCScreenDelegate alloc] init];
         m_delegate->sink = &m_sink;
 
@@ -268,6 +336,28 @@ private:
                                           type:SCStreamOutputTypeScreen
                             sampleHandlerQueue:q
                                          error:&addErr];
+        if (added && wantAudio)
+        {
+            if (@available(macOS 13.0, *))
+            {
+                dispatch_queue_t aq = dispatch_queue_create("com.retrocapture.sck.audio",
+                                                           DISPATCH_QUEUE_SERIAL);
+                NSError *aErr = nil;
+                if ([m_stream addStreamOutput:m_delegate
+                                         type:SCStreamOutputTypeAudio
+                           sampleHandlerQueue:aq
+                                        error:&aErr])
+                {
+                    SckSystemAudioHub::instance().setScreenProducerActive(true);
+                }
+                else
+                {
+                    LOG_WARN(std::string("VideoCaptureScreen(sck): audio output add failed — ") +
+                             (aErr ? aErr.localizedDescription.UTF8String : "?"));
+                }
+                dispatch_release(aq);
+            }
+        }
         dispatch_release(q);
         if (!added)
         {
