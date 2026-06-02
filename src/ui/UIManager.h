@@ -165,7 +165,8 @@ public:
         V4L2 = 1,
         DS = 2,           // DirectShow (Windows)
         Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
-        AVFoundation = 4  // AVFoundation (macOS)
+        AVFoundation = 4, // AVFoundation (macOS)
+        Screen = 5        // Desktop / window / region screen capture (#107)
     };
 
     // Source type setter (para uso pelas classes de abas)
