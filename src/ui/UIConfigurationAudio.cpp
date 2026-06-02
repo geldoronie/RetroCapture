@@ -123,7 +123,7 @@ void UIConfigurationAudio::refreshInputSources()
             }
         }
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(_WIN32)
     // Core Audio devices via IAudioCapture::listDevices — same listing
     // used elsewhere. On macOS the saved id comes from
     // `getAudioInputSourceId()`, same field reused.
@@ -284,10 +284,10 @@ void UIConfigurationAudio::renderInputSourceSelection()
                            "RetroCapture will record from it and publish "
                            "the audio as the 'RetroCapture' source.");
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(_WIN32)
     if (m_inputSourceNames.empty())
     {
-        ImGui::TextWrapped("No Core Audio input devices found.");
+        ImGui::TextWrapped("No audio devices found.");
         return;
     }
 
@@ -318,10 +318,19 @@ void UIConfigurationAudio::renderInputSourceSelection()
             else
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
-                                   "Failed to open Core Audio device");
+                                   "Failed to open audio device");
                 m_selectedInputSourceIndex = prev;
             }
         }
+    }
+
+    // #109 — flag system-audio (output monitor) selections.
+    if (m_selectedInputSourceIndex >= 0 &&
+        m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIsMonitor.size()) &&
+        m_inputSourceIsMonitor[m_selectedInputSourceIndex])
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Capturing system audio (loopback).");
     }
 
     ImGui::Spacing();
@@ -332,6 +341,7 @@ void UIConfigurationAudio::renderInputSourceSelection()
                     m_audioCapture->getChannels(),
                     m_audioCapture->getChannels() == 1 ? "" : "s");
 
+#ifdef __APPLE__
         if (ImGui::Button("Resync monitor"))
         {
             if (auto *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(m_audioCapture))
@@ -339,6 +349,7 @@ void UIConfigurationAudio::renderInputSourceSelection()
                 caCapture->resyncMonitor();
             }
         }
+#endif
     }
 #endif
 }

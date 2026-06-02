@@ -99,6 +99,38 @@ bool AudioCaptureWASAPI::selectDevice(const std::string &deviceName)
 
     HRESULT hr = S_OK;
 
+    // #109 — when an explicit endpoint id is given, open exactly that
+    // device and infer loopback from its data flow: a render (output)
+    // endpoint → system-audio loopback; a capture endpoint → normal mic.
+    // This handles selecting a specific output monitor (the old TODO).
+    if (!deviceName.empty() && deviceName != "default")
+    {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, deviceName.c_str(), -1, nullptr, 0);
+        if (wlen > 0)
+        {
+            std::wstring wid(static_cast<size_t>(wlen), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, deviceName.c_str(), -1, &wid[0], wlen);
+            IMMDevice *byId = nullptr;
+            if (SUCCEEDED(m_deviceEnumerator->GetDevice(wid.c_str(), &byId)) && byId)
+            {
+                IMMEndpoint *ep = nullptr;
+                EDataFlow flow = eCapture;
+                if (SUCCEEDED(byId->QueryInterface(__uuidof(IMMEndpoint), (void **)&ep)) && ep)
+                {
+                    ep->GetDataFlow(&flow);
+                    SafeRelease(&ep);
+                }
+                m_useLoopback = (flow == eRender);
+                m_device = byId;     // takes ownership
+                m_deviceId = deviceName;
+                LOG_INFO(std::string("AudioCapture: opening endpoint by id (") +
+                         (m_useLoopback ? "render/loopback" : "capture") + ")");
+                return true;
+            }
+        }
+        // Fall through to the legacy name/default matching below.
+    }
+
     // Se usar loopback, obter dispositivo de renderização (output)
     // Caso contrário, obter dispositivo de captura (input/microfone)
     if (m_useLoopback)
@@ -561,79 +593,78 @@ std::vector<AudioDeviceInfo> AudioCaptureWASAPI::listDevices()
         return devices;
     }
 
-    IMMDeviceCollection *deviceCollection = nullptr;
-    HRESULT hr = m_deviceEnumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &deviceCollection);
-    if (FAILED(hr))
-    {
-        return devices;
-    }
+    // #109 — list real inputs (eCapture) AND output endpoints (eRender),
+    // the latter flagged as monitors so they can be captured via WASAPI
+    // loopback (system audio).
+    struct Kind { EDataFlow flow; bool monitor; };
+    const Kind kinds[] = { {eCapture, false}, {eRender, true} };
 
-    UINT deviceCount = 0;
-    hr = deviceCollection->GetCount(&deviceCount);
-    if (FAILED(hr))
+    for (const Kind &k : kinds)
     {
-        SafeRelease(&deviceCollection);
-        return devices;
-    }
+        IMMDeviceCollection *deviceCollection = nullptr;
+        HRESULT hr = m_deviceEnumerator->EnumAudioEndpoints(k.flow, DEVICE_STATE_ACTIVE,
+                                                            &deviceCollection);
+        if (FAILED(hr) || !deviceCollection) continue;
 
-    for (UINT i = 0; i < deviceCount; i++)
-    {
-        IMMDevice *device = nullptr;
-        hr = deviceCollection->Item(i, &device);
-        if (FAILED(hr))
+        UINT deviceCount = 0;
+        if (FAILED(deviceCollection->GetCount(&deviceCount)))
         {
+            SafeRelease(&deviceCollection);
             continue;
         }
 
-        AudioDeviceInfo info;
+        for (UINT i = 0; i < deviceCount; i++)
+        {
+            IMMDevice *device = nullptr;
+            if (FAILED(deviceCollection->Item(i, &device))) continue;
 
-        // Get device ID
-        LPWSTR deviceId = nullptr;
-        hr = device->GetId(&deviceId);
-        if (SUCCEEDED(hr))
-        {
-            char idBuffer[512];
-            WideCharToMultiByte(CP_UTF8, 0, deviceId, -1, idBuffer, sizeof(idBuffer), nullptr, nullptr);
-            info.id = std::string(idBuffer);
-            CoTaskMemFree(deviceId);
-        }
-        else
-        {
-            info.id = std::to_string(i);
-        }
+            AudioDeviceInfo info;
+            info.isMonitor = k.monitor;
 
-        // Get friendly name
-        IPropertyStore *properties = nullptr;
-        hr = device->OpenPropertyStore(STGM_READ, &properties);
-        if (SUCCEEDED(hr))
-        {
-            PROPVARIANT friendlyName;
-            PropVariantInit(&friendlyName);
-            hr = properties->GetValue(PKEY_Device_FriendlyName, &friendlyName);
-            if (SUCCEEDED(hr))
+            LPWSTR deviceId = nullptr;
+            if (SUCCEEDED(device->GetId(&deviceId)))
             {
-                char nameBuffer[512];
-                WideCharToMultiByte(CP_UTF8, 0, friendlyName.pwszVal, -1, nameBuffer, sizeof(nameBuffer), nullptr, nullptr);
-                info.name = std::string(nameBuffer);
-                PropVariantClear(&friendlyName);
+                char idBuffer[512];
+                WideCharToMultiByte(CP_UTF8, 0, deviceId, -1, idBuffer, sizeof(idBuffer), nullptr, nullptr);
+                info.id = std::string(idBuffer);
+                CoTaskMemFree(deviceId);
             }
             else
             {
-                info.name = "Dispositivo " + std::to_string(i);
+                info.id = std::to_string(i);
             }
-            SafeRelease(&properties);
-        }
-        else
-        {
-            info.name = "Dispositivo " + std::to_string(i);
+
+            IPropertyStore *properties = nullptr;
+            if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)))
+            {
+                PROPVARIANT friendlyName;
+                PropVariantInit(&friendlyName);
+                if (SUCCEEDED(properties->GetValue(PKEY_Device_FriendlyName, &friendlyName)))
+                {
+                    char nameBuffer[512];
+                    WideCharToMultiByte(CP_UTF8, 0, friendlyName.pwszVal, -1, nameBuffer, sizeof(nameBuffer), nullptr, nullptr);
+                    info.name = std::string(nameBuffer);
+                    PropVariantClear(&friendlyName);
+                }
+                else
+                {
+                    info.name = "Device " + std::to_string(i);
+                }
+                SafeRelease(&properties);
+            }
+            else
+            {
+                info.name = "Device " + std::to_string(i);
+            }
+
+            info.available = true;
+            devices.push_back(info);
+            SafeRelease(&device);
         }
 
-        info.available = true;
-        devices.push_back(info);
-        SafeRelease(&device);
+        SafeRelease(&deviceCollection);
     }
 
-    SafeRelease(&deviceCollection);
     return devices;
 }
 
