@@ -1,11 +1,13 @@
 #include "ScreenBackend.h"
 
-// Fallback screen backend: a moving test pattern. Compiled when no real
-// platform grabber is enabled for this build (Windows/macOS until their
-// backends land, or Linux without PipeWire). The real Linux backend in
-// VideoCaptureScreen_linux.cpp takes over when RETROCAPTURE_SCREEN_PIPEWIRE
-// is defined.
-#ifndef RETROCAPTURE_SCREEN_PIPEWIRE
+// Fallback screen backend: a moving test pattern. Compiled only when no
+// real platform grabber is enabled for this build (Linux without
+// PipeWire, or a platform whose backend isn't built). The real backends
+// — VideoCaptureScreen_linux.cpp (PipeWire), _win.cpp (DXGI), _mac.mm
+// (ScreenCaptureKit) — take over when their macro is defined.
+#if !defined(RETROCAPTURE_SCREEN_PIPEWIRE) && \
+    !defined(RETROCAPTURE_SCREEN_DXGI) && \
+    !defined(RETROCAPTURE_SCREEN_SCK)
 
 #include "../utils/Logger.h"
 
@@ -78,4 +80,4 @@ std::unique_ptr<ScreenBackend> createScreenBackend(IScreenFrameSink &sink)
     return std::make_unique<TestPatternBackend>(sink);
 }
 
-#endif // !RETROCAPTURE_SCREEN_PIPEWIRE
+#endif // no real screen backend for this build

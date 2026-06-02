@@ -570,6 +570,7 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
@@ -598,6 +599,7 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
@@ -716,6 +718,25 @@ if(PLATFORM_LINUX AND PIPEWIRE_FOUND AND DBUS_FOUND)
         target_include_directories(retrocapture PRIVATE ${EGL_INCLUDE_DIRS})
         target_link_libraries(retrocapture PRIVATE ${EGL_LIBRARIES})
     endif()
+endif()
+
+# #107 — Windows screen-capture backend (DXGI Desktop Duplication).
+# VideoCaptureScreen_win.cpp keys off RETROCAPTURE_SCREEN_DXGI; d3d11/dxgi
+# headers + libs ship with MinGW-w64 / MXE.
+if(PLATFORM_WINDOWS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DXGI)
+    target_link_libraries(retrocapture PRIVATE d3d11 dxgi)
+endif()
+
+# #107 — macOS screen-capture backend (ScreenCaptureKit). The .mm is
+# excluded from non-Apple builds (below); the framework is 12.3+.
+if(PLATFORM_MACOS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_SCK)
+    target_link_libraries(retrocapture PRIVATE
+        "-framework ScreenCaptureKit"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics")
 endif()
 
 if(PLATFORM_WINDOWS)
