@@ -4,6 +4,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
+#include "../capture/VideoCaptureScreen.h"
 #include "../streaming/RemoteMetaSync.h"
 #include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
@@ -451,6 +452,17 @@ bool Application::initCapture()
         remote->setInterpolationMode(imode);
         remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
+    }
+    else if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+    {
+        // #107 — screen capture is its own backend (not in the
+        // platform factory, like Remote). Target + region come from the
+        // UI/config; open() happens below via the shared device path.
+        LOG_INFO("Source is screen — creating VideoCaptureScreen");
+        auto screen = std::make_unique<VideoCaptureScreen>();
+        screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                          m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+        m_capture = std::move(screen);
     }
     else
     {
@@ -1768,6 +1780,15 @@ bool Application::initUI()
         }
     });
 
+    // #107 — live screen-capture region crop. Push the new rect to the
+    // active VideoCaptureScreen so the crop changes without a restart.
+    m_ui->setOnScreenRegionChanged([this](uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        if (auto *screen = dynamic_cast<VideoCaptureScreen *>(m_capture.get()))
+        {
+            screen->setRegion(x, y, w, h);
+        }
+    });
+
     // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
                                                   {
@@ -2254,6 +2275,107 @@ bool Application::initUI()
                                          m_window->setVsync(sourceType == UIManager::SourceType::Remote);
                                      }
 
+                                     // #97/#107 — the concrete backend differs per source
+                                     // type (factory V4L2/DS/AVF, VideoCaptureScreen,
+                                     // VideoCaptureRemote). Reusing the old instance across a
+                                     // switch opened a screen target as a V4L2 device
+                                     // (segfault) and carried the previous source's device
+                                     // path into the new one. When the type no longer matches
+                                     // the live backend, tear it down and build the right one,
+                                     // dropping the stale device so the new source starts
+                                     // clean.
+                                     {
+                                         using ST = UIManager::SourceType;
+                                         const bool wantScreen = (sourceType == ST::Screen);
+                                         const bool wantRemote = (sourceType == ST::Remote);
+                                         const bool wantFactory = !wantScreen && !wantRemote; // V4L2/DS/AVF/None
+
+                                         const bool haveScreen  = dynamic_cast<VideoCaptureScreen *>(m_capture.get()) != nullptr;
+                                         const bool haveRemote  = dynamic_cast<VideoCaptureRemote *>(m_capture.get()) != nullptr;
+                                         const bool haveFactory = m_capture && !haveScreen && !haveRemote;
+
+                                         const bool wrongType =
+                                             !m_capture ||
+                                             (wantScreen && !haveScreen) ||
+                                             (wantRemote && !haveRemote) ||
+                                             (wantFactory && !haveFactory);
+
+                                         if (wrongType)
+                                         {
+                                             LOG_INFO("Source type changed — rebuilding capture backend");
+                                             // Drop the UI's raw capture pointer BEFORE the old
+                                             // instance is destroyed. setCaptureControls() stashes
+                                             // it in UIManager::m_capture (what getCapture() hands
+                                             // the Source tab); leaving it dangling across the
+                                             // rebuild segfaulted on the next render of the new
+                                             // tab. Cleared here, re-pointed at the new backend
+                                             // below.
+                                             if (m_ui) m_ui->setCaptureControls(nullptr);
+                                             if (m_remoteMetaSync) { m_remoteMetaSync->stop(); m_remoteMetaSync.reset(); }
+                                             if (m_capture) { m_capture->stopCapture(); m_capture->close(); m_capture.reset(); }
+                                             m_devicePath.clear();
+                                             if (m_ui) m_ui->setCurrentDeviceSilent("");
+
+                                             if (wantScreen)      m_capture = std::make_unique<VideoCaptureScreen>();
+                                             else if (wantRemote) m_capture = std::make_unique<VideoCaptureRemote>();
+                                             else                 m_capture = VideoCaptureFactory::create();
+
+                                             // Factory backend with no device yet → idle dummy
+                                             // so there's always valid output (black) until the
+                                             // user picks a device, instead of a half-init grab.
+                                             if (wantFactory && m_capture && sourceType != ST::None)
+                                             {
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                     m_capture->startCapture();
+                                             }
+
+                                             // Re-point the UI at the freshly built backend so
+                                             // getCapture() is valid again. For Screen/Remote
+                                             // this carries no hardware controls (no-op queries);
+                                             // for V4L2/DS it re-enumerates the control set.
+                                             if (m_ui) m_ui->setCaptureControls(m_capture.get());
+                                         }
+                                     }
+
+                                     // #107 — Screen: auto-open the default target so the
+                                     // user sees frames immediately instead of having to
+                                     // pick from the dropdown.
+                                     if (sourceType == UIManager::SourceType::Screen)
+                                     {
+                                         LOG_INFO("Screen source selected");
+                                         if (m_capture)
+                                         {
+                                             std::string target = m_ui ? m_ui->getCurrentDevice() : std::string();
+                                             if (target.empty())
+                                             {
+                                                 const auto devs = m_capture->listDevices();
+                                                 if (!devs.empty()) target = devs.front().id;
+                                             }
+                                             if (!target.empty())
+                                             {
+                                                 if (auto *screen = dynamic_cast<VideoCaptureScreen *>(m_capture.get()))
+                                                 {
+                                                     if (m_ui)
+                                                         screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                                                                           m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+                                                 }
+                                                 if (m_capture->open(target))
+                                                 {
+                                                     m_capture->startCapture();
+                                                     m_devicePath = target;
+                                                     if (m_ui)
+                                                     {
+                                                         m_ui->setCurrentDeviceSilent(target);
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, target);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         return; // Screen fully handled
+                                     }
+
                                      if (sourceType == UIManager::SourceType::None)
                                      {
                                          LOG_INFO("None source selected - activating dummy mode");
@@ -2538,6 +2660,68 @@ bool Application::initUI()
             return;
         }
         processingDeviceChange = true;
+
+        // #107 — Screen source: the callback carries the capture target
+        // ("monitor:N" / "window:<id>" / ""). Replace the capture with a
+        // VideoCaptureScreen pointed at it. Empty target == stop.
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+        {
+            // Dedup: if we're already capturing this exact target, don't
+            // tear the portal session down and re-create it (that popped
+            // a fresh portal dialog and interrupted PipeWire format
+            // negotiation, leaving the stream with no frames). The
+            // source-type switch already auto-opened the target, so the
+            // UI re-selecting the same one must be a no-op. #107.
+            if (!devicePath.empty() && devicePath == m_devicePath &&
+                dynamic_cast<VideoCaptureScreen *>(m_capture.get()) &&
+                m_capture->isOpen())
+            {
+                processingDeviceChange = false;
+                return;
+            }
+
+            LOG_INFO("Screen target change: " +
+                     (devicePath.empty() ? std::string("(stop)") : devicePath));
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture.reset();
+            }
+            m_devicePath = devicePath;
+
+            if (devicePath.empty())
+            {
+                if (m_ui) m_ui->setCaptureInfo(0, 0, 0, "");
+                processingDeviceChange = false;
+                return;
+            }
+
+            auto screen = std::make_unique<VideoCaptureScreen>();
+            screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                              m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+            m_capture = std::move(screen);
+            if (m_capture->open(devicePath))
+            {
+                m_capture->startCapture();
+                const uint32_t w = m_capture->getWidth();
+                const uint32_t h = m_capture->getHeight();
+                if (w > 0 && h > 0) { m_captureWidth = w; m_captureHeight = h; }
+                if (m_ui) m_ui->setCaptureInfo(w, h, m_captureFps, devicePath);
+            }
+            else
+            {
+                LOG_WARN("VideoCaptureScreen: failed to open target " + devicePath);
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(0, 0, 0, "Screen (failed)");
+                    m_ui->setCurrentDeviceSilent("");
+                }
+                m_devicePath.clear();
+            }
+            processingDeviceChange = false;
+            return;
+        }
 
         // Phase 5b/#47: when the active source is Remote, this callback
         // carries the remote BASE URL — not a V4L2 / DirectShow device
@@ -3985,6 +4169,14 @@ void Application::run()
         // Skip rendering during reconfiguration to avoid accessing deleted textures
         if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
+            // #107 — publish the live capture texture for the screen
+            // region selector (it draws the current frame to pick on).
+            if (m_ui)
+            {
+                m_ui->setCaptureTexture(m_frameProcessor->getTexture(),
+                                        m_frameProcessor->getTextureWidth(),
+                                        m_frameProcessor->getTextureHeight());
+            }
             // Log resolução de captura original (antes de qualquer processamento)
             static int originalCaptureLogCount = 0;
             if (originalCaptureLogCount++ < 3)

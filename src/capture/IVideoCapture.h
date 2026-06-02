@@ -14,6 +14,14 @@ struct Frame
     uint32_t format = 0; // Platform-specific pixel format
 };
 
+// Packed 32-bit pixel formats used by the screen-capture source (#107).
+// FrameProcessor uploads these straight to GL with GL_BGRA / GL_RGBA and
+// lets the driver swizzle to the RGB texture — no CPU colour conversion
+// on the hot path, which is what keeps large-monitor capture at full
+// frame rate. Sentinel values chosen to not collide with V4L2 fourccs.
+static constexpr uint32_t RC_PIXFMT_BGRA = 0xB07A0001u;
+static constexpr uint32_t RC_PIXFMT_RGBA = 0xB07A0002u;
+
 struct DeviceInfo
 {
     std::string id;        // Device identifier (path, GUID, etc.)
@@ -88,6 +96,22 @@ public:
      * never hold a "reconnect" state.
      */
     virtual bool isReceivingFrames() const { return isOpen(); }
+
+    /**
+     * Zero-copy GPU path (#107 screen capture). If the backend can hand
+     * the current frame as a ready GL texture (e.g. a DMABUF imported via
+     * EGL), it returns the texture id and sets w/h; FrameProcessor then
+     * uses it directly and skips the CPU upload. Returns 0 when there's
+     * no GPU frame this call (the caller falls back to captureLatestFrame).
+     * MUST be called on the GL thread — it may issue GL/EGL calls.
+     * The returned texture stays owned by the capture; the caller must
+     * not delete it.
+     */
+    virtual unsigned int getGpuTexture(uint32_t &width, uint32_t &height)
+    {
+        (void)width; (void)height;
+        return 0;
+    }
 
     // AVFoundation-specific extensions. Default no-op so V4L2,
     // DirectShow and Remote captures don't need to implement them.

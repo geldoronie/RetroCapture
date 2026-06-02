@@ -40,12 +40,14 @@
 #ifdef USE_SDL2
 #include <SDL2/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #endif
@@ -142,6 +144,11 @@ bool UIManager::init(void *window)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // Move windows only by dragging their title bar (standard desktop
+    // window behaviour). Without this, dragging anywhere in a window's
+    // body moves it — which fought the region-selector marquee and is
+    // generally surprising. Applies to every RetroCapture window.
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Anchor the ImGui ini to the user-data dir so window
     // positions/sizes/collapse state survive across runs regardless
@@ -366,6 +373,48 @@ void UIManager::shutdown()
     m_initialized = false;
 }
 
+// Keep every movable top-level window reachable: if its position drifted
+// outside the viewport (stale imgui.ini after a resolution/monitor change,
+// etc.) nudge it back so at least a grabbable strip of the title bar stays
+// on screen. Runs each frame on last frame's positions and applies before
+// the windows are submitted this frame, so they never paint off-screen.
+static void clampImGuiWindowsToViewport()
+{
+    ImGuiContext *gp = ImGui::GetCurrentContext();
+    if (!gp) return;
+    ImGuiContext &g = *gp;
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    if (!vp) return;
+    const float minX0 = vp->WorkPos.x;
+    const float minY0 = vp->WorkPos.y;
+    const float maxX0 = vp->WorkPos.x + vp->WorkSize.x;
+    const float maxY0 = vp->WorkPos.y + vp->WorkSize.y;
+    const float keep  = 48.0f; // px of the window that must remain on-screen
+
+    for (ImGuiWindow *w : g.Windows)
+    {
+        if (!w || !w->WasActive) continue;
+        if (w->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip |
+                        ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoMove))
+            continue; // children/popups/pinned OSD overlays manage themselves
+        if (w->Size.x <= 0.0f || w->Size.y <= 0.0f) continue;
+
+        ImVec2 pos = w->Pos;
+        const float minX = minX0 - w->Size.x + keep; // allow off the left/right
+        const float maxX = maxX0 - keep;             // edges, keep `keep` visible
+        const float minY = minY0;                    // title must stay below top
+        const float maxY = maxY0 - keep;
+        if (pos.x < minX) pos.x = minX;
+        if (pos.x > maxX) pos.x = maxX;
+        if (pos.y < minY) pos.y = minY;
+        if (pos.y > maxY) pos.y = maxY;
+
+        if (pos.x != w->Pos.x || pos.y != w->Pos.y)
+            ImGui::SetWindowPos(w, pos, ImGuiCond_Always);
+    }
+}
+
 void UIManager::beginFrame()
 {
     if (!m_initialized)
@@ -417,6 +466,10 @@ void UIManager::beginFrame()
         io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
         io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
+
+    // Pull any window that drifted off-screen back into the viewport so it
+    // can't get lost at a position that no longer exists on screen.
+    clampImGuiWindowsToViewport();
 }
 
 void UIManager::endFrame()
@@ -2392,6 +2445,13 @@ void UIManager::triggerRemoteInterpolationChange(const std::string &v)
     saveConfig();
 }
 
+void UIManager::triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    m_screenRegionX = x; m_screenRegionY = y; m_screenRegionW = w; m_screenRegionH = h;
+    if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    saveConfig();
+}
+
 void UIManager::triggerRemoteAudioVolumeChange(float volume)
 {
     if (volume < 0.0f) volume = 0.0f;
@@ -2986,6 +3046,7 @@ void UIManager::loadConfig()
                 const bool isPlatformNative =
                     loaded == SourceType::None ||
                     loaded == SourceType::Remote ||
+                    loaded == SourceType::Screen ||   // #107 cross-platform
 #ifdef __linux__
                     loaded == SourceType::V4L2;
 #elif defined(_WIN32)
@@ -3022,6 +3083,28 @@ void UIManager::loadConfig()
             {
                 m_currentDevice = ds["device"].get<std::string>();
             }
+        }
+
+        // #107 — screen-capture target + region crop. Region always
+        // round-trips; the target only seeds m_currentDevice when the
+        // active source is Screen (m_currentDevice is shared and the
+        // v4l2/ds blocks above also write it).
+        if (config.contains("screen"))
+        {
+            auto &screen = config["screen"];
+            if (m_sourceType == SourceType::Screen &&
+                screen.contains("target") && !screen["target"].is_null())
+            {
+                m_currentDevice = screen["target"].get<std::string>();
+            }
+            auto getU = [&](const char *k, uint32_t &dst) {
+                if (screen.contains(k) && screen[k].is_number_unsigned())
+                    dst = screen[k].get<uint32_t>();
+            };
+            getU("regionX", m_screenRegionX);
+            getU("regionY", m_screenRegionY);
+            getU("regionW", m_screenRegionW);
+            getU("regionH", m_screenRegionH);
         }
 
         // Carregar configurações de áudio
@@ -3270,6 +3353,14 @@ void UIManager::saveConfig()
         // Salvar dispositivo DirectShow
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
+
+        // #107 — screen-capture target + region crop.
+        config["screen"] = {
+            {"target",  (m_sourceType == SourceType::Screen) ? m_currentDevice : std::string()},
+            {"regionX", m_screenRegionX},
+            {"regionY", m_screenRegionY},
+            {"regionW", m_screenRegionW},
+            {"regionH", m_screenRegionH}};
 
         // Salvar configurações de áudio
         config["audio"] = {

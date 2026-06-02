@@ -165,7 +165,8 @@ public:
         V4L2 = 1,
         DS = 2,           // DirectShow (Windows)
         Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
-        AVFoundation = 4  // AVFoundation (macOS)
+        AVFoundation = 4, // AVFoundation (macOS)
+        Screen = 5        // Desktop / window / region screen capture (#107)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -509,6 +510,33 @@ public:
     // #77 client-side volume for the incoming remote audio stream.
     float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
     bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
+    // #107 screen-capture region crop (target pixels; 0,0,0,0 = full).
+    uint32_t getScreenRegionX() const { return m_screenRegionX; }
+    uint32_t getScreenRegionY() const { return m_screenRegionY; }
+    uint32_t getScreenRegionW() const { return m_screenRegionW; }
+    uint32_t getScreenRegionH() const { return m_screenRegionH; }
+    void triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void setOnScreenRegionChanged(std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> cb)
+    {
+        m_onScreenRegionChanged = cb;
+    }
+    // Apply a region to the live capture WITHOUT persisting or updating
+    // the stored values — used by the visual region selector to show the
+    // full (uncropped) frame while picking. saveConfig happens only on
+    // the final triggerScreenRegionChange().
+    void applyScreenRegionLive(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+    {
+        if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    }
+    // Live capture GL texture, published each frame by Application so the
+    // region selector can draw the current frame. 0 == none.
+    void setCaptureTexture(unsigned int tex, uint32_t w, uint32_t h)
+    {
+        m_captureTex = tex; m_captureTexW = w; m_captureTexH = h;
+    }
+    unsigned int getCaptureTextureId() const { return m_captureTex; }
+    uint32_t getCaptureTextureWidth() const  { return m_captureTexW; }
+    uint32_t getCaptureTextureHeight() const { return m_captureTexH; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -1209,6 +1237,12 @@ private:
     // preserving the level so unmuting restores it.
     float m_remoteAudioVolume = 1.0f;
     bool  m_remoteAudioMuted  = false;
+    // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
+    uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
+    // Live capture texture published by Application for the region selector.
+    unsigned int m_captureTex  = 0;
+    uint32_t     m_captureTexW = 0;
+    uint32_t     m_captureTexH = 0;
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -1332,6 +1366,7 @@ private:
     std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
     std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
     std::function<void(float)> m_onRemoteAudioVolumeChanged;
+    std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> m_onScreenRegionChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

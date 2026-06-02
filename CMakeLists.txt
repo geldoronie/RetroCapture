@@ -173,6 +173,25 @@ if(PLATFORM_LINUX)
         message(WARNING "libdbus-1 not found — Linux system-tray disabled "
                         "(install libdbus-1-dev / dbus). Close button will quit.")
     endif()
+    # #107 screen capture — PipeWire + xdg-desktop-portal (ScreenCast).
+    # Needs PipeWire (the frame transport) and libdbus (the portal D-Bus
+    # handshake); when either is missing the screen source falls back to
+    # the test-pattern stub instead of failing to build.
+    pkg_check_modules(PIPEWIRE libpipewire-0.3)
+    if(PIPEWIRE_FOUND AND DBUS_FOUND)
+        message(STATUS "PipeWire + libdbus found — screen capture (PipeWire/portal) ENABLED")
+    else()
+        message(WARNING "PipeWire or libdbus missing — screen capture uses the test-pattern stub")
+    endif()
+    # #107 — EGL enables the DMABUF zero-copy path (import the compositor's
+    # GPU buffer straight into a GL texture, no per-frame CPU/SHM copy).
+    # Optional: without it the screen backend falls back to the SHM copy.
+    pkg_check_modules(EGL egl)
+    if(EGL_FOUND AND PIPEWIRE_FOUND AND DBUS_FOUND)
+        message(STATUS "EGL found — screen capture DMABUF zero-copy ENABLED")
+    else()
+        message(WARNING "EGL missing — screen capture uses the SHM copy path (slower)")
+    endif()
 elseif(PLATFORM_MACOS)
     # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
     find_package(PkgConfig QUIET)
@@ -551,6 +570,7 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
@@ -579,6 +599,7 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
@@ -683,7 +704,42 @@ if(PLATFORM_LINUX AND DBUS_FOUND)
     target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_LINUX)
     target_include_directories(retrocapture PRIVATE ${DBUS_INCLUDE_DIRS})
     target_link_libraries(retrocapture PRIVATE ${DBUS_LIBRARIES})
-elseif(PLATFORM_WINDOWS)
+endif()
+
+# #107 — Linux screen-capture backend (PipeWire stream + portal over
+# D-Bus). Gated on both deps; VideoCaptureScreen_linux.cpp keys off
+# RETROCAPTURE_SCREEN_PIPEWIRE and the stub stands in when it's absent.
+if(PLATFORM_LINUX AND PIPEWIRE_FOUND AND DBUS_FOUND)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_PIPEWIRE)
+    target_include_directories(retrocapture PRIVATE ${PIPEWIRE_INCLUDE_DIRS} ${DBUS_INCLUDE_DIRS})
+    target_link_libraries(retrocapture PRIVATE ${PIPEWIRE_LIBRARIES} ${DBUS_LIBRARIES})
+    if(EGL_FOUND)
+        target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DMABUF)
+        target_include_directories(retrocapture PRIVATE ${EGL_INCLUDE_DIRS})
+        target_link_libraries(retrocapture PRIVATE ${EGL_LIBRARIES})
+    endif()
+endif()
+
+# #107 — Windows screen-capture backend (DXGI Desktop Duplication).
+# VideoCaptureScreen_win.cpp keys off RETROCAPTURE_SCREEN_DXGI; d3d11/dxgi
+# headers + libs ship with MinGW-w64 / MXE.
+if(PLATFORM_WINDOWS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DXGI)
+    target_link_libraries(retrocapture PRIVATE d3d11 dxgi)
+endif()
+
+# #107 — macOS screen-capture backend (ScreenCaptureKit). The .mm is
+# excluded from non-Apple builds (below); the framework is 12.3+.
+if(PLATFORM_MACOS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_SCK)
+    target_link_libraries(retrocapture PRIVATE
+        "-framework ScreenCaptureKit"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics")
+endif()
+
+if(PLATFORM_WINDOWS)
     # Shell_NotifyIcon + TrackPopupMenu — shell32/user32/gdi32 are part
     # of the standard Win32 link set (MXE links them by default, but be
     # explicit).
