@@ -78,9 +78,59 @@ async function pollNowPlaying() {
 // ============================================================
 
 let _livePlayer = null;
+// #80 — auto-recovery state. The browser MSE path can wedge on a
+// long-running stream (SourceBuffer quota, decode error, or a background-
+// throttled socket) and go black forever while VLC / the desktop client
+// keep playing. We watch for that and rebuild the player instead of
+// leaving the user a dead black frame until a manual reload.
+let _liveActive = false;          // user wants playback (Start, not Stop)
+let _liveWatchdog = null;         // interval that detects a frozen stream
+let _liveLastTime = -1;           // last observed currentTime
+let _liveStalledMs = 0;           // how long currentTime has been frozen
+let _liveRecoverScheduled = false;
 
 function liveStreamUrl() {
     return '/stream?t=' + Date.now();
+}
+
+function scheduleLiveRecover(reason) {
+    if (!_liveActive || _liveRecoverScheduled) return;
+    _liveRecoverScheduled = true;
+    console.warn('Live player recovering:', reason);
+    const status = document.getElementById('livePlayerStatus');
+    if (status) status.textContent = t('web.home.reconnecting');
+    // Small backoff so a burst of errors doesn't hot-loop the rebuild.
+    setTimeout(() => {
+        _liveRecoverScheduled = false;
+        if (_liveActive) startLivePlayer(); // startLivePlayer() tears down first
+    }, 1500);
+}
+
+function startLiveWatchdog() {
+    stopLiveWatchdog();
+    _liveLastTime = -1;
+    _liveStalledMs = 0;
+    _liveWatchdog = setInterval(() => {
+        const video = document.getElementById('livePlayer');
+        if (!video || !_liveActive || _liveRecoverScheduled) return;
+        // Only judge a stall while we should actually be advancing.
+        if (video.paused || video.ended || video.readyState < 2) {
+            _liveStalledMs = 0;
+            _liveLastTime = video.currentTime;
+            return;
+        }
+        if (video.currentTime === _liveLastTime) {
+            _liveStalledMs += 2000;
+            if (_liveStalledMs >= 8000) scheduleLiveRecover('stall');
+        } else {
+            _liveStalledMs = 0;
+            _liveLastTime = video.currentTime;
+        }
+    }, 2000);
+}
+
+function stopLiveWatchdog() {
+    if (_liveWatchdog) { clearInterval(_liveWatchdog); _liveWatchdog = null; }
 }
 
 function startLivePlayer() {
@@ -92,6 +142,7 @@ function startLivePlayer() {
     if (!video) return;
 
     stopLivePlayer();
+    _liveActive = true; // set AFTER the teardown above clears it
 
     if (typeof mpegts === 'undefined' || !mpegts.isSupported || !mpegts.isSupported()) {
         // Safari / native TS playback fallback.
@@ -111,6 +162,13 @@ function startLivePlayer() {
                 lazyLoad: false,
             });
             _livePlayer.attachMediaElement(video);
+            // #80 — a mid-stream mpegts.js error (decode / network / MSE
+            // SourceBuffer) otherwise leaves the player black forever. Rebuild
+            // it instead of waiting for the user to reload the page.
+            _livePlayer.on(mpegts.Events.ERROR, (errType, errDetail) => {
+                console.error('mpegts.js error:', errType, errDetail);
+                scheduleLiveRecover('error:' + errType);
+            });
             _livePlayer.load();
             _livePlayer.play().catch(() => {});
             if (status) status.textContent = t('web.home.connected');
@@ -120,6 +178,9 @@ function startLivePlayer() {
             return;
         }
     }
+    // Watch both paths for a frozen timeline (the "goes black and stops
+    // advancing" symptom) and auto-rebuild if it wedges.
+    startLiveWatchdog();
     if (startBtn) startBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = false;
     if (overlay) overlay.classList.add('d-none');
@@ -131,6 +192,11 @@ function stopLivePlayer() {
     const stopBtn = document.getElementById('livePlayerStopBtn');
     const status = document.getElementById('livePlayerStatus');
     const overlay = document.getElementById('livePlayerIdleOverlay');
+
+    // User-intent stop: cancel any pending auto-recovery and the watchdog so
+    // we don't fight an explicit Stop (#80).
+    _liveActive = false;
+    stopLiveWatchdog();
 
     if (_livePlayer) {
         try {

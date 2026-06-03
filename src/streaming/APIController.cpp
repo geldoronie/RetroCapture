@@ -316,29 +316,60 @@ std::pair<uint64_t, uint64_t> APIController::extractRange(const std::string &req
     }
 
     std::string rangeStr = request.substr(rangePos, rangeEnd - rangePos);
-    
-    // Parse "start-end" ou "start-"
+    // Trim surrounding whitespace.
+    while (!rangeStr.empty() && (rangeStr.front() == ' ' || rangeStr.front() == '\t')) rangeStr.erase(rangeStr.begin());
+    while (!rangeStr.empty() && (rangeStr.back() == ' ' || rangeStr.back() == '\t')) rangeStr.pop_back();
+
+    // Parse the three RFC 7233 forms: "start-end", "start-" and the
+    // suffix "-N" (the LAST N bytes). The suffix form is what a <video>
+    // element uses to fetch the trailing moov atom of a moov-at-end MP4
+    // (RetroCapture recordings); mishandling it served the wrong bytes and
+    // the browser could never read the moov, so playback silently failed
+    // (#79). Only the first byte-range-spec is honoured (no multi-range).
     size_t dashPos = rangeStr.find('-');
-    if (dashPos == std::string::npos)
+    if (dashPos == std::string::npos || fileSize == 0)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
+    const std::string startStr = rangeStr.substr(0, dashPos);
+    std::string endStr = rangeStr.substr(dashPos + 1);
+    size_t comma = endStr.find(',');
+    if (comma != std::string::npos)
+    {
+        endStr = endStr.substr(0, comma); // ignore additional ranges
+    }
+
     uint64_t start = 0;
     uint64_t end = fileSize - 1;
-
-    if (dashPos > 0)
+    try
     {
-        start = std::stoull(rangeStr.substr(0, dashPos));
+        if (startStr.empty())
+        {
+            // Suffix range "-N": the last N bytes.
+            if (endStr.empty()) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            uint64_t n = std::stoull(endStr);
+            if (n == 0) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            if (n > fileSize) n = fileSize;
+            start = fileSize - n;
+            end = fileSize - 1;
+        }
+        else
+        {
+            start = std::stoull(startStr);
+            if (!endStr.empty()) end = std::stoull(endStr);
+            // Clamp an over-long end to the last byte instead of rejecting
+            // (browsers happily ask for bytes=0-<huge>).
+            if (end >= fileSize) end = fileSize - 1;
+        }
+    }
+    catch (const std::exception &)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
-    if (dashPos < rangeStr.length() - 1)
-    {
-        end = std::stoull(rangeStr.substr(dashPos + 1));
-    }
-
-    // Validar range
-    if (start >= fileSize || end >= fileSize || start > end)
+    // Validate.
+    if (start >= fileSize || start > end)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
