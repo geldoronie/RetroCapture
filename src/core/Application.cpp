@@ -2985,7 +2985,22 @@ bool Application::initUI()
             // Disable dummy mode when trying to open real device
             m_capture->setDummyMode(false);
         }
-        
+
+        // #97 — if we're coming from a Remote (or Screen) session, m_capture
+        // is still that backend; calling open("/dev/videoN") on it routes the
+        // device path through the wrong demuxer ("connecting to remote base
+        // URL /dev/videoN"). Rebuild as the local factory capture (V4L2 /
+        // DirectShow / AVFoundation) before opening the device.
+        if (m_capture &&
+            (dynamic_cast<VideoCaptureRemote *>(m_capture.get()) ||
+             dynamic_cast<VideoCaptureScreen *>(m_capture.get())))
+        {
+            LOG_INFO("Device change: active capture is not a local device backend — rebuilding via factory (#97)");
+            if (m_remoteMetaSync) { m_remoteMetaSync->stop(); m_remoteMetaSync.reset(); }
+            m_capture = VideoCaptureFactory::create();
+            if (m_ui) m_ui->setCaptureControls(m_capture.get());
+        }
+
         // Update device path
         m_devicePath = devicePath;
         
