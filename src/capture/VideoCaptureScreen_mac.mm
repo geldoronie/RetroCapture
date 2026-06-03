@@ -43,6 +43,12 @@ API_AVAILABLE(macos(12.3))
     // hands it to the system-audio source.
     if (type == SCStreamOutputTypeAudio)
     {
+        static bool loggedFirstScreenAudio = false;
+        if (!loggedFirstScreenAudio)
+        {
+            loggedFirstScreenAudio = true;
+            LOG_INFO("VideoCaptureScreen(sck): first audio buffer received from screen stream");
+        }
         AudioBufferList abl;
         CMBlockBufferRef block = nullptr;
         if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -231,6 +237,12 @@ private:
         // window's filter is built from.
         SCContentFilter *filter = nil;
         uint32_t capW = 0, capH = 0;
+        // ScreenCaptureKit only captures system audio with a DISPLAY filter;
+        // capturesAudio is silently ignored for desktop-independent window
+        // capture (#109). So we only let the screen stream act as the audio
+        // producer when grabbing a full display — otherwise the hub runs its
+        // own audio-only display stream.
+        bool isDisplayCapture = false;
 
         if (target.rfind("window:", 0) == 0)
         {
@@ -288,6 +300,7 @@ private:
                                             excludingWindows:@[]];
             capW = (uint32_t)display.width;
             capH = (uint32_t)display.height;
+            isDisplayCapture = true;
         }
 
         if (!filter || capW == 0 || capH == 0)
@@ -307,17 +320,29 @@ private:
         cfg.queueDepth = 5;
         cfg.showsCursor = captureCursor ? YES : NO;
 
-        // #109 — capture system audio on this same stream (macOS 13+) so
-        // the system-audio source doesn't need a second SCStream (two
-        // conflict). 48 kHz stereo to match the audio bus.
+        // #109 — capture system audio on this same stream (macOS 13+) when
+        // grabbing a full display, so the system-audio source doesn't need a
+        // second SCStream. For window capture SCK won't deliver audio, so we
+        // leave it off and the hub falls back to its own display-filter
+        // audio stream. 48 kHz stereo to match the audio bus.
         bool wantAudio = false;
         if (@available(macOS 13.0, *))
         {
-            cfg.capturesAudio = YES;
-            cfg.sampleRate    = 48000;
-            cfg.channelCount  = 2;
-            cfg.excludesCurrentProcessAudio = YES; // never capture ourselves
-            wantAudio = true;
+            if (isDisplayCapture)
+            {
+                cfg.capturesAudio = YES;
+                cfg.sampleRate    = 48000;
+                cfg.channelCount  = 2;
+                cfg.excludesCurrentProcessAudio = YES; // never capture ourselves
+                wantAudio = true;
+            }
+            LOG_INFO(std::string("VideoCaptureScreen(sck): macOS 13+, ") +
+                     (isDisplayCapture ? "display capture — system audio ON this stream"
+                                       : "window capture — system audio via separate stream"));
+        }
+        else
+        {
+            LOG_INFO("VideoCaptureScreen(sck): macOS < 13 — no SCK audio on this stream");
         }
 
         m_delegate = [[RCScreenDelegate alloc] init];
@@ -348,6 +373,7 @@ private:
                            sampleHandlerQueue:aq
                                         error:&aErr])
                 {
+                    LOG_INFO("VideoCaptureScreen(sck): audio output added — screen stream is the system-audio producer");
                     SckSystemAudioHub::instance().setScreenProducerActive(true);
                 }
                 else
