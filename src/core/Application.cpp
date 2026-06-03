@@ -83,6 +83,19 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
+#include <atomic>
+#include <mutex>
+#include <fstream>
+#include "../utils/ShaderBundle.h" // #54 shader bundle transport
+
+// #54 — FFmpeg avio for the binary shader-bundle GET (http/https), same
+// transport the /meta poller already uses.
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/dict.h>
+#include <libavutil/error.h>
+}
 
 // swscale removed - resize is now done in encoding (HTTPTSStreamer)
 
@@ -92,6 +105,9 @@ Application::Application()
 
 Application::~Application()
 {
+    // #54 — make sure the shader-bundle worker is done before members it
+    // touches go away.
+    if (m_shaderBundleThread.joinable()) m_shaderBundleThread.join();
     shutdown();
 }
 
@@ -2807,6 +2823,15 @@ bool Application::initUI()
                 authToken = m_ui->getRemoteAuthToken();
                 m_ui->setRemoteAuthToken("");
             }
+            // #54 — keep the token for the shader-bundle fetch (same auth as
+            // the stream / /meta), and reset the per-connection fetch state so
+            // a new stream re-evaluates its shader from scratch.
+            {
+                std::lock_guard<std::mutex> lock(m_shaderBundleMutex);
+                m_remoteAuthToken = authToken;
+            }
+            m_shaderBundleLastTriedHash.clear();
+            m_appliedRemotePresetHash.clear();
 
             // Recreate the capture as Remote (the existing instance might be
             // V4L2/DS if the user just flipped source type).
@@ -6224,6 +6249,184 @@ std::string Application::resolveShaderPath(const std::string &shaderPath) const
     return fullPath.string();
 }
 
+namespace
+{
+    // #54 — binary HTTP(S) GET via FFmpeg avio (mirrors RemoteMetaSync's
+    // text GET). Returns the raw body, capped so a misbehaving host can't
+    // make us allocate unbounded.
+    std::string httpGetBinary(const std::string &url, const std::string &authToken,
+                              size_t maxBytes, int recvTimeoutMs = 8000)
+    {
+        avformat_network_init();
+        AVDictionary *opts = nullptr;
+        av_dict_set_int(&opts, "rw_timeout", static_cast<int64_t>(recvTimeoutMs) * 1000, 0);
+        av_dict_set(&opts, "user_agent", "RetroCapture/0.8", 0);
+        std::string headers = "Accept: application/octet-stream\r\n";
+        if (!authToken.empty())
+        {
+            headers += "Authorization: Bearer " + authToken + "\r\n";
+        }
+        av_dict_set(&opts, "headers", headers.c_str(), 0);
+
+        AVIOContext *io = nullptr;
+        int rc = avio_open2(&io, url.c_str(), AVIO_FLAG_READ, nullptr, &opts);
+        av_dict_free(&opts);
+        if (rc < 0)
+        {
+            char errbuf[256] = {};
+            av_strerror(rc, errbuf, sizeof(errbuf));
+            LOG_WARN(std::string("ShaderBundle: avio_open2 failed for ") + url + ": " + errbuf);
+            return {};
+        }
+        std::string body;
+        unsigned char buf[8192];
+        for (;;)
+        {
+            int n = avio_read(io, buf, sizeof(buf));
+            if (n <= 0) break;
+            body.append(reinterpret_cast<const char *>(buf), static_cast<size_t>(n));
+            if (body.size() > maxBytes) { body.clear(); break; } // over cap → reject
+        }
+        avio_closep(&io);
+        return body;
+    }
+
+    // Hash like "fnv1a64:abcd…" → a filesystem-safe directory name.
+    std::string hashToDirName(const std::string &hash)
+    {
+        std::string s = hash;
+        for (char &c : s)
+            if (c == ':' || c == '/' || c == '\\') c = '_';
+        return s;
+    }
+}
+
+std::string Application::shaderBundleCacheRoot(const std::string &presetHash) const
+{
+    return Paths::getCacheDir() + "/shader-cache/" + hashToDirName(presetHash);
+}
+
+std::string Application::cachedShaderBundleGlslp(const std::string &presetHash) const
+{
+    if (presetHash.empty()) return {};
+    const std::string root = shaderBundleCacheRoot(presetHash);
+    // The fetch writes a tiny pointer file with the bundle's .glslp rel-path
+    // so we don't have to scan/iterate the cache dir (portable across the
+    // FilesystemCompat shim).
+    std::ifstream idx(root + "/.bundle-glslp", std::ios::binary);
+    if (!idx.is_open()) return {};
+    std::string rel;
+    std::getline(idx, rel);
+    while (!rel.empty() && (rel.back() == '\n' || rel.back() == '\r')) rel.pop_back();
+    if (rel.empty()) return {};
+    const std::string full = root + "/" + rel;
+    if (!fs::exists(full)) return {};
+    return full;
+}
+
+void Application::requestShaderBundleFetch(const std::string &presetHash,
+                                           const std::string &presetName)
+{
+    if (presetHash.empty()) return;
+    if (m_shaderBundleFetching.load()) return;          // one fetch at a time
+    if (presetHash == m_shaderBundleLastTriedHash) return; // don't hammer a failing hash
+
+    const std::string baseUrl = m_devicePath; // remote base URL (Remote source)
+    if (baseUrl.empty()) return;
+    std::string token;
+    {
+        std::lock_guard<std::mutex> lock(m_shaderBundleMutex);
+        token = m_remoteAuthToken;
+    }
+
+    m_shaderBundleLastTriedHash = presetHash;
+    m_shaderBundleFetching.store(true);
+    LOG_INFO("ShaderBundle: fetching host shader bundle (hash " + presetHash + ")");
+
+    // Reap the previous (already-finished) worker before starting a new one.
+    if (m_shaderBundleThread.joinable()) m_shaderBundleThread.join();
+    m_shaderBundleThread = std::thread(
+        [this, presetHash, presetName, baseUrl, token]()
+        {
+            std::string glslpPath;
+            const bool ok = fetchAndCacheShaderBundle(baseUrl, token, presetHash, glslpPath);
+            if (ok)
+            {
+                std::lock_guard<std::mutex> lock(m_shaderBundleMutex);
+                m_pendingShaderBundleGlslp  = glslpPath;
+                m_pendingShaderBundleHash   = presetHash;
+                m_pendingShaderBundlePreset = presetName;
+                m_hasPendingShaderBundle.store(true);
+            }
+            else
+            {
+                LOG_WARN("ShaderBundle: fetch/cache failed (hash " + presetHash + ")");
+            }
+            m_shaderBundleFetching.store(false);
+        });
+}
+
+bool Application::fetchAndCacheShaderBundle(const std::string &baseUrl,
+                                           const std::string &authToken,
+                                           const std::string &presetHash,
+                                           std::string &glslpPathOut)
+{
+    const std::string url = baseUrl + "/api/v1/shader/bundle";
+    const std::string body = httpGetBinary(url, authToken, 16ull * 1024 * 1024);
+    if (body.empty()) return false;
+
+    std::vector<shaderbundle::Entry> entries;
+    if (!shaderbundle::unpack(body, entries) || entries.empty())
+    {
+        LOG_WARN("ShaderBundle: failed to unpack bundle from host");
+        return false;
+    }
+
+    const std::string root = shaderBundleCacheRoot(presetHash);
+    std::string glslpRel;
+    for (const auto &e : entries)
+    {
+        const std::string dest = root + "/" + e.relPath;
+        // Parent dir via plain string ops (avoids relying on fs::path::string()
+        // which the FilesystemCompat shim doesn't expose).
+        std::string parent = dest;
+        size_t slash = parent.find_last_of("/\\");
+        if (slash != std::string::npos) parent.resize(slash); else parent.clear();
+        // Single-arg form for FilesystemCompat (the shim has no error_code
+        // overload); std::filesystem throws on error, so guard both.
+        if (!parent.empty()) { try { fs::create_directories(parent); } catch (...) {} }
+        std::ofstream f(dest, std::ios::binary | std::ios::trunc);
+        if (!f.is_open())
+        {
+            LOG_WARN("ShaderBundle: cannot write " + dest);
+            return false;
+        }
+        f.write(e.data.data(), static_cast<std::streamsize>(e.data.size()));
+        f.close();
+
+        // The .glslp is the preset entry point.
+        if (glslpRel.empty() && e.relPath.size() >= 6 &&
+            e.relPath.compare(e.relPath.size() - 6, 6, ".glslp") == 0)
+        {
+            glslpRel = e.relPath;
+        }
+    }
+    if (glslpRel.empty())
+    {
+        LOG_WARN("ShaderBundle: bundle has no .glslp entry");
+        return false;
+    }
+    // Pointer file so a later session resolves the bundle without scanning.
+    {
+        std::ofstream idx(root + "/.bundle-glslp", std::ios::binary | std::ios::trunc);
+        if (idx.is_open()) idx << glslpRel << "\n";
+    }
+    glslpPathOut = root + "/" + glslpRel;
+    LOG_INFO("ShaderBundle: cached " + std::to_string(entries.size()) +
+             " files to " + root);
+    return true;
+}
+
 void Application::applyPendingRemoteMeta()
 {
     if (!m_hasPendingRemoteMeta.load()) return;
@@ -6309,20 +6512,60 @@ void Application::applyPendingRemoteMeta()
     bool reloaded = false;
     if (!preset.empty() && presetHash != m_appliedRemotePresetHash)
     {
+        // 1) Resolve the preset by name in the local shader library.
+        bool loaded = false;
         const std::string fullPath = resolveShaderPath(preset);
         if (!fullPath.empty())
         {
             LOG_INFO("RemoteMetaSync: applying host preset '" + preset + "' (hash " + presetHash + ")");
-            if (m_shaderEngine->loadPreset(fullPath))
+            loaded = m_shaderEngine->loadPreset(fullPath);
+        }
+        // 2) #54 — not present locally (or failed to load): try a bundle we
+        // already fetched for this hash, otherwise fetch it from the host.
+        if (!loaded)
+        {
+            const std::string cached = cachedShaderBundleGlslp(presetHash);
+            if (!cached.empty() && m_shaderEngine->loadPreset(cached))
             {
-                m_ui->setCurrentShader(preset);
-                m_appliedRemotePresetHash = presetHash;
-                reloaded = true;
+                LOG_INFO("RemoteMetaSync: applied cached shader bundle (hash " + presetHash + ")");
+                loaded = true;
             }
-            else
-            {
-                LOG_WARN("RemoteMetaSync: failed to load preset locally — bundle fetch is a Phase 4b TODO");
-            }
+        }
+        if (loaded)
+        {
+            m_ui->setCurrentShader(preset);
+            m_appliedRemotePresetHash = presetHash;
+            reloaded = true;
+        }
+        else
+        {
+            requestShaderBundleFetch(presetHash, preset);
+        }
+    }
+
+    // #54 — a background bundle fetch finished: load it on this (GL) thread,
+    // where ShaderEngine/GL access is safe.
+    if (m_hasPendingShaderBundle.load())
+    {
+        std::string glslp, hash, name;
+        {
+            std::lock_guard<std::mutex> lock(m_shaderBundleMutex);
+            glslp = std::move(m_pendingShaderBundleGlslp);
+            hash  = std::move(m_pendingShaderBundleHash);
+            name  = std::move(m_pendingShaderBundlePreset);
+            m_pendingShaderBundleGlslp.clear();
+            m_hasPendingShaderBundle.store(false);
+        }
+        if (!glslp.empty() && m_shaderEngine && m_shaderEngine->loadPreset(glslp))
+        {
+            if (m_ui && !name.empty()) m_ui->setCurrentShader(name);
+            m_appliedRemotePresetHash = hash;
+            reloaded = true;
+            LOG_INFO("RemoteMetaSync: applied fetched shader bundle '" + name + "' (hash " + hash + ")");
+        }
+        else
+        {
+            LOG_WARN("RemoteMetaSync: fetched shader bundle failed to load (hash " + hash + ")");
         }
     }
 

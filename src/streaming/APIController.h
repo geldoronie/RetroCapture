@@ -4,6 +4,9 @@
 #include <functional>
 #include <cstdint>
 #include <mutex>
+#include <vector>
+
+#include "../utils/ShaderBundle.h"
 
 class UIManager;
 class Application;
@@ -112,6 +115,18 @@ private:
      * Returns empty string if the file cannot be read.
      */
     std::string computePresetHash(const std::string &presetPath) const;
+
+    // #54 — collect a preset's bundle (the .glslp + every .glsl/LUT it
+    // references), with paths relative to their common root so the layout
+    // survives client extraction. Returns false if the preset can't be read
+    // or the bundle exceeds kMaxShaderBundleBytes. Used for both the bundle
+    // hash (in /meta) and the /api/v1/shader/bundle endpoint.
+    bool collectShaderBundle(const std::string &presetPath,
+                             std::vector<shaderbundle::Entry> &out,
+                             std::string &rootRelGlslp,
+                             uint64_t &totalBytes) const;
+    bool handleGETShaderBundle(int clientFd, const std::string &request);
+    static constexpr uint64_t kMaxShaderBundleBytes = 8ull * 1024 * 1024; // 8 MB cap
 
     // Endpoints GET (leitura)
     bool handleGET(int clientFd, const std::string &path, const std::string &request);
@@ -224,4 +239,12 @@ private:
     // #49 Phase 3 — sha256(password) hex; empty == no auth.
     mutable std::mutex m_passwordMu;
     std::string        m_streamPasswordHash;
+
+    // #54 — cache of the active preset's bundle hash so the ~1 Hz /meta
+    // poll doesn't re-read every shader file each time. Invalidated when the
+    // preset path or the .glslp's mtime changes.
+    mutable std::mutex  m_bundleHashMu;
+    mutable std::string m_bundleHashPath;   // presetPath the cache is for
+    mutable int64_t     m_bundleHashMtime = 0;
+    mutable std::string m_bundleHashValue;  // cached bundle hash
 };

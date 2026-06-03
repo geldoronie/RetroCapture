@@ -2,6 +2,7 @@
 #include "../core/Application.h"
 #include "../ui/UIManager.h"
 #include "../shader/ShaderEngine.h"
+#include "../shader/ShaderPreset.h"
 #include "HTTPServer.h"
 #include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
@@ -405,6 +406,10 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     else if (path == "/api/v1/shader/parameters")
     {
         return handleGETShaderParameters(clientFd);
+    }
+    else if (path == "/api/v1/shader/bundle")
+    {
+        return handleGETShaderBundle(clientFd, request);
     }
     else if (path == "/api/v1/capture/resolution")
     {
@@ -1315,16 +1320,209 @@ bool APIController::handleGETMetaSSE(int clientFd)
     return true;
 }
 
+namespace
+{
+    // Read a whole file into a string. Empty string on failure.
+    std::string readFileBytes(const std::string &path)
+    {
+        std::ifstream f(path, std::ios::binary);
+        if (!f.is_open()) return {};
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        return ss.str();
+    }
+
+    // Split a path into its components on '/' or '\\' (drops empties). Kept
+    // string-based so it works with both std::filesystem and the minimal
+    // FilesystemCompat shim used on the MinGW build (which lacks relative()/
+    // weakly_canonical()/path iterators).
+    std::vector<std::string> pathComponents(const std::string &p)
+    {
+        std::vector<std::string> comps;
+        std::string cur;
+        for (char c : p)
+        {
+            if (c == '/' || c == '\\')
+            {
+                if (!cur.empty()) { comps.push_back(cur); cur.clear(); }
+            }
+            else { cur += c; }
+        }
+        if (!cur.empty()) comps.push_back(cur);
+        return comps;
+    }
+}
+
+bool APIController::collectShaderBundle(const std::string &presetPath,
+                                       std::vector<shaderbundle::Entry> &out,
+                                       std::string &rootRelGlslp,
+                                       uint64_t &totalBytes) const
+{
+    out.clear();
+    rootRelGlslp.clear();
+    totalBytes = 0;
+    if (presetPath.empty() || !fs::exists(presetPath)) return false;
+
+    // Parse the preset to enumerate every file it references.
+    ShaderPreset preset;
+    if (!preset.load(presetPath)) return false;
+
+    // Gather the files (the .glslp + pass shaders + LUT textures), deduped.
+    // ShaderPreset has already resolved these to usable paths.
+    std::vector<std::string> paths;
+    auto addPath = [&](const std::string &p) {
+        if (p.empty()) return;
+        if (std::find(paths.begin(), paths.end(), p) == paths.end())
+            paths.push_back(p);
+    };
+    addPath(presetPath);
+    const size_t glslpIdx = 0; // presetPath is paths[0]
+    for (const auto &pass : preset.getPasses()) addPath(pass.shaderPath);
+    for (const auto &kv : preset.getTextures()) addPath(kv.second.path);
+
+    // Common root = longest common prefix of the path components, so the
+    // relative paths never need '..' and the client can extract them under
+    // one cache dir while preserving the preset's relative references.
+    std::vector<std::vector<std::string>> comps;
+    comps.reserve(paths.size());
+    size_t minLen = SIZE_MAX;
+    for (const auto &p : paths)
+    {
+        comps.push_back(pathComponents(p));
+        minLen = std::min(minLen, comps.back().size());
+    }
+    if (minLen == 0) return false;
+    size_t commonLen = 0;
+    for (size_t i = 0; i < minLen; ++i)
+    {
+        const std::string &c = comps[0][i];
+        bool allMatch = true;
+        for (const auto &cv : comps) { if (cv[i] != c) { allMatch = false; break; } }
+        if (!allMatch) break;
+        ++commonLen;
+    }
+    // Keep at least the filename in every relative path.
+    if (commonLen >= minLen) commonLen = minLen - 1;
+
+    for (size_t idx = 0; idx < paths.size(); ++idx)
+    {
+        std::string relStr;
+        for (size_t i = commonLen; i < comps[idx].size(); ++i)
+        {
+            if (!relStr.empty()) relStr += '/';
+            relStr += comps[idx][i];
+        }
+        if (!shaderbundle::relPathIsSafe(relStr)) return false;
+
+        std::string bytes = readFileBytes(paths[idx]);
+        if (bytes.empty() && !fs::exists(paths[idx])) return false;
+        totalBytes += bytes.size();
+        if (totalBytes > kMaxShaderBundleBytes) return false; // too big to bundle
+
+        shaderbundle::Entry e;
+        e.relPath = relStr;
+        e.data    = std::move(bytes);
+        if (idx == glslpIdx) rootRelGlslp = relStr;
+        out.push_back(std::move(e));
+    }
+    if (rootRelGlslp.empty() && !out.empty()) rootRelGlslp = out.front().relPath;
+    return !out.empty();
+}
+
 std::string APIController::computePresetHash(const std::string &presetPath) const
 {
-    std::ifstream file(presetPath, std::ios::binary);
-    if (!file.is_open())
+    if (presetPath.empty()) return "";
+
+    // Cache the bundle hash so the ~1 Hz /meta poll doesn't re-read every
+    // shader file each time. Keyed by preset path; switching presets
+    // recomputes. (An in-place edit of the same .glslp won't refresh the
+    // hash until a different preset is selected — acceptable: shaders are
+    // static assets, rarely edited mid-stream.)
     {
-        return "";
+        std::lock_guard<std::mutex> lock(m_bundleHashMu);
+        if (presetPath == m_bundleHashPath && !m_bundleHashValue.empty())
+        {
+            return m_bundleHashValue;
+        }
     }
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    return fnv1a64Hex(buffer.str());
+
+    std::vector<shaderbundle::Entry> entries;
+    std::string rootRelGlslp;
+    uint64_t totalBytes = 0;
+    std::string hash;
+    if (collectShaderBundle(presetPath, entries, rootRelGlslp, totalBytes))
+    {
+        hash = shaderbundle::hashEntries(entries);
+    }
+    else
+    {
+        // Fall back to hashing just the .glslp (e.g. bundle over the size
+        // cap) so /meta still announces a stable identity.
+        hash = shaderbundle::fnv1a64Hex(readFileBytes(presetPath));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_bundleHashMu);
+        m_bundleHashPath  = presetPath;
+        m_bundleHashValue = hash;
+    }
+    return hash;
+}
+
+bool APIController::handleGETShaderBundle(int clientFd, const std::string &request)
+{
+    (void)request;
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    ShaderEngine *shaderEngine = m_application->getShaderEngine();
+    const std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
+    if (presetPath.empty())
+    {
+        sendErrorResponse(clientFd, 404, "No active shader preset");
+        return true;
+    }
+
+    std::vector<shaderbundle::Entry> entries;
+    std::string rootRelGlslp;
+    uint64_t totalBytes = 0;
+    if (!collectShaderBundle(presetPath, entries, rootRelGlslp, totalBytes))
+    {
+        // Either unreadable or over the size cap — tell the client so it can
+        // show "shader not available" instead of hanging.
+        sendErrorResponse(clientFd, 413, "Shader bundle unavailable or too large");
+        return true;
+    }
+
+    const std::string blob = shaderbundle::pack(entries);
+    const std::string hash = shaderbundle::hashEntries(entries);
+
+    std::ostringstream response;
+    response << "HTTP/1.1 200 OK\r\n";
+    response << "Content-Type: application/octet-stream\r\n";
+    response << "Content-Length: " << blob.size() << "\r\n";
+    // The bundle's glslp entry path + content hash, so the client knows what
+    // to load and how to key its cache without re-deriving them.
+    response << "X-Shader-Bundle-Glslp: " << rootRelGlslp << "\r\n";
+    response << "X-Shader-Bundle-Hash: " << hash << "\r\n";
+    response << "Connection: close\r\n\r\n";
+
+    const std::string headerStr = response.str();
+    if (sendData(clientFd, headerStr.c_str(), headerStr.size()) < 0) return true;
+
+    // Stream the blob in chunks.
+    const size_t chunk = 64 * 1024;
+    for (size_t off = 0; off < blob.size(); off += chunk)
+    {
+        const size_t n = std::min(chunk, blob.size() - off);
+        if (sendData(clientFd, blob.data() + off, n) < 0) return true;
+    }
+    LOG_INFO("APIController: served shader bundle (" + std::to_string(entries.size()) +
+             " files, " + std::to_string(blob.size()) + " bytes, hash " + hash + ")");
+    return true;
 }
 
 bool APIController::handleGETPlatform(int clientFd)
