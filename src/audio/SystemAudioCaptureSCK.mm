@@ -40,12 +40,32 @@ API_AVAILABLE(macos(13.0))
         LOG_INFO("SystemAudioCaptureSCK: first audio buffer received");
     }
 
-    AudioBufferList abl;
+    // SCK delivers stereo, frequently as PLANAR float (one buffer per
+    // channel). A fixed `AudioBufferList abl; sizeof(abl)` only has room for
+    // ONE buffer, so the extract call fails ("array too small") for planar
+    // stereo and we silently dropped every real audio buffer (#109). Query
+    // the needed size first, then allocate an AudioBufferList that big.
+    size_t ablSize = 0;
+    OSStatus s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer, &ablSize, nullptr, 0, nullptr, nullptr,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, nullptr);
+    if (s != noErr || ablSize == 0) return;
+
+    AudioBufferList *abl = static_cast<AudioBufferList *>(malloc(ablSize));
+    if (!abl) return;
     CMBlockBufferRef block = nullptr;
-    const OSStatus s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sampleBuffer, nullptr, &abl, sizeof(abl), nullptr, nullptr,
+    s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer, nullptr, abl, ablSize, nullptr, nullptr,
         kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block);
-    if (s != noErr || !block) return;
+    if (s != noErr || !block) { free(abl); return; }
+
+    static bool loggedFmt = false;
+    if (!loggedFmt)
+    {
+        loggedFmt = true;
+        LOG_INFO("SystemAudioCaptureSCK: extracted audio, buffers=" +
+                 std::to_string(abl->mNumberBuffers));
+    }
 
     // The AudioBus stores interleaved int16; SCK delivers float32. Convert
     // (clamp + scale) into int16 before pushing.
@@ -55,11 +75,11 @@ API_AVAILABLE(macos(13.0))
         return static_cast<int16_t>(f * 32767.0f);
     };
 
-    if (abl.mNumberBuffers == 1)
+    if (abl->mNumberBuffers == 1)
     {
         // Single buffer: interleaved float for all channels.
-        const float *src = static_cast<const float *>(abl.mBuffers[0].mData);
-        const size_t n   = abl.mBuffers[0].mDataByteSize / sizeof(float);
+        const float *src = static_cast<const float *>(abl->mBuffers[0].mData);
+        const size_t n   = abl->mBuffers[0].mDataByteSize / sizeof(float);
         if (src && n)
         {
             std::vector<int16_t> out(n);
@@ -70,14 +90,14 @@ API_AVAILABLE(macos(13.0))
     else
     {
         // Planar float (one buffer per channel) — interleave to int16.
-        const uint32_t ch     = abl.mNumberBuffers;
-        const uint32_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
+        const uint32_t ch     = abl->mNumberBuffers;
+        const uint32_t frames = abl->mBuffers[0].mDataByteSize / sizeof(float);
         if (frames)
         {
             std::vector<int16_t> inter(static_cast<size_t>(frames) * ch);
             for (uint32_t c = 0; c < ch; ++c)
             {
-                const float *src = static_cast<const float *>(abl.mBuffers[c].mData);
+                const float *src = static_cast<const float *>(abl->mBuffers[c].mData);
                 if (!src) continue;
                 for (uint32_t f = 0; f < frames; ++f)
                     inter[static_cast<size_t>(f) * ch + c] = toI16(src[f]);
@@ -86,6 +106,7 @@ API_AVAILABLE(macos(13.0))
         }
     }
     CFRelease(block);
+    free(abl);
 }
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error

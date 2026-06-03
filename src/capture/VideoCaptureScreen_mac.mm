@@ -49,22 +49,41 @@ API_AVAILABLE(macos(12.3))
             loggedFirstScreenAudio = true;
             LOG_INFO("VideoCaptureScreen(sck): first audio buffer received from screen stream");
         }
-        AudioBufferList abl;
+        // SCK stereo audio is often PLANAR float (one buffer per channel);
+        // a fixed sizeof(AudioBufferList) only fits ONE buffer, so the
+        // extract call fails for planar stereo and we silently dropped all
+        // real audio (telemetry showed real=0, only keepalive silence) — the
+        // client got video with a silent audio track (#109). Query the size,
+        // then allocate an AudioBufferList big enough for every channel.
+        size_t ablSize = 0;
+        OSStatus s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer, &ablSize, nullptr, 0, nullptr, nullptr,
+            kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, nullptr);
+        if (s != noErr || ablSize == 0) return;
+        AudioBufferList *abl = static_cast<AudioBufferList *>(malloc(ablSize));
+        if (!abl) return;
         CMBlockBufferRef block = nullptr;
-        if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-                sampleBuffer, nullptr, &abl, sizeof(abl), nullptr, nullptr,
-                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block) == noErr &&
-            block)
+        s = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer, nullptr, abl, ablSize, nullptr, nullptr,
+            kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block);
+        if (s == noErr && block)
         {
+            static bool loggedFmt = false;
+            if (!loggedFmt)
+            {
+                loggedFmt = true;
+                LOG_INFO("VideoCaptureScreen(sck): extracted screen audio, buffers=" +
+                         std::to_string(abl->mNumberBuffers));
+            }
             auto toI16 = [](float f) -> int16_t {
                 if (f >  1.0f) f =  1.0f;
                 if (f < -1.0f) f = -1.0f;
                 return static_cast<int16_t>(f * 32767.0f);
             };
-            if (abl.mNumberBuffers == 1)
+            if (abl->mNumberBuffers == 1)
             {
-                const float *src = static_cast<const float *>(abl.mBuffers[0].mData);
-                const size_t n   = abl.mBuffers[0].mDataByteSize / sizeof(float);
+                const float *src = static_cast<const float *>(abl->mBuffers[0].mData);
+                const size_t n   = abl->mBuffers[0].mDataByteSize / sizeof(float);
                 if (src && n)
                 {
                     std::vector<int16_t> out(n);
@@ -74,14 +93,14 @@ API_AVAILABLE(macos(12.3))
             }
             else
             {
-                const uint32_t ch     = abl.mNumberBuffers;
-                const uint32_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
+                const uint32_t ch     = abl->mNumberBuffers;
+                const uint32_t frames = abl->mBuffers[0].mDataByteSize / sizeof(float);
                 if (frames)
                 {
                     std::vector<int16_t> inter(static_cast<size_t>(frames) * ch);
                     for (uint32_t c = 0; c < ch; ++c)
                     {
-                        const float *src = static_cast<const float *>(abl.mBuffers[c].mData);
+                        const float *src = static_cast<const float *>(abl->mBuffers[c].mData);
                         if (!src) continue;
                         for (uint32_t f = 0; f < frames; ++f)
                             inter[static_cast<size_t>(f) * ch + c] = toI16(src[f]);
@@ -91,6 +110,7 @@ API_AVAILABLE(macos(12.3))
             }
             CFRelease(block);
         }
+        free(abl);
         return;
     }
 
