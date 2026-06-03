@@ -49,6 +49,14 @@ void SckSystemAudioHub::forwardRealAudioLocked(const int16_t *samples, std::size
         LOG_INFO("SckSystemAudioHub: first real system-audio samples reached the bus");
     }
     m_lastRealPushUs = monotonicUs();
+    m_realSamplesWindow += sampleCount;
+    // Is this buffer actually carrying sound, or did SCK hand us silence?
+    // Peek a few samples so the telemetry can say "real audio but silent"
+    // vs "genuinely no real audio reaching the hub".
+    for (std::size_t i = 0; i < sampleCount; ++i)
+    {
+        if (samples[i] != 0) { m_nonZeroSamplesWindow++; break; }
+    }
     m_consumer->push(samples, sampleCount);
 }
 
@@ -163,6 +171,7 @@ void SckSystemAudioHub::stopKeepaliveAndJoin()
 void SckSystemAudioHub::keepaliveLoop()
 {
     std::vector<int16_t> silence;
+    int64_t lastReportUs = monotonicUs();
     while (m_keepaliveRun.load())
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(kSilenceChunkMs));
@@ -171,19 +180,39 @@ void SckSystemAudioHub::keepaliveLoop()
         if (!m_consumer) continue;
 
         const int64_t now = monotonicUs();
-        if (m_lastRealPushUs != 0 && (now - m_lastRealPushUs) < kSilenceGapUs)
+        const bool realFlowing =
+            (m_lastRealPushUs != 0 && (now - m_lastRealPushUs) < kSilenceGapUs);
+
+        if (!realFlowing)
         {
-            continue; // real audio is flowing; don't double-fill
+            // Fill one chunk of silence so the audio timeline keeps advancing.
+            const size_t frames  = static_cast<size_t>(m_rate) * kSilenceChunkMs / 1000;
+            const size_t samples = frames * m_channels;
+            if (samples != 0)
+            {
+                if (silence.size() != samples) silence.assign(samples, 0);
+                m_consumer->push(silence.data(), silence.size());
+                m_silenceSamplesWindow += samples;
+            }
+            // Note: do NOT update m_lastRealPushUs — that tracks *real* audio
+            // only, so the keepalive keeps filling while silence lasts.
         }
 
-        // Fill one chunk of silence so the audio timeline keeps advancing.
-        const size_t frames  = static_cast<size_t>(m_rate) * kSilenceChunkMs / 1000;
-        const size_t samples = frames * m_channels;
-        if (samples == 0) continue;
-        if (silence.size() != samples) silence.assign(samples, 0);
-        m_consumer->push(silence.data(), silence.size());
-        // Note: do NOT update m_lastRealPushUs — that tracks *real* audio
-        // only, so the keepalive keeps filling for as long as silence lasts.
+        // Telemetry: every ~2 s say what actually reached the bus, so we can
+        // tell real audio from keepalive silence without guessing (#109).
+        if (now - lastReportUs >= 2'000'000)
+        {
+            LOG_INFO("SckSystemAudioHub: last 2s — real=" +
+                     std::to_string(m_realSamplesWindow) + " (nonzero buffers=" +
+                     std::to_string(m_nonZeroSamplesWindow) + "), silence=" +
+                     std::to_string(m_silenceSamplesWindow) +
+                     ", screenActive=" + std::to_string(m_screenActive ? 1 : 0) +
+                     ", ownStream=" + std::to_string(m_ownStream ? 1 : 0));
+            m_realSamplesWindow = 0;
+            m_nonZeroSamplesWindow = 0;
+            m_silenceSamplesWindow = 0;
+            lastReportUs = now;
+        }
     }
 }
 

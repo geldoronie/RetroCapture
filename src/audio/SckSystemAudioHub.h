@@ -69,6 +69,11 @@ private:
     std::atomic<bool>                       m_keepaliveRun{false};
     int64_t                                 m_lastRealPushUs = 0;
     bool                                    m_loggedFirstReal = false;
+
+    // Telemetry (real vs keepalive silence reaching the bus), reset every 2s.
+    uint64_t                                m_realSamplesWindow = 0;
+    uint64_t                                m_nonZeroSamplesWindow = 0;
+    uint64_t                                m_silenceSamplesWindow = 0;
 };
 
 #endif // __APPLE__
