@@ -1328,8 +1328,23 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
 
     AVRational timeBase = codecCtx->time_base;
     int64_t calculatedPTS = 0;
-    if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    if (m_forStreaming)
     {
+        // Live streaming: wall-clock PTS, same clock source as the video
+        // PTS (both come from HTTPTSStreamer::getTimestampUs at push time),
+        // so audio and video share one timeline. Sample-count PTS assumes
+        // zero dropped chunks; the lossy live audio bus *does* drop chunks
+        // (esp. system-audio bursts), so sample-count drifts behind real
+        // time and the client ended up playing video with no usable audio
+        // (#109). Wall-clock tracks real time regardless of drops.
+        int64_t relativeTimeUs = captureTimestampUs - m_firstAudioTimestampUs;
+        if (relativeTimeUs < 0) relativeTimeUs = 0;
+        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
+    }
+    else if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    {
+        // File recording: sample-count PTS — smooth and jitter-free, and the
+        // recording drain doesn't drop chunks, so the count matches duration.
         int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
         calculatedPTS = (samplesPerChannel * timeBase.den) / (m_audioConfig.sampleRate * timeBase.num);
     }
