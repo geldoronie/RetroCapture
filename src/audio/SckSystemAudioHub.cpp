@@ -202,7 +202,7 @@ void SckSystemAudioHub::keepaliveLoop()
         // tell real audio from keepalive silence without guessing (#109).
         if (now - lastReportUs >= 2'000'000)
         {
-            LOG_INFO("SckSystemAudioHub: last 2s — real=" +
+            LOG_DEBUG("SckSystemAudioHub: last 2s — real=" +
                      std::to_string(m_realSamplesWindow) + " (nonzero buffers=" +
                      std::to_string(m_nonZeroSamplesWindow) + "), silence=" +
                      std::to_string(m_silenceSamplesWindow) +

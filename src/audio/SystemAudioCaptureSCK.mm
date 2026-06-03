@@ -63,7 +63,7 @@ API_AVAILABLE(macos(13.0))
     if (!loggedFmt)
     {
         loggedFmt = true;
-        LOG_INFO("SystemAudioCaptureSCK: extracted audio, buffers=" +
+        LOG_DEBUG("SystemAudioCaptureSCK: extracted audio, buffers=" +
                  std::to_string(abl->mNumberBuffers));
     }
 

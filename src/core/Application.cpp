@@ -4181,11 +4181,11 @@ void Application::run()
             static int originalCaptureLogCount = 0;
             if (originalCaptureLogCount++ < 3)
             {
-                LOG_INFO("=== ORIGINAL CAPTURE TEXTURE ===");
-                LOG_INFO("Original capture texture: " + std::to_string(m_frameProcessor->getTexture()) +
+                LOG_DEBUG("=== ORIGINAL CAPTURE TEXTURE ===");
+                LOG_DEBUG("Original capture texture: " + std::to_string(m_frameProcessor->getTexture()) +
                          ", Size: " + std::to_string(m_frameProcessor->getTextureWidth()) + "x" + 
                          std::to_string(m_frameProcessor->getTextureHeight()));
-                LOG_INFO("================================");
+                LOG_DEBUG("================================");
             }
             
             // Apply shader if active
@@ -4329,11 +4329,11 @@ void Application::run()
                 static int shaderOutputLogCount = 0;
                 if (shaderOutputLogCount++ < 3)
                 {
-                    LOG_INFO("=== SHADER OUTPUT ===");
-                    LOG_INFO("Shader output texture: " + std::to_string(textureToRender) +
+                    LOG_DEBUG("=== SHADER OUTPUT ===");
+                    LOG_DEBUG("Shader output texture: " + std::to_string(textureToRender) +
                              ", Output size: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
                              std::to_string(m_shaderEngine->getOutputHeight()));
-                    LOG_INFO("=====================");
+                    LOG_DEBUG("=====================");
                 }
 
                 // DEBUG: Check returned texture
@@ -4443,18 +4443,18 @@ void Application::run()
             static int pipelineResLogCount = 0;
             if (pipelineResLogCount++ < 3)
             {
-                LOG_INFO("=== PIPELINE RESOLUTIONS ===");
-                LOG_INFO("Original capture: " + 
+                LOG_DEBUG("=== PIPELINE RESOLUTIONS ===");
+                LOG_DEBUG("Original capture: " + 
                          std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
-                LOG_INFO("Shader output (renderWidth/Height): " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                LOG_DEBUG("Shader output (renderWidth/Height): " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
                 if (isShaderTexture)
                 {
-                    LOG_INFO("Shader engine output: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
+                    LOG_DEBUG("Shader engine output: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
                              std::to_string(m_shaderEngine->getOutputHeight()));
                 }
-                LOG_INFO("Output resolution (m_outputWidth/Height): " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
-                LOG_INFO("textureToRender: " + std::to_string(textureToRender) + ", isShaderTexture: " + std::string(isShaderTexture ? "yes" : "no"));
-                LOG_INFO("===========================");
+                LOG_DEBUG("Output resolution (m_outputWidth/Height): " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                LOG_DEBUG("textureToRender: " + std::to_string(textureToRender) + ", isShaderTexture: " + std::string(isShaderTexture ? "yes" : "no"));
+                LOG_DEBUG("===========================");
             }
             
             // Garantir que renderWidth e renderHeight são válidos (não 0)
@@ -4579,7 +4579,7 @@ void Application::run()
             static int finalResLogCount = 0;
             if (finalResLogCount++ < 3)
             {
-                LOG_INFO("Final texture resolutions - finalTexture: " + std::to_string(finalTexture) +
+                LOG_DEBUG("Final texture resolutions - finalTexture: " + std::to_string(finalTexture) +
                          ", finalRenderWidth: " + std::to_string(finalRenderWidth) +
                          ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
@@ -4650,7 +4650,7 @@ void Application::run()
             static int finalTextureSizeLogCount = 0;
             if (needsFrameCapture && finalTextureSizeLogCount++ < 3)
             {
-                LOG_INFO("Frame capture: finalTexture=" + std::to_string(finalTexture) + 
+                LOG_DEBUG("Frame capture: finalTexture=" + std::to_string(finalTexture) + 
                          ", finalRenderWidth=" + std::to_string(finalRenderWidth) + 
                          ", finalRenderHeight=" + std::to_string(finalRenderHeight) +
                          ", renderWidth=" + std::to_string(renderWidth) +
@@ -4760,17 +4760,17 @@ void Application::run()
                             static int captureSourceLogCount = 0;
                             if (captureSourceLogCount++ < 3)
                             {
-                                LOG_INFO("=== FRAME CAPTURE DEBUG ===");
-                                LOG_INFO("Original capture: " + 
+                                LOG_DEBUG("=== FRAME CAPTURE DEBUG ===");
+                                LOG_DEBUG("Original capture: " + 
                                          std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
                                 if (isShaderTexture)
                                 {
-                                    LOG_INFO("Shader engine output: " + 
+                                    LOG_DEBUG("Shader engine output: " + 
                                              std::to_string(m_shaderEngine->getOutputWidth()) + "x" + std::to_string(m_shaderEngine->getOutputHeight()));
                                 }
                                 LOG_INFO("renderWidth/Height: " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
                                 LOG_INFO("finalRenderWidth/Height: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight));
-                                LOG_INFO("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                                LOG_DEBUG("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
                                 
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
@@ -4782,11 +4782,11 @@ void Application::run()
                                     LOG_INFO("Streaming resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
                                 }
                                 
-                                LOG_INFO("Selected - textureToCapture: " + std::to_string(textureToCapture) +
+                                LOG_DEBUG("Selected - textureToCapture: " + std::to_string(textureToCapture) +
                                          ", size: " + std::to_string(captureTextureWidth) + "x" + std::to_string(captureTextureHeight));
-                                LOG_INFO("Textures - textureToRender: " + std::to_string(textureToRender) +
+                                LOG_DEBUG("Textures - textureToRender: " + std::to_string(textureToRender) +
                                          ", finalTexture: " + std::to_string(finalTexture));
-                                LOG_INFO("===========================");
+                                LOG_DEBUG("===========================");
                             }
                         }
                         
@@ -4955,7 +4955,7 @@ void Application::run()
                                 static int formatLogCount = 0;
                                 if (formatLogCount++ < 3)
                                 {
-                                    LOG_INFO("Frame capture: Using format " + std::string(isShaderTexture ? "RGBA" : "RGB") +
+                                    LOG_DEBUG("Frame capture: Using format " + std::string(isShaderTexture ? "RGBA" : "RGB") +
                                              " for texture " + std::to_string(finalTexture) +
                                              " (shader active: " + std::string(isShaderTexture ? "yes" : "no") + ")");
                                 }
@@ -4972,25 +4972,25 @@ void Application::run()
                                              (m_streamManager && m_streamManager->isActive()));
                             if (shouldLog)
                             {
-                                LOG_INFO("=== CAPTURE DETAILS ===");
-                                LOG_INFO("Capturing from texture: " + std::to_string(textureToCapture) +
+                                LOG_DEBUG("=== CAPTURE DETAILS ===");
+                                LOG_DEBUG("Capturing from texture: " + std::to_string(textureToCapture) +
                                          ", Size: " + std::to_string(textureWidth) + "x" + std::to_string(textureHeight));
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
                                     RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                     LOG_INFO("Recording target: " + 
                                              std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                    LOG_INFO("Will resize for recording: " + std::string(
+                                    LOG_DEBUG("Will resize for recording: " + std::string(
                                         (textureWidth != recSettings.width || textureHeight != recSettings.height) ? "YES" : "NO"));
                                 }
                                 if (m_streamManager && m_streamManager->isActive() && m_ui)
                                 {
-                                    LOG_INFO("Streaming target: " + 
+                                    LOG_DEBUG("Streaming target: " + 
                                              std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
-                                    LOG_INFO("Will resize for streaming: " + std::string(
+                                    LOG_DEBUG("Will resize for streaming: " + std::string(
                                         (textureWidth != m_ui->getStreamingWidth() || textureHeight != m_ui->getStreamingHeight()) ? "YES" : "NO"));
                                 }
-                                LOG_INFO("======================");
+                                LOG_DEBUG("======================");
                             }
                             
                             size_t rgbDataSize = static_cast<size_t>(textureWidth) * static_cast<size_t>(textureHeight) * 3;
@@ -5004,7 +5004,7 @@ void Application::run()
                             {
                                 GLint currentViewport[4];
                                 glGetIntegerv(GL_VIEWPORT, currentViewport);
-                                LOG_INFO("Frame capture: Viewport set to " +
+                                LOG_DEBUG("Frame capture: Viewport set to " +
                                              std::to_string(textureWidth) + "x" + std::to_string(textureHeight) +
                                              ", actual viewport: [" + std::to_string(currentViewport[0]) + "," +
                                              std::to_string(currentViewport[1]) + "," +
@@ -5253,11 +5253,11 @@ void Application::run()
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
                                     {
-                                        LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                        LOG_DEBUG("--- PUSHING FRAME TO STREAMING ---");
+                                        LOG_DEBUG("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
                                                  (useSource ? " (raw source — shader bypassed)" : ""));
-                                        LOG_INFO("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
-                                        LOG_INFO("----------------------------------");
+                                        LOG_DEBUG("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                        LOG_DEBUG("----------------------------------");
                                     }
                                     if (useSource)
                                     {
@@ -5302,12 +5302,12 @@ void Application::run()
                                     static int recordingPushLogCount = 0;
                                     if (recordingPushLogCount++ < 3)
                                     {
-                                        LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                        LOG_DEBUG("=== PUSHING FRAME TO RECORDING ===");
+                                        LOG_DEBUG("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
                                                  (useSource ? " (raw source — shader bypassed)" : ""));
                                         RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                         LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                        LOG_INFO("===================================");
+                                        LOG_DEBUG("===================================");
                                     }
                                     if (useSource)
                                     {

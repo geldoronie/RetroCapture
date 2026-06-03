@@ -72,7 +72,7 @@ API_AVAILABLE(macos(12.3))
             if (!loggedFmt)
             {
                 loggedFmt = true;
-                LOG_INFO("VideoCaptureScreen(sck): extracted screen audio, buffers=" +
+                LOG_DEBUG("VideoCaptureScreen(sck): extracted screen audio, buffers=" +
                          std::to_string(abl->mNumberBuffers));
             }
             auto toI16 = [](float f) -> int16_t {

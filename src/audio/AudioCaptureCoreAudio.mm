@@ -42,7 +42,7 @@ static OSStatus audioInputCallback(void *inRefCon,
     const unsigned h = ++hitCount;
     if (h <= 3 || (h % 1000) == 0)
     {
-        LOG_INFO("Core Audio input callback HIT #" + std::to_string(h) +
+        LOG_DEBUG("Core Audio input callback HIT #" + std::to_string(h) +
                  " (inNumberFrames=" + std::to_string(inNumberFrames) + ")");
     }
 
@@ -78,7 +78,7 @@ static OSStatus audioInputCallback(void *inRefCon,
         const unsigned n = ++cbCount;
         if (n <= 3 || (n % 1000) == 0)
         {
-            LOG_INFO("Core Audio input callback #" + std::to_string(n) +
+            LOG_DEBUG("Core Audio input callback #" + std::to_string(n) +
                      " — pushed " + std::to_string(tempBuffer.size()) + " samples");
         }
     }
@@ -816,7 +816,7 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
             const unsigned n = ++wCount;
             if (n <= 3 || (n % 1000) == 0)
             {
-                LOG_INFO("Monitor writer iter #" + std::to_string(n) +
+                LOG_DEBUG("Monitor writer iter #" + std::to_string(n) +
                          " — pulled " + std::to_string(got) +
                          " samples, wrote " + std::to_string(written));
             }
