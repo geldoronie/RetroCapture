@@ -153,6 +153,16 @@ public:
     // Shader path resolution (centralized)
     std::string resolveShaderPath(const std::string& shaderPath) const;
 
+    // #54 — shader bundle fetch for remote (directory) streams.
+    std::string shaderBundleCacheRoot(const std::string &presetHash) const;
+    std::string cachedShaderBundleGlslp(const std::string &presetHash) const;
+    void        requestShaderBundleFetch(const std::string &presetHash,
+                                         const std::string &presetName);
+    bool        fetchAndCacheShaderBundle(const std::string &baseUrl,
+                                          const std::string &authToken,
+                                          const std::string &presetHash,
+                                          std::string &glslpPathOut);
+
     // Phase 4 of #47: drains pending remote /meta snapshot onto the GL
     // thread. Called once per main-loop iteration; cheap no-op when
     // m_hasPendingRemoteMeta is false.
@@ -272,6 +282,21 @@ private:
     std::string                      m_pendingRemotePreset;
     std::string                      m_pendingRemotePresetHash;
     std::string                      m_appliedRemotePresetHash;
+
+    // #54 — shader-bundle fetch. When the host announces a shader the client
+    // doesn't have locally, fetch the bundle (.glslp + .glsl + LUTs) off the
+    // GL thread, cache it under getCacheDir()/shader-cache/<hash>/, and apply
+    // it on a later tick. m_remoteAuthToken keeps the connect's bearer token
+    // around for the fetch (the UI copy is consumed once at connect).
+    std::string                      m_remoteAuthToken;
+    std::thread                      m_shaderBundleThread;
+    std::mutex                       m_shaderBundleMutex;
+    std::atomic<bool>                m_shaderBundleFetching{false};
+    std::string                      m_shaderBundleLastTriedHash;
+    std::atomic<bool>                m_hasPendingShaderBundle{false};
+    std::string                      m_pendingShaderBundleGlslp;
+    std::string                      m_pendingShaderBundleHash;
+    std::string                      m_pendingShaderBundlePreset;
     bool                             m_pendingRemotePipelineEnabled = true;
     std::vector<std::pair<std::string, float>> m_pendingRemoteParams;
     // Host's source resolution from /meta. The capture rescales /raw to
