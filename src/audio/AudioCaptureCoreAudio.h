@@ -3,6 +3,7 @@
 #include "IAudioCapture.h"
 #include "AudioBus.h"
 #include "IAudioOutput.h"
+#include "SckSystemAudioHub.h" // #109 system-audio (output) capture coordinator
 #include <atomic>
 #include <cstdint>
 #include <vector>
@@ -93,6 +94,12 @@ private:
     std::unique_ptr<IAudioOutput>  m_monitor;
     std::shared_ptr<AudioBus::Tap> m_monitorTap;
     std::atomic<bool>              m_monitorRunning{false};
+
+    // #109 — system-audio (output) capture via ScreenCaptureKit, brokered
+    // by SckSystemAudioHub (single-SCStream). Active when the synthetic
+    // "system-audio" device is selected; the mic AudioUnit path is
+    // bypassed and the local monitor is left off.
+    bool m_systemAudio = false;
     std::atomic<bool>              m_monitorResyncPending{false};
     std::thread                    m_monitorThread;
 

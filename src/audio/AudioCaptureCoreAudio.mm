@@ -42,7 +42,7 @@ static OSStatus audioInputCallback(void *inRefCon,
     const unsigned h = ++hitCount;
     if (h <= 3 || (h % 1000) == 0)
     {
-        LOG_INFO("Core Audio input callback HIT #" + std::to_string(h) +
+        LOG_DEBUG("Core Audio input callback HIT #" + std::to_string(h) +
                  " (inNumberFrames=" + std::to_string(inNumberFrames) + ")");
     }
 
@@ -78,7 +78,7 @@ static OSStatus audioInputCallback(void *inRefCon,
         const unsigned n = ++cbCount;
         if (n <= 3 || (n % 1000) == 0)
         {
-            LOG_INFO("Core Audio input callback #" + std::to_string(n) +
+            LOG_DEBUG("Core Audio input callback #" + std::to_string(n) +
                      " — pushed " + std::to_string(tempBuffer.size()) + " samples");
         }
     }
@@ -126,12 +126,32 @@ AudioComponentInstance AudioCaptureCoreAudio::getAudioUnit() const
 }
 #endif
 
+// #109 — synthetic device id for capturing the system audio output.
+static const char *kSystemAudioId = "system-audio";
+
 bool AudioCaptureCoreAudio::open(const std::string &deviceName)
 {
     if (m_isOpen)
     {
         LOG_WARN("Dispositivo de áudio já aberto, fechando primeiro");
         close();
+    }
+
+    // #109 — system audio (output) uses ScreenCaptureKit, not the mic
+    // AudioUnit. No mic permission, no local monitor playback (the user
+    // already hears the system; playing it back would feed back). The
+    // SCStream is started in startCapture().
+    m_systemAudio = (deviceName == kSystemAudioId);
+    if (m_systemAudio)
+    {
+        // ScreenCaptureKit delivers 48 kHz stereo float; report that so
+        // the encoder/muxer and the SCStream(s) all agree on the rate.
+        m_sampleRate = 48000;
+        m_channels   = 2;
+        m_isOpen = true;
+        LOG_INFO("AudioCaptureCoreAudio: system-audio source (ScreenCaptureKit) — "
+                 "local monitor disabled to avoid feedback");
+        return true;
     }
 
 #ifdef __APPLE__
@@ -360,6 +380,18 @@ std::vector<AudioDeviceInfo> AudioCaptureCoreAudio::listDevices()
         defaultDevice.available = true;
         devices.push_back(defaultDevice);
     }
+
+    // #109 — synthetic "system audio" capture (ScreenCaptureKit loopback
+    // of the whole computer's output). Flagged isMonitor so the UI groups
+    // it and shows the feedback note.
+    {
+        AudioDeviceInfo sysAudio;
+        sysAudio.id        = kSystemAudioId;
+        sysAudio.name      = "System audio (ScreenCaptureKit)";
+        sysAudio.available = true;
+        sysAudio.isMonitor = true;
+        devices.push_back(sysAudio);
+    }
 #endif
 
     return devices;
@@ -376,6 +408,16 @@ bool AudioCaptureCoreAudio::startCapture()
     {
         LOG_ERROR("Dispositivo de áudio não aberto");
         return false;
+    }
+
+    if (m_systemAudio)
+    {
+        // Brokered by the hub: routes the screen-capture stream's audio
+        // when screen capture is active, else runs its own audio-only
+        // SCStream — never two SCStreams at once (#109).
+        SckSystemAudioHub::instance().requestSystemAudio(m_bus.get(), m_sampleRate, m_channels);
+        m_isCapturing = true;
+        return true;
     }
 
 #ifdef __APPLE__
@@ -399,6 +441,11 @@ bool AudioCaptureCoreAudio::startCapture()
 void AudioCaptureCoreAudio::stopCapture()
 {
     m_isCapturing = false;
+    if (m_systemAudio)
+    {
+        SckSystemAudioHub::instance().releaseSystemAudio();
+        return;
+    }
 #ifdef __APPLE__
     if (m_audioUnit)
     {
@@ -769,7 +816,7 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
             const unsigned n = ++wCount;
             if (n <= 3 || (n % 1000) == 0)
             {
-                LOG_INFO("Monitor writer iter #" + std::to_string(n) +
+                LOG_DEBUG("Monitor writer iter #" + std::to_string(n) +
                          " — pulled " + std::to_string(got) +
                          " samples, wrote " + std::to_string(written));
             }

@@ -1171,7 +1171,7 @@ bool VideoCaptureAVFoundation::setFramerate(uint32_t fps)
                              "framerate padrão do dispositivo");
                 }
                 
-                LOG_INFO("==============================");
+                LOG_DEBUG("==============================");
                 
                 [m_captureDevice unlockForConfiguration];
                 
@@ -1271,16 +1271,16 @@ bool VideoCaptureAVFoundation::captureLatestFrame(Frame &frame)
         static int conversionLogCount = 0;
         if (conversionLogCount++ % 150 == 0) // Log every 150 frames (~5 seconds at 30fps)
         {
-            LOG_INFO("=== CONVERSION PERFORMANCE ===");
-            LOG_INFO("BGRA→YUYV conversion time: " + std::to_string(duration) + " ms");
-            LOG_INFO("Frame size: " + std::to_string(m_width) + "x" + std::to_string(m_height));
+            LOG_DEBUG("=== CONVERSION PERFORMANCE ===");
+            LOG_DEBUG("BGRA→YUYV conversion time: " + std::to_string(duration) + " ms");
+            LOG_DEBUG("Frame size: " + std::to_string(m_width) + "x" + std::to_string(m_height));
             if (duration > 33) // More than 1 frame at 30fps
             {
                 LOG_WARN("Conversion is taking too long! This will limit framerate.");
                 LOG_WARN("At " + std::to_string(duration) + " ms per frame, max FPS is ~" + 
                          std::to_string(1000 / duration) + " fps");
             }
-            LOG_INFO("=============================");
+            LOG_DEBUG("=============================");
         }
         
         CVPixelBufferRelease(pb);
@@ -1882,7 +1882,7 @@ bool VideoCaptureAVFoundation::startCapture()
                         double devMinFps = 1.0 / CMTimeGetSeconds(devMin);
                         double devMaxFps = 1.0 / CMTimeGetSeconds(devMax);
                         LOG_INFO("Device framerate: " + std::to_string(devMinFps) + " - " + std::to_string(devMaxFps) + " fps");
-                        LOG_INFO("==============================");
+                        LOG_DEBUG("==============================");
                     }
                     else
                     {
@@ -2129,22 +2129,22 @@ bool VideoCaptureAVFoundation::convertPixelBufferToFrame(CVPixelBufferRef pixelB
     static int dimensionLogCount = 0;
     if (dimensionLogCount++ < 5)
     {
-        LOG_INFO("=== PIXEL BUFFER DIMENSIONS ===");
-        LOG_INFO("PixelBuffer: " + std::to_string(width) + "x" + std::to_string(height));
-        LOG_INFO("Requested (m_width/m_height): " + std::to_string(m_width) + "x" + std::to_string(m_height));
+        LOG_DEBUG("=== PIXEL BUFFER DIMENSIONS ===");
+        LOG_DEBUG("PixelBuffer: " + std::to_string(width) + "x" + std::to_string(height));
+        LOG_DEBUG("Requested (m_width/m_height): " + std::to_string(m_width) + "x" + std::to_string(m_height));
         if (m_width > 0 && m_height > 0)
         {
             float requestedAspect = static_cast<float>(m_width) / static_cast<float>(m_height);
             float actualAspect = static_cast<float>(width) / static_cast<float>(height);
-            LOG_INFO("Requested aspect: " + std::to_string(requestedAspect));
-            LOG_INFO("Actual aspect: " + std::to_string(actualAspect));
+            LOG_DEBUG("Requested aspect: " + std::to_string(requestedAspect));
+            LOG_DEBUG("Actual aspect: " + std::to_string(actualAspect));
             if (std::abs(requestedAspect - actualAspect) > 0.01f)
             {
                 LOG_WARN("Aspect ratio mismatch! Requested: " + std::to_string(requestedAspect) + 
                          ", Actual: " + std::to_string(actualAspect));
             }
         }
-        LOG_INFO("==============================");
+        LOG_DEBUG("==============================");
     }
     
     // Converter BGRA para YUYV
@@ -2670,7 +2670,7 @@ bool VideoCaptureAVFoundation::applyFormatAndFramerate(AVCaptureDeviceFormat* fo
                     }
                 }
                 
-                LOG_INFO("================================================");
+                LOG_DEBUG("================================================");
             }
             
             [m_captureDevice unlockForConfiguration];

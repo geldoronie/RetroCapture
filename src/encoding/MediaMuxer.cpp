@@ -758,7 +758,7 @@ void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &
     timeBaseLogCounter++;
     if (timeBaseLogCounter == 1 || timeBaseLogCounter % 300 == 0)
     {
-        LOG_INFO("MediaMuxer: PTS conversion - codec time_base: " + std::to_string(codecTimeBase.num) + "/" + std::to_string(codecTimeBase.den) +
+        LOG_DEBUG("MediaMuxer: PTS conversion - codec time_base: " + std::to_string(codecTimeBase.num) + "/" + std::to_string(codecTimeBase.den) +
                  ", stream time_base: " + std::to_string(streamTimeBase.num) + "/" + std::to_string(streamTimeBase.den) +
                  ", original PTS: " + std::to_string(pts));
     }
@@ -772,7 +772,7 @@ void MediaMuxer::convertPTS(const MediaEncoder::EncodedPacket &packet, int64_t &
 
         if (timeBaseLogCounter == 1 || timeBaseLogCounter % 300 == 0)
         {
-            LOG_INFO("MediaMuxer: PTS converted - original: " + std::to_string(originalPTS) +
+            LOG_DEBUG("MediaMuxer: PTS converted - original: " + std::to_string(originalPTS) +
                      ", converted: " + std::to_string(pts));
         }
     }
@@ -816,7 +816,7 @@ void MediaMuxer::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
             muxLogCounter++;
             if (muxLogCounter == 1 || muxLogCounter % 300 == 0)
             {
-                LOG_INFO("MediaMuxer: Video PTS - current: " + std::to_string(pts) +
+                LOG_DEBUG("MediaMuxer: Video PTS - current: " + std::to_string(pts) +
                          ", last: " + std::to_string(m_lastVideoPTS) +
                          ", delta: " + std::to_string(pts - m_lastVideoPTS));
             }

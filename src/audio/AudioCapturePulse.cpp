@@ -13,6 +13,18 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+namespace
+{
+// PulseAudio names a sink's monitor source "<sink>.monitor". Used to
+// recognise a system-output capture so we can skip local playback (#109).
+bool isMonitorSourceName(const std::string &name)
+{
+    const std::string suffix = ".monitor";
+    return name.size() >= suffix.size() &&
+           name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+} // namespace
+
 AudioCapturePulse::AudioCapturePulse()
     : m_mainloop(nullptr), m_mainloopApi(nullptr), m_context(nullptr), m_stream(nullptr),
       m_sampleRate(44100), m_channels(2), m_bytesPerSample(2),
@@ -284,23 +296,27 @@ bool AudioCapturePulse::open(const std::string &deviceName)
                  "other apps will not see it in the PulseAudio graph");
     }
 
+    // #109 — when capturing an output device's MONITOR (system audio),
+    // do NOT play it back through the default sink: that would feed the
+    // captured output straight back into itself → feedback (microfonia).
+    // The user already hears the system audio from the system, so local
+    // monitoring is simply skipped for monitor sources.
+    const bool capturingSystemOutput = isMonitorSourceName(deviceName);
+
     // Open the host-side monitor playback (the "output" half of the
     // RetroCapture I/O pair). ~2 s tap slack matches the other taps.
     // The two hardware clocks (capture device + default sink) will
     // drift in ppm over long sessions, accumulating in this tap; the
     // bus drop-oldest at the cap is the current safety net. Smooth
     // sample-rate-matching is a follow-up.
+    if (capturingSystemOutput)
     {
-        const size_t monitorCapacity =
-            static_cast<size_t>(m_sampleRate) * m_channels * 2;
-        auto monitorTap = m_bus->createTap(monitorCapacity);
-        m_monitor = std::make_unique<MonitorPlayback>();
-        if (!m_monitor->start(std::move(monitorTap), m_sampleRate, m_channels))
-        {
-            LOG_WARN("AudioCapture: monitor playback failed to start; "
-                     "user will not hear the input through the default sink");
-            m_monitor.reset();
-        }
+        LOG_INFO("AudioCapture: capturing system output '" + deviceName +
+                 "' — local monitor playback disabled to avoid feedback");
+    }
+    else
+    {
+        startMonitorPlayback();
     }
 
     m_isOpen = true;
@@ -566,19 +582,25 @@ void AudioCapturePulse::sourceInfoCallback(pa_context *c, const pa_source_info *
 
     if (i)
     {
-        // Only include non-monitor sources (monitors are virtual sources for sinks)
-        // We want actual audio sources that can be connected to our sink
-        if (i->monitor_of_sink == PA_INVALID_INDEX)
-        {
-            AudioDeviceInfo info;
-            info.id = i->name ? i->name : "";
-            info.name = i->description ? i->description : info.id;
-            info.description = i->description ? i->description : "";
-            info.available = (i->state == PA_SOURCE_RUNNING || i->state == PA_SOURCE_IDLE);
+        // #109 — list BOTH real inputs and sink monitors. Monitors
+        // (monitor_of_sink set) are the "system audio" of an output
+        // device; we flag them so the UI groups them and the capture
+        // skips local playback (feedback). Skip our own published
+        // virtual source's monitor so the user can't capture us.
+        const bool isMonitor = (i->monitor_of_sink != PA_INVALID_INDEX);
+        const std::string name = i->name ? i->name : "";
+        if (isMonitor && name.rfind("RetroCapture", 0) == 0)
+            return; // don't offer capturing our own virtual source
 
-            std::lock_guard<std::mutex> lock(g_sourcesMutex);
-            g_availableSources.push_back(info);
-        }
+        AudioDeviceInfo info;
+        info.id = name;
+        info.name = i->description ? i->description : info.id;
+        info.description = i->description ? i->description : "";
+        info.available = (i->state == PA_SOURCE_RUNNING || i->state == PA_SOURCE_IDLE);
+        info.isMonitor = isMonitor;
+
+        std::lock_guard<std::mutex> lock(g_sourcesMutex);
+        g_availableSources.push_back(info);
     }
 }
 
@@ -735,6 +757,24 @@ static void unloadModuleCallback(pa_context *c, int success, void *userdata)
     g_sinkOperationSuccess = (success == 0);
 }
 
+void AudioCapturePulse::startMonitorPlayback()
+{
+    // ~2 s tap slack matches the other taps. The two hardware clocks
+    // (capture device + default sink) drift in ppm over long sessions,
+    // accumulating in this tap; the bus drop-oldest at the cap is the
+    // current safety net. Smooth sample-rate-matching is a follow-up.
+    const size_t monitorCapacity =
+        static_cast<size_t>(m_sampleRate) * m_channels * 2;
+    auto monitorTap = m_bus->createTap(monitorCapacity);
+    m_monitor = std::make_unique<MonitorPlayback>();
+    if (!m_monitor->start(std::move(monitorTap), m_sampleRate, m_channels))
+    {
+        LOG_WARN("AudioCapture: monitor playback failed to start; "
+                 "user will not hear the input through the default sink");
+        m_monitor.reset();
+    }
+}
+
 bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
 {
     if (sourceName.empty())
@@ -754,6 +794,20 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
     if (!connectRecordStream(sourceName))
     {
         return false;
+    }
+
+    // #109 — keep the local monitor in sync with the source kind on a
+    // live switch: stop it when moving to a system-output monitor (else
+    // feedback), (re)start it when moving back to a real input.
+    if (isMonitorSourceName(sourceName))
+    {
+        if (m_monitor) { m_monitor->stop(); m_monitor.reset(); }
+        LOG_INFO("AudioCapture: switched to system output '" + sourceName +
+                 "' — local monitor disabled to avoid feedback");
+    }
+    else if (!m_monitor)
+    {
+        startMonitorPlayback();
     }
 
     if (wasCapturing)

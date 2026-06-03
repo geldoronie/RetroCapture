@@ -572,6 +572,7 @@ if(PLATFORM_LINUX)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemAudioCaptureSCK\\.(mm|h)$") 
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
 
@@ -601,6 +602,7 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemAudioCaptureSCK\\.(mm|h)$") 
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
 

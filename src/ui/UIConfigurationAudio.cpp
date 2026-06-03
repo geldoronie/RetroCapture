@@ -60,6 +60,7 @@ void UIConfigurationAudio::refreshInputSources()
 {
     m_inputSourceNames.clear();
     m_inputSourceIds.clear();
+    m_inputSourceIsMonitor.clear();
     m_selectedInputSourceIndex = -1;
 
     if (!m_audioCapture)
@@ -71,13 +72,24 @@ void UIConfigurationAudio::refreshInputSources()
     AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture);
     if (pulseCapture)
     {
-        // Get list of available input sources
+        // Get list of available sources — real inputs and output monitors
+        // (system audio, #109). Group inputs first, then monitors, and
+        // prefix the monitors so they read as "system audio".
         std::vector<AudioDeviceInfo> sources = pulseCapture->listInputSources();
 
-        for (const auto &source : sources)
+        for (const auto &source : sources) // inputs first
         {
+            if (source.isMonitor) continue;
             m_inputSourceNames.push_back(source.name);
             m_inputSourceIds.push_back(source.id);
+            m_inputSourceIsMonitor.push_back(false);
+        }
+        for (const auto &source : sources) // then system-audio monitors
+        {
+            if (!source.isMonitor) continue;
+            m_inputSourceNames.push_back("[System audio] " + source.name);
+            m_inputSourceIds.push_back(source.id);
+            m_inputSourceIsMonitor.push_back(true);
         }
 
         // Try to find current input source
@@ -111,15 +123,16 @@ void UIConfigurationAudio::refreshInputSources()
             }
         }
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(_WIN32)
     // Core Audio devices via IAudioCapture::listDevices — same listing
     // used elsewhere. On macOS the saved id comes from
     // `getAudioInputSourceId()`, same field reused.
     const auto devices = m_audioCapture->listDevices();
     for (const auto &d : devices)
     {
-        m_inputSourceNames.push_back(d.name);
+        m_inputSourceNames.push_back(d.isMonitor ? "[System audio] " + d.name : d.name);
         m_inputSourceIds.push_back(d.id);
+        m_inputSourceIsMonitor.push_back(d.isMonitor);
     }
 
     const std::string saved = m_uiManager
@@ -222,6 +235,18 @@ void UIConfigurationAudio::renderInputSourceSelection()
         }
     }
 
+    // #109 — when a system-audio (output monitor) source is selected,
+    // local monitoring is turned off to avoid a feedback loop. Make that
+    // explicit so the user isn't surprised they don't hear it through us.
+    if (m_selectedInputSourceIndex >= 0 &&
+        m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIsMonitor.size()) &&
+        m_inputSourceIsMonitor[m_selectedInputSourceIndex])
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Capturing system audio — local monitoring is off "
+                           "(prevents feedback). You still hear it from the system.");
+    }
+
     ImGui::Spacing();
 
     std::string currentSource = pulseCapture->getCurrentInputSource();
@@ -259,10 +284,10 @@ void UIConfigurationAudio::renderInputSourceSelection()
                            "RetroCapture will record from it and publish "
                            "the audio as the 'RetroCapture' source.");
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(_WIN32)
     if (m_inputSourceNames.empty())
     {
-        ImGui::TextWrapped("No Core Audio input devices found.");
+        ImGui::TextWrapped("No audio devices found.");
         return;
     }
 
@@ -293,10 +318,19 @@ void UIConfigurationAudio::renderInputSourceSelection()
             else
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
-                                   "Failed to open Core Audio device");
+                                   "Failed to open audio device");
                 m_selectedInputSourceIndex = prev;
             }
         }
+    }
+
+    // #109 — flag system-audio (output monitor) selections.
+    if (m_selectedInputSourceIndex >= 0 &&
+        m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIsMonitor.size()) &&
+        m_inputSourceIsMonitor[m_selectedInputSourceIndex])
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Capturing system audio (loopback).");
     }
 
     ImGui::Spacing();
@@ -307,6 +341,7 @@ void UIConfigurationAudio::renderInputSourceSelection()
                     m_audioCapture->getChannels(),
                     m_audioCapture->getChannels() == 1 ? "" : "s");
 
+#ifdef __APPLE__
         if (ImGui::Button("Resync monitor"))
         {
             if (auto *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(m_audioCapture))
@@ -314,6 +349,7 @@ void UIConfigurationAudio::renderInputSourceSelection()
                 caCapture->resyncMonitor();
             }
         }
+#endif
     }
 #endif
 }

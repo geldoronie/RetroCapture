@@ -1119,7 +1119,7 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
     ptsLogCounter++;
     if (ptsLogCounter == 1 || ptsLogCounter % 300 == 0) // Every 5 seconds at 60fps
     {
-        LOG_INFO("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
+        LOG_DEBUG("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
                  ", relativeTimeUs: " + std::to_string(relativeTimeUs) + 
                  ", relativeTimeSeconds: " + std::to_string(relativeTimeSeconds) +
                  ", timeBase: " + std::to_string(timeBase.num) + "/" + std::to_string(timeBase.den) +
@@ -1178,7 +1178,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     if (debugLogCounter == 1 || debugLogCounter % 100 == 0)
     {
         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-        LOG_INFO("MediaEncoder: Audio accumulator - size: " + std::to_string(m_audioAccumulator.size()) + 
+        LOG_DEBUG("MediaEncoder: Audio accumulator - size: " + std::to_string(m_audioAccumulator.size()) + 
                  ", needed: " + std::to_string(totalSamplesNeeded) + 
                  ", frame_size: " + std::to_string(samplesPerFrame) +
                  ", channels: " + std::to_string(m_audioConfig.channels));
@@ -1227,7 +1227,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         frameLogCounter++;
         if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
         {
-            LOG_INFO("MediaEncoder: Processing audio frame - actual: " + std::to_string(actualFrameSamples) + 
+            LOG_DEBUG("MediaEncoder: Processing audio frame - actual: " + std::to_string(actualFrameSamples) + 
                      ", expected: " + std::to_string(samplesPerFrame) + 
                      ", input consumed: " + std::to_string(totalSamplesNeeded));
         }
@@ -1259,7 +1259,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
 
             if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
             {
-                LOG_INFO("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
+                LOG_DEBUG("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
                          " -> " + std::to_string(sizeAfter) +
                          " (removed " + std::to_string(totalSamplesNeeded) + ")");
             }
@@ -1328,8 +1328,23 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
 
     AVRational timeBase = codecCtx->time_base;
     int64_t calculatedPTS = 0;
-    if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    if (m_forStreaming)
     {
+        // Live streaming: wall-clock PTS, same clock source as the video
+        // PTS (both come from HTTPTSStreamer::getTimestampUs at push time),
+        // so audio and video share one timeline. Sample-count PTS assumes
+        // zero dropped chunks; the lossy live audio bus *does* drop chunks
+        // (esp. system-audio bursts), so sample-count drifts behind real
+        // time and the client ended up playing video with no usable audio
+        // (#109). Wall-clock tracks real time regardless of drops.
+        int64_t relativeTimeUs = captureTimestampUs - m_firstAudioTimestampUs;
+        if (relativeTimeUs < 0) relativeTimeUs = 0;
+        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
+    }
+    else if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    {
+        // File recording: sample-count PTS — smooth and jitter-free, and the
+        // recording drain doesn't drop chunks, so the count matches duration.
         int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
         calculatedPTS = (samplesPerChannel * timeBase.den) / (m_audioConfig.sampleRate * timeBase.num);
     }
