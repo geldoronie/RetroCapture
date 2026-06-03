@@ -11,11 +11,14 @@
 
 namespace
 {
-// Inject silence in ~20 ms chunks; treat the timeline as silent once no
-// real audio has arrived for ~60 ms (three chunks). Continuous real audio
-// keeps m_lastRealPushUs fresh so the keepalive never fires mid-playback.
+// Inject silence in ~20 ms chunks, but only as a genuine safety net: once
+// SCK is the producer it delivers continuous audio buffers (even during
+// silence), so the keepalive must never fight real-audio jitter or flood
+// at startup before the first real buffer arrives. We therefore only fill
+// after a longer gap (~250 ms) with no real audio at all — covering a real
+// SCK stall/pause, not normal per-buffer spacing.
 constexpr int64_t kSilenceChunkMs = 20;
-constexpr int64_t kSilenceGapUs   = 60'000; // 60 ms
+constexpr int64_t kSilenceGapUs   = 250'000; // 250 ms
 
 int64_t monotonicUs()
 {
@@ -55,9 +58,11 @@ void SckSystemAudioHub::requestSystemAudio(AudioBus *bus, uint32_t sampleRate, u
     m_consumer = bus;
     m_rate     = sampleRate ? sampleRate : 48000;
     m_channels = channels ? channels : 2;
-    // Reset recency so the keepalive starts filling immediately until the
-    // first real buffer (if any) arrives.
-    m_lastRealPushUs = 0;
+    // Treat the timeline as fresh so the keepalive waits a full gap before
+    // assuming silence — this avoids flooding the bus with silence at
+    // startup (which collided with the first real buffers and overflowed
+    // the audio sync buffer).
+    m_lastRealPushUs = monotonicUs();
     m_loggedFirstReal = false;
 
     if (m_screenActive)
