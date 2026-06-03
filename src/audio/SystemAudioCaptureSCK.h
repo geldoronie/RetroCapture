@@ -1,9 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
-
-class AudioBus;
 
 /**
  * macOS system-audio capture via ScreenCaptureKit (macOS 13+), #109.
@@ -24,10 +24,15 @@ public:
     SystemAudioCaptureSCK();
     ~SystemAudioCaptureSCK();
 
-    // Begin capturing system audio into `bus` at the given format. The
-    // bus outlives this object (owned by AudioCaptureCoreAudio). Returns
-    // false on an immediate setup failure (frames still arrive async).
-    bool start(AudioBus *bus, uint32_t sampleRate, uint32_t channels);
+    // Interleaved int16 PCM sink, invoked on SCK's audio queue for each
+    // captured buffer. Routed through SckSystemAudioHub so it can track
+    // recency and run the silence keepalive.
+    using SampleSink = std::function<void(const int16_t *, std::size_t)>;
+
+    // Begin capturing system audio, delivering samples to `sink` at the
+    // given format. Returns false on an immediate setup failure (buffers
+    // still arrive async).
+    bool start(SampleSink sink, uint32_t sampleRate, uint32_t channels);
     void stop();
 
 private:

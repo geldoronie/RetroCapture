@@ -7,9 +7,9 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
 
-#include "AudioBus.h"
 #include "../utils/Logger.h"
 
+#include <functional>
 #include <vector>
 
 // ── delegate: pulls float PCM out of the audio sample buffers ────────
@@ -17,8 +17,10 @@ API_AVAILABLE(macos(13.0))
 @interface RCSystemAudioDelegate : NSObject <SCStreamOutput, SCStreamDelegate>
 {
 @public
-    AudioBus *bus;
-    uint32_t  channels;
+    // Pointer to the std::function owned by Impl (trivial ivar — avoids a
+    // non-trivial C++ ivar in a non-ARC ObjC object).
+    SystemAudioCaptureSCK::SampleSink *sink;
+    uint32_t                           channels;
 }
 @end
 
@@ -28,7 +30,7 @@ API_AVAILABLE(macos(13.0))
                    ofType:(SCStreamOutputType)type
 {
     (void)stream;
-    if (type != SCStreamOutputTypeAudio || bus == nullptr) return;
+    if (type != SCStreamOutputTypeAudio || sink == nullptr || !*sink) return;
     if (!CMSampleBufferIsValid(sampleBuffer)) return;
 
     static bool loggedFirst = false;
@@ -62,7 +64,7 @@ API_AVAILABLE(macos(13.0))
         {
             std::vector<int16_t> out(n);
             for (size_t i = 0; i < n; ++i) out[i] = toI16(src[i]);
-            bus->push(out.data(), out.size());
+            (*sink)(out.data(), out.size());
         }
     }
     else
@@ -80,7 +82,7 @@ API_AVAILABLE(macos(13.0))
                 for (uint32_t f = 0; f < frames; ++f)
                     inter[static_cast<size_t>(f) * ch + c] = toI16(src[f]);
             }
-            bus->push(inter.data(), inter.size());
+            (*sink)(inter.data(), inter.size());
         }
     }
     CFRelease(block);
@@ -96,14 +98,15 @@ API_AVAILABLE(macos(13.0))
 
 struct SystemAudioCaptureSCK::Impl
 {
-    SCStream             *stream   = nil;
+    SCStream              *stream   = nil;
     RCSystemAudioDelegate *delegate = nil;
+    SampleSink             sink;     // owned here; delegate holds a pointer
 };
 
 SystemAudioCaptureSCK::SystemAudioCaptureSCK() : m_impl(new Impl) {}
 SystemAudioCaptureSCK::~SystemAudioCaptureSCK() { stop(); }
 
-bool SystemAudioCaptureSCK::start(AudioBus *bus, uint32_t sampleRate, uint32_t channels)
+bool SystemAudioCaptureSCK::start(SampleSink sink, uint32_t sampleRate, uint32_t channels)
 {
     if (@available(macOS 13.0, *))
     {
@@ -143,8 +146,10 @@ bool SystemAudioCaptureSCK::start(AudioBus *bus, uint32_t sampleRate, uint32_t c
         cfg.height = 72;
         cfg.minimumFrameInterval = CMTimeMake(1, 1);
 
+        m_impl->sink = std::move(sink);
+
         m_impl->delegate = [[RCSystemAudioDelegate alloc] init];
-        m_impl->delegate->bus      = bus;
+        m_impl->delegate->sink     = &m_impl->sink;
         m_impl->delegate->channels = channels;
 
         m_impl->stream = [[SCStream alloc] initWithFilter:filter
