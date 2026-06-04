@@ -12,8 +12,8 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
-#ifdef __APPLE__
-#include <signal.h>
+#ifndef _WIN32
+#include <csignal>
 #endif
 
 void printUsage(const char *programName)
@@ -117,19 +117,15 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
-#ifdef __APPLE__
-    // macOS has no MSG_NOSIGNAL on send(); without ignoring SIGPIPE
-    // globally, a peer disconnecting mid-write would terminate the
-    // whole process. Linux uses MSG_NOSIGNAL per-send and Windows
-    // doesn't generate SIGPIPE in the first place, so this is needed
-    // on macOS specifically.
-    {
-        struct sigaction sa{};
-        sa.sa_handler = SIG_IGN;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = 0;
-        sigaction(SIGPIPE, &sa, nullptr);
-    }
+#ifndef _WIN32
+    // Ignore SIGPIPE process-wide (Linux + macOS). Our own HTTPServer sends
+    // use MSG_NOSIGNAL, but third-party socket writes don't: OpenSSL's
+    // BIO_write (e.g. the TLS /meta SSE poller in RemoteMetaSync) and
+    // FFmpeg's avio use plain write(), so a peer that drops mid-write — such
+    // as switching to another remote stream while the old TLS socket is
+    // still open — raised SIGPIPE and terminated the whole client (#112).
+    // Windows has no SIGPIPE.
+    std::signal(SIGPIPE, SIG_IGN);
 #endif
 
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
