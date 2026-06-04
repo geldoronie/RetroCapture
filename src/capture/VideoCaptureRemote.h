@@ -120,6 +120,13 @@ public:
 
 private:
     void decodeLoop();
+
+    // #93 stage 3 — reset the PTS anchor, flush stale audio, drop queued
+    // video and re-arm the drain-to-live so the next decoded frames
+    // re-anchor at the live edge. Shared by the fresh-stream (reconnect)
+    // path and the mid-stream resync triggered by sustained A/V drift.
+    // Runs on the decode thread only.
+    void resyncToLive();
     bool initDecoder();
     void cleanupDecoder();
     // Bring up the audio sink + resampler from the audio decoder's
@@ -255,6 +262,20 @@ private:
     std::atomic<bool> m_drainToLive{false};
     int64_t           m_drainStartWallUs = 0;
     int64_t           m_lastDecodeWallUs = 0;
+
+    // #93 stage 3 — automatic A/V resync. When the audio clock and the
+    // wall/video clock drift apart by more than a perceptible amount and
+    // stay there (stale audio backlog after a messy reconnect, or runaway
+    // drift over a long session), we don't limp along in wall-clock
+    // fallback forever. The consumer thread (captureLatestFrame) detects
+    // the sustained drift and raises m_resyncRequested; the decode thread
+    // acts on it by flushing the stale audio, dropping queued video, and
+    // re-jumping to the live edge (resyncToLive) so A/V re-lock at ~0.
+    // m_driftOutOfGateSinceUs / m_lastResyncUs are touched only by the
+    // consumer thread (under m_frameMutex) so they need no atomicity.
+    std::atomic<bool> m_resyncRequested{false};
+    int64_t           m_driftOutOfGateSinceUs = 0;
+    int64_t           m_lastResyncUs          = 0;
     // PTS of the first video frame in microseconds. Lets the audio
     // path (which has its own stream timebase) translate its absolute
     // PTS into the same stream-origin-relative coordinate the video

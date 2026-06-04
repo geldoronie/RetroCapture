@@ -596,6 +596,7 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             // that keeps growing = progressive drift; a huge/bouncing value
             // = transient sink warmup / bogus clock. The right resync depends
             // on which. Throttled to ~once / 2 s.
+            const bool locked = (drift > -500'000 && drift < 500'000);
             {
                 static int64_t lastDriftLogUs = 0;
                 if (nowWallUs - lastDriftLogUs >= 2'000'000)
@@ -603,11 +604,39 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
                     lastDriftLogUs = nowWallUs;
                     LOG_INFO("VideoCaptureRemote: A/V offset (audio-wall) = " +
                              std::to_string(drift / 1000) + " ms" +
-                             (drift > -500'000 && drift < 500'000 ? " [audio-locked]"
-                                                                  : " [wall-clock fallback]"));
+                             (locked ? " [audio-locked]" : " [wall-clock fallback]"));
                 }
             }
-            if (drift > -500'000 && drift < 500'000)
+            // #93 stage 3 — automatic resync. Don't wait for the drift to
+            // blow past the ±500 ms lock gate (a half-second lip-sync error
+            // is already obvious): once it's been beyond ±250 ms for a
+            // sustained 2 s, ask the decode thread to drop the stale audio
+            // and re-jump to live. Hysteresis (5 s cooldown) keeps it from
+            // thrashing while a resync settles, and the 2 s dwell ignores
+            // the harmless transient spike right after (re)connect. Timers
+            // use the raw wall clock (nowWallUs is overwritten by the lock
+            // just below). Consumer-thread-only state — no atomics needed.
+            if (drift <= -250'000 || drift >= 250'000)
+            {
+                if (m_driftOutOfGateSinceUs == 0)
+                {
+                    m_driftOutOfGateSinceUs = nowWallUs;
+                }
+                else if (nowWallUs - m_driftOutOfGateSinceUs > 2'000'000 &&
+                         nowWallUs - m_lastResyncUs          > 5'000'000)
+                {
+                    m_resyncRequested.store(true);
+                    m_lastResyncUs          = nowWallUs;
+                    m_driftOutOfGateSinceUs = 0;
+                    LOG_INFO("VideoCaptureRemote: A/V drift " + std::to_string(drift / 1000) +
+                             " ms sustained — requesting resync (drop stale audio + jump to live)");
+                }
+            }
+            else
+            {
+                m_driftOutOfGateSinceUs = 0;
+            }
+            if (locked)
             {
                 nowWallUs = audioNowWall;
             }
@@ -702,6 +731,25 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     return true;
 }
 
+void VideoCaptureRemote::resyncToLive()
+{
+    // Drop the PTS anchor so the next decoded frame re-anchors, flush
+    // any stale audio still queued in the sink (after a messy reconnect
+    // the deferred sink can hold seconds of old samples that otherwise
+    // play behind live), clear queued video, and re-arm the drain so we
+    // settle at the live edge. Runs on the decode thread.
+    m_streamAnchored.store(false);
+    m_firstPtsUs.store(0);
+    if (m_audioPlayback) m_audioPlayback->flush();
+    {
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_frameQueue.clear();
+    }
+    m_drainToLive.store(true);
+    m_drainStartWallUs = 0;
+    m_lastDecodeWallUs = 0;
+}
+
 void VideoCaptureRemote::decodeLoop()
 {
     AVPacket *packet = av_packet_alloc();
@@ -780,20 +828,11 @@ void VideoCaptureRemote::decodeLoop()
             // frames that were sitting in the queue from before the
             // disconnect. Otherwise the new stream's PTS=0 frame would
             // be timed against the old anchor and either play in the
-            // past or sit far in the future.
-            m_streamAnchored.store(false);
-            m_firstPtsUs.store(0);
-            if (m_audioPlayback) m_audioPlayback->flush();
-            {
-                std::lock_guard<std::mutex> lock(m_frameMutex);
-                m_frameQueue.clear();
-            }
+            // past or sit far in the future. resyncToLive() also flushes
+            // audio and re-arms the drain so we anchor at the live edge
+            // instead of ~1 s in the past (#93 stage 1).
+            resyncToLive();
             rgbW = 0; rgbH = 0; rgbBuf.clear();
-            // #93 stage 1 — start draining the host's pre-connect backlog so
-            // we anchor at the live edge instead of ~1 s in the past.
-            m_drainToLive.store(true);
-            m_drainStartWallUs = 0;
-            m_lastDecodeWallUs = 0;
             // Reconnect succeeded — drop backoff state so the next
             // hiccup starts from the 2 s slot again.
             m_consecutiveReconnectFailures.store(0);
@@ -801,6 +840,16 @@ void VideoCaptureRemote::decodeLoop()
             LOG_INFO(std::string("VideoCaptureRemote: ") +
                      (m_everReceivedFrame.load() ? "reconnected to " : "connected to ") +
                      m_url);
+        }
+
+        // #93 stage 3 — mid-stream resync requested by the consumer thread
+        // after sustained A/V drift (stale audio backlog or runaway drift).
+        // Drop the divergent state and re-settle at the live edge instead
+        // of staying in wall-clock fallback forever.
+        if (m_resyncRequested.exchange(false))
+        {
+            LOG_INFO("VideoCaptureRemote: A/V resync — dropping stale audio + queued video, re-anchoring to live");
+            resyncToLive();
         }
 
         int rc = av_read_frame(m_formatCtx, packet);
