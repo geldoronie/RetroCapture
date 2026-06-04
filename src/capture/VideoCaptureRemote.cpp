@@ -781,6 +781,11 @@ void VideoCaptureRemote::decodeLoop()
                 m_frameQueue.clear();
             }
             rgbW = 0; rgbH = 0; rgbBuf.clear();
+            // #93 stage 1 — start draining the host's pre-connect backlog so
+            // we anchor at the live edge instead of ~1 s in the past.
+            m_drainToLive.store(true);
+            m_drainStartWallUs = 0;
+            m_lastDecodeWallUs = 0;
             // Reconnect succeeded — drop backoff state so the next
             // hiccup starts from the 2 s slot again.
             m_consecutiveReconnectFailures.store(0);
@@ -979,6 +984,39 @@ void VideoCaptureRemote::decodeLoop()
             // the initial-connect-failing state and marks subsequent
             // drops as reconnects rather than first-connect failures.
             m_everReceivedFrame.store(true);
+
+            // #93 stage 1 — jump-to-live: drop the connect backlog burst.
+            // Frames decoded back-to-back (much faster than the stream's
+            // frame interval) are the host's buffered backlog; skip them and
+            // only resume once a near-real-time gap appears (the live edge),
+            // so we anchor at "now" instead of replaying ~1 s of old frames.
+            if (m_drainToLive.load())
+            {
+                if (m_drainStartWallUs == 0) m_drainStartWallUs = nowWallUs;
+                int64_t frameIntervalUs = 16666; // default ~60 fps
+                if (m_formatCtx && m_videoStreamIdx >= 0)
+                {
+                    AVRational fr = m_formatCtx->streams[m_videoStreamIdx]->avg_frame_rate;
+                    if (fr.num > 0 && fr.den > 0)
+                        frameIntervalUs = static_cast<int64_t>(1e6 * fr.den / fr.num);
+                }
+                const int64_t liveGap = std::max<int64_t>(frameIntervalUs * 6 / 10, 8000);
+                const int64_t gap = (m_lastDecodeWallUs > 0) ? (nowWallUs - m_lastDecodeWallUs) : 0;
+                m_lastDecodeWallUs = nowWallUs;
+                const bool liveReached = (gap >= liveGap);
+                const bool timeout     = (nowWallUs - m_drainStartWallUs) >= 2'000'000; // 2 s safety
+                if (!liveReached && !timeout)
+                {
+                    ++m_statProduced;
+                    ++m_statDropped; // dropped a backlog frame
+                    continue;        // keep draining; do not enqueue/anchor
+                }
+                m_drainToLive.store(false);
+                LOG_INFO("VideoCaptureRemote: reached live edge — dropped connect backlog");
+                // m_streamAnchored is still false, so the block below anchors
+                // this live-edge frame at 'now'.
+            }
+
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

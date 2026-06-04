@@ -245,6 +245,16 @@ private:
     std::atomic<int64_t> m_lastFrameAtSteadyUs{0};
     int64_t m_streamStartWallUs  = 0;
     int64_t m_firstPtsTicks      = 0;
+
+    // #93 stage 1 — jump-to-live. A host that's already streaming has up to
+    // ~1 s of frames buffered; anchoring on the first (oldest) decoded frame
+    // bakes that whole backlog in as permanent latency, and the stale frames
+    // replay before live. On every (re)connect we drain (drop) that initial
+    // burst and only anchor once decode cadence drops to ~real time (the live
+    // edge). m_drainStartWallUs=0 means "init on first decoded frame".
+    std::atomic<bool> m_drainToLive{false};
+    int64_t           m_drainStartWallUs = 0;
+    int64_t           m_lastDecodeWallUs = 0;
     // PTS of the first video frame in microseconds. Lets the audio
     // path (which has its own stream timebase) translate its absolute
     // PTS into the same stream-origin-relative coordinate the video
