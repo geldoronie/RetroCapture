@@ -115,6 +115,14 @@ private:
     bool sendAll(int clientFd, const char *data, size_t size) const;
 
     /**
+     * #113 — source dimensions to announce in /meta and /api/v1/source.
+     * Defaults to the logical (user-configured) capture resolution, but for
+     * a Screen source uses the live capture's real frame size, so the remote
+     * client doesn't inherit a stale V4L2 selection (wrong aspect ratio).
+     */
+    void sourceDimsForMeta(uint32_t &width, uint32_t &height) const;
+
+    /**
      * Compute a content hash of a preset file for the /meta endpoint.
      * Returns an opaque string (e.g. "fnv1a64:abcd...") used by the remote
      * client to decide whether its locally-cached preset is still valid.

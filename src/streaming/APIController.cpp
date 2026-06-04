@@ -420,6 +420,28 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     return m_httpServer->sendData(clientFd, data, size);
 }
 
+void APIController::sourceDimsForMeta(uint32_t &width, uint32_t &height) const
+{
+    width  = m_uiManager ? m_uiManager->getCaptureWidth()  : 0;
+    height = m_uiManager ? m_uiManager->getCaptureHeight() : 0;
+
+    // #113 — a Screen source's real frame size differs from the configured
+    // V4L2/logical resolution (getCaptureWidth keeps the last dropdown
+    // selection). Announcing that stale size made the remote client rescale
+    // /raw to the wrong aspect (e.g. a 16:9 screen reported as a leftover
+    // 4:3). Use the live capture's actual dimensions for Screen.
+    if (m_uiManager && m_uiManager->getSourceType() == UIManager::SourceType::Screen &&
+        m_application)
+    {
+        if (IVideoCapture *vc = m_application->getVideoCapture())
+        {
+            uint32_t w = vc->getWidth();
+            uint32_t h = vc->getHeight();
+            if (w > 0 && h > 0) { width = w; height = h; }
+        }
+    }
+}
+
 bool APIController::sendAll(int clientFd, const char *data, size_t size) const
 {
     size_t off = 0;
@@ -900,9 +922,11 @@ bool APIController::handleGETCaptureResolution(int clientFd)
         return true;
     }
 
+    uint32_t srcW = 0, srcH = 0;
+    sourceDimsForMeta(srcW, srcH);
     std::ostringstream json;
-    json << "{\"width\": " << jsonNumber(m_uiManager->getCaptureWidth())
-         << ", \"height\": " << jsonNumber(m_uiManager->getCaptureHeight()) << "}";
+    json << "{\"width\": " << jsonNumber(srcW)
+         << ", \"height\": " << jsonNumber(srcH) << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
@@ -1187,11 +1211,13 @@ std::string APIController::buildMetaSnapshotJSON()
         }
     }
 
+    uint32_t metaSrcW = 0, metaSrcH = 0;
+    sourceDimsForMeta(metaSrcW, metaSrcH);
     json <<   "]"
          << "}, "
          << "\"source\": {"
-         <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
-         <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
+         <<   "\"width\": "  << jsonNumber(metaSrcW)   << ", "
+         <<   "\"height\": " << jsonNumber(metaSrcH)  << ", "
          <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
          <<   "\"overscan\": {"
          <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
