@@ -325,29 +325,60 @@ std::pair<uint64_t, uint64_t> APIController::extractRange(const std::string &req
     }
 
     std::string rangeStr = request.substr(rangePos, rangeEnd - rangePos);
-    
-    // Parse "start-end" ou "start-"
+    // Trim surrounding whitespace.
+    while (!rangeStr.empty() && (rangeStr.front() == ' ' || rangeStr.front() == '\t')) rangeStr.erase(rangeStr.begin());
+    while (!rangeStr.empty() && (rangeStr.back() == ' ' || rangeStr.back() == '\t')) rangeStr.pop_back();
+
+    // Parse the three RFC 7233 forms: "start-end", "start-" and the
+    // suffix "-N" (the LAST N bytes). The suffix form is what a <video>
+    // element uses to fetch the trailing moov atom of a moov-at-end MP4
+    // (RetroCapture recordings); mishandling it served the wrong bytes and
+    // the browser could never read the moov, so playback silently failed
+    // (#79). Only the first byte-range-spec is honoured (no multi-range).
     size_t dashPos = rangeStr.find('-');
-    if (dashPos == std::string::npos)
+    if (dashPos == std::string::npos || fileSize == 0)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
+    const std::string startStr = rangeStr.substr(0, dashPos);
+    std::string endStr = rangeStr.substr(dashPos + 1);
+    size_t comma = endStr.find(',');
+    if (comma != std::string::npos)
+    {
+        endStr = endStr.substr(0, comma); // ignore additional ranges
+    }
+
     uint64_t start = 0;
     uint64_t end = fileSize - 1;
-
-    if (dashPos > 0)
+    try
     {
-        start = std::stoull(rangeStr.substr(0, dashPos));
+        if (startStr.empty())
+        {
+            // Suffix range "-N": the last N bytes.
+            if (endStr.empty()) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            uint64_t n = std::stoull(endStr);
+            if (n == 0) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            if (n > fileSize) n = fileSize;
+            start = fileSize - n;
+            end = fileSize - 1;
+        }
+        else
+        {
+            start = std::stoull(startStr);
+            if (!endStr.empty()) end = std::stoull(endStr);
+            // Clamp an over-long end to the last byte instead of rejecting
+            // (browsers happily ask for bytes=0-<huge>).
+            if (end >= fileSize) end = fileSize - 1;
+        }
+    }
+    catch (const std::exception &)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
-    if (dashPos < rangeStr.length() - 1)
-    {
-        end = std::stoull(rangeStr.substr(dashPos + 1));
-    }
-
-    // Validar range
-    if (start >= fileSize || end >= fileSize || start > end)
+    // Validate.
+    if (start >= fileSize || start > end)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
@@ -387,6 +418,29 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     if (!m_httpServer)
         return -1;
     return m_httpServer->sendData(clientFd, data, size);
+}
+
+bool APIController::sendAll(int clientFd, const char *data, size_t size) const
+{
+    size_t off = 0;
+    int idleSpins = 0;
+    while (off < size)
+    {
+        ssize_t s = sendData(clientFd, data + off, size - off);
+        if (s < 0) return false; // peer gone / fatal socket error
+        if (s == 0)
+        {
+            // EAGAIN/EWOULDBLOCK — socket send buffer is full. Back off and
+            // retry; bail only after a long stall so a dead-but-not-reset
+            // client can't wedge the handler forever (~30 s).
+            if (++idleSpins > 30000) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        idleSpins = 0;
+        off += static_cast<size_t>(s);
+    }
+    return true;
 }
 
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
@@ -2856,14 +2910,17 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
         response << "\r\n";
 
         std::string headerStr = response.str();
-        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
-        if (sent < 0)
+        if (!sendAll(clientFd, headerStr.c_str(), headerStr.length()))
         {
             file.close();
             return true;
         }
 
-        // Stream file content in chunks (64KB at a time)
+        // Stream file content in chunks (64KB at a time). sendAll() handles
+        // partial/EAGAIN sends — without it, a full socket buffer (immediate
+        // on a large file like a multi-hundred-MB recording) silently dropped
+        // the unsent tail of each chunk, corrupting/truncating the download
+        // and stalling browser playback after a couple of seconds (#79).
         const size_t chunkSize = 64 * 1024; // 64KB chunks
         std::vector<char> buffer(chunkSize);
         uint64_t remaining = contentLength;
@@ -2877,8 +2934,7 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
             if (bytesRead == 0)
                 break;
 
-            sent = sendData(clientFd, buffer.data(), bytesRead);
-            if (sent < 0)
+            if (!sendAll(clientFd, buffer.data(), bytesRead))
             {
                 file.close();
                 return true;
