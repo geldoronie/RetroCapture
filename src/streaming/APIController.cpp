@@ -1384,11 +1384,19 @@ bool APIController::collectShaderBundle(const std::string &presetPath,
     out.clear();
     rootRelGlslp.clear();
     totalBytes = 0;
-    if (presetPath.empty() || !fs::exists(presetPath)) return false;
+    if (presetPath.empty() || !fs::exists(presetPath))
+    {
+        LOG_WARN("collectShaderBundle: preset path missing/unreadable: " + presetPath);
+        return false;
+    }
 
     // Parse the preset to enumerate every file it references.
     ShaderPreset preset;
-    if (!preset.load(presetPath)) return false;
+    if (!preset.load(presetPath))
+    {
+        LOG_WARN("collectShaderBundle: ShaderPreset::load failed for " + presetPath);
+        return false;
+    }
 
     // Gather the files (the .glslp + pass shaders + LUT textures), deduped.
     // ShaderPreset has already resolved these to usable paths.
@@ -1435,12 +1443,27 @@ bool APIController::collectShaderBundle(const std::string &presetPath,
             if (!relStr.empty()) relStr += '/';
             relStr += comps[idx][i];
         }
-        if (!shaderbundle::relPathIsSafe(relStr)) return false;
+        if (!shaderbundle::relPathIsSafe(relStr))
+        {
+            LOG_WARN("collectShaderBundle: unsafe rel path '" + relStr +
+                     "' from '" + paths[idx] + "'");
+            return false;
+        }
 
         std::string bytes = readFileBytes(paths[idx]);
-        if (bytes.empty() && !fs::exists(paths[idx])) return false;
+        if (bytes.empty() && !fs::exists(paths[idx]))
+        {
+            LOG_WARN("collectShaderBundle: referenced file missing: " + paths[idx]);
+            return false;
+        }
         totalBytes += bytes.size();
-        if (totalBytes > kMaxShaderBundleBytes) return false; // too big to bundle
+        if (totalBytes > kMaxShaderBundleBytes)
+        {
+            LOG_WARN("collectShaderBundle: bundle exceeds cap (" +
+                     std::to_string(totalBytes) + " > " +
+                     std::to_string(kMaxShaderBundleBytes) + " bytes) at " + paths[idx]);
+            return false;
+        }
 
         shaderbundle::Entry e;
         e.relPath = relStr;
@@ -1449,6 +1472,8 @@ bool APIController::collectShaderBundle(const std::string &presetPath,
         out.push_back(std::move(e));
     }
     if (rootRelGlslp.empty() && !out.empty()) rootRelGlslp = out.front().relPath;
+    LOG_INFO("collectShaderBundle: " + std::to_string(out.size()) + " files, " +
+             std::to_string(totalBytes) + " bytes, glslp='" + rootRelGlslp + "'");
     return !out.empty();
 }
 
