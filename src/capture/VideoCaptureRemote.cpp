@@ -868,7 +868,16 @@ void VideoCaptureRemote::decodeLoop()
                     uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
                     const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
                                                      const_cast<const uint8_t **>(aFrame->data), nbIn);
-                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE)
+                    // #93 stage 1/3 — while jumping to live, drop the audio
+                    // backlog too. The video path drains its backlog and
+                    // anchors at the live edge; if we kept submitting the
+                    // buffered audio here, the sink would play from the old
+                    // start and lag video by the whole backlog (seen as a
+                    // multi-second A/V drift on a reconnect with a large host
+                    // buffer → the 'audio clock drift' fallback). Skipping
+                    // submit during the drain keeps audio empty so it starts
+                    // at the live edge alongside video.
+                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE && !m_drainToLive.load())
                     {
                         // Convert the frame's PTS (stream-tb units)
                         // to absolute stream microseconds. The drift
