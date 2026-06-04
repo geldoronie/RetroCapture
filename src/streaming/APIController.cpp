@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -95,6 +96,14 @@ namespace
 
     std::string jsonNumber(float value)
     {
+        // Non-finite floats (NaN / ±Inf) format as "nan"/"-inf"/"-nan", which
+        // is invalid JSON — the client's parser chokes on the bare '-'
+        // ("expected digit after '-'") and the whole /meta poll fails (#99).
+        // Emit a valid number instead so /meta is always parseable.
+        if (!std::isfinite(value))
+        {
+            return "0";
+        }
         std::ostringstream oss;
         oss.precision(6);
         oss << std::fixed << value;
