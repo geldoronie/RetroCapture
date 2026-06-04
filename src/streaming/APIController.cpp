@@ -381,6 +381,29 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     return m_httpServer->sendData(clientFd, data, size);
 }
 
+bool APIController::sendAll(int clientFd, const char *data, size_t size) const
+{
+    size_t off = 0;
+    int idleSpins = 0;
+    while (off < size)
+    {
+        ssize_t s = sendData(clientFd, data + off, size - off);
+        if (s < 0) return false; // peer gone / fatal socket error
+        if (s == 0)
+        {
+            // EAGAIN/EWOULDBLOCK — socket send buffer is full. Back off and
+            // retry; bail after a long stall (~30 s) so a dead client can't
+            // wedge the handler forever.
+            if (++idleSpins > 30000) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        idleSpins = 0;
+        off += static_cast<size_t>(s);
+    }
+    return true;
+}
+
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
     if (path == "/meta")
@@ -1511,14 +1534,16 @@ bool APIController::handleGETShaderBundle(int clientFd, const std::string &reque
     response << "Connection: close\r\n\r\n";
 
     const std::string headerStr = response.str();
-    if (sendData(clientFd, headerStr.c_str(), headerStr.size()) < 0) return true;
+    if (!sendAll(clientFd, headerStr.c_str(), headerStr.size())) return true;
 
-    // Stream the blob in chunks.
+    // Stream the blob in chunks. sendAll handles partial/EAGAIN sends — a
+    // single send() would silently drop the tail of a chunk once the socket
+    // buffer fills, corrupting the bundle (same bug fixed for recordings).
     const size_t chunk = 64 * 1024;
     for (size_t off = 0; off < blob.size(); off += chunk)
     {
         const size_t n = std::min(chunk, blob.size() - off);
-        if (sendData(clientFd, blob.data() + off, n) < 0) return true;
+        if (!sendAll(clientFd, blob.data() + off, n)) return true;
     }
     LOG_INFO("APIController: served shader bundle (" + std::to_string(entries.size()) +
              " files, " + std::to_string(blob.size()) + " bytes, hash " + hash + ")");

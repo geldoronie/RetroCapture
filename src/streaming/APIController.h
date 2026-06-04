@@ -109,6 +109,14 @@ private:
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
     /**
+     * Reliably send the entire buffer. sendData() does a single non-blocking
+     * send() that can return a partial count or 0 (EAGAIN, socket buffer
+     * full); this loops until everything is sent so large responses aren't
+     * silently truncated. Returns false on a fatal socket error.
+     */
+    bool sendAll(int clientFd, const char *data, size_t size) const;
+
+    /**
      * Compute a content hash of a preset file for the /meta endpoint.
      * Returns an opaque string (e.g. "fnv1a64:abcd...") used by the remote
      * client to decide whether its locally-cached preset is still valid.
