@@ -590,18 +590,26 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             // queue fills (the user-observed
             // 'decoded=60/s consumed=30/s drops=30/s queueDepth=20').
             const int64_t drift = audioNowWall - nowWallUs;
+            // #93 stage 3 — periodically log the live A/V offset (the audio
+            // clock minus wall clock) so we can see its SHAPE: a small
+            // constant value = fixed offset (host epoch mismatch); a value
+            // that keeps growing = progressive drift; a huge/bouncing value
+            // = transient sink warmup / bogus clock. The right resync depends
+            // on which. Throttled to ~once / 2 s.
+            {
+                static int64_t lastDriftLogUs = 0;
+                if (nowWallUs - lastDriftLogUs >= 2'000'000)
+                {
+                    lastDriftLogUs = nowWallUs;
+                    LOG_INFO("VideoCaptureRemote: A/V offset (audio-wall) = " +
+                             std::to_string(drift / 1000) + " ms" +
+                             (drift > -500'000 && drift < 500'000 ? " [audio-locked]"
+                                                                  : " [wall-clock fallback]"));
+                }
+            }
             if (drift > -500'000 && drift < 500'000)
             {
                 nowWallUs = audioNowWall;
-            }
-            else
-            {
-                static int driftLogCount = 0;
-                if (driftLogCount++ < 5)
-                {
-                    LOG_WARN("VideoCaptureRemote: audio clock drift=" + std::to_string(drift) +
-                             "us — falling back to wall clock for A/V sync");
-                }
             }
         }
     }
