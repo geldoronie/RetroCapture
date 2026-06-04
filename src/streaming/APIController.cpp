@@ -411,6 +411,29 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     return m_httpServer->sendData(clientFd, data, size);
 }
 
+bool APIController::sendAll(int clientFd, const char *data, size_t size) const
+{
+    size_t off = 0;
+    int idleSpins = 0;
+    while (off < size)
+    {
+        ssize_t s = sendData(clientFd, data + off, size - off);
+        if (s < 0) return false; // peer gone / fatal socket error
+        if (s == 0)
+        {
+            // EAGAIN/EWOULDBLOCK — socket send buffer is full. Back off and
+            // retry; bail only after a long stall so a dead-but-not-reset
+            // client can't wedge the handler forever (~30 s).
+            if (++idleSpins > 30000) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        idleSpins = 0;
+        off += static_cast<size_t>(s);
+    }
+    return true;
+}
+
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
 {
     if (path == "/meta")
@@ -2878,14 +2901,17 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
         response << "\r\n";
 
         std::string headerStr = response.str();
-        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
-        if (sent < 0)
+        if (!sendAll(clientFd, headerStr.c_str(), headerStr.length()))
         {
             file.close();
             return true;
         }
 
-        // Stream file content in chunks (64KB at a time)
+        // Stream file content in chunks (64KB at a time). sendAll() handles
+        // partial/EAGAIN sends — without it, a full socket buffer (immediate
+        // on a large file like a multi-hundred-MB recording) silently dropped
+        // the unsent tail of each chunk, corrupting/truncating the download
+        // and stalling browser playback after a couple of seconds (#79).
         const size_t chunkSize = 64 * 1024; // 64KB chunks
         std::vector<char> buffer(chunkSize);
         uint64_t remaining = contentLength;
@@ -2899,8 +2925,7 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
             if (bytesRead == 0)
                 break;
 
-            sent = sendData(clientFd, buffer.data(), bytesRead);
-            if (sent < 0)
+            if (!sendAll(clientFd, buffer.data(), bytesRead))
             {
                 file.close();
                 return true;
