@@ -607,35 +607,6 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
                              (locked ? " [audio-locked]" : " [wall-clock fallback]"));
                 }
             }
-            // #93 stage 3 — automatic resync. Don't wait for the drift to
-            // blow past the ±500 ms lock gate (a half-second lip-sync error
-            // is already obvious): once it's been beyond ±250 ms for a
-            // sustained 2 s, ask the decode thread to drop the stale audio
-            // and re-jump to live. Hysteresis (5 s cooldown) keeps it from
-            // thrashing while a resync settles, and the 2 s dwell ignores
-            // the harmless transient spike right after (re)connect. Timers
-            // use the raw wall clock (nowWallUs is overwritten by the lock
-            // just below). Consumer-thread-only state — no atomics needed.
-            if (drift <= -250'000 || drift >= 250'000)
-            {
-                if (m_driftOutOfGateSinceUs == 0)
-                {
-                    m_driftOutOfGateSinceUs = nowWallUs;
-                }
-                else if (nowWallUs - m_driftOutOfGateSinceUs > 2'000'000 &&
-                         nowWallUs - m_lastResyncUs          > 5'000'000)
-                {
-                    m_resyncRequested.store(true);
-                    m_lastResyncUs          = nowWallUs;
-                    m_driftOutOfGateSinceUs = 0;
-                    LOG_INFO("VideoCaptureRemote: A/V drift " + std::to_string(drift / 1000) +
-                             " ms sustained — requesting resync (drop stale audio + jump to live)");
-                }
-            }
-            else
-            {
-                m_driftOutOfGateSinceUs = 0;
-            }
             if (locked)
             {
                 nowWallUs = audioNowWall;
@@ -840,16 +811,6 @@ void VideoCaptureRemote::decodeLoop()
             LOG_INFO(std::string("VideoCaptureRemote: ") +
                      (m_everReceivedFrame.load() ? "reconnected to " : "connected to ") +
                      m_url);
-        }
-
-        // #93 stage 3 — mid-stream resync requested by the consumer thread
-        // after sustained A/V drift (stale audio backlog or runaway drift).
-        // Drop the divergent state and re-settle at the live edge instead
-        // of staying in wall-clock fallback forever.
-        if (m_resyncRequested.exchange(false))
-        {
-            LOG_INFO("VideoCaptureRemote: A/V resync — dropping stale audio + queued video, re-anchoring to live");
-            resyncToLive();
         }
 
         int rc = av_read_frame(m_formatCtx, packet);
