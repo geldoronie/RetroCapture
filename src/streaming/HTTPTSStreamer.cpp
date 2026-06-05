@@ -1491,12 +1491,28 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
                                  p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
                     p.tailOffset = 0;
                 }
+                // Slow /raw receiver (remote hop, congested link). Closing
+                // it here forced the client into a full messy reconnect —
+                // re-probe, deferred audio sink, multi-second A/V desync,
+                // audio dropout (#93). The /raw consumer is an FFmpeg
+                // demuxer that resyncs at the next in-band keyframe/PAT, so
+                // instead of tearing down we DROP the queued backlog and
+                // keep the connection. We clear the whole tail (rather than
+                // a partial trim) so what we resume sending stays 188-byte
+                // TS-packet aligned; the client sees a brief glitch, not a
+                // disconnect. /stream (browser mpegts.js) is left closing
+                // because it cannot tolerate a mid-stream byte drop.
                 if (p.pending() > kMaxClientBacklog)
                 {
-                    LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
-                             " send backlog " + std::to_string(p.pending()) +
-                             " bytes exceeded cap — closing");
-                    drop = true;
+                    p.tail.clear();
+                    p.tailOffset = 0;
+                    uint64_t n = ++p.backlogDrops;
+                    if (n == 1 || (n % 30) == 0)
+                    {
+                        LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
+                                 " send backlog exceeded cap — dropped backlog, keeping connection (total drops: " +
+                                 std::to_string(n) + ")");
+                    }
                 }
             }
 

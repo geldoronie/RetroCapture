@@ -590,18 +590,34 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             // queue fills (the user-observed
             // 'decoded=60/s consumed=30/s drops=30/s queueDepth=20').
             const int64_t drift = audioNowWall - nowWallUs;
-            if (drift > -500'000 && drift < 500'000)
+            // #93 stage 3 — periodically log the live A/V offset (the audio
+            // clock minus wall clock) so we can see its SHAPE: a small
+            // constant value = fixed offset (host epoch mismatch); a value
+            // that keeps growing = progressive drift; a huge/bouncing value
+            // = transient sink warmup / bogus clock. The right resync depends
+            // on which. Throttled to ~once / 2 s.
+            const bool locked = (drift > -500'000 && drift < 500'000);
+            {
+                static int64_t lastDriftLogUs = 0;
+                if (nowWallUs - lastDriftLogUs >= 2'000'000)
+                {
+                    lastDriftLogUs = nowWallUs;
+                    // #109 — also log the video queue depth so we can tell
+                    // WHY the video lags when drift is negative: a near-full
+                    // queue means video is held back by a lagging audio clock
+                    // (client-side audio buffer growth); a near-empty queue
+                    // means the host isn't delivering video fast enough and
+                    // the client is starved (host-side throughput).
+                    LOG_INFO("VideoCaptureRemote: A/V offset (audio-wall) = " +
+                             std::to_string(drift / 1000) + " ms" +
+                             (locked ? " [audio-locked]" : " [wall-clock fallback]") +
+                             " vqueue=" + std::to_string(m_frameQueue.size()) + "/" +
+                             std::to_string(kMaxQueued));
+                }
+            }
+            if (locked)
             {
                 nowWallUs = audioNowWall;
-            }
-            else
-            {
-                static int driftLogCount = 0;
-                if (driftLogCount++ < 5)
-                {
-                    LOG_WARN("VideoCaptureRemote: audio clock drift=" + std::to_string(drift) +
-                             "us — falling back to wall clock for A/V sync");
-                }
             }
         }
     }
@@ -694,6 +710,25 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     return true;
 }
 
+void VideoCaptureRemote::resyncToLive()
+{
+    // Drop the PTS anchor so the next decoded frame re-anchors, flush
+    // any stale audio still queued in the sink (after a messy reconnect
+    // the deferred sink can hold seconds of old samples that otherwise
+    // play behind live), clear queued video, and re-arm the drain so we
+    // settle at the live edge. Runs on the decode thread.
+    m_streamAnchored.store(false);
+    m_firstPtsUs.store(0);
+    if (m_audioPlayback) m_audioPlayback->flush();
+    {
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_frameQueue.clear();
+    }
+    m_drainToLive.store(true);
+    m_drainStartWallUs = 0;
+    m_lastDecodeWallUs = 0;
+}
+
 void VideoCaptureRemote::decodeLoop()
 {
     AVPacket *packet = av_packet_alloc();
@@ -772,14 +807,10 @@ void VideoCaptureRemote::decodeLoop()
             // frames that were sitting in the queue from before the
             // disconnect. Otherwise the new stream's PTS=0 frame would
             // be timed against the old anchor and either play in the
-            // past or sit far in the future.
-            m_streamAnchored.store(false);
-            m_firstPtsUs.store(0);
-            if (m_audioPlayback) m_audioPlayback->flush();
-            {
-                std::lock_guard<std::mutex> lock(m_frameMutex);
-                m_frameQueue.clear();
-            }
+            // past or sit far in the future. resyncToLive() also flushes
+            // audio and re-arms the drain so we anchor at the live edge
+            // instead of ~1 s in the past (#93 stage 1).
+            resyncToLive();
             rgbW = 0; rgbH = 0; rgbBuf.clear();
             // Reconnect succeeded — drop backoff state so the next
             // hiccup starts from the 2 s slot again.
@@ -855,7 +886,16 @@ void VideoCaptureRemote::decodeLoop()
                     uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
                     const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
                                                      const_cast<const uint8_t **>(aFrame->data), nbIn);
-                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE)
+                    // #93 stage 1/3 — while jumping to live, drop the audio
+                    // backlog too. The video path drains its backlog and
+                    // anchors at the live edge; if we kept submitting the
+                    // buffered audio here, the sink would play from the old
+                    // start and lag video by the whole backlog (seen as a
+                    // multi-second A/V drift on a reconnect with a large host
+                    // buffer → the 'audio clock drift' fallback). Skipping
+                    // submit during the drain keeps audio empty so it starts
+                    // at the live edge alongside video.
+                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE && !m_drainToLive.load())
                     {
                         // Convert the frame's PTS (stream-tb units)
                         // to absolute stream microseconds. The drift
@@ -877,6 +917,23 @@ void VideoCaptureRemote::decodeLoop()
                         // corrupted A/V clock.
                         const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
                         const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aFrame->pts) * av_q2d(tb) * 1e6);
+                        // #109 — never submit audio older than the live video
+                        // anchor. The drain drops the video backlog and anchors
+                        // video at the live edge, but on a reconnect the MPEG-TS
+                        // (esp. through the relay) is loosely interleaved: a
+                        // burst of stale audio packets can arrive AFTER the drain
+                        // ended, with PTS seconds behind the live video. Feeding
+                        // those plays the audio seconds behind the picture (the
+                        // measured ~14 s reconnect desync). Anchor-relative gate
+                        // with 300 ms tolerance for normal A/V interleave jitter;
+                        // once the backlog is past, live audio PTS sits far above
+                        // the anchor so this never trips in steady state.
+                        const int64_t anchorUs = m_firstPtsUs.load();
+                        if (m_streamAnchored.load() && ptsUs + 300'000 < anchorUs)
+                        {
+                            av_frame_unref(aFrame);
+                            continue;
+                        }
                         m_audioPlayback->submit(m_audioScratch.data(),
                                                 static_cast<size_t>(produced),
                                                 ptsUs);
@@ -979,6 +1036,39 @@ void VideoCaptureRemote::decodeLoop()
             // the initial-connect-failing state and marks subsequent
             // drops as reconnects rather than first-connect failures.
             m_everReceivedFrame.store(true);
+
+            // #93 stage 1 — jump-to-live: drop the connect backlog burst.
+            // Frames decoded back-to-back (much faster than the stream's
+            // frame interval) are the host's buffered backlog; skip them and
+            // only resume once a near-real-time gap appears (the live edge),
+            // so we anchor at "now" instead of replaying ~1 s of old frames.
+            if (m_drainToLive.load())
+            {
+                if (m_drainStartWallUs == 0) m_drainStartWallUs = nowWallUs;
+                int64_t frameIntervalUs = 16666; // default ~60 fps
+                if (m_formatCtx && m_videoStreamIdx >= 0)
+                {
+                    AVRational fr = m_formatCtx->streams[m_videoStreamIdx]->avg_frame_rate;
+                    if (fr.num > 0 && fr.den > 0)
+                        frameIntervalUs = static_cast<int64_t>(1e6 * fr.den / fr.num);
+                }
+                const int64_t liveGap = std::max<int64_t>(frameIntervalUs * 6 / 10, 8000);
+                const int64_t gap = (m_lastDecodeWallUs > 0) ? (nowWallUs - m_lastDecodeWallUs) : 0;
+                m_lastDecodeWallUs = nowWallUs;
+                const bool liveReached = (gap >= liveGap);
+                const bool timeout     = (nowWallUs - m_drainStartWallUs) >= 2'000'000; // 2 s safety
+                if (!liveReached && !timeout)
+                {
+                    ++m_statProduced;
+                    ++m_statDropped; // dropped a backlog frame
+                    continue;        // keep draining; do not enqueue/anchor
+                }
+                m_drainToLive.store(false);
+                LOG_INFO("VideoCaptureRemote: reached live edge — dropped connect backlog");
+                // m_streamAnchored is still false, so the block below anchors
+                // this live-edge frame at 'now'.
+            }
+
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

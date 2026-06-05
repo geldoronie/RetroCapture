@@ -360,6 +360,11 @@ private:
     {
         std::vector<uint8_t> tail;
         size_t tailOffset = 0;
+        // #93 — how many times this client's send backlog overflowed the
+        // cap. For /raw we drop the backlog and keep the connection (the
+        // FFmpeg demuxer resyncs at the next keyframe) instead of closing
+        // and forcing a messy reconnect; this just throttles the log.
+        uint64_t backlogDrops = 0;
         size_t pending() const { return tail.size() - tailOffset; }
     };
     static constexpr size_t kMaxClientBacklog = 4 * 1024 * 1024; // 4 MB
