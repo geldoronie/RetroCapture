@@ -196,6 +196,16 @@ private:
     int64_t m_firstAudioTimestampUs = 0;
     bool m_firstVideoTimestampSet = false;
     bool m_firstAudioTimestampSet = false;
+    // #109 — SHARED A/V epoch. Video and audio capture timestamps come
+    // from the same clock (HTTPTSStreamer::getTimestampUs), but PTS used
+    // to be made relative to two SEPARATE first-timestamps; the gap
+    // between the first video frame and first audio chunk arriving then
+    // became a permanent A/V skew baked into the muxed stream (the client
+    // saw video consistently behind audio). Latched by whichever media
+    // arrives first and subtracted by BOTH the video PTS and the
+    // streaming audio PTS so they share one origin.
+    int64_t m_firstMediaTimestampUs = 0;
+    bool    m_firstMediaTimestampSet = false;
     
     // Contadores precisos para cálculo de PTS (baseado em samples/frames, não timestamps)
     int64_t m_audioFrameCount = 0;  // Número de frames de áudio processados

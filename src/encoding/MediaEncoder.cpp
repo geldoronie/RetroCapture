@@ -1091,6 +1091,13 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
         m_firstVideoTimestampSet = true;
         m_videoFrameCountForPTS = 0;
     }
+    // #109 — latch the SHARED A/V epoch from whichever stream (audio or
+    // video) is encoded first, so audio and video PTS share one origin.
+    if (!m_firstMediaTimestampSet)
+    {
+        m_firstMediaTimestampUs  = captureTimestampUs;
+        m_firstMediaTimestampSet = true;
+    }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_videoCodecContext);
     if (!codecCtx)
@@ -1107,7 +1114,11 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
     
     // Calculate PTS based on actual elapsed time since first frame
     // This ensures video speed matches real time, regardless of actual capture FPS
-    int64_t relativeTimeUs = captureTimestampUs - m_firstVideoTimestampUs;
+    int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
+    // The shared epoch may be latched by an audio chunk captured slightly
+    // after a video frame that's encoded later — clamp so the video PTS
+    // never goes negative (audio does the same below).
+    if (relativeTimeUs < 0) relativeTimeUs = 0;
     double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
     calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
     
@@ -1319,6 +1330,13 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
         m_totalAudioSamplesProcessed = 0;
         m_audioFrameCount = 0;
     }
+    // #109 — latch the SHARED A/V epoch (see calculateVideoPTS) so audio
+    // arriving before the first video frame still anchors both timelines.
+    if (!m_firstMediaTimestampSet)
+    {
+        m_firstMediaTimestampUs  = captureTimestampUs;
+        m_firstMediaTimestampSet = true;
+    }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
     if (!codecCtx)
@@ -1337,7 +1355,10 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
         // (esp. system-audio bursts), so sample-count drifts behind real
         // time and the client ended up playing video with no usable audio
         // (#109). Wall-clock tracks real time regardless of drops.
-        int64_t relativeTimeUs = captureTimestampUs - m_firstAudioTimestampUs;
+        // Subtract the SHARED epoch (not the audio-only first timestamp) so
+        // audio and video PTS share one origin — otherwise the gap between
+        // the first video frame and first audio chunk is a constant skew.
+        int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
         if (relativeTimeUs < 0) relativeTimeUs = 0;
         calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
     }
@@ -1826,6 +1847,8 @@ void MediaEncoder::cleanup()
     m_firstAudioTimestampSet = false;
     m_firstVideoTimestampUs = 0;
     m_firstAudioTimestampUs = 0;
+    m_firstMediaTimestampSet = false;
+    m_firstMediaTimestampUs = 0;
     m_totalAudioSamplesProcessed = 0;
     m_audioFrameCount = 0;
     m_videoFrameCountForPTS = 0;
