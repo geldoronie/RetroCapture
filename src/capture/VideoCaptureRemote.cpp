@@ -602,9 +602,17 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
                 if (nowWallUs - lastDriftLogUs >= 2'000'000)
                 {
                     lastDriftLogUs = nowWallUs;
+                    // #109 — also log the video queue depth so we can tell
+                    // WHY the video lags when drift is negative: a near-full
+                    // queue means video is held back by a lagging audio clock
+                    // (client-side audio buffer growth); a near-empty queue
+                    // means the host isn't delivering video fast enough and
+                    // the client is starved (host-side throughput).
                     LOG_INFO("VideoCaptureRemote: A/V offset (audio-wall) = " +
                              std::to_string(drift / 1000) + " ms" +
-                             (locked ? " [audio-locked]" : " [wall-clock fallback]"));
+                             (locked ? " [audio-locked]" : " [wall-clock fallback]") +
+                             " vqueue=" + std::to_string(m_frameQueue.size()) + "/" +
+                             std::to_string(kMaxQueued));
                 }
             }
             if (locked)
