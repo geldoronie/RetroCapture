@@ -917,6 +917,23 @@ void VideoCaptureRemote::decodeLoop()
                         // corrupted A/V clock.
                         const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
                         const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aFrame->pts) * av_q2d(tb) * 1e6);
+                        // #109 — never submit audio older than the live video
+                        // anchor. The drain drops the video backlog and anchors
+                        // video at the live edge, but on a reconnect the MPEG-TS
+                        // (esp. through the relay) is loosely interleaved: a
+                        // burst of stale audio packets can arrive AFTER the drain
+                        // ended, with PTS seconds behind the live video. Feeding
+                        // those plays the audio seconds behind the picture (the
+                        // measured ~14 s reconnect desync). Anchor-relative gate
+                        // with 300 ms tolerance for normal A/V interleave jitter;
+                        // once the backlog is past, live audio PTS sits far above
+                        // the anchor so this never trips in steady state.
+                        const int64_t anchorUs = m_firstPtsUs.load();
+                        if (m_streamAnchored.load() && ptsUs + 300'000 < anchorUs)
+                        {
+                            av_frame_unref(aFrame);
+                            continue;
+                        }
                         m_audioPlayback->submit(m_audioScratch.data(),
                                                 static_cast<size_t>(produced),
                                                 ptsUs);
