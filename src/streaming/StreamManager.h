@@ -68,6 +68,14 @@ public:
     bool hasRawClients() const;
 
     /**
+     * True if at least one streamer has a connected /stream client.
+     * Application uses this to gate pushFrame (the shader-processed
+     * /stream feed) so the host doesn't run a second VAAPI encode when
+     * nobody is watching /stream — symmetric to hasRawClients().
+     */
+    bool hasClients() const;
+
+    /**
      * Get all stream URLs
      */
     std::vector<std::string> getStreamUrls() const;

@@ -165,6 +165,16 @@ bool StreamManager::hasRawClients() const
     return false;
 }
 
+bool StreamManager::hasClients() const
+{
+    for (const auto &streamer : m_streamers)
+    {
+        if (!streamer->isActive()) continue;
+        if (streamer->getClientCount() > 0) return true;
+    }
+    return false;
+}
+
 std::vector<std::string> StreamManager::getStreamUrls() const
 {
     std::vector<std::string> urls;

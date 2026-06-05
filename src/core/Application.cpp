@@ -5274,13 +5274,28 @@ void Application::run()
                                         LOG_DEBUG("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
                                         LOG_DEBUG("----------------------------------");
                                     }
-                                    if (useSource)
+                                    // #109 — gate the /stream feed on having a
+                                    // /stream client, exactly as /raw is gated by
+                                    // hasRawClients() below. Without this the host
+                                    // ran a second h264_vaapi 720p60 encode for the
+                                    // shader-processed /stream output even when only
+                                    // a remote /raw client was connected and nobody
+                                    // was watching /stream — two VAAPI encodes
+                                    // competing for the GPU, which starved the /raw
+                                    // encode and left the remote client's video
+                                    // lagging the audio (and overflowed the /stream
+                                    // synchronizer continuously). Idle the /stream
+                                    // encoder when no one is watching it.
+                                    if (m_streamManager->hasClients())
                                     {
-                                        m_streamManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
-                                    }
-                                    else
-                                    {
-                                        m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        if (useSource)
+                                        {
+                                            m_streamManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        }
+                                        else
+                                        {
+                                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
                                     }
 
                                     // Phase 2 of #47: also feed the /raw output (pre-shader, always).
