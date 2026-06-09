@@ -11,6 +11,7 @@
 #include <unistd.h>
 #endif
 #include <cstring>
+#include <cstdio>
 #include <cerrno>
 #include <cstdlib>
 #include <time.h>
@@ -3560,10 +3561,32 @@ void HTTPTSStreamer::rawEncodingThread()
         auto nowTs = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - statStart).count() >= 1)
         {
-            LOG_DEBUG("/raw encoder: video=" + std::to_string(statVideoEncoded) +
-                      "/s audio=" + std::to_string(statAudioEncoded) +
-                      "/s iters=" + std::to_string(statIterations) +
-                      " maxVidQueue=" + std::to_string(statMaxQueueDepth));
+            // #123 — per-stage averages (ms/frame) so we can see whether the
+            // CPU swscale convert, the HW surface upload, or the codec is the
+            // 60 fps bottleneck. avg = accumulated µs / frames encoded.
+            auto st = m_rawMediaEncoder.fetchVideoStageTimings();
+            std::string line = "/raw encoder: video=" + std::to_string(statVideoEncoded) +
+                               "/s audio=" + std::to_string(statAudioEncoded) +
+                               "/s iters=" + std::to_string(statIterations) +
+                               " maxVidQueue=" + std::to_string(statMaxQueueDepth);
+            if (st.frames > 0)
+            {
+                double convMs = (st.convertUs / 1000.0) / st.frames;
+                double upMs   = (st.uploadUs  / 1000.0) / st.frames;
+                double encMs  = (st.encodeUs  / 1000.0) / st.frames;
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              " stages(ms/f): convert=%.2f upload=%.2f encode=%.2f total=%.2f",
+                              convMs, upMs, encMs, convMs + upMs + encMs);
+                line += buf;
+                // Active /raw client: surface at INFO so the bottleneck is
+                // visible without enabling debug logging (#123 measurement).
+                LOG_INFO(line);
+            }
+            else
+            {
+                LOG_DEBUG(line);
+            }
             statVideoEncoded = statAudioEncoded = statIterations = 0;
             statMaxQueueDepth = 0;
             statStart = nowTs;

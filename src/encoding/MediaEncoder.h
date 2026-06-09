@@ -131,6 +131,24 @@ public:
     // Não-zero indica instabilidade no timestamp source.
     uint64_t getDesyncFrameCount() const { return m_desyncFrameCount.load(std::memory_order_relaxed); }
 
+    // #123 — per-stage video encode timing, in microseconds, accumulated
+    // since the last fetch. encodeVideo() splits its cost into:
+    //   convertUs — convertRGBToYUV (CPU swscale: RGB→NV12 + any resize)
+    //   uploadUs  — av_hwframe_transfer_data (sw NV12 → GPU surface; 0 for SW/NVENC)
+    //   encodeUs  — avcodec_send_frame + receiveVideoPackets (codec)
+    // frames is how many encodeVideo calls contributed. fetch resets the
+    // accumulators so a caller can print a clean rolling average.
+    struct VideoStageTimings { uint64_t convertUs = 0, uploadUs = 0, encodeUs = 0, frames = 0; };
+    VideoStageTimings fetchVideoStageTimings()
+    {
+        VideoStageTimings t;
+        t.convertUs = m_convertUs.exchange(0, std::memory_order_relaxed);
+        t.uploadUs  = m_uploadUs.exchange(0, std::memory_order_relaxed);
+        t.encodeUs  = m_encodeUs.exchange(0, std::memory_order_relaxed);
+        t.frames    = m_stageFrames.exchange(0, std::memory_order_relaxed);
+        return t;
+    }
+
 private:
     // Inicialização de codecs
     bool initializeVideoCodec();
@@ -245,4 +263,13 @@ private:
     // timestamp source — o stream ainda fica monotônico, mas isso vira jitter
     // de duração de frame no arquivo final.
     std::atomic<uint64_t> m_desyncFrameCount{0};
+
+    // #123 — per-stage encode timing accumulators (microseconds). See
+    // fetchVideoStageTimings(). Populated by encodeVideo, read+reset by
+    // the streaming telemetry. Per-instance, so /stream and /raw report
+    // independently.
+    std::atomic<uint64_t> m_convertUs{0};
+    std::atomic<uint64_t> m_uploadUs{0};
+    std::atomic<uint64_t> m_encodeUs{0};
+    std::atomic<uint64_t> m_stageFrames{0};
 };
