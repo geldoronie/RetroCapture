@@ -19,14 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.8.0-alpha] - unreleased
+## [0.8.0-alpha] - 2026-06-10
 
-Linux audio pipeline refactor: the host-side capture path no longer
-hides behind PulseAudio's `module-null-sink` + `module-loopback`
-loopback trick. RetroCapture now records directly from the user-picked
-input device and exposes a symmetric `RetroCapture` source/sink pair
-to the OS audio graph — same shape as the client side has always
-had via `AudioPlaybackPulse`.
+Thirteenth alpha release. A platform-reach release: the first working
+**macOS x86_64 port**, a **system tray / background-operation** mode, a
+**virtual camera** output, **screen capture** and **system-audio**
+sources, **real-time chat**, and a Linux **audio pipeline refactor** —
+plus a deep round of remote-client A/V-sync and streaming-stability
+hardening that makes distributed playback hold sync over long sessions.
+
+**Compared to 0.7.0-alpha**: macOS port (#18), system tray + minimize-to-
+tray (#86), virtual camera (#85), screen-capture source (#108), system-
+audio capture (#109), chat v0.5 (#88), Linux audio source/sink refactor
+(#78), client-side stream volume (#77), and a streaming/A-V-sync fix wave
+(remote connection lifecycle, shared-epoch sync, reconnect-to-live,
+chunked `/meta`, dual-encode gating).
 
 ### Changed
 
@@ -71,6 +78,33 @@ had via `AudioPlaybackPulse`.
 
 ### Added
 
+- **Real-time chat with identity-bound rooms** (#88) — a chat service
+  (`platform/services/chat/`, Go + WebSocket) plus an in-app client:
+  each live stream gets a room bound to the streamer's identity, with
+  an OSD overlay for the host/viewers and a panel in the web portal.
+  Lets a streamer and remote viewers talk without a third-party tool.
+  (v0.5 — moderation / reactions / slash commands tracked for a later
+  release under #87.)
+- **Virtual camera output** (#85) — RetroCapture can expose its
+  shader-processed output as a system virtual-camera device, so the
+  CRT-filtered picture can be selected as a webcam in Zoom / OBS /
+  browsers. `v4l2loopback` on Linux, the DirectShow/Media-Foundation
+  virtual cam on Windows, and a CoreMediaIO path on macOS.
+- **Screen capture source (monitor / window / region)** (#108) — a
+  third capture source alongside V4L2/AVFoundation and remote: grab a
+  whole monitor, a single window, or a dragged region. Backends per
+  platform — PipeWire (xdg-desktop-portal) on Linux/Wayland, the
+  Windows graphics capture path, and `ScreenCaptureKit` on macOS.
+- **System-audio output capture** (#109) — capture what the machine is
+  *playing* (the monitor / loopback of the default output) as an audio
+  source, in-process via the `AudioBus`, so a desktop-audio stream
+  carries sound without routing tricks. On macOS this uses the
+  `ScreenCaptureKit` audio path; a display filter is required for SCK
+  to deliver buffers.
+- **Client-side volume control for the remote stream** (#77) — a
+  linear gain slider applied to the incoming remote audio just before
+  the sink, live from the UI / quick-actions widget, persisted across
+  runs. The playback clock math is unaffected so A/V sync holds.
 - **System tray + minimize-to-tray for background operation** (#86) —
   RetroCapture can now hide its window and keep every pipeline
   (capture, shader, streaming, recording, virtual camera, chat)
@@ -145,6 +179,71 @@ had via `AudioPlaybackPulse`.
   `Info.plist` permission strings, codesigning, macOS source
   publisher equivalent of `module-pipe-source`, Apple Silicon
   build, CI/release integration).
+
+### Fixed
+
+- **Remote-client connection lifecycle** (#92, #95, #100) — disconnect
+  no longer freezes the UI, the reconnect counter is accurate, and a
+  long-GOP stream connects cleanly instead of stalling on the first
+  keyframe wait.
+- **Non-blocking connect + non-freezing disconnect** (#106) — the
+  remote connect/disconnect now runs off the UI thread with live
+  state feedback in the connection overlay.
+- **AAC mid-join audio** (#102) — when a client joins mid-stream and
+  the AAC probe can't resolve channel/rate yet, the audio sink is
+  deferred to the first decoded frame instead of opening with bad
+  params (which had silenced audio on reconnect).
+- **Remote A/V sync over reconnects and long sessions** (#93, #109) —
+  a shared A/V epoch (video and audio made relative to one origin so
+  the picture stops lagging the sound), a jump-to-live drain on
+  (re)connect that drops the stale backlog, an audio anchor gate that
+  refuses stale pre-anchor audio (fixed the ~-14 s reconnect desync),
+  /raw send backpressure that drops backlog instead of dropping the
+  connection, and gating the `/stream` encode so it idles when nobody
+  is watching it. Net: from "-14 s reconnect desync, no audio,
+  connection cascade" to a stable ~0 to -50 ms audio-locked window.
+- **Stream-switch crash on Linux** (#112) — ignore `SIGPIPE` on Linux
+  too, so switching streams while a socket write is in flight no
+  longer takes the process down.
+- **Local capture rebuild on source switch** (#97) — switching back to
+  a local V4L2 source from Remote/Screen rebuilds the capture backend
+  instead of reusing a torn-down one.
+- **`/meta` JSON robustness** (#99, #113) — emit valid JSON for
+  non-finite shader-parameter floats (NaN/Inf no longer corrupt the
+  payload), and announce the real screen-capture dimensions so the
+  client renders the shader at the host's logical source size.
+- **`/meta` SSE behind a proxy** (#120) — the SSE reader now decodes
+  chunked `Transfer-Encoding`, so shader/parameter/source sync works
+  through a relay (e.g. Cloudflare) that re-frames the response —
+  previously every client logged a stream of JSON parse failures.
+- **`/stream` no longer encodes for `/raw`-only clients** (#123) — the
+  "idle the /stream encoder when unwatched" gate counted `/raw`
+  subscribers via the combined audience count, so a single remote
+  `/raw` client made the host run a second 720p60 VAAPI encode that
+  overflowed the `/stream` synchronizer and stole GPU from `/raw`.
+- **Web recordings playback + live player auto-recovery** (#79, #80) —
+  the recordings page plays back reliably and the live web player
+  recovers from a transient stream hiccup instead of staying black.
+- **Reap stale audio module on startup** (#96) — a crash that strands
+  the `module-pipe-source source_name=RetroCapture` (and its FIFO) is
+  now cleaned up on the next launch, so RetroCapture sources don't
+  accumulate across crash-restart cycles.
+- **Windows cross-build** (#89) — unbroken after the chat (#84) merge.
+
+### Known issues
+
+- **Remote `/raw` connection drops through a relay** (#122) — over a
+  bandwidth-limited relay path the host can't always push 720p60 fast
+  enough; the relay then cuts the read side and the client reconnects.
+  Mitigated by the dual-encode gating in #123; a direct (LAN) or
+  higher-upload path is stable. Adaptive bitrate is tracked for a
+  follow-up.
+- **Residual progressive A/V drift on the remote client** (#124) — on
+  a long, stable connection the playback slowly falls behind live
+  (~0.5 ms/s, audio stays locked to video) due to a host
+  audio-capture-clock vs video-clock mismatch, bounded by a periodic
+  re-anchor to the live edge. A proper host-side re-clocking fix is
+  deferred past this alpha.
 
 ### Scope
 

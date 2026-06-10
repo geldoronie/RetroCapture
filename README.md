@@ -1,13 +1,13 @@
 # RetroCapture
 
-> Real-time video capture for Linux and Windows that applies **RetroArch GLSL
-> shaders** (CRT, NTSC, xBR, handheld, …) to live feeds from capture cards.
-> Includes HTTP MPEG-TS streaming, local recording, and a full web portal
-> for remote control.
+> Real-time video capture for Linux, Windows, and macOS that applies
+> **RetroArch GLSL shaders** (CRT, NTSC, xBR, handheld, …) to live feeds from
+> capture cards. Includes HTTP MPEG-TS streaming, local recording, a virtual
+> camera output, and a full web portal for remote control.
 
-![Version](https://img.shields.io/badge/version-0.7.0--alpha-orange)
+![Version](https://img.shields.io/badge/version-0.8.0--alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Raspberry%20Pi-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Raspberry%20Pi-lightgrey)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
 
 <!-- SCREENSHOT NEEDED: hero shot. Recommended: native UI fullscreen with a
@@ -16,7 +16,7 @@
      Target ~1600x900. Save as docs/screenshots/hero.png -->
 ![Hero](docs/screenshots/hero.png)
 
-**[⬇ Download 0.7.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+**[⬇ Download 0.8.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
 [Documentation](#documentation) ·
 [Issues](https://github.com/geldoronie/RetroCapture/issues) ·
 [Changelog](CHANGELOG.md)
@@ -59,29 +59,25 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
 - 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
   (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
 
-### What's new in 0.7.0-alpha
+### What's new in 0.8.0-alpha
 
-![0.7.0-alpha — native UI with the new side panels, Shortcuts helper top-right, and Quick Actions OSD bottom-right](docs/screenshots/new-version-full.png)
-
-- **Remote source mode (#47)** — connect a second RetroCapture to the
-  first one as a video source and watch the same shader output remotely,
-  with live parameter sync.
-- **Public stream directory (#49)** with **Cloudflare Quick + Named
-  tunnels (#53 / #60)** so you can publish without port-forwarding.
-- **HTTPS / TLS in HttpClient (#69)** — directory and `/raw` connections
-  default to `https://`.
-- **Recording pipeline parity + unified UI idiom (#59)** — recording
-  and streaming now share `MediaSynchronizer` semantics and a single
-  configuration UI layout.
-- **Quick Actions OSD + Shortcuts helper (#68)** — pinned overlay
-  controls and an at-a-glance shortcut reference.
-
-  ![Quick Actions OSD](docs/screenshots/quickactions.png)
-- **Preferences pane + i18n (#45 / #46)** — language selection, default
-  fullscreen, persisted Preferences window.
-- **Directory + Remote drift / probe / orientation / disconnect fixes
-  (#67)** — A/V clock corruption on mid-join, AAC probe races, ghost
-  audio after disconnect and remote-source orientation all handled.
+- **macOS x86_64 port (#18)** — first working build of host + client
+  modes on macOS (AVFoundation capture, Core Audio, `.app` bundle).
+- **System tray + minimize-to-tray (#86)** — hide the window and keep
+  every pipeline running in the background, with desktop notifications.
+- **Virtual camera output (#85)** — expose the shader-processed picture
+  as a webcam device for Zoom / OBS / browsers.
+- **Screen capture source (#108)** — grab a monitor, window, or region
+  as the capture source (PipeWire / Windows / ScreenCaptureKit).
+- **System-audio capture (#109)** — capture what the machine is playing
+  as an audio source, no routing tricks.
+- **Real-time chat (#88)** — per-stream chat rooms bound to the
+  streamer's identity, in the OSD overlay and the web portal.
+- **Linux audio refactor (#78)** — direct capture + a coherent
+  `RetroCapture` source/sink pair, no more `module-null-sink` loopback.
+- **Client-side stream volume (#77)** and a wave of remote-client
+  A/V-sync + streaming-stability fixes (shared-epoch sync,
+  reconnect-to-live, chunked `/meta`, dual-encode gating).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
@@ -148,15 +144,15 @@ shader:
 
 ## Download
 
-Pre-built binaries for **0.7.0-alpha** are attached to the
+Pre-built binaries for **0.8.0-alpha** are attached to the
 [latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
 
 | Platform | Artifact |
 | --- | --- |
-| Linux x86_64 | `RetroCapture-0.7.0-alpha-linux-x86_64.AppImage` |
-| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz` |
-| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.7.0-alpha-linux-arm32v7.tar.gz` |
-| Windows x86_64 | `RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe` |
+| Linux x86_64 | `RetroCapture-0.8.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.8.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.8.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.8.0-alpha-windows-x86_64-Setup.exe` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
@@ -189,6 +185,12 @@ edges are still being polished.
 | **HTTPS / TLS for directory and `/raw`** | ✅ New in 0.7.0-alpha |
 | **Bilingual UI (EN / PT-BR)** | ✅ New in 0.7.0-alpha |
 | **Quick Actions OSD + Shortcuts helper** | ✅ New in 0.7.0-alpha |
+| **macOS x86_64 (host + client)** | ✅ New in 0.8.0-alpha |
+| **System tray + minimize-to-tray** | ✅ New in 0.8.0-alpha |
+| **Virtual camera output** | ✅ New in 0.8.0-alpha |
+| **Screen capture source (monitor / window / region)** | ✅ New in 0.8.0-alpha |
+| **System-audio capture source** | ✅ New in 0.8.0-alpha |
+| **Real-time chat (per-stream rooms)** | ✅ New in 0.8.0-alpha |
 
 **Shader compatibility note:** most CRT, NTSC, upscale (xBR, Super-xBR) and
 handheld presets work cleanly. A handful of complex multi-pass presets are
@@ -204,21 +206,21 @@ For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 # Download from Releases, then:
-chmod +x RetroCapture-0.7.0-alpha-linux-x86_64.AppImage
-./RetroCapture-0.7.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+chmod +x RetroCapture-0.8.0-alpha-linux-x86_64.AppImage
+./RetroCapture-0.8.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
 ```
 
 ### Windows
 
-Run the installer (`RetroCapture-0.7.0-alpha-windows-x86_64-Setup.exe`),
+Run the installer (`RetroCapture-0.8.0-alpha-windows-x86_64-Setup.exe`),
 then launch RetroCapture from the Start menu. DirectShow is the default
 capture source on Windows.
 
 ### Raspberry Pi
 
 ```bash
-tar -xzf RetroCapture-0.7.0-alpha-linux-arm64v8.tar.gz
-cd RetroCapture-0.7.0-alpha-linux-arm64v8
+tar -xzf RetroCapture-0.8.0-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.8.0-alpha-linux-arm64v8
 ./retrocapture --source v4l2 --v4l2-device /dev/video0
 ```
 
