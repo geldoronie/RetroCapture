@@ -6,6 +6,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 
 /**
  * MediaSynchronizer - Classe responsável por sincronização de áudio e vídeo
@@ -64,6 +65,10 @@ public:
 
     MediaSynchronizer();
     ~MediaSynchronizer();
+
+    // Rótulo da instância ("stream" / "raw") — aparece nos logs de overflow
+    // para desambiguar qual pipeline está descartando frames (#123).
+    void setName(const std::string &name) { m_name = name; }
 
     // Configurar parâmetros de sincronização
     void setSyncTolerance(int64_t toleranceUs) { m_syncToleranceUs = toleranceUs; }
@@ -160,4 +165,7 @@ private:
     // chamados de threads distintas dos getters.
     std::atomic<uint64_t> m_videoDropCount{0};
     std::atomic<uint64_t> m_audioDropCount{0};
+
+    // Rótulo da instância para logs (#123). Vazio por padrão.
+    std::string m_name;
 };

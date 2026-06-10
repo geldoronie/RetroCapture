@@ -166,17 +166,23 @@ extern void (*glGetIntegerv)(GLenum pname, GLint* params);
 #define GL_VERSION 0x1F02
 #define GL_SHADING_LANGUAGE_VERSION 0x8B8C
 #define GL_MAJOR_VERSION 0x821B
+#define GL_EXTENSIONS 0x1F03
 
 // Funções básicas do OpenGL que podem estar disponíveis estaticamente
 // glGetString está disponível desde OpenGL 1.0, então pode ser linkado estaticamente
-#ifdef __cplusplus
-extern "C" {
-#endif
 const GLubyte* glGetString(GLenum name);
+
+// Fecha o bloco extern "C" aberto no topo do header. Tudo acima
+// (ponteiros de função + símbolos OpenGL) tem C-linkage; as funções
+// auxiliares C++ abaixo NÃO podem ter — getGLSLVersionString retorna
+// std::string, e declarar isso dentro de extern "C" é malformado
+// (warning -Wreturn-type-c-linkage) e faz o Apple clang 14 dar
+// segfault no frontend ao processar a declaração.
 #ifdef __cplusplus
 }
 #endif
 
+// Funções auxiliares C++ — fora do extern "C".
 bool loadOpenGLFunctions();
 
 // Funções para detectar versão OpenGL e GLSL
@@ -186,8 +192,4 @@ std::string getGLSLVersionString();
 bool isOpenGLES();
 // Retorna a versão major do OpenGL (3, 2, etc.)
 int getOpenGLMajorVersion();
-
-#ifdef __cplusplus
-}
-#endif
 

@@ -35,6 +35,9 @@ class RecordingManager;
 // Forward declaration for API
 struct ShaderParameter;
 
+// #86 — system tray abstraction (src/tray/ISystemTray.h)
+namespace retrocapture { class ISystemTray; }
+
 class Application
 {
 public:
@@ -63,6 +66,9 @@ public:
     void setFullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
     void setMonitorIndex(int index) { m_monitorIndex = index; }
     void setMaintainAspect(bool maintain) { m_maintainAspect = maintain; }
+    // #84 — Chat service base URL plumbing from --chat-url.
+    void setChatBaseUrl(const std::string &url) { m_chatBaseUrl = url; }
+    std::string getChatBaseUrl() const          { return m_chatBaseUrl; }
     void setBrightness(float brightness) { m_brightness = brightness; }
     void setContrast(float contrast) { m_contrast = contrast; }
     void setTextureFilterLinear(bool linear) { m_textureFilterLinear = linear; }
@@ -137,6 +143,7 @@ public:
     UIManager *getUIManager() { return m_ui.get(); }
     RecordingManager *getRecordingManager() { return m_recordingManager.get(); }
     IAudioCapture* getAudioCapture() const { return m_audioCapture.get(); }
+    IVideoCapture* getVideoCapture() const { return m_capture.get(); }
 
     // Preset management
     void applyPreset(const std::string& presetName);
@@ -175,15 +182,73 @@ private:
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
     std::unique_ptr<UIManager> m_ui;
+
+    // #86 — system tray + hide-to-tray. m_tray is always non-null
+    // (factory returns a no-op stub when the platform/DE has no tray
+    // host). setupSystemTray() builds the icon + menu and wires the
+    // window close callback; refreshTrayMenu() re-pushes labels/
+    // enabled state each frame; m_trayActive reflects whether a real
+    // tray host accepted the icon.
+    std::unique_ptr<retrocapture::ISystemTray> m_tray;
+    bool m_trayActive = false;
+    uint32_t m_trayMenuSig = 0;      // change-detection for refreshTrayMenu
+    bool m_trayMenuBuilt = false;
+    // Edge-detect streaming/recording for tray notifications (#86).
+    bool m_notifyPrevStreaming = false;
+    bool m_notifyPrevRecording = false;
+    bool m_notifyInit = false;       // skip the first frame's "transition"
+    void setupSystemTray();
+    void refreshTrayMenu();
     std::unique_ptr<FrameProcessor> m_frameProcessor;
     std::unique_ptr<StreamManager> m_streamManager;
     std::unique_ptr<class DirectoryClient> m_directoryClient;       // #49 Phase 2
     std::unique_ptr<class CloudflaredManager> m_cloudflaredManager; // #49 Phase 2.5
     std::unique_ptr<class DirectoryBrowser> m_directoryBrowser;     // #49 Phase 4
+    std::unique_ptr<class ChatClient>      m_chatClient;             // #84
     // #69 — Cache the URL each subsystem was started against so a
     // runtime edit in the UI reconfigures both immediately instead of
     // waiting for an app restart.
     std::string m_publishedDirectoryUrl;
+    // #84 — Chat-service base URL override from --chat-url. Empty
+    // means "no CLI override; let UIManager (loaded from config.json)
+    // pick the value". UIManager owns the persistent default and the
+    // runtime-editable field; Application syncs the UI value into
+    // m_chatClient every frame via syncChatTransport().
+    std::string m_chatBaseUrl;
+    // #84 — Tracks the slug the chat client is currently bound to
+    // (was streamId before the identity-bound rework). syncDirectory-
+    // Client uses this to detect transitions on the host side; on
+    // the viewer side, the remote /meta snapshot path uses the same
+    // member to detect roomSlug changes.
+    std::string m_chatBoundSlug;
+    // #84 — Monotonic generation incremented on every chat
+    // bind/unbind transition. The async stream-bind worker captures
+    // it at spawn time and re-checks before calling connectBySlug
+    // at the end; if the user clicked "Stop streaming" mid-flight
+    // (or the slug otherwise changed), the worker's connect is
+    // dropped so it doesn't undo the disconnect.
+    std::atomic<uint64_t> m_chatBindEpoch{0};
+
+    // #85 — Virtual-camera output sink. Linux uses v4l2loopback
+    // (VirtualCameraOutput), Windows uses the shared-memory IPC
+    // consumed by RetroCaptureVCam.dll (VirtualCameraOutputWin).
+    // syncVirtualCamera() starts/stops it per m_ui->getVirtcamEnabled();
+    // the main render loop calls pushFrame() on the RGBA scratch
+    // right after PBOManager readback so the work piggybacks on
+    // the existing readback path. Both sink classes expose the
+    // same isRunning() / pushFrame(SourceFormat::RGB|RGBA) shape
+    // so the call sites stay platform-agnostic.
+#if defined(__linux__)
+    using VirtcamSinkT = class VirtualCameraOutput;
+#elif defined(_WIN32)
+    using VirtcamSinkT = class VirtualCameraOutputWin;
+#elif defined(__APPLE__)
+    using VirtcamSinkT = class VirtualCameraOutputMac;
+#endif
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    std::unique_ptr<VirtcamSinkT> m_virtcam;
+    void syncVirtualCamera();
+#endif
     std::unique_ptr<IAudioCapture> m_audioCapture;
     std::unique_ptr<PBOManager> m_pboManager; // PBO para leitura assíncrona de pixels
     std::unique_ptr<RecordingManager> m_recordingManager;
@@ -242,8 +307,10 @@ private:
     // Configuração
     std::string m_shaderPath;
     std::string m_presetPath;
-#ifdef _WIN32
-    std::string m_devicePath = ""; // Windows: vazio por padrão (DirectShow usa índices)
+#if defined(_WIN32) || defined(__APPLE__)
+    // Windows (DirectShow) and macOS (AVFoundation) both pick a
+    // device by enumeration, not by filesystem path.
+    std::string m_devicePath = "";
 #else
     std::string m_devicePath = "/dev/video0"; // Linux: padrão V4L2
 #endif
@@ -319,6 +386,9 @@ private:
     std::string m_streamingQsvPreset   = "veryfast";
     std::string m_streamingAmfQuality  = "speed";
     std::string m_remoteInterpolation  = "linear";
+    // #77 effective client-side audio gain (muted ? 0 : volume), kept in
+    // sync with UIManager and applied to each VideoCaptureRemote created.
+    float m_remoteAudioGain = 1.0f;
     bool        m_remoteWindowFocused  = true;  // tracks vsync toggle state in the Remote main-loop branch
 
     // Buffer configuration

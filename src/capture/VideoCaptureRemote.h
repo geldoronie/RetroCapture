@@ -101,6 +101,16 @@ public:
     void setInterpolationMode(InterpolationMode mode);
 
     /**
+     * #77 — client-side playback gain for the incoming audio, linear
+     * in [0.0, 1.0] (1.0 = unity). Stored in an atomic and pushed to
+     * the audio sink by the decode thread, so it can be called live
+     * from the UI thread without touching the sink pointer directly.
+     * Applied lazily too: a value set before the sink exists (e.g. from
+     * config at connect time) is carried into ensureAudioOutput().
+     */
+    void setAudioVolume(float linear);
+
+    /**
      * #49 Phase 3 — bearer token sent to the host's /raw endpoint
      * for password-protected streams. Set before open(); empty
      * string disables the header (the host's open-by-default path
@@ -110,8 +120,22 @@ public:
 
 private:
     void decodeLoop();
+
+    // #93 stage 3 — reset the PTS anchor, flush stale audio, drop queued
+    // video and re-arm the drain-to-live so the next decoded frames
+    // re-anchor at the live edge. Shared by the fresh-stream (reconnect)
+    // path and the mid-stream resync triggered by sustained A/V drift.
+    // Runs on the decode thread only.
+    void resyncToLive();
     bool initDecoder();
     void cleanupDecoder();
+    // Bring up the audio sink + resampler from the audio decoder's
+    // current params (m_audioCodecCtx). Returns false (and leaves
+    // m_audioPlayback/m_swrCtx null) when the params aren't resolved
+    // yet — e.g. a mid-join AAC probe that reports 0 channels. Called
+    // eagerly in initDecoder and lazily from the decode loop once the
+    // first decoded frame populates the codec context. #98.
+    bool ensureAudioOutput();
 
     std::string m_url;        // base URL — "/raw" is appended internally
     std::string m_authToken;  // sha256 hex of password, empty == no auth
@@ -194,6 +218,10 @@ private:
 
     std::atomic<InterpolationMode> m_interpolationMode{InterpolationMode::Linear};
 
+    // #77 client-side audio gain, written by the UI thread, read by the
+    // decode thread which forwards it to m_audioPlayback each frame.
+    std::atomic<float> m_audioVolume{1.0f};
+
     // Per-refresh interpolation output buffer. The classic 3:2 pulldown
     // problem (60 fps stream into a 144 Hz panel = 2.4 refreshes per
     // frame → alternating 2/3-refresh hold times → visible judder) is
@@ -224,6 +252,16 @@ private:
     std::atomic<int64_t> m_lastFrameAtSteadyUs{0};
     int64_t m_streamStartWallUs  = 0;
     int64_t m_firstPtsTicks      = 0;
+
+    // #93 stage 1 — jump-to-live. A host that's already streaming has up to
+    // ~1 s of frames buffered; anchoring on the first (oldest) decoded frame
+    // bakes that whole backlog in as permanent latency, and the stale frames
+    // replay before live. On every (re)connect we drain (drop) that initial
+    // burst and only anchor once decode cadence drops to ~real time (the live
+    // edge). m_drainStartWallUs=0 means "init on first decoded frame".
+    std::atomic<bool> m_drainToLive{false};
+    int64_t           m_drainStartWallUs = 0;
+    int64_t           m_lastDecodeWallUs = 0;
     // PTS of the first video frame in microseconds. Lets the audio
     // path (which has its own stream timebase) translate its absolute
     // PTS into the same stream-origin-relative coordinate the video
@@ -255,6 +293,23 @@ public:
      * Cleared as soon as any reconnect succeeds.
      */
     bool isHostLikelyOffline() const override { return m_hostLikelyOffline.load(); }
+
+    /**
+     * #77 follow-up — true while the *initial* connect (this armed URL
+     * has never produced a frame) has failed a couple of times in a
+     * row. Distinguishes a genuine can't-connect (bad URL / host down /
+     * wrong password) from a mid-session reconnect, which the overlay
+     * already labels "Reconnecting…". Lets the UI surface a clear
+     * failure within a few seconds instead of spinning "Connecting…"
+     * forever or waiting ~15 min for the offline hint.
+     *
+     * Goes false again the moment the first frame arrives (m_everReceivedFrame).
+     */
+    bool isInitialConnectFailing() const
+    {
+        return !m_everReceivedFrame.load() &&
+               m_consecutiveReconnectFailures.load() >= 2;
+    }
     // 'Are we actively decoding right now?' — combines the
     // m_streamAnchored handshake bit (true once the first frame
     // decoded, reset in cleanupDecoder() / av_read_frame failure)
@@ -283,4 +338,11 @@ private:
     // offline hint clears with it).
     std::atomic<uint32_t> m_consecutiveReconnectFailures{0};
     std::atomic<bool>     m_hostLikelyOffline{false};
+
+    // Sticky 'a frame has arrived at least once since the current URL
+    // was armed' flag. Unlike m_streamAnchored (reset on every drop),
+    // this stays true across mid-session reconnects so the UI can tell
+    // a first-time connect failure apart from a reconnect. Reset in
+    // open() when a new URL is armed.
+    std::atomic<bool>     m_everReceivedFrame{false};
 };

@@ -151,6 +151,34 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
 
     ImGui::Spacing();
 
+    // #77 Client-side audio volume + mute. Only meaningful in Remote
+    // source mode, which is exactly where this tab lives. The slider
+    // shows 0–100%; mute is a separate latch so unmuting restores the
+    // last level. Both push through the UIManager triggers, which
+    // persist and forward the effective gain to the active capture.
+    ui_section_header(T("remote.audio_volume").c_str());
+    bool  muted     = m_uiManager->getRemoteAudioMuted();
+    float volumePct = m_uiManager->getRemoteAudioVolume() * 100.0f;
+
+    if (ImGui::Checkbox(T("remote.audio_mute").c_str(), &muted))
+    {
+        m_uiManager->triggerRemoteAudioMuteChange(muted);
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::BeginDisabled(muted);
+    if (ImGui::SliderFloat("##remoteAudioVol", &volumePct, 0.0f, 100.0f, "%.0f%%"))
+    {
+        m_uiManager->triggerRemoteAudioVolumeChange(volumePct / 100.0f);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("remote.audio_vol_tip").c_str());
+    }
+
+    ImGui::Spacing();
+
     // Two-frame state machine: button click sets *ShowStatus, the
     // next render of this state shows the spinning label and arms
     // *Execute, the frame after runs the blocking call. The user

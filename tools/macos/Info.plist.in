@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>RetroCapture</string>
+    <key>CFBundleDisplayName</key>
+    <string>RetroCapture</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.retrocapture.retrocapture</string>
+    <key>CFBundleExecutable</key>
+    <string>retrocapture</string>
+    <!-- App icon: Contents/Resources/RetroCapture.icns, generated from
+         assets/logo.png by build-macos-bundle.sh. Without this key macOS
+         shows the generic app icon in Finder / Launchpad / the Dock. -->
+    <key>CFBundleIconFile</key>
+    <string>RetroCapture</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>@RETROCAPTURE_VERSION@</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@RETROCAPTURE_VERSION@</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleSignature</key>
+    <string>RTRC</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>RetroCapture project</string>
+
+    <!-- Permission descriptions: required for macOS to show the
+         consent prompt when AVFoundation / Core Audio first ask for
+         access. Without these the access is silently denied. -->
+    <key>NSCameraUsageDescription</key>
+    <string>RetroCapture reads frames from your camera or capture card to apply CRT-style shaders to them.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>RetroCapture records audio from your microphone or capture card so it can be streamed and monitored alongside the captured video.</string>
+
+    <!-- This is a GUI app that opens an OpenGL window. -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>

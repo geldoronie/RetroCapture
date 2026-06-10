@@ -422,6 +422,36 @@
                                             </div>
                                         </div>
                                         
+                                        <!-- AVFoundation Controls (macOS only — backend gates by platform) -->
+                                        <div id="avfoundationControlsContainer" style="display: none;">
+                                            <div class="col-12">
+                                                <hr>
+                                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                                    <h6 class="mb-0">AVFoundation device</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationDevices()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="avfoundationDevice">
+                                                    <option value="">Loading...</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">macOS capture device sourced from AVCaptureDevice — UVC HDMI grabbers, webcams, virtual cameras.</small>
+                                            </div>
+
+                                            <div class="col-12 mt-3" id="avfoundationFormatBlock">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="mb-0">Format</h6>
+                                                    <button class="btn btn-sm btn-secondary" onclick="refreshAVFoundationFormats()">
+                                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                    </button>
+                                                </div>
+                                                <select class="form-select" id="avfoundationFormat">
+                                                    <option value="">Pick a device first…</option>
+                                                </select>
+                                                <small class="form-text text-muted mt-1">AVFoundation devices expose fixed (resolution, FPS range, pixel format) tuples — picking one applies all three atomically.</small>
+                                            </div>
+                                        </div>
+
                                         <!-- None Source Message -->
                                         <div id="noneSourceMessage" class="col-12">
                                             <div class="alert alert-info">
@@ -801,27 +831,58 @@
                                                 </div>
                                                 <div class="card-body">
                                                     <div class="mb-3">
-                                                        <label class="form-label">Select Input Source</label>
+                                                        <label class="form-label">Input device</label>
                                                         <div class="input-group">
                                                             <select class="form-select" id="audioInputSource">
-                                                                <option value="">Loading sources...</option>
+                                                                <option value="">Loading devices...</option>
                                                             </select>
-                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh sources">
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAudioInputSources()" title="Refresh devices">
                                                                 <i class="bi bi-arrow-clockwise"></i>
                                                             </button>
                                                         </div>
-                                                        <small class="form-text text-muted">Select the audio source to capture for streaming and recording</small>
+                                                        <small class="form-text text-muted">Pick the capture-card audio device. RetroCapture records from it and republishes the stream as the 'RetroCapture' source so other apps can pick it up.</small>
                                                     </div>
-                                                    <div class="d-flex gap-2">
+                                                    <div class="d-flex gap-2 flex-wrap">
                                                         <button type="button" class="btn btn-primary" id="connectInputBtn" onclick="connectAudioInput()">
-                                                            <i class="bi bi-plug me-1"></i>Connect
+                                                            <i class="bi bi-plug me-1"></i>Start capture
+                                                        </button>
+                                                        <button type="button" class="btn btn-outline-secondary" id="resyncMonitorBtn" onclick="resyncAudioMonitor()" disabled title="Drop monitor backlog and play live audio again">
+                                                            <i class="bi bi-arrow-counterclockwise me-1"></i>Resync monitor
                                                         </button>
                                                         <button type="button" class="btn btn-secondary" id="disconnectInputBtn" onclick="disconnectAudioInput()" disabled>
-                                                            <i class="bi bi-plug-fill me-1"></i>Disconnect
+                                                            <i class="bi bi-plug-fill me-1"></i>Stop capture
                                                         </button>
                                                     </div>
                                                     <div class="mt-2">
-                                                        <small class="text-muted" id="currentInputSource">No source connected</small>
+                                                        <small class="text-muted" id="currentInputSource">No input device selected</small>
+                                                    </div>
+                                                    <div class="mt-1">
+                                                        <small class="text-muted" id="currentInputFormat"></small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- AVFoundation audio device (macOS) -->
+                                        <div class="col-12" id="avfoundationAudioDeviceContainer" style="display: none;">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0">
+                                                        <i class="bi bi-soundwave me-2"></i>AVFoundation audio source
+                                                    </h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Audio source</label>
+                                                        <div class="input-group">
+                                                            <select class="form-select" id="avfoundationAudioDevice">
+                                                                <option value="">Loading...</option>
+                                                            </select>
+                                                            <button class="btn btn-outline-secondary" type="button" onclick="refreshAVFoundationAudioDevices()" title="Refresh">
+                                                                <i class="bi bi-arrow-clockwise"></i>
+                                                            </button>
+                                                        </div>
+                                                        <small class="form-text text-muted">Some AVFoundation devices (UVC HDMI grabbers) bundle audio with video — this picker lets you choose between the bundled stream and any other AVFoundation audio source.</small>
                                                     </div>
                                                 </div>
                                             </div>

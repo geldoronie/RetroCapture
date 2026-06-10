@@ -12,9 +12,13 @@
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
+#ifdef __APPLE__
+#include "../audio/AudioCaptureCoreAudio.h"
+#endif
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -92,6 +96,14 @@ namespace
 
     std::string jsonNumber(float value)
     {
+        // Non-finite floats (NaN / ±Inf) format as "nan"/"-inf"/"-nan", which
+        // is invalid JSON — the client's parser chokes on the bare '-'
+        // ("expected digit after '-'") and the whole /meta poll fails (#99).
+        // Emit a valid number instead so /meta is always parseable.
+        if (!std::isfinite(value))
+        {
+            return "0";
+        }
         std::ostringstream oss;
         oss.precision(6);
         oss << std::fixed << value;
@@ -313,29 +325,60 @@ std::pair<uint64_t, uint64_t> APIController::extractRange(const std::string &req
     }
 
     std::string rangeStr = request.substr(rangePos, rangeEnd - rangePos);
-    
-    // Parse "start-end" ou "start-"
+    // Trim surrounding whitespace.
+    while (!rangeStr.empty() && (rangeStr.front() == ' ' || rangeStr.front() == '\t')) rangeStr.erase(rangeStr.begin());
+    while (!rangeStr.empty() && (rangeStr.back() == ' ' || rangeStr.back() == '\t')) rangeStr.pop_back();
+
+    // Parse the three RFC 7233 forms: "start-end", "start-" and the
+    // suffix "-N" (the LAST N bytes). The suffix form is what a <video>
+    // element uses to fetch the trailing moov atom of a moov-at-end MP4
+    // (RetroCapture recordings); mishandling it served the wrong bytes and
+    // the browser could never read the moov, so playback silently failed
+    // (#79). Only the first byte-range-spec is honoured (no multi-range).
     size_t dashPos = rangeStr.find('-');
-    if (dashPos == std::string::npos)
+    if (dashPos == std::string::npos || fileSize == 0)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
+    const std::string startStr = rangeStr.substr(0, dashPos);
+    std::string endStr = rangeStr.substr(dashPos + 1);
+    size_t comma = endStr.find(',');
+    if (comma != std::string::npos)
+    {
+        endStr = endStr.substr(0, comma); // ignore additional ranges
+    }
+
     uint64_t start = 0;
     uint64_t end = fileSize - 1;
-
-    if (dashPos > 0)
+    try
     {
-        start = std::stoull(rangeStr.substr(0, dashPos));
+        if (startStr.empty())
+        {
+            // Suffix range "-N": the last N bytes.
+            if (endStr.empty()) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            uint64_t n = std::stoull(endStr);
+            if (n == 0) return std::make_pair(UINT64_MAX, UINT64_MAX);
+            if (n > fileSize) n = fileSize;
+            start = fileSize - n;
+            end = fileSize - 1;
+        }
+        else
+        {
+            start = std::stoull(startStr);
+            if (!endStr.empty()) end = std::stoull(endStr);
+            // Clamp an over-long end to the last byte instead of rejecting
+            // (browsers happily ask for bytes=0-<huge>).
+            if (end >= fileSize) end = fileSize - 1;
+        }
+    }
+    catch (const std::exception &)
+    {
+        return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
 
-    if (dashPos < rangeStr.length() - 1)
-    {
-        end = std::stoull(rangeStr.substr(dashPos + 1));
-    }
-
-    // Validar range
-    if (start >= fileSize || end >= fileSize || start > end)
+    // Validate.
+    if (start >= fileSize || start > end)
     {
         return std::make_pair(UINT64_MAX, UINT64_MAX);
     }
@@ -375,6 +418,51 @@ ssize_t APIController::sendData(int clientFd, const void *data, size_t size) con
     if (!m_httpServer)
         return -1;
     return m_httpServer->sendData(clientFd, data, size);
+}
+
+void APIController::sourceDimsForMeta(uint32_t &width, uint32_t &height) const
+{
+    width  = m_uiManager ? m_uiManager->getCaptureWidth()  : 0;
+    height = m_uiManager ? m_uiManager->getCaptureHeight() : 0;
+
+    // #113 — a Screen source's real frame size differs from the configured
+    // V4L2/logical resolution (getCaptureWidth keeps the last dropdown
+    // selection). Announcing that stale size made the remote client rescale
+    // /raw to the wrong aspect (e.g. a 16:9 screen reported as a leftover
+    // 4:3). Use the live capture's actual dimensions for Screen.
+    if (m_uiManager && m_uiManager->getSourceType() == UIManager::SourceType::Screen &&
+        m_application)
+    {
+        if (IVideoCapture *vc = m_application->getVideoCapture())
+        {
+            uint32_t w = vc->getWidth();
+            uint32_t h = vc->getHeight();
+            if (w > 0 && h > 0) { width = w; height = h; }
+        }
+    }
+}
+
+bool APIController::sendAll(int clientFd, const char *data, size_t size) const
+{
+    size_t off = 0;
+    int idleSpins = 0;
+    while (off < size)
+    {
+        ssize_t s = sendData(clientFd, data + off, size - off);
+        if (s < 0) return false; // peer gone / fatal socket error
+        if (s == 0)
+        {
+            // EAGAIN/EWOULDBLOCK — socket send buffer is full. Back off and
+            // retry; bail only after a long stall so a dead-but-not-reset
+            // client can't wedge the handler forever (~30 s).
+            if (++idleSpins > 30000) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        idleSpins = 0;
+        off += static_cast<size_t>(s);
+    }
+    return true;
 }
 
 bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
@@ -511,6 +599,21 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
     {
         return handleGETAudioStatus(clientFd);
     }
+#ifdef __APPLE__
+    else if (path == "/api/v1/avfoundation/devices")
+    {
+        return handleGETAVFoundationDevices(clientFd);
+    }
+    else if (path.rfind("/api/v1/avfoundation/formats/", 0) == 0)
+    {
+        return handleGETAVFoundationFormats(clientFd,
+                path.substr(std::string("/api/v1/avfoundation/formats/").size()));
+    }
+    else if (path == "/api/v1/avfoundation/audio-devices")
+    {
+        return handleGETAVFoundationAudioDevices(clientFd);
+    }
+#endif
     else if (path == "/api/v1/recording/profiles")
     {
         return handleGETRecordingProfiles(clientFd);
@@ -611,6 +714,24 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
     {
         return handleDisconnectAudioInput(clientFd);
     }
+    else if (path == "/api/v1/audio/resync")
+    {
+        return handleResyncAudioMonitor(clientFd);
+    }
+#ifdef __APPLE__
+    else if (path == "/api/v1/avfoundation/device")
+    {
+        return handleSetAVFoundationDevice(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/format")
+    {
+        return handleSetAVFoundationFormat(clientFd, body);
+    }
+    else if (path == "/api/v1/avfoundation/audio-device")
+    {
+        return handleSetAVFoundationAudioDevice(clientFd, body);
+    }
+#endif
     else if (path == "/api/v1/source/overscan")
     {
         return handleSetSourceOverscan(clientFd, body);
@@ -801,9 +922,11 @@ bool APIController::handleGETCaptureResolution(int clientFd)
         return true;
     }
 
+    uint32_t srcW = 0, srcH = 0;
+    sourceDimsForMeta(srcW, srcH);
     std::ostringstream json;
-    json << "{\"width\": " << jsonNumber(m_uiManager->getCaptureWidth())
-         << ", \"height\": " << jsonNumber(m_uiManager->getCaptureHeight()) << "}";
+    json << "{\"width\": " << jsonNumber(srcW)
+         << ", \"height\": " << jsonNumber(srcH) << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
 }
@@ -1088,11 +1211,13 @@ std::string APIController::buildMetaSnapshotJSON()
         }
     }
 
+    uint32_t metaSrcW = 0, metaSrcH = 0;
+    sourceDimsForMeta(metaSrcW, metaSrcH);
     json <<   "]"
          << "}, "
          << "\"source\": {"
-         <<   "\"width\": "  << jsonNumber(m_uiManager->getCaptureWidth())   << ", "
-         <<   "\"height\": " << jsonNumber(m_uiManager->getCaptureHeight())  << ", "
+         <<   "\"width\": "  << jsonNumber(metaSrcW)   << ", "
+         <<   "\"height\": " << jsonNumber(metaSrcH)  << ", "
          <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
          <<   "\"overscan\": {"
          <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
@@ -1115,6 +1240,20 @@ std::string APIController::buildMetaSnapshotJSON()
          // OSD quick-actions widget. No security concern since
          // browsing the directory already exposes per-stream counts.
          <<   "\"clientCount\": " << jsonNumber(m_uiManager->getStreamClientCount())
+         << "}, "
+         // #84 — Chat-room hint. roomSlug is the streamer's chosen
+         // persistent slug (UIManager::getStreamRoomSlug), populated
+         // only when the streamer ticked "Enable chat alongside this
+         // stream" and the slug has been provisioned. Empty means
+         // viewers should NOT auto-bind; they can still join any
+         // public room manually. We dropped the per-session streamId
+         // here in #84 because it produced one orphan chat_rooms
+         // row per stream session.
+         << "\"chat\": {"
+         <<   "\"roomSlug\": " << jsonString(m_uiManager->getStreamChatEnabled()
+                                              ? m_uiManager->getStreamRoomSlug()
+                                              : std::string{}) << ", "
+         <<   "\"url\": "      << jsonString(m_uiManager->getChatBaseUrl())
          << "}"
          << "}";
 
@@ -2797,14 +2936,17 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
         response << "\r\n";
 
         std::string headerStr = response.str();
-        ssize_t sent = sendData(clientFd, headerStr.c_str(), headerStr.length());
-        if (sent < 0)
+        if (!sendAll(clientFd, headerStr.c_str(), headerStr.length()))
         {
             file.close();
             return true;
         }
 
-        // Stream file content in chunks (64KB at a time)
+        // Stream file content in chunks (64KB at a time). sendAll() handles
+        // partial/EAGAIN sends — without it, a full socket buffer (immediate
+        // on a large file like a multi-hundred-MB recording) silently dropped
+        // the unsent tail of each chunk, corrupting/truncating the download
+        // and stalling browser playback after a couple of seconds (#79).
         const size_t chunkSize = 64 * 1024; // 64KB chunks
         std::vector<char> buffer(chunkSize);
         uint64_t remaining = contentLength;
@@ -2818,8 +2960,7 @@ bool APIController::handleGETRecordingFile(int clientFd, const std::string& reco
             if (bytesRead == 0)
                 break;
 
-            sent = sendData(clientFd, buffer.data(), bytesRead);
-            if (sent < 0)
+            if (!sendAll(clientFd, buffer.data(), bytesRead))
             {
                 file.close();
                 return true;
@@ -3106,4 +3247,289 @@ bool APIController::handleDisconnectAudioInput(int clientFd)
     return true;
 #endif
 }
+
+bool APIController::handleResyncAudioMonitor(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+
+    IAudioCapture *audioCapture = m_application->getAudioCapture();
+    if (!audioCapture)
+    {
+        sendErrorResponse(clientFd, 400, "Audio capture not available");
+        return true;
+    }
+
+#ifdef __linux__
+    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(audioCapture);
+    if (pulseCapture)
+    {
+        pulseCapture->resyncMonitor();
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Monitor resync requested";
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
+    return true;
+#elif defined(__APPLE__)
+    AudioCaptureCoreAudio *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(audioCapture);
+    if (caCapture)
+    {
+        caCapture->resyncMonitor();
+        nlohmann::json response;
+        response["success"] = true;
+        response["message"] = "Monitor resync requested";
+        sendJSONResponse(clientFd, 200, response.dump());
+        return true;
+    }
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
+    return true;
+#else
+    sendErrorResponse(clientFd, 400, "Monitor resync only available on Linux/macOS");
+    return true;
+#endif
+}
+
+#ifdef __APPLE__
+// AVFoundation endpoints (macOS). The video capture instance is asked
+// for the listings; on macOS that's VideoCaptureAVFoundation, which
+// implements the optional methods on IVideoCapture with real data.
+// The device-mutation endpoints go through IVideoCapture so we don't
+// need to dynamic_cast against the AVFoundation type here.
+
+bool APIController::handleGETAVFoundationDevices(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["devices"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["devices"] = nlohmann::json::array();
+    for (const auto &d : vc->listDevices())
+    {
+        r["devices"].push_back({
+            {"id",        d.id},
+            {"name",      d.name},
+            {"driver",    d.driver},
+            {"available", d.available}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleGETAVFoundationFormats(int clientFd, const std::string &deviceId)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["formats"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["deviceId"] = deviceId;
+    r["formats"]  = nlohmann::json::array();
+    for (const auto &f : vc->listFormats(deviceId))
+    {
+        r["formats"].push_back({
+            {"id",          f.id},
+            {"width",       f.width},
+            {"height",      f.height},
+            {"minFps",      f.minFps},
+            {"maxFps",      f.maxFps},
+            {"pixelFormat", f.pixelFormat},
+            {"colorSpace",  f.colorSpace},
+            {"displayName", f.displayName}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleGETAVFoundationAudioDevices(int clientFd)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    IVideoCapture *vc = m_application->getVideoCapture();
+    if (!vc)
+    {
+        nlohmann::json r;
+        r["devices"] = nlohmann::json::array();
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    nlohmann::json r;
+    r["current"]   = vc->getCurrentAudioDevice();
+    r["devices"]   = nlohmann::json::array();
+    for (const auto &d : vc->listAudioDevices())
+    {
+        r["devices"].push_back({
+            {"id",        d.id},
+            {"name",      d.name},
+            {"available", d.available}
+        });
+    }
+    sendJSONResponse(clientFd, 200, r.dump());
+    return true;
+}
+
+bool APIController::handleSetAVFoundationDevice(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string deviceId = j.value("deviceId", "");
+        if (deviceId.empty())
+        {
+            sendErrorResponse(clientFd, 400, "deviceId is required");
+            return true;
+        }
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        // Route through UIManager.triggerDeviceChange so config
+        // persistence and capture reconfig stay synchronized with
+        // whatever the native UI does when a user picks a device.
+        if (!m_uiManager)
+        {
+            sendErrorResponse(clientFd, 500, "UI manager not available");
+            return true;
+        }
+        m_uiManager->triggerDeviceChange(deviceId);
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationDeviceId(deviceId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]  = true;
+        r["deviceId"] = deviceId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+
+bool APIController::handleSetAVFoundationFormat(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string formatId = j.value("formatId", "");
+        const std::string deviceId = j.value("deviceId", "");
+        if (formatId.empty())
+        {
+            sendErrorResponse(clientFd, 400, "formatId is required");
+            return true;
+        }
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        if (!vc->setFormatById(formatId, deviceId))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to apply AVFoundation format");
+            return true;
+        }
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationFormatId(formatId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]  = true;
+        r["formatId"] = formatId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+
+bool APIController::handleSetAVFoundationAudioDevice(int clientFd, const std::string &body)
+{
+    if (!m_application)
+    {
+        sendErrorResponse(clientFd, 500, "Application not available");
+        return true;
+    }
+    try
+    {
+        const nlohmann::json j = nlohmann::json::parse(body);
+        const std::string audioDeviceId = j.value("audioDeviceId", "");
+        IVideoCapture *vc = m_application->getVideoCapture();
+        if (!vc)
+        {
+            sendErrorResponse(clientFd, 400, "No video capture active");
+            return true;
+        }
+        if (!vc->setAudioDevice(audioDeviceId))
+        {
+            sendErrorResponse(clientFd, 500, "Failed to set AVFoundation audio device");
+            return true;
+        }
+        if (m_uiManager)
+        {
+            m_uiManager->setAVFoundationAudioDeviceId(audioDeviceId);
+            m_uiManager->saveConfig();
+        }
+        nlohmann::json r;
+        r["success"]       = true;
+        r["audioDeviceId"] = audioDeviceId;
+        sendJSONResponse(clientFd, 200, r.dump());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, std::string("Invalid JSON: ") + e.what());
+        return true;
+    }
+}
+#endif // __APPLE__
 

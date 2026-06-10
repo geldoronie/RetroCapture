@@ -3,7 +3,7 @@
 #include "../utils/LanCheck.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -766,11 +766,18 @@ ssize_t WebPortal::sendData(int clientFd, const void *data, size_t size) const
     {
         return m_httpServer->sendData(clientFd, data, size);
     }
-    // Fallback para send() direto se HTTPServer não estiver configurado
+    // Fallback para send() direto se HTTPServer não estiver configurado.
+    // MSG_NOSIGNAL exists on Linux only — macOS uses the SO_NOSIGPIPE
+    // socket option (set once at accept time, not here) and Windows
+    // has no equivalent flag. We pass MSG_NOSIGNAL only on Linux; on
+    // the other platforms the caller is expected to have set up
+    // SIGPIPE handling elsewhere (e.g. signal(SIGPIPE, SIG_IGN) at
+    // startup, or per-socket SO_NOSIGPIPE on macOS).
     #ifdef PLATFORM_LINUX
     return send(clientFd, data, size, MSG_NOSIGNAL);
+    #elif defined(PLATFORM_MACOS)
+    return send(clientFd, data, size, 0);
     #else
-    // Windows não tem MSG_NOSIGNAL, usar send() normal
     return send(clientFd, (const char*)data, size, 0);
     #endif
 }

@@ -6,6 +6,9 @@
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
+#ifdef __APPLE__
+#include "../audio/AudioCaptureCoreAudio.h"
+#endif
 #include <imgui.h>
 #include <algorithm>
 
@@ -43,6 +46,12 @@ void UIConfigurationAudio::render()
     }
 
     renderInputSourceSelection();
+#ifdef __APPLE__
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    renderAVFoundationAudioDeviceSelection();
+#endif
 
     ImGui::End();
 }
@@ -51,6 +60,7 @@ void UIConfigurationAudio::refreshInputSources()
 {
     m_inputSourceNames.clear();
     m_inputSourceIds.clear();
+    m_inputSourceIsMonitor.clear();
     m_selectedInputSourceIndex = -1;
 
     if (!m_audioCapture)
@@ -62,13 +72,24 @@ void UIConfigurationAudio::refreshInputSources()
     AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture);
     if (pulseCapture)
     {
-        // Get list of available input sources
+        // Get list of available sources — real inputs and output monitors
+        // (system audio, #109). Group inputs first, then monitors, and
+        // prefix the monitors so they read as "system audio".
         std::vector<AudioDeviceInfo> sources = pulseCapture->listInputSources();
 
-        for (const auto &source : sources)
+        for (const auto &source : sources) // inputs first
         {
+            if (source.isMonitor) continue;
             m_inputSourceNames.push_back(source.name);
             m_inputSourceIds.push_back(source.id);
+            m_inputSourceIsMonitor.push_back(false);
+        }
+        for (const auto &source : sources) // then system-audio monitors
+        {
+            if (!source.isMonitor) continue;
+            m_inputSourceNames.push_back("[System audio] " + source.name);
+            m_inputSourceIds.push_back(source.id);
+            m_inputSourceIsMonitor.push_back(true);
         }
 
         // Try to find current input source
@@ -84,7 +105,7 @@ void UIConfigurationAudio::refreshInputSources()
                 }
             }
         }
-        
+
         // If no active connection found, check saved configuration from UIManager
         if (m_selectedInputSourceIndex == -1 && m_uiManager)
         {
@@ -102,6 +123,32 @@ void UIConfigurationAudio::refreshInputSources()
             }
         }
     }
+#elif defined(__APPLE__) || defined(_WIN32)
+    // Core Audio devices via IAudioCapture::listDevices — same listing
+    // used elsewhere. On macOS the saved id comes from
+    // `getAudioInputSourceId()`, same field reused.
+    const auto devices = m_audioCapture->listDevices();
+    for (const auto &d : devices)
+    {
+        m_inputSourceNames.push_back(d.isMonitor ? "[System audio] " + d.name : d.name);
+        m_inputSourceIds.push_back(d.id);
+        m_inputSourceIsMonitor.push_back(d.isMonitor);
+    }
+
+    const std::string saved = m_uiManager
+        ? m_uiManager->getAudioInputSourceId()
+        : std::string();
+    if (!saved.empty())
+    {
+        for (size_t i = 0; i < m_inputSourceIds.size(); ++i)
+        {
+            if (m_inputSourceIds[i] == saved)
+            {
+                m_selectedInputSourceIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
 #endif
 
     m_inputSourcesListNeedsRefresh = false;
@@ -111,9 +158,10 @@ void UIConfigurationAudio::refreshInputSources()
 void UIConfigurationAudio::renderInputSourceSelection()
 {
     ui_section_header("Audio input",
-                      "Pick the audio source captured alongside video. "
-                      "The selection is shared between streaming and "
-                      "recording.");
+                      "Pick the capture-card audio device. RetroCapture "
+                      "records directly from it and republishes the "
+                      "stream as the 'RetroCapture' source so other apps "
+                      "(DAWs, monitors) can pick it up.");
 
     if (!m_audioCapture)
     {
@@ -162,19 +210,17 @@ void UIConfigurationAudio::renderInputSourceSelection()
         sourceNamesCStr.push_back(name.c_str());
     }
 
-    // Input source selection combo
+    // Device dropdown drives the input directly — no more loopback hop
+    // through a virtual sink.
     int prevSelectedIndex = m_selectedInputSourceIndex;
-    if (ImGui::Combo("Input Source", &m_selectedInputSourceIndex, sourceNamesCStr.data(), static_cast<int>(sourceNamesCStr.size())))
+    if (ImGui::Combo("Input device", &m_selectedInputSourceIndex, sourceNamesCStr.data(), static_cast<int>(sourceNamesCStr.size())))
     {
-        // Source changed
         if (m_selectedInputSourceIndex >= 0 && m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIds.size()))
         {
             std::string selectedSourceId = m_inputSourceIds[m_selectedInputSourceIndex];
-            
+
             if (pulseCapture->connectInputSource(selectedSourceId))
             {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Input source connected successfully");
-                // Save configuration
                 if (m_uiManager)
                 {
                     m_uiManager->setAudioInputSourceId(selectedSourceId);
@@ -183,27 +229,47 @@ void UIConfigurationAudio::renderInputSourceSelection()
             }
             else
             {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to connect input source");
-                // Revert selection
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to open input device");
                 m_selectedInputSourceIndex = prevSelectedIndex;
             }
         }
     }
 
+    // #109 — when a system-audio (output monitor) source is selected,
+    // local monitoring is turned off to avoid a feedback loop. Make that
+    // explicit so the user isn't surprised they don't hear it through us.
+    if (m_selectedInputSourceIndex >= 0 &&
+        m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIsMonitor.size()) &&
+        m_inputSourceIsMonitor[m_selectedInputSourceIndex])
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Capturing system audio — local monitoring is off "
+                           "(prevents feedback). You still hear it from the system.");
+    }
+
     ImGui::Spacing();
 
-    // Current input source info
     std::string currentSource = pulseCapture->getCurrentInputSource();
     if (!currentSource.empty())
     {
-        ImGui::Text("Current Input: %s", currentSource.c_str());
-        
+        ImGui::Text("Capturing from: %s", currentSource.c_str());
+        ImGui::Text("Format: %u Hz, %u channel%s",
+                    pulseCapture->getSampleRate(),
+                    pulseCapture->getChannels(),
+                    pulseCapture->getChannels() == 1 ? "" : "s");
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                           "Published as 'RetroCapture' source");
+
         ImGui::Spacing();
-        if (ImGui::Button("Disconnect Input Source"))
+        if (ImGui::Button("Resync monitor"))
+        {
+            pulseCapture->resyncMonitor();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Stop capture"))
         {
             pulseCapture->disconnectInputSource();
             m_selectedInputSourceIndex = -1;
-            // Save configuration (clear saved source)
             if (m_uiManager)
             {
                 m_uiManager->setAudioInputSourceId("");
@@ -213,10 +279,147 @@ void UIConfigurationAudio::renderInputSourceSelection()
     }
     else
     {
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "No input source connected");
-        ImGui::TextWrapped("Select an input source above to connect it to RetroCapture. "
-                         "The selected source will be captured for streaming and recording.");
+        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.0f, 1.0f), "No input device selected");
+        ImGui::TextWrapped("Pick a device above to start capturing. "
+                           "RetroCapture will record from it and publish "
+                           "the audio as the 'RetroCapture' source.");
+    }
+#elif defined(__APPLE__) || defined(_WIN32)
+    if (m_inputSourceNames.empty())
+    {
+        ImGui::TextWrapped("No audio devices found.");
+        return;
+    }
+
+    std::vector<const char *> namesCStr;
+    namesCStr.reserve(m_inputSourceNames.size());
+    for (const auto &n : m_inputSourceNames) namesCStr.push_back(n.c_str());
+
+    const int prev = m_selectedInputSourceIndex;
+    int        idx = (m_selectedInputSourceIndex >= 0)
+                     ? m_selectedInputSourceIndex : 0;
+    if (ImGui::Combo("Input device", &idx,
+                     namesCStr.data(), static_cast<int>(namesCStr.size())))
+    {
+        if (idx >= 0 && idx < static_cast<int>(m_inputSourceIds.size()))
+        {
+            const std::string pickedId = m_inputSourceIds[idx];
+            m_audioCapture->close();
+            if (m_audioCapture->open(pickedId))
+            {
+                m_audioCapture->startCapture();
+                m_selectedInputSourceIndex = idx;
+                if (m_uiManager)
+                {
+                    m_uiManager->setAudioInputSourceId(pickedId);
+                    m_uiManager->saveConfig();
+                }
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+                                   "Failed to open audio device");
+                m_selectedInputSourceIndex = prev;
+            }
+        }
+    }
+
+    // #109 — flag system-audio (output monitor) selections.
+    if (m_selectedInputSourceIndex >= 0 &&
+        m_selectedInputSourceIndex < static_cast<int>(m_inputSourceIsMonitor.size()) &&
+        m_inputSourceIsMonitor[m_selectedInputSourceIndex])
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f),
+                           "Capturing system audio (loopback).");
+    }
+
+    ImGui::Spacing();
+    if (m_audioCapture->isOpen())
+    {
+        ImGui::Text("Format: %u Hz, %u channel%s",
+                    m_audioCapture->getSampleRate(),
+                    m_audioCapture->getChannels(),
+                    m_audioCapture->getChannels() == 1 ? "" : "s");
+
+#ifdef __APPLE__
+        if (ImGui::Button("Resync monitor"))
+        {
+            if (auto *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(m_audioCapture))
+            {
+                caCapture->resyncMonitor();
+            }
+        }
+#endif
     }
 #endif
 }
+
+#ifdef __APPLE__
+
+void UIConfigurationAudio::renderAVFoundationAudioDeviceSelection()
+{
+    ui_section_header("AVFoundation audio source",
+                      "Some capture devices carry audio alongside video "
+                      "(UVC HDMI grabbers). Use this dropdown to pick "
+                      "between the bundled stream and any other "
+                      "AVFoundation audio source on the system.");
+
+    if (!m_uiManager) return;
+
+    // Listing the AVFoundation audio devices goes through the video
+    // capture instance — AVFoundation owns the audio enumeration since
+    // the audio is bundled with the video device descriptor.
+    IVideoCapture *vc = m_uiManager->getCapture();
+    if (!vc)
+    {
+        ImGui::TextWrapped("No AVFoundation capture active.");
+        return;
+    }
+
+    if (m_avfAudioDevicesNeedRefresh)
+    {
+        m_avfAudioDevices = vc->listAudioDevices();
+        m_avfAudioDevicesNeedRefresh = false;
+    }
+
+    if (m_avfAudioDevices.empty())
+    {
+        ImGui::TextWrapped("No AVFoundation audio devices found.");
+        if (ImGui::Button("Refresh##avfAudioDevices"))
+        {
+            m_avfAudioDevicesNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string current = vc->getCurrentAudioDevice();
+    std::vector<const char *> names;
+    int idx = -1;
+    names.reserve(m_avfAudioDevices.size());
+    for (size_t i = 0; i < m_avfAudioDevices.size(); ++i)
+    {
+        names.push_back(m_avfAudioDevices[i].name.c_str());
+        if (m_avfAudioDevices[i].id == current) idx = static_cast<int>(i);
+    }
+    if (idx < 0) idx = 0;
+
+    if (ImGui::Combo("##avfAudioDevices", &idx,
+                     names.data(), static_cast<int>(names.size())))
+    {
+        const auto &picked = m_avfAudioDevices[idx];
+        if (vc->setAudioDevice(picked.id))
+        {
+            m_uiManager->setAVFoundationAudioDeviceId(picked.id);
+            m_uiManager->saveConfig();
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfAudioDevices"))
+    {
+        m_avfAudioDevicesNeedRefresh = true;
+    }
+}
+
+#endif // __APPLE__
 

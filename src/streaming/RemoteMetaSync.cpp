@@ -13,6 +13,7 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -131,6 +132,13 @@ namespace
                 const auto &st = j["streaming"];
                 out.upstreamClientCount = st.value("clientCount", 0u);
             }
+            if (j.contains("chat") && j["chat"].is_object())
+            {
+                // #84 — Chat-room hint. Empty when the host isn't
+                // publishing publicly; the client overlay will stay
+                // idle in that case.
+                out.chatRoomSlug = j["chat"].value("roomSlug", std::string{});
+            }
             return true;
         }
         catch (const std::exception &e)
@@ -183,6 +191,16 @@ void RemoteMetaSync::stop()
 {
     if (!m_running.load()) return;
     m_running.store(false);
+    // Break the SSE thread out of its no-timeout recv() immediately.
+    // Without this the join() below blocks until the host happens to
+    // send the next event/keepalive — which froze the UI on Disconnect.
+    // shutdownSocket() makes the in-flight recv return at once; the loop
+    // then sees m_running == false and exits. #104.
+    const std::intptr_t s = m_sseSock.load();
+    if (s != -1)
+    {
+        httpinternal::shutdownSocket(static_cast<httpinternal::socket_t>(s));
+    }
     if (m_thread.joinable())
     {
         m_thread.join();
@@ -275,6 +293,18 @@ bool RemoteMetaSync::runSSE()
         return false;
     }
 
+    // Register the live socket so stop() (on the UI thread) can break our
+    // blocking, no-timeout recv() by shutting it down. The guard clears
+    // the registration on every exit path; declared AFTER `conn` so it
+    // destructs FIRST — m_sseSock is back to -1 before `conn` closes the
+    // fd, so stop() can never shut down a closed/reused descriptor. #104.
+    m_sseSock.store(static_cast<std::intptr_t>(conn.sock));
+    struct SseSockGuard
+    {
+        std::atomic<std::intptr_t> &ref;
+        ~SseSockGuard() { ref.store(-1); }
+    } sseSockGuard{m_sseSock};
+
     // No recv timeout — SSE is intentionally long-lived. We rely on
     // peer-side keepalive comments and OS-level RST/FIN to notice
     // broken connections.
@@ -327,29 +357,92 @@ bool RemoteMetaSync::runSSE()
         int code = std::atoi(headerSection.c_str() + sp + 1);
         if (code < 200 || code >= 300) return false;
     }
+    // Lower-case header copy for the Content-Type / Transfer-Encoding checks.
+    std::string headerLower = headerSection;
+    std::transform(headerLower.begin(), headerLower.end(), headerLower.begin(),
+                   [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+
     // Content-Type check — must be text/event-stream for SSE.
+    if (headerLower.find("text/event-stream") == std::string::npos)
     {
-        std::string lower = headerSection;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c) { return static_cast<char>(::tolower(c)); });
-        if (lower.find("text/event-stream") == std::string::npos)
+        // Server responded with the old one-shot JSON snapshot — parse it
+        // and dispatch, then return false so the caller falls back to
+        // short-polling (since this server doesn't support SSE).
+        std::string body = buf.substr(headerEnd + 4);
+        Snapshot snap;
+        if (parseSnapshotJSON(body, snap))
         {
-            // Server responded with the old one-shot JSON snapshot — parse it
-            // and dispatch, then return false so the caller falls back to
-            // short-polling (since this server doesn't support SSE).
-            std::string body = buf.substr(headerEnd + 4);
-            Snapshot snap;
-            if (parseSnapshotJSON(body, snap))
-            {
-                dispatchIfChanged(snap);
-            }
-            return false;
+            dispatchIfChanged(snap);
         }
+        return false;
     }
 
-    LOG_INFO("RemoteMetaSync: SSE stream established with " + m_baseUrl);
+    // #120 — through a proxy (Cloudflare / stream.retrocapture.com) the SSE
+    // response is sent with Transfer-Encoding: chunked. The hand-rolled
+    // reader below splits events on "\n\n" over the raw bytes; without
+    // de-chunking, the chunk-size framing ("<hexsize>\r\n … \r\n") gets
+    // embedded into whichever event straddles a chunk boundary and the
+    // JSON parse fails ("ill-formed UTF-8 byte" / "missing closing quote").
+    // Direct host connections are unchunked so it only bit behind a proxy.
+    const bool chunked = (headerLower.find("transfer-encoding:") != std::string::npos &&
+                          headerLower.find("chunked") != std::string::npos);
 
-    std::string body = buf.substr(headerEnd + 4);
+    LOG_INFO(std::string("RemoteMetaSync: SSE stream established with ") + m_baseUrl +
+             (chunked ? " (chunked)" : ""));
+
+    // Incremental HTTP chunked-transfer decoder. Chunks can straddle recv()
+    // boundaries, so state (which phase, bytes left in the current chunk)
+    // persists across calls. Consumes complete framing from rawBuf and
+    // appends only the de-chunked payload to out; leaves any incomplete
+    // tail in rawBuf for the next pass.
+    std::string rawBuf;          // undecoded chunked bytes
+    size_t chunkRemaining = 0;   // data bytes left in the current chunk
+    int    chunkPhase     = 0;   // 0 = size line, 1 = data, 2 = trailing CRLF
+    bool   chunkError     = false;
+    auto dechunk = [&](std::string &out)
+    {
+        while (!rawBuf.empty())
+        {
+            if (chunkPhase == 0) // reading "<hexsize>[;ext]\r\n"
+            {
+                size_t crlf = rawBuf.find("\r\n");
+                if (crlf == std::string::npos)
+                {
+                    if (rawBuf.size() > 16 * 1024) chunkError = true; // garbage / desync
+                    break;
+                }
+                std::string sizeLine = rawBuf.substr(0, crlf);
+                size_t semi = sizeLine.find(';'); // strip chunk extensions
+                if (semi != std::string::npos) sizeLine.erase(semi);
+                chunkRemaining = static_cast<size_t>(strtoul(sizeLine.c_str(), nullptr, 16));
+                rawBuf.erase(0, crlf + 2);
+                if (chunkRemaining == 0) break; // last chunk (0\r\n\r\n) — stream end
+                chunkPhase = 1;
+            }
+            else if (chunkPhase == 1) // chunk data
+            {
+                size_t take = std::min(chunkRemaining, rawBuf.size());
+                out.append(rawBuf, 0, take);
+                rawBuf.erase(0, take);
+                chunkRemaining -= take;
+                if (chunkRemaining == 0) chunkPhase = 2;
+                else break; // need more bytes for this chunk
+            }
+            else // chunkPhase == 2: CRLF terminating the chunk data
+            {
+                if (rawBuf.size() < 2) break; // wait for both bytes
+                rawBuf.erase(0, 2);
+                chunkPhase = 0;
+            }
+        }
+    };
+
+    std::string body;
+    {
+        std::string afterHeaders = buf.substr(headerEnd + 4);
+        if (chunked) { rawBuf = std::move(afterHeaders); dechunk(body); }
+        else         { body    = std::move(afterHeaders); }
+    }
     buf.clear();
 
     auto processEvents = [&](std::string &stream)
@@ -399,7 +492,22 @@ bool RemoteMetaSync::runSSE()
     {
         int n = conn.recvSome(chunk, sizeof(chunk));
         if (n <= 0) break;
-        body.append(chunk, static_cast<size_t>(n));
+        if (chunked)
+        {
+            rawBuf.append(chunk, static_cast<size_t>(n));
+            dechunk(body);
+            // Malformed chunk framing — bail so the caller reconnects fresh
+            // rather than spinning on a desynced byte stream.
+            if (chunkError)
+            {
+                LOG_WARN("RemoteMetaSync: malformed chunked framing on SSE — reconnecting");
+                return true;
+            }
+        }
+        else
+        {
+            body.append(chunk, static_cast<size_t>(n));
+        }
         if (body.size() > 256 * 1024)
         {
             // Sanity cap. Drop anything before the last complete event boundary.

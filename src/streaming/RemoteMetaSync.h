@@ -60,6 +60,12 @@ public:
         // mode. Optional; older hosts that don't send this field
         // leave it at 0.
         uint32_t                     upstreamClientCount = 0;
+        // chat block (#84) — the host's persistent chat-room slug
+        // (UIManager::streamRoomSlug). Empty when the host has chat
+        // turned off, or hasn't chosen a slug yet. Replaces the
+        // earlier per-session chatStreamId, which produced one
+        // orphan chat_rooms row per stream restart.
+        std::string                  chatRoomSlug;
     };
 
     using SnapshotCallback = std::function<void(const Snapshot &)>;
@@ -126,6 +132,12 @@ private:
 
     std::thread         m_thread;
     std::atomic<bool>   m_running{false};
+    // Live SSE socket fd, registered by runSSE() while it's blocked in a
+    // no-timeout recv(). stop() shuts it down to break that recv at once
+    // so the join() doesn't hang until the host's next event/keepalive
+    // (which froze the UI on Disconnect). Stored as intptr_t so the
+    // header doesn't pull in socket headers; -1 == none. #104.
+    std::atomic<std::intptr_t> m_sseSock{-1};
 
     // Dedup state — only fire the callback when the snapshot actually
     // changed. Compared against the new snapshot before dispatch.

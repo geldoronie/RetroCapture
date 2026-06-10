@@ -3,9 +3,12 @@
 #include "UIConfigurationShader.h"
 #include "UIConfigurationImage.h"
 #include "UIConfigurationStreaming.h"
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+#  include "UIConfigurationVirtualCamera.h"
+#endif
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #  include "UIConfigurationAudio.h"
 #endif
 #include "UIInfoPanel.h"
@@ -14,6 +17,7 @@
 #include "UIShortcutsHelp.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
+#include "../osd/OSDChat.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -36,12 +40,14 @@
 #ifdef USE_SDL2
 #include <SDL2/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h> // #107 follow-up: clamp off-screen windows back in
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #endif
@@ -69,9 +75,12 @@ UIManager::~UIManager()
     m_shaderWindow.reset();
     m_imageWindow.reset();
     m_streamingWindow.reset();
+#if defined(__linux__)
+    m_virtcamWindow.reset();
+#endif
     m_recordingWindow.reset();
     m_webPortalWindow.reset();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow.reset();
 #endif
     m_infoWindow.reset();
@@ -135,6 +144,11 @@ bool UIManager::init(void *window)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // Move windows only by dragging their title bar (standard desktop
+    // window behaviour). Without this, dragging anywhere in a window's
+    // body moves it — which fought the region-selector marquee and is
+    // generally surprising. Applies to every RetroCapture window.
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Anchor the ImGui ini to the user-data dir so window
     // positions/sizes/collapse state survive across runs regardless
@@ -174,6 +188,53 @@ bool UIManager::init(void *window)
     // fallback. The bullets are now drawn via ImDrawList primitives
     // through ui_status_bullet() in UISectionHeader.h — same
     // technique UIDirectoryBrowser::drawPadlockIcon uses.
+    //
+    // Optional emoji font (#84) — chat messages routinely contain
+    // emojis the default font can't render either. We don't bundle a
+    // font (Noto Emoji's monochrome TTF is ~530 KB and adding it
+    // would grow every release), but we DO honour one if the user
+    // drops it under assets/fonts/. The expected file is
+    // NotoEmoji-Regular.ttf (download from
+    // https://fonts.google.com/noto/specimen/Noto+Emoji). When
+    // present we merge a broad emoji + dingbats + supplemental
+    // symbols range into the default atlas so chat content lands
+    // with proper glyphs instead of fallback boxes.
+    {
+        const fs::path fontPath =
+            fs::path(Paths::getReadOnlyAssetsDir()) / "assets" / "fonts" /
+            "NotoEmoji-Regular.ttf";
+        if (fs::exists(fontPath))
+        {
+            ImGuiIO &io = ImGui::GetIO();
+            io.Fonts->AddFontDefault();
+            ImFontConfig cfg;
+            cfg.MergeMode  = true;
+            cfg.PixelSnapH = true;
+            // ImGui's atlas only supports the Basic Multilingual Plane
+            // (U+0000..U+FFFF) plus surrogate-paired codepoints up to
+            // U+10FFFF that ImWchar32 can address; the runtime build
+            // here uses ImWchar = 16-bit by default. Cover the BMP
+            // symbol ranges that don't need surrogates so the merge
+            // takes effect even on a stock build.
+            static const ImWchar ranges[] = {
+                0x2000, 0x206F,   // general punctuation
+                0x2190, 0x21FF,   // arrows
+                0x2300, 0x23FF,   // misc technical (⏎ etc.)
+                0x2500, 0x257F,   // box drawing
+                0x2580, 0x259F,   // block elements
+                0x25A0, 0x25FF,   // geometric shapes (●, ○, …)
+                0x2600, 0x26FF,   // misc symbols (☀, ★, ♥…)
+                0x2700, 0x27BF,   // dingbats (✓, ✦…)
+                0x2B00, 0x2BFF,   // misc symbols + arrows
+                0x3000, 0x303F,   // CJK punctuation
+                0xFB00, 0xFB06,   // Latin ligatures
+                0,
+            };
+            io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(),
+                                         13.0f, &cfg, ranges);
+            LOG_INFO("UIManager: merged emoji font from " + fontPath.string());
+        }
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -226,9 +287,12 @@ bool UIManager::init(void *window)
     m_shaderWindow      = std::make_unique<UIConfigurationShader>(this);
     m_imageWindow       = std::make_unique<UIConfigurationImage>(this);
     m_streamingWindow   = std::make_unique<UIConfigurationStreaming>(this);
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    m_virtcamWindow     = std::make_unique<UIConfigurationVirtualCamera>(this);
+#endif
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
     m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
 #endif
     m_infoWindow        = std::make_unique<UIInfoPanel>(this);
@@ -240,6 +304,12 @@ bool UIManager::init(void *window)
     m_quickActionsOverlay->setVisible(m_quickActionsVisible);
     m_connectionOverlay   = std::make_unique<ConnectionStatusOverlay>(
         this, m_quickActionsOverlay.get());
+    // Chat overlay (#84) — needs the ChatClient pointer Application
+    // installs via setChatClient(). Always constructed; the overlay
+    // self-hides while the client is Idle, so a null/unconfigured
+    // pointer renders as nothing.
+    m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+    m_chatOverlay->setVisible(m_chatOverlayVisible);
     // Shortcuts orientation widget — UI layer, top-right corner,
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
@@ -262,6 +332,20 @@ bool UIManager::init(void *window)
     m_initialized = true;
     LOG_INFO("UIManager initialized");
     return true;
+}
+
+void UIManager::setChatClient(ChatClient *chat)
+{
+    m_chatClient = chat;
+    if (m_chatOverlay)
+    {
+        // The overlay was constructed before init() finished if
+        // setChatClient ran first; reconstruct it so it picks up the
+        // pointer. Cheaper to swap than to expose another setter that
+        // most callers wouldn't touch.
+        m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
+        m_chatOverlay->setVisible(m_chatOverlayVisible);
+    }
 }
 
 void UIManager::shutdown()
@@ -289,6 +373,48 @@ void UIManager::shutdown()
     m_initialized = false;
 }
 
+// Keep every movable top-level window reachable: if its position drifted
+// outside the viewport (stale imgui.ini after a resolution/monitor change,
+// etc.) nudge it back so at least a grabbable strip of the title bar stays
+// on screen. Runs each frame on last frame's positions and applies before
+// the windows are submitted this frame, so they never paint off-screen.
+static void clampImGuiWindowsToViewport()
+{
+    ImGuiContext *gp = ImGui::GetCurrentContext();
+    if (!gp) return;
+    ImGuiContext &g = *gp;
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    if (!vp) return;
+    const float minX0 = vp->WorkPos.x;
+    const float minY0 = vp->WorkPos.y;
+    const float maxX0 = vp->WorkPos.x + vp->WorkSize.x;
+    const float maxY0 = vp->WorkPos.y + vp->WorkSize.y;
+    const float keep  = 48.0f; // px of the window that must remain on-screen
+
+    for (ImGuiWindow *w : g.Windows)
+    {
+        if (!w || !w->WasActive) continue;
+        if (w->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip |
+                        ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoMove))
+            continue; // children/popups/pinned OSD overlays manage themselves
+        if (w->Size.x <= 0.0f || w->Size.y <= 0.0f) continue;
+
+        ImVec2 pos = w->Pos;
+        const float minX = minX0 - w->Size.x + keep; // allow off the left/right
+        const float maxX = maxX0 - keep;             // edges, keep `keep` visible
+        const float minY = minY0;                    // title must stay below top
+        const float maxY = maxY0 - keep;
+        if (pos.x < minX) pos.x = minX;
+        if (pos.x > maxX) pos.x = maxX;
+        if (pos.y < minY) pos.y = minY;
+        if (pos.y > maxY) pos.y = maxY;
+
+        if (pos.x != w->Pos.x || pos.y != w->Pos.y)
+            ImGui::SetWindowPos(w, pos, ImGuiCond_Always);
+    }
+}
+
 void UIManager::beginFrame()
 {
     if (!m_initialized)
@@ -304,7 +430,8 @@ void UIManager::beginFrame()
     // (UI hidden AND no interactive OSD on screen) rather than on
     // UI alone, and skip the mouse-position scrub that would prevent
     // any widget from seeing hover at all.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     const bool blockMouse     = !m_uiVisible && !osdInteractive;
     ImGuiIO& io = ImGui::GetIO();
     if (blockMouse)
@@ -339,6 +466,10 @@ void UIManager::beginFrame()
         io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
         io.MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
     }
+
+    // Pull any window that drifted off-screen back into the viewport so it
+    // can't get lost at a position that no longer exists on screen.
+    clampImGuiWindowsToViewport();
 }
 
 void UIManager::endFrame()
@@ -365,7 +496,8 @@ void UIManager::endFrame()
     // buttons must respond to clicks even with the rest of the UI
     // hidden via F12. So gate NoMouse on (UI hidden AND no
     // interactive OSD visible) rather than UI alone.
-    const bool osdInteractive = m_quickActionsOverlay && m_quickActionsOverlay->isVisible();
+    const bool osdInteractive = (m_quickActionsOverlay && m_quickActionsOverlay->isVisible()) ||
+                                (m_chatOverlay         && m_chatOverlay->isVisible());
     ImGuiIO& io = ImGui::GetIO();
     if (!m_uiVisible && !osdInteractive)
     {
@@ -402,6 +534,30 @@ void UIManager::render()
     // queries it for anti-collision math.
     if (m_quickActionsOverlay) m_quickActionsOverlay->render();
     renderConnectionOverlay();
+    // Chat overlay (#84) — also outside the m_uiVisible gate so the
+    // user can keep an eye on chat while everything else is hidden.
+    if (m_chatOverlay) m_chatOverlay->render();
+    // Directory browser (#84) — promoted from the regular UI layer
+    // to the OSD layer so it stays reachable when F12 hides the
+    // config windows. Same one-button entry from QuickActions
+    // continues to work; the only behavioural change is "outside
+    // m_uiVisible". p_open binding inside UIDirectoryBrowser::render
+    // gives it the standard title-bar X.
+    if (m_directoryBrowserWindow)
+    {
+        // Per-frame invariant: a host who's actively streaming
+        // shouldn't have the browser open — picking another stream
+        // would fight the capture pipeline, and the QuickActions
+        // button that opens it is already disabled in that state.
+        // Forcing it closed every frame is cheap and avoids the
+        // "I opened it before clicking Start, now it's stuck" case.
+        if (getStreamingActive() && !isRemoteSource() &&
+            m_directoryBrowserWindow->isVisible())
+        {
+            m_directoryBrowserWindow->setVisible(false);
+        }
+        m_directoryBrowserWindow->render();
+    }
 
     if (!m_uiVisible)
     {
@@ -464,8 +620,11 @@ void UIManager::render()
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
+#endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
 #endif
             }
@@ -487,6 +646,10 @@ void UIManager::render()
                     m_quickActionsOverlay->setVisible(!visible);
                 }
             }
+            // Profile / Chat / Chat Rooms moved to the top-level
+            // "Social" menu — they're a coherent group that's not
+            // about toggling local widgets, so the View menu was
+            // the wrong drawer for them.
             if (m_shortcutsHelpWindow)
             {
                 bool visible = m_shortcutsHelpWindow->isVisible();
@@ -524,6 +687,34 @@ void UIManager::render()
             }
             ImGui::EndMenu();
         }
+
+        // Social — Profile / Chat / Chat Rooms. Conceptually about
+        // identity + communication with other users; the View menu
+        // was being used as a catch-all and these items got buried.
+        if (m_chatOverlay && ImGui::BeginMenu(T("menu.social").c_str()))
+        {
+            bool profVis = m_chatOverlay->isProfileWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.profile").c_str(),
+                                nullptr, profVis))
+            {
+                m_chatOverlay->setProfileWindowVisible(!profVis);
+            }
+            ImGui::Separator();
+            bool chatVis = m_chatOverlay->isVisible();
+            if (ImGui::MenuItem(T("menu.social.chat").c_str(),
+                                "F8", chatVis))
+            {
+                m_chatOverlay->setVisible(!chatVis);
+            }
+            bool roomsVis = m_chatOverlay->isRoomsWindowVisible();
+            if (ImGui::MenuItem(T("menu.social.chatrooms").c_str(),
+                                nullptr, roomsVis))
+            {
+                m_chatOverlay->setRoomsWindowVisible(!roomsVis);
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu(T("menu.remote").c_str()))
         {
             const bool clientEntryAllowed = !m_streamingActive;
@@ -591,9 +782,12 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+        if (m_virtcamWindow)   m_virtcamWindow->setVisible(false);
+#endif
         // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
 #endif
     }
@@ -604,9 +798,12 @@ void UIManager::render()
     if (m_shaderWindow)      m_shaderWindow->render();
     if (m_imageWindow)       m_imageWindow->render();
     if (m_streamingWindow)   m_streamingWindow->render();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    if (m_virtcamWindow)     m_virtcamWindow->render();
+#endif
     if (m_recordingWindow)   m_recordingWindow->render();
     if (m_webPortalWindow)   m_webPortalWindow->render();
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     if (m_audioWindow)       m_audioWindow->render();
 #endif
     if (m_infoWindow)        m_infoWindow->render();
@@ -626,10 +823,10 @@ void UIManager::render()
         m_remoteConnectionWindow->render();
     }
 
-    if (m_directoryBrowserWindow)
-    {
-        m_directoryBrowserWindow->render();
-    }
+    // Directory browser moved to the OSD layer (rendered above the
+    // m_uiVisible gate at the top of this function). No render call
+    // here — having two would either double-render or eat input on
+    // alternating frames.
 
     // Renderizar janela de presets
     if (m_capturePresetsWindow)
@@ -2248,6 +2445,35 @@ void UIManager::triggerRemoteInterpolationChange(const std::string &v)
     saveConfig();
 }
 
+void UIManager::triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    m_screenRegionX = x; m_screenRegionY = y; m_screenRegionW = w; m_screenRegionH = h;
+    if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    saveConfig();
+}
+
+void UIManager::triggerRemoteAudioVolumeChange(float volume)
+{
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 1.0f) volume = 1.0f;
+    m_remoteAudioVolume = volume;
+    // Moving the slider above zero is an implicit unmute.
+    if (volume > 0.0f) m_remoteAudioMuted = false;
+    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
+    saveConfig();
+}
+
+void UIManager::triggerRemoteAudioMuteChange(bool muted)
+{
+    m_remoteAudioMuted = muted;
+    // Mute zeroes the effective gain but keeps m_remoteAudioVolume so
+    // the slider position (and the value restored on unmute) survives.
+    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
+    saveConfig();
+}
+
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
     m_streamingMaxVideoBufferSize = size;
@@ -2515,6 +2741,45 @@ void UIManager::loadConfig()
                 if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
                 if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
             }
+            // Chat URL (#84) — sibling to the directory block.
+            if (streaming.contains("chat"))
+            {
+                auto &chat = streaming["chat"];
+                if (chat.contains("baseUrl"))  m_chatBaseUrl  = chat["baseUrl"].get<std::string>();
+                if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
+                if (chat.contains("streamChatEnabled"))
+                    m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
+                if (chat.contains("streamRoomTitle"))
+                    m_streamRoomTitle   = chat["streamRoomTitle"].get<std::string>();
+                if (chat.contains("streamRoomSlug"))
+                    m_streamRoomSlug    = chat["streamRoomSlug"].get<std::string>();
+            }
+            // #85 — Virtual camera config, sibling block.
+            if (streaming.contains("virtcam"))
+            {
+                auto &vc = streaming["virtcam"];
+                if (vc.contains("enabled"))
+                    m_virtcamEnabled      = vc["enabled"].get<bool>();
+                if (vc.contains("devicePath"))
+                    m_virtcamDevicePath   = vc["devicePath"].get<std::string>();
+                if (vc.contains("outputWidth"))
+                    m_virtcamOutputWidth  = vc["outputWidth"].get<uint32_t>();
+                if (vc.contains("outputHeight"))
+                    m_virtcamOutputHeight = vc["outputHeight"].get<uint32_t>();
+                if (vc.contains("outputFps"))
+                    m_virtcamOutputFps    = vc["outputFps"].get<uint32_t>();
+                if (vc.contains("pixelFormat"))
+                    m_virtcamPixelFormat  = vc["pixelFormat"].get<std::string>();
+            }
+            // #84 — One-shot migration: pre-rework configs stored
+            // the directory's display nickname in a separate field
+            // (m_directoryHostNickname). The chat Profile now owns
+            // it; copy across when the chat nickname is empty so
+            // legacy configs don't suddenly look "unnamed".
+            if (m_chatNickname.empty() && !m_directoryHostNickname.empty())
+            {
+                m_chatNickname = m_directoryHostNickname;
+            }
         }
 
         // Preferences (#45 placeholder + window restructure)
@@ -2523,14 +2788,25 @@ void UIManager::loadConfig()
             auto &prefs = config["preferences"];
             if (prefs.contains("language"))        m_language        = prefs["language"].get<std::string>();
             if (prefs.contains("startFullscreen")) m_startFullscreen = prefs["startFullscreen"].get<bool>();
+            // #86 system tray / background operation.
+            if (prefs.contains("trayEnabled"))         m_trayEnabled         = prefs["trayEnabled"].get<bool>();
+            if (prefs.contains("trayMinimizeOnClose")) m_trayMinimizeOnClose = prefs["trayMinimizeOnClose"].get<bool>();
+            if (prefs.contains("trayStartMinimized"))  m_trayStartMinimized  = prefs["trayStartMinimized"].get<bool>();
+            if (prefs.contains("trayNotifications"))   m_trayNotifications   = prefs["trayNotifications"].get<bool>();
             // #68 — Quick actions widget visibility persists. Default
             // true so users discover the widget on first launch; once
             // they toggle it off via View, the choice survives across
             // runs.
             if (prefs.contains("quickActionsVisible"))
                 m_quickActionsVisible = prefs["quickActionsVisible"].get<bool>();
+            if (prefs.contains("quickActionsAutoHide"))
+                m_quickActionsAutoHide = prefs["quickActionsAutoHide"].get<bool>();
             if (prefs.contains("shortcutsHelpVisible"))
                 m_shortcutsHelpVisible = prefs["shortcutsHelpVisible"].get<bool>();
+            // Chat overlay visibility (#84). Default true — same
+            // discoverability story as the quick-actions widget.
+            if (prefs.contains("chatOverlayVisible"))
+                m_chatOverlayVisible = prefs["chatOverlayVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2762,7 +3038,30 @@ void UIManager::loadConfig()
             if (source.contains("type"))
             {
                 int sourceTypeInt = source["type"].get<int>();
-                m_sourceType = static_cast<SourceType>(sourceTypeInt);
+                SourceType loaded  = static_cast<SourceType>(sourceTypeInt);
+                // Coerce platform-foreign source types to the local
+                // platform's native one: a config saved on Linux
+                // with V4L2 shouldn't try to instantiate V4L2 on
+                // macOS, and so on. Remote and None always travel.
+                const bool isPlatformNative =
+                    loaded == SourceType::None ||
+                    loaded == SourceType::Remote ||
+                    loaded == SourceType::Screen ||   // #107 cross-platform
+#ifdef __linux__
+                    loaded == SourceType::V4L2;
+#elif defined(_WIN32)
+                    loaded == SourceType::DS;
+#elif defined(__APPLE__)
+                    loaded == SourceType::AVFoundation;
+#else
+                    false;
+#endif
+                if (isPlatformNative)
+                {
+                    m_sourceType = loaded;
+                }
+                // else: keep the platform-default that the
+                // constructor / default-init set.
             }
         }
 
@@ -2786,6 +3085,28 @@ void UIManager::loadConfig()
             }
         }
 
+        // #107 — screen-capture target + region crop. Region always
+        // round-trips; the target only seeds m_currentDevice when the
+        // active source is Screen (m_currentDevice is shared and the
+        // v4l2/ds blocks above also write it).
+        if (config.contains("screen"))
+        {
+            auto &screen = config["screen"];
+            if (m_sourceType == SourceType::Screen &&
+                screen.contains("target") && !screen["target"].is_null())
+            {
+                m_currentDevice = screen["target"].get<std::string>();
+            }
+            auto getU = [&](const char *k, uint32_t &dst) {
+                if (screen.contains(k) && screen[k].is_number_unsigned())
+                    dst = screen[k].get<uint32_t>();
+            };
+            getU("regionX", m_screenRegionX);
+            getU("regionY", m_screenRegionY);
+            getU("regionW", m_screenRegionW);
+            getU("regionH", m_screenRegionH);
+        }
+
         // Carregar configurações de áudio
         if (config.contains("audio"))
         {
@@ -2793,6 +3114,38 @@ void UIManager::loadConfig()
             if (audio.contains("inputSourceId") && !audio["inputSourceId"].is_null())
             {
                 m_audioInputSourceId = audio["inputSourceId"].get<std::string>();
+            }
+            // #77 client-side remote audio volume + mute.
+            if (audio.contains("remoteVolume") && audio["remoteVolume"].is_number())
+            {
+                m_remoteAudioVolume = audio["remoteVolume"].get<float>();
+                if (m_remoteAudioVolume < 0.0f) m_remoteAudioVolume = 0.0f;
+                if (m_remoteAudioVolume > 1.0f) m_remoteAudioVolume = 1.0f;
+            }
+            if (audio.contains("remoteMuted") && audio["remoteMuted"].is_boolean())
+            {
+                m_remoteAudioMuted = audio["remoteMuted"].get<bool>();
+            }
+        }
+
+        // AVFoundation persistence (macOS device + format selection).
+        // Loaded on every platform so the JSON round-trips cleanly;
+        // ignored on non-macOS builds where the fields don't drive
+        // anything.
+        if (config.contains("avfoundation"))
+        {
+            auto &avf = config["avfoundation"];
+            if (avf.contains("deviceId") && !avf["deviceId"].is_null())
+            {
+                m_avfDeviceId = avf["deviceId"].get<std::string>();
+            }
+            if (avf.contains("formatId") && !avf["formatId"].is_null())
+            {
+                m_avfFormatId = avf["formatId"].get<std::string>();
+            }
+            if (avf.contains("audioDeviceId") && !avf["audioDeviceId"].is_null())
+            {
+                m_avfAudioDeviceId = avf["audioDeviceId"].get<std::string>();
             }
         }
 
@@ -2913,18 +3266,43 @@ void UIManager::saveConfig()
                 {"namedTunnelId",       m_directoryNamedTunnelId},
                 {"namedTunnelHostname", m_directoryNamedTunnelHostname},
                 {"privacyAcked",   m_directoryPrivacyAcked},
+            }},
+            // Chat service URL + persistent nickname (#84).
+            {"chat", {
+                {"baseUrl",            m_chatBaseUrl},
+                {"nickname",           m_chatNickname},
+                {"streamChatEnabled",  m_streamChatEnabled},
+                {"streamRoomTitle",    m_streamRoomTitle},
+                {"streamRoomSlug",     m_streamRoomSlug},
+            }},
+            // Virtual camera (#85).
+            {"virtcam", {
+                {"enabled",      m_virtcamEnabled},
+                {"devicePath",   m_virtcamDevicePath},
+                {"outputWidth",  m_virtcamOutputWidth},
+                {"outputHeight", m_virtcamOutputHeight},
+                {"outputFps",    m_virtcamOutputFps},
+                {"pixelFormat",  m_virtcamPixelFormat},
             }}};
 
         // Preferences (#45 placeholder + window restructure)
         config["preferences"] = {
             {"language",        m_language},
             {"startFullscreen", m_startFullscreen},
+            {"trayEnabled",         m_trayEnabled},
+            {"trayMinimizeOnClose", m_trayMinimizeOnClose},
+            {"trayStartMinimized",  m_trayStartMinimized},
+            {"trayNotifications",   m_trayNotifications},
             {"quickActionsVisible",
              m_quickActionsOverlay ? m_quickActionsOverlay->isVisible()
                                   : m_quickActionsVisible},
+            {"quickActionsAutoHide", m_quickActionsAutoHide},
             {"shortcutsHelpVisible",
              m_shortcutsHelpWindow ? m_shortcutsHelpWindow->isVisible()
                                    : m_shortcutsHelpVisible},
+            {"chatOverlayVisible",
+             m_chatOverlay ? m_chatOverlay->isVisible()
+                           : m_chatOverlayVisible},
         };
 
         // Salvar configurações de imagem
@@ -2976,9 +3354,25 @@ void UIManager::saveConfig()
         config["directshow"] = {
             {"device", m_currentDevice.empty() ? "" : m_currentDevice}};
 
+        // #107 — screen-capture target + region crop.
+        config["screen"] = {
+            {"target",  (m_sourceType == SourceType::Screen) ? m_currentDevice : std::string()},
+            {"regionX", m_screenRegionX},
+            {"regionY", m_screenRegionY},
+            {"regionW", m_screenRegionW},
+            {"regionH", m_screenRegionH}};
+
         // Salvar configurações de áudio
         config["audio"] = {
-            {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId}};
+            {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId},
+            {"remoteVolume", m_remoteAudioVolume},
+            {"remoteMuted", m_remoteAudioMuted}};
+
+        // AVFoundation device + format selection (macOS).
+        config["avfoundation"] = {
+            {"deviceId",      m_avfDeviceId},
+            {"formatId",      m_avfFormatId},
+            {"audioDeviceId", m_avfAudioDeviceId}};
 
         // Salvar configurações de gravação
         config["recording"] = {

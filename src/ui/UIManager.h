@@ -26,6 +26,7 @@ class UIConfigurationStreaming;
 class UIConfigurationRecording;
 class UIConfigurationWebPortal;
 class UIConfigurationAudio;
+class UIConfigurationVirtualCamera;
 class UIInfoPanel;
 class QuickActionsOverlay;
 class UIPreferences;
@@ -162,8 +163,10 @@ public:
     {
         None = 0,
         V4L2 = 1,
-        DS = 2, // DirectShow (Windows)
-        Remote = 3 // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
+        DS = 2,           // DirectShow (Windows)
+        Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
+        AVFoundation = 4, // AVFoundation (macOS)
+        Screen = 5        // Desktop / window / region screen capture (#107)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -273,6 +276,102 @@ public:
     void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
     bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
     void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    // #84 — Chat service base URL (ws:// or wss://). Editable under
+    // Configurations → Streaming → Advanced, mirroring the directory
+    // URL field. Application reads this every frame and reconfigures
+    // the ChatClient when it changes (cheap no-op when unchanged).
+    const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
+    void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
+    // #84 — Persistent chat nickname. Shared between host and viewer
+    // modes (you're "geldo" regardless of which side you're on); the
+    // OSD chat panel writes here when the user clicks Apply. Empty
+    // means "use a fallback": Application falls back to the directory
+    // host nickname when publishing, or sends an empty hello (server
+    // generates anon-<rand>) when viewing.
+    const std::string &getChatNickname() const       { return m_chatNickname; }
+    void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    // #84 — Cross-window request to open the Chat Profile dialog.
+    // Set by UIConfigurationStreaming when the user clicks
+    // "Configure Profile"; consumed by OSDChat on the next frame.
+    // The flag is a one-shot — the consumer clears it so a stale
+    // request from minutes ago doesn't pop the dialog every frame.
+    bool consumeOpenChatProfileRequest()
+    {
+        if (!m_openChatProfileRequested) return false;
+        m_openChatProfileRequested = false;
+        return true;
+    }
+    void requestOpenChatProfile()                    { m_openChatProfileRequested = true; }
+    // #84 — Same one-shot pattern for the Chat Rooms window. Set by
+    // the QuickActions overlay; consumed by OSDChat on the next frame
+    // (also forces the chat panel itself visible if it was hidden).
+    bool consumeOpenChatRoomsRequest()
+    {
+        if (!m_openChatRoomsRequested) return false;
+        m_openChatRoomsRequested = false;
+        return true;
+    }
+    void requestOpenChatRooms()                      { m_openChatRoomsRequested = true; }
+    // #84 — "Open the chat alongside the stream" master toggle. When
+    // off, Application skips chat provisioning entirely; /meta omits
+    // chat.roomSlug so viewers don't auto-bind. Default ON so the
+    // out-of-the-box experience matches the prior auto-create-room
+    // behaviour. Editable under Streaming → Public Directory.
+    bool getStreamChatEnabled() const                { return m_streamChatEnabled; }
+    void setStreamChatEnabled(bool v)                { m_streamChatEnabled = v; }
+    // #84 — Human-readable name of the streamer's chat room. User-
+    // editable in Streaming → Chat room. Empty == "use default
+    // 'Stream of <nick>' at provision time".
+    const std::string &getStreamRoomTitle() const    { return m_streamRoomTitle; }
+    void setStreamRoomTitle(const std::string &v)    { m_streamRoomTitle = v; }
+    // #84 — Auto-derived public slug for the streamer's room. Not
+    // user-editable; computed from the room title (or the fallback
+    // "Stream of <nick>") at first stream start, persisted here so
+    // every reconnect lands on the same room. Empty == "not yet
+    // provisioned"; Application fills it on the first stream start
+    // with chat enabled.
+    const std::string &getStreamRoomSlug() const     { return m_streamRoomSlug; }
+    void setStreamRoomSlug(const std::string &v)     { m_streamRoomSlug = v; }
+
+    // #85 — Virtual camera (Linux v4l2loopback in Phase 1). Config
+    // round-trips through streaming.virtcam in retrocapture.conf.
+    // Runtime state (status / error text) lives here too, written
+    // by Application after each syncVirtualCamera tick so the
+    // configuration window can render a live status line.
+    bool getVirtcamEnabled() const                   { return m_virtcamEnabled; }
+    void setVirtcamEnabled(bool v)                   { m_virtcamEnabled = v; }
+    const std::string &getVirtcamDevicePath() const  { return m_virtcamDevicePath; }
+    void setVirtcamDevicePath(const std::string &v)  { m_virtcamDevicePath = v; }
+    uint32_t getVirtcamOutputWidth() const           { return m_virtcamOutputWidth; }
+    void setVirtcamOutputWidth(uint32_t v)           { m_virtcamOutputWidth = v; }
+    uint32_t getVirtcamOutputHeight() const          { return m_virtcamOutputHeight; }
+    void setVirtcamOutputHeight(uint32_t v)          { m_virtcamOutputHeight = v; }
+    uint32_t getVirtcamOutputFps() const             { return m_virtcamOutputFps; }
+    void setVirtcamOutputFps(uint32_t v)             { m_virtcamOutputFps = v; }
+    const std::string &getVirtcamPixelFormat() const { return m_virtcamPixelFormat; }
+    void setVirtcamPixelFormat(const std::string &v) { m_virtcamPixelFormat = v; }
+    // Status surface (written by Application; read by UI).
+    const std::string &getVirtcamStatusText() const  { return m_virtcamStatusText; }
+    void setVirtcamStatusText(const std::string &v)  { m_virtcamStatusText = v; }
+    const std::string &getVirtcamErrorText() const   { return m_virtcamErrorText; }
+    void setVirtcamErrorText(const std::string &v)   { m_virtcamErrorText = v; }
+    // #85 — Synchronous handshake for "stop the sink right now so
+    // I can `rmmod` the kernel module". UI sets requestVirtcamStop,
+    // Application::syncVirtualCamera consumes it on the next render
+    // frame: forces m_virtcam->stop() AND sets virtcamStoppedNotice
+    // so the UI worker can poll until it's safe to fire pkexec
+    // rmmod. Two atomic-ish bools (bool is fine here — UI thread
+    // and render thread is the same thread; the worker reads the
+    // *Notice flag but only after spinning a sleep, no race).
+    bool consumeVirtcamStopRequest()
+    {
+        if (!m_virtcamStopRequested) return false;
+        m_virtcamStopRequested = false;
+        return true;
+    }
+    void requestVirtcamStop()                        { m_virtcamStopRequested = true; }
+    bool isVirtcamStopped() const                    { return m_virtcamStoppedNotice; }
+    void setVirtcamStopped(bool v)                   { m_virtcamStoppedNotice = v; }
     // Preferences (#45 placeholder + window restructure). Persisted
     // today; the TranslationManager that consumes the language code
     // lands in Fase B.
@@ -280,9 +379,30 @@ public:
     void setLanguage(const std::string &v)           { m_language = v; }
     bool getStartFullscreen() const                  { return m_startFullscreen; }
     void setStartFullscreen(bool v)                  { m_startFullscreen = v; }
+    // #68 follow-up — auto-hide the quick-actions OSD after mouse idle.
+    bool getQuickActionsAutoHide() const             { return m_quickActionsAutoHide; }
+    void setQuickActionsAutoHide(bool v)             { m_quickActionsAutoHide = v; }
+    // #86 — system tray / background operation preferences.
+    bool getTrayEnabled() const                      { return m_trayEnabled; }
+    void setTrayEnabled(bool v)                      { m_trayEnabled = v; }
+    bool getTrayMinimizeOnClose() const              { return m_trayMinimizeOnClose; }
+    void setTrayMinimizeOnClose(bool v)              { m_trayMinimizeOnClose = v; }
+    bool getTrayStartMinimized() const               { return m_trayStartMinimized; }
+    void setTrayStartMinimized(bool v)               { m_trayStartMinimized = v; }
+    bool getTrayNotifications() const                { return m_trayNotifications; }
+    void setTrayNotifications(bool v)                { m_trayNotifications = v; }
     const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
-    const std::string &getDirectoryHostNickname() const { return m_directoryHostNickname; }
+    // #84 — As of the profile unification, the directory's "host
+    // nickname" is derived from the chat Profile (m_chatNickname).
+    // The setter is still here for ConfigJSON round-trips of legacy
+    // configs that have a separate hostNickname field; on first
+    // load we mirror it into m_chatNickname when the latter is
+    // empty, then the chat profile owns the value going forward.
+    const std::string &getDirectoryHostNickname() const
+    {
+        return m_chatNickname.empty() ? m_directoryHostNickname : m_chatNickname;
+    }
     void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
     const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
     void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
@@ -305,6 +425,12 @@ public:
     void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
     const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
     void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    // #84 — Currently-published directory streamId (empty when not
+    // Active). Application mirrors DirectoryClient::getStreamId() here
+    // every frame so APIController can embed it in /meta for the chat
+    // panel on remote clients.
+    const std::string &getDirectoryStreamId() const   { return m_directoryStreamId; }
+    void setDirectoryStreamId(const std::string &v)   { m_directoryStreamId = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
 
@@ -381,6 +507,36 @@ public:
     std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
     std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
     std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
+    // #77 client-side volume for the incoming remote audio stream.
+    float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
+    bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
+    // #107 screen-capture region crop (target pixels; 0,0,0,0 = full).
+    uint32_t getScreenRegionX() const { return m_screenRegionX; }
+    uint32_t getScreenRegionY() const { return m_screenRegionY; }
+    uint32_t getScreenRegionW() const { return m_screenRegionW; }
+    uint32_t getScreenRegionH() const { return m_screenRegionH; }
+    void triggerScreenRegionChange(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void setOnScreenRegionChanged(std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> cb)
+    {
+        m_onScreenRegionChanged = cb;
+    }
+    // Apply a region to the live capture WITHOUT persisting or updating
+    // the stored values — used by the visual region selector to show the
+    // full (uncropped) frame while picking. saveConfig happens only on
+    // the final triggerScreenRegionChange().
+    void applyScreenRegionLive(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+    {
+        if (m_onScreenRegionChanged) m_onScreenRegionChanged(x, y, w, h);
+    }
+    // Live capture GL texture, published each frame by Application so the
+    // region selector can draw the current frame. 0 == none.
+    void setCaptureTexture(unsigned int tex, uint32_t w, uint32_t h)
+    {
+        m_captureTex = tex; m_captureTexW = w; m_captureTexH = h;
+    }
+    unsigned int getCaptureTextureId() const { return m_captureTex; }
+    uint32_t getCaptureTextureWidth() const  { return m_captureTexW; }
+    uint32_t getCaptureTextureHeight() const { return m_captureTexH; }
 
     // Streaming setters com callbacks (para uso pelas classes de abas)
     void triggerStreamingPortChange(uint16_t port);
@@ -403,6 +559,11 @@ public:
     void triggerStreamingQsvPresetChange(const std::string &v);
     void triggerStreamingAmfQualityChange(const std::string &v);
     void triggerRemoteInterpolationChange(const std::string &v);
+    // #77 — volume in [0,1]; mute is a separate latch that overrides
+    // the slider value (so unmuting restores the last level). Both push
+    // the effective gain (muted ? 0 : volume) through the callback.
+    void triggerRemoteAudioVolumeChange(float volume);
+    void triggerRemoteAudioMuteChange(bool muted);
     void triggerStreamingMaxVideoBufferSizeChange(size_t size);
     void triggerStreamingMaxAudioBufferSizeChange(size_t size);
     void triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds);
@@ -456,6 +617,11 @@ public:
     // VideoCaptureRemote::isReceivingFrames() every frame.
     bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
     void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+    // First-connect-failing mirror: true while a brand-new connection
+    // (no frame ever received yet) has failed a few times. Mirrored
+    // from VideoCaptureRemote::isInitialConnectFailing() every frame.
+    bool getRemoteInitialConnectFailing() const { return m_remoteInitialConnectFailing; }
+    void setRemoteInitialConnectFailing(bool v) { m_remoteInitialConnectFailing = v; }
 
     // Host's current viewer count, parsed from /meta when we're in
     // client mode (#68). Application piggybacks the
@@ -489,6 +655,16 @@ public:
     // Audio device configuration
     void setAudioInputSourceId(const std::string &sourceId) { m_audioInputSourceId = sourceId; }
     std::string getAudioInputSourceId() const { return m_audioInputSourceId; }
+
+    // AVFoundation device + format persistence (macOS only). Stored
+    // regardless of platform so a config saved on macOS round-trips
+    // through Linux/Windows without losing data — they just ignore it.
+    void setAVFoundationDeviceId(const std::string &id) { m_avfDeviceId = id; }
+    std::string getAVFoundationDeviceId() const { return m_avfDeviceId; }
+    void setAVFoundationFormatId(const std::string &id) { m_avfFormatId = id; }
+    std::string getAVFoundationFormatId() const { return m_avfFormatId; }
+    void setAVFoundationAudioDeviceId(const std::string &id) { m_avfAudioDeviceId = id; }
+    std::string getAVFoundationAudioDeviceId() const { return m_avfAudioDeviceId; }
 
     // Streaming status getters
     bool getStreamingActive() const { return m_streamingActive; }
@@ -527,6 +703,8 @@ public:
     void setOnStreamingQsvPresetChanged  (std::function<void(const std::string &)> cb) { m_onStreamingQsvPresetChanged   = cb; }
     void setOnStreamingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onStreamingAmfQualityChanged  = cb; }
     void setOnRemoteInterpolationChanged (std::function<void(const std::string &)> cb) { m_onRemoteInterpolationChanged  = cb; }
+    // #77 — receives the effective linear gain (muted ? 0 : volume).
+    void setOnRemoteAudioVolumeChanged   (std::function<void(float)> cb) { m_onRemoteAudioVolumeChanged = cb; }
 
     // Accessor used by Application to keep the connection-window's
     // capture pointer current — the window reads .isOpen() / dims to
@@ -536,6 +714,11 @@ public:
     // OSD layer accessor — Application needs it to gate cursor
     // visibility on whether an interactive overlay is on screen (#68).
     QuickActionsOverlay *getQuickActionsOverlay() const { return m_quickActionsOverlay.get(); }
+    class OSDChat       *getChatOverlay()        const { return m_chatOverlay.get(); }
+    // Chat-overlay wiring (#84). Application creates the ChatClient
+    // and hands the pointer here so the OSD has a transport to draw
+    // from. Safe to call before or after init().
+    void setChatClient(class ChatClient *chat);
     void setOnStreamingMaxVideoBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxVideoBufferSizeChanged = callback; }
     void setOnStreamingMaxAudioBufferSizeChanged(std::function<void(size_t)> callback) { m_onStreamingMaxAudioBufferSizeChanged = callback; }
     void setOnStreamingMaxBufferTimeSecondsChanged(std::function<void(int64_t)> callback) { m_onStreamingMaxBufferTimeSecondsChanged = callback; }
@@ -844,9 +1027,12 @@ private:
     std::unique_ptr<class UIConfigurationShader>    m_shaderWindow;
     std::unique_ptr<class UIConfigurationImage>     m_imageWindow;
     std::unique_ptr<class UIConfigurationStreaming> m_streamingWindow;
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    std::unique_ptr<class UIConfigurationVirtualCamera> m_virtcamWindow;
+#endif
     std::unique_ptr<class UIConfigurationRecording> m_recordingWindow;
     std::unique_ptr<class UIConfigurationWebPortal> m_webPortalWindow;
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     std::unique_ptr<class UIConfigurationAudio>     m_audioWindow;
 #endif
     std::unique_ptr<class UIInfoPanel>              m_infoWindow;
@@ -857,11 +1043,22 @@ private:
     // accessors.
     std::unique_ptr<class QuickActionsOverlay>      m_quickActionsOverlay;
     std::unique_ptr<class ConnectionStatusOverlay>  m_connectionOverlay;
+    // Chat overlay (#84) — OSD layer like the two above, owns its
+    // input/scroll state but reads message data from the shared
+    // ChatClient (held by Application; pointer wired via
+    // setChatClient).
+    std::unique_ptr<class OSDChat>                  m_chatOverlay;
+    class ChatClient                               *m_chatClient = nullptr;
     // Loaded from config.json before m_quickActionsOverlay exists,
     // applied via setVisible() right after construction. Defaults to
     // true so first-time users see the overlay; subsequent toggles
     // round-trip through saveConfig().
     bool m_quickActionsVisible = true;
+    // Auto-hide the quick-actions overlay after the mouse goes idle, and
+    // reveal it again on the next movement. Default on; toggled in
+    // Preferences and persisted.
+    bool m_quickActionsAutoHide = true;
+    bool m_chatOverlayVisible  = true;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the
     // keyboard hints on first launch.
@@ -924,12 +1121,19 @@ private:
     
     // Audio device configuration (saved/loaded from config)
     std::string m_audioInputSourceId;
+    // AVFoundation persistence (macOS). Stored on all platforms so
+    // configs round-trip cleanly between machines.
+    std::string m_avfDeviceId;
+    std::string m_avfFormatId;
+    std::string m_avfAudioDeviceId;
     std::vector<V4L2Control> m_v4l2Controls;
     std::function<void(const std::string &, int32_t)> m_onV4L2ControlChanged;
 
     // Source selection
 #ifdef _WIN32
     SourceType m_sourceType = SourceType::DS; // Padrão: DirectShow no Windows
+#elif defined(__APPLE__)
+    SourceType m_sourceType = SourceType::AVFoundation; // Padrão: AVFoundation no macOS
 #else
     SourceType m_sourceType = SourceType::V4L2; // Padrão: V4L2 no Linux
 #endif
@@ -951,6 +1155,7 @@ private:
     uint32_t m_captureFps = 0;
     bool     m_remoteHostLikelyOffline = false;
     bool     m_remoteReceivingFrames   = false;
+    bool     m_remoteInitialConnectFailing = false;
     uint32_t m_remoteUpstreamClientCount = 0;
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to
@@ -1027,6 +1232,17 @@ private:
     //   "nearest" — show the closer frame (clean image, 3:2 stutter)
     //   "off"     — strict PTS gate, hold prev until next is due
     std::string m_remoteInterpolation = "linear";
+    // #77 client-side remote audio volume. m_remoteAudioVolume holds the
+    // slider level [0,1]; m_remoteAudioMuted overrides it to 0 while
+    // preserving the level so unmuting restores it.
+    float m_remoteAudioVolume = 1.0f;
+    bool  m_remoteAudioMuted  = false;
+    // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
+    uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
+    // Live capture texture published by Application for the region selector.
+    unsigned int m_captureTex  = 0;
+    uint32_t     m_captureTexW = 0;
+    uint32_t     m_captureTexH = 0;
     bool m_streamingActive = false;
     std::string m_streamUrl = "";
     uint32_t m_streamClientCount = 0;
@@ -1040,6 +1256,40 @@ private:
     // from here every frame.
     bool        m_directoryPublishEnabled = false;
     std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // #84 — Chat URL. Production default; --chat-url overrides at
+    // launch; the Streaming → Advanced field overrides at runtime.
+    // Accepts https://, http://, wss://, ws:// — ChatClient
+    // normalizes the scheme when building REST vs WS endpoints.
+    std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
+    // #84 — Persistent chat display name. Default empty; OSD chat
+    // panel's Apply button writes here + saveConfig.
+    std::string m_chatNickname            = "";
+    // #84 — One-shot flag: UIConfigurationStreaming raises it when
+    // the user clicks "Configure Profile" from the streaming
+    // settings; OSDChat consumes it on the next frame and opens
+    // the Profile window even if the chat panel itself is hidden.
+    bool        m_openChatProfileRequested = false;
+    bool        m_openChatRoomsRequested   = false;
+    // #84 — Open the chat alongside the stream. ON by default for
+    // backwards-compatible behaviour.
+    bool        m_streamChatEnabled       = true;
+    // #84 — Human-readable title for the streamer's chat room.
+    std::string m_streamRoomTitle         = "";
+    // #84 — The streamer's persistent room slug, auto-derived at
+    // provision time. Provisioned on the first stream-with-chat
+    // start, then reused forever.
+    std::string m_streamRoomSlug          = "";
+    // #85 — Virtual camera config + runtime status.
+    bool        m_virtcamEnabled          = false;
+    std::string m_virtcamDevicePath       = "";       // empty = auto-pick first loopback
+    uint32_t    m_virtcamOutputWidth      = 0;        // 0 = follow shader output
+    uint32_t    m_virtcamOutputHeight     = 0;
+    uint32_t    m_virtcamOutputFps        = 0;        // 0 = follow capture FPS
+    std::string m_virtcamPixelFormat      = "yuyv";   // "yuyv" | "rgb24"
+    std::string m_virtcamStatusText;                  // populated by Application
+    std::string m_virtcamErrorText;
+    bool        m_virtcamStopRequested    = false;    // UI -> Application
+    bool        m_virtcamStoppedNotice    = false;    // Application -> UI
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.
@@ -1047,6 +1297,14 @@ private:
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;
+    // #86 system tray. Default trayEnabled=true (the backend itself
+    // reports unsupported and falls back cleanly when there's no
+    // tray host); minimizeOnClose=true makes the X button background
+    // the app instead of quitting.
+    bool        m_trayEnabled             = true;
+    bool        m_trayMinimizeOnClose     = true;
+    bool        m_trayStartMinimized      = false;
+    bool        m_trayNotifications       = false;
     std::string m_directoryStreamName     = "";
     std::string m_directoryHostNickname   = "";
     std::string m_directoryPassword       = "";       // optional; empty = no password
@@ -1058,6 +1316,7 @@ private:
     std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
     bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
     std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
+    std::string m_directoryStreamId       = "";       // #84 — mirrored from DirectoryClient for /meta
 
     // Per-session telemetry counters mirrored from DirectoryClient
     // (#49 Phase 5). Application writes each frame; UI reads.
@@ -1106,6 +1365,8 @@ private:
     std::function<void(const std::string &)> m_onStreamingQsvPresetChanged;
     std::function<void(const std::string &)> m_onStreamingAmfQualityChanged;
     std::function<void(const std::string &)> m_onRemoteInterpolationChanged;
+    std::function<void(float)> m_onRemoteAudioVolumeChanged;
+    std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> m_onScreenRegionChanged;
     std::function<void(size_t)> m_onStreamingMaxVideoBufferSizeChanged;
     std::function<void(size_t)> m_onStreamingMaxAudioBufferSizeChanged;
     std::function<void(int64_t)> m_onStreamingMaxBufferTimeSecondsChanged;

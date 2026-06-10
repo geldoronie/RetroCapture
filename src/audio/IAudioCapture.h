@@ -11,6 +11,11 @@ struct AudioDeviceInfo
     std::string name;        // Human-readable name
     std::string description; // Device description (optional)
     bool available = true;   // Whether device is available
+    // #109 — true when this entry is an output device's monitor/loopback
+    // (system audio) rather than a real input. The UI groups these
+    // separately and the capture skips local monitor playback for them
+    // to avoid a feedback loop.
+    bool isMonitor = false;
 };
 
 /**

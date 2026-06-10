@@ -106,6 +106,23 @@ private:
     ssize_t sendData(int clientFd, const void *data, size_t size) const;
 
     /**
+     * Reliably send the entire buffer. sendData() does a single non-blocking
+     * send() that can return a partial count or 0 (EAGAIN, socket buffer
+     * full); this loops until everything is sent so large responses (e.g.
+     * recording files) aren't silently truncated. Returns false on a fatal
+     * socket error.
+     */
+    bool sendAll(int clientFd, const char *data, size_t size) const;
+
+    /**
+     * #113 — source dimensions to announce in /meta and /api/v1/source.
+     * Defaults to the logical (user-configured) capture resolution, but for
+     * a Screen source uses the live capture's real frame size, so the remote
+     * client doesn't inherit a stale V4L2 selection (wrong aspect ratio).
+     */
+    void sourceDimsForMeta(uint32_t &width, uint32_t &height) const;
+
+    /**
      * Compute a content hash of a preset file for the /meta endpoint.
      * Returns an opaque string (e.g. "fnv1a64:abcd...") used by the remote
      * client to decide whether its locally-cached preset is still valid.
@@ -162,6 +179,15 @@ private:
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
+#ifdef __APPLE__
+    // AVFoundation device + format endpoints (macOS only). The format
+    // dropdown follows OBS's "pick a (resolution, fps range, pixel
+    // format) tuple atomically" pattern instead of independent
+    // resolution/FPS sliders.
+    bool handleGETAVFoundationDevices(int clientFd);
+    bool handleGETAVFoundationFormats(int clientFd, const std::string &deviceId);
+    bool handleGETAVFoundationAudioDevices(int clientFd);
+#endif
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
@@ -189,6 +215,12 @@ private:
     bool handleUpdatePresetParameters(int clientFd, const std::string &presetName, const std::string &body);
     bool handleSetAudioInputSource(int clientFd, const std::string &body);
     bool handleDisconnectAudioInput(int clientFd);
+    bool handleResyncAudioMonitor(int clientFd);
+#ifdef __APPLE__
+    bool handleSetAVFoundationDevice(int clientFd, const std::string &body);
+    bool handleSetAVFoundationFormat(int clientFd, const std::string &body);
+    bool handleSetAVFoundationAudioDevice(int clientFd, const std::string &body);
+#endif
 
     // Recording profiles (saved snapshots of recording configuration)
     bool handleGETRecordingProfiles(int clientFd);

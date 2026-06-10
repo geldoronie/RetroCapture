@@ -12,6 +12,9 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#ifndef _WIN32
+#include <csignal>
+#endif
 
 void printUsage(const char *programName)
 {
@@ -24,6 +27,8 @@ void printUsage(const char *programName)
     std::cout << "  --source <type>        Source type: none, v4l2, remote (default: v4l2)\n";
 #elif defined(_WIN32)
     std::cout << "  --source <type>        Source type: none, ds, remote (default: ds)\n";
+#elif defined(__APPLE__)
+    std::cout << "  --source <type>        Source type: none, avfoundation, remote (default: avfoundation)\n";
 #else
     std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
@@ -32,6 +37,10 @@ void printUsage(const char *programName)
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
     std::cout << "  --directory-url <url>  Override the directory service URL (default https://directory.retrocapture.com).\n";
     std::cout << "                         Used by --browse-directory and as the default for in-app browse.\n";
+    std::cout << "  --chat-url <url>       Chat service base URL (default https://chat.retrocapture.com).\n";
+    std::cout << "                         Accepts https:// / http:// / wss:// / ws://; the client picks\n";
+    std::cout << "                         the right scheme for REST vs WebSocket internally.\n";
+    std::cout << "                         Local dev: http://localhost:8082.\n";
     std::cout << "  --cloudflared-binary <path>\n";
     std::cout << "                         Use the given cloudflared binary verbatim (skip download + sha256 check).\n";
     std::cout << "                         For air-gapped setups where GitHub releases aren't reachable.\n";
@@ -108,6 +117,17 @@ int main(int argc, char *argv[])
 {
     Logger::init();
 
+#ifndef _WIN32
+    // Ignore SIGPIPE process-wide (Linux + macOS). Our own HTTPServer sends
+    // use MSG_NOSIGNAL, but third-party socket writes don't: OpenSSL's
+    // BIO_write (e.g. the TLS /meta SSE poller in RemoteMetaSync) and
+    // FFmpeg's avio use plain write(), so a peer that drops mid-write — such
+    // as switching to another remote stream while the old TLS socket is
+    // still open — raised SIGPIPE and terminated the whole client (#112).
+    // Windows has no SIGPIPE.
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 
     std::string shaderPath;
@@ -115,12 +135,15 @@ int main(int argc, char *argv[])
     std::string remoteUrl; // Phase 3 of #47: base URL when --source remote
     bool        browseDirectory = false;     // #49 Phase 4: --browse-directory
     std::string browseDirectoryUrl;          // optional, defaults to https://directory.retrocapture.com
+    std::string chatBaseUrl;                 // #84: --chat-url, empty = let UIManager pick (default https://chat.retrocapture.com)
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
 #ifdef __linux__
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
     sourceType = "ds"; // Windows usa DirectShow
+#elif defined(__APPLE__)
+    sourceType = "avfoundation"; // macOS usa AVFoundation
 #else
     sourceType = "none"; // Outras plataformas sem suporte
 #endif
@@ -217,6 +240,8 @@ int main(int argc, char *argv[])
             if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
 #elif defined(_WIN32)
             if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
+#elif defined(__APPLE__)
+            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote")
 #else
             if (sourceType != "none" && sourceType != "remote")
 #endif
@@ -225,6 +250,8 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
 #elif defined(_WIN32)
                 LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
+#elif defined(__APPLE__)
+                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation' or 'remote'");
 #else
                 LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
 #endif
@@ -248,6 +275,13 @@ int main(int argc, char *argv[])
             // Overrides the URL --browse-directory queries (and the
             // default the app uses internally when launched normally).
             browseDirectoryUrl = argv[++i];
+        }
+        else if (arg == "--chat-url" && i + 1 < argc)
+        {
+            // #84 — Chat service URL. ws:// or wss:// for the WS
+            // endpoint; the REST endpoints used to resolve the room
+            // and seed history are derived by scheme swap.
+            chatBaseUrl = argv[++i];
         }
         else if (arg == "--cloudflared-binary" && i + 1 < argc)
         {
@@ -820,6 +854,10 @@ int main(int argc, char *argv[])
     app.setMaintainAspect(maintainAspect);
     app.setBrightness(brightness);
     app.setContrast(contrast);
+    if (!chatBaseUrl.empty())
+    {
+        app.setChatBaseUrl(chatBaseUrl);
+    }
 
     // Configurar dispositivo e controles apenas se a fonte for apropriada
 #ifdef __linux__
@@ -950,6 +988,9 @@ int main(int argc, char *argv[])
 #elif defined(_WIN32)
     if (sourceType == "ds")
         sourceTypeEnum = UIManager::SourceType::DS;
+#elif defined(__APPLE__)
+    if (sourceType == "avfoundation")
+        sourceTypeEnum = UIManager::SourceType::AVFoundation;
 #endif
     if (sourceType == "remote")
         sourceTypeEnum = UIManager::SourceType::Remote;

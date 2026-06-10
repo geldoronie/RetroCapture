@@ -3,7 +3,7 @@
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -11,6 +11,7 @@
 #include <unistd.h>
 #endif
 #include <cstring>
+#include <cstdio>
 #include <cerrno>
 #include <cstdlib>
 #include <time.h>
@@ -27,6 +28,42 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+}
+
+// Enable aggressive TCP keep-alive on a client socket so a viewer that
+// vanishes WITHOUT a clean FIN (network drop, a remote client whose
+// TLS read errored and was reaped over the internet) is detected by
+// the kernel in ~25 s instead of the default ~2 h. The disconnect
+// monitor loop's blocking recv() then returns and the client is
+// reaped, so the viewer count converges to reality.
+//
+// Without this, half-open connections from failed/repeated connects
+// pile up in m_clientSockets / m_rawClientSockets and inflate the
+// reported viewer count (the symptom: "counter already >6 even
+// without completing a connection"). #92.
+static void enableClientKeepalive(int fd)
+{
+    if (fd < 0) return;
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+#  if defined(PLATFORM_LINUX)
+    int idle  = 10; // begin probing after 10 s idle
+    int intvl = 5;  // probe every 5 s
+    int cnt   = 3;  // 3 missed probes → dead (~25 s total)
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt));
+#  elif defined(PLATFORM_MACOS)
+    int idle = 10; // macOS: seconds before first probe
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+#  endif
+#else
+    // Windows: SO_KEEPALIVE via the winsock fd (host build links winsock).
+    DWORD on = 1;
+    setsockopt(static_cast<SOCKET>(fd), SOL_SOCKET, SO_KEEPALIVE,
+               reinterpret_cast<const char *>(&on), sizeof(on));
+#endif
 }
 
 // Callback para escrever dados do MPEG-TS para os clientes HTTP
@@ -724,7 +761,7 @@ void HTTPTSStreamer::cleanup()
 void HTTPTSStreamer::handleClient(int clientFd)
 {
 // Configurar socket para baixa latência
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     int flag = 1;
     setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 #elif defined(_WIN32)
@@ -1135,6 +1172,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             }
         }
 
+        enableClientKeepalive(clientFd);
         {
             std::lock_guard<std::mutex> lock(m_rawOutputMutex);
             m_rawClientSockets.push_back(clientFd);
@@ -1194,6 +1232,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
     }
 
     // Adicionar cliente à lista
+    enableClientKeepalive(clientFd);
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
         m_clientSockets.push_back(clientFd);
@@ -1453,12 +1492,28 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
                                  p.tail.begin() + static_cast<std::ptrdiff_t>(p.tailOffset));
                     p.tailOffset = 0;
                 }
+                // Slow /raw receiver (remote hop, congested link). Closing
+                // it here forced the client into a full messy reconnect —
+                // re-probe, deferred audio sink, multi-second A/V desync,
+                // audio dropout (#93). The /raw consumer is an FFmpeg
+                // demuxer that resyncs at the next in-band keyframe/PAT, so
+                // instead of tearing down we DROP the queued backlog and
+                // keep the connection. We clear the whole tail (rather than
+                // a partial trim) so what we resume sending stays 188-byte
+                // TS-packet aligned; the client sees a brief glitch, not a
+                // disconnect. /stream (browser mpegts.js) is left closing
+                // because it cannot tolerate a mid-stream byte drop.
                 if (p.pending() > kMaxClientBacklog)
                 {
-                    LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
-                             " send backlog " + std::to_string(p.pending()) +
-                             " bytes exceeded cap — closing");
-                    drop = true;
+                    p.tail.clear();
+                    p.tailOffset = 0;
+                    uint64_t n = ++p.backlogDrops;
+                    if (n == 1 || (n % 30) == 0)
+                    {
+                        LOG_WARN("/raw client fd=" + std::to_string(clientFd) +
+                                 " send backlog exceeded cap — dropped backlog, keeping connection (total drops: " +
+                                 std::to_string(n) + ")");
+                    }
                 }
             }
 
@@ -1482,6 +1537,7 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
 bool HTTPTSStreamer::initializeEncoding()
 {
     // Configurar MediaSynchronizer com valores configuráveis
+    m_streamSynchronizer.setName("stream");
     m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
     m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
@@ -1566,6 +1622,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     // meaningful latency — the encoder still pulls in near-real-time.
     const size_t rawMaxVideo = std::max<size_t>(m_maxVideoBufferSize, 60);
     const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 120);
+    m_rawStreamSynchronizer.setName("raw");
     m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_rawStreamSynchronizer.setMaxVideoBufferSize(rawMaxVideo);
     m_rawStreamSynchronizer.setMaxAudioBufferSize(rawMaxAudio);
@@ -3506,10 +3563,32 @@ void HTTPTSStreamer::rawEncodingThread()
         auto nowTs = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - statStart).count() >= 1)
         {
-            LOG_DEBUG("/raw encoder: video=" + std::to_string(statVideoEncoded) +
-                      "/s audio=" + std::to_string(statAudioEncoded) +
-                      "/s iters=" + std::to_string(statIterations) +
-                      " maxVidQueue=" + std::to_string(statMaxQueueDepth));
+            // #123 — per-stage averages (ms/frame) so we can see whether the
+            // CPU swscale convert, the HW surface upload, or the codec is the
+            // 60 fps bottleneck. avg = accumulated µs / frames encoded.
+            auto st = m_rawMediaEncoder.fetchVideoStageTimings();
+            std::string line = "/raw encoder: video=" + std::to_string(statVideoEncoded) +
+                               "/s audio=" + std::to_string(statAudioEncoded) +
+                               "/s iters=" + std::to_string(statIterations) +
+                               " maxVidQueue=" + std::to_string(statMaxQueueDepth);
+            if (st.frames > 0)
+            {
+                double convMs = (st.convertUs / 1000.0) / st.frames;
+                double upMs   = (st.uploadUs  / 1000.0) / st.frames;
+                double encMs  = (st.encodeUs  / 1000.0) / st.frames;
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              " stages(ms/f): convert=%.2f upload=%.2f encode=%.2f total=%.2f",
+                              convMs, upMs, encMs, convMs + upMs + encMs);
+                line += buf;
+                // Active /raw client: surface at INFO so the bottleneck is
+                // visible without enabling debug logging (#123 measurement).
+                LOG_INFO(line);
+            }
+            else
+            {
+                LOG_DEBUG(line);
+            }
             statVideoEncoded = statAudioEncoded = statIterations = 0;
             statMaxQueueDepth = 0;
             statStart = nowTs;

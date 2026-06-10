@@ -131,6 +131,24 @@ public:
     // Não-zero indica instabilidade no timestamp source.
     uint64_t getDesyncFrameCount() const { return m_desyncFrameCount.load(std::memory_order_relaxed); }
 
+    // #123 — per-stage video encode timing, in microseconds, accumulated
+    // since the last fetch. encodeVideo() splits its cost into:
+    //   convertUs — convertRGBToYUV (CPU swscale: RGB→NV12 + any resize)
+    //   uploadUs  — av_hwframe_transfer_data (sw NV12 → GPU surface; 0 for SW/NVENC)
+    //   encodeUs  — avcodec_send_frame + receiveVideoPackets (codec)
+    // frames is how many encodeVideo calls contributed. fetch resets the
+    // accumulators so a caller can print a clean rolling average.
+    struct VideoStageTimings { uint64_t convertUs = 0, uploadUs = 0, encodeUs = 0, frames = 0; };
+    VideoStageTimings fetchVideoStageTimings()
+    {
+        VideoStageTimings t;
+        t.convertUs = m_convertUs.exchange(0, std::memory_order_relaxed);
+        t.uploadUs  = m_uploadUs.exchange(0, std::memory_order_relaxed);
+        t.encodeUs  = m_encodeUs.exchange(0, std::memory_order_relaxed);
+        t.frames    = m_stageFrames.exchange(0, std::memory_order_relaxed);
+        return t;
+    }
+
 private:
     // Inicialização de codecs
     bool initializeVideoCodec();
@@ -183,11 +201,29 @@ private:
     uint32_t m_swsDstHeight = 0;
     int m_swsDstFormat = 0; // AVPixelFormat — invalidate sws ctx when destination format changes too
 
+    // Padded scratch for the sws_scale source. libswscale's AVX2 RGB
+    // fastpath reads a few SIMD chunks past the last row; if the
+    // caller's buffer is allocated exactly width*height*3 and ends on
+    // a page boundary that over-read segfaults. We copy the source in
+    // here with trailing padding so the over-read lands in allocated
+    // memory. See convertRGBToYUV.
+    std::vector<uint8_t> m_swsSrcPadded;
+
     // Timestamps de referência (primeiro frame/chunk) - apenas para referência
     int64_t m_firstVideoTimestampUs = 0;
     int64_t m_firstAudioTimestampUs = 0;
     bool m_firstVideoTimestampSet = false;
     bool m_firstAudioTimestampSet = false;
+    // #109 — SHARED A/V epoch. Video and audio capture timestamps come
+    // from the same clock (HTTPTSStreamer::getTimestampUs), but PTS used
+    // to be made relative to two SEPARATE first-timestamps; the gap
+    // between the first video frame and first audio chunk arriving then
+    // became a permanent A/V skew baked into the muxed stream (the client
+    // saw video consistently behind audio). Latched by whichever media
+    // arrives first and subtracted by BOTH the video PTS and the
+    // streaming audio PTS so they share one origin.
+    int64_t m_firstMediaTimestampUs = 0;
+    bool    m_firstMediaTimestampSet = false;
     
     // Contadores precisos para cálculo de PTS (baseado em samples/frames, não timestamps)
     int64_t m_audioFrameCount = 0;  // Número de frames de áudio processados
@@ -227,4 +263,13 @@ private:
     // timestamp source — o stream ainda fica monotônico, mas isso vira jitter
     // de duração de frame no arquivo final.
     std::atomic<uint64_t> m_desyncFrameCount{0};
+
+    // #123 — per-stage encode timing accumulators (microseconds). See
+    // fetchVideoStageTimings(). Populated by encodeVideo, read+reset by
+    // the streaming telemetry. Per-instance, so /stream and /raw report
+    // independently.
+    std::atomic<uint64_t> m_convertUs{0};
+    std::atomic<uint64_t> m_uploadUs{0};
+    std::atomic<uint64_t> m_encodeUs{0};
+    std::atomic<uint64_t> m_stageFrames{0};
 };

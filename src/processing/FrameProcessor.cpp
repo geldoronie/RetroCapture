@@ -3,6 +3,12 @@
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
 #include <iostream>
+
+// Core GL since 1.2; define defensively in case the active loader header
+// didn't expose it (used by the screen-capture 32-bit upload path).
+#ifndef GL_BGRA
+#define GL_BGRA 0x80E1
+#endif
 #ifdef __linux__
 #include <linux/videodev2.h>
 #ifndef V4L2_PIX_FMT_MJPEG
@@ -47,6 +53,22 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     if (!capture->isOpen() && !capture->isDummyMode())
     {
         return false; // Device is closed, cannot process frames
+    }
+
+    // #107 zero-copy GPU path: if the capture hands us a ready GL texture
+    // (DMABUF imported via EGL), use it directly and skip the CPU upload.
+    {
+        uint32_t gw = 0, gh = 0;
+        const unsigned int gpuTex = capture->getGpuTexture(gw, gh);
+        if (gpuTex != 0 && gw > 0 && gh > 0)
+        {
+            m_externalTexture = gpuTex;
+            m_textureWidth    = gw;
+            m_textureHeight   = gh;
+            m_hasValidFrame   = true;
+            return true;
+        }
+        m_externalTexture = 0; // not on the GPU path this frame
     }
 
     Frame frame;
@@ -166,6 +188,21 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGB, GL_UNSIGNED_BYTE, frame.data);
         }
+    }
+    else if (frame.format == RC_PIXFMT_BGRA || frame.format == RC_PIXFMT_RGBA ||
+             frame.size == static_cast<size_t>(frame.width) * frame.height * 4)
+    {
+        // Packed 32-bit (screen capture, #107). Hand it to GL with the
+        // matching source format and let the driver swizzle into the RGB
+        // texture — no CPU colour conversion, which is what keeps a full
+        // monitor / 4K grab at the compositor's frame rate.
+        const GLenum srcFmt = (frame.format == RC_PIXFMT_RGBA) ? GL_RGBA : GL_BGRA;
+        if (textureCreated)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0,
+                         srcFmt, GL_UNSIGNED_BYTE, frame.data);
+        else
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height,
+                            srcFmt, GL_UNSIGNED_BYTE, frame.data);
     }
     else
     {

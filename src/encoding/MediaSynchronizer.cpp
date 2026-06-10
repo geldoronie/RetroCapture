@@ -61,7 +61,7 @@ bool MediaSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint3
             uint64_t dropped = m_videoDropCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if (dropped == 1 || (dropped % 30) == 0)
             {
-                LOG_WARN("MediaSynchronizer: video buffer overflow, dropped frame (total: " +
+                LOG_WARN("MediaSynchronizer[" + m_name + "]: video buffer overflow, dropped frame (total: " +
                          std::to_string(dropped) + ")");
             }
         }
@@ -113,7 +113,7 @@ bool MediaSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount
             uint64_t dropped = m_audioDropCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if (dropped == 1 || (dropped % 30) == 0)
             {
-                LOG_WARN("MediaSynchronizer: audio buffer overflow, dropped chunk (total: " +
+                LOG_WARN("MediaSynchronizer[" + m_name + "]: audio buffer overflow, dropped chunk (total: " +
                          std::to_string(dropped) + ")");
             }
         }

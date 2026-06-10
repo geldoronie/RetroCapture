@@ -52,3 +52,40 @@ services:
     # The test stage's RUN already executed `go test ./...`; if it
     # passed, the image built — there's nothing left to do at run time.
     command: ["true"]
+
+  chat:
+    build:
+      context: ./services/chat
+      target: runtime
+    image: retrocapture-chat:dev
+    container_name: retrocapture-chat
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./services/chat/data:/data
+    environment:
+      CHAT_PORT: "8082"
+      CHAT_DB_PATH: "/data/chat.db"
+      CHAT_LOG_LEVEL: "debug"
+      # Same reverse-proxy story as directory: flip on when deployed
+      # behind FRP / nginx / Cloudflare so the real client IP gets
+      # used for per-IP rate limiting instead of the proxy's.
+      CHAT_TRUST_PROXY_HEADERS: "false"
+      # Room inactivity sweep (#84). Rooms with no joins AND no
+      # posts for this many days are permanently deleted (cascade
+      # through chat_messages). 0 disables the sweep so existing
+      # rooms live forever.
+      CHAT_ROOM_INACTIVITY_DAYS: "3"
+      # How often the sweep worker runs. The sweep query is indexed
+      # and cheap, so an hour is fine even for large DBs. Lower it
+      # in dev (e.g. "1") if you want to watch the eviction happen.
+      CHAT_ROOM_SWEEP_INTERVAL_MINUTES: "60"
+    restart: unless-stopped
+
+  chat-test:
+    build:
+      context: ./services/chat
+      target: test
+    image: retrocapture-chat:test
+    profiles: ["test"]
+    command: ["true"]

@@ -5,6 +5,8 @@
 #include "../audio/AudioPlaybackPulse.h"
 #elif defined(_WIN32)
 #include "../audio/AudioPlaybackWASAPI.h"
+#elif defined(__APPLE__)
+#include "../audio/AudioPlaybackCoreAudio.h"
 #endif
 
 extern "C"
@@ -50,14 +52,31 @@ bool VideoCaptureRemote::open(const std::string &url)
         m_url.pop_back();
     }
 
-    LOG_INFO("VideoCaptureRemote: connecting to remote base URL " + m_url);
+    // Non-blocking connect: we do NOT run the (potentially multi-second)
+    // avformat_open_input / find_stream_info here, because open() is
+    // called synchronously on the UI thread — blocking it froze the
+    // whole app during connect, so the "Connecting…" overlay never got
+    // a frame to paint and the user got no feedback at all.
+    //
+    // Instead we just arm the URL and let decodeLoop() do the open on
+    // its own thread, reusing the exact path reconnect already uses
+    // (the `if (!m_formatCtx)` branch). The UI keeps rendering, the
+    // overlay shows progress, and a first-connect failure surfaces via
+    // isInitialConnectFailing() instead of a synchronous false return.
+    LOG_INFO("VideoCaptureRemote: arming remote base URL " + m_url +
+             " (connect runs on the decode thread)");
 
-    if (!initDecoder())
-    {
-        cleanupDecoder();
-        return false;
-    }
-
+    m_everReceivedFrame.store(false);
+    m_consecutiveReconnectFailures.store(0);
+    m_hostLikelyOffline.store(false);
+    // Arm a clean abort state once here, NOT per-initDecoder pass. The
+    // decode thread now runs the (blocking) avformat_open_input itself
+    // on every connect; if initDecoder reset this flag right before that
+    // call, a stopCapture() from a Disconnect click could land in the
+    // gap and get wiped, leaving open_input to run to its full 5 s
+    // timeout while the UI thread froze on the join. Resetting here means
+    // a later abort always sticks. (Disconnect-freeze fix, #104.)
+    m_decodeAborted.store(false);
     m_open.store(true);
     return true;
 }
@@ -96,9 +115,11 @@ bool VideoCaptureRemote::initDecoder()
         };
     static_cast<AVFormatContext *>(m_formatCtx)->interrupt_callback.opaque = this;
 
-    // Clear any stale abort flag from a previous teardown so this
-    // initDecoder pass starts with permission to block in I/O.
-    m_decodeAborted.store(false);
+    // NOTE: m_decodeAborted is intentionally NOT reset here. It's armed
+    // once in open() (and only ever set true by stopCapture()/close()).
+    // Resetting it per pass used to race with a Disconnect landing
+    // during avformat_open_input — see open(). Within a live decodeLoop
+    // it's always false anyway, so reconnect passes start clean.
 
     // Probing budget: must see at least one packet of each expected
     // stream so audio is detected, but every byte the probe consumes
@@ -175,25 +196,29 @@ bool VideoCaptureRemote::initDecoder()
     }
 
     AVCodecParameters *codecPar = m_formatCtx->streams[m_videoStreamIdx]->codecpar;
-    // Reject the open when probe didn't resolve video dimensions. The
-    // demuxer is allowed to surface a stream that's still being
-    // analyzed (the FFmpeg log line is 'Could not find codec
-    // parameters ... none: unspecified size'). If we proceed with
-    // width/height = 0, m_width/m_height are stuck at zero for the
-    // whole session and the consumer dead-locks at
-    //   decoded=N/s consumed=0/s drops=N queueDepth=20
-    // because nothing downstream can route 0x0 frames. Better to fail
-    // initDecoder and let the outer reconnect loop try again — by the
-    // time the next attempt fires, the upstream MPEG-TS is usually
-    // past the partial-PMT region that caused the first probe to
-    // give up.
+    // The probe sometimes can't resolve the video dimensions in its
+    // budget — FFmpeg logs 'Could not find codec parameters ... none:
+    // unspecified size'. This happens when the client joins mid-GOP
+    // and no SPS/keyframe lands inside the 2.5 s window. We USED to
+    // reject + reconnect here, but for a host with a long GOP every
+    // probe misses the keyframe and the client never connects at all
+    // ("não se conecta de jeito nenhum").
+    //
+    // Instead, proceed: the H.264 decoder derives width/height from
+    // the in-band SPS of the first decoded keyframe (which always
+    // arrives within one GOP), and decodeLoop sets m_width/m_height +
+    // the per-frame queue dims from frame->width/height once it does.
+    // So a 0x0 probe just delays the first visible frame by up to one
+    // GOP instead of blocking the connection forever. (The old
+    // dead-lock that motivated the reject is gone now that the consumer
+    // routes by per-frame dims, not the at-open m_width.)
     if (codecPar->width <= 0 || codecPar->height <= 0)
     {
         LOG_WARN("VideoCaptureRemote: probe returned " +
                  std::to_string(codecPar->width) + "x" +
                  std::to_string(codecPar->height) +
-                 " for video stream — rejecting and forcing reconnect");
-        return false;
+                 " for video stream — opening anyway; size resolves "
+                 "from the first decoded keyframe");
     }
     const AVCodec *codec = avcodec_find_decoder(codecPar->codec_id);
     if (!codec)
@@ -260,92 +285,18 @@ bool VideoCaptureRemote::initDecoder()
             const int  openRet   = gotParams ? avcodec_open2(m_audioCodecCtx, aCodec, nullptr) : -1;
             if (gotCtx && gotParams && openRet >= 0)
             {
-                // Open the system sink at the decoder's native format
-                // (e.g. AAC stereo 44.1 kHz). Shared-mode WASAPI /
-                // PulseAudio both auto-resample to whatever the device
-                // is configured for.
-#ifdef __linux__
-                m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
-#elif defined(_WIN32)
-                m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
-#endif
-                const uint32_t rate     = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
-                // Channel count compat: AVCodecContext.channels was
-                // deprecated in FFmpeg 5.1 in favour of ch_layout.nb_channels.
-                // Use whichever the build exposes.
-#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
-                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->channels);
-#else
-                const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->ch_layout.nb_channels);
-#endif
-                if (!m_audioPlayback || !m_audioPlayback->open(rate, channels))
+                // Bring the sink up now if the probe already resolved the
+                // AAC params. On a mid-join the probe often reports
+                // "aac, 0 channels: unspecified sample format" — in that
+                // case ensureAudioOutput() returns false and we DEFER:
+                // the decode loop retries it once the first decoded frame
+                // populates the codec context, instead of dropping audio
+                // for the whole session. #98 (sibling of the #100 video fix).
+                if (!ensureAudioOutput())
                 {
-                    LOG_WARN("VideoCaptureRemote: audio playback open failed — continuing video-only");
-                    m_audioPlayback.reset();
-                }
-                else
-                {
-                    // Resampler: decoder may emit planar floats / s16,
-                    // but the sink wants packed float32. swr_convert
-                    // handles both layout and sample-format conversions
-                    // transparently per audio frame.
-                    // Resampler setup with explicit channel layout —
-                    // setSwrChannelLayout wrapper was leaving the layout
-                    // unset on some ffmpeg builds ('swr_init failed:
-                    // Input channel count and layout are unset' in the
-                    // user log). swr_alloc_set_opts2 / the input-frame
-                    // path takes the layout directly from the codec
-                    // context, which is what the decoder actually emits,
-                    // so we hand the codec's layout in verbatim and tell
-                    // the output to mirror it.
-#if FFMPEG_USE_NEW_CHANNEL_LAYOUT
-                    int allocRet = swr_alloc_set_opts2(
-                        &m_swrCtx,
-                        &m_audioCodecCtx->ch_layout,   // out layout
-                        AV_SAMPLE_FMT_FLT,             // out fmt
-                        static_cast<int>(rate),        // out rate
-                        &m_audioCodecCtx->ch_layout,   // in layout
-                        m_audioCodecCtx->sample_fmt,   // in fmt
-                        m_audioCodecCtx->sample_rate,  // in rate
-                        0, nullptr);
-                    if (allocRet < 0)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts2 failed (" + std::to_string(allocRet) + ") — disabling audio");
-                        if (m_swrCtx) swr_free(&m_swrCtx);
-                        m_audioPlayback.reset();
-                        m_swrCtx = nullptr;
-                    }
-                    else
-#else
-                    int64_t layout = av_get_default_channel_layout(static_cast<int>(channels));
-                    m_swrCtx = swr_alloc_set_opts(
-                        nullptr,
-                        layout,                        // out layout
-                        AV_SAMPLE_FMT_FLT,             // out fmt
-                        static_cast<int>(rate),        // out rate
-                        layout,                        // in layout (assume same)
-                        m_audioCodecCtx->sample_fmt,   // in fmt
-                        m_audioCodecCtx->sample_rate,  // in rate
-                        0, nullptr);
-                    if (!m_swrCtx)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts failed — disabling audio");
-                        m_audioPlayback.reset();
-                    }
-                    else
-#endif
-                    if (swr_init(m_swrCtx) < 0)
-                    {
-                        LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
-                        swr_free(&m_swrCtx);
-                        m_audioPlayback.reset();
-                    }
-                    else
-                    {
-                        LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
-                                 " Hz x " + std::to_string(channels) + " ch, codec=" +
-                                 std::string(aCodec->name));
-                    }
+                    LOG_INFO("VideoCaptureRemote: audio params not ready at "
+                             "probe (likely mid-join) — deferring sink open "
+                             "to the first decoded frame");
                 }
             }
             else
@@ -356,6 +307,84 @@ bool VideoCaptureRemote::initDecoder()
         }
     }
 
+    return true;
+}
+
+bool VideoCaptureRemote::ensureAudioOutput()
+{
+    if (m_audioPlayback) return true;       // already up
+    if (!m_audioCodecCtx) return false;
+
+    const uint32_t rate = static_cast<uint32_t>(m_audioCodecCtx->sample_rate);
+#if defined(FF_API_OLD_CHANNEL_LAYOUT) || LIBAVCODEC_VERSION_MAJOR < 60
+    const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->channels);
+#else
+    const uint32_t channels = static_cast<uint32_t>(m_audioCodecCtx->ch_layout.nb_channels);
+#endif
+    // Params not resolved yet (mid-join probe) — caller retries on the
+    // next decoded frame.
+    if (rate == 0 || channels == 0) return false;
+
+    // Open the system sink at the decoder's native format. Shared-mode
+    // WASAPI / PulseAudio both auto-resample to the device config.
+#ifdef __linux__
+    m_audioPlayback = std::make_unique<AudioPlaybackPulse>();
+#elif defined(_WIN32)
+    m_audioPlayback = std::make_unique<AudioPlaybackWASAPI>();
+#elif defined(__APPLE__)
+    m_audioPlayback = std::make_unique<AudioPlaybackCoreAudio>();
+#endif
+    if (!m_audioPlayback || !m_audioPlayback->open(rate, channels))
+    {
+        LOG_WARN("VideoCaptureRemote: audio playback open failed — continuing video-only");
+        m_audioPlayback.reset();
+        return false;
+    }
+
+    // Resampler: decoder may emit planar floats / s16 but the sink
+    // wants packed float32; swr handles layout + sample-format. Hand
+    // the codec's own layout in verbatim (some ffmpeg builds left the
+    // layout unset via the wrapper).
+#if FFMPEG_USE_NEW_CHANNEL_LAYOUT
+    int allocRet = swr_alloc_set_opts2(
+        &m_swrCtx,
+        &m_audioCodecCtx->ch_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(rate),
+        &m_audioCodecCtx->ch_layout, m_audioCodecCtx->sample_fmt, m_audioCodecCtx->sample_rate,
+        0, nullptr);
+    if (allocRet < 0)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts2 failed (" + std::to_string(allocRet) + ") — disabling audio");
+        if (m_swrCtx) { swr_free(&m_swrCtx); m_swrCtx = nullptr; }
+        m_audioPlayback.reset();
+        return false;
+    }
+#else
+    int64_t layout = av_get_default_channel_layout(static_cast<int>(channels));
+    m_swrCtx = swr_alloc_set_opts(
+        nullptr,
+        layout, AV_SAMPLE_FMT_FLT, static_cast<int>(rate),
+        layout, m_audioCodecCtx->sample_fmt, m_audioCodecCtx->sample_rate,
+        0, nullptr);
+    if (!m_swrCtx)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_alloc_set_opts failed — disabling audio");
+        m_audioPlayback.reset();
+        return false;
+    }
+#endif
+    if (swr_init(m_swrCtx) < 0)
+    {
+        LOG_WARN("VideoCaptureRemote: swr_init failed — disabling audio");
+        swr_free(&m_swrCtx);
+        m_swrCtx = nullptr;
+        m_audioPlayback.reset();
+        return false;
+    }
+    // Carry any volume already chosen (config default / a live change
+    // made before the sink came up) into the freshly opened sink.
+    m_audioPlayback->setVolume(m_audioVolume.load(std::memory_order_relaxed));
+    LOG_INFO("VideoCaptureRemote: audio ready — " + std::to_string(rate) +
+             " Hz x " + std::to_string(channels) + " ch");
     return true;
 }
 
@@ -493,6 +522,16 @@ void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
     if (m_audioPlayback) m_audioPlayback->flush();
 }
 
+void VideoCaptureRemote::setAudioVolume(float linear)
+{
+    if (linear < 0.0f) linear = 0.0f;
+    if (linear > 1.0f) linear = 1.0f;
+    // UI-thread write; the decode thread reads this and forwards it to
+    // the sink each audio frame, so we never touch m_audioPlayback from
+    // here (it may be torn down concurrently by the decode thread).
+    m_audioVolume.store(linear, std::memory_order_relaxed);
+}
+
 void VideoCaptureRemote::setTargetResolution(uint32_t width, uint32_t height)
 {
     // Atomic stores — picked up by the decode thread on the next frame.
@@ -551,18 +590,34 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
             // queue fills (the user-observed
             // 'decoded=60/s consumed=30/s drops=30/s queueDepth=20').
             const int64_t drift = audioNowWall - nowWallUs;
-            if (drift > -500'000 && drift < 500'000)
+            // #93 stage 3 — periodically log the live A/V offset (the audio
+            // clock minus wall clock) so we can see its SHAPE: a small
+            // constant value = fixed offset (host epoch mismatch); a value
+            // that keeps growing = progressive drift; a huge/bouncing value
+            // = transient sink warmup / bogus clock. The right resync depends
+            // on which. Throttled to ~once / 2 s.
+            const bool locked = (drift > -500'000 && drift < 500'000);
+            {
+                static int64_t lastDriftLogUs = 0;
+                if (nowWallUs - lastDriftLogUs >= 2'000'000)
+                {
+                    lastDriftLogUs = nowWallUs;
+                    // #109 — also log the video queue depth so we can tell
+                    // WHY the video lags when drift is negative: a near-full
+                    // queue means video is held back by a lagging audio clock
+                    // (client-side audio buffer growth); a near-empty queue
+                    // means the host isn't delivering video fast enough and
+                    // the client is starved (host-side throughput).
+                    LOG_INFO("VideoCaptureRemote: A/V offset (audio-wall) = " +
+                             std::to_string(drift / 1000) + " ms" +
+                             (locked ? " [audio-locked]" : " [wall-clock fallback]") +
+                             " vqueue=" + std::to_string(m_frameQueue.size()) + "/" +
+                             std::to_string(kMaxQueued));
+                }
+            }
+            if (locked)
             {
                 nowWallUs = audioNowWall;
-            }
-            else
-            {
-                static int driftLogCount = 0;
-                if (driftLogCount++ < 5)
-                {
-                    LOG_WARN("VideoCaptureRemote: audio clock drift=" + std::to_string(drift) +
-                             "us — falling back to wall clock for A/V sync");
-                }
             }
         }
     }
@@ -655,6 +710,25 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     return true;
 }
 
+void VideoCaptureRemote::resyncToLive()
+{
+    // Drop the PTS anchor so the next decoded frame re-anchors, flush
+    // any stale audio still queued in the sink (after a messy reconnect
+    // the deferred sink can hold seconds of old samples that otherwise
+    // play behind live), clear queued video, and re-arm the drain so we
+    // settle at the live edge. Runs on the decode thread.
+    m_streamAnchored.store(false);
+    m_firstPtsUs.store(0);
+    if (m_audioPlayback) m_audioPlayback->flush();
+    {
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_frameQueue.clear();
+    }
+    m_drainToLive.store(true);
+    m_drainStartWallUs = 0;
+    m_lastDecodeWallUs = 0;
+}
+
 void VideoCaptureRemote::decodeLoop()
 {
     AVPacket *packet = av_packet_alloc();
@@ -733,20 +807,18 @@ void VideoCaptureRemote::decodeLoop()
             // frames that were sitting in the queue from before the
             // disconnect. Otherwise the new stream's PTS=0 frame would
             // be timed against the old anchor and either play in the
-            // past or sit far in the future.
-            m_streamAnchored.store(false);
-            m_firstPtsUs.store(0);
-            if (m_audioPlayback) m_audioPlayback->flush();
-            {
-                std::lock_guard<std::mutex> lock(m_frameMutex);
-                m_frameQueue.clear();
-            }
+            // past or sit far in the future. resyncToLive() also flushes
+            // audio and re-arms the drain so we anchor at the live edge
+            // instead of ~1 s in the past (#93 stage 1).
+            resyncToLive();
             rgbW = 0; rgbH = 0; rgbBuf.clear();
             // Reconnect succeeded — drop backoff state so the next
             // hiccup starts from the 2 s slot again.
             m_consecutiveReconnectFailures.store(0);
             m_hostLikelyOffline.store(false);
-            LOG_INFO("VideoCaptureRemote: reconnected to " + m_url);
+            LOG_INFO(std::string("VideoCaptureRemote: ") +
+                     (m_everReceivedFrame.load() ? "reconnected to " : "connected to ") +
+                     m_url);
         }
 
         int rc = av_read_frame(m_formatCtx, packet);
@@ -770,13 +842,30 @@ void VideoCaptureRemote::decodeLoop()
         // Audio packets: decode, resample to packed float32, push to
         // the playback sink. The sink's getClockUs() is the A/V master
         // clock for the video gating below.
-        if (packet->stream_index == m_audioStreamIdx && m_audioCodecCtx && m_audioPlayback)
+        // Gate on the decoder, not the sink: when the mid-join probe
+        // couldn't resolve the AAC params, m_audioPlayback is still
+        // null here. We decode anyway and bring the sink up lazily
+        // (ensureAudioOutput) from the first decoded frame, which DOES
+        // carry valid channels/rate. #98.
+        if (packet->stream_index == m_audioStreamIdx && m_audioCodecCtx)
         {
             if (avcodec_send_packet(m_audioCodecCtx, packet) >= 0)
             {
                 AVFrame *aFrame = av_frame_alloc();
                 while (aFrame && avcodec_receive_frame(m_audioCodecCtx, aFrame) >= 0)
                 {
+                    // Deferred sink bring-up: the codec context now has
+                    // real params. If it still can't open, skip this
+                    // frame and retry on the next.
+                    if (!m_audioPlayback && !ensureAudioOutput())
+                    {
+                        av_frame_unref(aFrame);
+                        continue;
+                    }
+                    // Forward the latest client-side gain to the sink.
+                    // Cheap relaxed load + store (~once per AAC frame);
+                    // keeps slider/mute changes live without a restart.
+                    m_audioPlayback->setVolume(m_audioVolume.load(std::memory_order_relaxed));
                     const int nbIn    = aFrame->nb_samples;
                     const int outRate = m_audioCodecCtx->sample_rate;
                     // Resampler may need extra output samples — ask
@@ -797,7 +886,16 @@ void VideoCaptureRemote::decodeLoop()
                     uint8_t *outPlanes[1] = { reinterpret_cast<uint8_t *>(m_audioScratch.data()) };
                     const int produced = swr_convert(m_swrCtx, outPlanes, static_cast<int>(maxOut),
                                                      const_cast<const uint8_t **>(aFrame->data), nbIn);
-                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE)
+                    // #93 stage 1/3 — while jumping to live, drop the audio
+                    // backlog too. The video path drains its backlog and
+                    // anchors at the live edge; if we kept submitting the
+                    // buffered audio here, the sink would play from the old
+                    // start and lag video by the whole backlog (seen as a
+                    // multi-second A/V drift on a reconnect with a large host
+                    // buffer → the 'audio clock drift' fallback). Skipping
+                    // submit during the drain keeps audio empty so it starts
+                    // at the live edge alongside video.
+                    if (produced > 0 && aFrame->pts != AV_NOPTS_VALUE && !m_drainToLive.load())
                     {
                         // Convert the frame's PTS (stream-tb units)
                         // to absolute stream microseconds. The drift
@@ -819,6 +917,23 @@ void VideoCaptureRemote::decodeLoop()
                         // corrupted A/V clock.
                         const AVRational tb = m_formatCtx->streams[m_audioStreamIdx]->time_base;
                         const int64_t ptsUs = static_cast<int64_t>(static_cast<double>(aFrame->pts) * av_q2d(tb) * 1e6);
+                        // #109 — never submit audio older than the live video
+                        // anchor. The drain drops the video backlog and anchors
+                        // video at the live edge, but on a reconnect the MPEG-TS
+                        // (esp. through the relay) is loosely interleaved: a
+                        // burst of stale audio packets can arrive AFTER the drain
+                        // ended, with PTS seconds behind the live video. Feeding
+                        // those plays the audio seconds behind the picture (the
+                        // measured ~14 s reconnect desync). Anchor-relative gate
+                        // with 300 ms tolerance for normal A/V interleave jitter;
+                        // once the backlog is past, live audio PTS sits far above
+                        // the anchor so this never trips in steady state.
+                        const int64_t anchorUs = m_firstPtsUs.load();
+                        if (m_streamAnchored.load() && ptsUs + 300'000 < anchorUs)
+                        {
+                            av_frame_unref(aFrame);
+                            continue;
+                        }
                         m_audioPlayback->submit(m_audioScratch.data(),
                                                 static_cast<size_t>(produced),
                                                 ptsUs);
@@ -917,6 +1032,43 @@ void VideoCaptureRemote::decodeLoop()
             // overlay can tell a live stream from a stalled one
             // even when m_streamAnchored hasn't been reset yet.
             m_lastFrameAtSteadyUs.store(nowWallUs);
+            // Sticky 'we've connected for real at least once' — clears
+            // the initial-connect-failing state and marks subsequent
+            // drops as reconnects rather than first-connect failures.
+            m_everReceivedFrame.store(true);
+
+            // #93 stage 1 — jump-to-live: drop the connect backlog burst.
+            // Frames decoded back-to-back (much faster than the stream's
+            // frame interval) are the host's buffered backlog; skip them and
+            // only resume once a near-real-time gap appears (the live edge),
+            // so we anchor at "now" instead of replaying ~1 s of old frames.
+            if (m_drainToLive.load())
+            {
+                if (m_drainStartWallUs == 0) m_drainStartWallUs = nowWallUs;
+                int64_t frameIntervalUs = 16666; // default ~60 fps
+                if (m_formatCtx && m_videoStreamIdx >= 0)
+                {
+                    AVRational fr = m_formatCtx->streams[m_videoStreamIdx]->avg_frame_rate;
+                    if (fr.num > 0 && fr.den > 0)
+                        frameIntervalUs = static_cast<int64_t>(1e6 * fr.den / fr.num);
+                }
+                const int64_t liveGap = std::max<int64_t>(frameIntervalUs * 6 / 10, 8000);
+                const int64_t gap = (m_lastDecodeWallUs > 0) ? (nowWallUs - m_lastDecodeWallUs) : 0;
+                m_lastDecodeWallUs = nowWallUs;
+                const bool liveReached = (gap >= liveGap);
+                const bool timeout     = (nowWallUs - m_drainStartWallUs) >= 2'000'000; // 2 s safety
+                if (!liveReached && !timeout)
+                {
+                    ++m_statProduced;
+                    ++m_statDropped; // dropped a backlog frame
+                    continue;        // keep draining; do not enqueue/anchor
+                }
+                m_drainToLive.store(false);
+                LOG_INFO("VideoCaptureRemote: reached live edge — dropped connect backlog");
+                // m_streamAnchored is still false, so the block below anchors
+                // this live-edge frame at 'now'.
+            }
+
             if (!m_streamAnchored.load())
             {
                 m_streamAnchored.store(true);

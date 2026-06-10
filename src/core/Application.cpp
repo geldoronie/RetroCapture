@@ -4,6 +4,7 @@
 #include "../capture/IVideoCapture.h"
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
+#include "../capture/VideoCaptureScreen.h"
 #include "../streaming/RemoteMetaSync.h"
 #include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
@@ -21,6 +22,18 @@
 #include "../shader/ShaderEngine.h"
 #include "../ui/UIManager.h"
 #include "../osd/QuickActionsOverlay.h"
+#include "../osd/OSDChat.h"
+#include "../chat/ChatClient.h"
+#include "../identity/ChatIdentity.h"
+#include "../identity/OwnedRooms.h"
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"
+#elif defined(_WIN32)
+#  include "../output/VirtualCameraOutputWin.h"
+#elif defined(__APPLE__)
+#  include "../output/VirtualCameraOutputMac.h"
+#endif
+#include "../tray/ISystemTray.h"
 #include "../ui/UIRemoteConnection.h"
 #include "../ui/UICapturePresets.h"
 #include "../ui/UIRecordings.h"
@@ -61,7 +74,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
 #include <unistd.h>
 #endif
 #include "../utils/FilesystemCompat.h"
@@ -118,6 +131,58 @@ bool Application::init()
         return false;
     }
     LOG_INFO("UI initialized");
+
+    // Chat transport (#84). Created up front so the OSD panel has a
+    // live pointer even before publish/connect; the client self-idles
+    // until connect(streamId) is called by the publish or remote-meta
+    // path.
+    //
+    // URL precedence:
+    //   1. --chat-url (non-empty m_chatBaseUrl) wins on launch and is
+    //      written into UIManager so the Streaming → Advanced field
+    //      reflects the live value. The user can then edit it from
+    //      there.
+    //   2. Otherwise UIManager's value (loaded from config.json, or
+    //      the built-in default ws://localhost:8082) is the source
+    //      of truth.
+    // After init, the UI is the canonical value — syncDirectoryClient
+    // reads it every frame and pushes any change down to ChatClient.
+    m_chatClient = std::make_unique<ChatClient>();
+    if (m_ui)
+    {
+        if (!m_chatBaseUrl.empty())
+        {
+            m_ui->setChatBaseUrl(m_chatBaseUrl);
+        }
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+        m_ui->setChatClient(m_chatClient.get());
+    }
+    else
+    {
+        m_chatClient->setBaseUrl(m_chatBaseUrl);
+    }
+
+    // Persistent chat identity (#84). The OSD Profile window will
+    // populate fields and re-save on first launch; we just load
+    // whatever's on disk here so an existing user's rc_<id> goes
+    // out with every hello from the get-go.
+    {
+        const ChatIdentity ident = identity::load();
+        if (ident.isInitialized())
+        {
+            m_chatClient->setClientId(ident.id);
+            // Push the saved nickname into ChatClient AND UIManager —
+            // the OSD's Rooms-browse click + manual join paths read
+            // snap.nickname; without this seeding, connectBySlug
+            // bails on the empty-nickname guard and silently does
+            // nothing on first launch.
+            if (!ident.nickname.empty())
+            {
+                m_chatClient->setNickname(ident.nickname);
+                if (m_ui) m_ui->setChatNickname(ident.nickname);
+            }
+        }
+    }
 
     // Connect ShaderEngine to UI for parameters
     if (m_ui && m_shaderEngine)
@@ -197,10 +262,14 @@ void Application::updateCursorVisibility()
     // the underlying clicks register.
     if (m_ui && m_window)
     {
-        const bool osdInteractive =
+        const bool quickInteractive =
             m_ui->getQuickActionsOverlay() &&
             m_ui->getQuickActionsOverlay()->isVisible();
-        m_window->setCursorVisible(m_ui->isVisible() || osdInteractive);
+        const bool chatInteractive =
+            m_ui->getChatOverlay() &&
+            m_ui->getChatOverlay()->isVisible();
+        m_window->setCursorVisible(
+            m_ui->isVisible() || quickInteractive || chatInteractive);
     }
 }
 
@@ -329,7 +398,7 @@ bool Application::initRenderer()
                         appPtr->m_shaderEngine->setViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                     }
 // Small delay to ensure ShaderEngine finished recreating framebuffers
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(10000); // 10ms
 #else
                     Sleep(10); // 10ms
@@ -381,7 +450,19 @@ bool Application::initCapture()
         if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
         else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
         remote->setInterpolationMode(imode);
+        remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
+    }
+    else if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+    {
+        // #107 — screen capture is its own backend (not in the
+        // platform factory, like Remote). Target + region come from the
+        // UI/config; open() happens below via the shared device path.
+        LOG_INFO("Source is screen — creating VideoCaptureScreen");
+        auto screen = std::make_unique<VideoCaptureScreen>();
+        screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                          m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+        m_capture = std::move(screen);
     }
     else
     {
@@ -400,9 +481,13 @@ bool Application::initCapture()
     // If it fails, activate dummy mode (generates black frames)
     if (m_devicePath.empty())
     {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
+        // Windows (DirectShow) and macOS (AVFoundation) both pick a
+        // capture device by enumeration at the backend layer — there
+        // is no filesystem path. Without a device explicitly chosen,
+        // start in dummy mode and let the user pick a device via the
+        // Source tab.
         LOG_INFO("No device specified - activating dummy mode directly");
-        // Go directly to dummy mode without trying to open device
         m_capture->setDummyMode(true);
         if (!m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
         {
@@ -664,6 +749,29 @@ bool Application::initCapture()
                 // mode. Bypasses the pending-snapshot apply path
                 // because there's no GL state involved.
                 if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                // #84 — Chat: if the host advertised a roomSlug in
+                // /meta, bind the local chat client to that room.
+                // Empty roomSlug means the host has chat disabled or
+                // hasn't picked a slug yet — close any session we
+                // might have had from a previous host.
+                if (m_chatClient)
+                {
+                    const std::string &slug = snap.chatRoomSlug;
+                    if (!slug.empty() && slug != m_chatBoundSlug)
+                    {
+                        m_chatBoundSlug = slug;
+                        // Viewer nick: persistent chat name only.
+                        const std::string nick = m_ui
+                            ? m_ui->getChatNickname()
+                            : std::string{};
+                        m_chatClient->connectBySlug(slug, nick);
+                    }
+                    else if (slug.empty() && !m_chatBoundSlug.empty())
+                    {
+                        m_chatBoundSlug.clear();
+                        m_chatClient->disconnect();
+                    }
+                }
             });
     }
 
@@ -691,7 +799,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
 
     // Small delay to ensure any ongoing frame processing completes
     // This prevents race conditions where processFrame is accessing the device
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(50000); // 50ms to let current frame processing finish
 #else
     Sleep(50); // 50ms to let current frame processing finish
@@ -717,7 +825,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     m_capture->close();
 
 // Small delay to ensure device was released
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
     usleep(100000); // 100ms
 #else
     Sleep(100); // 100ms
@@ -738,7 +846,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         LOG_ERROR("Failed to configure new capture format");
         // Try rollback: reopen with previous format
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -772,7 +880,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
         // Tentar rollback
         m_capture->stopCapture();
         m_capture->close();
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(100000); // 100ms
 #else
         Sleep(100); // 100ms
@@ -800,7 +908,7 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     for (int i = 0; i < 5; ++i)
     {
         m_capture->captureLatestFrame(dummyFrame);
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
         usleep(10000); // 10ms entre tentativas
 #else
         Sleep(10); // 10ms entre tentativas
@@ -1165,6 +1273,7 @@ bool Application::initUI()
     m_streamingQsvPreset   = m_ui->getStreamingQsvPreset();
     m_streamingAmfQuality  = m_ui->getStreamingAmfQuality();
     m_remoteInterpolation  = m_ui->getRemoteInterpolation();
+    m_remoteAudioGain      = m_ui->getRemoteAudioMuted() ? 0.0f : m_ui->getRemoteAudioVolume();
     m_streamingH265Preset = m_ui->getStreamingH265Preset();
     m_streamingH265Profile = m_ui->getStreamingH265Profile();
     m_streamingH265Level = m_ui->getStreamingH265Level();
@@ -1660,6 +1769,26 @@ bool Application::initUI()
         }
     });
 
+    // #77 Remote audio volume — UIManager hands us the effective gain
+    // (muted ? 0 : volume); push it live to the active VideoCaptureRemote
+    // (and remember it for any remote created later this session).
+    m_ui->setOnRemoteAudioVolumeChanged([this](float gain) {
+        m_remoteAudioGain = gain;
+        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
+        {
+            remote->setAudioVolume(gain);
+        }
+    });
+
+    // #107 — live screen-capture region crop. Push the new rect to the
+    // active VideoCaptureScreen so the crop changes without a restart.
+    m_ui->setOnScreenRegionChanged([this](uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        if (auto *screen = dynamic_cast<VideoCaptureScreen *>(m_capture.get()))
+        {
+            screen->setRegion(x, y, w, h);
+        }
+    });
+
     // Callbacks for buffer settings
     m_ui->setOnStreamingMaxVideoBufferSizeChanged([this](size_t size)
                                                   {
@@ -2146,6 +2275,107 @@ bool Application::initUI()
                                          m_window->setVsync(sourceType == UIManager::SourceType::Remote);
                                      }
 
+                                     // #97/#107 — the concrete backend differs per source
+                                     // type (factory V4L2/DS/AVF, VideoCaptureScreen,
+                                     // VideoCaptureRemote). Reusing the old instance across a
+                                     // switch opened a screen target as a V4L2 device
+                                     // (segfault) and carried the previous source's device
+                                     // path into the new one. When the type no longer matches
+                                     // the live backend, tear it down and build the right one,
+                                     // dropping the stale device so the new source starts
+                                     // clean.
+                                     {
+                                         using ST = UIManager::SourceType;
+                                         const bool wantScreen = (sourceType == ST::Screen);
+                                         const bool wantRemote = (sourceType == ST::Remote);
+                                         const bool wantFactory = !wantScreen && !wantRemote; // V4L2/DS/AVF/None
+
+                                         const bool haveScreen  = dynamic_cast<VideoCaptureScreen *>(m_capture.get()) != nullptr;
+                                         const bool haveRemote  = dynamic_cast<VideoCaptureRemote *>(m_capture.get()) != nullptr;
+                                         const bool haveFactory = m_capture && !haveScreen && !haveRemote;
+
+                                         const bool wrongType =
+                                             !m_capture ||
+                                             (wantScreen && !haveScreen) ||
+                                             (wantRemote && !haveRemote) ||
+                                             (wantFactory && !haveFactory);
+
+                                         if (wrongType)
+                                         {
+                                             LOG_INFO("Source type changed — rebuilding capture backend");
+                                             // Drop the UI's raw capture pointer BEFORE the old
+                                             // instance is destroyed. setCaptureControls() stashes
+                                             // it in UIManager::m_capture (what getCapture() hands
+                                             // the Source tab); leaving it dangling across the
+                                             // rebuild segfaulted on the next render of the new
+                                             // tab. Cleared here, re-pointed at the new backend
+                                             // below.
+                                             if (m_ui) m_ui->setCaptureControls(nullptr);
+                                             if (m_remoteMetaSync) { m_remoteMetaSync->stop(); m_remoteMetaSync.reset(); }
+                                             if (m_capture) { m_capture->stopCapture(); m_capture->close(); m_capture.reset(); }
+                                             m_devicePath.clear();
+                                             if (m_ui) m_ui->setCurrentDeviceSilent("");
+
+                                             if (wantScreen)      m_capture = std::make_unique<VideoCaptureScreen>();
+                                             else if (wantRemote) m_capture = std::make_unique<VideoCaptureRemote>();
+                                             else                 m_capture = VideoCaptureFactory::create();
+
+                                             // Factory backend with no device yet → idle dummy
+                                             // so there's always valid output (black) until the
+                                             // user picks a device, instead of a half-init grab.
+                                             if (wantFactory && m_capture && sourceType != ST::None)
+                                             {
+                                                 m_capture->setDummyMode(true);
+                                                 if (m_capture->setFormat(m_captureWidth, m_captureHeight, 0))
+                                                     m_capture->startCapture();
+                                             }
+
+                                             // Re-point the UI at the freshly built backend so
+                                             // getCapture() is valid again. For Screen/Remote
+                                             // this carries no hardware controls (no-op queries);
+                                             // for V4L2/DS it re-enumerates the control set.
+                                             if (m_ui) m_ui->setCaptureControls(m_capture.get());
+                                         }
+                                     }
+
+                                     // #107 — Screen: auto-open the default target so the
+                                     // user sees frames immediately instead of having to
+                                     // pick from the dropdown.
+                                     if (sourceType == UIManager::SourceType::Screen)
+                                     {
+                                         LOG_INFO("Screen source selected");
+                                         if (m_capture)
+                                         {
+                                             std::string target = m_ui ? m_ui->getCurrentDevice() : std::string();
+                                             if (target.empty())
+                                             {
+                                                 const auto devs = m_capture->listDevices();
+                                                 if (!devs.empty()) target = devs.front().id;
+                                             }
+                                             if (!target.empty())
+                                             {
+                                                 if (auto *screen = dynamic_cast<VideoCaptureScreen *>(m_capture.get()))
+                                                 {
+                                                     if (m_ui)
+                                                         screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                                                                           m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+                                                 }
+                                                 if (m_capture->open(target))
+                                                 {
+                                                     m_capture->startCapture();
+                                                     m_devicePath = target;
+                                                     if (m_ui)
+                                                     {
+                                                         m_ui->setCurrentDeviceSilent(target);
+                                                         m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                              m_captureFps, target);
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                         return; // Screen fully handled
+                                     }
+
                                      if (sourceType == UIManager::SourceType::None)
                                      {
                                          LOG_INFO("None source selected - activating dummy mode");
@@ -2312,6 +2542,80 @@ bool Application::initUI()
                                      }
 #endif
 
+#ifdef __APPLE__
+                                     if (sourceType == UIManager::SourceType::AVFoundation)
+                                     {
+                                         LOG_INFO("AVFoundation source selected");
+                                         // Re-arm the UI's capture pointer (the None
+                                         // branch above clears it as a side effect of
+                                         // setCaptureControls(nullptr)) so the Source
+                                         // tab can call listDevices() / setFormatById().
+                                         if (m_ui && m_capture)
+                                         {
+                                             m_ui->setCaptureControls(m_capture.get());
+                                         }
+
+                                         // Auto-open the saved device (or the first
+                                         // available one) instead of leaving the user
+                                         // in dummy mode with the dropdown showing a
+                                         // device that is not actually active. Without
+                                         // this, the user has to pick another device
+                                         // and come back just to make AVFoundation
+                                         // actually capture.
+                                         if (m_capture && m_capture->isDummyMode())
+                                         {
+                                             const auto devices = m_capture->listDevices();
+                                             if (!devices.empty())
+                                             {
+                                                 const std::string saved = m_ui
+                                                     ? m_ui->getAVFoundationDeviceId()
+                                                     : std::string();
+                                                 std::string target;
+                                                 if (!saved.empty())
+                                                 {
+                                                     for (const auto &d : devices)
+                                                     {
+                                                         if (d.id == saved)
+                                                         {
+                                                             target = saved;
+                                                             break;
+                                                         }
+                                                     }
+                                                 }
+                                                 if (target.empty())
+                                                 {
+                                                     target = devices.front().id;
+                                                 }
+                                                 LOG_INFO("Auto-opening AVFoundation device: " + target);
+                                                 if (m_ui)
+                                                 {
+                                                     m_ui->triggerDeviceChange(target);
+                                                 }
+
+                                                 // Restore the format the user had
+                                                 // selected on this device in a previous
+                                                 // session, if any and if the device is
+                                                 // the saved one (don't carry a format
+                                                 // across devices — different cards
+                                                 // expose different format IDs).
+                                                 const std::string savedFormatId = m_ui
+                                                     ? m_ui->getAVFoundationFormatId()
+                                                     : std::string();
+                                                 if (!savedFormatId.empty() && target == saved &&
+                                                     m_capture)
+                                                 {
+                                                     LOG_INFO("Restoring AVFoundation format: " + savedFormatId);
+                                                     if (!m_capture->setFormatById(savedFormatId, target))
+                                                     {
+                                                         LOG_WARN("Saved AVFoundation format id no longer matches a "
+                                                                  "format on this device — leaving device at default");
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
+#endif
+
                                      // Phase 5b/#47: switching INTO Remote — close the
                                      // current capture (V4L2/DS/None) and stand up an
                                      // empty VideoCaptureRemote that waits for the
@@ -2335,6 +2639,7 @@ bool Application::initUI()
                                              if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                                              else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                                              remote->setInterpolationMode(imode);
+                                             remote->setAudioVolume(m_remoteAudioGain);
                                              m_capture = std::move(remote);
                                          }
                                          m_devicePath.clear();
@@ -2355,6 +2660,68 @@ bool Application::initUI()
             return;
         }
         processingDeviceChange = true;
+
+        // #107 — Screen source: the callback carries the capture target
+        // ("monitor:N" / "window:<id>" / ""). Replace the capture with a
+        // VideoCaptureScreen pointed at it. Empty target == stop.
+        if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Screen)
+        {
+            // Dedup: if we're already capturing this exact target, don't
+            // tear the portal session down and re-create it (that popped
+            // a fresh portal dialog and interrupted PipeWire format
+            // negotiation, leaving the stream with no frames). The
+            // source-type switch already auto-opened the target, so the
+            // UI re-selecting the same one must be a no-op. #107.
+            if (!devicePath.empty() && devicePath == m_devicePath &&
+                dynamic_cast<VideoCaptureScreen *>(m_capture.get()) &&
+                m_capture->isOpen())
+            {
+                processingDeviceChange = false;
+                return;
+            }
+
+            LOG_INFO("Screen target change: " +
+                     (devicePath.empty() ? std::string("(stop)") : devicePath));
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture.reset();
+            }
+            m_devicePath = devicePath;
+
+            if (devicePath.empty())
+            {
+                if (m_ui) m_ui->setCaptureInfo(0, 0, 0, "");
+                processingDeviceChange = false;
+                return;
+            }
+
+            auto screen = std::make_unique<VideoCaptureScreen>();
+            screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
+                              m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
+            m_capture = std::move(screen);
+            if (m_capture->open(devicePath))
+            {
+                m_capture->startCapture();
+                const uint32_t w = m_capture->getWidth();
+                const uint32_t h = m_capture->getHeight();
+                if (w > 0 && h > 0) { m_captureWidth = w; m_captureHeight = h; }
+                if (m_ui) m_ui->setCaptureInfo(w, h, m_captureFps, devicePath);
+            }
+            else
+            {
+                LOG_WARN("VideoCaptureScreen: failed to open target " + devicePath);
+                if (m_ui)
+                {
+                    m_ui->setCaptureInfo(0, 0, 0, "Screen (failed)");
+                    m_ui->setCurrentDeviceSilent("");
+                }
+                m_devicePath.clear();
+            }
+            processingDeviceChange = false;
+            return;
+        }
 
         // Phase 5b/#47: when the active source is Remote, this callback
         // carries the remote BASE URL — not a V4L2 / DirectShow device
@@ -2378,36 +2745,36 @@ bool Application::initUI()
                 m_frameProcessor->deleteTexture();
             }
 
-            // Tear down any existing remote pipeline on a background
-            // thread so the main loop doesn't stall while
-            // VideoCaptureRemote joins its decode thread (up to ~1.5 s
-            // with the interrupt callback). We move ownership of both
-            // objects into a detached worker; the main thread
-            // continues immediately to spin up the new capture.
-            //
-            // Switching from one remote URL straight to another used
-            // to freeze the UI for the full join duration; this is
-            // what made "click another stream while connected" feel
-            // unresponsive even though the new connection itself was
-            // already fast.
-            if (m_remoteMetaSync || m_capture)
+            // Tear down any existing remote pipeline SYNCHRONOUSLY
+            // before we open the next one (#92/#95). This used to run
+            // on a detached worker so the main loop wouldn't stall on
+            // VideoCaptureRemote's decode-thread join — but that left
+            // the old /raw connection (a real "viewer" on the host)
+            // alive while the new one opened, so:
+            //   - #92: rapidly reconnecting / switching URLs stacked
+            //     several live connections; the host counted each as a
+            //     separate viewer.
+            //   - #95: on Disconnect (empty URL) nothing waited for the
+            //     teardown, so the socket / decode thread lingered and
+            //     the client stayed "connected".
+            // The teardown is actually fast: stopCapture() trips the
+            // ffmpeg interrupt callback so the blocking read returns at
+            // once, and RemoteMetaSync's poll loop sleeps in 100 ms
+            // slices that check its stop flag. Doing it inline closes
+            // the old socket (and joins both threads) before the next
+            // open — exactly one live connection at any time. The
+            // on-screen frame was already wiped above, so the brief
+            // (~100-300 ms) join isn't visible as a freeze.
+            if (m_remoteMetaSync)
             {
-                auto deadCapture = std::move(m_capture);
-                auto deadMeta    = std::move(m_remoteMetaSync);
-                std::thread([cap = std::move(deadCapture),
-                             meta = std::move(deadMeta)]() mutable {
-                    if (meta)
-                    {
-                        meta->stop();
-                        meta.reset();
-                    }
-                    if (cap)
-                    {
-                        cap->stopCapture();
-                        cap->close();
-                        cap.reset();
-                    }
-                }).detach();
+                m_remoteMetaSync->stop();
+                m_remoteMetaSync.reset();
+            }
+            if (m_capture)
+            {
+                m_capture->stopCapture();
+                m_capture->close();
+                m_capture.reset();
             }
 
             m_devicePath = devicePath;
@@ -2449,6 +2816,7 @@ bool Application::initUI()
                 if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
                 else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
                 remote->setInterpolationMode(imode);
+                remote->setAudioVolume(m_remoteAudioGain);
                 remote->setAuthToken(authToken);
                 m_capture = std::move(remote);
             }
@@ -2512,6 +2880,27 @@ bool Application::initUI()
                         // Browse leaves the OSD's "watching with N
                         // others" stuck at 0 forever.
                         if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
+                        // #84 — same chat-binding logic as the
+                        // initCapture-side callback. Reconnect when
+                        // the host's roomSlug arrives or changes;
+                        // disconnect when it goes empty.
+                        if (m_chatClient)
+                        {
+                            const std::string &slug = snap.chatRoomSlug;
+                            if (!slug.empty() && slug != m_chatBoundSlug)
+                            {
+                                m_chatBoundSlug = slug;
+                                const std::string nick = m_ui
+                                    ? m_ui->getChatNickname()
+                                    : std::string{};
+                                m_chatClient->connectBySlug(slug, nick);
+                            }
+                            else if (slug.empty() && !m_chatBoundSlug.empty())
+                            {
+                                m_chatBoundSlug.clear();
+                                m_chatClient->disconnect();
+                            }
+                        }
                     });
             }
             else
@@ -2596,7 +2985,22 @@ bool Application::initUI()
             // Disable dummy mode when trying to open real device
             m_capture->setDummyMode(false);
         }
-        
+
+        // #97 — if we're coming from a Remote (or Screen) session, m_capture
+        // is still that backend; calling open("/dev/videoN") on it routes the
+        // device path through the wrong demuxer ("connecting to remote base
+        // URL /dev/videoN"). Rebuild as the local factory capture (V4L2 /
+        // DirectShow / AVFoundation) before opening the device.
+        if (m_capture &&
+            (dynamic_cast<VideoCaptureRemote *>(m_capture.get()) ||
+             dynamic_cast<VideoCaptureScreen *>(m_capture.get())))
+        {
+            LOG_INFO("Device change: active capture is not a local device backend — rebuilding via factory (#97)");
+            if (m_remoteMetaSync) { m_remoteMetaSync->stop(); m_remoteMetaSync.reset(); }
+            m_capture = VideoCaptureFactory::create();
+            if (m_ui) m_ui->setCaptureControls(m_capture.get());
+        }
+
         // Update device path
         m_devicePath = devicePath;
         
@@ -2742,6 +3146,23 @@ void Application::handleKeyInput()
         {
             f11Pressed = false;
         }
+
+        // F8 toggles the chat overlay (#84). Suppressed while the
+        // chat input box has focus — otherwise pressing F8 to send a
+        // funny line just toggles the panel.
+        static bool f8Pressed = false;
+        bool f8Now = sdlWindow->isKeyPressed(SDLK_F8);
+        if (f8Now && !f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+        else if (!f8Now)
+        {
+            f8Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -2781,6 +3202,25 @@ void Application::handleKeyInput()
     else
     {
         f11Pressed = false;
+    }
+
+    // F8 toggles the chat overlay (#84). Suppressed while the chat
+    // input box has focus so typing "F8" in a message doesn't toggle
+    // the panel mid-sentence.
+    static bool f8Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS)
+    {
+        if (!f8Pressed)
+        {
+            auto *chat = m_ui->getChatOverlay();
+            const bool inputFocused = chat && chat->isInputFocused();
+            if (chat && !inputFocused) chat->toggleVisibility();
+            f8Pressed = true;
+        }
+    }
+    else
+    {
+        f8Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -3118,8 +3558,18 @@ bool Application::initAudioCapture()
         LOG_WARN("RecordingManager not initialized - recording will not be available");
     }
 
-    // Open default audio device (will create virtual sink)
-    if (!m_audioCapture->open())
+    // Use the saved input source if any (set via UI / web portal in a
+    // previous session). Empty string falls back to PulseAudio's default
+    // source. Replaces the old "open() creates a null-sink and a
+    // separate restoreAudioDeviceConnections() loops the saved source
+    // into it" two-step.
+    std::string savedSource;
+    if (m_ui)
+    {
+        savedSource = m_ui->getAudioInputSourceId();
+    }
+
+    if (!m_audioCapture->open(savedSource))
     {
         LOG_ERROR("Failed to open audio device");
         m_audioCapture.reset();
@@ -3144,6 +3594,12 @@ bool Application::initAudioCapture()
         m_ui->setAudioCapture(m_audioCapture.get());
     }
 
+    // Host-side monitor playback: on Linux it lives inside
+    // AudioCapturePulse (MonitorPlayback), on macOS inside
+    // AudioCaptureCoreAudio (also called MonitorPlayback there). The
+    // capture class spins up its own monitor in open() — no Application-
+    // level wiring needed.
+
     // Audio format for RecordingManager is already set in init() after audio capture starts
 
     return true;
@@ -3151,29 +3607,228 @@ bool Application::initAudioCapture()
 
 void Application::restoreAudioDeviceConnections()
 {
-    if (!m_audioCapture || !m_ui)
-    {
-        return;
-    }
+    // Obsolete since 0.8.0-alpha: the saved input source is now passed
+    // directly to AudioCapturePulse::open() during initAudioCapture(),
+    // so there is no separate "load a loopback module into a null-sink"
+    // step to restore. Kept as a no-op for callers that still invoke it.
+}
 
-#ifdef __linux__
-    AudioCapturePulse *pulseCapture = dynamic_cast<AudioCapturePulse *>(m_audioCapture.get());
-    if (!pulseCapture)
-    {
-        return;
-    }
+// ─────────────────────────────────────────────────────────────────────
+// #86 — system tray + hide-to-tray
+// ─────────────────────────────────────────────────────────────────────
+namespace {
+// Open a URL in the user's default browser. Mirrors the pattern used
+// by UIRecordings / UICredits.
+void openUrlInBrowser(const std::string &url)
+{
+#if defined(PLATFORM_LINUX)
+    std::string cmd = "xdg-open \"" + url + "\" &";
+    if (std::system(cmd.c_str()) != 0) { /* best-effort */ }
+#elif defined(PLATFORM_MACOS)
+    std::string cmd = "open \"" + url + "\" &";
+    if (std::system(cmd.c_str()) != 0) { /* best-effort */ }
+#elif defined(_WIN32)
+    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOW);
+#endif
+}
+} // namespace
 
-    std::string savedInputSourceId = m_ui->getAudioInputSourceId();
-    if (!savedInputSourceId.empty())
+void Application::setupSystemTray()
+{
+    using retrocapture::ISystemTray;
+    using retrocapture::TrayMenuItem;
+
+    m_tray = retrocapture::createSystemTray();
+
+    const bool wantTray = m_ui && m_ui->getTrayEnabled();
+
+    // Window close-button policy. Installed regardless of tray host:
+    //  - tray on + minimize-on-close + a real tray host → hide.
+    //  - otherwise → real quit (so a user with no tray host isn't
+    //    trapped with a close button that does nothing).
+    m_window->setCloseCallback([this]()
     {
-        usleep(500000);
-        if (!pulseCapture->connectInputSource(savedInputSourceId))
+        const bool minimize = m_ui && m_ui->getTrayEnabled() &&
+                              m_ui->getTrayMinimizeOnClose() && m_trayActive;
+        if (minimize)
         {
-            LOG_WARN("Failed to restore audio input source: " + savedInputSourceId);
+            m_window->hide();
+            refreshTrayMenu();
+        }
+        else
+        {
+            m_window->requestClose();
+        }
+    });
+
+    if (!wantTray)
+    {
+        LOG_INFO("System tray disabled in preferences");
+        return;
+    }
+
+    // The Linux backend loads our branded logo.png and serves it as
+    // the SNI IconPixmap (the actual visual). The name passed here is
+    // only the themed-icon fallback used if that asset can't be found
+    // at runtime — "camera-video" exists in every icon theme.
+    if (!m_tray->start("camera-video", "RetroCapture"))
+    {
+        LOG_WARN("System tray: no tray host available — the close "
+                 "button will quit the application. Install an "
+                 "AppIndicator/StatusNotifier host to enable "
+                 "minimize-to-tray.");
+        m_trayActive = false;
+        return;
+    }
+    m_trayActive = true;
+
+    // Left-click activation: toggle window visibility.
+    m_tray->setOnActivate([this]()
+    {
+        if (m_window->isVisible()) m_window->hide();
+        else                       m_window->show();
+        refreshTrayMenu();
+    });
+
+    refreshTrayMenu();
+
+    // Start-minimized: launch straight to the tray.
+    if (m_ui->getTrayStartMinimized())
+    {
+        m_window->hide();
+    }
+
+    LOG_INFO("System tray active");
+}
+
+void Application::refreshTrayMenu()
+{
+    using retrocapture::TrayMenuItem;
+    if (!m_tray || !m_trayActive) return;
+
+    const bool streaming   = m_ui && m_ui->getStreamingActive();
+    const bool recording   = m_ui && m_ui->getRecordingActive();
+
+    // Tray notifications (#86) — fire on streaming/recording edges,
+    // gated by the user preference. Runs before the menu-signature
+    // early-return below so a visibility-only change doesn't suppress
+    // it. The first pass just seeds the previous-state baseline.
+    if (m_notifyInit && m_ui && m_ui->getTrayNotifications())
+    {
+        if (streaming != m_notifyPrevStreaming)
+        {
+            m_tray->notify("RetroCapture",
+                           streaming ? "Streaming started" : "Streaming stopped");
+        }
+        if (recording != m_notifyPrevRecording)
+        {
+            if (recording)
+            {
+                m_tray->notify("RetroCapture", "Recording started");
+            }
+            else
+            {
+                const std::string fn = m_ui->getRecordingFilename();
+                m_tray->notify("RetroCapture",
+                               fn.empty() ? "Recording saved"
+                                          : ("Recording saved: " + fn));
+            }
         }
     }
+    m_notifyPrevStreaming = streaming;
+    m_notifyPrevRecording = recording;
+    m_notifyInit = true;
 
-#endif
+    const bool hasSource    = m_ui && !m_ui->getCurrentDevice().empty();
+    const bool clientMode  = m_ui && m_ui->isRemoteSource() && hasSource;
+    const bool windowShown = m_window && m_window->isVisible();
+
+    // Only re-push when something the menu reflects actually changed —
+    // updateMenu() emits a D-Bus signal on Linux, not worth doing every
+    // frame.
+    const uint32_t sig =
+        (streaming ? 1u : 0u) | (recording ? 2u : 0u) |
+        (hasSource ? 4u : 0u) | (clientMode ? 8u : 0u) |
+        (windowShown ? 16u : 0u);
+    if (m_trayMenuSig == sig && m_trayMenuBuilt) return;
+    m_trayMenuSig   = sig;
+    m_trayMenuBuilt = true;
+
+    std::vector<TrayMenuItem> items;
+
+    // Streaming toggle — hidden in client mode (nothing local to
+    // broadcast), disabled until a source is configured.
+    if (!clientMode)
+    {
+        TrayMenuItem stream;
+        stream.id      = "streaming";
+        stream.label   = streaming ? "Stop Streaming" : "Start Streaming";
+        stream.enabled = hasSource;
+        stream.onClick = [this]()
+        {
+            if (m_ui) m_ui->triggerStreamingStartStop(!m_ui->getStreamingActive());
+        };
+        items.push_back(std::move(stream));
+    }
+
+    // Recording toggle — available in client mode too (records whatever
+    // is in the framebuffer).
+    {
+        TrayMenuItem rec;
+        rec.id      = "recording";
+        rec.label   = recording ? "Stop Recording" : "Start Recording";
+        rec.enabled = true;
+        rec.onClick = [this]()
+        {
+            if (m_ui) m_ui->triggerRecordingStartStop(!m_ui->getRecordingActive());
+        };
+        items.push_back(std::move(rec));
+    }
+
+    // Open Web Portal.
+    {
+        TrayMenuItem portal;
+        portal.id      = "webportal";
+        portal.label   = "Open Web Portal";
+        portal.enabled = m_ui && m_ui->getWebPortalEnabled();
+        portal.onClick = [this]()
+        {
+            const uint16_t port = m_ui ? m_ui->getStreamingPort() : 8080;
+            openUrlInBrowser("http://localhost:" + std::to_string(port) + "/");
+        };
+        items.push_back(std::move(portal));
+    }
+
+    { TrayMenuItem sep; sep.type = TrayMenuItem::Type::Separator; sep.id = "sep1"; items.push_back(std::move(sep)); }
+
+    // Show / Hide window.
+    {
+        TrayMenuItem vis;
+        vis.id      = "visibility";
+        vis.label   = windowShown ? "Hide Window" : "Show Window";
+        vis.onClick = [this]()
+        {
+            if (m_window->isVisible()) m_window->hide();
+            else                       m_window->show();
+            refreshTrayMenu();
+        };
+        items.push_back(std::move(vis));
+    }
+
+    { TrayMenuItem sep; sep.type = TrayMenuItem::Type::Separator; sep.id = "sep2"; items.push_back(std::move(sep)); }
+
+    // Quit — set shouldClose so the main loop exits and shutdown()
+    // runs the orderly teardown (finalize recording, leave directory,
+    // join chat, release virtcam).
+    {
+        TrayMenuItem quit;
+        quit.id      = "quit";
+        quit.label   = "Quit";
+        quit.onClick = [this]() { m_window->requestClose(); };
+        items.push_back(std::move(quit));
+    }
+
+    m_tray->setMenu(items);
 }
 
 void Application::run()
@@ -3185,6 +3840,10 @@ void Application::run()
     }
 
     LOG_INFO("Starting main loop...");
+
+    // #86 — bring up the system tray + hide-to-tray wiring now that
+    // the window, UI and all pipelines are initialised.
+    setupSystemTray();
 
     // IMPORTANT: Ensure viewport is updated before first frame
     // This is especially important when window is created in fullscreen
@@ -3214,6 +3873,9 @@ void Application::run()
         // transition is needed (just compares two booleans and a few
         // strings).
         syncDirectoryClient();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+        syncVirtualCamera();
+#endif
         // Cursor visibility tracks BOTH UIManager::isVisible() and the
         // OSD overlay (#68). The setOnVisibilityChanged callback only
         // fires on F12 toggles — toggling the quick-actions widget via
@@ -3224,11 +3886,35 @@ void Application::run()
         updateCursorVisibility();
 
         m_window->pollEvents();
-        
+
+        // #86 — drain tray events (menu clicks / activation) on this
+        // thread, then refresh the menu labels/enabled if state moved.
+        if (m_tray)
+        {
+            m_tray->pump();
+            refreshTrayMenu();
+        }
+
         // Check again after polling events (window may have been invalidated)
         if (m_window->shouldClose())
         {
             break;
+        }
+
+        // Hide-to-tray pacing (#86): while the window is hidden,
+        // swapBuffers() is a no-op, so there's no vsync/compositor
+        // pacing to lean on and the loop would spin at 100% CPU.
+        // Sleep a frame's worth here so the capture/shader/streaming/
+        // recording/virtcam pipelines keep running at a sane rate
+        // while we're backgrounded. ~60 Hz upper bound; lower-FPS
+        // capture just sees more no-new-frame polls, which is cheap.
+        if (m_window && !m_window->isVisible())
+        {
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+            usleep(16000);
+#else
+            Sleep(16);
+#endif
         }
 
         // Process pending preset applications (from API threads)
@@ -3380,8 +4066,12 @@ void Application::run()
             {
                 // Neither streaming nor recording active, but we still need to process mainloop
                 // to prevent PulseAudio from freezing system audio
-                // Read and discard samples to keep buffer clean
-                const size_t maxSamples = 4096; // Temporary buffer
+                // Read and discard samples to keep the capture buffer
+                // from backing up. The host-side monitor (Linux:
+                // MonitorPlayback inside AudioCapturePulse; macOS:
+                // monitor inside AudioCaptureCoreAudio) has its own
+                // tap on the bus, so the user still hears the input.
+                const size_t maxSamples = 4096;
                 std::vector<int16_t> tempBuffer(maxSamples);
                 m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
             }
@@ -3479,7 +4169,7 @@ void Application::run()
                     }
                     if (attempt < maxAttempts - 1)
                     {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(5000); // 5ms between attempts
 #else
                         Sleep(5); // 5ms between attempts
@@ -3494,15 +4184,23 @@ void Application::run()
         // Skip rendering during reconfiguration to avoid accessing deleted textures
         if (!m_isReconfiguring && m_frameProcessor && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
         {
+            // #107 — publish the live capture texture for the screen
+            // region selector (it draws the current frame to pick on).
+            if (m_ui)
+            {
+                m_ui->setCaptureTexture(m_frameProcessor->getTexture(),
+                                        m_frameProcessor->getTextureWidth(),
+                                        m_frameProcessor->getTextureHeight());
+            }
             // Log resolução de captura original (antes de qualquer processamento)
             static int originalCaptureLogCount = 0;
             if (originalCaptureLogCount++ < 3)
             {
-                LOG_INFO("=== ORIGINAL CAPTURE TEXTURE ===");
-                LOG_INFO("Original capture texture: " + std::to_string(m_frameProcessor->getTexture()) +
+                LOG_DEBUG("=== ORIGINAL CAPTURE TEXTURE ===");
+                LOG_DEBUG("Original capture texture: " + std::to_string(m_frameProcessor->getTexture()) +
                          ", Size: " + std::to_string(m_frameProcessor->getTextureWidth()) + "x" + 
                          std::to_string(m_frameProcessor->getTextureHeight()));
-                LOG_INFO("================================");
+                LOG_DEBUG("================================");
             }
             
             // Apply shader if active
@@ -3646,11 +4344,11 @@ void Application::run()
                 static int shaderOutputLogCount = 0;
                 if (shaderOutputLogCount++ < 3)
                 {
-                    LOG_INFO("=== SHADER OUTPUT ===");
-                    LOG_INFO("Shader output texture: " + std::to_string(textureToRender) +
+                    LOG_DEBUG("=== SHADER OUTPUT ===");
+                    LOG_DEBUG("Shader output texture: " + std::to_string(textureToRender) +
                              ", Output size: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
                              std::to_string(m_shaderEngine->getOutputHeight()));
-                    LOG_INFO("=====================");
+                    LOG_DEBUG("=====================");
                 }
 
                 // DEBUG: Check returned texture
@@ -3760,18 +4458,18 @@ void Application::run()
             static int pipelineResLogCount = 0;
             if (pipelineResLogCount++ < 3)
             {
-                LOG_INFO("=== PIPELINE RESOLUTIONS ===");
-                LOG_INFO("Original capture: " + 
+                LOG_DEBUG("=== PIPELINE RESOLUTIONS ===");
+                LOG_DEBUG("Original capture: " + 
                          std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
-                LOG_INFO("Shader output (renderWidth/Height): " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
+                LOG_DEBUG("Shader output (renderWidth/Height): " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
                 if (isShaderTexture)
                 {
-                    LOG_INFO("Shader engine output: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
+                    LOG_DEBUG("Shader engine output: " + std::to_string(m_shaderEngine->getOutputWidth()) + "x" + 
                              std::to_string(m_shaderEngine->getOutputHeight()));
                 }
-                LOG_INFO("Output resolution (m_outputWidth/Height): " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
-                LOG_INFO("textureToRender: " + std::to_string(textureToRender) + ", isShaderTexture: " + std::string(isShaderTexture ? "yes" : "no"));
-                LOG_INFO("===========================");
+                LOG_DEBUG("Output resolution (m_outputWidth/Height): " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                LOG_DEBUG("textureToRender: " + std::to_string(textureToRender) + ", isShaderTexture: " + std::string(isShaderTexture ? "yes" : "no"));
+                LOG_DEBUG("===========================");
             }
             
             // Garantir que renderWidth e renderHeight são válidos (não 0)
@@ -3896,7 +4594,7 @@ void Application::run()
             static int finalResLogCount = 0;
             if (finalResLogCount++ < 3)
             {
-                LOG_INFO("Final texture resolutions - finalTexture: " + std::to_string(finalTexture) +
+                LOG_DEBUG("Final texture resolutions - finalTexture: " + std::to_string(finalTexture) +
                          ", finalRenderWidth: " + std::to_string(finalRenderWidth) +
                          ", finalRenderHeight: " + std::to_string(finalRenderHeight));
             }
@@ -3957,13 +4655,17 @@ void Application::run()
             // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
             // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
             bool needsFrameCapture = (m_streamManager && m_streamManager->isActive()) ||
-                                    (m_recordingManager && m_recordingManager->isRecording());
+                                    (m_recordingManager && m_recordingManager->isRecording())
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                    || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                    ;
 
             // Log para debug: verificar tamanho da textura final antes da captura
             static int finalTextureSizeLogCount = 0;
             if (needsFrameCapture && finalTextureSizeLogCount++ < 3)
             {
-                LOG_INFO("Frame capture: finalTexture=" + std::to_string(finalTexture) + 
+                LOG_DEBUG("Frame capture: finalTexture=" + std::to_string(finalTexture) + 
                          ", finalRenderWidth=" + std::to_string(finalRenderWidth) + 
                          ", finalRenderHeight=" + std::to_string(finalRenderHeight) +
                          ", renderWidth=" + std::to_string(renderWidth) +
@@ -4030,7 +4732,11 @@ void Application::run()
                         // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
                         // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
                         bool needsFrameCapture = (m_recordingManager && m_recordingManager->isRecording()) ||
-                                                (m_streamManager && m_streamManager->isActive());
+                                                (m_streamManager && m_streamManager->isActive())
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                                || (m_virtcam && m_virtcam->isRunning())
+#endif
+                                                ;
                         
                         if (needsFrameCapture)
                         {
@@ -4069,17 +4775,17 @@ void Application::run()
                             static int captureSourceLogCount = 0;
                             if (captureSourceLogCount++ < 3)
                             {
-                                LOG_INFO("=== FRAME CAPTURE DEBUG ===");
-                                LOG_INFO("Original capture: " + 
+                                LOG_DEBUG("=== FRAME CAPTURE DEBUG ===");
+                                LOG_DEBUG("Original capture: " + 
                                          std::to_string(m_frameProcessor->getTextureWidth()) + "x" + std::to_string(m_frameProcessor->getTextureHeight()));
                                 if (isShaderTexture)
                                 {
-                                    LOG_INFO("Shader engine output: " + 
+                                    LOG_DEBUG("Shader engine output: " + 
                                              std::to_string(m_shaderEngine->getOutputWidth()) + "x" + std::to_string(m_shaderEngine->getOutputHeight()));
                                 }
                                 LOG_INFO("renderWidth/Height: " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight));
                                 LOG_INFO("finalRenderWidth/Height: " + std::to_string(finalRenderWidth) + "x" + std::to_string(finalRenderHeight));
-                                LOG_INFO("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
+                                LOG_DEBUG("Output resolution: " + std::to_string(m_outputWidth) + "x" + std::to_string(m_outputHeight));
                                 
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
@@ -4091,16 +4797,99 @@ void Application::run()
                                     LOG_INFO("Streaming resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
                                 }
                                 
-                                LOG_INFO("Selected - textureToCapture: " + std::to_string(textureToCapture) +
+                                LOG_DEBUG("Selected - textureToCapture: " + std::to_string(textureToCapture) +
                                          ", size: " + std::to_string(captureTextureWidth) + "x" + std::to_string(captureTextureHeight));
-                                LOG_INFO("Textures - textureToRender: " + std::to_string(textureToRender) +
+                                LOG_DEBUG("Textures - textureToRender: " + std::to_string(textureToRender) +
                                          ", finalTexture: " + std::to_string(finalTexture));
-                                LOG_INFO("===========================");
+                                LOG_DEBUG("===========================");
                             }
                         }
                         
+                        // #85 — Apply Image-tab adjustments (brightness,
+                        // contrast) to the capture frame. The window
+                        // render path at the bottom of this loop runs
+                        // them via m_renderer->renderTexture, but the
+                        // texture we'd otherwise attach here is the
+                        // pre-adjustment finalTexture. Render it once
+                        // more into a side framebuffer with the
+                        // adjustments baked in, then capture from THAT.
+                        // Single extra render pass per frame; the
+                        // texture is RGBA so the downstream readback
+                        // always pulls 4 bpp.
+                        //
+                        // Without this, virtcam consumers + recordings
+                        // + streamed frames all reflect the un-adjusted
+                        // image — user tweaks brightness expecting it
+                        // to land in OBS and it doesn't.
+                        static GLuint postImageFBO     = 0;
+                        static GLuint postImageTex     = 0;
+                        static uint32_t postImageW     = 0;
+                        static uint32_t postImageH     = 0;
+                        const bool postImageActive =
+                            (m_brightness != 1.0f) || (m_contrast != 1.0f);
+
+                        GLuint fboTextureToAttach = textureToCapture;
+                        if (postImageActive)
+                        {
+                            if (postImageFBO == 0 || postImageTex == 0 ||
+                                postImageW != captureTextureWidth ||
+                                postImageH != captureTextureHeight)
+                            {
+                                if (postImageFBO) glDeleteFramebuffers(1, &postImageFBO);
+                                if (postImageTex) glDeleteTextures(1, &postImageTex);
+                                postImageFBO = 0; postImageTex = 0;
+                                glGenTextures(1, &postImageTex);
+                                glBindTexture(GL_TEXTURE_2D, postImageTex);
+                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                                             captureTextureWidth,
+                                             captureTextureHeight, 0,
+                                             GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                                glGenFramebuffers(1, &postImageFBO);
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                                       GL_COLOR_ATTACHMENT0,
+                                                       GL_TEXTURE_2D, postImageTex, 0);
+                                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+                                    GL_FRAMEBUFFER_COMPLETE)
+                                {
+                                    glDeleteFramebuffers(1, &postImageFBO);
+                                    glDeleteTextures(1, &postImageTex);
+                                    postImageFBO = 0; postImageTex = 0;
+                                }
+                                else
+                                {
+                                    postImageW = captureTextureWidth;
+                                    postImageH = captureTextureHeight;
+                                }
+                            }
+                            if (postImageFBO && postImageTex)
+                            {
+                                glBindFramebuffer(GL_FRAMEBUFFER, postImageFBO);
+                                glViewport(0, 0, postImageW, postImageH);
+                                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                                glClear(GL_COLOR_BUFFER_BIT);
+                                m_renderer->renderTexture(
+                                    textureToCapture,
+                                    postImageW, postImageH,
+                                    /*flipY=*/false, /*enableBlend=*/false,
+                                    m_brightness, m_contrast,
+                                    /*maintainAspect=*/false,
+                                    captureTextureWidth, captureTextureHeight,
+                                    /*preserveViewport=*/true);
+                                fboTextureToAttach = postImageTex;
+                                // Re-bind the original captureFBO so the
+                                // attach-and-read below operates on it
+                                // unchanged.
+                                glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+                            }
+                        }
+
                         // Anexar a textura escolhida ao FBO
-                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureToCapture, 0);
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTextureToAttach, 0);
 
                             // Verificar se o FBO está completo
                             GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -4169,13 +4958,19 @@ void Application::run()
                                 // textureToCapture is the source RGB texture, so treat as RGB.
                                 const bool pipelineEnabled = (!m_ui || m_ui->getShaderPipelineEnabled());
                                 bool isShaderTexture = (pipelineEnabled && m_shaderEngine && m_shaderEngine->isShaderActive());
-                                GLenum readFormat = isShaderTexture ? GL_RGBA : GL_RGB;
-                                uint32_t bytesPerPixel = isShaderTexture ? 4 : 3;
+                                // #85 — When the post-image render pass
+                                // ran above, what's attached to captureFBO
+                                // is RGBA regardless of source. Otherwise
+                                // keep the original RGB/RGBA decision.
+                                const bool readAsRgba = isShaderTexture ||
+                                    (postImageActive && fboTextureToAttach == postImageTex);
+                                GLenum readFormat = readAsRgba ? GL_RGBA : GL_RGB;
+                                uint32_t bytesPerPixel = readAsRgba ? 4 : 3;
 
                                 static int formatLogCount = 0;
                                 if (formatLogCount++ < 3)
                                 {
-                                    LOG_INFO("Frame capture: Using format " + std::string(isShaderTexture ? "RGBA" : "RGB") +
+                                    LOG_DEBUG("Frame capture: Using format " + std::string(isShaderTexture ? "RGBA" : "RGB") +
                                              " for texture " + std::to_string(finalTexture) +
                                              " (shader active: " + std::string(isShaderTexture ? "yes" : "no") + ")");
                                 }
@@ -4192,25 +4987,25 @@ void Application::run()
                                              (m_streamManager && m_streamManager->isActive()));
                             if (shouldLog)
                             {
-                                LOG_INFO("=== CAPTURE DETAILS ===");
-                                LOG_INFO("Capturing from texture: " + std::to_string(textureToCapture) +
+                                LOG_DEBUG("=== CAPTURE DETAILS ===");
+                                LOG_DEBUG("Capturing from texture: " + std::to_string(textureToCapture) +
                                          ", Size: " + std::to_string(textureWidth) + "x" + std::to_string(textureHeight));
                                 if (m_recordingManager && m_recordingManager->isRecording())
                                 {
                                     RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                     LOG_INFO("Recording target: " + 
                                              std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                    LOG_INFO("Will resize for recording: " + std::string(
+                                    LOG_DEBUG("Will resize for recording: " + std::string(
                                         (textureWidth != recSettings.width || textureHeight != recSettings.height) ? "YES" : "NO"));
                                 }
                                 if (m_streamManager && m_streamManager->isActive() && m_ui)
                                 {
-                                    LOG_INFO("Streaming target: " + 
+                                    LOG_DEBUG("Streaming target: " + 
                                              std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
-                                    LOG_INFO("Will resize for streaming: " + std::string(
+                                    LOG_DEBUG("Will resize for streaming: " + std::string(
                                         (textureWidth != m_ui->getStreamingWidth() || textureHeight != m_ui->getStreamingHeight()) ? "YES" : "NO"));
                                 }
-                                LOG_INFO("======================");
+                                LOG_DEBUG("======================");
                             }
                             
                             size_t rgbDataSize = static_cast<size_t>(textureWidth) * static_cast<size_t>(textureHeight) * 3;
@@ -4224,7 +5019,7 @@ void Application::run()
                             {
                                 GLint currentViewport[4];
                                 glGetIntegerv(GL_VIEWPORT, currentViewport);
-                                LOG_INFO("Frame capture: Viewport set to " +
+                                LOG_DEBUG("Frame capture: Viewport set to " +
                                              std::to_string(textureWidth) + "x" + std::to_string(textureHeight) +
                                              ", actual viewport: [" + std::to_string(currentViewport[0]) + "," +
                                              std::to_string(currentViewport[1]) + "," +
@@ -4259,6 +5054,23 @@ void Application::run()
                                     frameData.resize(rgbDataSize);
                                     frameDataReady = m_pboManager->getReadData(
                                         frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                    // #85 — Virtual camera also gets fed from
+                                    // the RGB path (no-shader / direct capture
+                                    // passthrough). Without this branch the
+                                    // consumer sees uninitialised buffer
+                                    // contents (black / static) whenever a
+                                    // shader is off, which was the symptom
+                                    // user hit on first end-to-end test.
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                    if (frameDataReady && m_virtcam &&
+                                        m_virtcam->isRunning())
+                                    {
+                                        m_virtcam->pushFrame(
+                                            frameData.data(),
+                                            textureWidth, textureHeight,
+                                            VirtcamSinkT::SourceFormat::RGB);
+                                    }
+#endif
                                 }
                                 else
                                 {
@@ -4269,6 +5081,20 @@ void Application::run()
                                                                   textureWidth, textureHeight,
                                                                   /*flipY=*/false))
                                     {
+                                        // #85 — Virtual camera piggybacks on
+                                        // this RGBA readback (shader path).
+                                        // Push happens BEFORE the RGB strip
+                                        // below so the sink keeps the alpha
+                                        // channel intact (sws RGBA → YUYV).
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+                                        if (m_virtcam && m_virtcam->isRunning())
+                                        {
+                                            m_virtcam->pushFrame(
+                                                rgbaData.data(),
+                                                textureWidth, textureHeight,
+                                                VirtcamSinkT::SourceFormat::RGBA);
+                                        }
+#endif
                                         frameData.resize(rgbDataSize);
                                         for (uint32_t row = 0; row < textureHeight; row++)
                                         {
@@ -4442,19 +5268,34 @@ void Application::run()
                                     static int streamPushLogCount = 0;
                                     if (streamPushLogCount++ < 3 && m_ui)
                                     {
-                                        LOG_INFO("--- PUSHING FRAME TO STREAMING ---");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                        LOG_DEBUG("--- PUSHING FRAME TO STREAMING ---");
+                                        LOG_DEBUG("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
                                                  (useSource ? " (raw source — shader bypassed)" : ""));
-                                        LOG_INFO("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
-                                        LOG_INFO("----------------------------------");
+                                        LOG_DEBUG("Streaming target resolution: " + std::to_string(m_ui->getStreamingWidth()) + "x" + std::to_string(m_ui->getStreamingHeight()));
+                                        LOG_DEBUG("----------------------------------");
                                     }
-                                    if (useSource)
+                                    // #109 — gate the /stream feed on having a
+                                    // /stream client, exactly as /raw is gated by
+                                    // hasRawClients() below. Without this the host
+                                    // ran a second h264_vaapi 720p60 encode for the
+                                    // shader-processed /stream output even when only
+                                    // a remote /raw client was connected and nobody
+                                    // was watching /stream — two VAAPI encodes
+                                    // competing for the GPU, which starved the /raw
+                                    // encode and left the remote client's video
+                                    // lagging the audio (and overflowed the /stream
+                                    // synchronizer continuously). Idle the /stream
+                                    // encoder when no one is watching it.
+                                    if (m_streamManager->hasClients())
                                     {
-                                        m_streamManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
-                                    }
-                                    else
-                                    {
-                                        m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        if (useSource)
+                                        {
+                                            m_streamManager->pushFrame(m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                        }
+                                        else
+                                        {
+                                            m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                        }
                                     }
 
                                     // Phase 2 of #47: also feed the /raw output (pre-shader, always).
@@ -4491,12 +5332,12 @@ void Application::run()
                                     static int recordingPushLogCount = 0;
                                     if (recordingPushLogCount++ < 3)
                                     {
-                                        LOG_INFO("=== PUSHING FRAME TO RECORDING ===");
-                                        LOG_INFO("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
+                                        LOG_DEBUG("=== PUSHING FRAME TO RECORDING ===");
+                                        LOG_DEBUG("Frame size being pushed: " + std::to_string(useSource ? sourceFrameW : actualCaptureWidth) + "x" + std::to_string(useSource ? sourceFrameH : actualCaptureHeight) +
                                                  (useSource ? " (raw source — shader bypassed)" : ""));
                                         RecordingSettings recSettings = m_recordingManager->getRecordingSettings();
                                         LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
-                                        LOG_INFO("===================================");
+                                        LOG_DEBUG("===================================");
                                     }
                                     if (useSource)
                                     {
@@ -4624,7 +5465,7 @@ void Application::run()
                     // Hidden / backgrounded — sleep a frame's worth so
                     // captureLatestFrame still drains the queue at a
                     // reasonable rate without spinning the CPU.
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(16000);
 #else
                     Sleep(16);
@@ -4646,7 +5487,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4721,7 +5562,7 @@ void Application::run()
                 if (elapsedUs < targetIntervalUs)
                 {
                     const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(static_cast<useconds_t>(sleepUs));
 #else
                     Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4752,7 +5593,7 @@ void Application::run()
                     if (elapsedUs < targetIntervalUs)
                     {
                         const int64_t sleepUs = targetIntervalUs - elapsedUs;
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                         usleep(static_cast<useconds_t>(sleepUs));
 #else
                         Sleep(static_cast<DWORD>(sleepUs / 1000));
@@ -4762,7 +5603,7 @@ void Application::run()
                 }
                 else
                 {
-#ifdef PLATFORM_LINUX
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
                     usleep(1000);
 #else
                     Sleep(1);
@@ -4783,6 +5624,14 @@ void Application::shutdown()
     }
 
     LOG_INFO("Shutting down Application...");
+
+    // #86 — tear down the tray icon early so it disappears the moment
+    // the user picks Quit, before the (slower) pipeline teardown runs.
+    if (m_tray)
+    {
+        m_tray->stop();
+        m_tray.reset();
+    }
 
     if (m_shaderSourceTexture != 0)
     {
@@ -5508,7 +6357,18 @@ void Application::applyPendingRemoteMeta()
     }
 
     // Master pipeline toggle: mirror the host's "Apply shader pipeline".
+    // Log every time it changes vs the local state, so a "shader vanishes
+    // after N seconds" symptom can be traced back to whichever snapshot
+    // flipped the value.
+    const bool prevPipelineEnabled = m_ui->getShaderPipelineEnabled();
     m_ui->setShaderPipelineEnabled(pipelineEnabled);
+    if (prevPipelineEnabled != pipelineEnabled)
+    {
+        LOG_INFO(std::string("RemoteMetaSync: pipelineEnabled changed ") +
+                 (prevPipelineEnabled ? "true" : "false") + " → " +
+                 (pipelineEnabled ? "true" : "false") +
+                 " (preset='" + preset + "' hash=" + presetHash + ")");
+    }
 
     // Parameter overrides apply on top of whatever preset is now active.
     // After a preset reload, the engine's parameters are at their preset
@@ -5543,9 +6403,294 @@ void Application::applyPendingRemoteMeta()
 // Always cheap when there's no transition; just compares the toggle
 // against the current state.
 // ─────────────────────────────────────────────────────────────────────
+#if defined(__linux__)
+// #85 — Virtual camera (v4l2loopback) lifecycle. Mirrors the
+// directory-client sync's "reconcile UI toggle with sink state"
+// pattern. Cheap when nothing changes; on a toggle / device /
+// dims transition does a stop + start. Status text is written
+// back into UIManager for the configuration window to display.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    // Synchronous "stop now" handshake (UI module-remove flow).
+    // When the UI fires the request, force the sink down THIS
+    // tick and post a notice the UI's worker spins on before
+    // running pkexec rmmod. Without this, rmmod fails with
+    // EBUSY because RetroCapture is still holding /dev/videoN
+    // through m_virtcam's fd.
+    if (m_ui->consumeVirtcamStopRequest())
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        m_ui->setVirtcamStopped(true);
+    }
+
+    const bool        enabled = m_ui->getVirtcamEnabled();
+    const std::string &cfgDev = m_ui->getVirtcamDevicePath();
+    const std::string &fmtStr = m_ui->getVirtcamPixelFormat();
+    const VirtualCameraOutput::PixelFormat fmt =
+        (fmtStr == "rgb24") ? VirtualCameraOutput::PixelFormat::RGB24
+                            : VirtualCameraOutput::PixelFormat::YUYV;
+
+    // Resolve "0 = follow upstream" sentinels. Cascade:
+    //   user-configured override (virtcam.outputWidth)
+    //     → shader/image output (outputWidth, only set when the
+    //       user picked an output resolution under Image)
+    //     → raw capture dims (captureWidth, always populated as
+    //       soon as a source is open).
+    // The shader-output fallback alone wasn't enough — many
+    // users don't configure an output resolution, so getOutputWidth
+    // sits at 0 forever and we silently never started. Capture
+    // dims is the right last-resort: it tracks the actual frame
+    // size we're feeding through the pipeline.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+    uint32_t f = m_ui->getVirtcamOutputFps();
+    if (f == 0) f = m_ui->getCaptureFps();
+    if (f == 0) f = 30; // cosmetic only; loopback doesn't enforce pacing
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (w == 0 || h == 0)
+    {
+        // Truly nothing to push yet — no source open and no
+        // override configured. Surface the wait so the user
+        // doesn't think the click did nothing.
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // Resolve device path: empty config = auto-pick first loopback.
+    std::string devicePath = cfgDev;
+    if (devicePath.empty())
+    {
+        const auto devices = VirtualCameraOutput::enumerateDevices();
+        if (devices.empty())
+        {
+            m_ui->setVirtcamErrorText(
+                "No v4l2loopback device. Run "
+                "`sudo modprobe v4l2loopback exclusive_caps=1`.");
+            return;
+        }
+        devicePath = devices.front().path;
+    }
+
+    // Lazy construct the sink.
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutput>();
+
+    std::string err;
+    if (!m_virtcam->start(devicePath, w, h, f, fmt, err))
+    {
+        m_ui->setVirtcamErrorText(err);
+        return;
+    }
+    m_ui->setVirtcamErrorText("");
+    // Status line for the configuration window.
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u %s to %s",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight(),
+                  (fmt == VirtualCameraOutput::PixelFormat::YUYV ? "YUYV" : "RGB24"),
+                  devicePath.c_str());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __linux__
+
+#if defined(_WIN32)
+// #85 Phase 2 — Windows virtual camera lifecycle. Simpler than the
+// Linux side: there's exactly one virtual device (the
+// RetroCaptureVCam.dll filter), no device picker. Driver state is
+// determined by whether the DLL is registered. The sink writes
+// frames to shared memory; the DirectShow filter inside every
+// consumer process reads them out.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool enabled = m_ui->getVirtcamEnabled();
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (!VirtualCameraOutputWin::isFilterDllRegistered())
+    {
+        m_ui->setVirtcamErrorText(
+            "RetroCaptureVCam.dll is not registered. Run the "
+            "installer (or `regsvr32 RetroCaptureVCam.dll` as admin) "
+            "to expose the virtual camera to consumers.");
+        return;
+    }
+
+    // Resolve dims using the same cascade as Linux: UI override →
+    // shader/image output → capture dims. Filter side advertises a
+    // fixed set (640x480, 1280x720, 1920x1080) so any sink dims
+    // outside that will fall back to the frozen frame in the
+    // filter. UI surfaces this caveat next to the resolution field.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+
+    if (w == 0 || h == 0)
+    {
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // Filter currently only advertises RGB24; offer it as the
+    // wire format regardless of what the UI cached. Once the
+    // filter learns RGBA / YUYV we can route the UI's choice
+    // through here.
+    constexpr auto fmt = VirtualCameraOutputWin::PixelFormat::RGB24;
+
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputWin>();
+
+    if (!m_virtcam->isRunning())
+    {
+        std::string err;
+        if (!m_virtcam->start(w, h, fmt, err))
+        {
+            m_ui->setVirtcamErrorText(err);
+            return;
+        }
+    }
+    m_ui->setVirtcamErrorText("");
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u RGB24 to RetroCaptureVCam.dll",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // _WIN32
+
+#if defined(__APPLE__)
+// #85 macOS — virtual camera lifecycle. Mirrors the Windows path:
+// single device (the CoreMediaIO DAL plug-in at
+// /Library/CoreMediaIO/Plug-Ins/DAL/RetroCaptureVCam.plugin), no
+// device picker. The host writes frames into POSIX shm; the
+// plug-in inside every consumer process reads them.
+void Application::syncVirtualCamera()
+{
+    if (!m_ui) return;
+
+    const bool enabled = m_ui->getVirtcamEnabled();
+
+    if (!enabled)
+    {
+        if (m_virtcam && m_virtcam->isRunning())
+        {
+            m_virtcam->stop();
+            m_ui->setVirtcamStatusText("");
+            m_ui->setVirtcamErrorText("");
+        }
+        return;
+    }
+
+    if (!VirtualCameraOutputMac::isPluginInstalled())
+    {
+        m_ui->setVirtcamErrorText(
+            "RetroCaptureVCam.plugin is not installed in "
+            "/Library/CoreMediaIO/Plug-Ins/DAL/. Run the "
+            "install-virtcam.sh helper (it copies the bundle "
+            "from the .app and requires sudo).");
+        return;
+    }
+
+    // Resolve dims using the same cascade as Linux/Windows: UI
+    // override → shader/image output → capture dims. The DAL
+    // plug-in currently only advertises one fixed format (RGB24
+    // @ 1280x720) so anything wildly off-spec will fall back to
+    // a frozen frame on the consumer side.
+    uint32_t w = m_ui->getVirtcamOutputWidth();
+    uint32_t h = m_ui->getVirtcamOutputHeight();
+    if (w == 0) w = m_ui->getOutputWidth();
+    if (h == 0) h = m_ui->getOutputHeight();
+    if (w == 0) w = m_ui->getCaptureWidth();
+    if (h == 0) h = m_ui->getCaptureHeight();
+
+    if (w == 0 || h == 0)
+    {
+        m_ui->setVirtcamStatusText(
+            "Waiting for a capture source (open a Source first).");
+        return;
+    }
+
+    // UYVY — must match the DAL plug-in's advertised '2vuy'
+    // (kCVPixelFormatType_422YpCbCr8), the camera-native YUV format.
+    // History: 24RGB → device shown, no image; BGRA → format
+    // recognised but consumer never started the stream.
+    constexpr auto fmt = VirtualCameraOutputMac::PixelFormat::UYVY;
+
+    if (!m_virtcam) m_virtcam = std::make_unique<VirtualCameraOutputMac>();
+
+    if (!m_virtcam->isRunning())
+    {
+        std::string err;
+        if (!m_virtcam->start(w, h, fmt, err))
+        {
+            m_ui->setVirtcamErrorText(err);
+            return;
+        }
+    }
+    m_ui->setVirtcamErrorText("");
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Publishing %ux%u UYVY to RetroCaptureVCam.plugin",
+                  m_virtcam->outputWidth(),
+                  m_virtcam->outputHeight());
+    m_ui->setVirtcamStatusText(buf);
+}
+#endif // __APPLE__
+
 void Application::syncDirectoryClient()
 {
     if (!m_ui) return;
+
+    // #84 — Keep ChatClient's base URL in sync with the editable
+    // Streaming → Advanced field. setBaseUrl is a no-op when the
+    // value hasn't changed; on change it tears down the WS and
+    // reconnects against the new URL. Runs at the top of the
+    // function (before any of the publish-gated early returns)
+    // so chat works whether or not the user has the directory
+    // publish toggle on.
+    if (m_chatClient)
+    {
+        m_chatClient->setBaseUrl(m_ui->getChatBaseUrl());
+    }
 
     // Mirror the remote capture's reconnect-backoff flag and the
     // "currently decoding frames" flag onto UIManager so the Info
@@ -5558,12 +6703,14 @@ void Application::syncDirectoryClient()
     {
         bool offline   = false;
         bool receiving = false;
+        bool failing   = false;
         if (m_capture)
         {
             if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
             {
                 offline   = remote->isHostLikelyOffline();
                 receiving = remote->isReceivingFrames();
+                failing   = remote->isInitialConnectFailing();
             }
             else
             {
@@ -5572,6 +6719,7 @@ void Application::syncDirectoryClient()
         }
         m_ui->setRemoteHostLikelyOffline(offline);
         m_ui->setRemoteReceivingFrames(receiving);
+        m_ui->setRemoteInitialConnectFailing(failing);
     }
 
     // #49 Phase 3 — keep the server-side password gate in sync with
@@ -5849,6 +6997,225 @@ void Application::syncDirectoryClient()
                             stats.heartbeatOk, stats.heartbeatFail,
                             stats.patchOk, stats.patchFail,
                             stats.secondsSinceLastHeartbeat);
+
+    // #84 — Chat lifecycle on the host side. As of the identity-
+    // bound rework, the chat room is no longer keyed by per-session
+    // streamId — it's a standalone room with a user-chosen slug,
+    // provisioned once and reused across every stream. The slug
+    // (m_ui->getStreamRoomSlug()) lives in the user's config and the
+    // host always reconnects to that same room when the toggle is on.
+    //
+    // BYPASS: when the user has manually joined a *different* room
+    // via the OSD popup (snap.slug non-empty AND different from the
+    // configured stream slug), the auto-bind stays out of the way —
+    // otherwise we'd fight the user's intent.
+    if (m_chatClient)
+    {
+        const bool chatEnabled = m_ui->getStreamChatEnabled();
+        const bool active = (state == DirectoryClient::State::Active);
+        std::string configuredSlug = m_ui->getStreamRoomSlug();
+        const auto snap   = m_chatClient->getSnapshot();
+        // Keep DirectoryStreamId updated so other consumers (UI
+        // labels, the host's own indicator) still see the session
+        // id — we just don't key chat on it anymore.
+        m_ui->setDirectoryStreamId(m_directoryClient->getStreamId());
+
+        // First stream start after the user ticked "Create chat room"
+        // with no slug derived yet — derive one from the title (user
+        // text or fallback "Stream of <nick>") so the rest of this
+        // function has something to bind to. Stored back into
+        // UIManager so subsequent reconnects skip the derivation.
+        if (active && chatEnabled && configuredSlug.empty())
+        {
+            const std::string nick = m_ui->getChatNickname();
+            std::string source = m_ui->getStreamRoomTitle();
+            if (source.empty() && !nick.empty())
+            {
+                source = std::string("Stream of ") + nick;
+            }
+            // Slugify: lowercase ASCII alnum + dashes, collapse
+            // runs of separators, strip leading/trailing dash,
+            // clamp to 32 chars to leave room for the suffix. Matches
+            // the server's isValidSlug shape (handlers.go).
+            auto slugify = [](const std::string &in) {
+                std::string out;
+                out.reserve(in.size());
+                bool lastWasDash = false;
+                for (char c : in)
+                {
+                    const unsigned char uc = static_cast<unsigned char>(c);
+                    if ((uc >= 'A' && uc <= 'Z') ||
+                        (uc >= 'a' && uc <= 'z') ||
+                        (uc >= '0' && uc <= '9'))
+                    {
+                        out.push_back(static_cast<char>(std::tolower(uc)));
+                        lastWasDash = false;
+                    }
+                    else if (!lastWasDash && !out.empty())
+                    {
+                        out.push_back('-');
+                        lastWasDash = true;
+                    }
+                }
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                if (out.size() > 32) out.resize(32);
+                while (!out.empty() && out.back() == '-') out.pop_back();
+                return out;
+            };
+            std::string slug = slugify(source);
+            // Anything below 2 chars fails the server's isValidSlug.
+            // Backstop with a hex-suffix slug so the user isn't
+            // blocked just because their inputs were unusable.
+            if (slug.size() < 2)
+            {
+                slug = ownedrooms::generateSecret().substr(0, 8);
+            }
+            else
+            {
+                // Disambiguate against collisions by appending the
+                // first 4 hex chars of a random secret. Cheap and
+                // makes the slug effectively unique-per-creation.
+                slug += "-" + ownedrooms::generateSecret().substr(0, 4);
+                if (slug.size() > 41) slug.resize(41);
+                while (!slug.empty() && slug.back() == '-') slug.pop_back();
+            }
+            m_ui->setStreamRoomSlug(slug);
+            m_ui->saveConfig();
+            configuredSlug = slug;
+        }
+
+        const bool userPinnedElsewhere = !snap.slug.empty() &&
+                                         snap.slug != configuredSlug;
+
+        if (!userPinnedElsewhere)
+        {
+            if (active && chatEnabled && !configuredSlug.empty() &&
+                configuredSlug != m_chatBoundSlug)
+            {
+                m_chatBoundSlug = configuredSlug;
+                // Move the whole probe/provision/patch/connect
+                // sequence off the main thread — used to block the
+                // render loop for several hundred ms on every
+                // stream-start. Worker does the HTTP, then calls
+                // connectBySlug (itself async) at the end. All
+                // ChatClient HTTP helpers are thread-safe.
+                ChatClient *chat       = m_chatClient.get();
+                const std::string slug = configuredSlug;
+                const std::string clientId  = chat->getClientId();
+                std::string nick = m_ui->getChatNickname();
+                if (nick.empty()) nick = m_ui->getDirectoryHostNickname();
+                std::string titleHint = m_ui->getStreamRoomTitle();
+                if (titleHint.empty() && !m_ui->getChatNickname().empty())
+                    titleHint = std::string("Stream of ") +
+                                m_ui->getChatNickname();
+                if (titleHint.empty())
+                    titleHint = m_ui->getDirectoryStreamName();
+                // Bump the bind epoch and capture the new value.
+                // The worker checks it at the end before calling
+                // connectBySlug; if the user has hit Stop Streaming
+                // (or otherwise transitioned away) in the meantime,
+                // m_chatBindEpoch will have advanced and the
+                // worker drops the connect to avoid undoing the
+                // disconnect that ran on the main thread.
+                const uint64_t epoch = m_chatBindEpoch.fetch_add(1) + 1;
+                std::atomic<uint64_t> *epochPtr = &m_chatBindEpoch;
+
+                std::thread([chat, slug, clientId, nick, titleHint,
+                             epoch, epochPtr]() {
+                    OwnedRoom owned;
+                    std::string ownerSecret;
+                    if (ownedrooms::findBySlug(slug, owned))
+                    {
+                        ownerSecret = owned.ownerSecret;
+                        // Revive if reaped.
+                        std::string probeErr;
+                        const bool exists = chat->roomExistsBySlug(slug, probeErr);
+                        if (!exists && probeErr.empty())
+                        {
+                            LOG_INFO("Chat: room '" + slug +
+                                     "' missing on server, reviving");
+                            std::string title = titleHint;
+                            if (title.empty()) title = owned.title;
+                            std::string newRoomId, newSlug, err;
+                            if (chat->createStandaloneRoom(
+                                    title, slug,
+                                    /*password=*/"", /*listed=*/true,
+                                    /*ownerClientId=*/clientId,
+                                    owned.ownerSecret,
+                                    /*isStreamRoom=*/true,
+                                    newRoomId, newSlug, err))
+                            {
+                                OwnedRoom rec = owned;
+                                rec.roomId = newRoomId;
+                                rec.title  = title;
+                                ownedrooms::append(rec);
+                                owned = rec;
+                            }
+                            else
+                            {
+                                LOG_WARN("Chat: revive failed: " + err);
+                            }
+                        }
+                        // Idempotent listed=true bump.
+                        std::string patchErr;
+                        if (!chat->setStandaloneRoomListed(
+                                owned.roomId, ownerSecret,
+                                /*listed=*/true, patchErr))
+                        {
+                            LOG_INFO("Chat: PATCH listed=true skipped/failed: " +
+                                     patchErr);
+                        }
+                    }
+                    else
+                    {
+                        // First-time provision.
+                        ownerSecret = ownedrooms::generateSecret();
+                        std::string newRoomId, newSlug, err;
+                        if (chat->createStandaloneRoom(
+                                titleHint, slug,
+                                /*password=*/"", /*listed=*/true,
+                                /*ownerClientId=*/clientId,
+                                ownerSecret,
+                                /*isStreamRoom=*/true,
+                                newRoomId, newSlug, err))
+                        {
+                            OwnedRoom rec;
+                            rec.roomId      = newRoomId;
+                            rec.slug        = newSlug;
+                            rec.title       = titleHint;
+                            rec.ownerSecret = ownerSecret;
+                            ownedrooms::append(rec);
+                        }
+                        else
+                        {
+                            LOG_WARN("Chat: stream-room provision failed: " + err);
+                        }
+                    }
+                    // Late-arrival cancel: main thread may have
+                    // disconnected or rebound during the HTTP
+                    // sequence. Don't undo that by reconnecting
+                    // here.
+                    if (epochPtr->load() != epoch)
+                    {
+                        LOG_INFO("Chat: bind worker stale (epoch "
+                                 "advanced), skipping connectBySlug");
+                        return;
+                    }
+                    chat->connectBySlug(slug, nick,
+                                        /*password=*/"", ownerSecret);
+                }).detach();
+            }
+            else if ((!active || !chatEnabled) && !m_chatBoundSlug.empty())
+            {
+                m_chatBoundSlug.clear();
+                // Advance the epoch so any in-flight bind worker
+                // notices its slug was abandoned and skips the
+                // tail connect.
+                m_chatBindEpoch.fetch_add(1);
+                m_chatClient->disconnect();
+            }
+        }
+    }
 }
 
 // Recording methods

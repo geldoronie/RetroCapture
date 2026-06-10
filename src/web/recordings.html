@@ -378,10 +378,25 @@
             const videoUrl = `/api/v1/recordings/${encodeURIComponent(id)}/file`;
             const player = document.getElementById('videoPlayer');
             const container = document.getElementById('videoPlayerContainer');
-            
+
+            // Surface playback failures instead of failing silently — a
+            // recording in a container the browser can't decode (MKV/AVI)
+            // legitimately won't play here; point the user at Download (#79).
+            player.onerror = () => {
+                showAlert(t('web.recordings.play_fail'), 'warning');
+            };
             player.src = videoUrl;
             container.classList.add('active');
-            player.play();
+            // play() returns a promise that *rejects* (doesn't throw) when the
+            // media can't load; handle it so the hint shows and there's no
+            // unhandled rejection in the console.
+            const p = player.play();
+            if (p && typeof p.catch === 'function') {
+                p.catch((err) => {
+                    console.error('Error playing recording:', err);
+                    showAlert(t('web.recordings.play_fail'), 'warning');
+                });
+            }
         }
 
         async function downloadRecording(id, filename) {

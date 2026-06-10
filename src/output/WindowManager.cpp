@@ -160,6 +160,21 @@ bool WindowManager::init(const WindowConfig &config)
             }
         } });
 
+    // Close-button interception (#86). GLFW sets shouldClose=true on
+    // the window-close request by default; when a close callback is
+    // installed we veto that (reset the flag) and hand the decision
+    // to Application — which either hides to tray or really quits.
+    glfwSetWindowCloseCallback(window, [](GLFWwindow *w)
+                               {
+        WindowManager* wm = static_cast<WindowManager*>(glfwGetWindowUserPointer(w));
+        if (wm && wm->m_closeCallback) {
+            // Veto GLFW's auto-close; the callback owns the decision.
+            glfwSetWindowShouldClose(w, GLFW_FALSE);
+            wm->m_closeCallback();
+        }
+        // No callback installed → leave shouldClose=true (default quit).
+        });
+
     m_window = window;
 
     // IMPORTANT: Always get the actual framebuffer dimensions after creating the window
@@ -259,9 +274,20 @@ void WindowManager::swapBuffers()
     {
         return;
     }
-    
+
+    // Hide-to-tray (#86): nothing to present while hidden, and a
+    // hidden window's swap can BLOCK (compositors park vsync at 0 Hz
+    // for unmapped windows) which would stall the whole main loop.
+    // Skipping the swap here gates ALL call sites at once; the GL
+    // work that ran before it is harmlessly discarded. The main loop
+    // paces itself with a sleep while hidden.
+    if (!m_visible)
+    {
+        return;
+    }
+
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window);
-    
+
     // Check if window is still valid before swapping
     // This prevents crashes when window is invalidated (e.g., KVM switch)
     if (glfwWindowShouldClose(window))
@@ -364,6 +390,53 @@ bool WindowManager::isFocused() const
 void WindowManager::setResizeCallback(std::function<void(int, int)> callback)
 {
     m_resizeCallback = callback;
+}
+
+void WindowManager::setCloseCallback(std::function<void()> callback)
+{
+    m_closeCallback = std::move(callback);
+}
+
+void WindowManager::requestClose()
+{
+    if (m_window)
+    {
+        glfwSetWindowShouldClose(static_cast<GLFWwindow *>(m_window), GLFW_TRUE);
+    }
+}
+
+void WindowManager::hide()
+{
+    if (m_window)
+    {
+        glfwHideWindow(static_cast<GLFWwindow *>(m_window));
+        m_visible = false;
+        LOG_INFO("WindowManager: window hidden (minimize to tray)");
+    }
+}
+
+void WindowManager::show()
+{
+    if (m_window)
+    {
+        GLFWwindow *w = static_cast<GLFWwindow *>(m_window);
+        glfwShowWindow(w);
+        glfwFocusWindow(w);
+        m_visible = true;
+        LOG_INFO("WindowManager: window shown");
+    }
+}
+
+bool WindowManager::isVisible() const
+{
+    // GLFW_VISIBLE reflects the mapped state; fall back to our cached
+    // flag if the window is gone.
+    if (!m_window)
+    {
+        return false;
+    }
+    return glfwGetWindowAttrib(static_cast<GLFWwindow *>(m_window),
+                               GLFW_VISIBLE) == GLFW_TRUE;
 }
 
 void WindowManager::setCursorVisible(bool visible)

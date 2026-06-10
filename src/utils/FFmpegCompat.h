@@ -34,6 +34,26 @@ extern "C"
 #define FFMPEG_USE_NEW_CHANNEL_LAYOUT 0
 #endif
 
+// Profile constant naming: FFmpeg 7+ renamed FF_PROFILE_* to
+// AV_PROFILE_* (and dropped the old aliases). Older versions only
+// expose FF_PROFILE_*. Map whichever side is missing onto the other
+// so the rest of the codebase can keep using FF_PROFILE_*.
+#if !defined(FF_PROFILE_HEVC_MAIN) && defined(AV_PROFILE_HEVC_MAIN)
+#define FF_PROFILE_HEVC_MAIN AV_PROFILE_HEVC_MAIN
+#endif
+#if !defined(FF_PROFILE_HEVC_MAIN_10) && defined(AV_PROFILE_HEVC_MAIN_10)
+#define FF_PROFILE_HEVC_MAIN_10 AV_PROFILE_HEVC_MAIN_10
+#endif
+#if !defined(FF_PROFILE_H264_BASELINE) && defined(AV_PROFILE_H264_BASELINE)
+#define FF_PROFILE_H264_BASELINE AV_PROFILE_H264_BASELINE
+#endif
+#if !defined(FF_PROFILE_H264_MAIN) && defined(AV_PROFILE_H264_MAIN)
+#define FF_PROFILE_H264_MAIN AV_PROFILE_H264_MAIN
+#endif
+#if !defined(FF_PROFILE_H264_HIGH) && defined(AV_PROFILE_H264_HIGH)
+#define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH
+#endif
+
 // Compatibility macros for AVIO write callback
 // FFmpeg 6.1+ (libavformat 61+) uses const uint8_t* for write_packet callback
 // FFmpeg 6.0 (libavformat 60) still uses uint8_t* (non-const)

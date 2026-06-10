@@ -58,5 +58,68 @@ void UIPreferences::render()
         ImGui::SetTooltip("%s", T("preferences.start_fullscreen.tip").c_str());
     }
 
+    bool quickActionsAutoHide = m_uiManager->getQuickActionsAutoHide();
+    if (ImGui::Checkbox(T("preferences.quickactions_autohide").c_str(), &quickActionsAutoHide))
+    {
+        m_uiManager->setQuickActionsAutoHide(quickActionsAutoHide);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.quickactions_autohide.tip").c_str());
+    }
+
+    // ── System tray / background operation (#86) ──────────────────
+    ui_section_header(T("preferences.tray").c_str());
+
+    bool trayEnabled = m_uiManager->getTrayEnabled();
+    if (ImGui::Checkbox(T("preferences.tray.enabled").c_str(), &trayEnabled))
+    {
+        m_uiManager->setTrayEnabled(trayEnabled);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.tray.enabled.tip").c_str());
+    }
+
+    // The sub-options only matter when the tray is on.
+    ImGui::BeginDisabled(!trayEnabled);
+
+    bool minimizeOnClose = m_uiManager->getTrayMinimizeOnClose();
+    if (ImGui::Checkbox(T("preferences.tray.minimize_on_close").c_str(), &minimizeOnClose))
+    {
+        m_uiManager->setTrayMinimizeOnClose(minimizeOnClose);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.tray.minimize_on_close.tip").c_str());
+    }
+
+    bool startMinimized = m_uiManager->getTrayStartMinimized();
+    if (ImGui::Checkbox(T("preferences.tray.start_minimized").c_str(), &startMinimized))
+    {
+        m_uiManager->setTrayStartMinimized(startMinimized);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.tray.start_minimized.tip").c_str());
+    }
+
+    bool trayNotifications = m_uiManager->getTrayNotifications();
+    if (ImGui::Checkbox(T("preferences.tray.notifications").c_str(), &trayNotifications))
+    {
+        m_uiManager->setTrayNotifications(trayNotifications);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", T("preferences.tray.notifications.tip").c_str());
+    }
+
+    ImGui::EndDisabled();
+
     ImGui::End();
 }

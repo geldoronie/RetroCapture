@@ -1,8 +1,12 @@
 #include "QuickActionsOverlay.h"
+#include "OSDChat.h"
 #include "../ui/UIManager.h"
 #include "../ui/UIDirectoryBrowser.h"
 #include "../ui/UISectionHeader.h"
 #include "../utils/TranslationManager.h"
+#if defined(__linux__)
+#  include "../output/VirtualCameraOutput.h"
+#endif
 
 #include <imgui.h>
 
@@ -19,6 +23,41 @@ void QuickActionsOverlay::render()
 {
     if (!m_visible || !m_uiManager) return;
 
+    // ── Auto-hide (#68 follow-up) ──────────────────────────────────
+    // Fade the overlay out after the mouse goes idle and bring it back
+    // on the next movement/click/scroll. Time base is ImGui::GetTime()
+    // (monotonic seconds), so no wall-clock plumbing needed.
+    ImGuiIO     &io  = ImGui::GetIO();
+    const double now = ImGui::GetTime();
+    if (!m_activityPrimed) { m_lastActivityTime = now; m_activityPrimed = true; }
+
+    const bool mouseActive =
+        io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f ||
+        io.MouseWheel != 0.0f ||
+        io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
+    if (mouseActive) m_lastActivityTime = now;
+
+    float alpha = 1.0f;
+    if (m_uiManager->getQuickActionsAutoHide())
+    {
+        constexpr double kHoldSeconds = 3.0;  // full opacity after activity
+        constexpr double kFadeSeconds = 0.4;  // fade-out duration
+        const double idle = now - m_lastActivityTime;
+        if (idle > kHoldSeconds)
+        {
+            const double t = (idle - kHoldSeconds) / kFadeSeconds;
+            alpha = (t >= 1.0) ? 0.0f : static_cast<float>(1.0 - t);
+        }
+        // Fully faded: skip the window entirely so it can't eat clicks
+        // while invisible. The activity check above keeps running and
+        // wakes it on the next movement.
+        if (alpha <= 0.0f)
+        {
+            m_lastRenderedHeight = 0.0f;
+            return;
+        }
+    }
+
     // Pinned to the bottom-right of the main viewport every frame.
     // The connection-status overlay shares this corner — it queries
     // renderedHeight() and shifts itself up to avoid overlap.
@@ -28,6 +67,9 @@ void QuickActionsOverlay::render()
     ImGui::SetNextWindowPos(anchor, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(240, 0), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
+    // Uniform fade of the whole overlay (bg + text + buttons). The bg
+    // alpha above is multiplied by this global style alpha.
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
 
     // No decoration. NoSavedSettings keeps imgui.ini clean — the
     // per-frame anchor is the only source of truth for position.
@@ -45,8 +87,14 @@ void QuickActionsOverlay::render()
     if (!ImGui::Begin("##quickActions", nullptr, flags))
     {
         ImGui::End();
+        ImGui::PopStyleVar();
         return;
     }
+
+    // Hovering the overlay keeps it awake even without movement, so it
+    // doesn't fade while the user is reading it or aiming for a button.
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+        m_lastActivityTime = now;
 
     const bool clientMode      = m_uiManager->isRemoteSource() &&
                                  !m_uiManager->getCurrentDevice().empty();
@@ -83,6 +131,24 @@ void QuickActionsOverlay::render()
         ImGui::Text("Watching");
         ImGui::SameLine();
         ImGui::TextDisabled("- %u %s", upstream, T("quickactions.viewers").c_str());
+
+        // #77 Audio volume + mute — mirrors UIRemoteConnection so the
+        // user can ride the level from the OSD when the main UI is
+        // hidden. Same UIManager triggers (persist + forward gain).
+        bool  muted     = m_uiManager->getRemoteAudioMuted();
+        float volumePct = m_uiManager->getRemoteAudioVolume() * 100.0f;
+        if (ImGui::Checkbox(T("remote.audio_mute").c_str(), &muted))
+        {
+            m_uiManager->triggerRemoteAudioMuteChange(muted);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(muted);
+        if (ImGui::SliderFloat("##qaAudioVol", &volumePct, 0.0f, 100.0f, "%.0f%%"))
+        {
+            m_uiManager->triggerRemoteAudioVolumeChange(volumePct / 100.0f);
+        }
+        ImGui::EndDisabled();
     }
     if (recordingActive)
     {
@@ -107,14 +173,46 @@ void QuickActionsOverlay::render()
         ImGui::Separator();
     }
 
-    // Browse directory — always available so users can discover other
-    // streams without going through the Remote menu, regardless of
-    // whether they're broadcasting (host) or consuming (client).
+    // Open chat — flips the OSD chat overlay back on if the user
+    // had hit the title-bar X. Cheap and always relevant; appears
+    // first because it's the most-used action of the trio.
+    if (ImGui::Button(T("quickactions.open_chat").c_str(), ImVec2(-1, 0)))
+    {
+        if (auto *chat = m_uiManager->getChatOverlay())
+        {
+            chat->setVisible(true);
+        }
+    }
+
+    // Chat rooms — opens the OSDChat Rooms window (one-shot request
+    // flag consumed by OSDChat next frame). Same widget the chat
+    // panel's "Rooms..." header button uses, just from a different
+    // entry point.
+    if (ImGui::Button(T("quickactions.chat_rooms").c_str(), ImVec2(-1, 0)))
+    {
+        m_uiManager->requestOpenChatRooms();
+    }
+
+    // Browse streams (formerly "Browse directory"). Hidden while
+    // we're streaming — exposing the directory browser to a host
+    // who's currently live creates two confusing "viewer" UIs in
+    // the same process. Joining someone else's stream while
+    // broadcasting also breaks the capture pipeline. The user has
+    // to stop the stream first; tooltip on the disabled button
+    // explains why.
     if (UIDirectoryBrowser *browser = m_uiManager->getDirectoryBrowserWindow())
     {
+        const bool blockedByStreaming = streamingActive && !clientMode;
+        ImGui::BeginDisabled(blockedByStreaming);
         if (ImGui::Button(T("quickactions.browse").c_str(), ImVec2(-1, 0)))
         {
             browser->setVisible(true);
+        }
+        ImGui::EndDisabled();
+        if (blockedByStreaming && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s",
+                T("quickactions.browse_disabled_streaming").c_str());
         }
     }
 
@@ -202,7 +300,46 @@ void QuickActionsOverlay::render()
         }
     }
 
+    // Virtual camera start/stop (#85, Linux only). Visible only
+    // when the kernel module has at least one loopback device
+    // available — otherwise the button would do nothing on
+    // click. Mirrors the Streaming + Recording button shape so
+    // it slots into the overlay's existing rhythm.
+#if defined(__linux__)
+    if (!clientMode)
+    {
+        // Cheap O(N) over a handful of /dev/video* nodes; runs
+        // only when QuickActions is open, every frame. Could be
+        // cached but the overhead is invisible in profiles.
+        const bool haveLoopback =
+            !VirtualCameraOutput::enumerateDevices().empty();
+        if (haveLoopback)
+        {
+            const bool vcamOn = m_uiManager->getVirtcamEnabled();
+            if (vcamOn)
+            {
+                if (ImGui::Button(T("quickactions.virtcam.stop").c_str(),
+                                  ImVec2(-1, 0)))
+                {
+                    m_uiManager->setVirtcamEnabled(false);
+                    m_uiManager->saveConfig();
+                }
+            }
+            else
+            {
+                if (ImGui::Button(T("quickactions.virtcam.start").c_str(),
+                                  ImVec2(-1, 0)))
+                {
+                    m_uiManager->setVirtcamEnabled(true);
+                    m_uiManager->saveConfig();
+                }
+            }
+        }
+    }
+#endif
+
     m_lastRenderedHeight = ImGui::GetWindowHeight();
 
     ImGui::End();
+    ImGui::PopStyleVar();
 }

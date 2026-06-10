@@ -13,7 +13,9 @@ extern "C"
 }
 
 #include "../utils/FFmpegCompat.h"
+#include <cstring>
 #include <mutex>
+#include <chrono>
 
 const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
 {
@@ -882,6 +884,24 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         return false;
     }
 
+    // libswscale's AVX2 RGB fastpath (macOS Homebrew FFmpeg) reads a
+    // few SIMD chunks (up to ~32 bytes) PAST the last source row via
+    // vinserti128/vmovdqa. When the caller's RGB buffer is allocated
+    // exactly width*height*3 and happens to end on a page boundary,
+    // that over-read hits an unmapped page and segfaults (observed on
+    // a macOS host with a 1280x720 buffer = exactly 2700K, crashing
+    // 1 byte past the MALLOC region). An earlier fix only clamped odd
+    // heights, which doesn't cover this: the over-read happens off the
+    // last row regardless of parity.
+    //
+    // Robust fix: copy the source into a scratch buffer with trailing
+    // padding so the fastpath's over-read always lands in allocated
+    // memory. The pad bytes are read into discarded (off-image) pixels.
+    if (height == 0 || width == 0 || !rgbData)
+    {
+        return false;
+    }
+
     uint32_t dstWidth = m_videoConfig.width;
     uint32_t dstHeight = m_videoConfig.height;
 
@@ -947,8 +967,22 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
         return false;
     }
 
-    const uint8_t *srcData[1] = {rgbData};
-    int srcLinesize[1] = {static_cast<int>(width * 3)};
+    const int srcStride = static_cast<int>(width * 3);
+    const size_t srcBytes = static_cast<size_t>(srcStride) * height;
+
+    // Copy into the padded scratch so libswscale's AVX2 fastpath can
+    // safely over-read past the last row (see the note above). 64 is
+    // FFmpeg's AV_INPUT_BUFFER_PADDING_SIZE; the fastpath reads at most
+    // a couple of SIMD registers past the end, well within that.
+    constexpr size_t kSwsTailPad = 64;
+    if (m_swsSrcPadded.size() < srcBytes + kSwsTailPad)
+    {
+        m_swsSrcPadded.resize(srcBytes + kSwsTailPad);
+    }
+    std::memcpy(m_swsSrcPadded.data(), rgbData, srcBytes);
+
+    const uint8_t *srcData[1] = {m_swsSrcPadded.data()};
+    int srcLinesize[1] = {srcStride};
 
     int ret = sws_scale(swsCtx, srcData, srcLinesize, 0, height, frame->data, frame->linesize);
     if (ret < 0)
@@ -1058,6 +1092,13 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
         m_firstVideoTimestampSet = true;
         m_videoFrameCountForPTS = 0;
     }
+    // #109 — latch the SHARED A/V epoch from whichever stream (audio or
+    // video) is encoded first, so audio and video PTS share one origin.
+    if (!m_firstMediaTimestampSet)
+    {
+        m_firstMediaTimestampUs  = captureTimestampUs;
+        m_firstMediaTimestampSet = true;
+    }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_videoCodecContext);
     if (!codecCtx)
@@ -1074,7 +1115,11 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
     
     // Calculate PTS based on actual elapsed time since first frame
     // This ensures video speed matches real time, regardless of actual capture FPS
-    int64_t relativeTimeUs = captureTimestampUs - m_firstVideoTimestampUs;
+    int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
+    // The shared epoch may be latched by an audio chunk captured slightly
+    // after a video frame that's encoded later — clamp so the video PTS
+    // never goes negative (audio does the same below).
+    if (relativeTimeUs < 0) relativeTimeUs = 0;
     double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
     calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
     
@@ -1086,7 +1131,7 @@ int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
     ptsLogCounter++;
     if (ptsLogCounter == 1 || ptsLogCounter % 300 == 0) // Every 5 seconds at 60fps
     {
-        LOG_INFO("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
+        LOG_DEBUG("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
                  ", relativeTimeUs: " + std::to_string(relativeTimeUs) + 
                  ", relativeTimeSeconds: " + std::to_string(relativeTimeSeconds) +
                  ", timeBase: " + std::to_string(timeBase.num) + "/" + std::to_string(timeBase.den) +
@@ -1145,7 +1190,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     if (debugLogCounter == 1 || debugLogCounter % 100 == 0)
     {
         std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-        LOG_INFO("MediaEncoder: Audio accumulator - size: " + std::to_string(m_audioAccumulator.size()) + 
+        LOG_DEBUG("MediaEncoder: Audio accumulator - size: " + std::to_string(m_audioAccumulator.size()) + 
                  ", needed: " + std::to_string(totalSamplesNeeded) + 
                  ", frame_size: " + std::to_string(samplesPerFrame) +
                  ", channels: " + std::to_string(m_audioConfig.channels));
@@ -1194,7 +1239,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         frameLogCounter++;
         if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
         {
-            LOG_INFO("MediaEncoder: Processing audio frame - actual: " + std::to_string(actualFrameSamples) + 
+            LOG_DEBUG("MediaEncoder: Processing audio frame - actual: " + std::to_string(actualFrameSamples) + 
                      ", expected: " + std::to_string(samplesPerFrame) + 
                      ", input consumed: " + std::to_string(totalSamplesNeeded));
         }
@@ -1226,7 +1271,7 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
 
             if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
             {
-                LOG_INFO("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
+                LOG_DEBUG("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
                          " -> " + std::to_string(sizeAfter) +
                          " (removed " + std::to_string(totalSamplesNeeded) + ")");
             }
@@ -1286,6 +1331,13 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
         m_totalAudioSamplesProcessed = 0;
         m_audioFrameCount = 0;
     }
+    // #109 — latch the SHARED A/V epoch (see calculateVideoPTS) so audio
+    // arriving before the first video frame still anchors both timelines.
+    if (!m_firstMediaTimestampSet)
+    {
+        m_firstMediaTimestampUs  = captureTimestampUs;
+        m_firstMediaTimestampSet = true;
+    }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
     if (!codecCtx)
@@ -1295,8 +1347,26 @@ int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sa
 
     AVRational timeBase = codecCtx->time_base;
     int64_t calculatedPTS = 0;
-    if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    if (m_forStreaming)
     {
+        // Live streaming: wall-clock PTS, same clock source as the video
+        // PTS (both come from HTTPTSStreamer::getTimestampUs at push time),
+        // so audio and video share one timeline. Sample-count PTS assumes
+        // zero dropped chunks; the lossy live audio bus *does* drop chunks
+        // (esp. system-audio bursts), so sample-count drifts behind real
+        // time and the client ended up playing video with no usable audio
+        // (#109). Wall-clock tracks real time regardless of drops.
+        // Subtract the SHARED epoch (not the audio-only first timestamp) so
+        // audio and video PTS share one origin — otherwise the gap between
+        // the first video frame and first audio chunk is a constant skew.
+        int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
+        if (relativeTimeUs < 0) relativeTimeUs = 0;
+        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
+    }
+    else if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
+    {
+        // File recording: sample-count PTS — smooth and jitter-free, and the
+        // recording drain doesn't drop chunks, so the count matches duration.
         int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
         calculatedPTS = (samplesPerChannel * timeBase.den) / (m_audioConfig.sampleRate * timeBase.num);
     }
@@ -1421,11 +1491,18 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         return false;
     }
 
+    // #123 — time each encode stage so the streaming telemetry can show
+    // whether the CPU swscale convert, the HW upload, or the codec itself
+    // is the bottleneck when the synchronizer overflows at 60 fps.
+    using stage_clock = std::chrono::steady_clock;
+    auto stageT0 = stage_clock::now();
+
     if (!convertRGBToYUV(rgbData, width, height, videoFrame))
     {
         LOG_ERROR("MediaEncoder: convertRGBToYUV failed");
         return false;
     }
+    auto stageAfterConvert = stage_clock::now();
 
     int64_t calculatedPTS = calculateVideoPTS(captureTimestampUs);
     videoFrame->pts = calculatedPTS;
@@ -1455,6 +1532,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     // AMF / D3D11) need the software-side NV12 frame uploaded to a
     // hardware surface before the codec can consume it. NVENC and the
     // software path skip this and feed the sw frame directly.
+    auto stageBeforeUpload = stage_clock::now();
     AVFrame *frameToSend = videoFrame;
     if (m_hwVideoFrame &&
         m_activeHardwareEncoder != HardwareEncoder::Software &&
@@ -1474,6 +1552,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         FFmpegCompat::setKeyFrame(hwFrame, forceKeyframe);
         frameToSend = hwFrame;
     }
+    auto stageAfterUpload = stage_clock::now();
 
     int ret = avcodec_send_frame(codecCtx, frameToSend);
     if (ret < 0)
@@ -1493,7 +1572,20 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     // path is inactive.
     (void)frameToSend;
 
-    return receiveVideoPackets(packets, captureTimestampUs);
+    bool recvOk = receiveVideoPackets(packets, captureTimestampUs);
+    auto stageEnd = stage_clock::now();
+
+    // #123 — accumulate per-stage microseconds for the telemetry.
+    using us = std::chrono::microseconds;
+    m_convertUs.fetch_add(std::chrono::duration_cast<us>(stageAfterConvert - stageT0).count(),
+                          std::memory_order_relaxed);
+    m_uploadUs.fetch_add(std::chrono::duration_cast<us>(stageAfterUpload - stageBeforeUpload).count(),
+                         std::memory_order_relaxed);
+    m_encodeUs.fetch_add(std::chrono::duration_cast<us>(stageEnd - stageAfterUpload).count(),
+                         std::memory_order_relaxed);
+    m_stageFrames.fetch_add(1, std::memory_order_relaxed);
+
+    return recvOk;
 }
 
 bool MediaEncoder::receiveVideoPackets(std::vector<EncodedPacket> &packets, int64_t captureTimestampUs)
@@ -1778,10 +1870,16 @@ void MediaEncoder::cleanup()
     m_firstAudioTimestampSet = false;
     m_firstVideoTimestampUs = 0;
     m_firstAudioTimestampUs = 0;
+    m_firstMediaTimestampSet = false;
+    m_firstMediaTimestampUs = 0;
     m_totalAudioSamplesProcessed = 0;
     m_audioFrameCount = 0;
     m_videoFrameCountForPTS = 0;
     m_desyncFrameCount.store(0, std::memory_order_relaxed);
+    m_convertUs.store(0, std::memory_order_relaxed);
+    m_uploadUs.store(0, std::memory_order_relaxed);
+    m_encodeUs.store(0, std::memory_order_relaxed);
+    m_stageFrames.store(0, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(m_ptsMutex);

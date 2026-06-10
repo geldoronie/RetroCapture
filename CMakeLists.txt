@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(RetroCapture VERSION 0.7.0 LANGUAGES CXX)
+project(RetroCapture VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,28 @@ option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_WITH_SDL2 "Use SDL2 instead of GLFW (for DirectFB/framebuffer support)" OFF)
 option(BUILD_COMPATIBLE_X86_64 "Build with compatible x86-64 flags (no AVX2, works on older CPUs)" OFF)
 option(BUILD_COMPATIBLE_ARM64 "Build with portable ARMv8-A flags (no SVE/crypto, works on Pi 3/4/5)" OFF)
+# #85 Phase 2 — DirectShow source filter DLL gate. OFF by default
+# because it pulls strmbase (DirectShow BaseClasses). We carry a
+# MinGW-patched snapshot under third_party/baseclasses/ so the
+# Windows cross-build (MXE) can produce the DLL when this flag is
+# ON; it stays OFF by default to keep configure-time cheap and
+# avoid surprising native Linux builds.
+option(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER
+    "Build the Windows DirectShow virtual-camera source filter DLL (#85 Phase 2)"
+    OFF)
+
+# #85 macOS path — CoreMediaIO DAL plug-in. Default ON on macOS
+# because the host-side sink (VirtualCameraOutputMac) is useless
+# without the plug-in that exposes the shared memory to consumers.
+# OFF elsewhere so the configure step ignores src/dal_plugin/.
+if(APPLE)
+    set(_DAL_DEFAULT ON)
+else()
+    set(_DAL_DEFAULT OFF)
+endif()
+option(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN
+    "Build the macOS CoreMediaIO DAL virtual-camera plug-in (#85 macOS)"
+    ${_DAL_DEFAULT})
 
 # Diretórios
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -141,6 +163,43 @@ endif()
 if(PLATFORM_LINUX)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PNG REQUIRED libpng)
+    # #86 system tray — StatusNotifierItem over D-Bus. Optional: if
+    # libdbus-1 isn't present the tray backend compiles out and the
+    # app falls back to the no-op stub (close button quits).
+    pkg_check_modules(DBUS dbus-1)
+    if(DBUS_FOUND)
+        message(STATUS "libdbus-1 found — Linux system-tray backend ENABLED")
+    else()
+        message(WARNING "libdbus-1 not found — Linux system-tray disabled "
+                        "(install libdbus-1-dev / dbus). Close button will quit.")
+    endif()
+    # #107 screen capture — PipeWire + xdg-desktop-portal (ScreenCast).
+    # Needs PipeWire (the frame transport) and libdbus (the portal D-Bus
+    # handshake); when either is missing the screen source falls back to
+    # the test-pattern stub instead of failing to build.
+    pkg_check_modules(PIPEWIRE libpipewire-0.3)
+    if(PIPEWIRE_FOUND AND DBUS_FOUND)
+        message(STATUS "PipeWire + libdbus found — screen capture (PipeWire/portal) ENABLED")
+    else()
+        message(WARNING "PipeWire or libdbus missing — screen capture uses the test-pattern stub")
+    endif()
+    # #107 — EGL enables the DMABUF zero-copy path (import the compositor's
+    # GPU buffer straight into a GL texture, no per-frame CPU/SHM copy).
+    # Optional: without it the screen backend falls back to the SHM copy.
+    pkg_check_modules(EGL egl)
+    if(EGL_FOUND AND PIPEWIRE_FOUND AND DBUS_FOUND)
+        message(STATUS "EGL found — screen capture DMABUF zero-copy ENABLED")
+    else()
+        message(WARNING "EGL missing — screen capture uses the SHM copy path (slower)")
+    endif()
+elseif(PLATFORM_MACOS)
+    # macOS: tentar pkg-config primeiro (Homebrew), depois find_package
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PNG REQUIRED libpng)
+    else()
+        find_package(PNG REQUIRED)
+    endif()
 else()
     # Windows: tentar pkg-config primeiro (MXE), depois find_package
     find_package(PkgConfig QUIET)
@@ -182,6 +241,32 @@ if(PLATFORM_LINUX)
     if(AVFORMAT_VERSION)
         string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" AVFORMAT_VERSION_MAJOR "${AVFORMAT_VERSION}")
         message(STATUS "Detected libavformat version: ${AVFORMAT_VERSION} (major: ${AVFORMAT_VERSION_MAJOR})")
+    endif()
+elseif(PLATFORM_MACOS)
+    # macOS: tentar pkg-config (Homebrew), depois find_package
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(AVCODEC REQUIRED libavcodec)
+        pkg_check_modules(AVFORMAT REQUIRED libavformat)
+        pkg_check_modules(AVUTIL REQUIRED libavutil)
+        pkg_check_modules(SWSCALE REQUIRED libswscale)
+        pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    else()
+        find_package(FFmpeg QUIET COMPONENTS avcodec avformat avutil swscale swresample)
+        if(FFmpeg_FOUND)
+            set(AVCODEC_LIBRARIES avcodec)
+            set(AVFORMAT_LIBRARIES avformat)
+            set(AVUTIL_LIBRARIES avutil)
+            set(SWSCALE_LIBRARIES swscale)
+            set(SWRESAMPLE_LIBRARIES swresample)
+            set(AVCODEC_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(AVFORMAT_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(AVUTIL_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(SWSCALE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+            set(SWRESAMPLE_INCLUDE_DIRS ${FFmpeg_INCLUDE_DIRS})
+        else()
+            message(FATAL_ERROR "FFmpeg não encontrado. Instale via Homebrew: brew install ffmpeg")
+        endif()
     endif()
 else()
     # Windows: usar pkg-config (MXE) ou find_package (vcpkg)
@@ -293,6 +378,26 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.11")
         GIT_TAG v3.11.3
     )
     FetchContent_MakeAvailable(json)
+
+    # IXWebSocket — WS/WSS client for the chat panel (#84). TLS via the
+    # platform-native backend (OpenSSL on Linux, SChannel on Windows,
+    # SecureTransport on macOS) — we already require OpenSSL elsewhere
+    # so set USE_OPEN_SSL explicitly on Linux. USE_WS builds the `ws`
+    # CLI demo; we don't need it. USE_ZLIB enables permessage-deflate;
+    # off keeps the dep footprint clean.
+    set(USE_TLS         ON  CACHE BOOL "ixwebsocket: TLS support"               FORCE)
+    set(USE_WS          OFF CACHE BOOL "ixwebsocket: build the ws CLI demo"     FORCE)
+    set(USE_ZLIB        OFF CACHE BOOL "ixwebsocket: permessage-deflate"        FORCE)
+    if(PLATFORM_LINUX)
+        set(USE_OPEN_SSL ON  CACHE BOOL "ixwebsocket: OpenSSL backend"          FORCE)
+        set(USE_MBED_TLS OFF CACHE BOOL "ixwebsocket: mbedTLS backend"          FORCE)
+    endif()
+    FetchContent_Declare(
+        ixwebsocket
+        GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
+        GIT_TAG v11.4.5
+    )
+    FetchContent_MakeAvailable(ixwebsocket)
 else()
     # Fallback para CMake 3.10: baixar manualmente durante configure
     set(IMGUI_DIR ${CMAKE_BINARY_DIR}/_deps/imgui-src)
@@ -337,6 +442,47 @@ else()
             message(FATAL_ERROR "Falha ao baixar nlohmann/json")
         endif()
     endif()
+
+    # IXWebSocket — mirror of the FetchContent branch above for CMake
+    # 3.10 (dockcross/Windows). Cache vars must be set before the
+    # add_subdirectory call so they take effect on the first configure.
+    # On Linux we'd pick OpenSSL explicitly; this branch only runs on
+    # the Windows cross-build, where ixwebsocket defaults to SChannel.
+    set(IXWS_DIR ${CMAKE_BINARY_DIR}/_deps/ixwebsocket-src)
+    if(NOT EXISTS ${IXWS_DIR}/CMakeLists.txt)
+        message(STATUS "Baixando IXWebSocket...")
+        if(EXISTS ${IXWS_DIR})
+            file(REMOVE_RECURSE ${IXWS_DIR})
+        endif()
+        file(MAKE_DIRECTORY ${IXWS_DIR})
+        execute_process(
+            COMMAND git clone --depth 1 --branch v11.4.5 https://github.com/machinezone/IXWebSocket.git ${IXWS_DIR}
+            RESULT_VARIABLE GIT_RESULT
+        )
+        if(NOT GIT_RESULT EQUAL "0")
+            message(FATAL_ERROR "Falha ao baixar IXWebSocket")
+        endif()
+    endif()
+
+    # ixwebsocket hardcodes `Crypt32` (capital C) in its Windows link
+    # block. On real MSVC the file system is case-insensitive so that
+    # works, but the MinGW cross-toolchain in MXE ships the import
+    # lib as `libcrypt32.a` and the Linux host FS *is* case-sensitive,
+    # so `-lCrypt32` fails to resolve. Rewrite to lowercase in place.
+    # `string(REPLACE)` is a no-op once the patch is already applied,
+    # so this stays idempotent on subsequent configures.
+    file(READ ${IXWS_DIR}/CMakeLists.txt _IXWS_CML)
+    string(REPLACE "PRIVATE Crypt32" "PRIVATE crypt32" _IXWS_CML "${_IXWS_CML}")
+    file(WRITE ${IXWS_DIR}/CMakeLists.txt "${_IXWS_CML}")
+    # ixwebsocket v11.4.5 doesn't auto-pick a Windows backend, it
+    # defaults to mbedtls (which MXE doesn't ship). Force OpenSSL
+    # since MXE builds it and our HTTPS support already links it.
+    set(USE_TLS         ON  CACHE BOOL "ixwebsocket: TLS support"           FORCE)
+    set(USE_WS          OFF CACHE BOOL "ixwebsocket: build the ws CLI demo" FORCE)
+    set(USE_ZLIB        OFF CACHE BOOL "ixwebsocket: permessage-deflate"    FORCE)
+    set(USE_OPEN_SSL    ON  CACHE BOOL "ixwebsocket: OpenSSL backend"       FORCE)
+    set(USE_MBED_TLS    OFF CACHE BOOL "ixwebsocket: mbedTLS backend"       FORCE)
+    add_subdirectory(${IXWS_DIR} ${CMAKE_BINARY_DIR}/_deps/ixwebsocket-build EXCLUDE_FROM_ALL)
 
     set(imgui_SOURCE_DIR ${IMGUI_DIR})
     set(json_SOURCE_DIR ${JSON_DIR})
@@ -395,16 +541,40 @@ endif()
 # Fontes
 file(GLOB_RECURSE SOURCES
     "src/*.cpp"
+    "src/*.mm"
     "src/*.h"
 )
 
+# #85 — the platform-specific virtcam filter/plug-in lives under
+# its own subdirectory (src/dshow_filter for Windows, src/dal_plugin
+# for macOS) and is its OWN target (built via add_subdirectory when
+# the matching option is set). Always remove these sources from the
+# main retrocapture executable build so the SOURCES glob doesn't
+# drag them in.
+list(FILTER SOURCES EXCLUDE REGEX ".*/dshow_filter/.*\\.(cpp|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/dal_plugin/.*\\.(cpp|h|mm)$")
+
 # Excluir implementações de outras plataformas
 if(PLATFORM_LINUX)
-    # No Linux, excluir implementações Windows (quando existirem)
+    # No Linux, excluir implementações Windows e macOS
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
+    # #86 tray: the Linux SNI backend needs libdbus; drop it when absent.
+    if(NOT DBUS_FOUND)
+        list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$")
+    endif()
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayWindows\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemAudioCaptureSCK\\.(mm|h)$") 
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
 
     # Excluir WindowManager baseado na opção BUILD_WITH_SDL2
     if(BUILD_WITH_SDL2)
@@ -415,10 +585,26 @@ if(PLATFORM_LINUX)
         list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
     endif()
 elseif(PLATFORM_WINDOWS)
-    # No Windows, excluir implementações Linux
+    # No Windows, excluir implementações Linux e macOS.
+    # `VirtualCameraOutput\\.cpp` (NOT VirtualCameraOutputWin) is the
+    # Linux v4l2loopback sink — must be excluded. UIConfigurationVirtualCamera
+    # is now compiled on both platforms (#85 Phase 2 surface).
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputMac\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$") # #86 Linux-only tray backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayMac\\.(mm|h)$")    # #86 macOS-only tray backend
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemAudioCaptureSCK\\.(mm|h)$") 
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioOutputCoreAudio.*\\.(mm|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioPlaybackCoreAudio\\.(cpp|h)$")
 
     # Excluir arquivos Linux genéricos que não têm versão Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
@@ -431,6 +617,37 @@ elseif(PLATFORM_WINDOWS)
     # list(FILTER SOURCES EXCLUDE REGEX ".*/FrameProcessor\\.cpp$") # FrameProcessor.cpp agora suporta Windows
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$") # V4L2DeviceScanner é Linux
     list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$") # V4L2ControlMapper é Linux
+elseif(PLATFORM_MACOS)
+    # No macOS, excluir implementações Linux e Windows.
+    # `VirtualCameraOutput\\.cpp` (Linux v4l2 sink) and `VirtualCameraOutputWin\\.cpp`
+    # (Windows DShow sink) must be excluded. `VirtualCameraOutputMac\\.cpp`
+    # stays — it's the new POSIX-shm sink for the DAL plug-in path.
+    # UIConfigurationVirtualCamera now compiles on all three (#85).
+    # Note: `AudioBus` is platform-agnostic (std::deque + mutex) and is
+    # used by both AudioCapturePulse on Linux and AudioCaptureCoreAudio
+    # on macOS, so it is NOT excluded here.
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureV4L2\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutput\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*VirtualCameraOutputWin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayLinux\\.(cpp|h)$")   # #86 Linux-only tray backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*SystemTrayWindows\\.(cpp|h)$") # #86 Windows-only tray backend
+    list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureDS\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSFrameGrabber\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*DSPin\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*AudioCaptureWASAPI\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
+
+    # Excluir arquivos Linux genéricos
+    list(FILTER SOURCES EXCLUDE REGEX ".*/VideoCapture\\.cpp$") # VideoCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/AudioCapture\\.cpp$") # AudioCapture.cpp é Linux
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2DeviceScanner\\.(cpp|h)$")
+    list(FILTER SOURCES EXCLUDE REGEX ".*/V4L2ControlMapper\\.(cpp|h)$")
+
+    # macOS usa GLFW (não SDL2 por padrão)
+    list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
 endif()
 
 # Executável principal
@@ -479,6 +696,61 @@ elseif(PLATFORM_WINDOWS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_WINDOWS)
 elseif(PLATFORM_MACOS)
     target_compile_definitions(retrocapture PRIVATE PLATFORM_MACOS)
+endif()
+
+# #86 — Linux system-tray backend (StatusNotifierItem over D-Bus).
+# Enable the backend + link libdbus only when it was found; otherwise
+# the SystemTrayLinux.cpp source was already filtered out above and the
+# no-op stub stands in.
+if(PLATFORM_LINUX AND DBUS_FOUND)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_LINUX)
+    target_include_directories(retrocapture PRIVATE ${DBUS_INCLUDE_DIRS})
+    target_link_libraries(retrocapture PRIVATE ${DBUS_LIBRARIES})
+endif()
+
+# #107 — Linux screen-capture backend (PipeWire stream + portal over
+# D-Bus). Gated on both deps; VideoCaptureScreen_linux.cpp keys off
+# RETROCAPTURE_SCREEN_PIPEWIRE and the stub stands in when it's absent.
+if(PLATFORM_LINUX AND PIPEWIRE_FOUND AND DBUS_FOUND)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_PIPEWIRE)
+    target_include_directories(retrocapture PRIVATE ${PIPEWIRE_INCLUDE_DIRS} ${DBUS_INCLUDE_DIRS})
+    target_link_libraries(retrocapture PRIVATE ${PIPEWIRE_LIBRARIES} ${DBUS_LIBRARIES})
+    if(EGL_FOUND)
+        target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DMABUF)
+        target_include_directories(retrocapture PRIVATE ${EGL_INCLUDE_DIRS})
+        target_link_libraries(retrocapture PRIVATE ${EGL_LIBRARIES})
+    endif()
+endif()
+
+# #107 — Windows screen-capture backend (DXGI Desktop Duplication).
+# VideoCaptureScreen_win.cpp keys off RETROCAPTURE_SCREEN_DXGI; d3d11/dxgi
+# headers + libs ship with MinGW-w64 / MXE.
+if(PLATFORM_WINDOWS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_DXGI)
+    target_link_libraries(retrocapture PRIVATE d3d11 dxgi)
+endif()
+
+# #107 — macOS screen-capture backend (ScreenCaptureKit). The .mm is
+# excluded from non-Apple builds (below); the framework is 12.3+.
+if(PLATFORM_MACOS)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_SCREEN_SCK)
+    target_link_libraries(retrocapture PRIVATE
+        "-framework ScreenCaptureKit"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics")
+endif()
+
+if(PLATFORM_WINDOWS)
+    # Shell_NotifyIcon + TrackPopupMenu — shell32/user32/gdi32 are part
+    # of the standard Win32 link set (MXE links them by default, but be
+    # explicit).
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_WINDOWS)
+    target_link_libraries(retrocapture PRIVATE shell32 user32 gdi32)
+elseif(PLATFORM_MACOS)
+    # NSStatusItem lives in AppKit.
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_TRAY_BACKEND_MACOS)
+    target_link_libraries(retrocapture PRIVATE "-framework AppKit")
 endif()
 
 # Propagar versão do projeto pro código (usado pelo endpoint /meta e afins)
@@ -540,6 +812,28 @@ if(PLATFORM_LINUX)
     endif()
 
     list(APPEND LINK_LIBS ${V4L2_LIBRARIES} ${PULSE_LIBRARIES} ${PULSE_SIMPLE_LIBRARIES})
+elseif(PLATFORM_MACOS)
+    # macOS frameworks discovered via find_library; the ones that
+    # need -framework syntax (AVFoundation, CoreAudio, etc.) are
+    # passed directly to target_link_libraries below since they
+    # don't follow the regular library-search-path convention.
+    find_library(COCOA_LIB Cocoa)
+    find_library(IOKIT_LIB IOKit)
+    find_library(COREVIDEO_LIB CoreVideo)
+    find_library(VIDEOTOOLBOX_LIB VideoToolbox)
+
+    if(COCOA_LIB)
+        list(APPEND LINK_LIBS ${COCOA_LIB})
+    endif()
+    if(IOKIT_LIB)
+        list(APPEND LINK_LIBS ${IOKIT_LIB})
+    endif()
+    if(COREVIDEO_LIB)
+        list(APPEND LINK_LIBS ${COREVIDEO_LIB})
+    endif()
+    if(VIDEOTOOLBOX_LIB)
+        list(APPEND LINK_LIBS ${VIDEOTOOLBOX_LIB})
+    endif()
 elseif(PLATFORM_WINDOWS)
     # Windows DirectShow libraries
     list(APPEND LINK_LIBS
@@ -557,6 +851,26 @@ elseif(PLATFORM_WINDOWS)
 endif()
 
 target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
+
+# IXWebSocket — chat WS/WSS transport (#84). FetchContent created the
+# `ixwebsocket` target; on macOS it also pulls in Security + Foundation
+# automatically via SecureTransport, and on Linux it links OpenSSL we
+# already require. Linked PRIVATE because the public headers don't
+# expose IXWebSocket types.
+target_link_libraries(retrocapture PRIVATE ixwebsocket)
+
+# macOS-specific frameworks (need -framework syntax)
+if(PLATFORM_MACOS)
+    target_link_libraries(retrocapture PRIVATE
+        "-framework AVFoundation"
+        "-framework CoreAudio"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework Foundation"
+        "-framework AudioToolbox"
+    )
+endif()
 
 # MinGW-w64 precisa linkar com stdc++fs para filesystem (GCC 8+)
 # Para GCC < 8, nossa implementação manual usa shlwapi
@@ -946,6 +1260,21 @@ if(PLATFORM_WINDOWS)
     # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
     # )
 
+    # #85 Phase 2 — register / unregister the DirectShow virtual
+    # camera filter DLL post-install. NSIS runs elevated
+    # (RequestExecutionLevel admin) so regsvr32 has the rights it
+    # needs to write under HKCR. /s = silent; the user shouldn't
+    # see a "DLL registered successfully" popup on every install.
+    # Guarded by RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER so a
+    # build without the filter doesn't ship a broken post-install
+    # call pointing at a missing DLL.
+    if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+        set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+        set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+            "ExecWait 'regsvr32.exe /u /s \\\"$INSTDIR\\\\bin\\\\RetroCaptureVCam.dll\\\"'")
+    endif()
+
     # Incluir CPack APÓS todas as configurações CPACK_*
     include(CPack)
 
@@ -1035,4 +1364,33 @@ else()
             FILES_MATCHING PATTERN "*"
         )
     endif()
+endif()
+
+# ---------------------------------------------------------------------
+# #85 Phase 2 — Windows DirectShow virtual-camera source filter DLL.
+#
+# Two add_subdirectory calls in order: strmbase first (the DirectShow
+# BaseClasses static lib), then the filter sources that link against
+# it. Gated by the option so a default Linux build doesn't pay the
+# configure-time cost of an irrelevant target tree.
+# ---------------------------------------------------------------------
+if(RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER)
+    if(NOT PLATFORM_WINDOWS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DSHOW_FILTER=ON only makes "
+            "sense on a Windows target build (cross-compile via MXE "
+            "or native MSVC). Current platform is not Windows.")
+    endif()
+    add_subdirectory(third_party/baseclasses)
+    add_subdirectory(src/dshow_filter)
+endif()
+
+if(RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN)
+    if(NOT PLATFORM_MACOS)
+        message(FATAL_ERROR
+            "RETROCAPTURE_BUILD_VIRTCAM_DAL_PLUGIN=ON only makes "
+            "sense on a macOS target build. Current platform is "
+            "not macOS.")
+    endif()
+    add_subdirectory(src/dal_plugin)
 endif()

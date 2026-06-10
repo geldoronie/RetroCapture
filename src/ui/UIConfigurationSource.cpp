@@ -3,6 +3,7 @@
 #include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include "../capture/IVideoCapture.h"
+#include "../capture/VideoCaptureScreen.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
@@ -50,6 +51,12 @@ void UIConfigurationSource::render()
         ImGui::End();
         return;
     }
+    if (sourceType == UIManager::SourceType::Screen)
+    {
+        renderScreenControls();
+        ImGui::End();
+        return;
+    }
 #ifdef __linux__
     if (sourceType == UIManager::SourceType::V4L2)
     {
@@ -63,6 +70,15 @@ void UIConfigurationSource::render()
     if (sourceType == UIManager::SourceType::DS)
     {
         renderDSControls();
+    }
+    else if (sourceType == UIManager::SourceType::None)
+    {
+        ImGui::TextWrapped("No source selected. Pick a source type above.");
+    }
+#elif defined(__APPLE__)
+    if (sourceType == UIManager::SourceType::AVFoundation)
+    {
+        renderAVFoundationControls();
     }
     else if (sourceType == UIManager::SourceType::None)
     {
@@ -89,20 +105,30 @@ void UIConfigurationSource::renderSourceTypeSelection()
     // ('Remote → Connect to Remote...') with a dedicated window for URL
     // and interpolation. The Source tab focuses only on physical capture
     // options local to the machine.
+    // 'Screen' (#107) is cross-platform and offered everywhere.
 #ifdef __linux__
-    const char *sourceTypeNames[] = {"None", "V4L2"};
+    const char *sourceTypeNames[] = {"None", "V4L2", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::V4L2};
+        UIManager::SourceType::V4L2,
+        UIManager::SourceType::Screen};
 #elif defined(_WIN32)
-    const char *sourceTypeNames[] = {"None", "DirectShow"};
+    const char *sourceTypeNames[] = {"None", "DirectShow", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
         UIManager::SourceType::None,
-        UIManager::SourceType::DS};
-#else
-    const char *sourceTypeNames[] = {"None"};
+        UIManager::SourceType::DS,
+        UIManager::SourceType::Screen};
+#elif defined(__APPLE__)
+    const char *sourceTypeNames[] = {"None", "AVFoundation", "Screen"};
     UIManager::SourceType sourceTypeMap[] = {
-        UIManager::SourceType::None};
+        UIManager::SourceType::None,
+        UIManager::SourceType::AVFoundation,
+        UIManager::SourceType::Screen};
+#else
+    const char *sourceTypeNames[] = {"None", "Screen"};
+    UIManager::SourceType sourceTypeMap[] = {
+        UIManager::SourceType::None,
+        UIManager::SourceType::Screen};
 #endif
 
     // Encontrar índice atual baseado no SourceType
@@ -128,6 +154,15 @@ void UIConfigurationSource::renderSourceTypeSelection()
 
 void UIConfigurationSource::renderV4L2Controls()
 {
+    // Re-fetch the live capture pointer. render() caches it at the top
+    // of the frame, but renderSourceTypeSelection() (called just before
+    // the dispatch here) can switch the source type and rebuild the
+    // backend mid-frame — leaving the cached pointer dangling at the
+    // just-destroyed instance. renderDSControls/AVFoundation already
+    // re-fetch for the same reason; V4L2 didn't, and dereferencing the
+    // stale pointer below segfaulted right after a Screen→V4L2 switch.
+    m_capture = m_uiManager->getCapture();
+
     // Sempre mostrar controles, mesmo sem dispositivo
     // Se não houver dispositivo, mostrar mensagem informativa
     if (!m_capture || !m_capture->isOpen())
@@ -733,3 +768,386 @@ void UIConfigurationSource::renderRemoteControls()
         ImGui::TextDisabled("not connected");
     }
 }
+
+void UIConfigurationSource::renderScreenControls()
+{
+    ui_section_header("Screen Capture",
+                      "Capture the desktop — a whole monitor, a window, "
+                      "or a cropped region — as the source.");
+
+    // Target enumeration. Cached so we don't re-enumerate every frame;
+    // a Refresh re-scans (windows come and go). On Wayland the portal's
+    // own picker ultimately decides, so this list may be a single entry.
+    if (!m_screenTargetsLoaded)
+    {
+        VideoCaptureScreen probe;
+        m_screenTargets       = probe.listDevices();
+        m_screenTargetsLoaded = true;
+    }
+
+    if (ImGui::Button("Refresh targets"))
+    {
+        VideoCaptureScreen probe;
+        m_screenTargets = probe.listDevices();
+    }
+
+    const std::string current = m_uiManager->getCurrentDevice();
+    std::string preview = current.empty() ? "(none)" : current;
+    for (const auto &d : m_screenTargets)
+        if (d.id == current) { preview = d.name; break; }
+
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##screenTarget", preview.c_str()))
+    {
+        for (const auto &d : m_screenTargets)
+        {
+            const bool selected = (d.id == current);
+            if (ImGui::Selectable(d.name.c_str(), selected))
+            {
+                m_uiManager->triggerDeviceChange(d.id);
+                m_uiManager->saveConfig();
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Target");
+
+    if (!current.empty())
+    {
+        if (ImGui::Button("Stop capture"))
+        {
+            m_uiManager->triggerDeviceChange("");
+            m_uiManager->saveConfig();
+        }
+    }
+
+    ImGui::Separator();
+    ui_section_header("Region (crop)",
+                      "Limit the captured area, in target pixels. "
+                      "All zero = capture the full target.");
+
+    // Seed the ImGui scratch from persisted config once.
+    if (!m_screenRegionSeeded)
+    {
+        m_screenRegion[0] = static_cast<int>(m_uiManager->getScreenRegionX());
+        m_screenRegion[1] = static_cast<int>(m_uiManager->getScreenRegionY());
+        m_screenRegion[2] = static_cast<int>(m_uiManager->getScreenRegionW());
+        m_screenRegion[3] = static_cast<int>(m_uiManager->getScreenRegionH());
+        m_screenRegionSeeded = true;
+    }
+
+    // Spin edits (±1 / ±10 with the step buttons) so fine adjustments
+    // are easy without dragging. Pairs on a line to stay compact.
+    ImGui::PushItemWidth(130.0f);
+    ImGui::InputInt("X", &m_screenRegion[0], 1, 10);
+    ImGui::SameLine();
+    ImGui::InputInt("Y", &m_screenRegion[1], 1, 10);
+    ImGui::InputInt("W", &m_screenRegion[2], 1, 10);
+    ImGui::SameLine();
+    ImGui::InputInt("H", &m_screenRegion[3], 1, 10);
+    ImGui::PopItemWidth();
+    for (int i = 0; i < 4; ++i) if (m_screenRegion[i] < 0) m_screenRegion[i] = 0;
+
+    if (ImGui::Button("Apply region"))
+    {
+        m_uiManager->triggerScreenRegionChange(
+            static_cast<uint32_t>(m_screenRegion[0]), static_cast<uint32_t>(m_screenRegion[1]),
+            static_cast<uint32_t>(m_screenRegion[2]), static_cast<uint32_t>(m_screenRegion[3]));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear region"))
+    {
+        m_screenRegion[0] = m_screenRegion[1] = m_screenRegion[2] = m_screenRegion[3] = 0;
+        m_uiManager->triggerScreenRegionChange(0, 0, 0, 0);
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Select region visually…"))
+    {
+        // Remember the current crop, then show the full (uncropped) frame
+        // live so the user marquees against the whole target.
+        for (int i = 0; i < 4; ++i) m_savedRegion[i] = m_screenRegion[i];
+        m_uiManager->applyScreenRegionLive(0, 0, 0, 0);
+        m_haveSelection   = false;
+        m_marqueeActive   = false;
+        m_regionSelectorOpen = true;
+    }
+
+    renderRegionSelector();
+}
+
+void UIConfigurationSource::renderRegionSelector()
+{
+    if (!m_regionSelectorOpen) return;
+
+    ImGui::SetNextWindowSize(ImVec2(820, 640), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (ImGui::Begin("Select capture region", &open, ImGuiWindowFlags_NoSavedSettings))
+    {
+        const unsigned int tex = m_uiManager->getCaptureTextureId();
+        const float fullW = static_cast<float>(m_uiManager->getCaptureTextureWidth());
+        const float fullH = static_cast<float>(m_uiManager->getCaptureTextureHeight());
+
+        if (tex == 0 || fullW < 1.0f || fullH < 1.0f)
+        {
+            ImGui::TextWrapped("Waiting for a frame — make sure a screen target is "
+                               "being captured.");
+        }
+        else
+        {
+            ImGui::TextDisabled("Drag on the image to mark the region. Full frame: %d x %d",
+                                static_cast<int>(fullW), static_cast<int>(fullH));
+
+            float availW = ImGui::GetContentRegionAvail().x;
+            if (availW < 64.0f) availW = 720.0f;
+            float scale = availW / fullW;
+            if (scale > 1.0f) scale = 1.0f;
+            const float dispW = fullW * scale;
+            const float dispH = fullH * scale;
+
+            const ImVec2 imgPos = ImGui::GetCursorScreenPos();
+            // Cover the frame with an InvisibleButton so the marquee drag
+            // is captured here instead of moving the window (ImGui::Image
+            // doesn't capture drags, so dragging on it would drag the
+            // window). The texture is drawn underneath via the draw list;
+            // the window then only moves from its title bar.
+            ImGui::InvisibleButton("##regionCanvas", ImVec2(dispW, dispH));
+            ImGui::GetWindowDrawList()->AddImage(
+                static_cast<ImTextureID>(tex), imgPos,
+                ImVec2(imgPos.x + dispW, imgPos.y + dispH));
+
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            auto clampf = [](float v, float hi) { return v < 0.0f ? 0.0f : (v > hi ? hi : v); };
+            if (ImGui::IsItemActivated())
+            {
+                m_selX0 = clampf(mouse.x - imgPos.x, dispW);
+                m_selY0 = clampf(mouse.y - imgPos.y, dispH);
+                m_selX1 = m_selX0;
+                m_selY1 = m_selY0;
+                m_marqueeActive = true;
+                m_haveSelection = true;
+            }
+            if (m_marqueeActive && ImGui::IsItemActive())
+            {
+                m_selX1 = clampf(mouse.x - imgPos.x, dispW);
+                m_selY1 = clampf(mouse.y - imgPos.y, dispH);
+            }
+            if (ImGui::IsItemDeactivated()) m_marqueeActive = false;
+
+            if (m_haveSelection)
+            {
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                const ImVec2 a(imgPos.x + std::min(m_selX0, m_selX1),
+                               imgPos.y + std::min(m_selY0, m_selY1));
+                const ImVec2 b(imgPos.x + std::max(m_selX0, m_selX1),
+                               imgPos.y + std::max(m_selY0, m_selY1));
+                dl->AddRectFilled(a, b, IM_COL32(64, 160, 255, 40));
+                dl->AddRect(a, b, IM_COL32(64, 160, 255, 255), 0.0f, 0, 2.0f);
+            }
+
+            const int rx = static_cast<int>(std::min(m_selX0, m_selX1) / scale);
+            const int ry = static_cast<int>(std::min(m_selY0, m_selY1) / scale);
+            const int rw = static_cast<int>((std::max(m_selX0, m_selX1) - std::min(m_selX0, m_selX1)) / scale);
+            const int rh = static_cast<int>((std::max(m_selY0, m_selY1) - std::min(m_selY0, m_selY1)) / scale);
+            ImGui::Text("X %d   Y %d   W %d   H %d", rx, ry, rw, rh);
+
+            const bool valid = m_haveSelection && rw >= 8 && rh >= 8;
+            ImGui::BeginDisabled(!valid);
+            if (ImGui::Button("Apply"))
+            {
+                m_screenRegion[0] = rx; m_screenRegion[1] = ry;
+                m_screenRegion[2] = rw; m_screenRegion[3] = rh;
+                m_uiManager->triggerScreenRegionChange(
+                    static_cast<uint32_t>(rx), static_cast<uint32_t>(ry),
+                    static_cast<uint32_t>(rw), static_cast<uint32_t>(rh));
+                m_regionSelectorOpen = false;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Use full frame"))
+            {
+                for (int i = 0; i < 4; ++i) m_screenRegion[i] = 0;
+                m_uiManager->triggerScreenRegionChange(0, 0, 0, 0);
+                m_regionSelectorOpen = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                m_uiManager->triggerScreenRegionChange(
+                    static_cast<uint32_t>(m_savedRegion[0]), static_cast<uint32_t>(m_savedRegion[1]),
+                    static_cast<uint32_t>(m_savedRegion[2]), static_cast<uint32_t>(m_savedRegion[3]));
+                m_regionSelectorOpen = false;
+            }
+        }
+    }
+    ImGui::End();
+
+    // Closed via the window's X → treat as Cancel: restore the crop the
+    // user had before opening the selector.
+    if (!open && m_regionSelectorOpen)
+    {
+        m_uiManager->triggerScreenRegionChange(
+            static_cast<uint32_t>(m_savedRegion[0]), static_cast<uint32_t>(m_savedRegion[1]),
+            static_cast<uint32_t>(m_savedRegion[2]), static_cast<uint32_t>(m_savedRegion[3]));
+        m_regionSelectorOpen = false;
+    }
+}
+
+#ifdef __APPLE__
+
+void UIConfigurationSource::renderAVFoundationControls()
+{
+    if (!m_capture || !m_capture->isOpen())
+    {
+        ImGui::TextWrapped("No AVFoundation device connected. Pick a device below "
+                           "to start capture.");
+        ImGui::Separator();
+    }
+
+    renderAVFoundationDeviceSelection();
+    ImGui::Separator();
+    renderAVFoundationFormatSelection();
+    // AVFoundation on macOS does not surface per-device hardware
+    // controls (brightness, gain, etc.) the way V4L2 / DirectShow do,
+    // so there is no hardware-controls section here. See
+    // docs/MACOS_PORT_STRATEGY.md.
+}
+
+void UIConfigurationSource::renderAVFoundationDeviceSelection()
+{
+    ui_section_header("AVFoundation device",
+                      "macOS capture device. The list is sourced from "
+                      "AVCaptureDevice — UVC HDMI grabbers, webcams, and "
+                      "any virtual camera installed on the system show up here.");
+
+    if (m_avfDevicesNeedRefresh && m_capture)
+    {
+        m_avfDevices = m_capture->listDevices();
+        m_avfDevicesNeedRefresh = false;
+    }
+
+    if (m_avfDevices.empty())
+    {
+        ImGui::TextWrapped("No AVFoundation devices found.");
+        if (ImGui::Button("Refresh##avfDevices"))
+        {
+            m_avfDevicesNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string currentId = m_uiManager
+        ? m_uiManager->getAVFoundationDeviceId()
+        : std::string();
+
+    std::vector<const char *> names;
+    int currentIndex = -1;
+    names.reserve(m_avfDevices.size());
+    for (size_t i = 0; i < m_avfDevices.size(); ++i)
+    {
+        names.push_back(m_avfDevices[i].name.c_str());
+        if (m_avfDevices[i].id == currentId)
+        {
+            currentIndex = static_cast<int>(i);
+        }
+    }
+    if (currentIndex < 0) currentIndex = 0;
+
+    if (ImGui::Combo("##avfDeviceCombo", &currentIndex,
+                     names.data(), static_cast<int>(names.size())))
+    {
+        const auto &picked = m_avfDevices[currentIndex];
+        if (m_uiManager)
+        {
+            m_uiManager->triggerDeviceChange(picked.id);
+            m_uiManager->setAVFoundationDeviceId(picked.id);
+            m_uiManager->saveConfig();
+        }
+        // Force a format-list refresh against the new device.
+        m_avfFormatsNeedRefresh = true;
+        m_avfFormatsForDeviceId.clear();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfDevices"))
+    {
+        m_avfDevicesNeedRefresh = true;
+    }
+}
+
+void UIConfigurationSource::renderAVFoundationFormatSelection()
+{
+    ui_section_header("Format",
+                      "Each AVFoundation device exposes a fixed set of "
+                      "(resolution, FPS range, pixel format) tuples. "
+                      "Picking a format applies all three atomically — "
+                      "no separate resolution / FPS sliders, OBS-style.");
+
+    if (!m_capture)
+    {
+        ImGui::TextWrapped("No capture instance available.");
+        return;
+    }
+
+    const std::string deviceId = m_uiManager
+        ? m_uiManager->getAVFoundationDeviceId()
+        : std::string();
+
+    if (m_avfFormatsNeedRefresh || m_avfFormatsForDeviceId != deviceId)
+    {
+        m_avfFormats = m_capture->listFormats(deviceId);
+        m_avfFormatsForDeviceId = deviceId;
+        m_avfFormatsNeedRefresh = false;
+    }
+
+    if (m_avfFormats.empty())
+    {
+        ImGui::TextWrapped("No formats available for the selected device.");
+        if (ImGui::Button("Refresh##avfFormats"))
+        {
+            m_avfFormatsNeedRefresh = true;
+        }
+        return;
+    }
+
+    const std::string currentFormatId = m_uiManager
+        ? m_uiManager->getAVFoundationFormatId()
+        : std::string();
+
+    std::vector<const char *> displayNames;
+    int currentIndex = -1;
+    displayNames.reserve(m_avfFormats.size());
+    for (size_t i = 0; i < m_avfFormats.size(); ++i)
+    {
+        displayNames.push_back(m_avfFormats[i].displayName.c_str());
+        if (m_avfFormats[i].id == currentFormatId)
+        {
+            currentIndex = static_cast<int>(i);
+        }
+    }
+    if (currentIndex < 0) currentIndex = 0;
+
+    if (ImGui::Combo("##avfFormatCombo", &currentIndex,
+                     displayNames.data(), static_cast<int>(displayNames.size())))
+    {
+        const auto &picked = m_avfFormats[currentIndex];
+        if (m_capture->setFormatById(picked.id, deviceId))
+        {
+            if (m_uiManager)
+            {
+                m_uiManager->setAVFoundationFormatId(picked.id);
+                m_uiManager->saveConfig();
+            }
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##avfFormats"))
+    {
+        m_avfFormatsNeedRefresh = true;
+    }
+}
+
+#endif // __APPLE__

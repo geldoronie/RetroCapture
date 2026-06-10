@@ -65,6 +65,17 @@ public:
     uint32_t getRawClientCount() const { return m_rawClientCount.load(); }
     bool hasRawClients() const { return m_rawClientCount.load() > 0; }
 
+    // /stream-only subscriber count. getClientCount() above deliberately
+    // combines /stream + /raw for the audience display (#68); this counts
+    // ONLY the MPEG-TS /stream viewers. Used to gate the shader-processed
+    // /stream encode: a /raw client must NOT make the host run a second
+    // VAAPI encode for a /stream feed nobody is watching (#123 — the
+    // combined count let a /raw client defeat the #121 gate, so the host
+    // ran two concurrent 720p60 encodes and the /stream synchronizer
+    // overflowed continuously).
+    uint32_t getStreamClientCount() const { return m_clientCount.load(); }
+    bool hasStreamClients() const { return m_clientCount.load() > 0; }
+
     // Additional configuration methods
     void setVideoBitrate(uint32_t bitrate) { m_videoBitrate = bitrate; }
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
@@ -360,6 +371,11 @@ private:
     {
         std::vector<uint8_t> tail;
         size_t tailOffset = 0;
+        // #93 — how many times this client's send backlog overflowed the
+        // cap. For /raw we drop the backlog and keep the connection (the
+        // FFmpeg demuxer resyncs at the next keyframe) instead of closing
+        // and forcing a messy reconnect; this just throttles the log.
+        uint64_t backlogDrops = 0;
         size_t pending() const { return tail.size() - tailOffset; }
     };
     static constexpr size_t kMaxClientBacklog = 4 * 1024 * 1024; // 4 MB

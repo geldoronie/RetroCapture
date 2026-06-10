@@ -197,7 +197,19 @@ size_t AudioPlaybackWASAPI::submit(const float *interleaved,
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         const size_t floats = sampleCount * m_channels;
-        m_queue.insert(m_queue.end(), interleaved, interleaved + floats);
+        // Apply the client-side gain on the way into the render queue.
+        // At unity we bulk-insert; otherwise scale per sample.
+        const float gain = volume();
+        if (gain == 1.0f)
+        {
+            m_queue.insert(m_queue.end(), interleaved, interleaved + floats);
+        }
+        else
+        {
+            m_queue.reserve(m_queue.size() + floats);
+            for (size_t i = 0; i < floats; ++i)
+                m_queue.push_back(interleaved[i] * gain);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(m_clockMutex);
