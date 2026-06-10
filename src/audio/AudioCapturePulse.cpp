@@ -91,9 +91,10 @@ void AudioCapturePulse::cleanupPulseAudio()
     stopPublishSource();
     disconnectRecordStream();
 
-    // Best-effort GC of any pre-0.8 module-null-sink / module-loopback
-    // we may have just inherited from an old session on this host.
-    gcLegacyRetroCaptureModules();
+    // Best-effort GC of any RetroCapture-owned module left behind by a
+    // prior run (pre-0.8 null-sink/loopback, or a crashed 0.8+ session's
+    // module-pipe-source + its FIFO) before we publish our own. #96.
+    gcStaleRetroCaptureModules();
 
     if (m_mainloop && m_context)
     {
@@ -277,10 +278,10 @@ bool AudioCapturePulse::open(const std::string &deviceName)
         return false;
     }
 
-    // One-time GC of any module-null-sink / module-loopback left behind
-    // by older RetroCapture binaries on this host. Idempotent against a
-    // clean graph.
-    gcLegacyRetroCaptureModules();
+    // GC of any RetroCapture-owned module left behind by a prior run
+    // (pre-0.8 null-sink/loopback, or a crashed session's
+    // module-pipe-source + FIFO). Idempotent against a clean graph. #96.
+    gcStaleRetroCaptureModules();
 
     if (!connectRecordStream(deviceName))
     {
@@ -832,47 +833,82 @@ void AudioCapturePulse::disconnectInputSource()
 }
 
 
-// Compact module scan: picks out any pre-0.8 module-null-sink that
-// claimed sink_name=RetroCapture, and any module-loopback that fed it.
-// Once both classes are unloaded, the pre-0.8 RetroCapture sink and its
-// stray sink-inputs vanish on their own. Anything else is left alone.
-// 0.8+ does not load any null-sink or loopback — capture is direct,
-// publish goes via module-pipe-source, monitor playback is in-process
-// (MonitorPlayback / pa_simple) — so on a clean 0.8+ graph this is a
-// no-op.
-static void legacyModuleInfoCallback(pa_context *c, const pa_module_info *i, int eol, void *userdata)
+// A RetroCapture-owned PulseAudio module left loaded by a previous run.
+// fifoPath is non-empty only for a module-pipe-source — its `file=` arg —
+// so we can reap the orphaned FIFO (and its /tmp dir) after unloading.
+namespace {
+struct StaleRetroModule
+{
+    uint32_t    index = PA_INVALID_INDEX;
+    std::string fifoPath; // module-pipe-source FIFO; empty for the legacy ones
+};
+} // namespace
+
+// Module scan for #96: reap ANY RetroCapture-owned module left loaded by a
+// prior run, so an unclean exit (crash / kill -9) can't collide with this
+// session. Two classes:
+//   - pre-0.8 migration leftovers: module-null-sink sink_name=RetroCapture
+//     and the module-loopback that fed it.
+//   - current-gen: module-pipe-source source_name=RetroCapture. The
+//     pipe-source is a loaded module that OUTLIVES the process that loaded
+//     it, so a crash before stopPublishSource() runs strands it (and its
+//     FIFO) — the next launch then risks a duplicate/colliding RetroCapture
+//     source or a publish that fails because the name/FIFO is taken.
+// This runs before this run loads its own pipe-source, so anything matched
+// is necessarily stale. (Single-instance assumption: the source name is
+// unique, so a second concurrent instance would collide anyway.)
+// The output/monitor side (MonitorPlayback) uses a connection-scoped
+// pa_simple PLAYBACK stream, which PulseAudio tears down when the client
+// dies — it's not a loaded module, so there's nothing to reap there.
+static void staleModuleInfoCallback(pa_context *c, const pa_module_info *i, int eol, void *userdata)
 {
     (void)c;
     if (eol || !i || !i->name)
     {
         return;
     }
-    auto *out = static_cast<std::vector<uint32_t> *>(userdata);
+    auto *out = static_cast<std::vector<StaleRetroModule> *>(userdata);
     const std::string name = i->name;
     const std::string args = i->argument ? i->argument : "";
 
     if (name == "module-null-sink" && args.find("sink_name=RetroCapture") != std::string::npos)
     {
-        out->push_back(i->index);
+        out->push_back({i->index, ""});
         return;
     }
     if (name == "module-loopback" &&
         (args.find("sink=RetroCapture") != std::string::npos ||
          args.find("RetroCaptureInputLoopback") != std::string::npos))
     {
-        out->push_back(i->index);
+        out->push_back({i->index, ""});
+        return;
+    }
+    if (name == "module-pipe-source" && args.find("source_name=RetroCapture") != std::string::npos)
+    {
+        // Pull the FIFO path out of the `file=` arg so we can also remove
+        // the orphaned FIFO and its /tmp/retrocapture-* dir after unload.
+        std::string fifo;
+        const std::string key = "file=";
+        size_t p = args.find(key);
+        if (p != std::string::npos)
+        {
+            p += key.size();
+            size_t end = args.find(' ', p);
+            fifo = args.substr(p, end == std::string::npos ? std::string::npos : end - p);
+        }
+        out->push_back({i->index, fifo});
     }
 }
 
-void AudioCapturePulse::gcLegacyRetroCaptureModules()
+void AudioCapturePulse::gcStaleRetroCaptureModules()
 {
     if (!m_context || pa_context_get_state(m_context) != PA_CONTEXT_READY)
     {
         return;
     }
 
-    std::vector<uint32_t> stale;
-    pa_operation *op = pa_context_get_module_info_list(m_context, legacyModuleInfoCallback, &stale);
+    std::vector<StaleRetroModule> stale;
+    pa_operation *op = pa_context_get_module_info_list(m_context, staleModuleInfoCallback, &stale);
     if (op)
     {
         int ret = 0;
@@ -889,10 +925,10 @@ void AudioCapturePulse::gcLegacyRetroCaptureModules()
         pa_operation_unref(op);
     }
 
-    for (uint32_t idx : stale)
+    for (const StaleRetroModule &mod : stale)
     {
         g_sinkOperationSuccess = false;
-        pa_operation *unloadOp = pa_context_unload_module(m_context, idx, unloadModuleCallback, this);
+        pa_operation *unloadOp = pa_context_unload_module(m_context, mod.index, unloadModuleCallback, this);
         if (!unloadOp)
         {
             continue;
@@ -905,12 +941,30 @@ void AudioCapturePulse::gcLegacyRetroCaptureModules()
             usleep(10000);
         }
         pa_operation_unref(unloadOp);
+
+        // Reap the orphaned FIFO + its per-run temp dir. Guard on the
+        // /tmp/retrocapture- prefix so a hand-edited file= arg can't make
+        // us unlink/rmdir anything outside our own scratch space.
+        if (!mod.fifoPath.empty() &&
+            mod.fifoPath.rfind("/tmp/retrocapture-", 0) == 0)
+        {
+            unlink(mod.fifoPath.c_str());
+            size_t slash = mod.fifoPath.find_last_of('/');
+            if (slash != std::string::npos)
+            {
+                const std::string dir = mod.fifoPath.substr(0, slash);
+                if (dir.rfind("/tmp/retrocapture-", 0) == 0)
+                {
+                    rmdir(dir.c_str());
+                }
+            }
+        }
     }
 
     if (!stale.empty())
     {
-        LOG_INFO("gcLegacyRetroCaptureModules: unloaded " +
-                 std::to_string(stale.size()) + " pre-0.8 module(s)");
+        LOG_INFO("gcStaleRetroCaptureModules: unloaded " +
+                 std::to_string(stale.size()) + " stale RetroCapture module(s)");
     }
 }
 
