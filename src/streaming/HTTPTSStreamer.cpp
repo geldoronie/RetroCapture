@@ -1537,6 +1537,7 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
 bool HTTPTSStreamer::initializeEncoding()
 {
     // Configurar MediaSynchronizer com valores configuráveis
+    m_streamSynchronizer.setName("stream");
     m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
     m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
@@ -1621,6 +1622,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     // meaningful latency — the encoder still pulls in near-real-time.
     const size_t rawMaxVideo = std::max<size_t>(m_maxVideoBufferSize, 60);
     const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 120);
+    m_rawStreamSynchronizer.setName("raw");
     m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_rawStreamSynchronizer.setMaxVideoBufferSize(rawMaxVideo);
     m_rawStreamSynchronizer.setMaxAudioBufferSize(rawMaxAudio);
