@@ -79,6 +79,12 @@ void UICredits::render()
         ImGui::Unindent();
         ImGui::Spacing();
 
+        ImGui::BulletText("cloudflared");
+        ImGui::Indent();
+        ImGui::TextWrapped("Cloudflare Tunnel client, bundled to publish streams without port-forwarding.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
         ui_section_header("Libraries");
 
         ImGui::BulletText("ImGui");
@@ -117,16 +123,40 @@ void UICredits::render()
         ImGui::Unindent();
         ImGui::Spacing();
 
+        ImGui::BulletText("SDL2");
+        ImGui::Indent();
+        ImGui::TextWrapped("Windowing/input backend for the headless Raspberry Pi (SDL2 + DirectFB) build.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("IXWebSocket");
+        ImGui::Indent();
+        ImGui::TextWrapped("WebSocket (WS/WSS) client for the real-time chat panel.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
 #ifdef PLATFORM_LINUX
         ImGui::BulletText("V4L2");
         ImGui::Indent();
-        ImGui::TextWrapped("Video4Linux2 API for video capture on Linux.");
+        ImGui::TextWrapped("Video4Linux2 API for video capture (and v4l2loopback for the virtual camera output) on Linux.");
         ImGui::Unindent();
         ImGui::Spacing();
 
         ImGui::BulletText("PulseAudio");
         ImGui::Indent();
-        ImGui::TextWrapped("Audio capture from system on Linux.");
+        ImGui::TextWrapped("Audio capture, playback and the published RetroCapture source/sink on Linux.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("PipeWire");
+        ImGui::Indent();
+        ImGui::TextWrapped("Screen capture (monitor / window / region) via xdg-desktop-portal on Linux/Wayland.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("D-Bus");
+        ImGui::Indent();
+        ImGui::TextWrapped("System tray (StatusNotifierItem) and desktop notifications on Linux.");
         ImGui::Unindent();
         ImGui::Spacing();
 #elif defined(_WIN32)
@@ -138,14 +168,44 @@ void UICredits::render()
 
         ImGui::BulletText("WASAPI");
         ImGui::Indent();
-        ImGui::TextWrapped("Windows Audio Session API for audio capture.");
+        ImGui::TextWrapped("Windows Audio Session API for audio capture and playback.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+#elif defined(PLATFORM_MACOS)
+        ImGui::BulletText("AVFoundation");
+        ImGui::Indent();
+        ImGui::TextWrapped("Video capture on macOS.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("Core Audio");
+        ImGui::Indent();
+        ImGui::TextWrapped("Audio capture and playback on macOS (AudioUnit).");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("ScreenCaptureKit");
+        ImGui::Indent();
+        ImGui::TextWrapped("Screen capture and system-audio capture on macOS.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("AppKit / Cocoa");
+        ImGui::Indent();
+        ImGui::TextWrapped("Native window, system tray (NSStatusItem) and the .app bundle on macOS.");
+        ImGui::Unindent();
+        ImGui::Spacing();
+
+        ImGui::BulletText("CoreMediaIO");
+        ImGui::Indent();
+        ImGui::TextWrapped("Virtual camera output (DAL plug-in) on macOS.");
         ImGui::Unindent();
         ImGui::Spacing();
 #endif
 
         ImGui::BulletText("OpenSSL");
         ImGui::Indent();
-        ImGui::TextWrapped("SSL/TLS support for HTTPS in the web portal.");
+        ImGui::TextWrapped("SSL/TLS support for HTTPS, the secure WebSocket chat, and the remote/directory connections.");
         ImGui::Unindent();
         ImGui::Spacing();
 
