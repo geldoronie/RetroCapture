@@ -11,6 +11,7 @@
 #include <unistd.h>
 #endif
 #include <cstring>
+#include <cstdio>
 #include <cerrno>
 #include <cstdlib>
 #include <time.h>
@@ -1536,6 +1537,7 @@ int HTTPTSStreamer::writeToRawClients(const uint8_t *buf, int buf_size)
 bool HTTPTSStreamer::initializeEncoding()
 {
     // Configurar MediaSynchronizer com valores configuráveis
+    m_streamSynchronizer.setName("stream");
     m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
     m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
@@ -1620,6 +1622,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     // meaningful latency — the encoder still pulls in near-real-time.
     const size_t rawMaxVideo = std::max<size_t>(m_maxVideoBufferSize, 60);
     const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 120);
+    m_rawStreamSynchronizer.setName("raw");
     m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_rawStreamSynchronizer.setMaxVideoBufferSize(rawMaxVideo);
     m_rawStreamSynchronizer.setMaxAudioBufferSize(rawMaxAudio);
@@ -3560,10 +3563,32 @@ void HTTPTSStreamer::rawEncodingThread()
         auto nowTs = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(nowTs - statStart).count() >= 1)
         {
-            LOG_DEBUG("/raw encoder: video=" + std::to_string(statVideoEncoded) +
-                      "/s audio=" + std::to_string(statAudioEncoded) +
-                      "/s iters=" + std::to_string(statIterations) +
-                      " maxVidQueue=" + std::to_string(statMaxQueueDepth));
+            // #123 — per-stage averages (ms/frame) so we can see whether the
+            // CPU swscale convert, the HW surface upload, or the codec is the
+            // 60 fps bottleneck. avg = accumulated µs / frames encoded.
+            auto st = m_rawMediaEncoder.fetchVideoStageTimings();
+            std::string line = "/raw encoder: video=" + std::to_string(statVideoEncoded) +
+                               "/s audio=" + std::to_string(statAudioEncoded) +
+                               "/s iters=" + std::to_string(statIterations) +
+                               " maxVidQueue=" + std::to_string(statMaxQueueDepth);
+            if (st.frames > 0)
+            {
+                double convMs = (st.convertUs / 1000.0) / st.frames;
+                double upMs   = (st.uploadUs  / 1000.0) / st.frames;
+                double encMs  = (st.encodeUs  / 1000.0) / st.frames;
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              " stages(ms/f): convert=%.2f upload=%.2f encode=%.2f total=%.2f",
+                              convMs, upMs, encMs, convMs + upMs + encMs);
+                line += buf;
+                // Active /raw client: surface at INFO so the bottleneck is
+                // visible without enabling debug logging (#123 measurement).
+                LOG_INFO(line);
+            }
+            else
+            {
+                LOG_DEBUG(line);
+            }
             statVideoEncoded = statAudioEncoded = statIterations = 0;
             statMaxQueueDepth = 0;
             statStart = nowTs;

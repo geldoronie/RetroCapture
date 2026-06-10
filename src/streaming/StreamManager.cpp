@@ -167,10 +167,20 @@ bool StreamManager::hasRawClients() const
 
 bool StreamManager::hasClients() const
 {
+    // /stream-only gate. Mirrors hasRawClients(): we must NOT count /raw
+    // subscribers here, otherwise a remote /raw client makes this return
+    // true and the host runs the shader-processed /stream VAAPI encode for
+    // a feed nobody is watching — a second concurrent 720p60 encode that
+    // overflowed the /stream synchronizer and stole GPU from the /raw
+    // encode (#123). getClientCount() is combined for the audience display
+    // (#68); the encode gate needs the /stream-only count.
     for (const auto &streamer : m_streamers)
     {
         if (!streamer->isActive()) continue;
-        if (streamer->getClientCount() > 0) return true;
+        if (auto *ts = dynamic_cast<const HTTPTSStreamer *>(streamer.get()))
+        {
+            if (ts->hasStreamClients()) return true;
+        }
     }
     return false;
 }

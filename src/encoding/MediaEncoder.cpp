@@ -15,6 +15,7 @@ extern "C"
 #include "../utils/FFmpegCompat.h"
 #include <cstring>
 #include <mutex>
+#include <chrono>
 
 const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
 {
@@ -1490,11 +1491,18 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         return false;
     }
 
+    // #123 — time each encode stage so the streaming telemetry can show
+    // whether the CPU swscale convert, the HW upload, or the codec itself
+    // is the bottleneck when the synchronizer overflows at 60 fps.
+    using stage_clock = std::chrono::steady_clock;
+    auto stageT0 = stage_clock::now();
+
     if (!convertRGBToYUV(rgbData, width, height, videoFrame))
     {
         LOG_ERROR("MediaEncoder: convertRGBToYUV failed");
         return false;
     }
+    auto stageAfterConvert = stage_clock::now();
 
     int64_t calculatedPTS = calculateVideoPTS(captureTimestampUs);
     videoFrame->pts = calculatedPTS;
@@ -1524,6 +1532,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     // AMF / D3D11) need the software-side NV12 frame uploaded to a
     // hardware surface before the codec can consume it. NVENC and the
     // software path skip this and feed the sw frame directly.
+    auto stageBeforeUpload = stage_clock::now();
     AVFrame *frameToSend = videoFrame;
     if (m_hwVideoFrame &&
         m_activeHardwareEncoder != HardwareEncoder::Software &&
@@ -1543,6 +1552,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         FFmpegCompat::setKeyFrame(hwFrame, forceKeyframe);
         frameToSend = hwFrame;
     }
+    auto stageAfterUpload = stage_clock::now();
 
     int ret = avcodec_send_frame(codecCtx, frameToSend);
     if (ret < 0)
@@ -1562,7 +1572,20 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     // path is inactive.
     (void)frameToSend;
 
-    return receiveVideoPackets(packets, captureTimestampUs);
+    bool recvOk = receiveVideoPackets(packets, captureTimestampUs);
+    auto stageEnd = stage_clock::now();
+
+    // #123 — accumulate per-stage microseconds for the telemetry.
+    using us = std::chrono::microseconds;
+    m_convertUs.fetch_add(std::chrono::duration_cast<us>(stageAfterConvert - stageT0).count(),
+                          std::memory_order_relaxed);
+    m_uploadUs.fetch_add(std::chrono::duration_cast<us>(stageAfterUpload - stageBeforeUpload).count(),
+                         std::memory_order_relaxed);
+    m_encodeUs.fetch_add(std::chrono::duration_cast<us>(stageEnd - stageAfterUpload).count(),
+                         std::memory_order_relaxed);
+    m_stageFrames.fetch_add(1, std::memory_order_relaxed);
+
+    return recvOk;
 }
 
 bool MediaEncoder::receiveVideoPackets(std::vector<EncodedPacket> &packets, int64_t captureTimestampUs)
@@ -1853,6 +1876,10 @@ void MediaEncoder::cleanup()
     m_audioFrameCount = 0;
     m_videoFrameCountForPTS = 0;
     m_desyncFrameCount.store(0, std::memory_order_relaxed);
+    m_convertUs.store(0, std::memory_order_relaxed);
+    m_uploadUs.store(0, std::memory_order_relaxed);
+    m_encodeUs.store(0, std::memory_order_relaxed);
+    m_stageFrames.store(0, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(m_ptsMutex);
