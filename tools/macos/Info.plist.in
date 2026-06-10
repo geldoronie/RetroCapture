@@ -10,6 +10,11 @@
     <string>com.retrocapture.retrocapture</string>
     <key>CFBundleExecutable</key>
     <string>retrocapture</string>
+    <!-- App icon: Contents/Resources/RetroCapture.icns, generated from
+         assets/logo.png by build-macos-bundle.sh. Without this key macOS
+         shows the generic app icon in Finder / Launchpad / the Dock. -->
+    <key>CFBundleIconFile</key>
+    <string>RetroCapture</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

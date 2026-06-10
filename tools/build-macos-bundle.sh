@@ -105,6 +105,34 @@ sed -e "s/@RETROCAPTURE_VERSION@/$RELEASE_VERSION/g" \
     "$SCRIPT_DIR/macos/Info.plist.in" \
     > "$APP_DIR/Contents/Info.plist"
 
+# 2b2 — app icon. macOS shows the generic icon unless the bundle ships a
+# .icns referenced by CFBundleIconFile (set in Info.plist). Build one from
+# assets/logo.png with the native sips + iconutil so the app gets the
+# branded icon in Finder / Launchpad / the Dock. Best-effort: warn and
+# continue if the tools or the source PNG are missing.
+ICON_SRC="$REPO_ROOT/assets/logo.png"
+if [ -f "$ICON_SRC" ] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
+    ICONSET="$STAGE/RetroCapture.iconset"
+    rm -rf "$ICONSET"
+    mkdir -p "$ICONSET"
+    # macOS reads a fixed set of names/sizes from the .iconset dir.
+    for sz in 16 32 128 256 512; do
+        sips -z "$sz" "$sz" "$ICON_SRC" \
+            --out "$ICONSET/icon_${sz}x${sz}.png" >/dev/null 2>&1
+        sips -z "$((sz * 2))" "$((sz * 2))" "$ICON_SRC" \
+            --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1
+    done
+    if iconutil -c icns "$ICONSET" \
+        -o "$APP_DIR/Contents/Resources/RetroCapture.icns" >/dev/null 2>&1; then
+        echo "   icon    : Contents/Resources/RetroCapture.icns (from assets/logo.png)"
+    else
+        echo "   icon    : ⚠️  iconutil failed — bundle will use the generic icon"
+    fi
+    rm -rf "$ICONSET"
+else
+    echo "   icon    : ⚠️  skipped (need assets/logo.png + sips + iconutil) — generic icon"
+fi
+
 # 2c — read-only assets that Paths::getReadOnlyAssetsDir() expects to
 # find under <exe>/../Resources/ when running from the bundle.
 for d in shaders web; do
