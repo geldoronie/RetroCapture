@@ -107,12 +107,15 @@ private:
     bool startPublishSource();
     void stopPublishSource();
     void waitForContextReady();
-    // One-shot migration GC: unloads any module-null-sink (sink_name=
-    // RetroCapture) and module-loopback (feeding sink=RetroCapture)
-    // left behind by pre-0.8 RetroCapture binaries on this host. No-op
-    // on a clean graph. Safe to drop in a future release once the
-    // 0.7→0.8 transition window has closed.
-    void gcLegacyRetroCaptureModules();
+    // Startup GC (#96): reap any RetroCapture-owned PulseAudio module left
+    // loaded by a prior run before this session creates its own — the
+    // pre-0.8 migration leftovers (module-null-sink sink_name=RetroCapture
+    // and the module-loopback feeding it) AND the current-gen
+    // module-pipe-source source_name=RetroCapture, whose FIFO + /tmp dir
+    // are reaped too. A crash / kill -9 strands the pipe-source (a loaded
+    // module outlives its loader), so this keeps a clean slate. No-op on a
+    // clean graph.
+    void gcStaleRetroCaptureModules();
 
     // PulseAudio objects
     pa_mainloop *m_mainloop;
