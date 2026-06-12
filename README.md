@@ -172,6 +172,7 @@ Pre-built binaries for **0.8.1-alpha** are attached to the
 | Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.8.1-alpha-linux-arm64v8.tar.gz` |
 | Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.8.1-alpha-linux-arm32v7.tar.gz` |
 | Windows x86_64 | `RetroCapture-0.8.1-alpha-windows-x86_64-Setup.exe` |
+| macOS x86_64 | `RetroCapture-0.8.1-alpha-macos-x86_64.tar.gz` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
