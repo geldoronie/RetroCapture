@@ -288,7 +288,31 @@ bool MediaEncoder::initializeVideoCodec()
     codecCtx->gop_size = static_cast<int>(m_videoConfig.fps * 2);
     codecCtx->max_b_frames = 0;
     codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
-    codecCtx->bit_rate = m_videoConfig.bitrate;
+
+    // #129 — the FFmpeg 4.1 libx264/libx265 build shipped in our MXE Windows
+    // toolchain emits empty (neutral-gray) frames whenever ABR rate control is
+    // used: bisection proved that setting codecCtx->bit_rate produces a blank
+    // stream at >=640x480 (both streaming and recording came out solid gray —
+    // the long-standing Windows "gray screen / white noise" report), while
+    // constant-quality CRF encodes the exact same input correctly. Linux/macOS
+    // ship newer FFmpeg where ABR is fine, so this only applies to Windows.
+    // Drive the software x264/x265 with pure constant-quality CRF — NO VBV.
+    // The VBV/HRD rate-control model in this FFmpeg corrupts to solid-black
+    // frames the moment the buffer underflows, which sustained real content
+    // triggers a few seconds in (bisected: 920 underflows -> blank stream,
+    // while pure CRF ran 2000 frames clean). ABR sets a bitrate AND a VBV, so
+    // it's broken too; even CRF + an explicit vbv-maxrate cap reintroduces the
+    // underflow. Pure CRF has no buffer state to break. The trade-off is an
+    // unbounded peak bitrate, far preferable to a black stream; CRF still
+    // self-limits to a sane average for typical capture content.
+#ifdef _WIN32
+    const bool useCRF = (codec->id == AV_CODEC_ID_H264 || codec->id == AV_CODEC_ID_HEVC);
+#else
+    const bool useCRF = false;
+#endif
+    if (!useCRF)
+        codecCtx->bit_rate = m_videoConfig.bitrate;
+
     codecCtx->thread_count = 0;
     // FF_THREAD_FRAME parallelises encoding across consecutive frames
     // (each thread works on a different frame) instead of FF_THREAD_SLICE
@@ -345,23 +369,32 @@ bool MediaEncoder::initializeVideoCodec()
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
         av_dict_set_int(&opts, "scenecut", 0, 0);
 
-        if (m_forStreaming)
+        if (useCRF)
+        {
+            // #129 — Windows constant-quality path (ABR + VBV are broken here,
+            // see above). NO vbv-maxrate/vbv-bufsize: any VBV reintroduces the
+            // underflow-to-black bug. repeat-headers=1 inlines SPS/PPS before
+            // every IDR for mid-stream MPEG-TS joins. x264-params is the channel
+            // that actually reaches libx264 (bare AVOption keys are dropped by
+            // this FFmpeg).
+            av_dict_set_int(&opts, "crf", 20, 0);
+            av_dict_set(&opts, "x264-params", "repeat-headers=1", 0);
+        }
+        else if (m_forStreaming)
         {
             // HTTP-TS streaming: tight vbv caps bitrate variation.
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
+            av_dict_set_int(&opts, "repeat-headers", 1, 0);
         }
         else
         {
             // Gravação em arquivo: vbv largo pra rate-control flexível.
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate * 2, 0);
+            // Inline SPS/PPS in front of every IDR so thumbnailers in DaVinci /
+            // kdenlive / Premiere that seek to a random byte offset can decode
+            // the next keyframe immediately (#59).
+            av_dict_set_int(&opts, "repeat-headers", 1, 0);
         }
-        // Inline SPS/PPS in front of every IDR for both modes (#59).
-        // Streaming needs it for mid-stream join; file recording needs
-        // it so thumbnailers in DaVinci / kdenlive / Premiere that
-        // seek to a random byte offset can decode the next keyframe
-        // immediately instead of waiting for the muxer's extradata,
-        // which some tools skip when scrubbing.
-        av_dict_set_int(&opts, "repeat-headers", 1, 0);
     }
     else if (codec->id == AV_CODEC_ID_HEVC)
     {
@@ -378,7 +411,15 @@ bool MediaEncoder::initializeVideoCodec()
         av_dict_set_int(&opts, "rc-lookahead", 0, 0);
         av_dict_set_int(&opts, "scenecut", 0, 0);
 
-        if (m_forStreaming)
+        if (useCRF)
+        {
+            // #129 — Windows constant-quality path, no VBV (mirrors the H.264
+            // path: any VBV in this FFmpeg corrupts to black on underflow).
+            av_dict_set_int(&opts, "crf", 22, 0);
+            av_dict_set(&opts, "x265-params",
+                        m_forStreaming ? "repeat-headers=1:annexb=1" : "repeat-headers=1", 0);
+        }
+        else if (m_forStreaming)
         {
             av_dict_set_int(&opts, "vbv-bufsize", m_videoConfig.bitrate / 10, 0);
             // Streaming uses Annex B byte-stream framing inside the
@@ -431,6 +472,7 @@ bool MediaEncoder::initializeVideoCodec()
         avcodec_free_context(&codecCtx);
         return false;
     }
+
     av_dict_free(&opts);
 
     m_videoCodecContext = codecCtx;
