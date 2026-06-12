@@ -54,6 +54,11 @@ public:
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
     uint32_t getBytesPerSample() const override;
 
+    // #137 — drop any backlog accumulated in the local monitor playback so it
+    // snaps back to live (mirrors AudioCapturePulse/CoreAudio resyncMonitor).
+    // No-op when the monitor isn't running.
+    void resyncMonitor();
+
 private:
     // WASAPI objects
     IMMDeviceEnumerator *m_deviceEnumerator;

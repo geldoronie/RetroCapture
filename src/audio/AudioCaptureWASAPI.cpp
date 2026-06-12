@@ -482,6 +482,18 @@ void AudioCaptureWASAPI::stopCapture()
     LOG_INFO("AudioCapture parado");
 }
 
+void AudioCaptureWASAPI::resyncMonitor()
+{
+    // #137 — flush the monitor render queue. Capture (48k) and the render
+    // device mix rate can drift slightly, letting the playback queue grow and
+    // the monitor lag; dropping the backlog snaps it back to live.
+    if (m_monitorActive && m_monitor)
+    {
+        m_monitor->flush();
+        LOG_INFO("Audio monitor resynced (backlog dropped)");
+    }
+}
+
 bool AudioCaptureWASAPI::startCaptureThread()
 {
     if (m_captureThreadRunning)
