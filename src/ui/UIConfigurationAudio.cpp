@@ -9,6 +9,9 @@
 #ifdef __APPLE__
 #include "../audio/AudioCaptureCoreAudio.h"
 #endif
+#ifdef _WIN32
+#include "../audio/AudioCaptureWASAPI.h"
+#endif
 #include <imgui.h>
 #include <algorithm>
 
@@ -347,6 +350,15 @@ void UIConfigurationAudio::renderInputSourceSelection()
             if (auto *caCapture = dynamic_cast<AudioCaptureCoreAudio *>(m_audioCapture))
             {
                 caCapture->resyncMonitor();
+            }
+        }
+#endif
+#ifdef _WIN32
+        if (ImGui::Button("Resync monitor"))
+        {
+            if (auto *wasapiCapture = dynamic_cast<AudioCaptureWASAPI *>(m_audioCapture))
+            {
+                wasapiCapture->resyncMonitor();
             }
         }
 #endif

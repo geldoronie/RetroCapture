@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IAudioCapture.h"
+#include "AudioPlaybackWASAPI.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -53,6 +54,11 @@ public:
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
     uint32_t getBytesPerSample() const override;
 
+    // #137 — drop any backlog accumulated in the local monitor playback so it
+    // snaps back to live (mirrors AudioCapturePulse/CoreAudio resyncMonitor).
+    // No-op when the monitor isn't running.
+    void resyncMonitor();
+
 private:
     // WASAPI objects
     IMMDeviceEnumerator *m_deviceEnumerator;
@@ -66,6 +72,13 @@ private:
     uint32_t m_channels;
     uint32_t m_bytesPerSample;
     WAVEFORMATEX *m_waveFormat;
+
+    // #137 — WASAPI shared-mode mix format is almost always 32-bit IEEE
+    // float, not int16. The capture loop used to reinterpret the buffer as
+    // int16 unconditionally, which turned the card's audio into white noise.
+    // Track the real sample format so processAudioData converts correctly.
+    enum class SampleFormat { Pcm16, Pcm32, Float32, Unsupported };
+    SampleFormat m_sampleFormat = SampleFormat::Pcm16;
 
     // State
     bool m_isOpen;
@@ -85,6 +98,15 @@ private:
     std::atomic<bool> m_captureThreadRunning;
     std::thread m_captureThread;
 
+    // #137 — local monitor: play the captured audio out the default render
+    // endpoint so the operator hears the capture card live (mirrors the
+    // PulseAudio/CoreAudio monitor on the other platforms). Disabled for
+    // loopback/system-audio sources, which would feed back. Reuses the
+    // existing WASAPI render sink.
+    std::unique_ptr<AudioPlaybackWASAPI> m_monitor;
+    bool m_monitorActive = false;
+    std::vector<float> m_monitorScratch;
+
     // Helper methods
     bool initializeCOM();
     void shutdownCOM();
@@ -96,6 +118,9 @@ private:
     void captureThreadFunction();
     void processAudioData(BYTE *data, UINT32 framesAvailable);
     void convertToFloat(const int16_t *input, float *output, size_t samples);
+    // #137 — decode the WASAPI mix-format buffer to interleaved float per the
+    // detected m_sampleFormat. Returns the number of float samples written.
+    size_t decodeToFloat(const BYTE *data, UINT32 framesAvailable, std::vector<float> &out);
 };
 
 #endif // _WIN32
