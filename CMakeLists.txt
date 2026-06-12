@@ -1242,23 +1242,22 @@ if(PLATFORM_WINDOWS)
     set(CPACK_COMPONENT_SSL_DESCRIPTION "SSL certificates for HTTPS support")
     set(CPACK_COMPONENT_SSL_REQUIRED ON)
 
-    # Create Start Menu shortcuts (devem estar antes do include(CPack))
-    # The shortcut will automatically use the icon embedded in retrocapture.exe
-    # Windows extracts the icon from the executable automatically
+    # Start Menu + Desktop shortcuts (must be set before include(CPack)).
+    # #131 — the previous CreateShortCut used $START_MENU_FOLDER, but the
+    # CPack NSIS template's variable is $STARTMENU_FOLDER (no underscore in
+    # the middle); the wrong name expanded empty, so no Start Menu shortcut
+    # was created. Also add a Desktop shortcut ($DESKTOP is always valid).
+    # The shortcut icon comes from the icon embedded in retrocapture.exe.
+    # Kept in CREATE_ICONS_EXTRA (not EXTRA_INSTALL_COMMANDS) so it doesn't
+    # collide with the virtcam regsvr32 below (#133).
     set(CPACK_NSIS_CREATE_ICONS_EXTRA
-        "CreateShortCut '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+        "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
+        "CreateShortCut '$DESKTOP\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
     )
     set(CPACK_NSIS_DELETE_ICONS_EXTRA
-        "Delete '$SMPROGRAMS\\\\$START_MENU_FOLDER\\\\RetroCapture.lnk'"
+        "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\RetroCapture.lnk'"
+        "Delete '$DESKTOP\\\\RetroCapture.lnk'"
     )
-
-    # Create Desktop shortcut (optional)
-    # set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
-    # "CreateShortCut '$DESKTOP\\\\RetroCapture.lnk' '$INSTDIR\\\\bin\\\\retrocapture.exe'"
-    # )
-    # set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-    # "Delete '$DESKTOP\\\\RetroCapture.lnk'"
-    # )
 
     # #85 Phase 2 — register / unregister the DirectShow virtual
     # camera filter DLL post-install. NSIS runs elevated
