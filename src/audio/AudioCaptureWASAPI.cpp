@@ -5,6 +5,8 @@
 #include <audioclient.h>
 #include <endpointvolume.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <mmreg.h>
+#include <ksmedia.h>
 #include <algorithm>
 #include <cstring>
 #include <thread>
@@ -272,6 +274,33 @@ bool AudioCaptureWASAPI::initializeAudioClient()
     m_channels = m_waveFormat->nChannels;
     m_bytesPerSample = m_waveFormat->wBitsPerSample / 8;
 
+    // #137 — figure out the actual sample format. Shared-mode GetMixFormat
+    // almost always reports WAVE_FORMAT_EXTENSIBLE wrapping 32-bit IEEE float;
+    // the old code blindly read the buffer as int16 → white noise. Resolve
+    // the real tag (unwrapping EXTENSIBLE) so processAudioData converts right.
+    {
+        WORD tag = m_waveFormat->wFormatTag;
+        const WORD bits = m_waveFormat->wBitsPerSample;
+        if (tag == WAVE_FORMAT_EXTENSIBLE && m_waveFormat->cbSize >= 22)
+        {
+            // The EXTENSIBLE SubFormat GUID is {fmtTag-0000-0010-8000-00aa00389b71};
+            // its Data1 IS the underlying format tag. Compare that instead of the
+            // KSDATAFORMAT_SUBTYPE_* GUID symbols, which don't link under MinGW
+            // without initguid/ksuser.
+            const WAVEFORMATEXTENSIBLE *ext =
+                reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(m_waveFormat);
+            tag = static_cast<WORD>(ext->SubFormat.Data1);
+        }
+        if (tag == WAVE_FORMAT_IEEE_FLOAT && bits == 32)
+            m_sampleFormat = SampleFormat::Float32;
+        else if (tag == WAVE_FORMAT_PCM && bits == 16)
+            m_sampleFormat = SampleFormat::Pcm16;
+        else if (tag == WAVE_FORMAT_PCM && bits == 32)
+            m_sampleFormat = SampleFormat::Pcm32;
+        else
+            m_sampleFormat = SampleFormat::Unsupported;
+    }
+
     // IMPORTANTE: AUDCLNT_STREAMFLAGS_LOOPBACK só funciona com dispositivos de RENDERIZAÇÃO (eRender)
     // Não funciona com dispositivos de CAPTURA (eCapture)
     // Se m_useLoopback é true, o dispositivo deve ser de renderização (eRender) e podemos usar LOOPBACK
@@ -294,9 +323,14 @@ bool AudioCaptureWASAPI::initializeAudioClient()
         (void **)&m_captureClient);
     CHECK_HR(hr, "Failed to obter Capture Client");
 
+    const char *fmtName = (m_sampleFormat == SampleFormat::Float32) ? "float32" : (m_sampleFormat == SampleFormat::Pcm16) ? "pcm16"
+                                                                              : (m_sampleFormat == SampleFormat::Pcm32)   ? "pcm32"
+                                                                                                                          : "UNSUPPORTED";
     LOG_INFO("Audio Client inicializado: " + std::to_string(m_sampleRate) + "Hz, " +
              std::to_string(m_channels) + " canais, " +
-             std::to_string(m_bytesPerSample * 8) + " bits");
+             std::to_string(m_bytesPerSample * 8) + " bits, fmt=" + fmtName);
+    if (m_sampleFormat == SampleFormat::Unsupported)
+        LOG_WARN("WASAPI mix format not recognized — captured audio will be silenced to avoid noise");
 
     return true;
 }
@@ -396,6 +430,27 @@ bool AudioCaptureWASAPI::startCapture()
         return false;
     }
 
+    // #137 — local monitor. Play the captured audio out the default render
+    // endpoint so the operator hears the capture card live. Disabled for
+    // loopback/system-audio sources (capturing what's already playing would
+    // feed back). Non-fatal: monitoring failing must not stop capture.
+    m_monitorActive = false;
+    if (!m_useLoopback && m_sampleFormat != SampleFormat::Unsupported)
+    {
+        m_monitor = std::make_unique<AudioPlaybackWASAPI>();
+        if (m_monitor->open(m_sampleRate, m_channels))
+        {
+            m_monitorActive = true;
+            LOG_INFO("Audio monitor started: " + std::to_string(m_sampleRate) + "Hz, " +
+                     std::to_string(m_channels) + " ch");
+        }
+        else
+        {
+            LOG_WARN("Audio monitor unavailable (render endpoint open failed)");
+            m_monitor.reset();
+        }
+    }
+
     LOG_INFO("AudioCapture iniciado");
     return true;
 }
@@ -408,6 +463,15 @@ void AudioCaptureWASAPI::stopCapture()
     }
 
     stopCaptureThread();
+
+    // #137 — tear the monitor down first so it stops pulling from the
+    // (about-to-stop) capture and releases the render endpoint.
+    m_monitorActive = false;
+    if (m_monitor)
+    {
+        m_monitor->close();
+        m_monitor.reset();
+    }
 
     if (m_audioClient)
     {
@@ -492,6 +556,36 @@ void AudioCaptureWASAPI::captureThreadFunction()
     }
 }
 
+size_t AudioCaptureWASAPI::decodeToFloat(const BYTE *data, UINT32 framesAvailable, std::vector<float> &out)
+{
+    const size_t total = static_cast<size_t>(framesAvailable) * m_channels;
+    out.resize(total);
+    switch (m_sampleFormat)
+    {
+    case SampleFormat::Float32:
+        std::memcpy(out.data(), data, total * sizeof(float));
+        break;
+    case SampleFormat::Pcm16:
+    {
+        const int16_t *src = reinterpret_cast<const int16_t *>(data);
+        for (size_t i = 0; i < total; ++i)
+            out[i] = static_cast<float>(src[i]) / 32768.0f;
+        break;
+    }
+    case SampleFormat::Pcm32:
+    {
+        const int32_t *src = reinterpret_cast<const int32_t *>(data);
+        for (size_t i = 0; i < total; ++i)
+            out[i] = static_cast<float>(src[i]) / 2147483648.0f;
+        break;
+    }
+    default:
+        std::fill(out.begin(), out.end(), 0.0f); // silence, never noise
+        break;
+    }
+    return total;
+}
+
 void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable)
 {
     if (!data || framesAvailable == 0)
@@ -499,19 +593,32 @@ void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable)
         return;
     }
 
-    size_t samples = framesAvailable * m_channels;
-    const int16_t *sampleData = reinterpret_cast<const int16_t *>(data);
+    // #137 — decode the real mix format (usually 32-bit float) to interleaved
+    // float. The previous int16 reinterpret of a float buffer was the white
+    // noise. Reuse m_monitorScratch as the conversion buffer.
+    const size_t total = decodeToFloat(data, framesAvailable, m_monitorScratch);
+    const float *flt = m_monitorScratch.data();
 
+    // Local monitor — send the captured audio straight to the speakers so the
+    // operator can hear the capture card live (skipped for loopback sources).
+    if (m_monitorActive && m_monitor && m_monitor->isOpen())
+    {
+        m_monitor->submit(flt, framesAvailable, 0);
+    }
+
+    // Encode / stream path keeps the int16 buffer that getSamples() expects.
     {
         std::lock_guard<std::mutex> lock(m_bufferMutex);
         size_t oldSize = m_audioBuffer.size();
-        m_audioBuffer.resize(oldSize + samples);
-        std::memcpy(m_audioBuffer.data() + oldSize, sampleData, samples * sizeof(int16_t));
-    }
-
-    if (m_audioCallback)
-    {
-        m_audioCallback(sampleData, samples);
+        m_audioBuffer.resize(oldSize + total);
+        int16_t *dst = m_audioBuffer.data() + oldSize;
+        for (size_t i = 0; i < total; ++i)
+        {
+            float s = flt[i];
+            if (s > 1.0f) s = 1.0f;
+            else if (s < -1.0f) s = -1.0f;
+            dst[i] = static_cast<int16_t>(s * 32767.0f);
+        }
     }
 }
 
