@@ -8,7 +8,7 @@
 #endif
 #include "UIConfigurationRecording.h"
 #include "UIConfigurationWebPortal.h"
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 #  include "UIConfigurationAudio.h"
 #endif
 #include "UIInfoPanel.h"
@@ -292,7 +292,7 @@ bool UIManager::init(void *window)
 #endif
     m_recordingWindow   = std::make_unique<UIConfigurationRecording>(this);
     m_webPortalWindow   = std::make_unique<UIConfigurationWebPortal>(this);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
     m_audioWindow       = std::make_unique<UIConfigurationAudio>(this);
 #endif
     m_infoWindow        = std::make_unique<UIInfoPanel>(this);
@@ -624,7 +624,7 @@ void UIManager::render()
                 toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
 #endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
 #endif
             }
@@ -787,7 +787,7 @@ void UIManager::render()
 #endif
         // Recording window stays openable in client mode (#68).
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
 #endif
     }
@@ -803,7 +803,7 @@ void UIManager::render()
 #endif
     if (m_recordingWindow)   m_recordingWindow->render();
     if (m_webPortalWindow)   m_webPortalWindow->render();
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
     if (m_audioWindow)       m_audioWindow->render();
 #endif
     if (m_infoWindow)        m_infoWindow->render();
