@@ -362,6 +362,19 @@ void UIManager::shutdown()
         LOG_INFO("Old configuration file removed during shutdown: " + oldIniPath);
     }
 
+    // #132 — flush window positions/sizes now. ImGui only auto-saves the
+    // ini on a ~5 s timer during the frame loop (io.IniSavingRate), and
+    // DestroyContext does NOT save. So a window moved shortly before
+    // quitting — or a quit via the tray / window-close path on Windows —
+    // lost its layout. Force a save here while the context is still valid.
+    // The LOG also surfaces the exact path, which helps if the user-data
+    // dir turns out not to be writable on a given platform.
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().IniFilename)
+    {
+        ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
+        LOG_INFO(std::string("Saved ImGui layout to ") + ImGui::GetIO().IniFilename);
+    }
+
     ImGui_ImplOpenGL3_Shutdown();
 #ifdef USE_SDL2
     ImGui_ImplSDL2_Shutdown();
