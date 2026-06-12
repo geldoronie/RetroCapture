@@ -274,10 +274,11 @@ bool DSFrameGrabber::GetLatestFrame(uint8_t *buffer, size_t bufferSize, uint32_t
         return true; // Apenas verificar se há frame
     }
     
-    // Se for YUY2, retornar RGB convertido
-    if (IsEqualGUID(m_pixelFormat, MEDIASUBTYPE_YUY2) && !m_rgbBuffer.empty())
+    // #135 — return the unpacked RGB24 buffer for any format we converted
+    // (YUY2/UYVY/NV12/RGB32); fall back to the raw buffer for RGB24/unknown.
+    if (m_convertedToRGB && !m_rgbBuffer.empty())
     {
-        size_t rgbSize = width * height * 3;
+        size_t rgbSize = static_cast<size_t>(width) * height * 3;
         if (bufferSize >= rgbSize)
         {
             memcpy(buffer, m_rgbBuffer.data(), rgbSize);
@@ -285,7 +286,7 @@ bool DSFrameGrabber::GetLatestFrame(uint8_t *buffer, size_t bufferSize, uint32_t
         }
         return false;
     }
-    
+
     // Para outros formatos, retornar dados originais
     if (bufferSize >= m_frameBuffer.size())
     {
@@ -356,50 +357,66 @@ void DSFrameGrabber::ProcessSample(IMediaSample *pSample)
         
         // Armazenar formato de pixel
         m_pixelFormat = subtype;
-        
-        // Se for YUY2, converter para RGB
-        if (IsEqualGUID(subtype, MEDIASUBTYPE_YUY2) && width > 0 && height > 0)
+
+        // #135 — unpack whatever the device actually delivers into RGB24.
+        // The DS pin advertises RGB24/RGB32/YUY2/UYVY/NV12; previously only
+        // YUY2 was converted and everything else was copied raw but labeled
+        // RGB24 downstream, so NV12/UYVY/RGB32 devices rendered monochrome and
+        // tiled (e.g. NV12's luma-only plane read as RGB → ~3x horizontal
+        // repeat squeezed into the top third). Convert here so the consumer
+        // always gets clean RGB24.
+        const size_t rgbSize = static_cast<size_t>(width) * height * 3;
+        const bool haveDims = (width > 0 && height > 0);
+        m_convertedToRGB = false;
+
+        if (haveDims && IsEqualGUID(subtype, MEDIASUBTYPE_YUY2))
         {
-            size_t rgbSize = width * height * 3;
-            if (m_rgbBuffer.size() < rgbSize)
-            {
-                m_rgbBuffer.resize(rgbSize);
-            }
-            
-            // Armazenar dados YUY2 originais
-            if (m_frameBuffer.size() < static_cast<size_t>(dataLength))
-            {
-                m_frameBuffer.resize(dataLength);
-            }
-            memcpy(m_frameBuffer.data(), pData, dataLength);
-            
-            // Converter YUY2 para RGB
+            if (m_rgbBuffer.size() < rgbSize) m_rgbBuffer.resize(rgbSize);
             ConvertYUY2ToRGB(pData, dataLength, m_rgbBuffer.data(), width, height);
+            m_convertedToRGB = true;
             m_hasFrame = true;
         }
-        else if (IsEqualGUID(subtype, MEDIASUBTYPE_RGB24) || IsEqualGUID(subtype, MEDIASUBTYPE_RGB32))
+        else if (haveDims && IsEqualGUID(subtype, MEDIASUBTYPE_UYVY))
         {
-            // RGB - copiar diretamente
+            if (m_rgbBuffer.size() < rgbSize) m_rgbBuffer.resize(rgbSize);
+            ConvertUYVYToRGB(pData, dataLength, m_rgbBuffer.data(), width, height);
+            m_convertedToRGB = true;
+            m_hasFrame = true;
+        }
+        else if (haveDims && IsEqualGUID(subtype, MEDIASUBTYPE_NV12))
+        {
+            if (m_rgbBuffer.size() < rgbSize) m_rgbBuffer.resize(rgbSize);
+            ConvertNV12ToRGB(pData, dataLength, m_rgbBuffer.data(), width, height);
+            m_convertedToRGB = true;
+            m_hasFrame = true;
+        }
+        else if (haveDims && IsEqualGUID(subtype, MEDIASUBTYPE_RGB32))
+        {
+            // 32bpp BGRX → drop the 4th byte so the buffer matches the RGB24
+            // stride the consumer expects (otherwise a 4-vs-3 byte shear).
+            if (m_rgbBuffer.size() < rgbSize) m_rgbBuffer.resize(rgbSize);
+            ConvertRGB32ToRGB24(pData, dataLength, m_rgbBuffer.data(), width, height);
+            m_convertedToRGB = true;
+            m_hasFrame = true;
+        }
+        else if (IsEqualGUID(subtype, MEDIASUBTYPE_RGB24))
+        {
+            // Already RGB24 — copy raw.
             if (m_frameBuffer.size() < static_cast<size_t>(dataLength))
-            {
                 m_frameBuffer.resize(dataLength);
-            }
             memcpy(m_frameBuffer.data(), pData, dataLength);
             m_hasFrame = true;
         }
         else
         {
-            // Outro formato - copiar como está (pode não funcionar, mas vamos tentar)
+            // Unknown format — copy raw (best effort).
             if (m_frameBuffer.size() < static_cast<size_t>(dataLength))
-            {
                 m_frameBuffer.resize(dataLength);
-            }
             memcpy(m_frameBuffer.data(), pData, dataLength);
             m_hasFrame = true;
-            
             if (processCount <= 10)
             {
-                LOG_WARN("[DSFrameGrabber] Formato de pixel desconhecido: " + std::to_string(subtype.Data1) + 
+                LOG_WARN("[DSFrameGrabber] Formato de pixel desconhecido: " + std::to_string(subtype.Data1) +
                          " - copiando dados brutos (pode não funcionar)");
             }
         }
@@ -477,6 +494,72 @@ void DSFrameGrabber::ConvertYUY2ToRGB(const uint8_t *yuy2Data, size_t yuy2Size, 
                 rgbData[rgbIdx1 + 2] = static_cast<uint8_t>(B1);
             }
         }
+    }
+}
+
+// #135 — BT.601 limited-range YUV→RGB, shared by the converters below.
+static inline void rc_yuv601ToRgb(int Y, int U, int V, uint8_t *out)
+{
+    int C = Y - 16, D = U - 128, E = V - 128;
+    int R = (298 * C + 409 * E + 128) >> 8;
+    int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
+    int B = (298 * C + 516 * D + 128) >> 8;
+    out[0] = static_cast<uint8_t>(std::max(0, std::min(255, R)));
+    out[1] = static_cast<uint8_t>(std::max(0, std::min(255, G)));
+    out[2] = static_cast<uint8_t>(std::max(0, std::min(255, B)));
+}
+
+// UYVY: U0 Y0 V0 Y1 (2 pixels / 4 bytes) — byte order swapped vs YUY2.
+void DSFrameGrabber::ConvertUYVYToRGB(const uint8_t *uyvyData, size_t uyvySize, uint8_t *rgbData, uint32_t width, uint32_t height)
+{
+    if (!uyvyData || !rgbData || width == 0 || height == 0) return;
+    if (static_cast<size_t>(width) * height * 2 > uyvySize) return; // not enough data — leave as-is
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; x += 2)
+        {
+            const uint8_t *p = uyvyData + (static_cast<size_t>(y) * width + x) * 2;
+            int U = p[0], Y0 = p[1], V = p[2], Y1 = p[3];
+            rc_yuv601ToRgb(Y0, U, V, rgbData + (static_cast<size_t>(y) * width + x) * 3);
+            if (x + 1 < width)
+                rc_yuv601ToRgb(Y1, U, V, rgbData + (static_cast<size_t>(y) * width + x + 1) * 3);
+        }
+    }
+}
+
+// NV12: full-res Y plane (W*H) then interleaved U/V plane (W*H/2), 2x2 subsampled.
+void DSFrameGrabber::ConvertNV12ToRGB(const uint8_t *nv12Data, size_t nv12Size, uint8_t *rgbData, uint32_t width, uint32_t height)
+{
+    if (!nv12Data || !rgbData || width == 0 || height == 0) return;
+    const size_t ySize = static_cast<size_t>(width) * height;
+    if (ySize + ySize / 2 > nv12Size) return; // not enough data — leave as-is
+    const uint8_t *yPlane = nv12Data;
+    const uint8_t *uvPlane = nv12Data + ySize;
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        const size_t uvRow = static_cast<size_t>(y / 2) * width;
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            int Y = yPlane[static_cast<size_t>(y) * width + x];
+            const uint8_t *uv = uvPlane + uvRow + (x & ~1u);
+            rc_yuv601ToRgb(Y, uv[0], uv[1], rgbData + (static_cast<size_t>(y) * width + x) * 3);
+        }
+    }
+}
+
+// RGB32 (BGRX/BGRA, 4bpp) → RGB24 (3bpp): drop the 4th byte, keep BGR order
+// (DirectShow RGB is bottom-up BGR; downstream treats RGB24 the same way YUY2
+// output is treated, so byte order stays consistent with the existing path).
+void DSFrameGrabber::ConvertRGB32ToRGB24(const uint8_t *rgba, size_t rgbaSize, uint8_t *rgbData, uint32_t width, uint32_t height)
+{
+    if (!rgba || !rgbData || width == 0 || height == 0) return;
+    const size_t px = static_cast<size_t>(width) * height;
+    if (px * 4 > rgbaSize) return; // not enough data — leave as-is
+    for (size_t i = 0; i < px; ++i)
+    {
+        rgbData[i * 3 + 0] = rgba[i * 4 + 0];
+        rgbData[i * 3 + 1] = rgba[i * 4 + 1];
+        rgbData[i * 3 + 2] = rgba[i * 4 + 2];
     }
 }
 

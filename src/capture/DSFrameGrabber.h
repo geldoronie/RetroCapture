@@ -64,10 +64,19 @@ private:
     uint32_t m_height;
     bool m_hasFrame;
     GUID m_pixelFormat; // Formato de pixel atual (subtype)
-    
+    // #135 — true when the latest frame was converted into m_rgbBuffer (RGB24).
+    // GetLatestFrame returns m_rgbBuffer when set, m_frameBuffer (raw) otherwise.
+    // Without this only YUY2 was unpacked; NV12/UYVY/RGB32 devices were copied
+    // raw but mislabeled RGB24 downstream (monochrome + 3x horizontal tiling).
+    bool m_convertedToRGB = false;
+
     // Helper
     void UpdateDimensionsFromMediaType(const AM_MEDIA_TYPE *pmt);
     void ConvertYUY2ToRGB(const uint8_t *yuy2Data, size_t yuy2Size, uint8_t *rgbData, uint32_t width, uint32_t height);
+    // #135 — additional capture formats the DS pin advertises.
+    void ConvertUYVYToRGB(const uint8_t *uyvyData, size_t uyvySize, uint8_t *rgbData, uint32_t width, uint32_t height);
+    void ConvertNV12ToRGB(const uint8_t *nv12Data, size_t nv12Size, uint8_t *rgbData, uint32_t width, uint32_t height);
+    void ConvertRGB32ToRGB24(const uint8_t *rgba, size_t rgbaSize, uint8_t *rgbData, uint32_t width, uint32_t height);
 };
 
 // Forward declaration for pin class
