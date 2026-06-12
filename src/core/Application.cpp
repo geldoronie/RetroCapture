@@ -5032,7 +5032,24 @@ void Application::run()
                             // Decidir entre PBO async e leitura síncrona ANTES de tocar no FBO.
                             // O PBO precisa do FBO bound durante startAsyncRead; o sync precisa
                             // do FBO bound durante glReadPixels. Os dois caminhos divergem aqui.
-                            bool useAsyncPBO = (m_pboManager &&
+                            //
+                            // #129 — on Windows the on-screen render is correct but the
+                            // streamed/recorded frames come out black: the async-PBO
+                            // readback (FBO -> PBO -> getReadData) returns zeros on the
+                            // Windows GL driver while the synchronous glReadPixels path
+                            // works. Force the sync path on Windows. Can be overridden
+                            // either way with RETROCAPTURE_PBO=1/0 for A/B testing.
+                            bool allowPBO;
+                            {
+                                const char *pboEnv = std::getenv("RETROCAPTURE_PBO");
+                                if (pboEnv)      allowPBO = (pboEnv[0] == '1');
+#ifdef _WIN32
+                                else             allowPBO = false; // sync readback on Windows (#129)
+#else
+                                else             allowPBO = true;
+#endif
+                            }
+                            bool useAsyncPBO = (allowPBO && m_pboManager &&
                                                 m_pboManager->init(textureWidth, textureHeight, readFormat) &&
                                                 m_pboManager->isInitialized());
 
