@@ -913,17 +913,11 @@ bool VideoCaptureDS::setFormat(uint32_t width, uint32_t height, uint32_t pixelFo
         m_height = height;
         m_pixelFormat = pixelFormat;
 
-        // Create dummy buffer (RGB24: 3 bytes per pixel)
-        // Preencher com verde (0, 255, 0) para depuração
+        // Dummy "no signal" buffer (RGB24). Calm neutral dark gray —
+        // the previous bright-green debug fill read like an error when
+        // no device was present (#134).
         size_t frameSize = width * height * 3;
-        m_dummyFrameBuffer.resize(frameSize);
-        // Preencher com verde: RGB(0, 255, 0)
-        for (size_t i = 0; i < frameSize; i += 3)
-        {
-            m_dummyFrameBuffer[i] = 0;     // R
-            m_dummyFrameBuffer[i + 1] = 255; // G
-            m_dummyFrameBuffer[i + 2] = 0;   // B
-        }
+        m_dummyFrameBuffer.assign(frameSize, 0x18); // R=G=B=24 → dark gray
 
         LOG_INFO("Formato dummy definido: " + std::to_string(m_width) + "x" + std::to_string(m_height));
         return true;
@@ -978,15 +972,9 @@ bool VideoCaptureDS::startCapture()
 
         if (m_dummyFrameBuffer.empty() && m_width > 0 && m_height > 0)
         {
-            size_t frameSize = m_width * m_height * 3; // RGB24: 3 bytes per pixel
-            m_dummyFrameBuffer.resize(frameSize);
-            // Preencher com verde: RGB(0, 255, 0) para depuração
-            for (size_t i = 0; i < frameSize; i += 3)
-            {
-                m_dummyFrameBuffer[i] = 0;     // R
-                m_dummyFrameBuffer[i + 1] = 255; // G
-                m_dummyFrameBuffer[i + 2] = 0;   // B
-            }
+            size_t frameSize = m_width * m_height * 3; // RGB24
+            // Calm neutral dark gray "no signal" fill (#134), not green.
+            m_dummyFrameBuffer.assign(frameSize, 0x18); // R=G=B=24 → dark gray
         }
 
         m_streaming = true;

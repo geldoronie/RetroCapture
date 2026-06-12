@@ -71,6 +71,26 @@ void VideoCapture::close()
     }
 }
 
+namespace
+{
+    // #134 — fill a YUYV (YUY2) dummy buffer with a calm neutral dark-gray
+    // "no signal" frame. All-zero bytes look black in RGB but in YUYV the
+    // chroma bytes default to 0 (= -128 after the 128 bias), which the
+    // YUYV→RGB conversion turns into bright GREEN — that read like an
+    // error/glitch when no device was present. Set Y to a dark level and
+    // U/V to neutral 128. Byte order per 2 px: Y0 U Y1 V.
+    void fillDummyNoSignalYUYV(std::vector<uint8_t> &buf)
+    {
+        for (size_t i = 0; i + 3 < buf.size(); i += 4)
+        {
+            buf[i]     = 0x18; // Y0 — dark gray
+            buf[i + 1] = 0x80; // U  — neutral (128)
+            buf[i + 2] = 0x18; // Y1
+            buf[i + 3] = 0x80; // V  — neutral (128)
+        }
+    }
+} // namespace
+
 bool VideoCapture::setFormat(uint32_t width, uint32_t height, uint32_t pixelFormat)
 {
     // Em modo dummy, apenas definir dimensões sem abrir dispositivo
@@ -82,7 +102,8 @@ bool VideoCapture::setFormat(uint32_t width, uint32_t height, uint32_t pixelForm
 
         // Criar buffer dummy para frame preto (YUYV: 2 bytes por pixel)
         size_t frameSize = width * height * 2;
-        m_dummyFrameBuffer.resize(frameSize, 0); // Preencher com zeros (preto em YUYV)
+        m_dummyFrameBuffer.resize(frameSize);
+        fillDummyNoSignalYUYV(m_dummyFrameBuffer); // neutral dark "no signal", not green (#134)
 
         LOG_INFO("Formato dummy definido: " + std::to_string(m_width) + "x" +
                  std::to_string(m_height) + " (format: 0x" +
@@ -284,7 +305,8 @@ bool VideoCapture::startCapture()
         if (m_dummyFrameBuffer.empty() && m_width > 0 && m_height > 0)
         {
             size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
-            m_dummyFrameBuffer.resize(frameSize, 0);   // Preencher com zeros (preto)
+            m_dummyFrameBuffer.resize(frameSize);
+            fillDummyNoSignalYUYV(m_dummyFrameBuffer); // neutral dark "no signal", not green (#134)
         }
 
         m_streaming = true;
@@ -418,7 +440,8 @@ bool VideoCapture::captureFrame(Frame &frame)
             if (m_width > 0 && m_height > 0)
             {
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
-                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_dummyFrameBuffer.resize(frameSize);
+                fillDummyNoSignalYUYV(m_dummyFrameBuffer); // neutral dark "no signal", not green (#134)
                 m_streaming = true;
                 LOG_INFO("Dummy mode activated automatically after device disconnect");
             }
@@ -476,7 +499,8 @@ bool VideoCapture::captureFrame(Frame &frame)
             if (m_width > 0 && m_height > 0)
             {
                 size_t frameSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel
-                m_dummyFrameBuffer.resize(frameSize, 0);
+                m_dummyFrameBuffer.resize(frameSize);
+                fillDummyNoSignalYUYV(m_dummyFrameBuffer); // neutral dark "no signal", not green (#134)
                 m_streaming = true;
                 LOG_INFO("Dummy mode activated automatically after device disconnect");
             }
