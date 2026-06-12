@@ -45,6 +45,22 @@
 #ifdef ENABLE_HTTPS
   #include <openssl/ssl.h>
   #include <openssl/err.h>
+  #include <openssl/x509.h>
+  #ifdef _WIN32
+    // #130 — Windows has no /etc/ssl CA path, so we pull the OS trust
+    // store into OpenSSL (see loadSystemCaBundle). crypt32 is already
+    // linked on the Windows build. wincrypt.h #defines a handful of
+    // identifiers (X509_NAME, X509_EXTENSIONS, OCSP_*, PKCS7_*) that
+    // collide with OpenSSL's; we only use X509 / d2i_X509 / X509_STORE*
+    // (not clobbered), but undef the macros so any later OpenSSL use in
+    // this header stays safe.
+    #include <wincrypt.h>
+    #undef X509_NAME
+    #undef X509_EXTENSIONS
+    #undef PKCS7_SIGNER_INFO
+    #undef OCSP_REQUEST
+    #undef OCSP_RESPONSE
+  #endif
 #endif
 
 namespace httpinternal
@@ -206,6 +222,41 @@ namespace httpinternal
         {
             if (SSL_CTX_load_verify_locations(ctx, nullptr, envDir) == 1) return true;
         }
+
+#ifdef _WIN32
+        // #130 — Windows ships no /etc/ssl bundle and MXE/MinGW OpenSSL
+        // has no compiled-in CA path, so every HTTPS verify failed (the
+        // directory listing, /raw over TLS, the WSS chat). Pull the
+        // trusted roots straight from the OS certificate store (ROOT +
+        // CA) into OpenSSL's X509_STORE — always current, nothing to
+        // bundle or keep fresh.
+        {
+            X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+            bool anyLoaded = false;
+            const wchar_t *sysStores[] = { L"ROOT", L"CA" };
+            for (const wchar_t *storeName : sysStores)
+            {
+                HCERTSTORE hStore = CertOpenSystemStoreW(0, storeName);
+                if (!hStore) continue;
+                PCCERT_CONTEXT pCtx = nullptr;
+                while ((pCtx = CertEnumCertificatesInStore(hStore, pCtx)) != nullptr)
+                {
+                    if (!(pCtx->dwCertEncodingType & X509_ASN_ENCODING)) continue;
+                    const unsigned char *der = pCtx->pbCertEncoded;
+                    X509 *x = d2i_X509(nullptr, &der, static_cast<long>(pCtx->cbCertEncoded));
+                    if (x)
+                    {
+                        if (store && X509_STORE_add_cert(store, x) == 1) anyLoaded = true;
+                        X509_free(x);
+                    }
+                }
+                CertCloseStore(hStore, 0);
+            }
+            if (anyLoaded) return true;
+            // else fall through — unlikely to find anything below on
+            // Windows, but harmless and lets SSL_CERT_FILE still work.
+        }
+#endif
 
         // Ordered by hit-rate across distros we ship for.
         static const char *kCandidateFiles[] = {
