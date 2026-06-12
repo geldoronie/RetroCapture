@@ -19,6 +19,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1-alpha] - 2026-06-12
+
+Fourteenth alpha release. A focused **Windows-hardening** pass: every Windows
+bug reported against 0.8.0-alpha is fixed, so capture, streaming, recording,
+audio and the virtual camera all work on a fresh Windows install. No new
+features — stability and platform-correctness only.
+
+### Fixed
+
+- **Windows stream/recording rendered a solid gray screen** (#129). The
+  FFmpeg 4.1 libx264/libx265 build in the MXE toolchain corrupts the stream to
+  empty frames under both ABR (`bit_rate`) and VBV rate control — VBV
+  underflow a few seconds in turned the picture to gray. The Windows software
+  encoder now uses pure constant-quality CRF (no ABR/VBV), which the bisection
+  proved encodes correctly. Other platforms keep ABR.
+- **Windows captured the wrong audio as white noise** (#137). The audio
+  configuration window was never shown on Windows (so the capture card's audio
+  endpoint couldn't be selected), and the WASAPI 32-bit-float mix format was
+  read as int16 — white noise even with the right device. The window is now
+  available, the float format is decoded correctly, and a **local audio
+  monitor** (with a "Resync monitor" button) lets the operator hear the capture
+  live, mirroring Linux/macOS.
+- **Monochrome, horizontally-tiled capture on some devices** (#135). Cards
+  delivering NV12/UYVY/RGB32 (instead of the requested RGB24) were mislabeled
+  and rendered as grayscale repeated ~3× across the top of the window. The
+  DirectShow grabber now converts NV12, UYVY and RGB32 to RGB alongside the
+  existing YUY2 path.
+- **Virtual camera never appeared in OBS/Zoom/Teams** (#133). The DirectShow
+  filter registered only under the legacy filter category, never under
+  `CLSID_VideoInputDeviceCategory`, so capture apps didn't list it. It is now
+  registered (and unregistered) under the video-input category.
+- **TLS errors listing the public stream directory on Windows** (#130) — load
+  the Windows OS trust store (ROOT + CA) into OpenSSL.
+- **Installer created non-working shortcuts** (#131) — fixed the Start Menu
+  entry and added a Desktop shortcut.
+- **ImGui window positions weren't kept across runs** (#132) — persist the
+  layout on shutdown.
+
+### Changed
+
+- The "no device" capture placeholder is now a calm dark gray instead of a
+  jarring bright green (#134).
+
+---
+
 ## [0.8.0-alpha] - 2026-06-10
 
 Thirteenth alpha release. A platform-reach release: the first working
