@@ -1223,6 +1223,40 @@ bool VideoCaptureDS::readSample(Frame &frame)
         {
             m_width = pvi->bmiHeader.biWidth;
             m_height = abs(pvi->bmiHeader.biHeight); // Height pode ser negativo
+
+            // #129 — log the format the device ACTUALLY delivers (once).
+            // The grabber requests RGB24, but some capture devices ignore
+            // that and deliver YUY2/NV12; we then mislabel the buffer as
+            // RGB24 and the picture renders as gray noise. Surface the real
+            // format so a user's log pins this down.
+            static bool s_loggedFmt = false;
+            if (!s_loggedFmt)
+            {
+                s_loggedFmt = true;
+                DWORD comp = pvi->bmiHeader.biCompression;
+                char fourcc[5] = {0};
+                if (comp == BI_RGB)
+                {
+                    std::strncpy(fourcc, "RGB", 4);
+                }
+                else
+                {
+                    fourcc[0] = static_cast<char>(comp & 0xFF);
+                    fourcc[1] = static_cast<char>((comp >> 8) & 0xFF);
+                    fourcc[2] = static_cast<char>((comp >> 16) & 0xFF);
+                    fourcc[3] = static_cast<char>((comp >> 24) & 0xFF);
+                }
+                LOG_INFO("DirectShow negotiated format: " +
+                         std::to_string(static_cast<int>(pvi->bmiHeader.biBitCount)) +
+                         "bpp compression='" + fourcc + "' " +
+                         std::to_string(m_width) + "x" + std::to_string(m_height));
+                if (!(pvi->bmiHeader.biBitCount == 24 && comp == BI_RGB))
+                {
+                    LOG_WARN("DirectShow: device did NOT deliver RGB24 — frames are "
+                             "mislabeled RGB24 and will render as gray noise (#129). "
+                             "A format conversion (YUY2/NV12 -> RGB) is needed.");
+                }
+            }
         }
         FreeMediaType(mt);
     }
