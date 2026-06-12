@@ -75,21 +75,95 @@ int g_cTemplates = sizeof(g_Templates) / sizeof(g_Templates[0]);
 // --------------------------------------------------------------------
 // DllRegisterServer / DllUnregisterServer
 //
-// AMovieDllRegisterServer2 walks g_Templates and writes the standard
-// HKCR\CLSID keys; it also calls IFilterMapper2 to register us under
-// CLSID_VideoInputDeviceCategory (because sudFilter.dwMerit is
-// MERIT_DO_NOT_USE — graph builder ignores, but the category entry
-// still lands so OBS et al. see the camera in their device list).
+// AMovieDllRegisterServer2 writes the HKCR\CLSID\InprocServer32 keys
+// (so the filter can be CoCreateInstance'd) and registers it with
+// IFilterMapper2 — but under the DEFAULT category, which resolves to
+// CLSID_LegacyAmFilterCategory (it passes category = 0, see
+// third_party/baseclasses/dllsetup.cpp). It does NOT touch
+// CLSID_VideoInputDeviceCategory, so OBS/Zoom/Teams — which enumerate
+// the video-input category — never list the camera (#133). The filter
+// merit has nothing to do with the category; the old comment here that
+// claimed AMovieDllRegisterServer2 handled the category was wrong.
+//
+// So after the standard registration we ALSO register the filter under
+// CLSID_VideoInputDeviceCategory ourselves — that's what makes it show
+// up as a webcam. DllUnregisterServer removes that entry first, then
+// undoes the standard registration.
 // --------------------------------------------------------------------
+
+namespace
+{
+    // Register/unregister the filter under the video-input (camera)
+    // category via IFilterMapper2 so capture apps enumerate it.
+    HRESULT RegisterCameraCategory(BOOL bRegister)
+    {
+        // regsvr32 / AMovieDllRegisterServer2 run with COM up, but init
+        // defensively (refcounted) in case we're invoked standalone.
+        const bool comInited = SUCCEEDED(CoInitialize(nullptr));
+
+        IFilterMapper2 *mapper = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_FilterMapper2, nullptr,
+                                      CLSCTX_INPROC_SERVER, IID_IFilterMapper2,
+                                      reinterpret_cast<void **>(&mapper));
+        if (SUCCEEDED(hr) && mapper)
+        {
+            if (bRegister)
+            {
+                REGPINTYPES rpt = {&MEDIATYPE_Video, &MEDIASUBTYPE_RGB24};
+                REGFILTERPINS rfp = {};
+                rfp.strName      = const_cast<LPWSTR>(L"Output");
+                rfp.bRendered    = FALSE;
+                rfp.bOutput      = TRUE;
+                rfp.bZero        = FALSE;
+                rfp.bMany        = FALSE;
+                rfp.clsConnectsToFilter = &CLSID_NULL;
+                rfp.strConnectsToPin    = nullptr;
+                rfp.nMediaTypes  = 1;
+                rfp.lpMediaType  = &rpt;
+
+                REGFILTER2 rf2 = {};
+                rf2.dwVersion = 1;
+                rf2.dwMerit   = MERIT_DO_NOT_USE;
+                rf2.cPins     = 1;
+                rf2.rgPins    = &rfp;
+
+                hr = mapper->RegisterFilter(CLSID_RetroCaptureVCam,
+                                            kFilterFriendlyName,
+                                            nullptr, // create the moniker
+                                            &CLSID_VideoInputDeviceCategory,
+                                            nullptr, // instance = friendly name
+                                            &rf2);
+            }
+            else
+            {
+                hr = mapper->UnregisterFilter(&CLSID_VideoInputDeviceCategory,
+                                              nullptr, CLSID_RetroCaptureVCam);
+                if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
+                    hr = S_OK; // not registered → fine on uninstall
+            }
+            mapper->Release();
+        }
+
+        if (comInited)
+            CoUninitialize();
+        return hr;
+    }
+}
 
 STDAPI DllRegisterServer()
 {
-    return AMovieDllRegisterServer2(TRUE);
+    HRESULT hr = AMovieDllRegisterServer2(TRUE);
+    if (FAILED(hr))
+        return hr;
+    return RegisterCameraCategory(TRUE);
 }
 
 STDAPI DllUnregisterServer()
 {
-    return AMovieDllRegisterServer2(FALSE);
+    // Remove the camera-category entry first, then the CLSID keys.
+    HRESULT hrCat = RegisterCameraCategory(FALSE);
+    HRESULT hr    = AMovieDllRegisterServer2(FALSE);
+    return FAILED(hr) ? hr : hrCat;
 }
 
 // --------------------------------------------------------------------
