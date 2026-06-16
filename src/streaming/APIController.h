@@ -132,6 +132,17 @@ private:
 
     // Endpoints GET (leitura)
     bool handleGET(int clientFd, const std::string &path, const std::string &request);
+    // #155 — handleGET dispatch split into per-domain sub-routers; each returns true if it
+    // matched (setting `result` to the handler's return), false to fall through to the next.
+    bool routeGETSystem(int clientFd, const std::string &path, const std::string &request, bool &result);
+    bool routeGETSource(int clientFd, const std::string &path, bool &result);
+    bool routeGETShader(int clientFd, const std::string &path, bool &result);
+    bool routeGETCapture(int clientFd, const std::string &path, bool &result);
+    bool routeGETStreaming(int clientFd, const std::string &path, bool &result);
+    bool routeGETRecording(int clientFd, const std::string &path, const std::string &request, bool &result);
+    bool routeGETDevices(int clientFd, const std::string &path, bool &result);
+    bool routeGETPresets(int clientFd, const std::string &path, bool &result);
+    bool routeGETAudio(int clientFd, const std::string &path, bool &result);
     bool handleGETSource(int clientFd);
     bool handleGETShader(int clientFd);
     bool handleGETShaderList(int clientFd);
@@ -191,6 +202,15 @@ private:
 
     // Endpoints POST/PUT (escrita)
     bool handlePOST(int clientFd, const std::string &path, const std::string &body);
+    // #155 — handlePOST dispatch split into per-domain sub-routers (same matched/result contract).
+    bool routePOSTSource(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTShader(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTCapture(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTStreaming(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTRecording(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTDevices(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTPresets(int clientFd, const std::string &path, const std::string &body, bool &result);
+    bool routePOSTAudio(int clientFd, const std::string &path, const std::string &body, bool &result);
     bool handlePUT(int clientFd, const std::string &path, const std::string &body);
     bool handleSetSource(int clientFd, const std::string &body);
     bool handleSetShader(int clientFd, const std::string &body);
