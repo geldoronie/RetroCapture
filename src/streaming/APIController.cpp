@@ -465,61 +465,119 @@ bool APIController::sendAll(int clientFd, const char *data, size_t size) const
     return true;
 }
 
-bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
+bool APIController::routeGETSystem(int clientFd, const std::string &path, const std::string &request, bool &result)
 {
     if (path == "/meta")
     {
-        return handleGETMeta(clientFd, request);
+        result = handleGETMeta(clientFd, request);
+        return true;
     }
-    else if (path == "/api/v1/source")
+    if (path == "/api/v1/preferences")
     {
-        return handleGETSource(clientFd);
+        result = handleGETPreferences(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/preferences")
+    if (path == "/api/v1/status")
     {
-        return handleGETPreferences(clientFd);
+        result = handleGETStatus(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/shader")
+    if (path == "/api/v1/platform")
     {
-        return handleGETShader(clientFd);
+        result = handleGETPlatform(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/shader/list")
+    return false;
+}
+
+bool APIController::routeGETSource(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/source")
     {
-        return handleGETShaderList(clientFd);
+        result = handleGETSource(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/shader/parameters")
+    if (path == "/api/v1/source/overscan")
     {
-        return handleGETShaderParameters(clientFd);
+        result = handleGETSourceOverscan(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/capture/resolution")
+    return false;
+}
+
+bool APIController::routeGETShader(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/shader")
     {
-        return handleGETCaptureResolution(clientFd);
+        result = handleGETShader(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/capture/fps")
+    if (path == "/api/v1/shader/list")
     {
-        return handleGETCaptureFPS(clientFd);
+        result = handleGETShaderList(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/image/settings")
+    if (path == "/api/v1/shader/parameters")
     {
-        return handleGETImageSettings(clientFd);
+        result = handleGETShaderParameters(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/streaming/settings")
+    return false;
+}
+
+bool APIController::routeGETCapture(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/capture/resolution")
     {
-        return handleGETStreamingSettings(clientFd);
+        result = handleGETCaptureResolution(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/recording/settings")
+    if (path == "/api/v1/capture/fps")
     {
-        return handleGETRecordingSettings(clientFd);
+        result = handleGETCaptureFPS(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/recording/status")
+    if (path == "/api/v1/image/settings")
     {
-        return handleGETRecordingStatus(clientFd);
+        result = handleGETImageSettings(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/recordings")
+    return false;
+}
+
+bool APIController::routeGETStreaming(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/streaming/settings")
     {
-        return handleGETRecordings(clientFd);
+        result = handleGETStreamingSettings(clientFd);
+        return true;
     }
-    else if (path.find("/api/v1/recordings/") == 0)
+    if (path == "/api/v1/streaming/profiles")
+    {
+        result = handleGETStreamingProfiles(clientFd);
+        return true;
+    }
+    return false;
+}
+
+bool APIController::routeGETRecording(int clientFd, const std::string &path, const std::string &request, bool &result)
+{
+    if (path == "/api/v1/recording/settings")
+    {
+        result = handleGETRecordingSettings(clientFd);
+        return true;
+    }
+    if (path == "/api/v1/recording/status")
+    {
+        result = handleGETRecordingStatus(clientFd);
+        return true;
+    }
+    if (path == "/api/v1/recordings")
+    {
+        result = handleGETRecordings(clientFd);
+        return true;
+    }
+    if (path.find("/api/v1/recordings/") == 0)
     {
         std::string remaining = path.substr(19); // Length of "/api/v1/recordings/"
         
@@ -531,7 +589,8 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
             std::string recordingId = remaining.substr(0, filePos);
             if (!recordingId.empty())
             {
-                return handleGETRecordingFile(clientFd, recordingId, request);
+                result = handleGETRecordingFile(clientFd, recordingId, request);
+                return true;
             }
         }
         // Check if it's /api/v1/recordings/{id}/thumbnail
@@ -541,155 +600,264 @@ bool APIController::handleGET(int clientFd, const std::string &path, const std::
             std::string recordingId = remaining.substr(0, thumbPos);
             if (!recordingId.empty())
             {
-                return handleGETRecordingThumbnail(clientFd, recordingId);
+                result = handleGETRecordingThumbnail(clientFd, recordingId);
+                return true;
             }
         }
         else if (!remaining.empty())
         {
             // Extract recording ID from path: /api/v1/recordings/{id}
-            return handleGETRecording(clientFd, remaining);
+            result = handleGETRecording(clientFd, remaining);
+            return true;
         }
     }
-    else if (path == "/api/v1/v4l2/devices")
+    if (path == "/api/v1/recording/profiles")
     {
-        return handleGETV4L2Devices(clientFd);
+        result = handleGETRecordingProfiles(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/v4l2/devices/refresh")
+    return false;
+}
+
+bool APIController::routeGETDevices(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/v4l2/devices")
     {
-        return handleRefreshV4L2Devices(clientFd);
+        result = handleGETV4L2Devices(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/v4l2/controls")
+    if (path == "/api/v1/v4l2/devices/refresh")
     {
-        return handleGETV4L2Controls(clientFd);
+        result = handleRefreshV4L2Devices(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/ds/devices")
+    if (path == "/api/v1/v4l2/controls")
     {
-        return handleGETDSDevices(clientFd);
+        result = handleGETV4L2Controls(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/ds/devices/refresh")
+    if (path == "/api/v1/ds/devices")
     {
-        return handleRefreshDSDevices(clientFd);
+        result = handleGETDSDevices(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/status")
+    if (path == "/api/v1/ds/devices/refresh")
     {
-        return handleGETStatus(clientFd);
+        result = handleRefreshDSDevices(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/platform")
+#ifdef __APPLE__
+    if (path == "/api/v1/avfoundation/devices")
     {
-        return handleGETPlatform(clientFd);
+        result = handleGETAVFoundationDevices(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/presets")
+    if (path.rfind("/api/v1/avfoundation/formats/", 0) == 0)
     {
-        return handleGETPresets(clientFd);
+        return handleGETAVFoundationFormats(clientFd,
+                path.substr(std::string("/api/v1/avfoundation/formats/").size()));
     }
-    else if (path.find("/api/v1/presets/") == 0)
+    if (path == "/api/v1/avfoundation/audio-devices")
+    {
+        result = handleGETAVFoundationAudioDevices(clientFd);
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool APIController::routeGETPresets(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/presets")
+    {
+        result = handleGETPresets(clientFd);
+        return true;
+    }
+    if (path.find("/api/v1/presets/") == 0)
     {
         // Extract preset name from path: /api/v1/presets/{name}
         std::string presetName = path.substr(16); // Length of "/api/v1/presets/"
         if (!presetName.empty())
         {
-            return handleGETPreset(clientFd, presetName);
+            result = handleGETPreset(clientFd, presetName);
+            return true;
         }
     }
-    else if (path == "/api/v1/audio/input-sources")
-    {
-        return handleGETAudioInputSources(clientFd);
-    }
-    else if (path == "/api/v1/audio/status")
-    {
-        return handleGETAudioStatus(clientFd);
-    }
-#ifdef __APPLE__
-    else if (path == "/api/v1/avfoundation/devices")
-    {
-        return handleGETAVFoundationDevices(clientFd);
-    }
-    else if (path.rfind("/api/v1/avfoundation/formats/", 0) == 0)
-    {
-        return handleGETAVFoundationFormats(clientFd,
-                path.substr(std::string("/api/v1/avfoundation/formats/").size()));
-    }
-    else if (path == "/api/v1/avfoundation/audio-devices")
-    {
-        return handleGETAVFoundationAudioDevices(clientFd);
-    }
-#endif
-    else if (path == "/api/v1/recording/profiles")
-    {
-        return handleGETRecordingProfiles(clientFd);
-    }
-    else if (path == "/api/v1/streaming/profiles")
-    {
-        return handleGETStreamingProfiles(clientFd);
-    }
-    else if (path == "/api/v1/source/overscan")
-    {
-        return handleGETSourceOverscan(clientFd);
-    }
-
-    send404(clientFd);
-    return true;
+    return false;
 }
 
-bool APIController::handlePOST(int clientFd, const std::string &path, const std::string &body)
+bool APIController::routeGETAudio(int clientFd, const std::string &path, bool &result)
+{
+    if (path == "/api/v1/audio/input-sources")
+    {
+        result = handleGETAudioInputSources(clientFd);
+        return true;
+    }
+    if (path == "/api/v1/audio/status")
+    {
+        result = handleGETAudioStatus(clientFd);
+        return true;
+    }
+    return false;
+}
+
+bool APIController::routePOSTSource(int clientFd, const std::string &path, const std::string &body, bool &result)
 {
     if (path == "/api/v1/source")
     {
-        return handleSetSource(clientFd, body);
+        result = handleSetSource(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/shader")
+    if (path == "/api/v1/source/overscan")
     {
-        return handleSetShader(clientFd, body);
+        result = handleSetSourceOverscan(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/shader/parameter")
+    return false;
+}
+
+bool APIController::routePOSTShader(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/shader")
     {
-        return handleSetShaderParameter(clientFd, body);
+        result = handleSetShader(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/capture/resolution")
+    if (path == "/api/v1/shader/parameter")
     {
-        return handleSetCaptureResolution(clientFd, body);
+        result = handleSetShaderParameter(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/capture/fps")
+    return false;
+}
+
+bool APIController::routePOSTCapture(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/capture/resolution")
     {
-        return handleSetCaptureFPS(clientFd, body);
+        result = handleSetCaptureResolution(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/image/settings")
+    if (path == "/api/v1/capture/fps")
     {
-        return handleSetImageSettings(clientFd, body);
+        result = handleSetCaptureFPS(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/streaming/settings")
+    if (path == "/api/v1/image/settings")
     {
-        return handleSetStreamingSettings(clientFd, body);
+        result = handleSetImageSettings(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/streaming/control")
+    return false;
+}
+
+bool APIController::routePOSTStreaming(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/streaming/settings")
     {
-        return handleSetStreamingControl(clientFd, body);
+        result = handleSetStreamingSettings(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/recording/settings")
+    if (path == "/api/v1/streaming/control")
     {
-        return handleSetRecordingSettings(clientFd, body);
+        result = handleSetStreamingControl(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/recording/control")
+    if (path == "/api/v1/streaming/profiles")
     {
-        return handleSetRecordingControl(clientFd, body);
+        result = handleSaveStreamingProfile(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/v4l2/control")
+    if (path.find("/api/v1/streaming/profiles/") == 0 && path.find("/apply") != std::string::npos)
     {
-        return handleSetV4L2Control(clientFd, body);
+        // /api/v1/streaming/profiles/{name}/apply
+        constexpr size_t prefixLen = 27; // length of "/api/v1/streaming/profiles/"
+        size_t applyPos = path.find("/apply");
+        if (applyPos != std::string::npos && applyPos > prefixLen)
+        {
+            std::string name = path.substr(prefixLen, applyPos - prefixLen);
+            if (!name.empty()) return handleApplyStreamingProfile(clientFd, name);
+        }
     }
-    else if (path == "/api/v1/v4l2/device")
+    return false;
+}
+
+bool APIController::routePOSTRecording(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/recording/settings")
     {
-        return handleSetV4L2Device(clientFd, body);
+        result = handleSetRecordingSettings(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/ds/device")
+    if (path == "/api/v1/recording/control")
     {
-        return handleSetDSDevice(clientFd, body);
+        result = handleSetRecordingControl(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/presets")
+    if (path == "/api/v1/recording/profiles")
     {
-        return handleCreatePreset(clientFd, body);
+        result = handleSaveRecordingProfile(clientFd, body);
+        return true;
     }
-    else if (path.find("/api/v1/presets/") == 0 && path.find("/apply") != std::string::npos)
+    if (path.find("/api/v1/recording/profiles/") == 0 && path.find("/apply") != std::string::npos)
+    {
+        // /api/v1/recording/profiles/{name}/apply
+        constexpr size_t prefixLen = 27; // length of "/api/v1/recording/profiles/"
+        size_t applyPos = path.find("/apply");
+        if (applyPos != std::string::npos && applyPos > prefixLen)
+        {
+            std::string name = path.substr(prefixLen, applyPos - prefixLen);
+            if (!name.empty()) return handleApplyRecordingProfile(clientFd, name);
+        }
+    }
+    return false;
+}
+
+bool APIController::routePOSTDevices(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/v4l2/control")
+    {
+        result = handleSetV4L2Control(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/v4l2/device")
+    {
+        result = handleSetV4L2Device(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/ds/device")
+    {
+        result = handleSetDSDevice(clientFd, body);
+        return true;
+    }
+#ifdef __APPLE__
+    if (path == "/api/v1/avfoundation/device")
+    {
+        result = handleSetAVFoundationDevice(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/avfoundation/format")
+    {
+        result = handleSetAVFoundationFormat(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/avfoundation/audio-device")
+    {
+        result = handleSetAVFoundationAudioDevice(clientFd, body);
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool APIController::routePOSTPresets(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/presets")
+    {
+        result = handleCreatePreset(clientFd, body);
+        return true;
+    }
+    if (path.find("/api/v1/presets/") == 0 && path.find("/apply") != std::string::npos)
     {
         // Extract preset name from path: /api/v1/presets/{name}/apply
         std::string fullPath = path;
@@ -703,69 +871,62 @@ bool APIController::handlePOST(int clientFd, const std::string &path, const std:
             {
                 requestBody = "{\"name\": \"" + presetName + "\"}";
             }
-            return handleApplyPreset(clientFd, requestBody);
+            result = handleApplyPreset(clientFd, requestBody);
+            return true;
         }
     }
-    else if (path == "/api/v1/audio/input-source")
+    return false;
+}
+
+bool APIController::routePOSTAudio(int clientFd, const std::string &path, const std::string &body, bool &result)
+{
+    if (path == "/api/v1/audio/input-source")
     {
-        return handleSetAudioInputSource(clientFd, body);
+        result = handleSetAudioInputSource(clientFd, body);
+        return true;
     }
-    else if (path == "/api/v1/audio/disconnect-input")
+    if (path == "/api/v1/audio/disconnect-input")
     {
-        return handleDisconnectAudioInput(clientFd);
+        result = handleDisconnectAudioInput(clientFd);
+        return true;
     }
-    else if (path == "/api/v1/audio/resync")
+    if (path == "/api/v1/audio/resync")
     {
-        return handleResyncAudioMonitor(clientFd);
+        result = handleResyncAudioMonitor(clientFd);
+        return true;
     }
-#ifdef __APPLE__
-    else if (path == "/api/v1/avfoundation/device")
-    {
-        return handleSetAVFoundationDevice(clientFd, body);
-    }
-    else if (path == "/api/v1/avfoundation/format")
-    {
-        return handleSetAVFoundationFormat(clientFd, body);
-    }
-    else if (path == "/api/v1/avfoundation/audio-device")
-    {
-        return handleSetAVFoundationAudioDevice(clientFd, body);
-    }
-#endif
-    else if (path == "/api/v1/source/overscan")
-    {
-        return handleSetSourceOverscan(clientFd, body);
-    }
-    else if (path == "/api/v1/recording/profiles")
-    {
-        return handleSaveRecordingProfile(clientFd, body);
-    }
-    else if (path.find("/api/v1/recording/profiles/") == 0 && path.find("/apply") != std::string::npos)
-    {
-        // /api/v1/recording/profiles/{name}/apply
-        constexpr size_t prefixLen = 27; // length of "/api/v1/recording/profiles/"
-        size_t applyPos = path.find("/apply");
-        if (applyPos != std::string::npos && applyPos > prefixLen)
-        {
-            std::string name = path.substr(prefixLen, applyPos - prefixLen);
-            if (!name.empty()) return handleApplyRecordingProfile(clientFd, name);
-        }
-    }
-    else if (path == "/api/v1/streaming/profiles")
-    {
-        return handleSaveStreamingProfile(clientFd, body);
-    }
-    else if (path.find("/api/v1/streaming/profiles/") == 0 && path.find("/apply") != std::string::npos)
-    {
-        // /api/v1/streaming/profiles/{name}/apply
-        constexpr size_t prefixLen = 27; // length of "/api/v1/streaming/profiles/"
-        size_t applyPos = path.find("/apply");
-        if (applyPos != std::string::npos && applyPos > prefixLen)
-        {
-            std::string name = path.substr(prefixLen, applyPos - prefixLen);
-            if (!name.empty()) return handleApplyStreamingProfile(clientFd, name);
-        }
-    }
+    return false;
+}
+
+
+bool APIController::handleGET(int clientFd, const std::string &path, const std::string &request)
+{
+    bool result = false;
+    if (routeGETSystem(clientFd, path, request, result)) return result;
+    if (routeGETSource(clientFd, path, result)) return result;
+    if (routeGETShader(clientFd, path, result)) return result;
+    if (routeGETCapture(clientFd, path, result)) return result;
+    if (routeGETStreaming(clientFd, path, result)) return result;
+    if (routeGETRecording(clientFd, path, request, result)) return result;
+    if (routeGETDevices(clientFd, path, result)) return result;
+    if (routeGETPresets(clientFd, path, result)) return result;
+    if (routeGETAudio(clientFd, path, result)) return result;
+
+    send404(clientFd);
+    return true;
+}
+
+bool APIController::handlePOST(int clientFd, const std::string &path, const std::string &body)
+{
+    bool result = false;
+    if (routePOSTSource(clientFd, path, body, result)) return result;
+    if (routePOSTShader(clientFd, path, body, result)) return result;
+    if (routePOSTCapture(clientFd, path, body, result)) return result;
+    if (routePOSTStreaming(clientFd, path, body, result)) return result;
+    if (routePOSTRecording(clientFd, path, body, result)) return result;
+    if (routePOSTDevices(clientFd, path, body, result)) return result;
+    if (routePOSTPresets(clientFd, path, body, result)) return result;
+    if (routePOSTAudio(clientFd, path, body, result)) return result;
 
     send404(clientFd);
     return true;
