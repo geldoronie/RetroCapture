@@ -72,11 +72,7 @@ private:
 
     // Helper
     void UpdateDimensionsFromMediaType(const AM_MEDIA_TYPE *pmt);
-    void ConvertYUY2ToRGB(const uint8_t *yuy2Data, size_t yuy2Size, uint8_t *rgbData, uint32_t width, uint32_t height);
-    // #135 — additional capture formats the DS pin advertises.
-    void ConvertUYVYToRGB(const uint8_t *uyvyData, size_t uyvySize, uint8_t *rgbData, uint32_t width, uint32_t height);
-    void ConvertNV12ToRGB(const uint8_t *nv12Data, size_t nv12Size, uint8_t *rgbData, uint32_t width, uint32_t height);
-    void ConvertRGB32ToRGB24(const uint8_t *rgba, size_t rgbaSize, uint8_t *rgbData, uint32_t width, uint32_t height);
+    // Pixel-format → RGB24 conversion lives in rc::pixfmt (PixelFormatConverter, #150).
 };
 
 // Forward declaration for pin class
