@@ -318,6 +318,435 @@ bool ShaderEngine::loadPreset(const std::string &presetPath)
     return true;
 }
 
+bool ShaderEngine::compilePass(size_t i)
+{
+    const auto &passes = m_preset.getPasses();
+    const auto &passInfo = passes[i];
+    auto &passData = m_passes[i];
+
+    // Preservar parameterInfo existente se já temos (backup local)
+    std::map<std::string, ShaderParameterInfo> localPreservedParamInfo = passData.parameterInfo;
+    std::map<std::string, float> localPreservedExtractedParams = passData.extractedParameters;
+
+    passData.passInfo = passInfo;
+
+    // DEBUG: Log das configurações do pass
+
+    // Ler shader
+    std::ifstream file(passInfo.shaderPath);
+    if (!file.is_open())
+    {
+        LOG_ERROR("Failed to open shader for pass " + std::to_string(i) + ": " + passInfo.shaderPath);
+        // Se não conseguimos ler o arquivo, manter parâmetros existentes se houver
+        // Apenas marcar que este pass não compilou
+        passData.vertexShader = 0;
+        passData.fragmentShader = 0;
+        passData.program = 0;
+        return false;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string shaderSource = buffer.str();
+    file.close();
+
+    // Verificar extensão do shader - apenas GLSL é suportado
+    fs::path shaderPath(passInfo.shaderPath);
+    std::string shaderExtension = shaderPath.extension();
+    std::transform(shaderExtension.begin(), shaderExtension.end(), shaderExtension.begin(), ::tolower);
+
+    if (shaderExtension == ".slang")
+    {
+        LOG_ERROR("Slang shaders (.slang) are not supported in pass " + std::to_string(i));
+        LOG_ERROR("Use GLSL shaders (.glsl) or GLSLP presets (.glslp)");
+        // Slang não suportado, manter parâmetros existentes se houver
+        passData.vertexShader = 0;
+        passData.fragmentShader = 0;
+        passData.program = 0;
+        return false;
+    }
+
+    // Usar ShaderPreprocessor para processar o shader
+    // Nota: As dimensões de saída/entrada serão calculadas em applyShader,
+    // mas precisamos de valores padrão para o pré-processamento (código de compatibilidade)
+    // Usar valores padrão razoáveis (640x480) - o código de compatibilidade só é injetado
+    // para shaders específicos que não dependem fortemente das dimensões exatas
+    uint32_t defaultInputWidth = 640;
+    uint32_t defaultInputHeight = 480;
+    uint32_t defaultOutputWidth = 640;
+    uint32_t defaultOutputHeight = 480;
+
+    auto preprocessResult = ShaderPreprocessor::preprocess(
+        shaderSource,
+        passInfo.shaderPath,
+        i,
+        defaultOutputWidth,
+        defaultOutputHeight,
+        defaultInputWidth,
+        defaultInputHeight,
+        m_preset.getPasses());
+
+    // Armazenar resultados
+    std::string vertexSource = preprocessResult.vertexSource;
+    std::string fragmentSource = preprocessResult.fragmentSource;
+
+    // Se já temos parameterInfo preservado e o novo está vazio, manter o preservado
+    // Caso contrário, usar o novo (que pode ter mais parâmetros)
+    if (!preprocessResult.parameterInfo.empty())
+    {
+        passData.extractedParameters = preprocessResult.extractedParameters;
+        passData.parameterInfo = preprocessResult.parameterInfo;
+    }
+    else if (!localPreservedParamInfo.empty())
+    {
+        // Manter os parâmetros preservados se o novo está vazio
+        passData.parameterInfo = localPreservedParamInfo;
+        passData.extractedParameters = localPreservedExtractedParams;
+    }
+
+    // Log de debug: verificar se parâmetros foram extraídos
+    if (!passData.parameterInfo.empty())
+    {
+        LOG_INFO("Pass " + std::to_string(i) + " has " + std::to_string(passData.parameterInfo.size()) + " parameter(s)");
+    }
+
+    // IMPORTANTE: Os parâmetros já foram extraídos e armazenados em passData.parameterInfo
+    // Mesmo que a compilação falhe, queremos manter os parâmetros para a UI
+
+    // Compilar shaders
+    if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
+    {
+        LOG_ERROR("Failed to compile vertex shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
+        // Não limpar passes aqui - manter parameterInfo mesmo se compilação falhar
+        // Apenas marcar que este pass não está compilado
+        passData.vertexShader = 0;
+        passData.fragmentShader = 0;
+        passData.program = 0;
+        // Continuar para o próximo pass para tentar extrair parâmetros de outros passes
+        return false;
+    }
+
+    // Tentar compilar o fragment shader
+    GLuint tempFragmentShader = 0;
+    if (!compileShader(fragmentSource, GL_FRAGMENT_SHADER, tempFragmentShader))
+    {
+        // Se falhou, obter a mensagem de erro do shader temporário
+        char errorLog[512] = {0};
+        if (tempFragmentShader != 0)
+        {
+            glGetShaderInfoLog(tempFragmentShader, 512, nullptr, errorLog);
+        }
+        std::string errorMsg = std::string(errorLog);
+
+        // Verificar se o erro é sobre vec3 = vec4
+        bool isVec3Vec4Error = (errorMsg.find("initializer of type vec4 cannot be assigned to variable of type vec3") != std::string::npos ||
+                                errorMsg.find("cannot convert") != std::string::npos ||
+                                (errorMsg.find("vec4") != std::string::npos && errorMsg.find("vec3") != std::string::npos));
+
+        if (isVec3Vec4Error)
+        {
+        }
+
+        // Tentar corrigir erro específico de vec3 = vec4
+        // Procurar por padrão: vec3 var = COMPAT_TEXTURE(...)
+        std::string correctedSource = fragmentSource;
+        std::regex vec3TextureError(R"(\bvec3\s+(\w+)\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()");
+        std::smatch match;
+
+        if (std::regex_search(fragmentSource, match, vec3TextureError))
+        {
+            std::string varName = match[1].str();
+
+            // Verificar se a variável é usada com .rgb ou similar depois
+            // Procurar por padrões como: var.rgb, var.r, var.g, var.b, etc.
+            // (comentado - não usado atualmente)
+            // std::regex rgbPattern(varName + R"(\s*\.(rgb|r|g|b|rg|rb|gb))");
+            // bool usesRgb = std::regex_search(fragmentSource, rgbPattern);
+
+            // Mudar declaração para vec4 (sempre, já que COMPAT_TEXTURE retorna vec4)
+            // IMPORTANTE: Precisamos preservar COMPAT_TEXTURE na substituição
+            // Tentar substituição simples primeiro (mais confiável)
+            std::string oldPattern = "vec3 " + varName + " = COMPAT_TEXTURE";
+            std::string newPattern = "vec4 " + varName + " = COMPAT_TEXTURE";
+            size_t pos = correctedSource.find(oldPattern);
+            if (pos != std::string::npos)
+            {
+                correctedSource.replace(pos, oldPattern.length(), newPattern);
+            }
+            else
+            {
+                // Tentar com espaços diferentes
+                oldPattern = "vec3\t" + varName + " = COMPAT_TEXTURE";
+                newPattern = "vec4\t" + varName + " = COMPAT_TEXTURE";
+                pos = correctedSource.find(oldPattern);
+                if (pos != std::string::npos)
+                {
+                    correctedSource.replace(pos, oldPattern.length(), newPattern);
+                }
+                else
+                {
+                    // Tentar com regex (última opção)
+                    std::string pattern = R"(\bvec3\s+)" + varName + R"(\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()";
+                    std::regex regexPattern(pattern);
+                    std::smatch match;
+
+                    if (std::regex_search(correctedSource, match, regexPattern))
+                    {
+                        // Capturar a função de textura e construir a substituição manualmente
+                        std::string textureFunc = match[2].str(); // COMPAT_TEXTURE, texture ou texture2D
+                        std::string fullMatch = match[0].str();   // Match completo
+                        std::string replacement = "vec4 " + varName + " = " + textureFunc + "(";
+
+                        // Substituir manualmente para garantir que funcione
+                        size_t matchPos = correctedSource.find(fullMatch);
+                        if (matchPos != std::string::npos)
+                        {
+                            correctedSource.replace(matchPos, fullMatch.length(), replacement);
+                        }
+                        else
+                        {
+                            // Fallback: usar regex_replace
+                            correctedSource = std::regex_replace(correctedSource, regexPattern, replacement);
+                        }
+                    }
+                }
+            }
+
+            // Verificar se a substituição foi feita (verificar de várias formas)
+            bool substitutionFound = false;
+            if (correctedSource.find("vec4 " + varName) != std::string::npos ||
+                correctedSource.find("vec4\t" + varName) != std::string::npos ||
+                correctedSource.find("vec4  " + varName) != std::string::npos) // Dois espaços
+            {
+                substitutionFound = true;
+            }
+            else
+            {
+                // Verificar se ainda tem vec3 (substituição falhou)
+                if (correctedSource.find("vec3 " + varName) != std::string::npos ||
+                    correctedSource.find("vec3\t" + varName) != std::string::npos)
+                {
+                    LOG_ERROR("Pass " + std::to_string(i) + ": Substitution failed - still found vec3 " + varName);
+                    // Tentar substituição manual linha por linha
+                    std::istringstream iss(correctedSource);
+                    std::ostringstream oss;
+                    std::string line;
+                    bool found = false;
+                    while (std::getline(iss, line))
+                    {
+                        // Procurar por qualquer linha que contenha vec3, o nome da variável e COMPAT_TEXTURE
+                        if (line.find("vec3") != std::string::npos &&
+                            line.find(varName) != std::string::npos &&
+                            line.find("COMPAT_TEXTURE") != std::string::npos)
+                        {
+                            // Substituir vec3 por vec4
+                            size_t pos = line.find("vec3");
+                            if (pos != std::string::npos)
+                            {
+                                line.replace(pos, 4, "vec4");
+                                found = true;
+                            }
+                        }
+                        oss << line << "\n";
+                    }
+                    if (found)
+                    {
+                        correctedSource = oss.str();
+                        substitutionFound = true;
+                    }
+                    else
+                    {
+                        // Última tentativa: substituição direta no string
+                        size_t pos = correctedSource.find("vec3 " + varName + " = COMPAT_TEXTURE");
+                        if (pos != std::string::npos)
+                        {
+                            correctedSource.replace(pos, 4, "vec4");
+                            substitutionFound = true;
+                        }
+                        else
+                        {
+                            // Tentar com espaços diferentes
+                            pos = correctedSource.find("vec3\t" + varName + " = COMPAT_TEXTURE");
+                            if (pos != std::string::npos)
+                            {
+                                correctedSource.replace(pos, 4, "vec4");
+                                substitutionFound = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (substitutionFound)
+            {
+                // CORREÇÃO ADICIONAL: Se mudamos vec3 para vec4, precisamos corrigir usos de vec4(var, float)
+                // Padrão: vec4(varName, float) onde varName agora é vec4
+                // Isso deve ser corrigido para vec4(varName.rgb, float) ou apenas varName
+                std::regex vec4ConstructorPattern(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*[\d.]+\s*\))");
+                if (std::regex_search(correctedSource, vec4ConstructorPattern))
+                {
+                    // Substituir vec4(varName, float) por vec4(varName.rgb, float)
+                    correctedSource = std::regex_replace(correctedSource,
+                                                         std::regex(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*([\d.]+)\s*\))"),
+                                                         "vec4(" + varName + ".rgb, $1)");
+                }
+
+                // Log da linha corrigida para debug
+                std::istringstream iss(correctedSource);
+                std::string line;
+                int lineNum = 0;
+                while (std::getline(iss, line) && lineNum < 110)
+                {
+                    lineNum++;
+                    if (lineNum >= 98 && lineNum <= 110 && (line.find(varName) != std::string::npos || line.find("FragColor") != std::string::npos))
+                    {
+                    }
+                }
+
+                // Tentar compilar novamente
+                GLuint testShader = 0;
+                if (compileShader(correctedSource, GL_FRAGMENT_SHADER, testShader))
+                {
+                    // Sucesso! Usar a versão corrigida
+                    if (passData.fragmentShader != 0)
+                        glDeleteShader(passData.fragmentShader);
+                    passData.fragmentShader = testShader;
+                    fragmentSource = correctedSource;
+                }
+                else
+                {
+                    // Ainda falhou, mostrar erro detalhado
+                    char infoLog[512];
+                    glGetShaderInfoLog(testShader, 512, nullptr, infoLog);
+                    LOG_ERROR("Failed to compile fragment shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ") even after correction: " + std::string(infoLog));
+                    std::istringstream iss2(correctedSource);
+                    std::string line2;
+                    int lineNum2 = 0;
+                    while (std::getline(iss2, line2) && lineNum2 < 110)
+                    {
+                        lineNum2++;
+                        if (lineNum2 >= 95 && lineNum2 <= 110)
+                        {
+                        }
+                    }
+                    if (testShader != 0)
+                        glDeleteShader(testShader);
+                    glDeleteShader(passData.vertexShader);
+                    if (tempFragmentShader != 0)
+                        glDeleteShader(tempFragmentShader);
+                    // Não limpar tudo - manter parameterInfo para a UI
+                    passData.vertexShader = 0;
+                    passData.fragmentShader = 0;
+                    passData.program = 0;
+                    return false;
+                }
+            }
+            else
+            {
+                LOG_ERROR("Pass " + std::to_string(i) + ": Failed to apply correction (substitution not found)");
+                std::istringstream iss(fragmentSource);
+                std::string line;
+                int lineNum = 0;
+                while (std::getline(iss, line) && lineNum < 105)
+                {
+                    lineNum++;
+                    if (lineNum >= 95 && lineNum <= 105)
+                    {
+                    }
+                }
+                glDeleteShader(passData.vertexShader);
+                if (tempFragmentShader != 0)
+                    glDeleteShader(tempFragmentShader);
+                // Manter parameterInfo mesmo se compilação falhar
+                passData.vertexShader = 0;
+                passData.fragmentShader = 0;
+                passData.program = 0;
+                return false;
+            }
+        }
+        else
+        {
+            // Erro não relacionado a vec3 = vec4 ou padrão não encontrado
+            LOG_ERROR("Failed to compile fragment shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
+            // Manter parameterInfo mesmo se compilação falhar
+            glDeleteShader(passData.vertexShader);
+            if (tempFragmentShader != 0)
+                glDeleteShader(tempFragmentShader);
+            passData.vertexShader = 0;
+            passData.fragmentShader = 0;
+            passData.program = 0;
+            return false;
+        }
+    }
+    else
+    {
+        // Compilação bem-sucedida
+        passData.fragmentShader = tempFragmentShader;
+    }
+
+    // Criar e linkar programa para este pass (cada pass precisa de seu próprio programa)
+    GLuint program = glCreateProgram();
+    if (program == 0)
+    {
+        LOG_ERROR("Failed to create shader program for pass " + std::to_string(i));
+        // Manter parameterInfo mesmo se criação do programa falhar
+        glDeleteShader(passData.vertexShader);
+        if (passData.fragmentShader != 0)
+            glDeleteShader(passData.fragmentShader);
+        passData.vertexShader = 0;
+        passData.fragmentShader = 0;
+        passData.program = 0;
+        return false;
+    }
+
+    glAttachShader(program, passData.vertexShader);
+    glAttachShader(program, passData.fragmentShader);
+
+    // Ligar atributos antes de linkar (necessário quando não usamos layout(location))
+    // RetroArch shaders podem usar VertexCoord ou Position
+    glBindAttribLocation(program, 0, "Position");
+    glBindAttribLocation(program, 0, "VertexCoord"); // RetroArch também usa VertexCoord
+    glBindAttribLocation(program, 1, "TexCoord");
+    // IMPORTANTE: Motion blur shaders precisam de PrevTexCoord, Prev1TexCoord, etc.
+    // Como todos os frames têm as mesmas dimensões, podemos usar os mesmos dados de TexCoord
+    glBindAttribLocation(program, 1, "PrevTexCoord");
+    glBindAttribLocation(program, 1, "Prev1TexCoord");
+    glBindAttribLocation(program, 1, "Prev2TexCoord");
+    glBindAttribLocation(program, 1, "Prev3TexCoord");
+    glBindAttribLocation(program, 1, "Prev4TexCoord");
+    glBindAttribLocation(program, 1, "Prev5TexCoord");
+    glBindAttribLocation(program, 1, "Prev6TexCoord");
+    glBindAttribLocation(program, 2, "COLOR"); // Alguns shaders RetroArch usam COLOR como atributo
+
+    glLinkProgram(program);
+
+    GLint success;
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    if (!success)
+    {
+        char infoLog[512];
+        glGetProgramInfoLog(program, 512, nullptr, infoLog);
+        LOG_ERROR("Error linking shader program for pass " + std::to_string(i) + " (" + passInfo.shaderPath + "): " + std::string(infoLog));
+        glDeleteProgram(program);
+        glDeleteShader(passData.vertexShader);
+        glDeleteShader(passData.fragmentShader);
+        glDeleteProgram(program);
+        // Manter parameterInfo mesmo se linkagem falhar
+        passData.vertexShader = 0;
+        passData.fragmentShader = 0;
+        passData.program = 0;
+        return false;
+    }
+
+    passData.program = program;
+    passData.floatFramebuffer = passInfo.floatFramebuffer;
+    
+    // Pré-cachear uniforms comuns para este pass após linkagem bem-sucedida
+    preCacheCommonUniforms(program);
+    return true;
+}
+
+
 bool ShaderEngine::loadPresetPasses()
 {
     // IMPORTANTE: Preservar parameterInfo existente ao recarregar passes
@@ -401,436 +830,8 @@ bool ShaderEngine::loadPresetPasses()
 
     for (size_t i = 0; i < passes.size(); ++i)
     {
-        const auto &passInfo = passes[i];
-        auto &passData = m_passes[i];
-
-        // Preservar parameterInfo existente se já temos (backup local)
-        std::map<std::string, ShaderParameterInfo> localPreservedParamInfo = passData.parameterInfo;
-        std::map<std::string, float> localPreservedExtractedParams = passData.extractedParameters;
-
-        passData.passInfo = passInfo;
-
-        // DEBUG: Log das configurações do pass
-
-        // Ler shader
-        std::ifstream file(passInfo.shaderPath);
-        if (!file.is_open())
-        {
-            LOG_ERROR("Failed to open shader for pass " + std::to_string(i) + ": " + passInfo.shaderPath);
-            // Se não conseguimos ler o arquivo, manter parâmetros existentes se houver
-            // Apenas marcar que este pass não compilou
-            passData.vertexShader = 0;
-            passData.fragmentShader = 0;
-            passData.program = 0;
+        if (!compilePass(i))
             allPassesCompiled = false;
-            continue; // Continuar para próximo pass
-        }
-
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        std::string shaderSource = buffer.str();
-        file.close();
-
-        // Verificar extensão do shader - apenas GLSL é suportado
-        fs::path shaderPath(passInfo.shaderPath);
-        std::string shaderExtension = shaderPath.extension();
-        std::transform(shaderExtension.begin(), shaderExtension.end(), shaderExtension.begin(), ::tolower);
-
-        if (shaderExtension == ".slang")
-        {
-            LOG_ERROR("Slang shaders (.slang) are not supported in pass " + std::to_string(i));
-            LOG_ERROR("Use GLSL shaders (.glsl) or GLSLP presets (.glslp)");
-            // Slang não suportado, manter parâmetros existentes se houver
-            passData.vertexShader = 0;
-            passData.fragmentShader = 0;
-            passData.program = 0;
-            allPassesCompiled = false;
-            continue; // Continuar para próximo pass
-        }
-
-        // Usar ShaderPreprocessor para processar o shader
-        // Nota: As dimensões de saída/entrada serão calculadas em applyShader,
-        // mas precisamos de valores padrão para o pré-processamento (código de compatibilidade)
-        // Usar valores padrão razoáveis (640x480) - o código de compatibilidade só é injetado
-        // para shaders específicos que não dependem fortemente das dimensões exatas
-        uint32_t defaultInputWidth = 640;
-        uint32_t defaultInputHeight = 480;
-        uint32_t defaultOutputWidth = 640;
-        uint32_t defaultOutputHeight = 480;
-
-        auto preprocessResult = ShaderPreprocessor::preprocess(
-            shaderSource,
-            passInfo.shaderPath,
-            i,
-            defaultOutputWidth,
-            defaultOutputHeight,
-            defaultInputWidth,
-            defaultInputHeight,
-            m_preset.getPasses());
-
-        // Armazenar resultados
-        std::string vertexSource = preprocessResult.vertexSource;
-        std::string fragmentSource = preprocessResult.fragmentSource;
-
-        // Se já temos parameterInfo preservado e o novo está vazio, manter o preservado
-        // Caso contrário, usar o novo (que pode ter mais parâmetros)
-        if (!preprocessResult.parameterInfo.empty())
-        {
-            passData.extractedParameters = preprocessResult.extractedParameters;
-            passData.parameterInfo = preprocessResult.parameterInfo;
-        }
-        else if (!localPreservedParamInfo.empty())
-        {
-            // Manter os parâmetros preservados se o novo está vazio
-            passData.parameterInfo = localPreservedParamInfo;
-            passData.extractedParameters = localPreservedExtractedParams;
-        }
-
-        // Log de debug: verificar se parâmetros foram extraídos
-        if (!passData.parameterInfo.empty())
-        {
-            LOG_INFO("Pass " + std::to_string(i) + " has " + std::to_string(passData.parameterInfo.size()) + " parameter(s)");
-        }
-
-        // IMPORTANTE: Os parâmetros já foram extraídos e armazenados em passData.parameterInfo
-        // Mesmo que a compilação falhe, queremos manter os parâmetros para a UI
-
-        // Compilar shaders
-        if (!compileShader(vertexSource, GL_VERTEX_SHADER, passData.vertexShader))
-        {
-            LOG_ERROR("Failed to compile vertex shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
-            // Não limpar passes aqui - manter parameterInfo mesmo se compilação falhar
-            // Apenas marcar que este pass não está compilado
-            passData.vertexShader = 0;
-            passData.fragmentShader = 0;
-            passData.program = 0;
-            allPassesCompiled = false;
-            // Continuar para o próximo pass para tentar extrair parâmetros de outros passes
-            continue;
-        }
-
-        // Tentar compilar o fragment shader
-        GLuint tempFragmentShader = 0;
-        if (!compileShader(fragmentSource, GL_FRAGMENT_SHADER, tempFragmentShader))
-        {
-            // Se falhou, obter a mensagem de erro do shader temporário
-            char errorLog[512] = {0};
-            if (tempFragmentShader != 0)
-            {
-                glGetShaderInfoLog(tempFragmentShader, 512, nullptr, errorLog);
-            }
-            std::string errorMsg = std::string(errorLog);
-
-            // Verificar se o erro é sobre vec3 = vec4
-            bool isVec3Vec4Error = (errorMsg.find("initializer of type vec4 cannot be assigned to variable of type vec3") != std::string::npos ||
-                                    errorMsg.find("cannot convert") != std::string::npos ||
-                                    (errorMsg.find("vec4") != std::string::npos && errorMsg.find("vec3") != std::string::npos));
-
-            if (isVec3Vec4Error)
-            {
-            }
-
-            // Tentar corrigir erro específico de vec3 = vec4
-            // Procurar por padrão: vec3 var = COMPAT_TEXTURE(...)
-            std::string correctedSource = fragmentSource;
-            std::regex vec3TextureError(R"(\bvec3\s+(\w+)\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()");
-            std::smatch match;
-
-            if (std::regex_search(fragmentSource, match, vec3TextureError))
-            {
-                std::string varName = match[1].str();
-
-                // Verificar se a variável é usada com .rgb ou similar depois
-                // Procurar por padrões como: var.rgb, var.r, var.g, var.b, etc.
-                // (comentado - não usado atualmente)
-                // std::regex rgbPattern(varName + R"(\s*\.(rgb|r|g|b|rg|rb|gb))");
-                // bool usesRgb = std::regex_search(fragmentSource, rgbPattern);
-
-                // Mudar declaração para vec4 (sempre, já que COMPAT_TEXTURE retorna vec4)
-                // IMPORTANTE: Precisamos preservar COMPAT_TEXTURE na substituição
-                // Tentar substituição simples primeiro (mais confiável)
-                std::string oldPattern = "vec3 " + varName + " = COMPAT_TEXTURE";
-                std::string newPattern = "vec4 " + varName + " = COMPAT_TEXTURE";
-                size_t pos = correctedSource.find(oldPattern);
-                if (pos != std::string::npos)
-                {
-                    correctedSource.replace(pos, oldPattern.length(), newPattern);
-                }
-                else
-                {
-                    // Tentar com espaços diferentes
-                    oldPattern = "vec3\t" + varName + " = COMPAT_TEXTURE";
-                    newPattern = "vec4\t" + varName + " = COMPAT_TEXTURE";
-                    pos = correctedSource.find(oldPattern);
-                    if (pos != std::string::npos)
-                    {
-                        correctedSource.replace(pos, oldPattern.length(), newPattern);
-                    }
-                    else
-                    {
-                        // Tentar com regex (última opção)
-                        std::string pattern = R"(\bvec3\s+)" + varName + R"(\s*=\s*(COMPAT_TEXTURE|texture|texture2D)\s*\()";
-                        std::regex regexPattern(pattern);
-                        std::smatch match;
-
-                        if (std::regex_search(correctedSource, match, regexPattern))
-                        {
-                            // Capturar a função de textura e construir a substituição manualmente
-                            std::string textureFunc = match[2].str(); // COMPAT_TEXTURE, texture ou texture2D
-                            std::string fullMatch = match[0].str();   // Match completo
-                            std::string replacement = "vec4 " + varName + " = " + textureFunc + "(";
-
-                            // Substituir manualmente para garantir que funcione
-                            size_t matchPos = correctedSource.find(fullMatch);
-                            if (matchPos != std::string::npos)
-                            {
-                                correctedSource.replace(matchPos, fullMatch.length(), replacement);
-                            }
-                            else
-                            {
-                                // Fallback: usar regex_replace
-                                correctedSource = std::regex_replace(correctedSource, regexPattern, replacement);
-                            }
-                        }
-                    }
-                }
-
-                // Verificar se a substituição foi feita (verificar de várias formas)
-                bool substitutionFound = false;
-                if (correctedSource.find("vec4 " + varName) != std::string::npos ||
-                    correctedSource.find("vec4\t" + varName) != std::string::npos ||
-                    correctedSource.find("vec4  " + varName) != std::string::npos) // Dois espaços
-                {
-                    substitutionFound = true;
-                }
-                else
-                {
-                    // Verificar se ainda tem vec3 (substituição falhou)
-                    if (correctedSource.find("vec3 " + varName) != std::string::npos ||
-                        correctedSource.find("vec3\t" + varName) != std::string::npos)
-                    {
-                        LOG_ERROR("Pass " + std::to_string(i) + ": Substitution failed - still found vec3 " + varName);
-                        // Tentar substituição manual linha por linha
-                        std::istringstream iss(correctedSource);
-                        std::ostringstream oss;
-                        std::string line;
-                        bool found = false;
-                        while (std::getline(iss, line))
-                        {
-                            // Procurar por qualquer linha que contenha vec3, o nome da variável e COMPAT_TEXTURE
-                            if (line.find("vec3") != std::string::npos &&
-                                line.find(varName) != std::string::npos &&
-                                line.find("COMPAT_TEXTURE") != std::string::npos)
-                            {
-                                // Substituir vec3 por vec4
-                                size_t pos = line.find("vec3");
-                                if (pos != std::string::npos)
-                                {
-                                    line.replace(pos, 4, "vec4");
-                                    found = true;
-                                }
-                            }
-                            oss << line << "\n";
-                        }
-                        if (found)
-                        {
-                            correctedSource = oss.str();
-                            substitutionFound = true;
-                        }
-                        else
-                        {
-                            // Última tentativa: substituição direta no string
-                            size_t pos = correctedSource.find("vec3 " + varName + " = COMPAT_TEXTURE");
-                            if (pos != std::string::npos)
-                            {
-                                correctedSource.replace(pos, 4, "vec4");
-                                substitutionFound = true;
-                            }
-                            else
-                            {
-                                // Tentar com espaços diferentes
-                                pos = correctedSource.find("vec3\t" + varName + " = COMPAT_TEXTURE");
-                                if (pos != std::string::npos)
-                                {
-                                    correctedSource.replace(pos, 4, "vec4");
-                                    substitutionFound = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (substitutionFound)
-                {
-                    // CORREÇÃO ADICIONAL: Se mudamos vec3 para vec4, precisamos corrigir usos de vec4(var, float)
-                    // Padrão: vec4(varName, float) onde varName agora é vec4
-                    // Isso deve ser corrigido para vec4(varName.rgb, float) ou apenas varName
-                    std::regex vec4ConstructorPattern(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*[\d.]+\s*\))");
-                    if (std::regex_search(correctedSource, vec4ConstructorPattern))
-                    {
-                        // Substituir vec4(varName, float) por vec4(varName.rgb, float)
-                        correctedSource = std::regex_replace(correctedSource,
-                                                             std::regex(R"(\bvec4\s*\(\s*)" + varName + R"(\s*,\s*([\d.]+)\s*\))"),
-                                                             "vec4(" + varName + ".rgb, $1)");
-                    }
-
-                    // Log da linha corrigida para debug
-                    std::istringstream iss(correctedSource);
-                    std::string line;
-                    int lineNum = 0;
-                    while (std::getline(iss, line) && lineNum < 110)
-                    {
-                        lineNum++;
-                        if (lineNum >= 98 && lineNum <= 110 && (line.find(varName) != std::string::npos || line.find("FragColor") != std::string::npos))
-                        {
-                        }
-                    }
-
-                    // Tentar compilar novamente
-                    GLuint testShader = 0;
-                    if (compileShader(correctedSource, GL_FRAGMENT_SHADER, testShader))
-                    {
-                        // Sucesso! Usar a versão corrigida
-                        if (passData.fragmentShader != 0)
-                            glDeleteShader(passData.fragmentShader);
-                        passData.fragmentShader = testShader;
-                        fragmentSource = correctedSource;
-                    }
-                    else
-                    {
-                        // Ainda falhou, mostrar erro detalhado
-                        char infoLog[512];
-                        glGetShaderInfoLog(testShader, 512, nullptr, infoLog);
-                        LOG_ERROR("Failed to compile fragment shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ") even after correction: " + std::string(infoLog));
-                        std::istringstream iss2(correctedSource);
-                        std::string line2;
-                        int lineNum2 = 0;
-                        while (std::getline(iss2, line2) && lineNum2 < 110)
-                        {
-                            lineNum2++;
-                            if (lineNum2 >= 95 && lineNum2 <= 110)
-                            {
-                            }
-                        }
-                        if (testShader != 0)
-                            glDeleteShader(testShader);
-                        glDeleteShader(passData.vertexShader);
-                        if (tempFragmentShader != 0)
-                            glDeleteShader(tempFragmentShader);
-                        // Não limpar tudo - manter parameterInfo para a UI
-                        passData.vertexShader = 0;
-                        passData.fragmentShader = 0;
-                        passData.program = 0;
-                        allPassesCompiled = false;
-                        continue; // Continuar para próximo pass
-                    }
-                }
-                else
-                {
-                    LOG_ERROR("Pass " + std::to_string(i) + ": Failed to apply correction (substitution not found)");
-                    std::istringstream iss(fragmentSource);
-                    std::string line;
-                    int lineNum = 0;
-                    while (std::getline(iss, line) && lineNum < 105)
-                    {
-                        lineNum++;
-                        if (lineNum >= 95 && lineNum <= 105)
-                        {
-                        }
-                    }
-                    glDeleteShader(passData.vertexShader);
-                    if (tempFragmentShader != 0)
-                        glDeleteShader(tempFragmentShader);
-                    // Manter parameterInfo mesmo se compilação falhar
-                    passData.vertexShader = 0;
-                    passData.fragmentShader = 0;
-                    passData.program = 0;
-                    allPassesCompiled = false;
-                    continue; // Continuar para próximo pass
-                }
-            }
-            else
-            {
-                // Erro não relacionado a vec3 = vec4 ou padrão não encontrado
-                LOG_ERROR("Failed to compile fragment shader for pass " + std::to_string(i) + " (" + passInfo.shaderPath + ")");
-                // Manter parameterInfo mesmo se compilação falhar
-                glDeleteShader(passData.vertexShader);
-                if (tempFragmentShader != 0)
-                    glDeleteShader(tempFragmentShader);
-                passData.vertexShader = 0;
-                passData.fragmentShader = 0;
-                passData.program = 0;
-                allPassesCompiled = false;
-                continue; // Continuar para próximo pass
-            }
-        }
-        else
-        {
-            // Compilação bem-sucedida
-            passData.fragmentShader = tempFragmentShader;
-        }
-
-        // Criar e linkar programa para este pass (cada pass precisa de seu próprio programa)
-        GLuint program = glCreateProgram();
-        if (program == 0)
-        {
-            LOG_ERROR("Failed to create shader program for pass " + std::to_string(i));
-            // Manter parameterInfo mesmo se criação do programa falhar
-            glDeleteShader(passData.vertexShader);
-            if (passData.fragmentShader != 0)
-                glDeleteShader(passData.fragmentShader);
-            passData.vertexShader = 0;
-            passData.fragmentShader = 0;
-            passData.program = 0;
-            allPassesCompiled = false;
-            continue; // Continuar para próximo pass
-        }
-
-        glAttachShader(program, passData.vertexShader);
-        glAttachShader(program, passData.fragmentShader);
-
-        // Ligar atributos antes de linkar (necessário quando não usamos layout(location))
-        // RetroArch shaders podem usar VertexCoord ou Position
-        glBindAttribLocation(program, 0, "Position");
-        glBindAttribLocation(program, 0, "VertexCoord"); // RetroArch também usa VertexCoord
-        glBindAttribLocation(program, 1, "TexCoord");
-        // IMPORTANTE: Motion blur shaders precisam de PrevTexCoord, Prev1TexCoord, etc.
-        // Como todos os frames têm as mesmas dimensões, podemos usar os mesmos dados de TexCoord
-        glBindAttribLocation(program, 1, "PrevTexCoord");
-        glBindAttribLocation(program, 1, "Prev1TexCoord");
-        glBindAttribLocation(program, 1, "Prev2TexCoord");
-        glBindAttribLocation(program, 1, "Prev3TexCoord");
-        glBindAttribLocation(program, 1, "Prev4TexCoord");
-        glBindAttribLocation(program, 1, "Prev5TexCoord");
-        glBindAttribLocation(program, 1, "Prev6TexCoord");
-        glBindAttribLocation(program, 2, "COLOR"); // Alguns shaders RetroArch usam COLOR como atributo
-
-        glLinkProgram(program);
-
-        GLint success;
-        glGetProgramiv(program, GL_LINK_STATUS, &success);
-        if (!success)
-        {
-            char infoLog[512];
-            glGetProgramInfoLog(program, 512, nullptr, infoLog);
-            LOG_ERROR("Error linking shader program for pass " + std::to_string(i) + " (" + passInfo.shaderPath + "): " + std::string(infoLog));
-            glDeleteProgram(program);
-            glDeleteShader(passData.vertexShader);
-            glDeleteShader(passData.fragmentShader);
-            glDeleteProgram(program);
-            // Manter parameterInfo mesmo se linkagem falhar
-            passData.vertexShader = 0;
-            passData.fragmentShader = 0;
-            passData.program = 0;
-            allPassesCompiled = false;
-            continue; // Continuar para próximo pass
-        }
-
-        passData.program = program;
-        passData.floatFramebuffer = passInfo.floatFramebuffer;
-        
-        // Pré-cachear uniforms comuns para este pass após linkagem bem-sucedida
-        preCacheCommonUniforms(program);
     }
 
     // Verificar se há texturas de referência
@@ -845,6 +846,687 @@ bool ShaderEngine::loadPresetPasses()
     // Os parâmetros extraídos estarão disponíveis na UI
     return allPassesCompiled;
 }
+
+void ShaderEngine::renderMultipassPass(size_t i, GLuint &currentTexture, uint32_t &currentWidth,
+                                       uint32_t &currentHeight, GLuint originalTexture)
+{
+    auto &pass = m_passes[i];
+    const auto &passInfo = pass.passInfo;
+
+    // Calcular dimensões de saída
+    // Para absolute, precisamos ler o valor do preset
+    uint32_t absX = 0, absY = 0;
+    if (passInfo.scaleTypeX == "absolute")
+    {
+        absX = static_cast<uint32_t>(std::round(passInfo.scaleX));
+    }
+    if (passInfo.scaleTypeY == "absolute")
+    {
+        absY = static_cast<uint32_t>(std::round(passInfo.scaleY));
+    }
+
+    // IMPORTANTE: Se for o último pass e não especificar escala, usar viewport
+    // Isso garante que a textura final preencha a janela
+    // MAS: Se o primeiro pass especificar viewport explicitamente, não alterar
+    bool isLastPass = (i == m_passes.size() - 1);
+    std::string scaleTypeX = passInfo.scaleTypeX;
+    std::string scaleTypeY = passInfo.scaleTypeY;
+    float scaleX = passInfo.scaleX;
+    float scaleY = passInfo.scaleY;
+
+    // Se for o último pass e não especificar escala (ou for "source" com scale 1.0),
+    // usar viewport para preencher a janela
+    // IMPORTANTE: Não alterar se já especificar viewport explicitamente
+    if (isLastPass && scaleTypeX != "viewport" && (scaleTypeX.empty() || (scaleTypeX == "source" && scaleX == 1.0f)))
+    {
+        scaleTypeX = "viewport";
+        scaleX = 1.0f;
+    }
+    if (isLastPass && scaleTypeY != "viewport" && (scaleTypeY.empty() || (scaleTypeY == "source" && scaleY == 1.0f)))
+    {
+        scaleTypeY = "viewport";
+        scaleY = 1.0f;
+    }
+
+    uint32_t outputWidth = calculateScale(currentWidth, scaleTypeX, scaleX,
+                                          m_viewportWidth, absX);
+    uint32_t outputHeight = calculateScale(currentHeight, scaleTypeY, scaleY,
+                                           m_viewportHeight, absY);
+
+    // Aplicar limite de resolução apenas se configurado pelo usuário
+    if (m_maxShaderWidth > 0 && outputWidth > m_maxShaderWidth)
+    {
+        float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
+        outputWidth = m_maxShaderWidth;
+        outputHeight = static_cast<uint32_t>(std::round(m_maxShaderWidth / aspectRatio));
+        outputHeight = (outputHeight / 2) * 2; // Múltiplo de 2
+    }
+    if (m_maxShaderHeight > 0 && outputHeight > m_maxShaderHeight)
+    {
+        float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
+        outputHeight = m_maxShaderHeight;
+        outputWidth = static_cast<uint32_t>(std::round(m_maxShaderHeight * aspectRatio));
+        outputWidth = (outputWidth / 2) * 2; // Múltiplo de 2
+    }
+
+    // DEBUG: Log das dimensões calculadas
+    if (i == 0 || i == m_passes.size() - 1)
+    {
+    }
+
+    // Criar/atualizar framebuffer se necessário
+    if (pass.framebuffer == 0 || pass.width != outputWidth || pass.height != outputHeight)
+    {
+        cleanupFramebuffer(pass.framebuffer, pass.texture);
+        createFramebuffer(outputWidth, outputHeight, pass.passInfo.floatFramebuffer,
+                          pass.framebuffer, pass.texture, pass.passInfo.srgbFramebuffer);
+        // Dimensões mudaram: invalidar feedback FBO; será re-alocada lazy.
+        cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
+        pass.feedbackEnabled = false;
+        pass.width = outputWidth;
+        pass.height = outputHeight;
+
+        // DEBUG: Log do primeiro pass
+        if (i == 0)
+        {
+        }
+    }
+
+    // Bind framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
+
+    // Para passes com srgb_framebuffer=true, o FBO usa GL_SRGB8_ALPHA8.
+    // Sem GL_FRAMEBUFFER_SRGB habilitado, o valor escrito pelo shader cai
+    // direto na textura sem encoding sRGB; depois, o pass seguinte ao ler
+    // a textura aplica decoding sRGB→linear automaticamente, gerando
+    // gama dupla a cada pass e progressivamente escurecendo até preto.
+    // GL_FRAMEBUFFER_SRGB = 0x8DB9 (não exposto pelo nosso loader glad)
+    constexpr GLenum FRAMEBUFFER_SRGB_ENUM = 0x8DB9;
+    if (pass.passInfo.srgbFramebuffer)
+    {
+        glEnable(FRAMEBUFFER_SRGB_ENUM);
+    }
+    else
+    {
+        glDisable(FRAMEBUFFER_SRGB_ENUM);
+    }
+
+    glViewport(0, 0, outputWidth, outputHeight);
+
+    // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
+    // O shader gameboy usa alpha, então precisamos de um fundo transparente
+    // IMPORTANTE: Habilitar color mask antes de limpar (como RetroArch faz)
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // IMPORTANTE: Para shaders que usam alpha (como Game Boy), NÃO habilitar blending durante a renderização
+    // O blending é necessário apenas na renderização final na janela, não durante a renderização para o framebuffer
+    // Durante a renderização para o framebuffer, queremos que o shader escreva diretamente o alpha que ele calcula
+    // O blending será aplicado depois quando renderizarmos a textura do framebuffer na janela
+    // IMPORTANTE: Verificar se o programa é válido ANTES de usar
+    if (pass.program == 0)
+    {
+        LOG_ERROR("Invalid shader program in pass " + std::to_string(i));
+        // IMPORTANTE: Resetar estado do OpenGL antes de continuar
+        glUseProgram(0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return;
+    }
+
+    // IMPORTANTE: Desabilitar blending, culling e depth test (como RetroArch faz)
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+
+    // Usar shader program (agora sabemos que é válido)
+    glUseProgram(pass.program);
+
+    // IMPORTANTE: Configurar uniforms ANTES de bind de texturas
+    // Mas o uniform Texture/Source precisa ser configurado DEPOIS do bind
+    // Primeiro, configurar outros uniforms (SourceSize, etc)
+    setupUniforms(pass.program, i, currentWidth, currentHeight, outputWidth, outputHeight);
+
+    // Bind textura de entrada na unidade 0 (ANTES de configurar uniform Texture)
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, currentTexture);
+
+    // Verificar se a textura é válida ANTES de configurar uniforms
+    if (currentTexture == 0)
+    {
+        LOG_ERROR("Invalid input texture in pass " + std::to_string(i));
+        // IMPORTANTE: Resetar estado do OpenGL antes de continuar
+        glUseProgram(0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return;
+    }
+
+    // IMPORTANTE: Aplicar filter_linear# e wrap_mode# na textura de entrada
+    // RetroArch aplica essas configurações quando faz bind da textura
+    // Isso é crítico para shaders como motionblur-simple e crt-geom que precisam de GL_NEAREST
+    // A textura já está bindada (glBindTexture acima), então apenas aplicar parâmetros
+    bool filterLinear = passInfo.filterLinear;
+    std::string wrapMode = passInfo.wrapMode;
+    bool mipmapInput = passInfo.mipmapInput;
+
+    // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
+    // IMPORTANTE: Aplicar sempre, pois alguns shaders (como crt-geom) precisam de GL_NEAREST no primeiro pass
+    GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+    // Se mipmap for necessário, usar filtros de mipmap
+    if (mipmapInput)
+    {
+        if (filterLinear)
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        }
+        else
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        }
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+
+    // Aplicar wrap mode
+    // IMPORTANTE: Usar clamp_to_edge como fallback se clamp_to_border não for suportado
+    GLenum wrap = wrapModeToGLEnum(wrapMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+
+    // DEBUG: Log do primeiro pass
+    if (i == 0)
+    {
+    }
+
+    // Configurar uniform Texture/Source DEPOIS do bind (como RetroArch faz)
+    // RetroArch shaders podem usar diferentes nomes: Texture, Source, Input, s_p, etc.
+    // Tentar todos os nomes comuns
+    bool textureBound = false;
+
+    // Lista de nomes comuns de uniforms de textura no RetroArch
+    const char *textureUniformNames[] = {
+        "Texture", // Mais comum
+        "Source",  // Segundo mais comum
+        "Input",   // Alguns shaders usam
+        "s_p",     // Usado por alguns shaders (ex: sgenpt-mix)
+        "tex",     // Alguns shaders usam
+        "image",   // Raro, mas possível
+    };
+
+    for (const char *name : textureUniformNames)
+    {
+        GLint loc = getUniformLocation(pass.program, name);
+        if (loc >= 0)
+        {
+            // IMPORTANTE: Garantir que a textura está bindada ANTES de configurar o uniform
+            // E garantir que estamos na unidade de textura correta
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, currentTexture);
+            glUniform1i(loc, 0);
+            textureBound = true;
+            if (i == 0 || i == 3 || i == 4)
+            {
+            }
+            break; // Encontrou um, não precisa tentar os outros
+        }
+        else if (i == 0)
+        {
+            // Log apenas no primeiro pass para debug
+            // LOG_INFO("Pass 0: Uniform '" + std::string(name) + "' não encontrado");
+        }
+    }
+
+    // Se nenhum uniform foi encontrado, logar aviso (primeiro pass, pass 3 e pass 4 que estão falhando)
+    // Nota: o warning sobre "nenhum uniform de textura encontrado" foi
+    // movido pra depois das demais ligações (PrevTexture, PassPrev,
+    // PassFeedback, alias, OrigTexture, LUT). Shaders como avg-lum0.glsl
+    // declaram `Texture` mas só usam `PrevN`, fazendo o compilador
+    // otimizar `Texture` fora do programa — não é tela preta de verdade.
+
+    // Bind texturas de passes anteriores (PassPrev#Texture)
+    // RetroArch shaders podem referenciar saídas de passes anteriores
+    // Também suportar nomes alternativos: PrevTexture, Prev1Texture, etc.
+    int texUnit = 1;
+
+    // IMPORTANTE: Se não há passes anteriores (i == 0), mas o shader espera PrevTexture,
+    // vincular a textura de entrada atual para esses uniforms (comportamento comum do RetroArch)
+    // IMPORTANTE: Para motion blur, precisamos vincular frames anteriores reais
+    // Verificar se o shader precisa de histórico de frames (PrevTexture, Prev1Texture, etc.)
+    bool needsHistory = false;
+    for (int prevIdx = 0; prevIdx < 7; ++prevIdx)
+    {
+        std::string name = (prevIdx == 0) ? "PrevTexture" : "Prev" + std::to_string(prevIdx) + "Texture";
+        if (getUniformLocation(pass.program, name) >= 0)
+        {
+            needsHistory = true;
+            break;
+        }
+    }
+
+    if (i == 0)
+    {
+        // Para o primeiro pass, vincular histórico de frames se disponível
+        // IMPORTANTE: Se não há histórico suficiente, NÃO vincular os PrevTexture uniforms
+        // Isso evita que o shader faça média de frames idênticos (que escurece)
+        // O shader motion blur deve funcionar apenas quando há histórico real
+        for (int prevIdx = 0; prevIdx < 7; ++prevIdx) // RetroArch geralmente usa até Prev6Texture
+        {
+            std::vector<std::string> passTextureNames;
+            if (prevIdx == 0)
+            {
+                passTextureNames.push_back("PrevTexture");
+                passTextureNames.push_back("PassPrev0Texture");
+            }
+            else
+            {
+                passTextureNames.push_back("Prev" + std::to_string(prevIdx) + "Texture");
+                passTextureNames.push_back("PassPrev" + std::to_string(prevIdx) + "Texture");
+            }
+
+            for (const auto &name : passTextureNames)
+            {
+                GLint loc = getUniformLocation(pass.program, name);
+                if (loc >= 0)
+                {
+                    // IMPORTANTE: Só vincular se temos histórico real para este índice
+                    // Se não há histórico suficiente, NÃO vincular o uniform
+                    // Isso evita que o shader faça média de frames idênticos (que escurece)
+                    // O shader motion blur deve funcionar apenas quando há histórico real
+                    if (needsHistory && prevIdx < static_cast<int>(m_frameHistory.size()))
+                    {
+                        glActiveTexture(GL_TEXTURE0 + texUnit);
+
+                        // Usar frame do histórico (frames mais antigos primeiro)
+                        // PrevTexture = frame mais recente (índice 0), Prev6Texture = frame mais antigo
+                        // O histórico é ordenado: [mais recente, ..., mais antigo]
+                        size_t historyIdx = prevIdx; // prevIdx=0 é o mais recente, prevIdx=6 é o mais antigo
+                        if (historyIdx < m_frameHistory.size() && m_frameHistory[historyIdx] != 0)
+                        {
+                            glBindTexture(GL_TEXTURE_2D, m_frameHistory[historyIdx]);
+                            glUniform1i(loc, texUnit);
+                            texUnit++;
+                        }
+                    }
+                    // Se não há histórico suficiente, não vincular o uniform
+                    // O shader pode usar valores padrão ou zero, mas não fará média de frames idênticos
+                    // Isso evita o escurecimento quando não há histórico suficiente
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        // Para passes subsequentes, vincular texturas de passes anteriores reais
+        for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+        {
+            // Tentar diferentes nomes de uniforms
+            std::vector<std::string> passTextureNames;
+            if (prevPass == 0)
+            {
+                passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
+                passTextureNames.push_back("PrevTexture");
+            }
+            else
+            {
+                passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
+                passTextureNames.push_back("Prev" + std::to_string(prevPass) + "Texture");
+            }
+
+            for (const auto &name : passTextureNames)
+            {
+                GLint loc = getUniformLocation(pass.program, name);
+                if (loc >= 0)
+                {
+                    glActiveTexture(GL_TEXTURE0 + texUnit);
+                    glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
+                    glUniform1i(loc, texUnit);
+                    texUnit++;
+                    break;
+                }
+            }
+
+            // PassPrev<N>TextureSize / PassPrev<N>InputSize / PassPrev<N>OutputSize:
+            // dimensões do pass alvo. Sem isso, shaders como crt-royale-bloom-approx
+            // (que faz tex_uv = video_uv * PassPrev2InputSize / PassPrev2TextureSize)
+            // dividem 0/0 e produzem NaN → tela preta.
+            const std::string nStr = std::to_string(i - prevPass);
+            const ShaderPassData &target = m_passes[prevPass];
+            const float tw = static_cast<float>(target.width);
+            const float th = static_cast<float>(target.height);
+
+            GLint sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "TextureSize");
+            if (sizeLoc >= 0)
+            {
+                glUniform2f(sizeLoc, tw, th);
+            }
+            sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "InputSize");
+            if (sizeLoc >= 0)
+            {
+                // InputSize de pass P é o tamanho que ele recebeu como entrada.
+                // Se P>0, é o output do pass anterior; se P==0, é o source original.
+                if (prevPass == 0)
+                {
+                    glUniform2f(sizeLoc,
+                                static_cast<float>(m_sourceWidth),
+                                static_cast<float>(m_sourceHeight));
+                }
+                else
+                {
+                    glUniform2f(sizeLoc,
+                                static_cast<float>(m_passes[prevPass - 1].width),
+                                static_cast<float>(m_passes[prevPass - 1].height));
+                }
+            }
+            sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "OutputSize");
+            if (sizeLoc >= 0)
+            {
+                glUniform2f(sizeLoc, tw, th);
+            }
+        }
+
+        // PassPrev<N>Texture com N > pass atual aponta pra "antes do pass 0",
+        // que na prática é o input original (kawase_glow's screen_combine usa
+        // PassPrev8Texture no pass 7 pra recuperar a imagem pré-blur).
+        // Tentamos uma faixa razoável acima do pass atual.
+        for (uint32_t N = i + 1; N <= i + 12; ++N)
+        {
+            GLint loc = getUniformLocation(pass.program,
+                                           "PassPrev" + std::to_string(N) + "Texture");
+            if (loc >= 0 && originalTexture != 0)
+            {
+                glActiveTexture(GL_TEXTURE0 + texUnit);
+                glBindTexture(GL_TEXTURE_2D, originalTexture);
+                glUniform1i(loc, texUnit);
+                texUnit++;
+            }
+        }
+
+        // Vincular passes anteriores referenciados por alias (aliasN = SomeName).
+        // RetroArch GLSL spec: presets podem nomear um pass via `aliasN = MyPass`,
+        // e passes posteriores referenciam o sampler como `uniform sampler2D MyPass`
+        // (e o tamanho via `uniform vec4 MyPassSize`).
+        for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
+        {
+            const std::string &alias = m_passes[prevPass].passInfo.alias;
+            if (alias.empty())
+            {
+                return;
+            }
+
+            GLint aliasTexLoc = getUniformLocation(pass.program, alias);
+            if (aliasTexLoc >= 0)
+            {
+                glActiveTexture(GL_TEXTURE0 + texUnit);
+                glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
+                glUniform1i(aliasTexLoc, texUnit);
+                texUnit++;
+            }
+
+            GLint aliasSizeLoc = getUniformLocation(pass.program, alias + "Size");
+            if (aliasSizeLoc >= 0)
+            {
+                float w = static_cast<float>(m_passes[prevPass].width);
+                float h = static_cast<float>(m_passes[prevPass].height);
+                glUniform4f(aliasSizeLoc, w, h,
+                            w > 0.0f ? 1.0f / w : 0.0f,
+                            h > 0.0f ? 1.0f / h : 0.0f);
+            }
+        }
+    }
+
+    // PassFeedback<N> / PassFeedback<N>Texture: o pass corrente pode samplear o
+    // output do frame ANTERIOR de qualquer pass (incluindo si mesmo). Alocação
+    // lazy: se algum uniform PassFeedback<N>* aparecer aqui, marcamos pass[N]
+    // pra ter ping-pong e alocamos sua segunda textura na primeira vez.
+    // O swap entre texture/feedbackTexture acontece no fim do frame, abaixo.
+    for (uint32_t fbPass = 0; fbPass <= i && fbPass < m_passes.size(); ++fbPass)
+    {
+        const std::string idxStr = std::to_string(fbPass);
+        std::vector<std::string> samplerNames = {
+            "PassFeedback" + idxStr,
+            "PassFeedback" + idxStr + "Texture"
+        };
+
+        GLint fbTexLoc = -1;
+        for (const auto &name : samplerNames)
+        {
+            fbTexLoc = getUniformLocation(pass.program, name);
+            if (fbTexLoc >= 0) break;
+        }
+
+        bool hasFeedbackUniform = (fbTexLoc >= 0);
+
+        GLint fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "Size");
+        if (fbSizeLoc < 0)
+        {
+            fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "TextureSize");
+        }
+        if (fbSizeLoc >= 0)
+        {
+            hasFeedbackUniform = true;
+        }
+
+        if (!hasFeedbackUniform)
+        {
+            return;
+        }
+
+        ShaderPassData &fbTarget = m_passes[fbPass];
+        fbTarget.feedbackEnabled = true;
+
+        // Lazy alloc da textura/FBO de feedback com as MESMAS dimensões do
+        // pass alvo. Se as dimensões ainda não foram definidas (pass que não
+        // rodou neste frame ainda), pular — nada útil pra bindar.
+        if (fbTarget.feedbackTexture == 0 && fbTarget.width > 0 && fbTarget.height > 0)
+        {
+            createFramebuffer(fbTarget.width, fbTarget.height,
+                              fbTarget.passInfo.floatFramebuffer,
+                              fbTarget.feedbackFramebuffer, fbTarget.feedbackTexture,
+                              fbTarget.passInfo.srgbFramebuffer);
+        }
+
+        if (fbTexLoc >= 0 && fbTarget.feedbackTexture != 0)
+        {
+            glActiveTexture(GL_TEXTURE0 + texUnit);
+            glBindTexture(GL_TEXTURE_2D, fbTarget.feedbackTexture);
+            glUniform1i(fbTexLoc, texUnit);
+            texUnit++;
+        }
+
+        if (fbSizeLoc >= 0)
+        {
+            float w = static_cast<float>(fbTarget.width);
+            float h = static_cast<float>(fbTarget.height);
+            glUniform4f(fbSizeLoc, w, h,
+                        w > 0.0f ? 1.0f / w : 0.0f,
+                        h > 0.0f ? 1.0f / h : 0.0f);
+        }
+    }
+
+    // IMPORTANTE: Vincular textura original (OrigTexture) se o shader precisar
+    // Alguns shaders (como hqx-pass2) precisam da textura original além da saída do pass anterior
+    GLint origTexLoc = getUniformLocation(pass.program, "OrigTexture");
+    if (origTexLoc >= 0)
+    {
+        glActiveTexture(GL_TEXTURE0 + texUnit);
+        glBindTexture(GL_TEXTURE_2D, originalTexture);
+        glUniform1i(origTexLoc, texUnit);
+        texUnit++;
+    }
+
+    // Bind texturas de referência (LUTs, etc)
+    const auto &presetTextures = m_preset.getTextures();
+    for (const auto &texRef : m_textureReferences)
+    {
+        glActiveTexture(GL_TEXTURE0 + texUnit);
+        glBindTexture(GL_TEXTURE_2D, texRef.second);
+
+        // Aplicar configurações do preset (filter_linear, wrap_mode, mipmap)
+        bool filterLinear = true;               // Padrão: linear
+        std::string wrapMode = "clamp_to_edge"; // Padrão: clamp_to_edge
+        bool mipmap = false;                    // Padrão: sem mipmap
+
+        auto texIt = presetTextures.find(texRef.first);
+        if (texIt != presetTextures.end())
+        {
+            filterLinear = texIt->second.linear;
+            wrapMode = texIt->second.wrapMode;
+            mipmap = texIt->second.mipmap;
+        }
+
+        // Aplicar configurações (textura já está bindada)
+        GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+        if (mipmap)
+        {
+            if (filterLinear)
+            {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            }
+            else
+            {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+            }
+            glGenerateMipmap(GL_TEXTURE_2D);
+        }
+
+        GLenum wrap = wrapModeToGLEnum(wrapMode);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+
+        GLint loc = getUniformLocation(pass.program, texRef.first);
+        if (loc >= 0)
+        {
+            glUniform1i(loc, texUnit);
+        }
+        else
+        {
+            // Não logar aviso se a textura não for usada neste pass
+            // Alguns shaders (como hqx-pass1) não usam todas as texturas de referência
+            // Apenas logar em modo DEBUG se necessário
+            // LOG_WARN("Pass " + std::to_string(i) + ": Uniform de textura de referência '" + texRef.first + "' não encontrado");
+        }
+        texUnit++;
+    }
+
+    // Após TODOS os bindings (Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT),
+    // só avisamos "tela preta provável" se NADA tiver sido bindado neste pass.
+    // texUnit começa em 1 (slot 0 reservado pra Texture). Se ainda for 1 e
+    // textureBound=false, o pass vai amostrar de unidades de textura
+    // não inicializadas — isso sim seria preto de verdade.
+    if (!textureBound && texUnit == 1)
+    {
+        static int warnedPasses = 0;
+        if (warnedPasses < 5)
+        {
+            warnedPasses++;
+            LOG_WARN("Pass " + std::to_string(i) + " sem nenhum sampler bindado " +
+                     "(Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT). " +
+                     "Provável tela preta. Programa: " + std::to_string(pass.program));
+        }
+    }
+
+    // Renderizar
+    // IMPORTANTE: Garantir que os atributos estão habilitados
+    // (alguns drivers podem desabilitar após mudar de programa)
+    glBindVertexArray(m_VAO);
+
+    // Garantir que os atributos estão habilitados
+    glEnableVertexAttribArray(0); // Position
+    glEnableVertexAttribArray(1); // TexCoord
+
+    // IMPORTANTE: Garantir que a textura está bindada antes de renderizar
+    // Alguns drivers podem desvincular a textura durante mudanças de estado
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, currentTexture);
+
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    glBindVertexArray(0);
+
+    // IMPORTANTE: Não precisamos desabilitar blending aqui porque não habilitamos
+    // O blending será aplicado apenas na renderização final na janela
+
+    // DEBUG: Verificar se houve erro OpenGL e verificar se algo foi renderizado
+    // Nota: glGetError pode não estar disponível, então vamos apenas verificar o framebuffer
+
+    // Verificar se o framebuffer está completo (todos os passes)
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE)
+    {
+        LOG_ERROR("Pass " + std::to_string(i) + ": Incomplete framebuffer after rendering! Status: " + std::to_string(status));
+    }
+
+    // Próximo pass usa a saída deste
+    currentTexture = pass.texture;
+    currentWidth = outputWidth;
+    currentHeight = outputHeight;
+
+    // Verificar se a textura de saída é válida
+    if (i == 0 && currentTexture == 0)
+    {
+        LOG_ERROR("Pass 0: Invalid output texture (0)!");
+    }
+}
+
+
+GLuint ShaderEngine::renderSinglePass(GLuint inputTexture, uint32_t width, uint32_t height)
+{
+    // Modo simples (shader único)
+    if (m_framebuffer == 0 || m_outputWidth != width || m_outputHeight != height)
+    {
+        cleanupFramebuffer(m_framebuffer, m_outputTexture);
+        createFramebuffer(width, height, false, m_framebuffer, m_outputTexture);
+        m_outputWidth = width;
+        m_outputHeight = height;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    glViewport(0, 0, width, height);
+
+    glUseProgram(m_shaderProgram);
+
+    GLint texLoc = getUniformLocation(m_shaderProgram, "Texture");
+    if (texLoc >= 0)
+    {
+        glUniform1i(texLoc, 0);
+    }
+
+    GLint texSizeLoc = getUniformLocation(m_shaderProgram, "TextureSize");
+    if (texSizeLoc >= 0)
+    {
+        glUniform2f(texSizeLoc, static_cast<float>(width), static_cast<float>(height));
+    }
+
+    GLint inputSizeLoc = getUniformLocation(m_shaderProgram, "InputSize");
+    if (inputSizeLoc >= 0)
+    {
+        glUniform2f(inputSizeLoc, static_cast<float>(width), static_cast<float>(height));
+    }
+
+    GLint outputSizeLoc = getUniformLocation(m_shaderProgram, "OutputSize");
+    if (outputSizeLoc >= 0)
+    {
+        glUniform2f(outputSizeLoc, static_cast<float>(width), static_cast<float>(height));
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, inputTexture);
+
+    glBindVertexArray(m_VAO);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return m_outputTexture;
+}
+
 
 GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t height)
 {
@@ -1009,628 +1691,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // Aplicar cada pass
         for (size_t i = 0; i < m_passes.size(); ++i)
         {
-            auto &pass = m_passes[i];
-            const auto &passInfo = pass.passInfo;
-
-            // Calcular dimensões de saída
-            // Para absolute, precisamos ler o valor do preset
-            uint32_t absX = 0, absY = 0;
-            if (passInfo.scaleTypeX == "absolute")
-            {
-                absX = static_cast<uint32_t>(std::round(passInfo.scaleX));
-            }
-            if (passInfo.scaleTypeY == "absolute")
-            {
-                absY = static_cast<uint32_t>(std::round(passInfo.scaleY));
-            }
-
-            // IMPORTANTE: Se for o último pass e não especificar escala, usar viewport
-            // Isso garante que a textura final preencha a janela
-            // MAS: Se o primeiro pass especificar viewport explicitamente, não alterar
-            bool isLastPass = (i == m_passes.size() - 1);
-            std::string scaleTypeX = passInfo.scaleTypeX;
-            std::string scaleTypeY = passInfo.scaleTypeY;
-            float scaleX = passInfo.scaleX;
-            float scaleY = passInfo.scaleY;
-
-            // Se for o último pass e não especificar escala (ou for "source" com scale 1.0),
-            // usar viewport para preencher a janela
-            // IMPORTANTE: Não alterar se já especificar viewport explicitamente
-            if (isLastPass && scaleTypeX != "viewport" && (scaleTypeX.empty() || (scaleTypeX == "source" && scaleX == 1.0f)))
-            {
-                scaleTypeX = "viewport";
-                scaleX = 1.0f;
-            }
-            if (isLastPass && scaleTypeY != "viewport" && (scaleTypeY.empty() || (scaleTypeY == "source" && scaleY == 1.0f)))
-            {
-                scaleTypeY = "viewport";
-                scaleY = 1.0f;
-            }
-
-            uint32_t outputWidth = calculateScale(currentWidth, scaleTypeX, scaleX,
-                                                  m_viewportWidth, absX);
-            uint32_t outputHeight = calculateScale(currentHeight, scaleTypeY, scaleY,
-                                                   m_viewportHeight, absY);
-            
-            // Aplicar limite de resolução apenas se configurado pelo usuário
-            if (m_maxShaderWidth > 0 && outputWidth > m_maxShaderWidth)
-            {
-                float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
-                outputWidth = m_maxShaderWidth;
-                outputHeight = static_cast<uint32_t>(std::round(m_maxShaderWidth / aspectRatio));
-                outputHeight = (outputHeight / 2) * 2; // Múltiplo de 2
-            }
-            if (m_maxShaderHeight > 0 && outputHeight > m_maxShaderHeight)
-            {
-                float aspectRatio = static_cast<float>(outputWidth) / static_cast<float>(outputHeight);
-                outputHeight = m_maxShaderHeight;
-                outputWidth = static_cast<uint32_t>(std::round(m_maxShaderHeight * aspectRatio));
-                outputWidth = (outputWidth / 2) * 2; // Múltiplo de 2
-            }
-
-            // DEBUG: Log das dimensões calculadas
-            if (i == 0 || i == m_passes.size() - 1)
-            {
-            }
-
-            // Criar/atualizar framebuffer se necessário
-            if (pass.framebuffer == 0 || pass.width != outputWidth || pass.height != outputHeight)
-            {
-                cleanupFramebuffer(pass.framebuffer, pass.texture);
-                createFramebuffer(outputWidth, outputHeight, pass.passInfo.floatFramebuffer,
-                                  pass.framebuffer, pass.texture, pass.passInfo.srgbFramebuffer);
-                // Dimensões mudaram: invalidar feedback FBO; será re-alocada lazy.
-                cleanupFramebuffer(pass.feedbackFramebuffer, pass.feedbackTexture);
-                pass.feedbackEnabled = false;
-                pass.width = outputWidth;
-                pass.height = outputHeight;
-
-                // DEBUG: Log do primeiro pass
-                if (i == 0)
-                {
-                }
-            }
-
-            // Bind framebuffer
-            glBindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
-
-            // Para passes com srgb_framebuffer=true, o FBO usa GL_SRGB8_ALPHA8.
-            // Sem GL_FRAMEBUFFER_SRGB habilitado, o valor escrito pelo shader cai
-            // direto na textura sem encoding sRGB; depois, o pass seguinte ao ler
-            // a textura aplica decoding sRGB→linear automaticamente, gerando
-            // gama dupla a cada pass e progressivamente escurecendo até preto.
-            // GL_FRAMEBUFFER_SRGB = 0x8DB9 (não exposto pelo nosso loader glad)
-            constexpr GLenum FRAMEBUFFER_SRGB_ENUM = 0x8DB9;
-            if (pass.passInfo.srgbFramebuffer)
-            {
-                glEnable(FRAMEBUFFER_SRGB_ENUM);
-            }
-            else
-            {
-                glDisable(FRAMEBUFFER_SRGB_ENUM);
-            }
-
-            glViewport(0, 0, outputWidth, outputHeight);
-
-            // IMPORTANTE: Limpar com cor transparente (0,0,0,0) para shaders que usam alpha
-            // O shader gameboy usa alpha, então precisamos de um fundo transparente
-            // IMPORTANTE: Habilitar color mask antes de limpar (como RetroArch faz)
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-
-            // IMPORTANTE: Para shaders que usam alpha (como Game Boy), NÃO habilitar blending durante a renderização
-            // O blending é necessário apenas na renderização final na janela, não durante a renderização para o framebuffer
-            // Durante a renderização para o framebuffer, queremos que o shader escreva diretamente o alpha que ele calcula
-            // O blending será aplicado depois quando renderizarmos a textura do framebuffer na janela
-            // IMPORTANTE: Verificar se o programa é válido ANTES de usar
-            if (pass.program == 0)
-            {
-                LOG_ERROR("Invalid shader program in pass " + std::to_string(i));
-                // IMPORTANTE: Resetar estado do OpenGL antes de continuar
-                glUseProgram(0);
-                glBindTexture(GL_TEXTURE_2D, 0);
-                continue; // Pular este pass se o programa é inválido
-            }
-
-            // IMPORTANTE: Desabilitar blending, culling e depth test (como RetroArch faz)
-            glDisable(GL_BLEND);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_DEPTH_TEST);
-
-            // Usar shader program (agora sabemos que é válido)
-            glUseProgram(pass.program);
-
-            // IMPORTANTE: Configurar uniforms ANTES de bind de texturas
-            // Mas o uniform Texture/Source precisa ser configurado DEPOIS do bind
-            // Primeiro, configurar outros uniforms (SourceSize, etc)
-            setupUniforms(pass.program, i, currentWidth, currentHeight, outputWidth, outputHeight);
-
-            // Bind textura de entrada na unidade 0 (ANTES de configurar uniform Texture)
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, currentTexture);
-
-            // Verificar se a textura é válida ANTES de configurar uniforms
-            if (currentTexture == 0)
-            {
-                LOG_ERROR("Invalid input texture in pass " + std::to_string(i));
-                // IMPORTANTE: Resetar estado do OpenGL antes de continuar
-                glUseProgram(0);
-                glBindTexture(GL_TEXTURE_2D, 0);
-                continue; // Pular este pass se não há textura válida
-            }
-
-            // IMPORTANTE: Aplicar filter_linear# e wrap_mode# na textura de entrada
-            // RetroArch aplica essas configurações quando faz bind da textura
-            // Isso é crítico para shaders como motionblur-simple e crt-geom que precisam de GL_NEAREST
-            // A textura já está bindada (glBindTexture acima), então apenas aplicar parâmetros
-            bool filterLinear = passInfo.filterLinear;
-            std::string wrapMode = passInfo.wrapMode;
-            bool mipmapInput = passInfo.mipmapInput;
-
-            // Aplicar filtro (GL_LINEAR ou GL_NEAREST)
-            // IMPORTANTE: Aplicar sempre, pois alguns shaders (como crt-geom) precisam de GL_NEAREST no primeiro pass
-            GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-
-            // Se mipmap for necessário, usar filtros de mipmap
-            if (mipmapInput)
-            {
-                if (filterLinear)
-                {
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-                }
-                else
-                {
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-                }
-                glGenerateMipmap(GL_TEXTURE_2D);
-            }
-
-            // Aplicar wrap mode
-            // IMPORTANTE: Usar clamp_to_edge como fallback se clamp_to_border não for suportado
-            GLenum wrap = wrapModeToGLEnum(wrapMode);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
-
-            // DEBUG: Log do primeiro pass
-            if (i == 0)
-            {
-            }
-
-            // Configurar uniform Texture/Source DEPOIS do bind (como RetroArch faz)
-            // RetroArch shaders podem usar diferentes nomes: Texture, Source, Input, s_p, etc.
-            // Tentar todos os nomes comuns
-            bool textureBound = false;
-
-            // Lista de nomes comuns de uniforms de textura no RetroArch
-            const char *textureUniformNames[] = {
-                "Texture", // Mais comum
-                "Source",  // Segundo mais comum
-                "Input",   // Alguns shaders usam
-                "s_p",     // Usado por alguns shaders (ex: sgenpt-mix)
-                "tex",     // Alguns shaders usam
-                "image",   // Raro, mas possível
-            };
-
-            for (const char *name : textureUniformNames)
-            {
-                GLint loc = getUniformLocation(pass.program, name);
-                if (loc >= 0)
-                {
-                    // IMPORTANTE: Garantir que a textura está bindada ANTES de configurar o uniform
-                    // E garantir que estamos na unidade de textura correta
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, currentTexture);
-                    glUniform1i(loc, 0);
-                    textureBound = true;
-                    if (i == 0 || i == 3 || i == 4)
-                    {
-                    }
-                    break; // Encontrou um, não precisa tentar os outros
-                }
-                else if (i == 0)
-                {
-                    // Log apenas no primeiro pass para debug
-                    // LOG_INFO("Pass 0: Uniform '" + std::string(name) + "' não encontrado");
-                }
-            }
-
-            // Se nenhum uniform foi encontrado, logar aviso (primeiro pass, pass 3 e pass 4 que estão falhando)
-            // Nota: o warning sobre "nenhum uniform de textura encontrado" foi
-            // movido pra depois das demais ligações (PrevTexture, PassPrev,
-            // PassFeedback, alias, OrigTexture, LUT). Shaders como avg-lum0.glsl
-            // declaram `Texture` mas só usam `PrevN`, fazendo o compilador
-            // otimizar `Texture` fora do programa — não é tela preta de verdade.
-
-            // Bind texturas de passes anteriores (PassPrev#Texture)
-            // RetroArch shaders podem referenciar saídas de passes anteriores
-            // Também suportar nomes alternativos: PrevTexture, Prev1Texture, etc.
-            int texUnit = 1;
-
-            // IMPORTANTE: Se não há passes anteriores (i == 0), mas o shader espera PrevTexture,
-            // vincular a textura de entrada atual para esses uniforms (comportamento comum do RetroArch)
-            // IMPORTANTE: Para motion blur, precisamos vincular frames anteriores reais
-            // Verificar se o shader precisa de histórico de frames (PrevTexture, Prev1Texture, etc.)
-            bool needsHistory = false;
-            for (int prevIdx = 0; prevIdx < 7; ++prevIdx)
-            {
-                std::string name = (prevIdx == 0) ? "PrevTexture" : "Prev" + std::to_string(prevIdx) + "Texture";
-                if (getUniformLocation(pass.program, name) >= 0)
-                {
-                    needsHistory = true;
-                    break;
-                }
-            }
-
-            if (i == 0)
-            {
-                // Para o primeiro pass, vincular histórico de frames se disponível
-                // IMPORTANTE: Se não há histórico suficiente, NÃO vincular os PrevTexture uniforms
-                // Isso evita que o shader faça média de frames idênticos (que escurece)
-                // O shader motion blur deve funcionar apenas quando há histórico real
-                for (int prevIdx = 0; prevIdx < 7; ++prevIdx) // RetroArch geralmente usa até Prev6Texture
-                {
-                    std::vector<std::string> passTextureNames;
-                    if (prevIdx == 0)
-                    {
-                        passTextureNames.push_back("PrevTexture");
-                        passTextureNames.push_back("PassPrev0Texture");
-                    }
-                    else
-                    {
-                        passTextureNames.push_back("Prev" + std::to_string(prevIdx) + "Texture");
-                        passTextureNames.push_back("PassPrev" + std::to_string(prevIdx) + "Texture");
-                    }
-
-                    for (const auto &name : passTextureNames)
-                    {
-                        GLint loc = getUniformLocation(pass.program, name);
-                        if (loc >= 0)
-                        {
-                            // IMPORTANTE: Só vincular se temos histórico real para este índice
-                            // Se não há histórico suficiente, NÃO vincular o uniform
-                            // Isso evita que o shader faça média de frames idênticos (que escurece)
-                            // O shader motion blur deve funcionar apenas quando há histórico real
-                            if (needsHistory && prevIdx < static_cast<int>(m_frameHistory.size()))
-                            {
-                                glActiveTexture(GL_TEXTURE0 + texUnit);
-
-                                // Usar frame do histórico (frames mais antigos primeiro)
-                                // PrevTexture = frame mais recente (índice 0), Prev6Texture = frame mais antigo
-                                // O histórico é ordenado: [mais recente, ..., mais antigo]
-                                size_t historyIdx = prevIdx; // prevIdx=0 é o mais recente, prevIdx=6 é o mais antigo
-                                if (historyIdx < m_frameHistory.size() && m_frameHistory[historyIdx] != 0)
-                                {
-                                    glBindTexture(GL_TEXTURE_2D, m_frameHistory[historyIdx]);
-                                    glUniform1i(loc, texUnit);
-                                    texUnit++;
-                                }
-                            }
-                            // Se não há histórico suficiente, não vincular o uniform
-                            // O shader pode usar valores padrão ou zero, mas não fará média de frames idênticos
-                            // Isso evita o escurecimento quando não há histórico suficiente
-                            break;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // Para passes subsequentes, vincular texturas de passes anteriores reais
-                for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
-                {
-                    // Tentar diferentes nomes de uniforms
-                    std::vector<std::string> passTextureNames;
-                    if (prevPass == 0)
-                    {
-                        passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
-                        passTextureNames.push_back("PrevTexture");
-                    }
-                    else
-                    {
-                        passTextureNames.push_back("PassPrev" + std::to_string(i - prevPass) + "Texture");
-                        passTextureNames.push_back("Prev" + std::to_string(prevPass) + "Texture");
-                    }
-
-                    for (const auto &name : passTextureNames)
-                    {
-                        GLint loc = getUniformLocation(pass.program, name);
-                        if (loc >= 0)
-                        {
-                            glActiveTexture(GL_TEXTURE0 + texUnit);
-                            glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
-                            glUniform1i(loc, texUnit);
-                            texUnit++;
-                            break;
-                        }
-                    }
-
-                    // PassPrev<N>TextureSize / PassPrev<N>InputSize / PassPrev<N>OutputSize:
-                    // dimensões do pass alvo. Sem isso, shaders como crt-royale-bloom-approx
-                    // (que faz tex_uv = video_uv * PassPrev2InputSize / PassPrev2TextureSize)
-                    // dividem 0/0 e produzem NaN → tela preta.
-                    const std::string nStr = std::to_string(i - prevPass);
-                    const ShaderPassData &target = m_passes[prevPass];
-                    const float tw = static_cast<float>(target.width);
-                    const float th = static_cast<float>(target.height);
-
-                    GLint sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "TextureSize");
-                    if (sizeLoc >= 0)
-                    {
-                        glUniform2f(sizeLoc, tw, th);
-                    }
-                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "InputSize");
-                    if (sizeLoc >= 0)
-                    {
-                        // InputSize de pass P é o tamanho que ele recebeu como entrada.
-                        // Se P>0, é o output do pass anterior; se P==0, é o source original.
-                        if (prevPass == 0)
-                        {
-                            glUniform2f(sizeLoc,
-                                        static_cast<float>(m_sourceWidth),
-                                        static_cast<float>(m_sourceHeight));
-                        }
-                        else
-                        {
-                            glUniform2f(sizeLoc,
-                                        static_cast<float>(m_passes[prevPass - 1].width),
-                                        static_cast<float>(m_passes[prevPass - 1].height));
-                        }
-                    }
-                    sizeLoc = getUniformLocation(pass.program, "PassPrev" + nStr + "OutputSize");
-                    if (sizeLoc >= 0)
-                    {
-                        glUniform2f(sizeLoc, tw, th);
-                    }
-                }
-
-                // PassPrev<N>Texture com N > pass atual aponta pra "antes do pass 0",
-                // que na prática é o input original (kawase_glow's screen_combine usa
-                // PassPrev8Texture no pass 7 pra recuperar a imagem pré-blur).
-                // Tentamos uma faixa razoável acima do pass atual.
-                for (uint32_t N = i + 1; N <= i + 12; ++N)
-                {
-                    GLint loc = getUniformLocation(pass.program,
-                                                   "PassPrev" + std::to_string(N) + "Texture");
-                    if (loc >= 0 && originalTexture != 0)
-                    {
-                        glActiveTexture(GL_TEXTURE0 + texUnit);
-                        glBindTexture(GL_TEXTURE_2D, originalTexture);
-                        glUniform1i(loc, texUnit);
-                        texUnit++;
-                    }
-                }
-
-                // Vincular passes anteriores referenciados por alias (aliasN = SomeName).
-                // RetroArch GLSL spec: presets podem nomear um pass via `aliasN = MyPass`,
-                // e passes posteriores referenciam o sampler como `uniform sampler2D MyPass`
-                // (e o tamanho via `uniform vec4 MyPassSize`).
-                for (uint32_t prevPass = 0; prevPass < i && prevPass < m_passes.size(); ++prevPass)
-                {
-                    const std::string &alias = m_passes[prevPass].passInfo.alias;
-                    if (alias.empty())
-                    {
-                        continue;
-                    }
-
-                    GLint aliasTexLoc = getUniformLocation(pass.program, alias);
-                    if (aliasTexLoc >= 0)
-                    {
-                        glActiveTexture(GL_TEXTURE0 + texUnit);
-                        glBindTexture(GL_TEXTURE_2D, m_passes[prevPass].texture);
-                        glUniform1i(aliasTexLoc, texUnit);
-                        texUnit++;
-                    }
-
-                    GLint aliasSizeLoc = getUniformLocation(pass.program, alias + "Size");
-                    if (aliasSizeLoc >= 0)
-                    {
-                        float w = static_cast<float>(m_passes[prevPass].width);
-                        float h = static_cast<float>(m_passes[prevPass].height);
-                        glUniform4f(aliasSizeLoc, w, h,
-                                    w > 0.0f ? 1.0f / w : 0.0f,
-                                    h > 0.0f ? 1.0f / h : 0.0f);
-                    }
-                }
-            }
-
-            // PassFeedback<N> / PassFeedback<N>Texture: o pass corrente pode samplear o
-            // output do frame ANTERIOR de qualquer pass (incluindo si mesmo). Alocação
-            // lazy: se algum uniform PassFeedback<N>* aparecer aqui, marcamos pass[N]
-            // pra ter ping-pong e alocamos sua segunda textura na primeira vez.
-            // O swap entre texture/feedbackTexture acontece no fim do frame, abaixo.
-            for (uint32_t fbPass = 0; fbPass <= i && fbPass < m_passes.size(); ++fbPass)
-            {
-                const std::string idxStr = std::to_string(fbPass);
-                std::vector<std::string> samplerNames = {
-                    "PassFeedback" + idxStr,
-                    "PassFeedback" + idxStr + "Texture"
-                };
-
-                GLint fbTexLoc = -1;
-                for (const auto &name : samplerNames)
-                {
-                    fbTexLoc = getUniformLocation(pass.program, name);
-                    if (fbTexLoc >= 0) break;
-                }
-
-                bool hasFeedbackUniform = (fbTexLoc >= 0);
-
-                GLint fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "Size");
-                if (fbSizeLoc < 0)
-                {
-                    fbSizeLoc = getUniformLocation(pass.program, "PassFeedback" + idxStr + "TextureSize");
-                }
-                if (fbSizeLoc >= 0)
-                {
-                    hasFeedbackUniform = true;
-                }
-
-                if (!hasFeedbackUniform)
-                {
-                    continue;
-                }
-
-                ShaderPassData &fbTarget = m_passes[fbPass];
-                fbTarget.feedbackEnabled = true;
-
-                // Lazy alloc da textura/FBO de feedback com as MESMAS dimensões do
-                // pass alvo. Se as dimensões ainda não foram definidas (pass que não
-                // rodou neste frame ainda), pular — nada útil pra bindar.
-                if (fbTarget.feedbackTexture == 0 && fbTarget.width > 0 && fbTarget.height > 0)
-                {
-                    createFramebuffer(fbTarget.width, fbTarget.height,
-                                      fbTarget.passInfo.floatFramebuffer,
-                                      fbTarget.feedbackFramebuffer, fbTarget.feedbackTexture,
-                                      fbTarget.passInfo.srgbFramebuffer);
-                }
-
-                if (fbTexLoc >= 0 && fbTarget.feedbackTexture != 0)
-                {
-                    glActiveTexture(GL_TEXTURE0 + texUnit);
-                    glBindTexture(GL_TEXTURE_2D, fbTarget.feedbackTexture);
-                    glUniform1i(fbTexLoc, texUnit);
-                    texUnit++;
-                }
-
-                if (fbSizeLoc >= 0)
-                {
-                    float w = static_cast<float>(fbTarget.width);
-                    float h = static_cast<float>(fbTarget.height);
-                    glUniform4f(fbSizeLoc, w, h,
-                                w > 0.0f ? 1.0f / w : 0.0f,
-                                h > 0.0f ? 1.0f / h : 0.0f);
-                }
-            }
-
-            // IMPORTANTE: Vincular textura original (OrigTexture) se o shader precisar
-            // Alguns shaders (como hqx-pass2) precisam da textura original além da saída do pass anterior
-            GLint origTexLoc = getUniformLocation(pass.program, "OrigTexture");
-            if (origTexLoc >= 0)
-            {
-                glActiveTexture(GL_TEXTURE0 + texUnit);
-                glBindTexture(GL_TEXTURE_2D, originalTexture);
-                glUniform1i(origTexLoc, texUnit);
-                texUnit++;
-            }
-
-            // Bind texturas de referência (LUTs, etc)
-            const auto &presetTextures = m_preset.getTextures();
-            for (const auto &texRef : m_textureReferences)
-            {
-                glActiveTexture(GL_TEXTURE0 + texUnit);
-                glBindTexture(GL_TEXTURE_2D, texRef.second);
-
-                // Aplicar configurações do preset (filter_linear, wrap_mode, mipmap)
-                bool filterLinear = true;               // Padrão: linear
-                std::string wrapMode = "clamp_to_edge"; // Padrão: clamp_to_edge
-                bool mipmap = false;                    // Padrão: sem mipmap
-
-                auto texIt = presetTextures.find(texRef.first);
-                if (texIt != presetTextures.end())
-                {
-                    filterLinear = texIt->second.linear;
-                    wrapMode = texIt->second.wrapMode;
-                    mipmap = texIt->second.mipmap;
-                }
-
-                // Aplicar configurações (textura já está bindada)
-                GLenum filter = filterLinear ? GL_LINEAR : GL_NEAREST;
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-
-                if (mipmap)
-                {
-                    if (filterLinear)
-                    {
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-                    }
-                    else
-                    {
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-                    }
-                    glGenerateMipmap(GL_TEXTURE_2D);
-                }
-
-                GLenum wrap = wrapModeToGLEnum(wrapMode);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
-
-                GLint loc = getUniformLocation(pass.program, texRef.first);
-                if (loc >= 0)
-                {
-                    glUniform1i(loc, texUnit);
-                }
-                else
-                {
-                    // Não logar aviso se a textura não for usada neste pass
-                    // Alguns shaders (como hqx-pass1) não usam todas as texturas de referência
-                    // Apenas logar em modo DEBUG se necessário
-                    // LOG_WARN("Pass " + std::to_string(i) + ": Uniform de textura de referência '" + texRef.first + "' não encontrado");
-                }
-                texUnit++;
-            }
-
-            // Após TODOS os bindings (Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT),
-            // só avisamos "tela preta provável" se NADA tiver sido bindado neste pass.
-            // texUnit começa em 1 (slot 0 reservado pra Texture). Se ainda for 1 e
-            // textureBound=false, o pass vai amostrar de unidades de textura
-            // não inicializadas — isso sim seria preto de verdade.
-            if (!textureBound && texUnit == 1)
-            {
-                static int warnedPasses = 0;
-                if (warnedPasses < 5)
-                {
-                    warnedPasses++;
-                    LOG_WARN("Pass " + std::to_string(i) + " sem nenhum sampler bindado " +
-                             "(Texture/Prev/PassPrev/PassFeedback/alias/Orig/LUT). " +
-                             "Provável tela preta. Programa: " + std::to_string(pass.program));
-                }
-            }
-
-            // Renderizar
-            // IMPORTANTE: Garantir que os atributos estão habilitados
-            // (alguns drivers podem desabilitar após mudar de programa)
-            glBindVertexArray(m_VAO);
-
-            // Garantir que os atributos estão habilitados
-            glEnableVertexAttribArray(0); // Position
-            glEnableVertexAttribArray(1); // TexCoord
-
-            // IMPORTANTE: Garantir que a textura está bindada antes de renderizar
-            // Alguns drivers podem desvincular a textura durante mudanças de estado
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, currentTexture);
-
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-            glBindVertexArray(0);
-
-            // IMPORTANTE: Não precisamos desabilitar blending aqui porque não habilitamos
-            // O blending será aplicado apenas na renderização final na janela
-
-            // DEBUG: Verificar se houve erro OpenGL e verificar se algo foi renderizado
-            // Nota: glGetError pode não estar disponível, então vamos apenas verificar o framebuffer
-
-            // Verificar se o framebuffer está completo (todos os passes)
-            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-            if (status != GL_FRAMEBUFFER_COMPLETE)
-            {
-                LOG_ERROR("Pass " + std::to_string(i) + ": Incomplete framebuffer after rendering! Status: " + std::to_string(status));
-            }
-
-            // Próximo pass usa a saída deste
-            currentTexture = pass.texture;
-            currentWidth = outputWidth;
-            currentHeight = outputHeight;
-
-            // Verificar se a textura de saída é válida
-            if (i == 0 && currentTexture == 0)
-            {
-                LOG_ERROR("Pass 0: Invalid output texture (0)!");
-            }
+            renderMultipassPass(i, currentTexture, currentWidth, currentHeight, originalTexture);
         }
 
         // Desvincular framebuffer após todos os passes
@@ -1813,54 +1874,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
     }
     else
     {
-        // Modo simples (shader único)
-        if (m_framebuffer == 0 || m_outputWidth != width || m_outputHeight != height)
-        {
-            cleanupFramebuffer(m_framebuffer, m_outputTexture);
-            createFramebuffer(width, height, false, m_framebuffer, m_outputTexture);
-            m_outputWidth = width;
-            m_outputHeight = height;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
-        glViewport(0, 0, width, height);
-
-        glUseProgram(m_shaderProgram);
-
-        GLint texLoc = getUniformLocation(m_shaderProgram, "Texture");
-        if (texLoc >= 0)
-        {
-            glUniform1i(texLoc, 0);
-        }
-
-        GLint texSizeLoc = getUniformLocation(m_shaderProgram, "TextureSize");
-        if (texSizeLoc >= 0)
-        {
-            glUniform2f(texSizeLoc, static_cast<float>(width), static_cast<float>(height));
-        }
-
-        GLint inputSizeLoc = getUniformLocation(m_shaderProgram, "InputSize");
-        if (inputSizeLoc >= 0)
-        {
-            glUniform2f(inputSizeLoc, static_cast<float>(width), static_cast<float>(height));
-        }
-
-        GLint outputSizeLoc = getUniformLocation(m_shaderProgram, "OutputSize");
-        if (outputSizeLoc >= 0)
-        {
-            glUniform2f(outputSizeLoc, static_cast<float>(width), static_cast<float>(height));
-        }
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, inputTexture);
-
-        glBindVertexArray(m_VAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        return m_outputTexture;
+        return renderSinglePass(inputTexture, width, height);
     }
 }
 
@@ -1895,8 +1909,7 @@ uint32_t ShaderEngine::calculateScale(uint32_t sourceSize, const std::string &sc
     return sourceSize;
 }
 
-void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight,
-                                 uint32_t outputWidth, uint32_t outputHeight)
+void ShaderEngine::applyCoreSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight)
 {
     // Texture/Source será configurado DEPOIS do bind da textura (em applyShader)
     // Isso garante que a textura esteja vinculada antes de configurar o uniform
@@ -1995,6 +2008,11 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     // ou que ele tenha sido otimizado fora pelo compilador GLSL
     // Não é necessariamente um erro, apenas um aviso informativo
 
+}
+
+void ShaderEngine::applyPassSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight)
+{
+    GLint loc = 0;
     // PassOutputSize# - Tamanhos de saída de passes anteriores (RetroArch injeta isso)
     // Permite que shaders acessem informações de passes anteriores
     for (uint32_t i = 0; i < passIndex && i < m_passes.size(); ++i)
@@ -2072,6 +2090,11 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         }
     }
 
+}
+
+void ShaderEngine::applyFrameUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight)
+{
+    GLint loc = 0;
     // FrameCount (uint convertido para float - convertido de params.FrameCount)
     // IMPORTANTE: Aplicar frame_count_mod# do passInfo (não do preset parameters)
     // RetroArch armazena frame_count_mod diretamente no pass
@@ -2188,6 +2211,11 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
                     h > 0.0f ? 1.0f / h : 0.0f);
     }
 
+}
+
+void ShaderEngine::applyShaderParameterUniforms(GLuint program, uint32_t passIndex)
+{
+    GLint loc = 0;
     // Parâmetros extraídos de #pragma parameter (injetados pelo RetroArch)
     // Esses são parâmetros configuráveis que o RetroArch injeta como uniforms
     if (passIndex < m_passes.size())
@@ -2345,6 +2373,11 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
         glUniform1f(loc, 0.32f); // Persistence Blue
     }
 
+}
+
+void ShaderEngine::applyAlternateSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight)
+{
+    GLint loc = 0;
     // Parâmetros de resolução e escala
     loc = getUniformLocation(program, "internal_res");
     if (loc >= 0)
@@ -2446,6 +2479,11 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
     // uma declaração explícita e o glUniform4f acima pode não funcionar.
     // Mas na prática, muitos drivers OpenGL são tolerantes com isso.
 
+}
+
+void ShaderEngine::applyGlobalPresetUniforms(GLuint program)
+{
+    GLint loc = 0;
     // Frame count e time
     // IMPORTANTE: NÃO incrementar aqui! FrameCount deve ser incrementado apenas uma vez por frame
     // no início de applyShader(), não a cada chamada de setupUniforms() (que é chamado para cada pass)
@@ -2480,6 +2518,18 @@ void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t in
             glUniform1f(loc, param.second);
         }
     }
+}
+
+
+void ShaderEngine::setupUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight,
+                                 uint32_t outputWidth, uint32_t outputHeight)
+{
+    applyCoreSizeUniforms(program, passIndex, inputWidth, inputHeight, outputWidth, outputHeight);
+    applyPassSizeUniforms(program, passIndex, inputWidth, inputHeight);
+    applyFrameUniforms(program, passIndex, inputWidth, inputHeight);
+    applyShaderParameterUniforms(program, passIndex);
+    applyAlternateSizeUniforms(program, passIndex, inputWidth, inputHeight, outputWidth, outputHeight);
+    applyGlobalPresetUniforms(program);
 }
 
 bool ShaderEngine::loadTextureReference(const std::string &name, const std::string &path)

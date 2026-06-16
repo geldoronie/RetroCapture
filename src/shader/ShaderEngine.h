@@ -160,11 +160,26 @@ private:
     
     // Preset functions
     bool loadPresetPasses();
+    // #154 — per-pass compile/link loop body extracted from loadPresetPasses (behavior-preserving).
+    bool compilePass(size_t i);
     void cleanupPresetPasses();
-    uint32_t calculateScale(uint32_t sourceSize, const std::string& scaleType, float scale, 
+    uint32_t calculateScale(uint32_t sourceSize, const std::string& scaleType, float scale,
                            uint32_t viewportSize, uint32_t absoluteValue);
+    // #154 — applyShader() bodies extracted (behavior-preserving): one preset pass + the simple single-shader path.
+    void renderMultipassPass(size_t i, GLuint &currentTexture, uint32_t &currentWidth,
+                             uint32_t &currentHeight, GLuint originalTexture);
+    GLuint renderSinglePass(GLuint inputTexture, uint32_t width, uint32_t height);
     void setupUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight,
                       uint32_t outputWidth, uint32_t outputHeight);
+    // #154 — setupUniforms() split into cohesive uniform-group helpers (behavior-preserving).
+    void applyCoreSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight,
+                               uint32_t outputWidth, uint32_t outputHeight);
+    void applyPassSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight);
+    void applyFrameUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight);
+    void applyShaderParameterUniforms(GLuint program, uint32_t passIndex);
+    void applyAlternateSizeUniforms(GLuint program, uint32_t passIndex, uint32_t inputWidth, uint32_t inputHeight,
+                                    uint32_t outputWidth, uint32_t outputHeight);
+    void applyGlobalPresetUniforms(GLuint program);
     bool loadTextureReference(const std::string& name, const std::string& path);
     void cleanupTextureReferences();
     
