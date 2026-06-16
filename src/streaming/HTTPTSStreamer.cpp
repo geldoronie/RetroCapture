@@ -758,7 +758,7 @@ void HTTPTSStreamer::cleanup()
     stop();
 }
 
-void HTTPTSStreamer::handleClient(int clientFd)
+bool HTTPTSStreamer::readClientRequest(int clientFd, std::string &request)
 {
 // Configurar socket para baixa latência
 #if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
@@ -784,7 +784,6 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // Cap the total bytes we'll accumulate (16 KB header limit) and
     // the total wait time (5 s) so a malicious or stuck client can't
     // hold a handler thread indefinitely.
-    std::string request;
     request.reserve(2048);
     {
         char buffer[4096];
@@ -815,7 +814,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
                 // partial data buffered there's no point trying to
                 // parse it as a valid HTTP request.
                 m_httpServer.closeClient(clientFd);
-                return;
+        return false;
             }
             buffer[n] = '\0';
             request.append(buffer, static_cast<size_t>(n));
@@ -827,7 +826,7 @@ void HTTPTSStreamer::handleClient(int clientFd)
             // Headers larger than 16 KB or stream never produced a
             // terminator — either malformed or hostile. Drop.
             m_httpServer.closeClient(clientFd);
-            return;
+        return false;
         }
 
         // The SO_RCVTIMEO we set above is socket-wide and persists
@@ -849,6 +848,177 @@ void HTTPTSStreamer::handleClient(int clientFd)
         ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tvOff, sizeof(tvOff));
 #endif
     }
+    return true;
+}
+
+
+void HTTPTSStreamer::serveRawClient(int clientFd, const std::string &request)
+{
+    // #49 Phase 3 — password gate. When the user has configured a
+    // stream password, /raw rejects unauthenticated connections
+    // with 401 + WWW-Authenticate so any CLI / FFmpeg consumer
+    // can surface the missing-token failure cleanly. /stream is
+    // intentionally not gated — it stays open for VLC / mpv /
+    // browser portal viewers.
+    std::string pwHash;
+    {
+        std::lock_guard<std::mutex> lock(m_passwordMu);
+        pwHash = m_streamPasswordHash;
+    }
+    if (!HttpAuth::authorized(request, pwHash))
+    {
+        const char *response = "HTTP/1.1 401 Unauthorized\r\n"
+                               "WWW-Authenticate: Bearer realm=\"retrocapture-raw\"\r\n"
+                               "Content-Type: text/plain\r\n"
+                               "Connection: close\r\n"
+                               "\r\n"
+                               "This stream requires a password. "
+                               "Send Authorization: Bearer <sha256(password)> "
+                               "or append ?token=<sha256(password)> to the URL.";
+        m_httpServer.sendData(clientFd, response, strlen(response));
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+
+    // /raw is only meaningful while streaming is actually running —
+    // the raw encoder pipeline is brought up by initializeRawPipeline
+    // as part of start() and torn down by stop(). Without it, the
+    // HTTP socket accepts the connection and ffmpeg/avformat_open_input
+    // sees a valid TS-ish header (whatever the muxer flushed before
+    // shutdown) but no further packets ever arrive — the user-visible
+    // symptom is "client says connected but stream stays black".
+    // Bail with 503 so the client treats it as a failed connect.
+    if (!m_rawMediaEncoder.isInitialized())
+    {
+        const char *response = "HTTP/1.1 503 Service Unavailable\r\n"
+                               "Content-Type: text/plain\r\n"
+                               "Connection: close\r\n"
+                               "\r\n"
+                               "Streaming is not running on this server. "
+                               "Start streaming on the host before connecting.";
+        m_httpServer.sendData(clientFd, response, strlen(response));
+        m_httpServer.closeClient(clientFd);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> headerLock(m_rawHeaderMutex);
+        if (m_rawHeaderWritten && !m_rawFormatHeader.empty())
+        {
+            ssize_t headerSent = m_httpServer.sendData(clientFd, m_rawFormatHeader.data(), m_rawFormatHeader.size());
+            if (headerSent < 0)
+            {
+                LOG_ERROR("Failed to send raw format header to client");
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+        }
+    }
+
+    enableClientKeepalive(clientFd);
+    {
+        std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+        m_rawClientSockets.push_back(clientFd);
+        m_rawClientCount = m_rawClientSockets.size();
+    }
+
+    while (!m_stopRequest && m_running)
+    {
+        char dummy;
+        ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
+        if (result <= 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Atomically remove from the broadcast list AND close the fd,
+    // both under the list lock. Without this writeToRawClients
+    // (which also detects send failures and closes the fd) and the
+    // handler thread could double-close the same fd value — and
+    // because Linux reuses fd numbers immediately, the second close
+    // sometimes shut down a freshly-accepted unrelated connection,
+    // breaking every subsequent client until streaming was
+    // restarted. Whichever path finds the fd still in the list
+    // wins the close; the loser sees an empty find result and exits
+    // without touching the fd.
+    {
+        std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+        auto it = std::find(m_rawClientSockets.begin(), m_rawClientSockets.end(), clientFd);
+        if (it != m_rawClientSockets.end())
+        {
+            m_rawClientSockets.erase(it);
+            m_rawClientPending.erase(clientFd);
+            m_rawClientCount = m_rawClientSockets.size();
+            m_httpServer.closeClient(clientFd);
+        }
+    }
+    return;
+}
+
+
+void HTTPTSStreamer::serveStreamClient(int clientFd)
+{
+    // /stream path — unchanged from before Phase 2.
+
+    // Enviar header do formato MPEG-TS se já foi capturado
+    {
+        std::lock_guard<std::mutex> headerLock(m_headerMutex);
+        if (m_headerWritten && !m_formatHeader.empty())
+        {
+            ssize_t headerSent = m_httpServer.sendData(clientFd, m_formatHeader.data(), m_formatHeader.size());
+            if (headerSent < 0)
+            {
+                LOG_ERROR("Failed to send format header to client");
+                m_httpServer.closeClient(clientFd);
+                return;
+            }
+        }
+        else
+        {
+        }
+    }
+
+    // Adicionar cliente à lista
+    enableClientKeepalive(clientFd);
+    {
+        std::lock_guard<std::mutex> lock(m_outputMutex);
+        m_clientSockets.push_back(clientFd);
+        m_clientCount = m_clientSockets.size();
+    }
+
+    // Manter conexão aberta - dados serão enviados via writeToClients
+    // Monitorar conexão para detectar desconexão
+    while (!m_stopRequest && m_running)
+    {
+        char dummy;
+        ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
+        if (result <= 0)
+        {
+            break; // Cliente desconectou
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // evitar busy-waiting
+    }
+
+    // Atomically remove from the broadcast list AND close the fd, same
+    // pattern as the /raw branch above — avoids the double-close race
+    // with writeToClients on disconnect.
+    {
+        std::lock_guard<std::mutex> lock(m_outputMutex);
+        auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
+        if (it != m_clientSockets.end())
+        {
+            m_clientSockets.erase(it);
+            m_clientPending.erase(clientFd);
+            m_clientCount = m_clientSockets.size();
+            m_httpServer.closeClient(clientFd);
+        }
+    }
+}
+
+
+void HTTPTSStreamer::handleClient(int clientFd)
+{
+    std::string request;
+    if (!readClientRequest(clientFd, request))
+        return;
     ssize_t bytesRead = static_cast<ssize_t>(request.size());
     (void)bytesRead;
 
@@ -1112,160 +1282,11 @@ void HTTPTSStreamer::handleClient(int clientFd)
     // different state mirrors (format header, client list, mutex).
     if (isRawRequest)
     {
-        // #49 Phase 3 — password gate. When the user has configured a
-        // stream password, /raw rejects unauthenticated connections
-        // with 401 + WWW-Authenticate so any CLI / FFmpeg consumer
-        // can surface the missing-token failure cleanly. /stream is
-        // intentionally not gated — it stays open for VLC / mpv /
-        // browser portal viewers.
-        std::string pwHash;
-        {
-            std::lock_guard<std::mutex> lock(m_passwordMu);
-            pwHash = m_streamPasswordHash;
-        }
-        if (!HttpAuth::authorized(request, pwHash))
-        {
-            const char *response = "HTTP/1.1 401 Unauthorized\r\n"
-                                   "WWW-Authenticate: Bearer realm=\"retrocapture-raw\"\r\n"
-                                   "Content-Type: text/plain\r\n"
-                                   "Connection: close\r\n"
-                                   "\r\n"
-                                   "This stream requires a password. "
-                                   "Send Authorization: Bearer <sha256(password)> "
-                                   "or append ?token=<sha256(password)> to the URL.";
-            m_httpServer.sendData(clientFd, response, strlen(response));
-            m_httpServer.closeClient(clientFd);
-            return;
-        }
-
-        // /raw is only meaningful while streaming is actually running —
-        // the raw encoder pipeline is brought up by initializeRawPipeline
-        // as part of start() and torn down by stop(). Without it, the
-        // HTTP socket accepts the connection and ffmpeg/avformat_open_input
-        // sees a valid TS-ish header (whatever the muxer flushed before
-        // shutdown) but no further packets ever arrive — the user-visible
-        // symptom is "client says connected but stream stays black".
-        // Bail with 503 so the client treats it as a failed connect.
-        if (!m_rawMediaEncoder.isInitialized())
-        {
-            const char *response = "HTTP/1.1 503 Service Unavailable\r\n"
-                                   "Content-Type: text/plain\r\n"
-                                   "Connection: close\r\n"
-                                   "\r\n"
-                                   "Streaming is not running on this server. "
-                                   "Start streaming on the host before connecting.";
-            m_httpServer.sendData(clientFd, response, strlen(response));
-            m_httpServer.closeClient(clientFd);
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> headerLock(m_rawHeaderMutex);
-            if (m_rawHeaderWritten && !m_rawFormatHeader.empty())
-            {
-                ssize_t headerSent = m_httpServer.sendData(clientFd, m_rawFormatHeader.data(), m_rawFormatHeader.size());
-                if (headerSent < 0)
-                {
-                    LOG_ERROR("Failed to send raw format header to client");
-                    m_httpServer.closeClient(clientFd);
-                    return;
-                }
-            }
-        }
-
-        enableClientKeepalive(clientFd);
-        {
-            std::lock_guard<std::mutex> lock(m_rawOutputMutex);
-            m_rawClientSockets.push_back(clientFd);
-            m_rawClientCount = m_rawClientSockets.size();
-        }
-
-        while (!m_stopRequest && m_running)
-        {
-            char dummy;
-            ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
-            if (result <= 0) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
-        // Atomically remove from the broadcast list AND close the fd,
-        // both under the list lock. Without this writeToRawClients
-        // (which also detects send failures and closes the fd) and the
-        // handler thread could double-close the same fd value — and
-        // because Linux reuses fd numbers immediately, the second close
-        // sometimes shut down a freshly-accepted unrelated connection,
-        // breaking every subsequent client until streaming was
-        // restarted. Whichever path finds the fd still in the list
-        // wins the close; the loser sees an empty find result and exits
-        // without touching the fd.
-        {
-            std::lock_guard<std::mutex> lock(m_rawOutputMutex);
-            auto it = std::find(m_rawClientSockets.begin(), m_rawClientSockets.end(), clientFd);
-            if (it != m_rawClientSockets.end())
-            {
-                m_rawClientSockets.erase(it);
-                m_rawClientPending.erase(clientFd);
-                m_rawClientCount = m_rawClientSockets.size();
-                m_httpServer.closeClient(clientFd);
-            }
-        }
+        serveRawClient(clientFd, request);
         return;
     }
 
-    // /stream path — unchanged from before Phase 2.
-
-    // Enviar header do formato MPEG-TS se já foi capturado
-    {
-        std::lock_guard<std::mutex> headerLock(m_headerMutex);
-        if (m_headerWritten && !m_formatHeader.empty())
-        {
-            ssize_t headerSent = m_httpServer.sendData(clientFd, m_formatHeader.data(), m_formatHeader.size());
-            if (headerSent < 0)
-            {
-                LOG_ERROR("Failed to send format header to client");
-                m_httpServer.closeClient(clientFd);
-                return;
-            }
-        }
-        else
-        {
-        }
-    }
-
-    // Adicionar cliente à lista
-    enableClientKeepalive(clientFd);
-    {
-        std::lock_guard<std::mutex> lock(m_outputMutex);
-        m_clientSockets.push_back(clientFd);
-        m_clientCount = m_clientSockets.size();
-    }
-
-    // Manter conexão aberta - dados serão enviados via writeToClients
-    // Monitorar conexão para detectar desconexão
-    while (!m_stopRequest && m_running)
-    {
-        char dummy;
-        ssize_t result = m_httpServer.receiveData(clientFd, &dummy, 1);
-        if (result <= 0)
-        {
-            break; // Cliente desconectou
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // evitar busy-waiting
-    }
-
-    // Atomically remove from the broadcast list AND close the fd, same
-    // pattern as the /raw branch above — avoids the double-close race
-    // with writeToClients on disconnect.
-    {
-        std::lock_guard<std::mutex> lock(m_outputMutex);
-        auto it = std::find(m_clientSockets.begin(), m_clientSockets.end(), clientFd);
-        if (it != m_clientSockets.end())
-        {
-            m_clientSockets.erase(it);
-            m_clientPending.erase(clientFd);
-            m_clientCount = m_clientSockets.size();
-            m_httpServer.closeClient(clientFd);
-        }
-    }
+    serveStreamClient(clientFd);
 }
 
 void HTTPTSStreamer::send404(int clientFd)
