@@ -933,39 +933,8 @@ bool Application::reconfigureCapture(uint32_t width, uint32_t height, uint32_t f
     return true;
 }
 
-bool Application::initUI()
+void Application::wireVisualCallbacks()
 {
-    // IMPORTANT: Ensure OpenGL context is active before initializing ImGui
-    // ImGui needs a valid OpenGL context to initialize correctly
-    if (m_window)
-    {
-        m_window->makeCurrent();
-    }
-    else
-    {
-        LOG_ERROR("Window not available to initialize UI");
-        return false;
-    }
-
-    m_ui = std::make_unique<UIManager>();
-
-    // Get window pointer from WindowManager (GLFW or SDL2)
-    void *window = m_window->getWindow();
-    if (!window)
-    {
-        LOG_ERROR("Failed to get window pointer for ImGui");
-        m_ui.reset();
-        return false;
-    }
-
-    if (!m_ui->init(window))
-    {
-        LOG_ERROR("Failed to initialize UIManager");
-        m_ui.reset();
-        return false;
-    }
-
-    // Configure callbacks
     m_ui->setOnVisibilityChanged([this](bool /* visible */)
                                   {
         updateCursorVisibility();
@@ -1455,6 +1424,10 @@ bool Application::initUI()
         m_window->setFullscreen(m_fullscreen, m_monitorIndex);
     }
 
+}
+
+void Application::wireStreamingCallbacks()
+{
     m_ui->setOnStreamingStartStop([this](bool start)
                                   {
         // CRITICAL: This callback runs in main thread (ImGui render thread)
@@ -1842,6 +1815,10 @@ bool Application::initUI()
                 m_streamingAVIOBufferSize);
         } });
 
+}
+
+void Application::wireRecordingCallbacks()
+{
     // Recording callbacks
     m_ui->setOnRecordingStartStop([this](bool start)
                                   {
@@ -2037,6 +2014,10 @@ bool Application::initUI()
             m_recordingManager->setRecordingSettings(settings);
         } });
 
+}
+
+void Application::wireWebPortalCallbacks()
+{
     // Web Portal callbacks
     m_ui->setOnWebPortalEnabledChanged([this](bool enabled)
                                        {
@@ -2258,6 +2239,10 @@ bool Application::initUI()
         
         LOG_INFO("[CALLBACK] Thread criada, retornando (thread principal continua)"); });
 
+}
+
+void Application::wireSourceAndMiscCallbacks()
+{
     // Callback for source type change
     m_ui->setOnSourceTypeChanged([this](UIManager::SourceType sourceType)
                                  {
@@ -3130,6 +3115,47 @@ bool Application::initUI()
         } });
     }
 
+}
+
+
+bool Application::initUI()
+{
+    // IMPORTANT: Ensure OpenGL context is active before initializing ImGui
+    // ImGui needs a valid OpenGL context to initialize correctly
+    if (m_window)
+    {
+        m_window->makeCurrent();
+    }
+    else
+    {
+        LOG_ERROR("Window not available to initialize UI");
+        return false;
+    }
+
+    m_ui = std::make_unique<UIManager>();
+
+    // Get window pointer from WindowManager (GLFW or SDL2)
+    void *window = m_window->getWindow();
+    if (!window)
+    {
+        LOG_ERROR("Failed to get window pointer for ImGui");
+        m_ui.reset();
+        return false;
+    }
+
+    if (!m_ui->init(window))
+    {
+        LOG_ERROR("Failed to initialize UIManager");
+        m_ui.reset();
+        return false;
+    }
+
+    // Configure callbacks
+    wireVisualCallbacks();
+    wireStreamingCallbacks();
+    wireRecordingCallbacks();
+    wireWebPortalCallbacks();
+    wireSourceAndMiscCallbacks();
     return true;
 }
 
