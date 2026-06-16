@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "RemoteSourceManager.h"
 #include "FrameCapturePipeline.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
@@ -91,6 +92,7 @@
 Application::Application()
 {
     m_pipeline = std::make_unique<FrameCapturePipeline>(*this);
+    m_remoteManager = std::make_unique<RemoteSourceManager>(*this);
 }
 
 Application::~Application()
@@ -718,71 +720,7 @@ bool Application::initCapture()
     // main loop (see applyPendingRemoteMeta()).
     if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Remote && !m_devicePath.empty())
     {
-        m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
-        m_remoteMetaSync->start(m_devicePath,
-            [this](const RemoteMetaSync::Snapshot &snap)
-            {
-                std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-                m_pendingRemotePreset          = snap.preset;
-                m_pendingRemotePresetHash      = snap.presetHash;
-                m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
-                m_pendingRemoteParams.clear();
-                m_pendingRemoteParams.reserve(snap.parameters.size());
-                for (const auto &p : snap.parameters)
-                {
-                    m_pendingRemoteParams.emplace_back(p.name, p.value);
-                }
-                m_pendingRemoteSourceWidth  = snap.sourceWidth;
-                m_pendingRemoteSourceHeight = snap.sourceHeight;
-                // Image-tab values: seed only once per connection — see
-                // applyPendingRemoteMeta for the gate. Stash the values
-                // from this snapshot; if it's the first one we'll apply
-                // them on the GL thread, otherwise the apply gate skips.
-                if (!m_remoteImageSeeded)
-                {
-                    m_pendingRemoteImageBrightness     = snap.imageBrightness;
-                    m_pendingRemoteImageContrast       = snap.imageContrast;
-                    m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
-                    m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
-                    m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
-                    m_hasPendingRemoteImageSeed        = true;
-                }
-                // Plain assignment — uint32_t is atomic on every platform
-                // we target, and a momentarily stale read in the main
-                // loop is harmless (just one extra render iteration at
-                // most).
-                if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
-                m_hasPendingRemoteMeta.store(true);
-                // Push the host's viewer count straight onto UIManager
-                // (#68) — the OSD quick-actions widget reads it every
-                // frame to render "watching with N others" in client
-                // mode. Bypasses the pending-snapshot apply path
-                // because there's no GL state involved.
-                if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
-                // #84 — Chat: if the host advertised a roomSlug in
-                // /meta, bind the local chat client to that room.
-                // Empty roomSlug means the host has chat disabled or
-                // hasn't picked a slug yet — close any session we
-                // might have had from a previous host.
-                if (m_chatClient)
-                {
-                    const std::string &slug = snap.chatRoomSlug;
-                    if (!slug.empty() && slug != m_chatBoundSlug)
-                    {
-                        m_chatBoundSlug = slug;
-                        // Viewer nick: persistent chat name only.
-                        const std::string nick = m_ui
-                            ? m_ui->getChatNickname()
-                            : std::string{};
-                        m_chatClient->connectBySlug(slug, nick);
-                    }
-                    else if (slug.empty() && !m_chatBoundSlug.empty())
-                    {
-                        m_chatBoundSlug.clear();
-                        m_chatClient->disconnect();
-                    }
-                }
-            });
+        m_remoteManager->startWorker(m_devicePath, nullptr);
     }
 
     return true;
@@ -2861,63 +2799,7 @@ void Application::wireSourceAndMiscCallbacks()
                                          m_captureFps, devicePath);
                 }
                 // Re-start the /meta poller against the new host.
-                m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
-                m_remoteMetaSync->setAuthToken(authToken);
-                m_remoteMetaSync->start(devicePath,
-                    [this](const RemoteMetaSync::Snapshot &snap)
-                    {
-                        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-                        m_pendingRemotePreset          = snap.preset;
-                        m_pendingRemotePresetHash      = snap.presetHash;
-                        m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
-                        m_pendingRemoteParams.clear();
-                        m_pendingRemoteParams.reserve(snap.parameters.size());
-                        for (const auto &p : snap.parameters)
-                        {
-                            m_pendingRemoteParams.emplace_back(p.name, p.value);
-                        }
-                        m_pendingRemoteSourceWidth  = snap.sourceWidth;
-                        m_pendingRemoteSourceHeight = snap.sourceHeight;
-                        // Image-tab seed — first snapshot per connection only.
-                        if (!m_remoteImageSeeded)
-                        {
-                            m_pendingRemoteImageBrightness     = snap.imageBrightness;
-                            m_pendingRemoteImageContrast       = snap.imageContrast;
-                            m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
-                            m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
-                            m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
-                            m_hasPendingRemoteImageSeed        = true;
-                        }
-                        if (snap.sourceFps > 0) m_remoteSourceFps = snap.sourceFps;
-                        m_hasPendingRemoteMeta.store(true);
-                        // #68 — same upstream-client-count push the
-                        // initCapture-side callback does. Without this
-                        // copy, switching to Remote mid-session via
-                        // Browse leaves the OSD's "watching with N
-                        // others" stuck at 0 forever.
-                        if (m_ui) m_ui->setRemoteUpstreamClientCount(snap.upstreamClientCount);
-                        // #84 — same chat-binding logic as the
-                        // initCapture-side callback. Reconnect when
-                        // the host's roomSlug arrives or changes;
-                        // disconnect when it goes empty.
-                        if (m_chatClient)
-                        {
-                            const std::string &slug = snap.chatRoomSlug;
-                            if (!slug.empty() && slug != m_chatBoundSlug)
-                            {
-                                m_chatBoundSlug = slug;
-                                const std::string nick = m_ui
-                                    ? m_ui->getChatNickname()
-                                    : std::string{};
-                                m_chatClient->connectBySlug(slug, nick);
-                            }
-                            else if (slug.empty() && !m_chatBoundSlug.empty())
-                            {
-                                m_chatBoundSlug.clear();
-                                m_chatClient->disconnect();
-                            }
-                        }
-                    });
+                m_remoteManager->startWorker(devicePath, &authToken);
             }
             else
             {
@@ -4046,7 +3928,7 @@ void Application::run()
 
         // Phase 4 of #47: drain pending remote /meta deltas onto this
         // thread before any GL work. Cheap when nothing pending.
-        applyPendingRemoteMeta();
+        m_remoteManager->applyPendingRemoteMeta();
 
         // Phase 2 of #49: reconcile the public-directory publish state
         // with whatever the UI toggle currently says. Cheap when no
@@ -5011,138 +4893,6 @@ std::string Application::resolveShaderPath(const std::string &shaderPath) const
     return fullPath.string();
 }
 
-void Application::applyPendingRemoteMeta()
-{
-    if (!m_hasPendingRemoteMeta.load()) return;
-
-    // Snapshot the pending values out from under the polling thread.
-    std::string preset;
-    std::string presetHash;
-    bool pipelineEnabled = true;
-    std::vector<std::pair<std::string, float>> params;
-    uint32_t sourceW = 0, sourceH = 0;
-    bool seedImage = false;
-    float imgBrightness = 1.0f, imgContrast = 1.0f;
-    bool imgMaintainAspect = true;
-    uint32_t imgOutW = 0, imgOutH = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_pendingRemoteMutex);
-        preset           = std::move(m_pendingRemotePreset);
-        presetHash       = std::move(m_pendingRemotePresetHash);
-        pipelineEnabled  = m_pendingRemotePipelineEnabled;
-        params           = std::move(m_pendingRemoteParams);
-        sourceW          = m_pendingRemoteSourceWidth;
-        sourceH          = m_pendingRemoteSourceHeight;
-        if (m_hasPendingRemoteImageSeed)
-        {
-            seedImage         = true;
-            imgBrightness     = m_pendingRemoteImageBrightness;
-            imgContrast       = m_pendingRemoteImageContrast;
-            imgMaintainAspect = m_pendingRemoteImageMaintainAspect;
-            imgOutW           = m_pendingRemoteImageOutputWidth;
-            imgOutH           = m_pendingRemoteImageOutputHeight;
-            m_hasPendingRemoteImageSeed = false;
-        }
-        m_hasPendingRemoteMeta.store(false);
-    }
-
-    // Seed the local Image tab from the host on the very first snapshot
-    // per connection. m_remoteImageSeeded flips true here and gates the
-    // callback so subsequent snapshots leave these values alone — the
-    // user is free to tweak the local Image controls after the initial
-    // sync.
-    if (seedImage && m_ui)
-    {
-        m_ui->setBrightness(imgBrightness);
-        m_ui->setContrast(imgContrast);
-        m_ui->setMaintainAspect(imgMaintainAspect);
-        m_ui->setOutputResolution(imgOutW, imgOutH);
-        m_remoteImageSeeded = true;
-        LOG_INFO("RemoteMetaSync: seeded local Image from host — brightness=" +
-                 std::to_string(imgBrightness) + " contrast=" +
-                 std::to_string(imgContrast) + " maintainAspect=" +
-                 std::to_string(imgMaintainAspect) + " output=" +
-                 std::to_string(imgOutW) + "x" + std::to_string(imgOutH));
-    }
-
-    // Tell the remote capture to rescale to the host's source dims (if the
-    // stream is encoded at a different size) and sync our render-size view
-    // so downstream FBO / viewport calculations use the right values.
-    if (sourceW > 0 && sourceH > 0)
-    {
-        if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_capture.get()))
-        {
-            remote->setTargetResolution(sourceW, sourceH);
-        }
-        if (sourceW != m_captureWidth || sourceH != m_captureHeight)
-        {
-            LOG_INFO("Remote source dims from /meta: " +
-                     std::to_string(sourceW) + "x" + std::to_string(sourceH) +
-                     " (was " + std::to_string(m_captureWidth) + "x" + std::to_string(m_captureHeight) + ")");
-            m_captureWidth  = sourceW;
-            m_captureHeight = sourceH;
-        }
-    }
-
-    if (!m_shaderEngine || !m_ui)
-    {
-        return;
-    }
-
-    // Phase 4 minimum: resolve preset by name in the local shader library.
-    // If the preset isn't there, log and keep whatever shader the client
-    // already has — Phase 4b will fetch the bundle from /meta/shader-bundle
-    // and cache it locally for these cases.
-    bool reloaded = false;
-    if (!preset.empty() && presetHash != m_appliedRemotePresetHash)
-    {
-        const std::string fullPath = resolveShaderPath(preset);
-        if (!fullPath.empty())
-        {
-            LOG_INFO("RemoteMetaSync: applying host preset '" + preset + "' (hash " + presetHash + ")");
-            if (m_shaderEngine->loadPreset(fullPath))
-            {
-                m_ui->setCurrentShader(preset);
-                m_appliedRemotePresetHash = presetHash;
-                reloaded = true;
-            }
-            else
-            {
-                LOG_WARN("RemoteMetaSync: failed to load preset locally — bundle fetch is a Phase 4b TODO");
-            }
-        }
-    }
-
-    // Master pipeline toggle: mirror the host's "Apply shader pipeline".
-    // Log every time it changes vs the local state, so a "shader vanishes
-    // after N seconds" symptom can be traced back to whichever snapshot
-    // flipped the value.
-    const bool prevPipelineEnabled = m_ui->getShaderPipelineEnabled();
-    m_ui->setShaderPipelineEnabled(pipelineEnabled);
-    if (prevPipelineEnabled != pipelineEnabled)
-    {
-        LOG_INFO(std::string("RemoteMetaSync: pipelineEnabled changed ") +
-                 (prevPipelineEnabled ? "true" : "false") + " → " +
-                 (pipelineEnabled ? "true" : "false") +
-                 " (preset='" + preset + "' hash=" + presetHash + ")");
-    }
-
-    // Parameter overrides apply on top of whatever preset is now active.
-    // After a preset reload, the engine's parameters are at their preset
-    // defaults; layering the host's overrides on top reproduces the look.
-    if (!params.empty())
-    {
-        for (const auto &kv : params)
-        {
-            m_shaderEngine->setShaderParameter(kv.first, kv.second);
-        }
-        if (reloaded)
-        {
-            LOG_INFO("RemoteMetaSync: applied " + std::to_string(params.size()) +
-                     " parameter override(s)");
-        }
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // #49 Phase 2 — public directory publish lifecycle
