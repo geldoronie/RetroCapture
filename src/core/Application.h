@@ -484,6 +484,12 @@ private:
     bool initWindow();
     bool initRenderer();
     bool initUI();
+    // #153 — initUI() callback wiring split into contiguous groups (behavior-preserving).
+    void wireVisualCallbacks();
+    void wireStreamingCallbacks();
+    void wireRecordingCallbacks();
+    void wireWebPortalCallbacks();
+    void wireSourceAndMiscCallbacks();
     bool initStreaming();
     bool initWebPortal();
     void stopWebPortal();
