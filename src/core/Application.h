@@ -31,6 +31,7 @@ class StreamManager;
 class HTTPTSStreamer;
 class PBOManager;
 class RecordingManager;
+class FrameCapturePipeline; // #157 — per-frame render/distribute pipeline
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -40,6 +41,10 @@ namespace retrocapture { class ISystemTray; }
 
 class Application
 {
+    // #157 — FrameCapturePipeline runs the per-frame render/distribute path and
+    // reaches Application's collaborators and per-frame buffers directly.
+    friend class FrameCapturePipeline;
+
 public:
     Application();
     ~Application();
@@ -499,5 +504,7 @@ private:
 
     // #152 — pieces extracted from the monolithic run() loop (behavior-preserving).
     void processAudioCapture();        // drain audio capture → stream/recording managers
-    bool renderAndDistributeFrame();   // per-frame render+shader+capture/push; true = frame already presented (skip loop tail)
+
+    // #157 — per-frame render+shader+capture/push pipeline (was renderAndDistributeFrame()).
+    std::unique_ptr<FrameCapturePipeline> m_pipeline;
 };
