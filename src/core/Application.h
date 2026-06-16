@@ -33,6 +33,7 @@ class PBOManager;
 class RecordingManager;
 class FrameCapturePipeline; // #157 — per-frame render/distribute pipeline
 class RemoteSourceManager;  // #158 — remote /meta worker + pending-meta drain
+class UICallbackWiring;     // #159 — UIManager callback registration
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -48,6 +49,9 @@ class Application
     // #158 — RemoteSourceManager runs the remote /meta worker and drain and
     // reaches Application's m_pendingRemote* fields + collaborators directly.
     friend class RemoteSourceManager;
+    // #159 — UICallbackWiring registers the UIManager callbacks and reaches
+    // Application's collaborators + state through these lambdas.
+    friend class UICallbackWiring;
 
 public:
     Application();
@@ -185,6 +189,9 @@ private:
 #endif
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
+    // #159 — declared BEFORE m_ui so it is destroyed AFTER the UIManager that
+    // stores its registered lambdas (which capture the wiring).
+    std::unique_ptr<UICallbackWiring> m_callbackWiring;
     std::unique_ptr<UIManager> m_ui;
 
     // #86 — system tray + hide-to-tray. m_tray is always non-null
@@ -493,12 +500,6 @@ private:
     bool initWindow();
     bool initRenderer();
     bool initUI();
-    // #153 — initUI() callback wiring split into contiguous groups (behavior-preserving).
-    void wireVisualCallbacks();
-    void wireStreamingCallbacks();
-    void wireRecordingCallbacks();
-    void wireWebPortalCallbacks();
-    void wireSourceAndMiscCallbacks();
     bool initStreaming();
     bool initWebPortal();
     void stopWebPortal();
