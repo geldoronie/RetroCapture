@@ -203,6 +203,11 @@ private:
     void cleanupRawPipeline();    // Phase 2 of #47 — tears down the raw encoder + muxer.
     int  writeToRawClients(const uint8_t *buf, int buf_size); // Phase 2 of #47.
     void handleClient(int clientFd);
+    // #156 — phases extracted from the monolithic handleClient (behavior-preserving):
+    // request read-with-timeout loop, and the /raw and /stream serving branches.
+    bool readClientRequest(int clientFd, std::string &request);
+    void serveRawClient(int clientFd, const std::string &request);
+    void serveStreamClient(int clientFd);
     void send404(int clientFd);     // Enviar resposta 404
     void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
     void cleanupOldData();          // Limpar dados antigos baseado em tempo
