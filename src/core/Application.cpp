@@ -5,6 +5,7 @@
 #include "../capture/VideoCaptureFactory.h"
 #include "../capture/VideoCaptureRemote.h"
 #include "../capture/VideoCaptureScreen.h"
+#include "../capture/VideoCaptureTestPattern.h"
 #include "../streaming/RemoteMetaSync.h"
 #include "../encoding/MediaEncoder.h"
 #ifdef PLATFORM_LINUX
@@ -463,6 +464,13 @@ bool Application::initCapture()
         screen->setRegion(m_ui->getScreenRegionX(), m_ui->getScreenRegionY(),
                           m_ui->getScreenRegionW(), m_ui->getScreenRegionH());
         m_capture = std::move(screen);
+    }
+    else if (m_ui && m_ui->getSourceType() == UIManager::SourceType::Test)
+    {
+        // #149 — synthetic test-pattern source for the smoke-test. Isolated
+        // from the platform factory so it can't regress real capture.
+        LOG_INFO("Source is test — creating VideoCaptureTestPattern");
+        m_capture = std::make_unique<VideoCaptureTestPattern>();
     }
     else
     {
@@ -2288,16 +2296,19 @@ bool Application::initUI()
                                          using ST = UIManager::SourceType;
                                          const bool wantScreen = (sourceType == ST::Screen);
                                          const bool wantRemote = (sourceType == ST::Remote);
-                                         const bool wantFactory = !wantScreen && !wantRemote; // V4L2/DS/AVF/None
+                                         const bool wantTest   = (sourceType == ST::Test); // #149 smoke-test source
+                                         const bool wantFactory = !wantScreen && !wantRemote && !wantTest; // V4L2/DS/AVF/None
 
                                          const bool haveScreen  = dynamic_cast<VideoCaptureScreen *>(m_capture.get()) != nullptr;
                                          const bool haveRemote  = dynamic_cast<VideoCaptureRemote *>(m_capture.get()) != nullptr;
-                                         const bool haveFactory = m_capture && !haveScreen && !haveRemote;
+                                         const bool haveTest    = dynamic_cast<VideoCaptureTestPattern *>(m_capture.get()) != nullptr;
+                                         const bool haveFactory = m_capture && !haveScreen && !haveRemote && !haveTest;
 
                                          const bool wrongType =
                                              !m_capture ||
                                              (wantScreen && !haveScreen) ||
                                              (wantRemote && !haveRemote) ||
+                                             (wantTest && !haveTest) ||
                                              (wantFactory && !haveFactory);
 
                                          if (wrongType)
@@ -2318,6 +2329,7 @@ bool Application::initUI()
 
                                              if (wantScreen)      m_capture = std::make_unique<VideoCaptureScreen>();
                                              else if (wantRemote) m_capture = std::make_unique<VideoCaptureRemote>();
+                                             else if (wantTest)   m_capture = std::make_unique<VideoCaptureTestPattern>();
                                              else                 m_capture = VideoCaptureFactory::create();
 
                                              // Factory backend with no device yet → idle dummy
@@ -2336,6 +2348,23 @@ bool Application::initUI()
                                              // for V4L2/DS it re-enumerates the control set.
                                              if (m_ui) m_ui->setCaptureControls(m_capture.get());
                                          }
+                                     }
+
+                                     // #149 — Test: open the synthetic source and start it
+                                     // immediately (no device to pick).
+                                     if (sourceType == UIManager::SourceType::Test)
+                                     {
+                                         LOG_INFO("Test source selected — starting synthetic pattern");
+                                         if (m_capture)
+                                         {
+                                             m_capture->open("test");
+                                             m_capture->setFormat(m_captureWidth, m_captureHeight, 0);
+                                             m_capture->startCapture();
+                                             if (m_ui)
+                                                 m_ui->setCaptureInfo(m_capture->getWidth(), m_capture->getHeight(),
+                                                                      m_captureFps, "Test Pattern");
+                                         }
+                                         return; // Test fully handled
                                      }
 
                                      // #107 — Screen: auto-open the default target so the

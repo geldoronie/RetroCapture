@@ -236,24 +236,26 @@ int main(int argc, char *argv[])
             sourceType = argv[++i];
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
+            // 'test' is the synthetic test-pattern source (#149), valid on
+            // every platform — it has no hardware backend.
 #ifdef __linux__
-            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote" && sourceType != "test")
 #elif defined(_WIN32)
-            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote" && sourceType != "test")
 #elif defined(__APPLE__)
-            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote" && sourceType != "test")
 #else
-            if (sourceType != "none" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "remote" && sourceType != "test")
 #endif
             {
 #ifdef __linux__
-                LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'v4l2', 'remote' or 'test'");
 #elif defined(_WIN32)
-                LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'ds', 'remote' or 'test'");
 #elif defined(__APPLE__)
-                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation', 'remote' or 'test'");
 #else
-                LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'remote' or 'test'");
 #endif
                 return 1;
             }
@@ -994,6 +996,8 @@ int main(int argc, char *argv[])
 #endif
     if (sourceType == "remote")
         sourceTypeEnum = UIManager::SourceType::Remote;
+    if (sourceType == "test")
+        sourceTypeEnum = UIManager::SourceType::Test;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
     
