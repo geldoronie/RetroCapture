@@ -32,6 +32,7 @@ class HTTPTSStreamer;
 class PBOManager;
 class RecordingManager;
 class FrameCapturePipeline; // #157 — per-frame render/distribute pipeline
+class RemoteSourceManager;  // #158 — remote /meta worker + pending-meta drain
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -44,6 +45,9 @@ class Application
     // #157 — FrameCapturePipeline runs the per-frame render/distribute path and
     // reaches Application's collaborators and per-frame buffers directly.
     friend class FrameCapturePipeline;
+    // #158 — RemoteSourceManager runs the remote /meta worker and drain and
+    // reaches Application's m_pendingRemote* fields + collaborators directly.
+    friend class RemoteSourceManager;
 
 public:
     Application();
@@ -158,11 +162,6 @@ public:
     // Shader path resolution (centralized)
     std::string resolveShaderPath(const std::string& shaderPath) const;
 
-    // Phase 4 of #47: drains pending remote /meta snapshot onto the GL
-    // thread. Called once per main-loop iteration; cheap no-op when
-    // m_hasPendingRemoteMeta is false.
-    void applyPendingRemoteMeta();
-
     // #49 Phase 2: reconciles the public-directory publish state with
     // the UI toggle. Called every frame; cheap when no transition.
     void syncDirectoryClient();
@@ -268,6 +267,11 @@ private:
     // of the last completed main-loop iteration to compute the next sleep.
     uint32_t m_remoteSourceFps = 0;
     int64_t  m_lastFrameSwapUs = 0;
+
+    // #158 — owns the remote /meta worker wiring + pending-meta drain. Declared
+    // BEFORE m_remoteMetaSync so it is destroyed AFTER it: the worker thread (whose
+    // callback calls into the manager) is joined while the manager is still alive.
+    std::unique_ptr<RemoteSourceManager> m_remoteManager;
 
     // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
     // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
