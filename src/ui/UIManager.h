@@ -166,7 +166,8 @@ public:
         DS = 2,           // DirectShow (Windows)
         Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
         AVFoundation = 4, // AVFoundation (macOS)
-        Screen = 5        // Desktop / window / region screen capture (#107)
+        Screen = 5,       // Desktop / window / region screen capture (#107)
+        Test = 6          // Synthetic test-pattern source for the smoke-test (#149)
     };
 
     // Source type setter (para uso pelas classes de abas)
