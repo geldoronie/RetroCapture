@@ -490,4 +490,8 @@ private:
     bool initAudioCapture();
     void restoreAudioDeviceConnections();
     void handleKeyInput();
+
+    // #152 — pieces extracted from the monolithic run() loop (behavior-preserving).
+    void processAudioCapture();        // drain audio capture → stream/recording managers
+    bool renderAndDistributeFrame();   // per-frame render+shader+capture/push; true = frame already presented (skip loop tail)
 };
