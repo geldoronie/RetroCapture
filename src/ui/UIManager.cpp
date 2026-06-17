@@ -2537,10 +2537,10 @@ void UIManager::triggerStreamingStartStop(bool start)
 
 void UIManager::triggerWebPortalEnabledChange(bool enabled)
 {
-    m_webPortalEnabled = enabled;
-    if (!enabled && m_webPortalHTTPSEnabled)
+    m_webPortalConfig.enabled = enabled;
+    if (!enabled && m_webPortalConfig.httpsEnabled)
     {
-        m_webPortalHTTPSEnabled = false;
+        m_webPortalConfig.httpsEnabled = false;
         if (m_onWebPortalHTTPSChanged)
         {
             m_onWebPortalHTTPSChanged(false);
@@ -2555,7 +2555,7 @@ void UIManager::triggerWebPortalEnabledChange(bool enabled)
 
 void UIManager::triggerWebPortalHTTPSChange(bool enabled)
 {
-    m_webPortalHTTPSEnabled = enabled;
+    m_webPortalConfig.httpsEnabled = enabled;
     if (m_onWebPortalHTTPSChanged)
     {
         m_onWebPortalHTTPSChanged(enabled);
@@ -2574,7 +2574,7 @@ void UIManager::triggerWebPortalStartStop(bool start)
 
 void UIManager::triggerWebPortalTitleChange(const std::string &title)
 {
-    m_webPortalTitle = title;
+    m_webPortalConfig.title = title;
     if (m_onWebPortalTitleChanged)
     {
         m_onWebPortalTitleChanged(title);
@@ -2584,7 +2584,7 @@ void UIManager::triggerWebPortalTitleChange(const std::string &title)
 
 void UIManager::triggerWebPortalSubtitleChange(const std::string &subtitle)
 {
-    m_webPortalSubtitle = subtitle;
+    m_webPortalConfig.subtitle = subtitle;
     if (m_onWebPortalSubtitleChanged)
     {
         m_onWebPortalSubtitleChanged(subtitle);
@@ -2594,7 +2594,7 @@ void UIManager::triggerWebPortalSubtitleChange(const std::string &subtitle)
 
 void UIManager::triggerWebPortalSSLCertPathChange(const std::string &path)
 {
-    m_webPortalSSLCertPath = path;
+    m_webPortalConfig.sslCertPath = path;
     if (m_onWebPortalSSLCertPathChanged)
     {
         m_onWebPortalSSLCertPathChanged(path);
@@ -2604,7 +2604,7 @@ void UIManager::triggerWebPortalSSLCertPathChange(const std::string &path)
 
 void UIManager::triggerWebPortalSSLKeyPathChange(const std::string &path)
 {
-    m_webPortalSSLKeyPath = path;
+    m_webPortalConfig.sslKeyPath = path;
     if (m_onWebPortalSSLKeyPathChanged)
     {
         m_onWebPortalSSLKeyPathChanged(path);
@@ -2865,19 +2865,19 @@ void UIManager::loadConfig()
         {
             auto &webPortal = config["webPortal"];
             if (webPortal.contains("enabled"))
-                m_webPortalEnabled = webPortal["enabled"];
+                m_webPortalConfig.enabled = webPortal["enabled"];
             if (webPortal.contains("httpsEnabled"))
-                m_webPortalHTTPSEnabled = webPortal["httpsEnabled"];
+                m_webPortalConfig.httpsEnabled = webPortal["httpsEnabled"];
             if (webPortal.contains("sslCertPath"))
-                m_webPortalSSLCertPath = webPortal["sslCertPath"].get<std::string>();
+                m_webPortalConfig.sslCertPath = webPortal["sslCertPath"].get<std::string>();
             if (webPortal.contains("sslKeyPath"))
-                m_webPortalSSLKeyPath = webPortal["sslKeyPath"].get<std::string>();
+                m_webPortalConfig.sslKeyPath = webPortal["sslKeyPath"].get<std::string>();
             if (webPortal.contains("title"))
-                m_webPortalTitle = webPortal["title"].get<std::string>();
+                m_webPortalConfig.title = webPortal["title"].get<std::string>();
             if (webPortal.contains("subtitle"))
-                m_webPortalSubtitle = webPortal["subtitle"].get<std::string>();
+                m_webPortalConfig.subtitle = webPortal["subtitle"].get<std::string>();
             if (webPortal.contains("imagePath"))
-                m_webPortalImagePath = webPortal["imagePath"].get<std::string>();
+                m_webPortalConfig.imagePath = webPortal["imagePath"].get<std::string>();
             if (webPortal.contains("backgroundImagePath"))
                 m_webPortalBackgroundImagePath = webPortal["backgroundImagePath"].get<std::string>();
 
@@ -2886,37 +2886,37 @@ void UIManager::loadConfig()
             {
                 auto &texts = webPortal["texts"];
                 if (texts.contains("streamInfo"))
-                    m_webPortalTextStreamInfo = texts["streamInfo"].get<std::string>();
+                    m_webPortalConfig.textStreamInfo = texts["streamInfo"].get<std::string>();
                 if (texts.contains("quickActions"))
-                    m_webPortalTextQuickActions = texts["quickActions"].get<std::string>();
+                    m_webPortalConfig.textQuickActions = texts["quickActions"].get<std::string>();
                 if (texts.contains("compatibility"))
-                    m_webPortalTextCompatibility = texts["compatibility"].get<std::string>();
+                    m_webPortalConfig.textCompatibility = texts["compatibility"].get<std::string>();
                 if (texts.contains("status"))
-                    m_webPortalTextStatus = texts["status"].get<std::string>();
+                    m_webPortalConfig.textStatus = texts["status"].get<std::string>();
                 if (texts.contains("codec"))
-                    m_webPortalTextCodec = texts["codec"].get<std::string>();
+                    m_webPortalConfig.textCodec = texts["codec"].get<std::string>();
                 if (texts.contains("resolution"))
-                    m_webPortalTextResolution = texts["resolution"].get<std::string>();
+                    m_webPortalConfig.textResolution = texts["resolution"].get<std::string>();
                 if (texts.contains("streamUrl"))
-                    m_webPortalTextStreamUrl = texts["streamUrl"].get<std::string>();
+                    m_webPortalConfig.textStreamUrl = texts["streamUrl"].get<std::string>();
                 if (texts.contains("copyUrl"))
-                    m_webPortalTextCopyUrl = texts["copyUrl"].get<std::string>();
+                    m_webPortalConfig.textCopyUrl = texts["copyUrl"].get<std::string>();
                 if (texts.contains("openNewTab"))
-                    m_webPortalTextOpenNewTab = texts["openNewTab"].get<std::string>();
+                    m_webPortalConfig.textOpenNewTab = texts["openNewTab"].get<std::string>();
                 if (texts.contains("supported"))
-                    m_webPortalTextSupported = texts["supported"].get<std::string>();
+                    m_webPortalConfig.textSupported = texts["supported"].get<std::string>();
                 if (texts.contains("format"))
-                    m_webPortalTextFormat = texts["format"].get<std::string>();
+                    m_webPortalConfig.textFormat = texts["format"].get<std::string>();
                 if (texts.contains("codecInfo"))
-                    m_webPortalTextCodecInfo = texts["codecInfo"].get<std::string>();
+                    m_webPortalConfig.textCodecInfo = texts["codecInfo"].get<std::string>();
                 if (texts.contains("supportedBrowsers"))
-                    m_webPortalTextSupportedBrowsers = texts["supportedBrowsers"].get<std::string>();
+                    m_webPortalConfig.textSupportedBrowsers = texts["supportedBrowsers"].get<std::string>();
                 if (texts.contains("formatInfo"))
-                    m_webPortalTextFormatInfo = texts["formatInfo"].get<std::string>();
+                    m_webPortalConfig.textFormatInfo = texts["formatInfo"].get<std::string>();
                 if (texts.contains("codecInfoValue"))
-                    m_webPortalTextCodecInfoValue = texts["codecInfoValue"].get<std::string>();
+                    m_webPortalConfig.textCodecInfoValue = texts["codecInfoValue"].get<std::string>();
                 if (texts.contains("connecting"))
-                    m_webPortalTextConnecting = texts["connecting"].get<std::string>();
+                    m_webPortalConfig.textConnecting = texts["connecting"].get<std::string>();
             }
 
             // Carregar cores
@@ -3330,15 +3330,15 @@ void UIManager::saveConfig()
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
-            {"enabled", m_webPortalEnabled},
-            {"httpsEnabled", m_webPortalHTTPSEnabled},
-            {"sslCertPath", m_webPortalSSLCertPath},
-            {"sslKeyPath", m_webPortalSSLKeyPath},
-            {"title", m_webPortalTitle},
-            {"subtitle", m_webPortalSubtitle},
-            {"imagePath", m_webPortalImagePath},
+            {"enabled", m_webPortalConfig.enabled},
+            {"httpsEnabled", m_webPortalConfig.httpsEnabled},
+            {"sslCertPath", m_webPortalConfig.sslCertPath},
+            {"sslKeyPath", m_webPortalConfig.sslKeyPath},
+            {"title", m_webPortalConfig.title},
+            {"subtitle", m_webPortalConfig.subtitle},
+            {"imagePath", m_webPortalConfig.imagePath},
             {"backgroundImagePath", m_webPortalBackgroundImagePath},
-            {"texts", {{"streamInfo", m_webPortalTextStreamInfo}, {"quickActions", m_webPortalTextQuickActions}, {"compatibility", m_webPortalTextCompatibility}, {"status", m_webPortalTextStatus}, {"codec", m_webPortalTextCodec}, {"resolution", m_webPortalTextResolution}, {"streamUrl", m_webPortalTextStreamUrl}, {"copyUrl", m_webPortalTextCopyUrl}, {"openNewTab", m_webPortalTextOpenNewTab}, {"supported", m_webPortalTextSupported}, {"format", m_webPortalTextFormat}, {"codecInfo", m_webPortalTextCodecInfo}, {"supportedBrowsers", m_webPortalTextSupportedBrowsers}, {"formatInfo", m_webPortalTextFormatInfo}, {"codecInfoValue", m_webPortalTextCodecInfoValue}, {"connecting", m_webPortalTextConnecting}}},
+            {"texts", {{"streamInfo", m_webPortalConfig.textStreamInfo}, {"quickActions", m_webPortalConfig.textQuickActions}, {"compatibility", m_webPortalConfig.textCompatibility}, {"status", m_webPortalConfig.textStatus}, {"codec", m_webPortalConfig.textCodec}, {"resolution", m_webPortalConfig.textResolution}, {"streamUrl", m_webPortalConfig.textStreamUrl}, {"copyUrl", m_webPortalConfig.textCopyUrl}, {"openNewTab", m_webPortalConfig.textOpenNewTab}, {"supported", m_webPortalConfig.textSupported}, {"format", m_webPortalConfig.textFormat}, {"codecInfo", m_webPortalConfig.textCodecInfo}, {"supportedBrowsers", m_webPortalConfig.textSupportedBrowsers}, {"formatInfo", m_webPortalConfig.textFormatInfo}, {"codecInfoValue", m_webPortalConfig.textCodecInfoValue}, {"connecting", m_webPortalConfig.textConnecting}}},
             {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"primaryLight", {m_webPortalColorPrimaryLight[0], m_webPortalColorPrimaryLight[1], m_webPortalColorPrimaryLight[2], m_webPortalColorPrimaryLight[3]}}, {"primaryDark", {m_webPortalColorPrimaryDark[0], m_webPortalColorPrimaryDark[1], m_webPortalColorPrimaryDark[2], m_webPortalColorPrimaryDark[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"secondaryHighlight", {m_webPortalColorSecondaryHighlight[0], m_webPortalColorSecondaryHighlight[1], m_webPortalColorSecondaryHighlight[2], m_webPortalColorSecondaryHighlight[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}, {"info", {m_webPortalColorInfo[0], m_webPortalColorInfo[1], m_webPortalColorInfo[2], m_webPortalColorInfo[3]}}}}};
 
         // Salvar configurações de captura
@@ -3439,13 +3439,13 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Web Portal Enable/Disable (configuração)
-    bool portalEnabled = m_webPortalEnabled;
+    bool portalEnabled = m_webPortalConfig.enabled;
     if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
     {
-        m_webPortalEnabled = portalEnabled;
-        if (!portalEnabled && m_webPortalHTTPSEnabled)
+        m_webPortalConfig.enabled = portalEnabled;
+        if (!portalEnabled && m_webPortalConfig.httpsEnabled)
         {
-            m_webPortalHTTPSEnabled = false;
+            m_webPortalConfig.httpsEnabled = false;
             if (m_onWebPortalHTTPSChanged)
             {
                 m_onWebPortalHTTPSChanged(false);
@@ -3482,7 +3482,7 @@ void UIManager::renderWebPortalPanel()
             }
         }
         ImGui::Spacing();
-        std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
+        std::string portalUrl = (m_webPortalConfig.httpsEnabled ? "https://" : "http://") +
                                 std::string("localhost:") + std::to_string(m_streamingConfig.port);
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Portal Web Ativo");
         ImGui::Text("URL: %s", portalUrl.c_str());
@@ -3506,10 +3506,10 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // HTTPS Enable/Disable
-    bool httpsEnabled = m_webPortalHTTPSEnabled;
+    bool httpsEnabled = m_webPortalConfig.httpsEnabled;
     if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
-        m_webPortalHTTPSEnabled = httpsEnabled;
+        m_webPortalConfig.httpsEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
         {
             m_onWebPortalHTTPSChanged(httpsEnabled);
@@ -3536,31 +3536,31 @@ void UIManager::renderWebPortalPanel()
         if (ImGui::CollapsingHeader("Certificate Settings"))
         {
             char certPathBuffer[512];
-            strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
+            strncpy(certPathBuffer, m_webPortalConfig.sslCertPath.c_str(), sizeof(certPathBuffer) - 1);
             certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
 
             ImGui::Text("Caminho do Certificado:");
             if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
             {
-                m_webPortalSSLCertPath = std::string(certPathBuffer);
+                m_webPortalConfig.sslCertPath = std::string(certPathBuffer);
                 if (m_onWebPortalSSLCertPathChanged)
                 {
-                    m_onWebPortalSSLCertPathChanged(m_webPortalSSLCertPath);
+                    m_onWebPortalSSLCertPathChanged(m_webPortalConfig.sslCertPath);
                 }
                 saveConfig();
             }
 
             char keyPathBuffer[512];
-            strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
+            strncpy(keyPathBuffer, m_webPortalConfig.sslKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
             keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
 
             ImGui::Text("Caminho da Chave Privada:");
             if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
             {
-                m_webPortalSSLKeyPath = std::string(keyPathBuffer);
+                m_webPortalConfig.sslKeyPath = std::string(keyPathBuffer);
                 if (m_onWebPortalSSLKeyPathChanged)
                 {
-                    m_onWebPortalSSLKeyPathChanged(m_webPortalSSLKeyPath);
+                    m_onWebPortalSSLKeyPathChanged(m_webPortalConfig.sslKeyPath);
                 }
                 saveConfig();
             }
@@ -3578,15 +3578,15 @@ void UIManager::renderWebPortalPanel()
 
     // Título
     char titleBuffer[256];
-    strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
+    strncpy(titleBuffer, m_webPortalConfig.title.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
     ImGui::Text("Title:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
-        m_webPortalTitle = std::string(titleBuffer);
+        m_webPortalConfig.title = std::string(titleBuffer);
         if (m_onWebPortalTitleChanged)
         {
-            m_onWebPortalTitleChanged(m_webPortalTitle);
+            m_onWebPortalTitleChanged(m_webPortalConfig.title);
         }
         saveConfig();
     }
@@ -3595,15 +3595,15 @@ void UIManager::renderWebPortalPanel()
 
     // Subtítulo
     char subtitleBuffer[256];
-    strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
+    strncpy(subtitleBuffer, m_webPortalConfig.subtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
     ImGui::Text("Subtitle:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
-        m_webPortalSubtitle = std::string(subtitleBuffer);
+        m_webPortalConfig.subtitle = std::string(subtitleBuffer);
         if (m_onWebPortalSubtitleChanged)
         {
-            m_onWebPortalSubtitleChanged(m_webPortalSubtitle);
+            m_onWebPortalSubtitleChanged(m_webPortalConfig.subtitle);
         }
         saveConfig();
     }
