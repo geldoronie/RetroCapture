@@ -1,4 +1,5 @@
 #include "VideoCaptureV4L2.h"
+#include "FormatNegotiator.h"
 #include "../utils/Logger.h"
 #include "../utils/V4L2DeviceScanner.h"
 #include "../v4l2/V4L2ControlMapper.h"
@@ -182,33 +183,14 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
             }
         }
 
-        if (yuyvSupported)
+        // #161 — format-choice policy lives in FormatNegotiator; the ioctl
+        // enumeration above stays here (the platform seam).
+        bool negotiateOk = true;
+        pixelFormat = rc::capture::FormatNegotiator::chooseDefaultV4L2Format(
+            yuyvSupported, mjpegSupported, fmt.fmt.pix.pixelformat, negotiateOk);
+        if (!negotiateOk)
         {
-            LOG_INFO("YUYV supported, using YUYV as default format");
-            pixelFormat = V4L2_PIX_FMT_YUYV;
-        }
-        else
-        {
-            // Se YUYV não é suportado, pegar o formato atual do dispositivo
-            pixelFormat = fmt.fmt.pix.pixelformat;
-            if (pixelFormat == 0)
-            {
-                // Se ainda não temos formato, tentar MJPG como último recurso
-                if (mjpegSupported)
-                {
-                    LOG_WARN("YUYV not supported, falling back to MJPG (not fully supported yet)");
-                    pixelFormat = V4L2_PIX_FMT_MJPEG;
-                }
-                else
-                {
-                    LOG_ERROR("Nenhum formato suportado encontrado");
-                    return false;
-                }
-            }
-            else if (pixelFormat == V4L2_PIX_FMT_MJPEG)
-            {
-                LOG_WARN("Device is using MJPG but YUYV is unavailable. MJPG is not fully supported.");
-            }
+            return false;
         }
     }
 
@@ -232,41 +214,17 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
     m_height = fmt.fmt.pix.height;
     m_pixelFormat = fmt.fmt.pix.pixelformat;
 
-    // Verificar se o formato foi aceito corretamente
-    if (m_pixelFormat != pixelFormat)
+    // Verificar se o formato foi aceito corretamente (#161 — policy in FormatNegotiator).
+    if (!rc::capture::FormatNegotiator::isAcceptedFormat(pixelFormat, m_pixelFormat))
     {
-        char requestedStr[5] = {0};
-        requestedStr[0] = (pixelFormat >> 0) & 0xFF;
-        requestedStr[1] = (pixelFormat >> 8) & 0xFF;
-        requestedStr[2] = (pixelFormat >> 16) & 0xFF;
-        requestedStr[3] = (pixelFormat >> 24) & 0xFF;
-
-        char actualStr[5] = {0};
-        actualStr[0] = (m_pixelFormat >> 0) & 0xFF;
-        actualStr[1] = (m_pixelFormat >> 8) & 0xFF;
-        actualStr[2] = (m_pixelFormat >> 16) & 0xFF;
-        actualStr[3] = (m_pixelFormat >> 24) & 0xFF;
-
-        LOG_WARN("Formato solicitado '" + std::string(requestedStr) +
-                 "' mas dispositivo retornou '" + std::string(actualStr) + "'");
-
-        // Se foi solicitado YUYV mas retornou MJPG, tentar forçar novamente
-        if (pixelFormat == V4L2_PIX_FMT_YUYV && m_pixelFormat == V4L2_PIX_FMT_MJPEG)
-        {
-            LOG_ERROR("Device did not accept YUYV and returned MJPG. YUYV may not be supported.");
-            return false;
-        }
+        return false;
     }
 
     // Log do formato de forma mais legível
-    char formatStr[5] = {0};
-    formatStr[0] = (m_pixelFormat >> 0) & 0xFF;
-    formatStr[1] = (m_pixelFormat >> 8) & 0xFF;
-    formatStr[2] = (m_pixelFormat >> 16) & 0xFF;
-    formatStr[3] = (m_pixelFormat >> 24) & 0xFF;
     LOG_INFO("Formato definido: " + std::to_string(m_width) + "x" +
              std::to_string(m_height) + " (format: 0x" +
-             std::to_string(m_pixelFormat) + " = '" + std::string(formatStr) + "')");
+             std::to_string(m_pixelFormat) + " = '" +
+             rc::capture::FormatNegotiator::fourccToString(m_pixelFormat) + "')");
 
     return true;
 }
