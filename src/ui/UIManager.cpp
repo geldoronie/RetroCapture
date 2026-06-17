@@ -1697,7 +1697,7 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Controles básicos
-    int port = static_cast<int>(m_streamingPort);
+    int port = static_cast<int>(m_streamingConfig.port);
     if (ImGui::InputInt("Port", &port, 1, 100))
     {
         // Validation is done in setStreamingPort/triggerStreamingPortChange
@@ -1725,7 +1725,7 @@ void UIManager::renderStreamingPanel()
     int currentResIndex = 0;
     for (int i = 0; i < 10; i++)
     {
-        if (m_streamingWidth == resolutionWidths[i] && m_streamingHeight == resolutionHeights[i])
+        if (m_streamingConfig.width == resolutionWidths[i] && m_streamingConfig.height == resolutionHeights[i])
         {
             currentResIndex = i;
             break;
@@ -1734,15 +1734,15 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
     {
-        m_streamingWidth = resolutionWidths[currentResIndex];
-        m_streamingHeight = resolutionHeights[currentResIndex];
+        m_streamingConfig.width = resolutionWidths[currentResIndex];
+        m_streamingConfig.height = resolutionHeights[currentResIndex];
         if (m_onStreamingWidthChanged)
         {
-            m_onStreamingWidthChanged(m_streamingWidth);
+            m_onStreamingWidthChanged(m_streamingConfig.width);
         }
         if (m_onStreamingHeightChanged)
         {
-            m_onStreamingHeightChanged(m_streamingHeight);
+            m_onStreamingHeightChanged(m_streamingConfig.height);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1754,7 +1754,7 @@ void UIManager::renderStreamingPanel()
     int currentFpsIndex = 0;
     for (int i = 0; i < 6; i++)
     {
-        if (m_streamingFps == fpsValues[i])
+        if (m_streamingConfig.fps == fpsValues[i])
         {
             currentFpsIndex = i;
             break;
@@ -1763,10 +1763,10 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("FPS", &currentFpsIndex, fpsOptions, 6))
     {
-        m_streamingFps = fpsValues[currentFpsIndex];
+        m_streamingConfig.fps = fpsValues[currentFpsIndex];
         if (m_onStreamingFpsChanged)
         {
-            m_onStreamingFpsChanged(m_streamingFps);
+            m_onStreamingFpsChanged(m_streamingConfig.fps);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1780,7 +1780,7 @@ void UIManager::renderStreamingPanel()
     int currentVideoCodecIndex = 0;
     for (int i = 0; i < 4; i++)
     {
-        if (m_streamingVideoCodec == videoCodecs[i])
+        if (m_streamingConfig.videoCodec == videoCodecs[i])
         {
             currentVideoCodecIndex = i;
             break;
@@ -1789,10 +1789,10 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
-        m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
+        m_streamingConfig.videoCodec = videoCodecs[currentVideoCodecIndex];
         if (m_onStreamingVideoCodecChanged)
         {
-            m_onStreamingVideoCodecChanged(m_streamingVideoCodec);
+            m_onStreamingVideoCodecChanged(m_streamingConfig.videoCodec);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1802,7 +1802,7 @@ void UIManager::renderStreamingPanel()
     int currentAudioCodecIndex = 0;
     for (int i = 0; i < 3; i++)
     {
-        if (m_streamingAudioCodec == audioCodecs[i])
+        if (m_streamingConfig.audioCodec == audioCodecs[i])
         {
             currentAudioCodecIndex = i;
             break;
@@ -1811,16 +1811,16 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Codec de Áudio", &currentAudioCodecIndex, audioCodecs, 3))
     {
-        m_streamingAudioCodec = audioCodecs[currentAudioCodecIndex];
+        m_streamingConfig.audioCodec = audioCodecs[currentAudioCodecIndex];
         if (m_onStreamingAudioCodecChanged)
         {
-            m_onStreamingAudioCodecChanged(m_streamingAudioCodec);
+            m_onStreamingAudioCodecChanged(m_streamingConfig.audioCodec);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
 
     // Qualidade H.264 (apenas se codec for h264)
-    if (m_streamingVideoCodec == "h264")
+    if (m_streamingConfig.videoCodec == "h264")
     {
         const char *h264Presets[] = {
             "ultrafast",
@@ -1835,7 +1835,7 @@ void UIManager::renderStreamingPanel()
         int currentPresetIndex = 2; // Padrão: veryfast
         for (int i = 0; i < 9; i++)
         {
-            if (m_streamingH264Preset == h264Presets[i])
+            if (m_streamingConfig.h264Preset == h264Presets[i])
             {
                 currentPresetIndex = i;
                 break;
@@ -1844,10 +1844,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
         {
-            m_streamingH264Preset = h264Presets[currentPresetIndex];
+            m_streamingConfig.h264Preset = h264Presets[currentPresetIndex];
             if (m_onStreamingH264PresetChanged)
             {
-                m_onStreamingH264PresetChanged(m_streamingH264Preset);
+                m_onStreamingH264PresetChanged(m_streamingConfig.h264Preset);
             }
             saveConfig();
         }
@@ -1861,7 +1861,7 @@ void UIManager::renderStreamingPanel()
     }
 
     // Qualidade H.265 (apenas se codec for h265)
-    if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
+    if (m_streamingConfig.videoCodec == "h265" || m_streamingConfig.videoCodec == "hevc")
     {
         const char *h265Presets[] = {
             "ultrafast",
@@ -1876,7 +1876,7 @@ void UIManager::renderStreamingPanel()
         int currentPresetIndex = 2; // Padrão: veryfast
         for (int i = 0; i < 9; i++)
         {
-            if (m_streamingH265Preset == h265Presets[i])
+            if (m_streamingConfig.h265Preset == h265Presets[i])
             {
                 currentPresetIndex = i;
                 break;
@@ -1885,10 +1885,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
         {
-            m_streamingH265Preset = h265Presets[currentPresetIndex];
+            m_streamingConfig.h265Preset = h265Presets[currentPresetIndex];
             if (m_onStreamingH265PresetChanged)
             {
-                m_onStreamingH265PresetChanged(m_streamingH265Preset);
+                m_onStreamingH265PresetChanged(m_streamingConfig.h265Preset);
             }
             saveConfig();
         }
@@ -1905,7 +1905,7 @@ void UIManager::renderStreamingPanel()
         int currentProfileIndex = 0;
         for (int i = 0; i < 2; i++)
         {
-            if (m_streamingH265Profile == h265Profiles[i])
+            if (m_streamingConfig.h265Profile == h265Profiles[i])
             {
                 currentProfileIndex = i;
                 break;
@@ -1914,10 +1914,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
         {
-            m_streamingH265Profile = h265Profiles[currentProfileIndex];
+            m_streamingConfig.h265Profile = h265Profiles[currentProfileIndex];
             if (m_onStreamingH265ProfileChanged)
             {
-                m_onStreamingH265ProfileChanged(m_streamingH265Profile);
+                m_onStreamingH265ProfileChanged(m_streamingConfig.h265Profile);
             }
             saveConfig();
         }
@@ -1935,7 +1935,7 @@ void UIManager::renderStreamingPanel()
         int currentLevelIndex = 0;
         for (int i = 0; i < 14; i++)
         {
-            if (m_streamingH265Level == h265Levels[i])
+            if (m_streamingConfig.h265Level == h265Levels[i])
             {
                 currentLevelIndex = i;
                 break;
@@ -1944,10 +1944,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
         {
-            m_streamingH265Level = h265Levels[currentLevelIndex];
+            m_streamingConfig.h265Level = h265Levels[currentLevelIndex];
             if (m_onStreamingH265LevelChanged)
             {
-                m_onStreamingH265LevelChanged(m_streamingH265Level);
+                m_onStreamingH265LevelChanged(m_streamingConfig.h265Level);
             }
             saveConfig();
         }
@@ -1961,15 +1961,15 @@ void UIManager::renderStreamingPanel()
     }
 
     // Configurações VP8 (apenas se codec for vp8)
-    if (m_streamingVideoCodec == "vp8")
+    if (m_streamingConfig.videoCodec == "vp8")
     {
-        int currentSpeed = m_streamingVP8Speed;
+        int currentSpeed = m_streamingConfig.vp8Speed;
         if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
         {
-            m_streamingVP8Speed = currentSpeed;
+            m_streamingConfig.vp8Speed = currentSpeed;
             if (m_onStreamingVP8SpeedChanged)
             {
-                m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
+                m_onStreamingVP8SpeedChanged(m_streamingConfig.vp8Speed);
             }
             saveConfig();
         }
@@ -1983,15 +1983,15 @@ void UIManager::renderStreamingPanel()
     }
 
     // Configurações VP9 (apenas se codec for vp9)
-    if (m_streamingVideoCodec == "vp9")
+    if (m_streamingConfig.videoCodec == "vp9")
     {
-        int currentSpeed = m_streamingVP9Speed;
+        int currentSpeed = m_streamingConfig.vp9Speed;
         if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
         {
-            m_streamingVP9Speed = currentSpeed;
+            m_streamingConfig.vp9Speed = currentSpeed;
             if (m_onStreamingVP9SpeedChanged)
             {
-                m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
+                m_onStreamingVP9SpeedChanged(m_streamingConfig.vp9Speed);
             }
             saveConfig();
         }
@@ -2009,16 +2009,16 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Bitrate de vídeo
-    int bitrate = static_cast<int>(m_streamingBitrate);
+    int bitrate = static_cast<int>(m_streamingConfig.bitrate);
     if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
         {
-            m_streamingBitrate = static_cast<uint32_t>(bitrate);
+            m_streamingConfig.bitrate = static_cast<uint32_t>(bitrate);
             if (m_onStreamingBitrateChanged)
             {
-                m_onStreamingBitrateChanged(m_streamingBitrate);
+                m_onStreamingBitrateChanged(m_streamingConfig.bitrate);
             }
             saveConfig();
         }
@@ -2032,16 +2032,16 @@ void UIManager::renderStreamingPanel()
     }
 
     // Bitrate de áudio
-    int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
+    int audioBitrate = static_cast<int>(m_streamingConfig.audioBitrate);
     if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
         {
-            m_streamingAudioBitrate = static_cast<uint32_t>(audioBitrate);
+            m_streamingConfig.audioBitrate = static_cast<uint32_t>(audioBitrate);
             if (m_onStreamingAudioBitrateChanged)
             {
-                m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
+                m_onStreamingAudioBitrateChanged(m_streamingConfig.audioBitrate);
             }
             saveConfig();
         }
@@ -2058,13 +2058,13 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Max Video Buffer Size
-    int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
+    int maxVideoBuffer = static_cast<int>(m_streamingConfig.maxVideoBufferSize);
     if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
     {
-        m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
+        m_streamingConfig.maxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
         if (m_onStreamingMaxVideoBufferSizeChanged)
         {
-            m_onStreamingMaxVideoBufferSizeChanged(m_streamingMaxVideoBufferSize);
+            m_onStreamingMaxVideoBufferSizeChanged(m_streamingConfig.maxVideoBufferSize);
         }
         saveConfig();
     }
@@ -2077,13 +2077,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // Max Audio Buffer Size
-    int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
+    int maxAudioBuffer = static_cast<int>(m_streamingConfig.maxAudioBufferSize);
     if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
     {
-        m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
+        m_streamingConfig.maxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
         if (m_onStreamingMaxAudioBufferSizeChanged)
         {
-            m_onStreamingMaxAudioBufferSizeChanged(m_streamingMaxAudioBufferSize);
+            m_onStreamingMaxAudioBufferSizeChanged(m_streamingConfig.maxAudioBufferSize);
         }
         saveConfig();
     }
@@ -2096,13 +2096,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // Max Buffer Time
-    int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
+    int maxBufferTime = static_cast<int>(m_streamingConfig.maxBufferTimeSeconds);
     if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
     {
-        m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
+        m_streamingConfig.maxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
         if (m_onStreamingMaxBufferTimeSecondsChanged)
         {
-            m_onStreamingMaxBufferTimeSecondsChanged(m_streamingMaxBufferTimeSeconds);
+            m_onStreamingMaxBufferTimeSecondsChanged(m_streamingConfig.maxBufferTimeSeconds);
         }
         saveConfig();
     }
@@ -2115,13 +2115,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // AVIO Buffer Size
-    int avioBuffer = static_cast<int>(m_streamingAVIOBufferSize / 1024); // Converter para KB
+    int avioBuffer = static_cast<int>(m_streamingConfig.avioBufferSize / 1024); // Converter para KB
     if (ImGui::SliderInt("AVIO Buffer (KB)", &avioBuffer, 64, 1024))
     {
-        m_streamingAVIOBufferSize = static_cast<size_t>(avioBuffer * 1024);
+        m_streamingConfig.avioBufferSize = static_cast<size_t>(avioBuffer * 1024);
         if (m_onStreamingAVIOBufferSizeChanged)
         {
-            m_onStreamingAVIOBufferSizeChanged(m_streamingAVIOBufferSize);
+            m_onStreamingAVIOBufferSizeChanged(m_streamingConfig.avioBufferSize);
         }
         saveConfig();
     }
@@ -2255,7 +2255,7 @@ void UIManager::setStreamingPort(uint16_t port)
     // Note: uint16_t max is 65535, so we only need to check >= 1024
     if (port >= 1024)
     {
-        m_streamingPort = port;
+        m_streamingConfig.port = port;
     }
     else
     {
@@ -2269,14 +2269,14 @@ void UIManager::triggerStreamingPortChange(uint16_t port)
     setStreamingPort(port);
     if (m_onStreamingPortChanged)
     {
-        m_onStreamingPortChanged(m_streamingPort);
+        m_onStreamingPortChanged(m_streamingConfig.port);
     }
     saveConfig();
 }
 
 void UIManager::triggerStreamingWidthChange(uint32_t width)
 {
-    m_streamingWidth = width;
+    m_streamingConfig.width = width;
     if (m_onStreamingWidthChanged)
     {
         m_onStreamingWidthChanged(width);
@@ -2286,7 +2286,7 @@ void UIManager::triggerStreamingWidthChange(uint32_t width)
 
 void UIManager::triggerStreamingHeightChange(uint32_t height)
 {
-    m_streamingHeight = height;
+    m_streamingConfig.height = height;
     if (m_onStreamingHeightChanged)
     {
         m_onStreamingHeightChanged(height);
@@ -2296,7 +2296,7 @@ void UIManager::triggerStreamingHeightChange(uint32_t height)
 
 void UIManager::triggerStreamingFpsChange(uint32_t fps)
 {
-    m_streamingFps = fps;
+    m_streamingConfig.fps = fps;
     if (m_onStreamingFpsChanged)
     {
         m_onStreamingFpsChanged(fps);
@@ -2306,7 +2306,7 @@ void UIManager::triggerStreamingFpsChange(uint32_t fps)
 
 void UIManager::triggerStreamingBitrateChange(uint32_t bitrate)
 {
-    m_streamingBitrate = bitrate;
+    m_streamingConfig.bitrate = bitrate;
     if (m_onStreamingBitrateChanged)
     {
         m_onStreamingBitrateChanged(bitrate);
@@ -2316,7 +2316,7 @@ void UIManager::triggerStreamingBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerStreamingAudioBitrateChange(uint32_t bitrate)
 {
-    m_streamingAudioBitrate = bitrate;
+    m_streamingConfig.audioBitrate = bitrate;
     if (m_onStreamingAudioBitrateChanged)
     {
         m_onStreamingAudioBitrateChanged(bitrate);
@@ -2326,7 +2326,7 @@ void UIManager::triggerStreamingAudioBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerStreamingVideoCodecChange(const std::string &codec)
 {
-    m_streamingVideoCodec = codec;
+    m_streamingConfig.videoCodec = codec;
     if (m_onStreamingVideoCodecChanged)
     {
         m_onStreamingVideoCodecChanged(codec);
@@ -2336,7 +2336,7 @@ void UIManager::triggerStreamingVideoCodecChange(const std::string &codec)
 
 void UIManager::triggerStreamingAudioCodecChange(const std::string &codec)
 {
-    m_streamingAudioCodec = codec;
+    m_streamingConfig.audioCodec = codec;
     if (m_onStreamingAudioCodecChanged)
     {
         m_onStreamingAudioCodecChanged(codec);
@@ -2346,7 +2346,7 @@ void UIManager::triggerStreamingAudioCodecChange(const std::string &codec)
 
 void UIManager::triggerStreamingH264PresetChange(const std::string &preset)
 {
-    m_streamingH264Preset = preset;
+    m_streamingConfig.h264Preset = preset;
     if (m_onStreamingH264PresetChanged)
     {
         m_onStreamingH264PresetChanged(preset);
@@ -2356,7 +2356,7 @@ void UIManager::triggerStreamingH264PresetChange(const std::string &preset)
 
 void UIManager::triggerStreamingH265PresetChange(const std::string &preset)
 {
-    m_streamingH265Preset = preset;
+    m_streamingConfig.h265Preset = preset;
     if (m_onStreamingH265PresetChanged)
     {
         m_onStreamingH265PresetChanged(preset);
@@ -2366,7 +2366,7 @@ void UIManager::triggerStreamingH265PresetChange(const std::string &preset)
 
 void UIManager::triggerStreamingH265ProfileChange(const std::string &profile)
 {
-    m_streamingH265Profile = profile;
+    m_streamingConfig.h265Profile = profile;
     if (m_onStreamingH265ProfileChanged)
     {
         m_onStreamingH265ProfileChanged(profile);
@@ -2376,7 +2376,7 @@ void UIManager::triggerStreamingH265ProfileChange(const std::string &profile)
 
 void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 {
-    m_streamingH265Level = level;
+    m_streamingConfig.h265Level = level;
     if (m_onStreamingH265LevelChanged)
     {
         m_onStreamingH265LevelChanged(level);
@@ -2395,7 +2395,7 @@ void UIManager::triggerDeviceChange(const std::string &device)
 
 void UIManager::triggerStreamingVP8SpeedChange(int speed)
 {
-    m_streamingVP8Speed = speed;
+    m_streamingConfig.vp8Speed = speed;
     if (m_onStreamingVP8SpeedChanged)
     {
         m_onStreamingVP8SpeedChanged(speed);
@@ -2405,7 +2405,7 @@ void UIManager::triggerStreamingVP8SpeedChange(int speed)
 
 void UIManager::triggerStreamingVP9SpeedChange(int speed)
 {
-    m_streamingVP9Speed = speed;
+    m_streamingConfig.vp9Speed = speed;
     if (m_onStreamingVP9SpeedChanged)
     {
         m_onStreamingVP9SpeedChanged(speed);
@@ -2415,7 +2415,7 @@ void UIManager::triggerStreamingVP9SpeedChange(int speed)
 
 void UIManager::triggerStreamingHardwareEncoderChange(int v)
 {
-    m_streamingHardwareEncoder = v;
+    m_streamingConfig.hardwareEncoder = v;
     if (m_onStreamingHardwareEncoderChanged)
     {
         m_onStreamingHardwareEncoderChanged(v);
@@ -2425,28 +2425,28 @@ void UIManager::triggerStreamingHardwareEncoderChange(int v)
 
 void UIManager::triggerStreamingNvencPresetChange(const std::string &v)
 {
-    m_streamingNvencPreset = v;
+    m_streamingConfig.nvencPreset = v;
     if (m_onStreamingNvencPresetChanged) m_onStreamingNvencPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingVaapiRcModeChange(const std::string &v)
 {
-    m_streamingVaapiRcMode = v;
+    m_streamingConfig.vaapiRcMode = v;
     if (m_onStreamingVaapiRcModeChanged) m_onStreamingVaapiRcModeChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingQsvPresetChange(const std::string &v)
 {
-    m_streamingQsvPreset = v;
+    m_streamingConfig.qsvPreset = v;
     if (m_onStreamingQsvPresetChanged) m_onStreamingQsvPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
 {
-    m_streamingAmfQuality = v;
+    m_streamingConfig.amfQuality = v;
     if (m_onStreamingAmfQualityChanged) m_onStreamingAmfQualityChanged(v);
     saveConfig();
 }
@@ -2489,7 +2489,7 @@ void UIManager::triggerRemoteAudioMuteChange(bool muted)
 
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
-    m_streamingMaxVideoBufferSize = size;
+    m_streamingConfig.maxVideoBufferSize = size;
     if (m_onStreamingMaxVideoBufferSizeChanged)
     {
         m_onStreamingMaxVideoBufferSizeChanged(size);
@@ -2499,7 +2499,7 @@ void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 
 void UIManager::triggerStreamingMaxAudioBufferSizeChange(size_t size)
 {
-    m_streamingMaxAudioBufferSize = size;
+    m_streamingConfig.maxAudioBufferSize = size;
     if (m_onStreamingMaxAudioBufferSizeChanged)
     {
         m_onStreamingMaxAudioBufferSizeChanged(size);
@@ -2509,7 +2509,7 @@ void UIManager::triggerStreamingMaxAudioBufferSizeChange(size_t size)
 
 void UIManager::triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds)
 {
-    m_streamingMaxBufferTimeSeconds = seconds;
+    m_streamingConfig.maxBufferTimeSeconds = seconds;
     if (m_onStreamingMaxBufferTimeSecondsChanged)
     {
         m_onStreamingMaxBufferTimeSecondsChanged(seconds);
@@ -2519,7 +2519,7 @@ void UIManager::triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds)
 
 void UIManager::triggerStreamingAVIOBufferSizeChange(size_t size)
 {
-    m_streamingAVIOBufferSize = size;
+    m_streamingConfig.avioBufferSize = size;
     if (m_onStreamingAVIOBufferSizeChanged)
     {
         m_onStreamingAVIOBufferSizeChanged(size);
@@ -2685,43 +2685,43 @@ void UIManager::loadConfig()
         {
             auto &streaming = config["streaming"];
             if (streaming.contains("port"))
-                m_streamingPort = streaming["port"];
+                m_streamingConfig.port = streaming["port"];
             if (streaming.contains("width"))
-                m_streamingWidth = streaming["width"];
+                m_streamingConfig.width = streaming["width"];
             if (streaming.contains("height"))
-                m_streamingHeight = streaming["height"];
+                m_streamingConfig.height = streaming["height"];
             if (streaming.contains("fps"))
-                m_streamingFps = streaming["fps"];
+                m_streamingConfig.fps = streaming["fps"];
             if (streaming.contains("bitrate"))
-                m_streamingBitrate = streaming["bitrate"];
+                m_streamingConfig.bitrate = streaming["bitrate"];
             if (streaming.contains("audioBitrate"))
-                m_streamingAudioBitrate = streaming["audioBitrate"];
+                m_streamingConfig.audioBitrate = streaming["audioBitrate"];
             if (streaming.contains("videoCodec"))
-                m_streamingVideoCodec = streaming["videoCodec"].get<std::string>();
+                m_streamingConfig.videoCodec = streaming["videoCodec"].get<std::string>();
             if (streaming.contains("audioCodec"))
-                m_streamingAudioCodec = streaming["audioCodec"].get<std::string>();
+                m_streamingConfig.audioCodec = streaming["audioCodec"].get<std::string>();
             if (streaming.contains("h264Preset"))
-                m_streamingH264Preset = streaming["h264Preset"].get<std::string>();
+                m_streamingConfig.h264Preset = streaming["h264Preset"].get<std::string>();
             if (streaming.contains("h265Preset"))
-                m_streamingH265Preset = streaming["h265Preset"].get<std::string>();
+                m_streamingConfig.h265Preset = streaming["h265Preset"].get<std::string>();
             if (streaming.contains("h265Profile"))
-                m_streamingH265Profile = streaming["h265Profile"].get<std::string>();
+                m_streamingConfig.h265Profile = streaming["h265Profile"].get<std::string>();
             if (streaming.contains("h265Level"))
-                m_streamingH265Level = streaming["h265Level"].get<std::string>();
+                m_streamingConfig.h265Level = streaming["h265Level"].get<std::string>();
             if (streaming.contains("vp8Speed"))
-                m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
+                m_streamingConfig.vp8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
-                m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+                m_streamingConfig.vp9Speed = streaming["vp9Speed"].get<int>();
             if (streaming.contains("hardwareEncoder"))
-                m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
+                m_streamingConfig.hardwareEncoder = streaming["hardwareEncoder"].get<int>();
             if (streaming.contains("nvencPreset"))
-                m_streamingNvencPreset = streaming["nvencPreset"].get<std::string>();
+                m_streamingConfig.nvencPreset = streaming["nvencPreset"].get<std::string>();
             if (streaming.contains("vaapiRcMode"))
-                m_streamingVaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
+                m_streamingConfig.vaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
             if (streaming.contains("qsvPreset"))
-                m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
+                m_streamingConfig.qsvPreset = streaming["qsvPreset"].get<std::string>();
             if (streaming.contains("amfQuality"))
-                m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
+                m_streamingConfig.amfQuality = streaming["amfQuality"].get<std::string>();
             if (streaming.contains("remoteInterpolation"))
                 m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
 
@@ -2730,13 +2730,13 @@ void UIManager::loadConfig()
             {
                 auto &buffer = streaming["buffer"];
                 if (buffer.contains("maxVideoBufferSize"))
-                    m_streamingMaxVideoBufferSize = buffer["maxVideoBufferSize"].get<size_t>();
+                    m_streamingConfig.maxVideoBufferSize = buffer["maxVideoBufferSize"].get<size_t>();
                 if (buffer.contains("maxAudioBufferSize"))
-                    m_streamingMaxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
+                    m_streamingConfig.maxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
                 if (buffer.contains("maxBufferTimeSeconds"))
-                    m_streamingMaxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
+                    m_streamingConfig.maxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
                 if (buffer.contains("avioBufferSize"))
-                    m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
+                    m_streamingConfig.avioBufferSize = buffer["avioBufferSize"].get<size_t>();
             }
             if (streaming.contains("directory"))
             {
@@ -3239,28 +3239,28 @@ void UIManager::saveConfig()
 
         // Salvar configurações de streaming
         config["streaming"] = {
-            {"port", m_streamingPort},
-            {"width", m_streamingWidth},
-            {"height", m_streamingHeight},
-            {"fps", m_streamingFps},
-            {"bitrate", m_streamingBitrate},
-            {"audioBitrate", m_streamingAudioBitrate},
-            {"videoCodec", m_streamingVideoCodec},
-            {"audioCodec", m_streamingAudioCodec},
-            {"h264Preset", m_streamingH264Preset},
-            {"h265Preset", m_streamingH265Preset},
-            {"h265Profile", m_streamingH265Profile},
-            {"h265Level", m_streamingH265Level},
-            {"vp8Speed", m_streamingVP8Speed},
-            {"vp9Speed", m_streamingVP9Speed},
-            {"hardwareEncoder", m_streamingHardwareEncoder},
-            {"nvencPreset", m_streamingNvencPreset},
-            {"vaapiRcMode", m_streamingVaapiRcMode},
-            {"qsvPreset",   m_streamingQsvPreset},
-            {"amfQuality",  m_streamingAmfQuality},
+            {"port", m_streamingConfig.port},
+            {"width", m_streamingConfig.width},
+            {"height", m_streamingConfig.height},
+            {"fps", m_streamingConfig.fps},
+            {"bitrate", m_streamingConfig.bitrate},
+            {"audioBitrate", m_streamingConfig.audioBitrate},
+            {"videoCodec", m_streamingConfig.videoCodec},
+            {"audioCodec", m_streamingConfig.audioCodec},
+            {"h264Preset", m_streamingConfig.h264Preset},
+            {"h265Preset", m_streamingConfig.h265Preset},
+            {"h265Profile", m_streamingConfig.h265Profile},
+            {"h265Level", m_streamingConfig.h265Level},
+            {"vp8Speed", m_streamingConfig.vp8Speed},
+            {"vp9Speed", m_streamingConfig.vp9Speed},
+            {"hardwareEncoder", m_streamingConfig.hardwareEncoder},
+            {"nvencPreset", m_streamingConfig.nvencPreset},
+            {"vaapiRcMode", m_streamingConfig.vaapiRcMode},
+            {"qsvPreset",   m_streamingConfig.qsvPreset},
+            {"amfQuality",  m_streamingConfig.amfQuality},
             {"remoteInterpolation", m_remoteInterpolation},
             {"applyShader", m_streamingApplyShader},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}},
+            {"buffer", {{"maxVideoBufferSize", m_streamingConfig.maxVideoBufferSize}, {"maxAudioBufferSize", m_streamingConfig.maxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingConfig.maxBufferTimeSeconds}, {"avioBufferSize", m_streamingConfig.avioBufferSize}}},
             // #49 Phase 2: public directory publish settings.
             // The password is persisted because the user re-uses it
             // across sessions; the runtime streamId + ownerToken are
@@ -3461,7 +3461,7 @@ void UIManager::renderWebPortalPanel()
     if (!portalEnabled)
     {
         ImGui::Spacing();
-        std::string streamUrl = "http://localhost:" + std::to_string(m_streamingPort) + "/stream";
+        std::string streamUrl = "http://localhost:" + std::to_string(m_streamingConfig.port) + "/stream";
         ImGui::Text("Stream direto: %s", streamUrl.c_str());
         return;
     }
@@ -3483,7 +3483,7 @@ void UIManager::renderWebPortalPanel()
         }
         ImGui::Spacing();
         std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
-                                std::string("localhost:") + std::to_string(m_streamingPort);
+                                std::string("localhost:") + std::to_string(m_streamingConfig.port);
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Portal Web Ativo");
         ImGui::Text("URL: %s", portalUrl.c_str());
     }
@@ -3802,7 +3802,7 @@ void UIManager::renderWebPortalPanel()
 
     // Portal URL
     std::string protocol = httpsEnabled ? "https" : "http";
-    std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
+    std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingConfig.port);
     ImGui::Text("URL: %s", portalUrl.c_str());
 }
 

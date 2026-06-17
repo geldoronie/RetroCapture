@@ -38,6 +38,36 @@ class UIRecordings;
 class RecordingProfileManager;
 class StreamingProfileManager;
 
+// #160 — UIManager streaming settings grouped into a config struct (first of the
+// config-struct groups). Storage consolidation: the per-field getters/setters are
+// now thin wrappers over this, plus bulk get/setStreamingConfig() accessors.
+struct StreamingConfig
+{
+    uint16_t    port            = 8080;
+    uint32_t    width           = 640;
+    uint32_t    height          = 480;
+    uint32_t    fps             = 60;
+    uint32_t    bitrate         = 8000;
+    uint32_t    audioBitrate    = 256;
+    std::string videoCodec      = "h264";
+    std::string audioCodec      = "aac";
+    std::string h264Preset      = "veryfast";
+    std::string h265Preset      = "veryfast";
+    std::string h265Profile     = "main";
+    std::string h265Level       = "auto";
+    int         vp8Speed        = 12;
+    int         vp9Speed        = 6;
+    int         hardwareEncoder = 0;       // 0 = Auto (MediaEncoder::HardwareEncoder::Auto)
+    std::string nvencPreset     = "p4";
+    std::string vaapiRcMode     = "CBR";
+    std::string qsvPreset       = "veryfast";
+    std::string amfQuality      = "speed";
+    size_t      maxVideoBufferSize   = 15;
+    size_t      maxAudioBufferSize   = 30;
+    int64_t     maxBufferTimeSeconds = 5;
+    size_t      avioBufferSize       = 256 * 1024;
+};
+
 class UIManager
 {
 public:
@@ -457,56 +487,63 @@ public:
         m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
     }
     void setStreamingPort(uint16_t port);
-    void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
-    void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
-    void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
-    void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
-    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
-    void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
-    void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
-    void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
-    void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
-    void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
-    void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
-    void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
-    void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    void setStreamingWidth(uint32_t width) { m_streamingConfig.width = width; }
+    void setStreamingHeight(uint32_t height) { m_streamingConfig.height = height; }
+    void setStreamingFps(uint32_t fps) { m_streamingConfig.fps = fps; }
+    void setStreamingBitrate(uint32_t bitrate) { m_streamingConfig.bitrate = bitrate; }
+    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingConfig.audioBitrate = bitrate; }
+    void setStreamingVideoCodec(const std::string &codec) { m_streamingConfig.videoCodec = codec; }
+    void setStreamingAudioCodec(const std::string &codec) { m_streamingConfig.audioCodec = codec; }
+    void setStreamingH264Preset(const std::string &preset) { m_streamingConfig.h264Preset = preset; }
+    void setStreamingH265Preset(const std::string &preset) { m_streamingConfig.h265Preset = preset; }
+    void setStreamingH265Profile(const std::string &profile) { m_streamingConfig.h265Profile = profile; }
+    void setStreamingH265Level(const std::string &level) { m_streamingConfig.h265Level = level; }
+    void setStreamingVP8Speed(int speed) { m_streamingConfig.vp8Speed = speed; }
+    void setStreamingVP9Speed(int speed) { m_streamingConfig.vp9Speed = speed; }
     // Hardware encoder selection — uses int so we don't have to pull
     // MediaEncoder.h into the UI layer. Stored as int matching the
     // MediaEncoder::HardwareEncoder enum values (Auto=0, Software=1,
     // NVENC=2, VAAPI=3, QSV=4, AMF=5).
-    void setStreamingHardwareEncoder(int v) { m_streamingHardwareEncoder = v; }
+    void setStreamingHardwareEncoder(int v) { m_streamingConfig.hardwareEncoder = v; }
 
     // Buffer settings
-    void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
-    void setStreamingMaxAudioBufferSize(size_t size) { m_streamingMaxAudioBufferSize = size; }
-    void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingMaxBufferTimeSeconds = seconds; }
-    void setStreamingAVIOBufferSize(size_t size) { m_streamingAVIOBufferSize = size; }
+    void setStreamingMaxVideoBufferSize(size_t size) { m_streamingConfig.maxVideoBufferSize = size; }
+    void setStreamingMaxAudioBufferSize(size_t size) { m_streamingConfig.maxAudioBufferSize = size; }
+    void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingConfig.maxBufferTimeSeconds = seconds; }
+    void setStreamingAVIOBufferSize(size_t size) { m_streamingConfig.avioBufferSize = size; }
 
-    size_t getStreamingMaxVideoBufferSize() const { return m_streamingMaxVideoBufferSize; }
-    size_t getStreamingMaxAudioBufferSize() const { return m_streamingMaxAudioBufferSize; }
-    int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingMaxBufferTimeSeconds; }
-    size_t getStreamingAVIOBufferSize() const { return m_streamingAVIOBufferSize; }
+    size_t getStreamingMaxVideoBufferSize() const { return m_streamingConfig.maxVideoBufferSize; }
+    size_t getStreamingMaxAudioBufferSize() const { return m_streamingConfig.maxAudioBufferSize; }
+    int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingConfig.maxBufferTimeSeconds; }
+    size_t getStreamingAVIOBufferSize() const { return m_streamingConfig.avioBufferSize; }
 
     // Streaming info getters (public)
-    uint16_t getStreamingPort() const { return m_streamingPort; }
-    uint32_t getStreamingWidth() const { return m_streamingWidth; }
-    uint32_t getStreamingHeight() const { return m_streamingHeight; }
-    uint32_t getStreamingFps() const { return m_streamingFps; }
-    uint32_t getStreamingBitrate() const { return m_streamingBitrate; }
-    uint32_t getStreamingAudioBitrate() const { return m_streamingAudioBitrate; }
-    std::string getStreamingVideoCodec() const { return m_streamingVideoCodec; }
-    std::string getStreamingAudioCodec() const { return m_streamingAudioCodec; }
-    std::string getStreamingH264Preset() const { return m_streamingH264Preset; }
-    std::string getStreamingH265Preset() const { return m_streamingH265Preset; }
-    std::string getStreamingH265Profile() const { return m_streamingH265Profile; }
-    std::string getStreamingH265Level() const { return m_streamingH265Level; }
-    int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
-    int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
-    int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
-    std::string getStreamingNvencPreset() const { return m_streamingNvencPreset; }
-    std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
-    std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
-    std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
+    uint16_t getStreamingPort() const { return m_streamingConfig.port; }
+    uint32_t getStreamingWidth() const { return m_streamingConfig.width; }
+    uint32_t getStreamingHeight() const { return m_streamingConfig.height; }
+    uint32_t getStreamingFps() const { return m_streamingConfig.fps; }
+    uint32_t getStreamingBitrate() const { return m_streamingConfig.bitrate; }
+    uint32_t getStreamingAudioBitrate() const { return m_streamingConfig.audioBitrate; }
+    std::string getStreamingVideoCodec() const { return m_streamingConfig.videoCodec; }
+    std::string getStreamingAudioCodec() const { return m_streamingConfig.audioCodec; }
+    std::string getStreamingH264Preset() const { return m_streamingConfig.h264Preset; }
+    std::string getStreamingH265Preset() const { return m_streamingConfig.h265Preset; }
+    std::string getStreamingH265Profile() const { return m_streamingConfig.h265Profile; }
+    std::string getStreamingH265Level() const { return m_streamingConfig.h265Level; }
+    int getStreamingVP8Speed() const { return m_streamingConfig.vp8Speed; }
+    int getStreamingVP9Speed() const { return m_streamingConfig.vp9Speed; }
+    int getStreamingHardwareEncoder() const { return m_streamingConfig.hardwareEncoder; }
+    std::string getStreamingNvencPreset() const { return m_streamingConfig.nvencPreset; }
+    std::string getStreamingVaapiRcMode() const { return m_streamingConfig.vaapiRcMode; }
+    std::string getStreamingQsvPreset()   const { return m_streamingConfig.qsvPreset; }
+    std::string getStreamingAmfQuality()  const { return m_streamingConfig.amfQuality; }
+
+    // #160 — bulk access to the whole streaming-settings group. New code should
+    // prefer these; the per-field accessors above are thin wrappers over the same
+    // struct and will be migrated/removed in follow-up PRs.
+    const StreamingConfig &getStreamingConfig() const { return m_streamingConfig; }
+    void setStreamingConfig(const StreamingConfig &cfg) { m_streamingConfig = cfg; }
+
     std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
     // #77 client-side volume for the incoming remote audio stream.
     float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
@@ -1201,30 +1238,13 @@ private:
 
     // Streaming controls
     bool m_streamingEnabled = false;
-    uint16_t m_streamingPort = 8080;
-    uint32_t m_streamingWidth = 640;  // Padrão: 640px
-    uint32_t m_streamingHeight = 480; // Padrão: 480px
-    uint32_t m_streamingFps = 60;
-    uint32_t m_streamingBitrate = 8000;
-    uint32_t m_streamingAudioBitrate = 256;
-    std::string m_streamingVideoCodec = "h264";
-    std::string m_streamingAudioCodec = "aac";
-    std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-    std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-    std::string m_streamingH265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
-    std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
-    int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
-    int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
-    int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
+    // #160 — streaming settings grouped into one struct (see StreamingConfig above).
+    StreamingConfig m_streamingConfig;
     // Per-backend quality / preset values — the Streaming-tab UI shows
     // whichever combo matches the currently selected hardware encoder.
     // Stored separately so switching encoders preserves each backend's
     // previously chosen value rather than collapsing them onto one
     // shared string whose meaning would shift mid-flight.
-    std::string m_streamingNvencPreset = "p4";      // p1 (fastest) .. p7 (slowest)
-    std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
-    std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
-    std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
 
     // Client-side interpolation mode for Remote-source playback. Picks
     // how each display refresh resolves the time between two consecutive
@@ -1340,10 +1360,6 @@ private:
     // to give a bit more cushion against client/network jitter — small
     // frame loss showed up under load even on capable hardware. Audio
     // bumped to match. Still overridable from config.json.
-    size_t m_streamingMaxVideoBufferSize = 15;     // Máximo de frames no buffer de vídeo (1-50)
-    size_t m_streamingMaxAudioBufferSize = 30;     // Máximo de chunks no buffer de áudio (5-100)
-    int64_t m_streamingMaxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (1-30)
-    size_t m_streamingAVIOBufferSize = 256 * 1024; // 256KB para buffer AVIO do FFmpeg (64KB-1MB)
 
     std::function<void(bool)> m_onStreamingStartStop;
     std::function<void(uint16_t)> m_onStreamingPortChanged;
