@@ -68,6 +68,33 @@ struct StreamingConfig
     size_t      avioBufferSize       = 256 * 1024;
 };
 
+// #160 — UIManager recording settings grouped into a config struct (group 2/N).
+struct RecordingConfig
+{
+    uint32_t    width            = 1920;
+    uint32_t    height           = 1080;
+    uint32_t    fps              = 60;
+    uint32_t    bitrate          = 8000000;
+    uint32_t    audioBitrate     = 256000;
+    std::string videoCodec       = "h264";
+    std::string audioCodec       = "aac";
+    std::string h264Preset       = "veryfast";
+    std::string h265Preset       = "veryfast";
+    std::string h265Profile      = "main";
+    std::string h265Level        = "auto";
+    int         vp8Speed         = 12;
+    int         vp9Speed         = 6;
+    std::string container        = "mp4";
+    std::string outputPath       = "recordings/";
+    std::string filenameTemplate = "recording_%Y%m%d_%H%M%S";
+    bool        includeAudio     = true;
+    int         hardwareEncoder  = 0;          // 0=Auto 1=SW 2=NVENC 3=VAAPI 4=QSV 5=AMF
+    std::string nvencPreset      = "p4";
+    std::string vaapiRcMode      = "VBR";
+    std::string qsvPreset        = "medium";
+    std::string amfQuality       = "quality";
+};
+
 class UIManager
 {
 public:
@@ -767,23 +794,23 @@ public:
     void setRecordingDurationUs(uint64_t durationUs) { m_recordingDurationUs = durationUs; }
     void setRecordingFileSize(uint64_t fileSize) { m_recordingFileSize = fileSize; }
     void setRecordingFilename(const std::string& filename) { m_recordingFilename = filename; }
-    void setRecordingWidth(uint32_t width) { m_recordingWidth = width; }
-    void setRecordingHeight(uint32_t height) { m_recordingHeight = height; }
-    void setRecordingFps(uint32_t fps) { m_recordingFps = fps; }
-    void setRecordingBitrate(uint32_t bitrate) { m_recordingBitrate = bitrate; }
-    void setRecordingAudioBitrate(uint32_t bitrate) { m_recordingAudioBitrate = bitrate; }
-    void setRecordingVideoCodec(const std::string& codec) { m_recordingVideoCodec = codec; }
-    void setRecordingAudioCodec(const std::string& codec) { m_recordingAudioCodec = codec; }
-    void setRecordingH264Preset(const std::string& preset) { m_recordingH264Preset = preset; }
-    void setRecordingH265Preset(const std::string& preset) { m_recordingH265Preset = preset; }
-    void setRecordingH265Profile(const std::string& profile) { m_recordingH265Profile = profile; }
-    void setRecordingH265Level(const std::string& level) { m_recordingH265Level = level; }
-    void setRecordingVP8Speed(int speed) { m_recordingVP8Speed = speed; }
-    void setRecordingVP9Speed(int speed) { m_recordingVP9Speed = speed; }
-    void setRecordingContainer(const std::string& container) { m_recordingContainer = container; }
-    void setRecordingOutputPath(const std::string& path) { m_recordingOutputPath = path; }
-    void setRecordingFilenameTemplate(const std::string& template_) { m_recordingFilenameTemplate = template_; }
-    void setRecordingIncludeAudio(bool include) { m_recordingIncludeAudio = include; }
+    void setRecordingWidth(uint32_t width) { m_recordingConfig.width = width; }
+    void setRecordingHeight(uint32_t height) { m_recordingConfig.height = height; }
+    void setRecordingFps(uint32_t fps) { m_recordingConfig.fps = fps; }
+    void setRecordingBitrate(uint32_t bitrate) { m_recordingConfig.bitrate = bitrate; }
+    void setRecordingAudioBitrate(uint32_t bitrate) { m_recordingConfig.audioBitrate = bitrate; }
+    void setRecordingVideoCodec(const std::string& codec) { m_recordingConfig.videoCodec = codec; }
+    void setRecordingAudioCodec(const std::string& codec) { m_recordingConfig.audioCodec = codec; }
+    void setRecordingH264Preset(const std::string& preset) { m_recordingConfig.h264Preset = preset; }
+    void setRecordingH265Preset(const std::string& preset) { m_recordingConfig.h265Preset = preset; }
+    void setRecordingH265Profile(const std::string& profile) { m_recordingConfig.h265Profile = profile; }
+    void setRecordingH265Level(const std::string& level) { m_recordingConfig.h265Level = level; }
+    void setRecordingVP8Speed(int speed) { m_recordingConfig.vp8Speed = speed; }
+    void setRecordingVP9Speed(int speed) { m_recordingConfig.vp9Speed = speed; }
+    void setRecordingContainer(const std::string& container) { m_recordingConfig.container = container; }
+    void setRecordingOutputPath(const std::string& path) { m_recordingConfig.outputPath = path; }
+    void setRecordingFilenameTemplate(const std::string& template_) { m_recordingConfig.filenameTemplate = template_; }
+    void setRecordingIncludeAudio(bool include) { m_recordingConfig.includeAudio = include; }
 
     // Hardware encoder selection for recording (#59). Same int-based
     // encoding as the streaming side so we don't have to pull
@@ -791,39 +818,44 @@ public:
     // 2=NVENC, 3=VAAPI, 4=QSV, 5=AMF). Backend-specific preset
     // strings live in separate fields per backend, mirroring the
     // streaming layout exactly so the same UI block can render both.
-    void setRecordingHardwareEncoder(int v)           { m_recordingHardwareEncoder = v; }
-    void setRecordingNvencPreset(const std::string &v){ m_recordingNvencPreset = v; }
-    void setRecordingVaapiRcMode(const std::string &v){ m_recordingVaapiRcMode = v; }
-    void setRecordingQsvPreset(const std::string &v)  { m_recordingQsvPreset = v; }
-    void setRecordingAmfQuality(const std::string &v) { m_recordingAmfQuality = v; }
+    void setRecordingHardwareEncoder(int v)           { m_recordingConfig.hardwareEncoder = v; }
+    void setRecordingNvencPreset(const std::string &v){ m_recordingConfig.nvencPreset = v; }
+    void setRecordingVaapiRcMode(const std::string &v){ m_recordingConfig.vaapiRcMode = v; }
+    void setRecordingQsvPreset(const std::string &v)  { m_recordingConfig.qsvPreset = v; }
+    void setRecordingAmfQuality(const std::string &v) { m_recordingConfig.amfQuality = v; }
 
     // Recording info getters (public)
     bool getRecordingActive() const { return m_recordingActive; }
     uint64_t getRecordingDurationUs() const { return m_recordingDurationUs; }
     uint64_t getRecordingFileSize() const { return m_recordingFileSize; }
     std::string getRecordingFilename() const { return m_recordingFilename; }
-    uint32_t getRecordingWidth() const { return m_recordingWidth; }
-    uint32_t getRecordingHeight() const { return m_recordingHeight; }
-    uint32_t getRecordingFps() const { return m_recordingFps; }
-    uint32_t getRecordingBitrate() const { return m_recordingBitrate; }
-    uint32_t getRecordingAudioBitrate() const { return m_recordingAudioBitrate; }
-    std::string getRecordingVideoCodec() const { return m_recordingVideoCodec; }
-    std::string getRecordingAudioCodec() const { return m_recordingAudioCodec; }
-    std::string getRecordingH264Preset() const { return m_recordingH264Preset; }
-    std::string getRecordingH265Preset() const { return m_recordingH265Preset; }
-    std::string getRecordingH265Profile() const { return m_recordingH265Profile; }
-    std::string getRecordingH265Level() const { return m_recordingH265Level; }
-    int getRecordingVP8Speed() const { return m_recordingVP8Speed; }
-    int getRecordingVP9Speed() const { return m_recordingVP9Speed; }
-    std::string getRecordingContainer() const { return m_recordingContainer; }
-    std::string getRecordingOutputPath() const { return m_recordingOutputPath; }
-    std::string getRecordingFilenameTemplate() const { return m_recordingFilenameTemplate; }
-    bool getRecordingIncludeAudio() const { return m_recordingIncludeAudio; }
-    int  getRecordingHardwareEncoder() const         { return m_recordingHardwareEncoder; }
-    std::string getRecordingNvencPreset() const      { return m_recordingNvencPreset; }
-    std::string getRecordingVaapiRcMode() const      { return m_recordingVaapiRcMode; }
-    std::string getRecordingQsvPreset()   const      { return m_recordingQsvPreset; }
-    std::string getRecordingAmfQuality()  const      { return m_recordingAmfQuality; }
+    uint32_t getRecordingWidth() const { return m_recordingConfig.width; }
+    uint32_t getRecordingHeight() const { return m_recordingConfig.height; }
+    uint32_t getRecordingFps() const { return m_recordingConfig.fps; }
+    uint32_t getRecordingBitrate() const { return m_recordingConfig.bitrate; }
+    uint32_t getRecordingAudioBitrate() const { return m_recordingConfig.audioBitrate; }
+    std::string getRecordingVideoCodec() const { return m_recordingConfig.videoCodec; }
+    std::string getRecordingAudioCodec() const { return m_recordingConfig.audioCodec; }
+    std::string getRecordingH264Preset() const { return m_recordingConfig.h264Preset; }
+    std::string getRecordingH265Preset() const { return m_recordingConfig.h265Preset; }
+    std::string getRecordingH265Profile() const { return m_recordingConfig.h265Profile; }
+    std::string getRecordingH265Level() const { return m_recordingConfig.h265Level; }
+    int getRecordingVP8Speed() const { return m_recordingConfig.vp8Speed; }
+    int getRecordingVP9Speed() const { return m_recordingConfig.vp9Speed; }
+    std::string getRecordingContainer() const { return m_recordingConfig.container; }
+    std::string getRecordingOutputPath() const { return m_recordingConfig.outputPath; }
+    std::string getRecordingFilenameTemplate() const { return m_recordingConfig.filenameTemplate; }
+    bool getRecordingIncludeAudio() const { return m_recordingConfig.includeAudio; }
+    int  getRecordingHardwareEncoder() const         { return m_recordingConfig.hardwareEncoder; }
+    std::string getRecordingNvencPreset() const      { return m_recordingConfig.nvencPreset; }
+    std::string getRecordingVaapiRcMode() const      { return m_recordingConfig.vaapiRcMode; }
+    std::string getRecordingQsvPreset()   const      { return m_recordingConfig.qsvPreset; }
+    std::string getRecordingAmfQuality()  const      { return m_recordingConfig.amfQuality; }
+
+    // #160 — bulk access to the whole recording-settings group (per-field
+    // accessors above are thin wrappers over the same struct).
+    const RecordingConfig &getRecordingConfig() const { return m_recordingConfig; }
+    void setRecordingConfig(const RecordingConfig &cfg) { m_recordingConfig = cfg; }
 
     // Recording setters with callbacks
     void triggerRecordingWidthChange(uint32_t width);
@@ -1394,31 +1426,11 @@ private:
     uint64_t m_recordingDurationUs = 0;
     uint64_t m_recordingFileSize = 0;
     std::string m_recordingFilename;
-    uint32_t m_recordingWidth = 1920;
-    uint32_t m_recordingHeight = 1080;
-    uint32_t m_recordingFps = 60;
-    uint32_t m_recordingBitrate = 8000000;
-    uint32_t m_recordingAudioBitrate = 256000;
-    std::string m_recordingVideoCodec = "h264";
-    std::string m_recordingAudioCodec = "aac";
-    std::string m_recordingH264Preset = "veryfast";
-    std::string m_recordingH265Preset = "veryfast";
-    std::string m_recordingH265Profile = "main";
-    std::string m_recordingH265Level = "auto";
-    int m_recordingVP8Speed = 12;
-    int m_recordingVP9Speed = 6;
-    std::string m_recordingContainer = "mp4";
-    std::string m_recordingOutputPath = "recordings/";
-    std::string m_recordingFilenameTemplate = "recording_%Y%m%d_%H%M%S";
-    bool m_recordingIncludeAudio = true;
+    // #160 — recording settings grouped (see RecordingConfig above).
+    RecordingConfig m_recordingConfig;
     // Mirrors the streaming side (#59). 0=Auto (try hardware,
     // fall back to libx264), 1=Software, 2=NVENC, 3=VAAPI, 4=QSV,
     // 5=AMF. Backend-specific presets live in separate fields.
-    int         m_recordingHardwareEncoder = 0;
-    std::string m_recordingNvencPreset = "p4";
-    std::string m_recordingVaapiRcMode = "VBR"; // VBR is the better default for files
-    std::string m_recordingQsvPreset   = "medium";
-    std::string m_recordingAmfQuality  = "quality"; // recordings can afford the latency for visual quality
 
     // Recording callbacks
     std::function<void(bool)> m_onRecordingStartStop;

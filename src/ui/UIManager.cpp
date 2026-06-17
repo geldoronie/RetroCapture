@@ -3167,51 +3167,51 @@ void UIManager::loadConfig()
         {
             auto &recording = config["recording"];
             if (recording.contains("width"))
-                m_recordingWidth = recording["width"].get<uint32_t>();
+                m_recordingConfig.width = recording["width"].get<uint32_t>();
             if (recording.contains("height"))
-                m_recordingHeight = recording["height"].get<uint32_t>();
+                m_recordingConfig.height = recording["height"].get<uint32_t>();
             if (recording.contains("fps"))
-                m_recordingFps = recording["fps"].get<uint32_t>();
+                m_recordingConfig.fps = recording["fps"].get<uint32_t>();
             if (recording.contains("bitrate"))
-                m_recordingBitrate = recording["bitrate"].get<uint32_t>();
+                m_recordingConfig.bitrate = recording["bitrate"].get<uint32_t>();
             if (recording.contains("audioBitrate"))
-                m_recordingAudioBitrate = recording["audioBitrate"].get<uint32_t>();
+                m_recordingConfig.audioBitrate = recording["audioBitrate"].get<uint32_t>();
             if (recording.contains("videoCodec"))
-                m_recordingVideoCodec = recording["videoCodec"].get<std::string>();
+                m_recordingConfig.videoCodec = recording["videoCodec"].get<std::string>();
             if (recording.contains("audioCodec"))
-                m_recordingAudioCodec = recording["audioCodec"].get<std::string>();
+                m_recordingConfig.audioCodec = recording["audioCodec"].get<std::string>();
             if (recording.contains("h264Preset"))
-                m_recordingH264Preset = recording["h264Preset"].get<std::string>();
+                m_recordingConfig.h264Preset = recording["h264Preset"].get<std::string>();
             if (recording.contains("h265Preset"))
-                m_recordingH265Preset = recording["h265Preset"].get<std::string>();
+                m_recordingConfig.h265Preset = recording["h265Preset"].get<std::string>();
             if (recording.contains("h265Profile"))
-                m_recordingH265Profile = recording["h265Profile"].get<std::string>();
+                m_recordingConfig.h265Profile = recording["h265Profile"].get<std::string>();
             if (recording.contains("h265Level"))
-                m_recordingH265Level = recording["h265Level"].get<std::string>();
+                m_recordingConfig.h265Level = recording["h265Level"].get<std::string>();
             if (recording.contains("vp8Speed"))
-                m_recordingVP8Speed = recording["vp8Speed"].get<int>();
+                m_recordingConfig.vp8Speed = recording["vp8Speed"].get<int>();
             if (recording.contains("vp9Speed"))
-                m_recordingVP9Speed = recording["vp9Speed"].get<int>();
+                m_recordingConfig.vp9Speed = recording["vp9Speed"].get<int>();
             if (recording.contains("container"))
-                m_recordingContainer = recording["container"].get<std::string>();
+                m_recordingConfig.container = recording["container"].get<std::string>();
             if (recording.contains("outputPath"))
-                m_recordingOutputPath = recording["outputPath"].get<std::string>();
+                m_recordingConfig.outputPath = recording["outputPath"].get<std::string>();
             if (recording.contains("filenameTemplate"))
-                m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
+                m_recordingConfig.filenameTemplate = recording["filenameTemplate"].get<std::string>();
             if (recording.contains("includeAudio"))
-                m_recordingIncludeAudio = recording["includeAudio"];
+                m_recordingConfig.includeAudio = recording["includeAudio"];
             if (recording.contains("applyShader"))
                 m_recordingApplyShader = recording["applyShader"].get<bool>();
             if (recording.contains("hardwareEncoder"))
-                m_recordingHardwareEncoder = recording["hardwareEncoder"].get<int>();
+                m_recordingConfig.hardwareEncoder = recording["hardwareEncoder"].get<int>();
             if (recording.contains("nvencPreset"))
-                m_recordingNvencPreset = recording["nvencPreset"].get<std::string>();
+                m_recordingConfig.nvencPreset = recording["nvencPreset"].get<std::string>();
             if (recording.contains("vaapiRcMode"))
-                m_recordingVaapiRcMode = recording["vaapiRcMode"].get<std::string>();
+                m_recordingConfig.vaapiRcMode = recording["vaapiRcMode"].get<std::string>();
             if (recording.contains("qsvPreset"))
-                m_recordingQsvPreset = recording["qsvPreset"].get<std::string>();
+                m_recordingConfig.qsvPreset = recording["qsvPreset"].get<std::string>();
             if (recording.contains("amfQuality"))
-                m_recordingAmfQuality = recording["amfQuality"].get<std::string>();
+                m_recordingConfig.amfQuality = recording["amfQuality"].get<std::string>();
         }
 
         if (config.contains("streaming"))
@@ -3389,29 +3389,29 @@ void UIManager::saveConfig()
 
         // Salvar configurações de gravação
         config["recording"] = {
-            {"width", m_recordingWidth},
-            {"height", m_recordingHeight},
-            {"fps", m_recordingFps},
-            {"bitrate", m_recordingBitrate},
-            {"audioBitrate", m_recordingAudioBitrate},
-            {"videoCodec", m_recordingVideoCodec},
-            {"audioCodec", m_recordingAudioCodec},
-            {"h264Preset", m_recordingH264Preset},
-            {"h265Preset", m_recordingH265Preset},
-            {"h265Profile", m_recordingH265Profile},
-            {"h265Level", m_recordingH265Level},
-            {"vp8Speed", m_recordingVP8Speed},
-            {"vp9Speed", m_recordingVP9Speed},
-            {"container", m_recordingContainer},
-            {"outputPath", m_recordingOutputPath},
-            {"filenameTemplate", m_recordingFilenameTemplate},
-            {"includeAudio", m_recordingIncludeAudio},
+            {"width", m_recordingConfig.width},
+            {"height", m_recordingConfig.height},
+            {"fps", m_recordingConfig.fps},
+            {"bitrate", m_recordingConfig.bitrate},
+            {"audioBitrate", m_recordingConfig.audioBitrate},
+            {"videoCodec", m_recordingConfig.videoCodec},
+            {"audioCodec", m_recordingConfig.audioCodec},
+            {"h264Preset", m_recordingConfig.h264Preset},
+            {"h265Preset", m_recordingConfig.h265Preset},
+            {"h265Profile", m_recordingConfig.h265Profile},
+            {"h265Level", m_recordingConfig.h265Level},
+            {"vp8Speed", m_recordingConfig.vp8Speed},
+            {"vp9Speed", m_recordingConfig.vp9Speed},
+            {"container", m_recordingConfig.container},
+            {"outputPath", m_recordingConfig.outputPath},
+            {"filenameTemplate", m_recordingConfig.filenameTemplate},
+            {"includeAudio", m_recordingConfig.includeAudio},
             {"applyShader", m_recordingApplyShader},
-            {"hardwareEncoder", m_recordingHardwareEncoder},
-            {"nvencPreset", m_recordingNvencPreset},
-            {"vaapiRcMode", m_recordingVaapiRcMode},
-            {"qsvPreset", m_recordingQsvPreset},
-            {"amfQuality", m_recordingAmfQuality}};
+            {"hardwareEncoder", m_recordingConfig.hardwareEncoder},
+            {"nvencPreset", m_recordingConfig.nvencPreset},
+            {"vaapiRcMode", m_recordingConfig.vaapiRcMode},
+            {"qsvPreset", m_recordingConfig.qsvPreset},
+            {"amfQuality", m_recordingConfig.amfQuality}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -3809,7 +3809,7 @@ void UIManager::renderWebPortalPanel()
 // Recording trigger methods
 void UIManager::triggerRecordingWidthChange(uint32_t width)
 {
-    m_recordingWidth = width;
+    m_recordingConfig.width = width;
     if (m_onRecordingWidthChanged)
     {
         m_onRecordingWidthChanged(width);
@@ -3819,7 +3819,7 @@ void UIManager::triggerRecordingWidthChange(uint32_t width)
 
 void UIManager::triggerRecordingHeightChange(uint32_t height)
 {
-    m_recordingHeight = height;
+    m_recordingConfig.height = height;
     if (m_onRecordingHeightChanged)
     {
         m_onRecordingHeightChanged(height);
@@ -3829,7 +3829,7 @@ void UIManager::triggerRecordingHeightChange(uint32_t height)
 
 void UIManager::triggerRecordingFpsChange(uint32_t fps)
 {
-    m_recordingFps = fps;
+    m_recordingConfig.fps = fps;
     if (m_onRecordingFpsChanged)
     {
         m_onRecordingFpsChanged(fps);
@@ -3839,7 +3839,7 @@ void UIManager::triggerRecordingFpsChange(uint32_t fps)
 
 void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
 {
-    m_recordingBitrate = bitrate;
+    m_recordingConfig.bitrate = bitrate;
     if (m_onRecordingBitrateChanged)
     {
         m_onRecordingBitrateChanged(bitrate);
@@ -3849,7 +3849,7 @@ void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
 {
-    m_recordingAudioBitrate = bitrate;
+    m_recordingConfig.audioBitrate = bitrate;
     if (m_onRecordingAudioBitrateChanged)
     {
         m_onRecordingAudioBitrateChanged(bitrate);
@@ -3859,7 +3859,7 @@ void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
 {
-    m_recordingVideoCodec = codec;
+    m_recordingConfig.videoCodec = codec;
     if (m_onRecordingVideoCodecChanged)
     {
         m_onRecordingVideoCodecChanged(codec);
@@ -3869,7 +3869,7 @@ void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
 
 void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
 {
-    m_recordingAudioCodec = codec;
+    m_recordingConfig.audioCodec = codec;
     if (m_onRecordingAudioCodecChanged)
     {
         m_onRecordingAudioCodecChanged(codec);
@@ -3879,7 +3879,7 @@ void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
 
 void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
 {
-    m_recordingH264Preset = preset;
+    m_recordingConfig.h264Preset = preset;
     if (m_onRecordingH264PresetChanged)
     {
         m_onRecordingH264PresetChanged(preset);
@@ -3889,7 +3889,7 @@ void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
 
 void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
 {
-    m_recordingH265Preset = preset;
+    m_recordingConfig.h265Preset = preset;
     if (m_onRecordingH265PresetChanged)
     {
         m_onRecordingH265PresetChanged(preset);
@@ -3899,7 +3899,7 @@ void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
 
 void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
 {
-    m_recordingH265Profile = profile;
+    m_recordingConfig.h265Profile = profile;
     if (m_onRecordingH265ProfileChanged)
     {
         m_onRecordingH265ProfileChanged(profile);
@@ -3909,7 +3909,7 @@ void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
 
 void UIManager::triggerRecordingH265LevelChange(const std::string& level)
 {
-    m_recordingH265Level = level;
+    m_recordingConfig.h265Level = level;
     if (m_onRecordingH265LevelChanged)
     {
         m_onRecordingH265LevelChanged(level);
@@ -3919,7 +3919,7 @@ void UIManager::triggerRecordingH265LevelChange(const std::string& level)
 
 void UIManager::triggerRecordingVP8SpeedChange(int speed)
 {
-    m_recordingVP8Speed = speed;
+    m_recordingConfig.vp8Speed = speed;
     if (m_onRecordingVP8SpeedChanged)
     {
         m_onRecordingVP8SpeedChanged(speed);
@@ -3929,7 +3929,7 @@ void UIManager::triggerRecordingVP8SpeedChange(int speed)
 
 void UIManager::triggerRecordingVP9SpeedChange(int speed)
 {
-    m_recordingVP9Speed = speed;
+    m_recordingConfig.vp9Speed = speed;
     if (m_onRecordingVP9SpeedChanged)
     {
         m_onRecordingVP9SpeedChanged(speed);
@@ -3939,7 +3939,7 @@ void UIManager::triggerRecordingVP9SpeedChange(int speed)
 
 void UIManager::triggerRecordingContainerChange(const std::string& container)
 {
-    m_recordingContainer = container;
+    m_recordingConfig.container = container;
     if (m_onRecordingContainerChanged)
     {
         m_onRecordingContainerChanged(container);
@@ -3949,7 +3949,7 @@ void UIManager::triggerRecordingContainerChange(const std::string& container)
 
 void UIManager::triggerRecordingOutputPathChange(const std::string& path)
 {
-    m_recordingOutputPath = path;
+    m_recordingConfig.outputPath = path;
     if (m_onRecordingOutputPathChanged)
     {
         m_onRecordingOutputPathChanged(path);
@@ -3959,7 +3959,7 @@ void UIManager::triggerRecordingOutputPathChange(const std::string& path)
 
 void UIManager::triggerRecordingFilenameTemplateChange(const std::string& template_)
 {
-    m_recordingFilenameTemplate = template_;
+    m_recordingConfig.filenameTemplate = template_;
     if (m_onRecordingFilenameTemplateChanged)
     {
         m_onRecordingFilenameTemplateChanged(template_);
@@ -3969,7 +3969,7 @@ void UIManager::triggerRecordingFilenameTemplateChange(const std::string& templa
 
 void UIManager::triggerRecordingIncludeAudioChange(bool include)
 {
-    m_recordingIncludeAudio = include;
+    m_recordingConfig.includeAudio = include;
     if (m_onRecordingIncludeAudioChanged)
     {
         m_onRecordingIncludeAudioChanged(include);
@@ -3979,35 +3979,35 @@ void UIManager::triggerRecordingIncludeAudioChange(bool include)
 
 void UIManager::triggerRecordingHardwareEncoderChange(int v)
 {
-    m_recordingHardwareEncoder = v;
+    m_recordingConfig.hardwareEncoder = v;
     if (m_onRecordingHardwareEncoderChanged) m_onRecordingHardwareEncoderChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingNvencPresetChange(const std::string &v)
 {
-    m_recordingNvencPreset = v;
+    m_recordingConfig.nvencPreset = v;
     if (m_onRecordingNvencPresetChanged) m_onRecordingNvencPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingVaapiRcModeChange(const std::string &v)
 {
-    m_recordingVaapiRcMode = v;
+    m_recordingConfig.vaapiRcMode = v;
     if (m_onRecordingVaapiRcModeChanged) m_onRecordingVaapiRcModeChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingQsvPresetChange(const std::string &v)
 {
-    m_recordingQsvPreset = v;
+    m_recordingConfig.qsvPreset = v;
     if (m_onRecordingQsvPresetChanged) m_onRecordingQsvPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingAmfQualityChange(const std::string &v)
 {
-    m_recordingAmfQuality = v;
+    m_recordingConfig.amfQuality = v;
     if (m_onRecordingAmfQualityChanged) m_onRecordingAmfQualityChanged(v);
     saveConfig();
 }
