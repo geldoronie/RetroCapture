@@ -95,6 +95,34 @@ struct RecordingConfig
     std::string amfQuality       = "quality";
 };
 
+// #160 — UIManager web-portal settings + theme strings grouped (group 3/N).
+struct WebPortalConfig
+{
+    bool        enabled       = true;
+    bool        httpsEnabled  = false;
+    std::string sslCertPath   = "ssl/server.crt";
+    std::string sslKeyPath    = "ssl/server.key";
+    std::string title         = "RetroCapture Stream";
+    std::string subtitle      = "Real-time video streaming";
+    std::string imagePath     = "logo.png";
+    std::string textStreamInfo        = "Stream Information";
+    std::string textQuickActions      = "Quick Actions";
+    std::string textCompatibility     = "Compatibilidade";
+    std::string textStatus            = "Status";
+    std::string textCodec             = "Codec";
+    std::string textResolution        = "Resolution";
+    std::string textStreamUrl         = "URL do Stream";
+    std::string textCopyUrl           = "Copiar URL";
+    std::string textOpenNewTab        = "Abrir em Nova Aba";
+    std::string textSupported         = "Suportado";
+    std::string textFormat            = "Formato";
+    std::string textCodecInfo         = "Codec";
+    std::string textSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+    std::string textFormatInfo        = "HLS (HTTP Live Streaming)";
+    std::string textCodecInfoValue    = "H.264/AAC";
+    std::string textConnecting        = "Conectando...";
+};
+
 class UIManager
 {
 public:
@@ -926,14 +954,14 @@ public:
     void setOnRecordingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onRecordingAmfQualityChanged = cb; }
 
     // Web Portal settings
-    void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
-    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
-    void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
-    void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
+    void setWebPortalEnabled(bool enabled) { m_webPortalConfig.enabled = enabled; }
+    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalConfig.httpsEnabled = enabled; }
+    void setWebPortalSSLCertPath(const std::string &path) { m_webPortalConfig.sslCertPath = path; }
+    void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalConfig.sslKeyPath = path; }
     void setFoundSSLCertificatePath(const std::string &path) { m_foundSSLCertPath = path; }
     void setFoundSSLKeyPath(const std::string &path) { m_foundSSLKeyPath = path; }
-    void setWebPortalTitle(const std::string &title) { m_webPortalTitle = title; }
-    void setWebPortalImagePath(const std::string &path) { m_webPortalImagePath = path; }
+    void setWebPortalTitle(const std::string &title) { m_webPortalConfig.title = title; }
+    void setWebPortalImagePath(const std::string &path) { m_webPortalConfig.imagePath = path; }
     void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortalBackgroundImagePath = path; }
     void setWebPortalColorBackground(const float color[4])
     {
@@ -981,34 +1009,38 @@ public:
             memcpy(m_webPortalColorDanger, color, 4 * sizeof(float));
     }
 
-    bool getWebPortalEnabled() const { return m_webPortalEnabled; }
-    bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
-    std::string getWebPortalSSLCertPath() const { return m_webPortalSSLCertPath; }
-    std::string getWebPortalSSLKeyPath() const { return m_webPortalSSLKeyPath; }
+    bool getWebPortalEnabled() const { return m_webPortalConfig.enabled; }
+    bool getWebPortalHTTPSEnabled() const { return m_webPortalConfig.httpsEnabled; }
+    std::string getWebPortalSSLCertPath() const { return m_webPortalConfig.sslCertPath; }
+    std::string getWebPortalSSLKeyPath() const { return m_webPortalConfig.sslKeyPath; }
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
-    std::string getWebPortalTitle() const { return m_webPortalTitle; }
-    std::string getWebPortalSubtitle() const { return m_webPortalSubtitle; }
-    std::string getWebPortalImagePath() const { return m_webPortalImagePath; }
+    std::string getWebPortalTitle() const { return m_webPortalConfig.title; }
+    std::string getWebPortalSubtitle() const { return m_webPortalConfig.subtitle; }
+    std::string getWebPortalImagePath() const { return m_webPortalConfig.imagePath; }
+    // #160 — bulk access to the web-portal settings group (per-field accessors
+    // are thin wrappers over the same struct).
+    const WebPortalConfig &getWebPortalConfig() const { return m_webPortalConfig; }
+    void setWebPortalConfig(const WebPortalConfig &cfg) { m_webPortalConfig = cfg; }
     std::string getWebPortalBackgroundImagePath() const { return m_webPortalBackgroundImagePath; }
 
     // Getters para textos editáveis
-    std::string getWebPortalTextStreamInfo() const { return m_webPortalTextStreamInfo; }
-    std::string getWebPortalTextQuickActions() const { return m_webPortalTextQuickActions; }
-    std::string getWebPortalTextCompatibility() const { return m_webPortalTextCompatibility; }
-    std::string getWebPortalTextStatus() const { return m_webPortalTextStatus; }
-    std::string getWebPortalTextCodec() const { return m_webPortalTextCodec; }
-    std::string getWebPortalTextResolution() const { return m_webPortalTextResolution; }
-    std::string getWebPortalTextStreamUrl() const { return m_webPortalTextStreamUrl; }
-    std::string getWebPortalTextCopyUrl() const { return m_webPortalTextCopyUrl; }
-    std::string getWebPortalTextOpenNewTab() const { return m_webPortalTextOpenNewTab; }
-    std::string getWebPortalTextSupported() const { return m_webPortalTextSupported; }
-    std::string getWebPortalTextFormat() const { return m_webPortalTextFormat; }
-    std::string getWebPortalTextCodecInfo() const { return m_webPortalTextCodecInfo; }
-    std::string getWebPortalTextSupportedBrowsers() const { return m_webPortalTextSupportedBrowsers; }
-    std::string getWebPortalTextFormatInfo() const { return m_webPortalTextFormatInfo; }
-    std::string getWebPortalTextCodecInfoValue() const { return m_webPortalTextCodecInfoValue; }
-    std::string getWebPortalTextConnecting() const { return m_webPortalTextConnecting; }
+    std::string getWebPortalTextStreamInfo() const { return m_webPortalConfig.textStreamInfo; }
+    std::string getWebPortalTextQuickActions() const { return m_webPortalConfig.textQuickActions; }
+    std::string getWebPortalTextCompatibility() const { return m_webPortalConfig.textCompatibility; }
+    std::string getWebPortalTextStatus() const { return m_webPortalConfig.textStatus; }
+    std::string getWebPortalTextCodec() const { return m_webPortalConfig.textCodec; }
+    std::string getWebPortalTextResolution() const { return m_webPortalConfig.textResolution; }
+    std::string getWebPortalTextStreamUrl() const { return m_webPortalConfig.textStreamUrl; }
+    std::string getWebPortalTextCopyUrl() const { return m_webPortalConfig.textCopyUrl; }
+    std::string getWebPortalTextOpenNewTab() const { return m_webPortalConfig.textOpenNewTab; }
+    std::string getWebPortalTextSupported() const { return m_webPortalConfig.textSupported; }
+    std::string getWebPortalTextFormat() const { return m_webPortalConfig.textFormat; }
+    std::string getWebPortalTextCodecInfo() const { return m_webPortalConfig.textCodecInfo; }
+    std::string getWebPortalTextSupportedBrowsers() const { return m_webPortalConfig.textSupportedBrowsers; }
+    std::string getWebPortalTextFormatInfo() const { return m_webPortalConfig.textFormatInfo; }
+    std::string getWebPortalTextCodecInfoValue() const { return m_webPortalConfig.textCodecInfoValue; }
+    std::string getWebPortalTextConnecting() const { return m_webPortalConfig.textConnecting; }
 
     // Getters para cores
     const float *getWebPortalColorBackground() const { return m_webPortalColorBackground; }
@@ -1068,22 +1100,22 @@ public:
     float *getWebPortalColorInfoEditable() { return m_webPortalColorInfo; }
 
     // Getters para textos editáveis (retornam referências não-const)
-    std::string &getWebPortalTextStreamInfoEditable() { return m_webPortalTextStreamInfo; }
-    std::string &getWebPortalTextQuickActionsEditable() { return m_webPortalTextQuickActions; }
-    std::string &getWebPortalTextCompatibilityEditable() { return m_webPortalTextCompatibility; }
-    std::string &getWebPortalTextStatusEditable() { return m_webPortalTextStatus; }
-    std::string &getWebPortalTextCodecEditable() { return m_webPortalTextCodec; }
-    std::string &getWebPortalTextResolutionEditable() { return m_webPortalTextResolution; }
-    std::string &getWebPortalTextStreamUrlEditable() { return m_webPortalTextStreamUrl; }
-    std::string &getWebPortalTextCopyUrlEditable() { return m_webPortalTextCopyUrl; }
-    std::string &getWebPortalTextOpenNewTabEditable() { return m_webPortalTextOpenNewTab; }
-    std::string &getWebPortalTextSupportedEditable() { return m_webPortalTextSupported; }
-    std::string &getWebPortalTextFormatEditable() { return m_webPortalTextFormat; }
-    std::string &getWebPortalTextCodecInfoEditable() { return m_webPortalTextCodecInfo; }
-    std::string &getWebPortalTextSupportedBrowsersEditable() { return m_webPortalTextSupportedBrowsers; }
-    std::string &getWebPortalTextFormatInfoEditable() { return m_webPortalTextFormatInfo; }
-    std::string &getWebPortalTextCodecInfoValueEditable() { return m_webPortalTextCodecInfoValue; }
-    std::string &getWebPortalTextConnectingEditable() { return m_webPortalTextConnecting; }
+    std::string &getWebPortalTextStreamInfoEditable() { return m_webPortalConfig.textStreamInfo; }
+    std::string &getWebPortalTextQuickActionsEditable() { return m_webPortalConfig.textQuickActions; }
+    std::string &getWebPortalTextCompatibilityEditable() { return m_webPortalConfig.textCompatibility; }
+    std::string &getWebPortalTextStatusEditable() { return m_webPortalConfig.textStatus; }
+    std::string &getWebPortalTextCodecEditable() { return m_webPortalConfig.textCodec; }
+    std::string &getWebPortalTextResolutionEditable() { return m_webPortalConfig.textResolution; }
+    std::string &getWebPortalTextStreamUrlEditable() { return m_webPortalConfig.textStreamUrl; }
+    std::string &getWebPortalTextCopyUrlEditable() { return m_webPortalConfig.textCopyUrl; }
+    std::string &getWebPortalTextOpenNewTabEditable() { return m_webPortalConfig.textOpenNewTab; }
+    std::string &getWebPortalTextSupportedEditable() { return m_webPortalConfig.textSupported; }
+    std::string &getWebPortalTextFormatEditable() { return m_webPortalConfig.textFormat; }
+    std::string &getWebPortalTextCodecInfoEditable() { return m_webPortalConfig.textCodecInfo; }
+    std::string &getWebPortalTextSupportedBrowsersEditable() { return m_webPortalConfig.textSupportedBrowsers; }
+    std::string &getWebPortalTextFormatInfoEditable() { return m_webPortalConfig.textFormatInfo; }
+    std::string &getWebPortalTextCodecInfoValueEditable() { return m_webPortalConfig.textCodecInfoValue; }
+    std::string &getWebPortalTextConnectingEditable() { return m_webPortalConfig.textConnecting; }
 
 private:
     bool m_initialized = false;
@@ -1458,34 +1490,13 @@ private:
     std::function<void(const std::string &)> m_onRecordingAmfQualityChanged;
 
     // Web Portal settings
-    bool m_webPortalEnabled = true; // Habilitado por padrão
-    bool m_webPortalHTTPSEnabled = false;
-    std::string m_webPortalSSLCertPath = "ssl/server.crt";
-    std::string m_webPortalSSLKeyPath = "ssl/server.key";
+    // #160 — web-portal settings grouped (see WebPortalConfig above).
+    WebPortalConfig m_webPortalConfig;
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
-    std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
-    std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Stream Information";
-    std::string m_webPortalTextQuickActions = "Quick Actions";
-    std::string m_webPortalTextCompatibility = "Compatibilidade";
-    std::string m_webPortalTextStatus = "Status";
-    std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolution";
-    std::string m_webPortalTextStreamUrl = "URL do Stream";
-    std::string m_webPortalTextCopyUrl = "Copiar URL";
-    std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
-    std::string m_webPortalTextSupported = "Suportado";
-    std::string m_webPortalTextFormat = "Formato";
-    std::string m_webPortalTextCodecInfo = "Codec";
-    std::string m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
-    std::string m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
-    std::string m_webPortalTextCodecInfoValue = "H.264/AAC";
-    std::string m_webPortalTextConnecting = "Conectando...";
 
     // Cores do portal baseadas no styleguide RetroCapture (RGBA, valores 0.0-1.0)
     // Primary - Retro Teal #0A7A83
