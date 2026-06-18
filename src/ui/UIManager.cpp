@@ -309,7 +309,7 @@ bool UIManager::init(void *window)
     // self-hides while the client is Idle, so a null/unconfigured
     // pointer renders as nothing.
     m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
-    m_chatOverlay->setVisible(m_chatOverlayVisible);
+    m_chatOverlay->setVisible(m_chatConfig.overlayVisible);
     // Shortcuts orientation widget — UI layer, top-right corner,
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
@@ -344,7 +344,7 @@ void UIManager::setChatClient(ChatClient *chat)
         // pointer. Cheaper to swap than to expose another setter that
         // most callers wouldn't touch.
         m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
-        m_chatOverlay->setVisible(m_chatOverlayVisible);
+        m_chatOverlay->setVisible(m_chatConfig.overlayVisible);
     }
 }
 
@@ -2758,8 +2758,8 @@ void UIManager::loadConfig()
             if (streaming.contains("chat"))
             {
                 auto &chat = streaming["chat"];
-                if (chat.contains("baseUrl"))  m_chatBaseUrl  = chat["baseUrl"].get<std::string>();
-                if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
+                if (chat.contains("baseUrl"))  m_chatConfig.baseUrl  = chat["baseUrl"].get<std::string>();
+                if (chat.contains("nickname")) m_chatConfig.nickname = chat["nickname"].get<std::string>();
                 if (chat.contains("streamChatEnabled"))
                     m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
                 if (chat.contains("streamRoomTitle"))
@@ -2789,9 +2789,9 @@ void UIManager::loadConfig()
             // (m_directoryState.hostNickname). The chat Profile now owns
             // it; copy across when the chat nickname is empty so
             // legacy configs don't suddenly look "unnamed".
-            if (m_chatNickname.empty() && !m_directoryState.hostNickname.empty())
+            if (m_chatConfig.nickname.empty() && !m_directoryState.hostNickname.empty())
             {
-                m_chatNickname = m_directoryState.hostNickname;
+                m_chatConfig.nickname = m_directoryState.hostNickname;
             }
         }
 
@@ -2819,7 +2819,7 @@ void UIManager::loadConfig()
             // Chat overlay visibility (#84). Default true — same
             // discoverability story as the quick-actions widget.
             if (prefs.contains("chatOverlayVisible"))
-                m_chatOverlayVisible = prefs["chatOverlayVisible"].get<bool>();
+                m_chatConfig.overlayVisible = prefs["chatOverlayVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -3282,8 +3282,8 @@ void UIManager::saveConfig()
             }},
             // Chat service URL + persistent nickname (#84).
             {"chat", {
-                {"baseUrl",            m_chatBaseUrl},
-                {"nickname",           m_chatNickname},
+                {"baseUrl",            m_chatConfig.baseUrl},
+                {"nickname",           m_chatConfig.nickname},
                 {"streamChatEnabled",  m_streamChatEnabled},
                 {"streamRoomTitle",    m_streamRoomTitle},
                 {"streamRoomSlug",     m_streamRoomSlug},
@@ -3315,7 +3315,7 @@ void UIManager::saveConfig()
                                    : m_shortcutsHelpVisible},
             {"chatOverlayVisible",
              m_chatOverlay ? m_chatOverlay->isVisible()
-                           : m_chatOverlayVisible},
+                           : m_chatConfig.overlayVisible},
         };
 
         // Salvar configurações de imagem
