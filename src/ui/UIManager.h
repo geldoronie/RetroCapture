@@ -123,6 +123,33 @@ struct WebPortalConfig
     std::string textConnecting        = "Conectando...";
 };
 
+// #160 — UIManager directory publish settings + live status grouped (group 4/N).
+struct DirectoryState
+{
+    bool        publishEnabled      = false;
+    std::string url                 = "https://directory.retrocapture.com";
+    bool        insecureSkipVerify  = false;
+    std::string streamName          = "";
+    std::string hostNickname        = "";
+    std::string password            = "";       // optional; empty = no password
+    std::string endpointMode        = "direct"; // direct | tunnel-cloudflare | custom
+    std::string customEndpoint      = "";
+    std::string tunnelMode          = "quick";  // quick | named
+    std::string namedTunnelId       = "";
+    std::string namedTunnelHostname = "";
+    bool        privacyAcked        = false;    // sticky once the user accepts the warning
+    // Live status mirrored from Application/DirectoryClient; UI just reads.
+    std::string statusText          = "Idle";
+    std::string streamId            = "";
+    uint64_t    registerOk          = 0;
+    uint64_t    registerFail        = 0;
+    uint64_t    heartbeatOk         = 0;
+    uint64_t    heartbeatFail       = 0;
+    uint64_t    patchOk             = 0;
+    uint64_t    patchFail           = 0;
+    int64_t     secondsSinceLastHeartbeat = -1;
+};
+
 class UIManager
 {
 public:
@@ -356,12 +383,12 @@ public:
     bool isStreamingProcessing() const { return m_streamingProcessing; }
 
     // ── Public-directory publish settings (#49 Phase 2) ──
-    bool getDirectoryPublishEnabled() const          { return m_directoryPublishEnabled; }
-    void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
-    const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
-    void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
-    bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
-    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    bool getDirectoryPublishEnabled() const          { return m_directoryState.publishEnabled; }
+    void setDirectoryPublishEnabled(bool v)          { m_directoryState.publishEnabled = v; }
+    const std::string &getDirectoryUrl() const       { return m_directoryState.url; }
+    void setDirectoryUrl(const std::string &v)       { m_directoryState.url = v; }
+    bool getDirectoryInsecureSkipVerify() const      { return m_directoryState.insecureSkipVerify; }
+    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryState.insecureSkipVerify = v; }
     // #84 — Chat service base URL (ws:// or wss://). Editable under
     // Configurations → Streaming → Advanced, mirroring the directory
     // URL field. Application reads this every frame and reconfigures
@@ -477,8 +504,8 @@ public:
     void setTrayStartMinimized(bool v)               { m_trayStartMinimized = v; }
     bool getTrayNotifications() const                { return m_trayNotifications; }
     void setTrayNotifications(bool v)                { m_trayNotifications = v; }
-    const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
-    void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
+    const std::string &getDirectoryStreamName() const { return m_directoryState.streamName; }
+    void setDirectoryStreamName(const std::string &v) { m_directoryState.streamName = v; }
     // #84 — As of the profile unification, the directory's "host
     // nickname" is derived from the chat Profile (m_chatNickname).
     // The setter is still here for ConfigJSON round-trips of legacy
@@ -487,59 +514,63 @@ public:
     // empty, then the chat profile owns the value going forward.
     const std::string &getDirectoryHostNickname() const
     {
-        return m_chatNickname.empty() ? m_directoryHostNickname : m_chatNickname;
+        return m_chatNickname.empty() ? m_directoryState.hostNickname : m_chatNickname;
     }
-    void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
-    const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
-    void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
-    const std::string &getDirectoryEndpointMode() const { return m_directoryEndpointMode; }
-    void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
-    const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
-    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    void setDirectoryHostNickname(const std::string &v) { m_directoryState.hostNickname = v; }
+    const std::string &getDirectoryPassword() const  { return m_directoryState.password; }
+    void setDirectoryPassword(const std::string &v)  { m_directoryState.password = v; }
+    const std::string &getDirectoryEndpointMode() const { return m_directoryState.endpointMode; }
+    void setDirectoryEndpointMode(const std::string &v) { m_directoryState.endpointMode = v; }
+    const std::string &getDirectoryCustomEndpoint() const { return m_directoryState.customEndpoint; }
+    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryState.customEndpoint = v; }
     // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
     // tunnelMode is "quick" (default) or "named". When "named", the
     // tunnel id + hostname identify which existing tunnel cloudflared
     // should run, and the directory entry's URL points at the user's
     // own hostname instead of a fresh trycloudflare.com one.
-    const std::string &getDirectoryTunnelMode() const { return m_directoryTunnelMode; }
-    void setDirectoryTunnelMode(const std::string &v) { m_directoryTunnelMode = v; }
-    const std::string &getDirectoryNamedTunnelId() const { return m_directoryNamedTunnelId; }
-    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryNamedTunnelId = v; }
-    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryNamedTunnelHostname; }
-    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryNamedTunnelHostname = v; }
-    bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
-    void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
-    const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
-    void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    const std::string &getDirectoryTunnelMode() const { return m_directoryState.tunnelMode; }
+    void setDirectoryTunnelMode(const std::string &v) { m_directoryState.tunnelMode = v; }
+    const std::string &getDirectoryNamedTunnelId() const { return m_directoryState.namedTunnelId; }
+    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryState.namedTunnelId = v; }
+    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryState.namedTunnelHostname; }
+    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryState.namedTunnelHostname = v; }
+    bool getDirectoryPrivacyAcked() const            { return m_directoryState.privacyAcked; }
+    void setDirectoryPrivacyAcked(bool v)            { m_directoryState.privacyAcked = v; }
+    const std::string &getDirectoryStatusText() const { return m_directoryState.statusText; }
+    void setDirectoryStatusText(const std::string &v) { m_directoryState.statusText = v; }
     // #84 — Currently-published directory streamId (empty when not
     // Active). Application mirrors DirectoryClient::getStreamId() here
     // every frame so APIController can embed it in /meta for the chat
     // panel on remote clients.
-    const std::string &getDirectoryStreamId() const   { return m_directoryStreamId; }
-    void setDirectoryStreamId(const std::string &v)   { m_directoryStreamId = v; }
+    const std::string &getDirectoryStreamId() const   { return m_directoryState.streamId; }
+    void setDirectoryStreamId(const std::string &v)   { m_directoryState.streamId = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
 
     // Directory telemetry getters/setters (#49 Phase 5).
-    uint64_t getDirectoryRegisterOk()    const { return m_directoryRegisterOk; }
-    uint64_t getDirectoryRegisterFail()  const { return m_directoryRegisterFail; }
-    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryHeartbeatOk; }
-    uint64_t getDirectoryHeartbeatFail() const { return m_directoryHeartbeatFail; }
-    uint64_t getDirectoryPatchOk()       const { return m_directoryPatchOk; }
-    uint64_t getDirectoryPatchFail()     const { return m_directoryPatchFail; }
-    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directorySecondsSinceLastHeartbeat; }
+    uint64_t getDirectoryRegisterOk()    const { return m_directoryState.registerOk; }
+    uint64_t getDirectoryRegisterFail()  const { return m_directoryState.registerFail; }
+    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryState.heartbeatOk; }
+    uint64_t getDirectoryHeartbeatFail() const { return m_directoryState.heartbeatFail; }
+    uint64_t getDirectoryPatchOk()       const { return m_directoryState.patchOk; }
+    uint64_t getDirectoryPatchFail()     const { return m_directoryState.patchFail; }
+    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directoryState.secondsSinceLastHeartbeat; }
+    // #160 — bulk access to the directory settings+status group (per-field
+    // accessors are thin wrappers over the same struct).
+    const DirectoryState &getDirectoryState() const { return m_directoryState; }
+    void setDirectoryState(const DirectoryState &st) { m_directoryState = st; }
     void setDirectoryStats(uint64_t regOk, uint64_t regFail,
                            uint64_t hbOk, uint64_t hbFail,
                            uint64_t patchOk, uint64_t patchFail,
                            int64_t secondsSinceLastHeartbeat)
     {
-        m_directoryRegisterOk    = regOk;
-        m_directoryRegisterFail  = regFail;
-        m_directoryHeartbeatOk   = hbOk;
-        m_directoryHeartbeatFail = hbFail;
-        m_directoryPatchOk       = patchOk;
-        m_directoryPatchFail     = patchFail;
-        m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
+        m_directoryState.registerOk    = regOk;
+        m_directoryState.registerFail  = regFail;
+        m_directoryState.heartbeatOk   = hbOk;
+        m_directoryState.heartbeatFail = hbFail;
+        m_directoryState.patchOk       = patchOk;
+        m_directoryState.patchFail     = patchFail;
+        m_directoryState.secondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
     }
     void setStreamingPort(uint16_t port);
     void setStreamingWidth(uint32_t width) { m_streamingConfig.width = width; }
@@ -1339,8 +1370,8 @@ private:
     // UI-side only; Application owns the DirectoryClient that
     // actually talks to the directory service and mirrors the toggle
     // from here every frame.
-    bool        m_directoryPublishEnabled = false;
-    std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // #160 — directory publish/tunnel settings + status grouped (see DirectoryState above).
+    DirectoryState m_directoryState;
     // #84 — Chat URL. Production default; --chat-url overrides at
     // launch; the Streaming → Advanced field overrides at runtime.
     // Accepts https://, http://, wss://, ws:// — ChatClient
@@ -1378,7 +1409,6 @@ private:
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.
-    bool        m_directoryInsecureSkipVerify = false;
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;
@@ -1390,28 +1420,10 @@ private:
     bool        m_trayMinimizeOnClose     = true;
     bool        m_trayStartMinimized      = false;
     bool        m_trayNotifications       = false;
-    std::string m_directoryStreamName     = "";
-    std::string m_directoryHostNickname   = "";
-    std::string m_directoryPassword       = "";       // optional; empty = no password
-    std::string m_directoryEndpointMode   = "direct"; // "direct" | "tunnel-cloudflare" | "custom"
-    std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
     // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
-    std::string m_directoryTunnelMode           = "quick"; // "quick" | "named"
-    std::string m_directoryNamedTunnelId        = "";       // cloudflared tunnel uuid
-    std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
-    bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
-    std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
-    std::string m_directoryStreamId       = "";       // #84 — mirrored from DirectoryClient for /meta
 
     // Per-session telemetry counters mirrored from DirectoryClient
     // (#49 Phase 5). Application writes each frame; UI reads.
-    uint64_t m_directoryRegisterOk     = 0;
-    uint64_t m_directoryRegisterFail   = 0;
-    uint64_t m_directoryHeartbeatOk    = 0;
-    uint64_t m_directoryHeartbeatFail  = 0;
-    uint64_t m_directoryPatchOk        = 0;
-    uint64_t m_directoryPatchFail      = 0;
-    int64_t  m_directorySecondsSinceLastHeartbeat = -1;
 
     // Transient bearer token for the next remote connect (#49 Phase 3).
     // sha256 hex of the password the user typed in the prompt. Not

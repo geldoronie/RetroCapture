@@ -2741,18 +2741,18 @@ void UIManager::loadConfig()
             if (streaming.contains("directory"))
             {
                 auto &dir = streaming["directory"];
-                if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
-                if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
-                if (dir.contains("insecureSkipVerify")) m_directoryInsecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
-                if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
-                if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
-                if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
-                if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
-                if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
-                if (dir.contains("tunnelMode"))           m_directoryTunnelMode           = dir["tunnelMode"].get<std::string>();
-                if (dir.contains("namedTunnelId"))        m_directoryNamedTunnelId        = dir["namedTunnelId"].get<std::string>();
-                if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
-                if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
+                if (dir.contains("publishEnabled"))   m_directoryState.publishEnabled   = dir["publishEnabled"].get<bool>();
+                if (dir.contains("url"))              m_directoryState.url              = dir["url"].get<std::string>();
+                if (dir.contains("insecureSkipVerify")) m_directoryState.insecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
+                if (dir.contains("streamName"))       m_directoryState.streamName       = dir["streamName"].get<std::string>();
+                if (dir.contains("hostNickname"))     m_directoryState.hostNickname     = dir["hostNickname"].get<std::string>();
+                if (dir.contains("password"))         m_directoryState.password         = dir["password"].get<std::string>();
+                if (dir.contains("endpointMode"))     m_directoryState.endpointMode     = dir["endpointMode"].get<std::string>();
+                if (dir.contains("customEndpoint"))   m_directoryState.customEndpoint   = dir["customEndpoint"].get<std::string>();
+                if (dir.contains("tunnelMode"))           m_directoryState.tunnelMode           = dir["tunnelMode"].get<std::string>();
+                if (dir.contains("namedTunnelId"))        m_directoryState.namedTunnelId        = dir["namedTunnelId"].get<std::string>();
+                if (dir.contains("namedTunnelHostname"))  m_directoryState.namedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
+                if (dir.contains("privacyAcked"))     m_directoryState.privacyAcked     = dir["privacyAcked"].get<bool>();
             }
             // Chat URL (#84) — sibling to the directory block.
             if (streaming.contains("chat"))
@@ -2786,12 +2786,12 @@ void UIManager::loadConfig()
             }
             // #84 — One-shot migration: pre-rework configs stored
             // the directory's display nickname in a separate field
-            // (m_directoryHostNickname). The chat Profile now owns
+            // (m_directoryState.hostNickname). The chat Profile now owns
             // it; copy across when the chat nickname is empty so
             // legacy configs don't suddenly look "unnamed".
-            if (m_chatNickname.empty() && !m_directoryHostNickname.empty())
+            if (m_chatNickname.empty() && !m_directoryState.hostNickname.empty())
             {
-                m_chatNickname = m_directoryHostNickname;
+                m_chatNickname = m_directoryState.hostNickname;
             }
         }
 
@@ -3267,18 +3267,18 @@ void UIManager::saveConfig()
             // never persisted (per the spec — a new run is a new
             // directory entry).
             {"directory", {
-                {"publishEnabled", m_directoryPublishEnabled},
-                {"url",            m_directoryUrl},
-                {"insecureSkipVerify", m_directoryInsecureSkipVerify},
-                {"streamName",     m_directoryStreamName},
-                {"hostNickname",   m_directoryHostNickname},
-                {"password",       m_directoryPassword},
-                {"endpointMode",        m_directoryEndpointMode},
-                {"customEndpoint",      m_directoryCustomEndpoint},
-                {"tunnelMode",          m_directoryTunnelMode},
-                {"namedTunnelId",       m_directoryNamedTunnelId},
-                {"namedTunnelHostname", m_directoryNamedTunnelHostname},
-                {"privacyAcked",   m_directoryPrivacyAcked},
+                {"publishEnabled", m_directoryState.publishEnabled},
+                {"url",            m_directoryState.url},
+                {"insecureSkipVerify", m_directoryState.insecureSkipVerify},
+                {"streamName",     m_directoryState.streamName},
+                {"hostNickname",   m_directoryState.hostNickname},
+                {"password",       m_directoryState.password},
+                {"endpointMode",        m_directoryState.endpointMode},
+                {"customEndpoint",      m_directoryState.customEndpoint},
+                {"tunnelMode",          m_directoryState.tunnelMode},
+                {"namedTunnelId",       m_directoryState.namedTunnelId},
+                {"namedTunnelHostname", m_directoryState.namedTunnelHostname},
+                {"privacyAcked",   m_directoryState.privacyAcked},
             }},
             // Chat service URL + persistent nickname (#84).
             {"chat", {
