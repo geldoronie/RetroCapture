@@ -162,6 +162,14 @@ struct RemoteState
     bool        audioMuted            = false;
 };
 
+// #160 — UIManager chat settings grouped (group 6/N, final grouping group).
+struct ChatConfig
+{
+    bool        overlayVisible = true;
+    std::string baseUrl        = "https://chat.retrocapture.com";
+    std::string nickname       = "";
+};
+
 class UIManager
 {
 public:
@@ -405,16 +413,20 @@ public:
     // Configurations → Streaming → Advanced, mirroring the directory
     // URL field. Application reads this every frame and reconfigures
     // the ChatClient when it changes (cheap no-op when unchanged).
-    const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
-    void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
+    const std::string &getChatBaseUrl() const        { return m_chatConfig.baseUrl; }
+    void setChatBaseUrl(const std::string &v)        { m_chatConfig.baseUrl = v; }
     // #84 — Persistent chat nickname. Shared between host and viewer
     // modes (you're "geldo" regardless of which side you're on); the
     // OSD chat panel writes here when the user clicks Apply. Empty
     // means "use a fallback": Application falls back to the directory
     // host nickname when publishing, or sends an empty hello (server
     // generates anon-<rand>) when viewing.
-    const std::string &getChatNickname() const       { return m_chatNickname; }
-    void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    const std::string &getChatNickname() const       { return m_chatConfig.nickname; }
+    void setChatNickname(const std::string &v)       { m_chatConfig.nickname = v; }
+    // #160 — bulk access to the chat settings group (per-field accessors are
+    // thin wrappers over the same struct).
+    const ChatConfig &getChatConfig() const { return m_chatConfig; }
+    void setChatConfig(const ChatConfig &cfg) { m_chatConfig = cfg; }
     // #84 — Cross-window request to open the Chat Profile dialog.
     // Set by UIConfigurationStreaming when the user clicks
     // "Configure Profile"; consumed by OSDChat on the next frame.
@@ -519,14 +531,14 @@ public:
     const std::string &getDirectoryStreamName() const { return m_directoryState.streamName; }
     void setDirectoryStreamName(const std::string &v) { m_directoryState.streamName = v; }
     // #84 — As of the profile unification, the directory's "host
-    // nickname" is derived from the chat Profile (m_chatNickname).
+    // nickname" is derived from the chat Profile (m_chatConfig.nickname).
     // The setter is still here for ConfigJSON round-trips of legacy
     // configs that have a separate hostNickname field; on first
-    // load we mirror it into m_chatNickname when the latter is
+    // load we mirror it into m_chatConfig.nickname when the latter is
     // empty, then the chat profile owns the value going forward.
     const std::string &getDirectoryHostNickname() const
     {
-        return m_chatNickname.empty() ? m_directoryState.hostNickname : m_chatNickname;
+        return m_chatConfig.nickname.empty() ? m_directoryState.hostNickname : m_chatConfig.nickname;
     }
     void setDirectoryHostNickname(const std::string &v) { m_directoryState.hostNickname = v; }
     const std::string &getDirectoryPassword() const  { return m_directoryState.password; }
@@ -1207,7 +1219,8 @@ private:
     // reveal it again on the next movement. Default on; toggled in
     // Preferences and persisted.
     bool m_quickActionsAutoHide = true;
-    bool m_chatOverlayVisible  = true;
+    // #160 — chat settings grouped (see ChatConfig above).
+    ChatConfig m_chatConfig;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the
     // keyboard hints on first launch.
@@ -1387,10 +1400,8 @@ private:
     // launch; the Streaming → Advanced field overrides at runtime.
     // Accepts https://, http://, wss://, ws:// — ChatClient
     // normalizes the scheme when building REST vs WS endpoints.
-    std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
     // #84 — Persistent chat display name. Default empty; OSD chat
     // panel's Apply button writes here + saveConfig.
-    std::string m_chatNickname            = "";
     // #84 — One-shot flag: UIConfigurationStreaming raises it when
     // the user clicks "Configure Profile" from the streaming
     // settings; OSDChat consumes it on the next frame and opens
