@@ -1253,7 +1253,7 @@ void ShaderEngine::renderMultipassPass(size_t i, GLuint &currentTexture, uint32_
             const std::string &alias = m_passes[prevPass].passInfo.alias;
             if (alias.empty())
             {
-                return;
+                continue;
             }
 
             GLint aliasTexLoc = getUniformLocation(pass.program, alias);
@@ -1311,7 +1311,7 @@ void ShaderEngine::renderMultipassPass(size_t i, GLuint &currentTexture, uint32_
 
         if (!hasFeedbackUniform)
         {
-            return;
+            continue;
         }
 
         ShaderPassData &fbTarget = m_passes[fbPass];
