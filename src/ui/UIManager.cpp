@@ -2453,7 +2453,7 @@ void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
 
 void UIManager::triggerRemoteInterpolationChange(const std::string &v)
 {
-    m_remoteInterpolation = v;
+    m_remoteState.interpolation = v;
     if (m_onRemoteInterpolationChanged) m_onRemoteInterpolationChanged(v);
     saveConfig();
 }
@@ -2469,20 +2469,20 @@ void UIManager::triggerRemoteAudioVolumeChange(float volume)
 {
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
-    m_remoteAudioVolume = volume;
+    m_remoteState.audioVolume = volume;
     // Moving the slider above zero is an implicit unmute.
-    if (volume > 0.0f) m_remoteAudioMuted = false;
-    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (volume > 0.0f) m_remoteState.audioMuted = false;
+    const float gain = m_remoteState.audioMuted ? 0.0f : m_remoteState.audioVolume;
     if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
     saveConfig();
 }
 
 void UIManager::triggerRemoteAudioMuteChange(bool muted)
 {
-    m_remoteAudioMuted = muted;
-    // Mute zeroes the effective gain but keeps m_remoteAudioVolume so
+    m_remoteState.audioMuted = muted;
+    // Mute zeroes the effective gain but keeps m_remoteState.audioVolume so
     // the slider position (and the value restored on unmute) survives.
-    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    const float gain = m_remoteState.audioMuted ? 0.0f : m_remoteState.audioVolume;
     if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
     saveConfig();
 }
@@ -2723,7 +2723,7 @@ void UIManager::loadConfig()
             if (streaming.contains("amfQuality"))
                 m_streamingConfig.amfQuality = streaming["amfQuality"].get<std::string>();
             if (streaming.contains("remoteInterpolation"))
-                m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
+                m_remoteState.interpolation = streaming["remoteInterpolation"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
@@ -3131,13 +3131,13 @@ void UIManager::loadConfig()
             // #77 client-side remote audio volume + mute.
             if (audio.contains("remoteVolume") && audio["remoteVolume"].is_number())
             {
-                m_remoteAudioVolume = audio["remoteVolume"].get<float>();
-                if (m_remoteAudioVolume < 0.0f) m_remoteAudioVolume = 0.0f;
-                if (m_remoteAudioVolume > 1.0f) m_remoteAudioVolume = 1.0f;
+                m_remoteState.audioVolume = audio["remoteVolume"].get<float>();
+                if (m_remoteState.audioVolume < 0.0f) m_remoteState.audioVolume = 0.0f;
+                if (m_remoteState.audioVolume > 1.0f) m_remoteState.audioVolume = 1.0f;
             }
             if (audio.contains("remoteMuted") && audio["remoteMuted"].is_boolean())
             {
-                m_remoteAudioMuted = audio["remoteMuted"].get<bool>();
+                m_remoteState.audioMuted = audio["remoteMuted"].get<bool>();
             }
         }
 
@@ -3258,7 +3258,7 @@ void UIManager::saveConfig()
             {"vaapiRcMode", m_streamingConfig.vaapiRcMode},
             {"qsvPreset",   m_streamingConfig.qsvPreset},
             {"amfQuality",  m_streamingConfig.amfQuality},
-            {"remoteInterpolation", m_remoteInterpolation},
+            {"remoteInterpolation", m_remoteState.interpolation},
             {"applyShader", m_streamingApplyShader},
             {"buffer", {{"maxVideoBufferSize", m_streamingConfig.maxVideoBufferSize}, {"maxAudioBufferSize", m_streamingConfig.maxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingConfig.maxBufferTimeSeconds}, {"avioBufferSize", m_streamingConfig.avioBufferSize}}},
             // #49 Phase 2: public directory publish settings.
@@ -3378,8 +3378,8 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId},
-            {"remoteVolume", m_remoteAudioVolume},
-            {"remoteMuted", m_remoteAudioMuted}};
+            {"remoteVolume", m_remoteState.audioVolume},
+            {"remoteMuted", m_remoteState.audioMuted}};
 
         // AVFoundation device + format selection (macOS).
         config["avfoundation"] = {
