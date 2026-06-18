@@ -150,6 +150,18 @@ struct DirectoryState
     int64_t     secondsSinceLastHeartbeat = -1;
 };
 
+// #160 — UIManager remote-source playback status + client settings grouped (group 5/N).
+struct RemoteState
+{
+    bool        hostLikelyOffline     = false;
+    bool        receivingFrames       = false;
+    bool        initialConnectFailing = false;
+    uint32_t    upstreamClientCount   = 0;
+    std::string interpolation         = "linear";
+    float       audioVolume           = 1.0f;
+    bool        audioMuted            = false;
+};
+
 class UIManager
 {
 public:
@@ -630,10 +642,14 @@ public:
     const StreamingConfig &getStreamingConfig() const { return m_streamingConfig; }
     void setStreamingConfig(const StreamingConfig &cfg) { m_streamingConfig = cfg; }
 
-    std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
+    std::string getRemoteInterpolation() const { return m_remoteState.interpolation; }
+    // #160 — bulk access to the remote-source state group (per-field accessors
+    // are thin wrappers over the same struct).
+    const RemoteState &getRemoteState() const { return m_remoteState; }
+    void setRemoteState(const RemoteState &st) { m_remoteState = st; }
     // #77 client-side volume for the incoming remote audio stream.
-    float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
-    bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
+    float getRemoteAudioVolume() const { return m_remoteState.audioVolume; }
+    bool  getRemoteAudioMuted()  const { return m_remoteState.audioMuted; }
     // #107 screen-capture region crop (target pixels; 0,0,0,0 = full).
     uint32_t getScreenRegionX() const { return m_screenRegionX; }
     uint32_t getScreenRegionY() const { return m_screenRegionY; }
@@ -733,26 +749,26 @@ public:
     // nullptr to setCaptureControls to suppress the V4L2/DS hardware
     // controls) so the Info panel can't dynamic-cast its way to the
     // flag. Default false in host mode (#58).
-    bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
-    void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
+    bool getRemoteHostLikelyOffline() const { return m_remoteState.hostLikelyOffline; }
+    void setRemoteHostLikelyOffline(bool v) { m_remoteState.hostLikelyOffline = v; }
     // 'Are we decoding frames right now' — distinct from
     // captureWidth > 0, which stays at the last seen value after
     // the stream drops. Mirrored by Application from
     // VideoCaptureRemote::isReceivingFrames() every frame.
-    bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
-    void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+    bool getRemoteReceivingFrames() const { return m_remoteState.receivingFrames; }
+    void setRemoteReceivingFrames(bool v) { m_remoteState.receivingFrames = v; }
     // First-connect-failing mirror: true while a brand-new connection
     // (no frame ever received yet) has failed a few times. Mirrored
     // from VideoCaptureRemote::isInitialConnectFailing() every frame.
-    bool getRemoteInitialConnectFailing() const { return m_remoteInitialConnectFailing; }
-    void setRemoteInitialConnectFailing(bool v) { m_remoteInitialConnectFailing = v; }
+    bool getRemoteInitialConnectFailing() const { return m_remoteState.initialConnectFailing; }
+    void setRemoteInitialConnectFailing(bool v) { m_remoteState.initialConnectFailing = v; }
 
     // Host's current viewer count, parsed from /meta when we're in
     // client mode (#68). Application piggybacks the
     // RemoteMetaSync::Snapshot callback to keep this fresh. 0 when
     // we're not a client or the host's /meta predates this field.
-    uint32_t getRemoteUpstreamClientCount() const { return m_remoteUpstreamClientCount; }
-    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteUpstreamClientCount = v; }
+    uint32_t getRemoteUpstreamClientCount() const { return m_remoteState.upstreamClientCount; }
+    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteState.upstreamClientCount = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -1286,10 +1302,8 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
-    bool     m_remoteHostLikelyOffline = false;
-    bool     m_remoteReceivingFrames   = false;
-    bool     m_remoteInitialConnectFailing = false;
-    uint32_t m_remoteUpstreamClientCount = 0;
+    // #160 — remote-source playback state + settings grouped (see RemoteState above).
+    RemoteState m_remoteState;
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to
     // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
@@ -1347,12 +1361,9 @@ private:
     //   "linear"  — LERP between prev and next (smooth motion, ghosting)
     //   "nearest" — show the closer frame (clean image, 3:2 stutter)
     //   "off"     — strict PTS gate, hold prev until next is due
-    std::string m_remoteInterpolation = "linear";
-    // #77 client-side remote audio volume. m_remoteAudioVolume holds the
-    // slider level [0,1]; m_remoteAudioMuted overrides it to 0 while
+    // #77 client-side remote audio volume. m_remoteState.audioVolume holds the
+    // slider level [0,1]; m_remoteState.audioMuted overrides it to 0 while
     // preserving the level so unmuting restores it.
-    float m_remoteAudioVolume = 1.0f;
-    bool  m_remoteAudioMuted  = false;
     // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
     uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
     // Live capture texture published by Application for the region selector.
