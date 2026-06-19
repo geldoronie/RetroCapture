@@ -1,6 +1,6 @@
 # `chat` service
 
-Live chat hosted at `chat.retrocapture.com`. Provides per-stream chat rooms (auto-spawned when a stream publishes to the directory) and standalone rooms (community channels, not yet exposed in the UI). Wire-format spec: [`docs/CHAT_PROTOCOL.md`](../../../docs/CHAT_PROTOCOL.md).
+Live chat hosted at `chat.retrocapture.com`. Provides per-stream chat rooms (auto-spawned when a stream publishes to the directory) and standalone rooms (community channels, not yet exposed in the UI). The endpoint surface and message envelopes are summarized below.
 
 Tracking issue: [#84](../../../issues/84).
 
@@ -31,7 +31,8 @@ curl http://localhost:8082/health
 | GET    | `/rooms/by-stream/:streamId`    | Resolve a stream id to its linked room (creates the room if missing).                     |
 | GET    | `/ws?room=<id>` or `?stream=<id>` | WebSocket upgrade. Send `hello`, receive `welcome`, then exchange `post` / `message`. |
 
-See [`docs/CHAT_PROTOCOL.md`](../../../docs/CHAT_PROTOCOL.md) for the full envelope shapes and storage schema.
+The message envelopes and storage schema are defined by the service
+implementation in this directory.
 
 ## Configuration
 
@@ -67,6 +68,5 @@ The `internal/api` package only knows about HTTP / WebSocket and the wire types;
 
 ## See also
 
-- [Wire protocol](../../../docs/CHAT_PROTOCOL.md)
 - [Issue #84](../../../issues/84)
 - Sibling [`directory`](../directory/) service for the catalogue half.

@@ -6,8 +6,7 @@ fetch the list and decide which one to join. The service never sees
 stream bytes — only metadata.
 
 Tracking issue: [#49](../../../issues/49).
-Wire-format spec: [`docs/DIRECTORY_PROTOCOL.md`](../../../docs/DIRECTORY_PROTOCOL.md)
-(forthcoming; will be written alongside Phase 1 of #49).
+The endpoint surface is summarized below.
 
 ## Quick start
 
@@ -42,8 +41,6 @@ local development.
 
 ## Endpoints
 
-The full list is specified in
-[`docs/DIRECTORY_PROTOCOL.md`](../../../docs/DIRECTORY_PROTOCOL.md).
 At Phase 1 bootstrap only `GET /health` is implemented; the rest land
 incrementally as Phase 1 of #49 progresses.
 

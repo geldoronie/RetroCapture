@@ -35,10 +35,10 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
 - 🔁 **Shader-preserving distributed playback** — connect another RetroCapture
   in *Remote source* mode and it receives the host's pre-shader feed plus
   the host's current preset/parameters, so the picture renders with the
-  exact same look on the remote machine. ([REMOTE_STREAM_PROTOCOL](docs/REMOTE_STREAM_PROTOCOL.md))
+  exact same look on the remote machine.
 - 🌎 **Public stream directory** (opt-in) — publish your stream to
   `directory.retrocapture.com` with one click and let other RetroCaptures
-  discover and connect from the in-app browser. ([DIRECTORY_PROTOCOL](docs/DIRECTORY_PROTOCOL.md))
+  discover and connect from the in-app browser.
 - ☁️ **Cloudflare tunnels** — Quick (ephemeral `trycloudflare.com` URL) or
   Named (your own hostname) modes so the publish works behind CGNAT and
   on networks where you can't open ports.
@@ -404,16 +404,6 @@ nlohmann/json (auto-fetched by CMake); OpenSSL (optional, for HTTPS).
 - [`CHANGELOG.md`](CHANGELOG.md) — full version history.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture,
   components, data flow, threading model.
-- [`docs/DESIGN_PATTERNS.md`](docs/DESIGN_PATTERNS.md) — patterns
-  used in the codebase, SOLID/DRY notes, contributor guide and the
-  "how to add a new subsystem" worked example.
-- [`docs/PATHS.md`](docs/PATHS.md) — on-disk layout (assets / config /
-  data / cache / recordings) and the env-var overrides for each role.
-- [`docs/REMOTE_STREAM_PROTOCOL.md`](docs/REMOTE_STREAM_PROTOCOL.md) —
-  wire format of `/stream`, `/raw`, `/meta` and the Remote source
-  client.
-- [`docs/DIRECTORY_PROTOCOL.md`](docs/DIRECTORY_PROTOCOL.md) — opt-in
-  public stream directory protocol.
 - [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — commit conventions
   and development process.
 

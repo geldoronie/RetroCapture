@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Shaders rendered nothing on the live output (window, stream, recording,
+  virtual camera): the per-pass render loop exited early on an inner-loop
+  guard, returning the unshaded input. Restored shader rendering (#184).
+- Recording came out upside-down when the Recording tab's apply-shader
+  toggle was off: the raw-source readback used the opposite vertical
+  orientation from the shaded path. Recording, `/stream` and `/raw` now
+  share the host's canonical orientation (#187).
+- The Remote source client ignored the Streaming tab's apply-shader
+  toggle and kept applying the shader; the `/meta` snapshot now reports
+  the effective streaming shader state so the client follows it (#188).
+
+### Changed
+
+- **Remote protocol orientation (breaking):** the `/raw` feed now carries
+  the capture in the host's canonical bottom-up orientation, matching
+  `/stream` and recording. A 0.8.2-alpha client paired with a
+  pre-0.8.2-alpha host (or vice-versa) renders the remote picture
+  upside-down. Mixing versions across this boundary is unsupported (#187).
+
 ### Planned
 
 - WebRTC streaming support (#52)
