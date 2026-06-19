@@ -401,7 +401,15 @@ void UICallbackWiring::wireVisualCallbacks()
     // IMPORTANT: After init(), UIManager has already loaded saved configurations
     // Synchronize Application values with values loaded from UI
     // This ensures saved configurations are applied
-    m_app.m_streamingPort = m_app.m_ui->getStreamingPort();
+    //
+    // Port exception (#163): an explicit CLI --stream-port / --web-portal-port
+    // must win over the saved config. When set, push the Application value into
+    // the UI (so the bind, URLs and directory all agree); otherwise adopt the
+    // UI's saved port as before.
+    if (m_app.m_streamingPortExplicit)
+        m_app.m_ui->setStreamingPort(m_app.m_streamingPort);
+    else
+        m_app.m_streamingPort = m_app.m_ui->getStreamingPort();
     m_app.m_streamingWidth = m_app.m_ui->getStreamingWidth();
     m_app.m_streamingHeight = m_app.m_ui->getStreamingHeight();
     m_app.m_streamingFps = m_app.m_ui->getStreamingFps();

@@ -64,3 +64,4 @@ build-windows-x86_64/
 *.pdb
 *.exp
 mxe/
+RetroCapture.ini
