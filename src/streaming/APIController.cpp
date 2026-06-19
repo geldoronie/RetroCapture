@@ -1339,6 +1339,12 @@ std::string APIController::buildMetaSnapshotJSON()
 
     ShaderEngine *shaderEngine = m_application->getShaderEngine();
     bool shaderActive = shaderEngine && shaderEngine->isShaderActive();
+    // #188 — the remote client consumes the *streaming* feed, so the shader it
+    // applies locally must follow BOTH the master Shader-tab toggle AND the
+    // Streaming-tab apply-shader toggle. Reporting only getShaderPipelineEnabled()
+    // here left the client shaded even after the user disabled shader for streaming.
+    bool clientPipelineEnabled = m_uiManager->getShaderPipelineEnabled() &&
+                                 m_uiManager->getStreamingApplyShader();
     std::string presetName = m_uiManager->getCurrentShader();
     std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
     std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
@@ -1349,7 +1355,7 @@ std::string APIController::buildMetaSnapshotJSON()
          << "\"serverVersion\": " << jsonString(RETROCAPTURE_VERSION) << ", "
          << "\"shader\": {"
          <<   "\"active\": "          << jsonBool(shaderActive)                          << ", "
-         <<   "\"pipelineEnabled\": " << jsonBool(m_uiManager->getShaderPipelineEnabled()) << ", "
+         <<   "\"pipelineEnabled\": " << jsonBool(clientPipelineEnabled)                  << ", "
          <<   "\"preset\": "          << jsonString(presetName)                          << ", "
          <<   "\"presetHash\": "      << jsonString(presetHash)                          << ", "
          <<   "\"parameters\": [";

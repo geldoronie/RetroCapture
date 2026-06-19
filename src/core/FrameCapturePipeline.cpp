@@ -516,18 +516,19 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     // Camera image and shader output both need Y inversion in
     // the general case — that's why flipY defaults to true.
     //
-    // Exception: remote source consumed without a client-side
-    // shader. The /raw wire data goes through one fewer Y
-    // inversion than a locally-captured frame (no FrameProcessor
-    // upload→shader→sample chain on the client), so the
-    // renderer's implicit flip overshoots and the image lands
-    // upside-down. When the user disables the client-side
-    // shader pipeline on a Remote source, drop the flip so the
-    // picture stays right-side-up (#67).
-    const bool remoteWithoutShader =
-        (m_app.m_ui && m_app.m_ui->getSourceType() == UIManager::SourceType::Remote &&
-         !isShaderTexture);
-    bool shouldFlipY = !remoteWithoutShader;
+    // Exception: a Remote source. The /raw wire feed arrives
+    // already inverted relative to a locally-captured frame, so
+    // the renderer's implicit flip overshoots and the image lands
+    // upside-down. This holds in BOTH the shader and non-shader
+    // cases — the host now reads /raw bottom-up (#187), matching
+    // its shaded-output orientation, so the client must drop the
+    // flip for any Remote source regardless of the client-side
+    // shader pipeline (#67, #187). Previously the flip was dropped
+    // only when no client-side shader ran, which left a Remote +
+    // client-shader frame upside-down once /raw was made consistent.
+    const bool remoteSource =
+        (m_app.m_ui && m_app.m_ui->getSourceType() == UIManager::SourceType::Remote);
+    bool shouldFlipY = !remoteSource;
 
     // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
     uint32_t windowWidth = m_app.m_window->getWidth();
@@ -1165,11 +1166,16 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                     glReadPixels(0, 0, static_cast<GLsizei>(sourceFrameW),
                                                  static_cast<GLsizei>(sourceFrameH),
                                                  GL_RGB, GL_UNSIGNED_BYTE, m_app.m_captureSourcePadded.data());
-                                    // glReadPixels returns rows bottom-up; flip + strip row padding.
+                                    // #187 — keep glReadPixels' native bottom-up order (do NOT flip),
+                                    // only strip the row padding. The shaded path (frameData) is read via
+                                    // PBO with flipY=false (also bottom-up) and records/streams correctly;
+                                    // this raw-source buffer feeds the same encoders (recording, /stream,
+                                    // /raw), so it must match that orientation. The old vertical flip here
+                                    // produced upside-down recording whenever apply-shader was OFF.
                                     m_app.m_captureSourceFrameData.resize(rowUnpadded * sourceFrameH);
                                     for (uint32_t row = 0; row < sourceFrameH; ++row)
                                     {
-                                        const uint32_t srcRow = sourceFrameH - 1 - row;
+                                        const uint32_t srcRow = row;
                                         const uint8_t *s = m_app.m_captureSourcePadded.data() + srcRow * rowPadded;
                                         uint8_t *d = m_app.m_captureSourceFrameData.data() + row * rowUnpadded;
                                         memcpy(d, s, rowUnpadded);
