@@ -36,9 +36,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="${1:-$REPO_ROOT/build-linux-x86_64/bin/retrocapture}"
-# The streaming server binds 8080 regardless of --stream-port (the flag only
-# echoes; the bind is fixed — tracked separately). Use 8080 and refuse to run
-# if it's already taken, rather than fighting a live instance.
+# The app is launched with --stream-port "$PORT" (honored since #163), so a
+# non-default SMOKE_PORT both avoids clashing with a live instance and doubles
+# as a regression check that the bind actually follows the flag.
 PORT="${SMOKE_PORT:-8080}"
 SMOKE_PRESET="${SMOKE_PRESET:-crt/crt-hyllian-glow.glslp}"
 W=1280; H=720
@@ -100,7 +100,7 @@ launch_app() {
     mkdir -p "$cfg" "$data"
     XDG_CONFIG_HOME="$cfg" XDG_DATA_HOME="$data" \
         $LAUNCH_PREFIX "$BIN" --source test --stream-enable --hide-ui \
-        --width "$W" --height "$H" "$@" \
+        --stream-port "$PORT" --width "$W" --height "$H" "$@" \
         > "$WORK/$sub-app.log" 2>&1 &
     APP_PID=$!
 
