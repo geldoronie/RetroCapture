@@ -6,16 +6,6 @@ responsibility lives in the source tree. It is intended as the
 orientation tour for new contributors and the reference point when
 reviewing changes that cut across subsystems.
 
-For wire-level details of the streaming endpoints and the public
-directory service, see the companion protocol docs:
-
-- [`REMOTE_STREAM_PROTOCOL.md`](REMOTE_STREAM_PROTOCOL.md) — `/stream`,
-  `/raw`, `/meta` and the desktop client's Remote source.
-- [`DIRECTORY_PROTOCOL.md`](DIRECTORY_PROTOCOL.md) — opt-in public
-  stream directory (`/register`, `/heartbeat`, `/streams`, …).
-- [`PATHS.md`](PATHS.md) — on-disk layout (assets / config / data /
-  cache / recordings) and the env-var overrides for each role.
-
 ---
 
 ## Big picture
@@ -306,8 +296,9 @@ through `APIController`, so changes in either surface stay in sync.
 
 ### `src/utils/` — Cross-cutting utilities
 
-- **`Paths`** — XDG / Known-Folders aware path resolution (see
-  [`PATHS.md`](PATHS.md)).
+- **`Paths`** — XDG / Known-Folders aware path resolution for the
+  assets / config / data / cache / recordings roles, with per-role
+  env-var overrides.
 - **`Logger`** — process-wide rate-limited logger (lock-free,
   per-thread buffers).
 - **`HttpClient`** + **`HttpClientTls`** — small synchronous
@@ -333,8 +324,8 @@ through `APIController`, so changes in either surface stay in sync.
 ### `src/web/` — Web portal static assets
 
 HTML + JS + CSS + PWA manifest + Workbox-based service worker.
-Loaded from disk at runtime by `WebPortal` (see [`PATHS.md`](PATHS.md)
-for where `src/web/` is installed on shipped builds).
+Loaded from disk at runtime by `WebPortal` from the installed
+`src/web/` tree (resolved via `Paths`).
 
 ---
 
@@ -379,7 +370,7 @@ block process exit beyond ~1.5 s.
 
 - **User config** (`config.json`) is loaded once at startup and saved
   on every `UIManager` change. Lives under `XDG_CONFIG_HOME` /
-  `%APPDATA%` (see `PATHS.md`).
+  `%APPDATA%`.
 - **Capture presets**, **streaming profiles**, **recording profiles**
   and **recording sidecar metadata** live under
   `XDG_DATA_HOME` / `%APPDATA%\data\`.
@@ -402,8 +393,10 @@ block process exit beyond ~1.5 s.
 | `WS /api/shader/preview`       | `APIController`          | Live shader-parameter push                 |
 | Directory `POST /register`, … | `DirectoryClient` ↔ remote | Publish + heartbeat + patch + delete       |
 
-`REMOTE_STREAM_PROTOCOL.md` documents the wire format of `/raw` and
-`/meta` in detail; `DIRECTORY_PROTOCOL.md` covers the directory side.
+Note: `/raw` carries the capture in the host's canonical bottom-up
+orientation (matching `/stream` and recording); the Remote client
+compensates that inversion on display. See the CHANGELOG entry for the
+0.8.2-alpha orientation standardization.
 
 ---
 
@@ -420,8 +413,8 @@ under `tools/`:
 | Windows x86_64        | MXE MinGW-w64 docker   | `build-windows-x86_64/bin/retrocapture.exe` |
 
 All four ship with the same `src/web/`, `shaders/` and `assets/`
-trees. The on-disk layout the binaries expect at runtime is
-documented in [`PATHS.md`](PATHS.md).
+trees, resolved at runtime via `Paths` (XDG roles on Linux,
+Known-Folders on Windows).
 
 ---
 
@@ -429,10 +422,9 @@ documented in [`PATHS.md`](PATHS.md).
 
 - New to the codebase → this file, then `src/core/Application.cpp`'s
   main loop, then the subsystem of interest.
-- Touching streaming → [`REMOTE_STREAM_PROTOCOL.md`](REMOTE_STREAM_PROTOCOL.md)
-  and `src/streaming/HTTPTSStreamer.{h,cpp}`.
-- Touching directory publish → [`DIRECTORY_PROTOCOL.md`](DIRECTORY_PROTOCOL.md)
-  and `src/streaming/DirectoryClient.{h,cpp}`.
+- Touching streaming → `src/streaming/HTTPTSStreamer.{h,cpp}` and
+  `APIController.{h,cpp}` (`/meta`).
+- Touching directory publish → `src/streaming/DirectoryClient.{h,cpp}`.
 - Touching shaders → `shaders/README.md` (preset format) and
   `src/shader/ShaderEngine.{h,cpp}`.
 - Committing → [`CONTRIBUTING.md`](CONTRIBUTING.md).

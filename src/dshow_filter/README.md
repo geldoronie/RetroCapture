@@ -23,7 +23,7 @@ To complete Phase 2:
      The Wine project's strmbase port + the ReactOS port are
      both viable starting points.
 
-2. **Implement** the classes laid out in `docs/VIRTCAM_WINDOWS.md`:
+2. **Implement** the filter classes:
    `CRetroCaptureFilter` (CSource subclass), `CRetroCaptureStream`
    (CSourceStream subclass), `SharedMemoryReader` (OpenFileMappingW
    + WaitForSingleObject on `Local\RetroCaptureVCam_FrameReady_v1`).
@@ -36,6 +36,6 @@ To complete Phase 2:
 5. **End-to-end test on Windows**: install, RetroCapture writes,
    OBS reads, picture appears.
 
-See `docs/VIRTCAM_WINDOWS.md` for the full architecture, IPC
-protocol (shared memory layout, event names, CLSIDs), and CMake
-+ CPack hooks.
+The IPC contract (shared-memory layout, event names like
+`Local\RetroCaptureVCam_FrameReady_v1`, and CLSIDs) is defined by the
+writer side in `src/output/VirtualCameraOutputWin.*`.
