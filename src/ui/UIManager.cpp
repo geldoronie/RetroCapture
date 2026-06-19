@@ -309,7 +309,7 @@ bool UIManager::init(void *window)
     // self-hides while the client is Idle, so a null/unconfigured
     // pointer renders as nothing.
     m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
-    m_chatOverlay->setVisible(m_chatOverlayVisible);
+    m_chatOverlay->setVisible(m_chatConfig.overlayVisible);
     // Shortcuts orientation widget — UI layer, top-right corner,
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
@@ -344,7 +344,7 @@ void UIManager::setChatClient(ChatClient *chat)
         // pointer. Cheaper to swap than to expose another setter that
         // most callers wouldn't touch.
         m_chatOverlay = std::make_unique<OSDChat>(this, m_chatClient);
-        m_chatOverlay->setVisible(m_chatOverlayVisible);
+        m_chatOverlay->setVisible(m_chatConfig.overlayVisible);
     }
 }
 
@@ -1697,7 +1697,7 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Controles básicos
-    int port = static_cast<int>(m_streamingPort);
+    int port = static_cast<int>(m_streamingConfig.port);
     if (ImGui::InputInt("Port", &port, 1, 100))
     {
         // Validation is done in setStreamingPort/triggerStreamingPortChange
@@ -1725,7 +1725,7 @@ void UIManager::renderStreamingPanel()
     int currentResIndex = 0;
     for (int i = 0; i < 10; i++)
     {
-        if (m_streamingWidth == resolutionWidths[i] && m_streamingHeight == resolutionHeights[i])
+        if (m_streamingConfig.width == resolutionWidths[i] && m_streamingConfig.height == resolutionHeights[i])
         {
             currentResIndex = i;
             break;
@@ -1734,15 +1734,15 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Resolution", &currentResIndex, resolutions, 10))
     {
-        m_streamingWidth = resolutionWidths[currentResIndex];
-        m_streamingHeight = resolutionHeights[currentResIndex];
+        m_streamingConfig.width = resolutionWidths[currentResIndex];
+        m_streamingConfig.height = resolutionHeights[currentResIndex];
         if (m_onStreamingWidthChanged)
         {
-            m_onStreamingWidthChanged(m_streamingWidth);
+            m_onStreamingWidthChanged(m_streamingConfig.width);
         }
         if (m_onStreamingHeightChanged)
         {
-            m_onStreamingHeightChanged(m_streamingHeight);
+            m_onStreamingHeightChanged(m_streamingConfig.height);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1754,7 +1754,7 @@ void UIManager::renderStreamingPanel()
     int currentFpsIndex = 0;
     for (int i = 0; i < 6; i++)
     {
-        if (m_streamingFps == fpsValues[i])
+        if (m_streamingConfig.fps == fpsValues[i])
         {
             currentFpsIndex = i;
             break;
@@ -1763,10 +1763,10 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("FPS", &currentFpsIndex, fpsOptions, 6))
     {
-        m_streamingFps = fpsValues[currentFpsIndex];
+        m_streamingConfig.fps = fpsValues[currentFpsIndex];
         if (m_onStreamingFpsChanged)
         {
-            m_onStreamingFpsChanged(m_streamingFps);
+            m_onStreamingFpsChanged(m_streamingConfig.fps);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1780,7 +1780,7 @@ void UIManager::renderStreamingPanel()
     int currentVideoCodecIndex = 0;
     for (int i = 0; i < 4; i++)
     {
-        if (m_streamingVideoCodec == videoCodecs[i])
+        if (m_streamingConfig.videoCodec == videoCodecs[i])
         {
             currentVideoCodecIndex = i;
             break;
@@ -1789,10 +1789,10 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Video Codec", &currentVideoCodecIndex, videoCodecs, 4))
     {
-        m_streamingVideoCodec = videoCodecs[currentVideoCodecIndex];
+        m_streamingConfig.videoCodec = videoCodecs[currentVideoCodecIndex];
         if (m_onStreamingVideoCodecChanged)
         {
-            m_onStreamingVideoCodecChanged(m_streamingVideoCodec);
+            m_onStreamingVideoCodecChanged(m_streamingConfig.videoCodec);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
@@ -1802,7 +1802,7 @@ void UIManager::renderStreamingPanel()
     int currentAudioCodecIndex = 0;
     for (int i = 0; i < 3; i++)
     {
-        if (m_streamingAudioCodec == audioCodecs[i])
+        if (m_streamingConfig.audioCodec == audioCodecs[i])
         {
             currentAudioCodecIndex = i;
             break;
@@ -1811,16 +1811,16 @@ void UIManager::renderStreamingPanel()
 
     if (ImGui::Combo("Codec de Áudio", &currentAudioCodecIndex, audioCodecs, 3))
     {
-        m_streamingAudioCodec = audioCodecs[currentAudioCodecIndex];
+        m_streamingConfig.audioCodec = audioCodecs[currentAudioCodecIndex];
         if (m_onStreamingAudioCodecChanged)
         {
-            m_onStreamingAudioCodecChanged(m_streamingAudioCodec);
+            m_onStreamingAudioCodecChanged(m_streamingConfig.audioCodec);
         }
         saveConfig(); // Salvar configuração quando mudar
     }
 
     // Qualidade H.264 (apenas se codec for h264)
-    if (m_streamingVideoCodec == "h264")
+    if (m_streamingConfig.videoCodec == "h264")
     {
         const char *h264Presets[] = {
             "ultrafast",
@@ -1835,7 +1835,7 @@ void UIManager::renderStreamingPanel()
         int currentPresetIndex = 2; // Padrão: veryfast
         for (int i = 0; i < 9; i++)
         {
-            if (m_streamingH264Preset == h264Presets[i])
+            if (m_streamingConfig.h264Preset == h264Presets[i])
             {
                 currentPresetIndex = i;
                 break;
@@ -1844,10 +1844,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.264 Quality", &currentPresetIndex, h264Presets, 9))
         {
-            m_streamingH264Preset = h264Presets[currentPresetIndex];
+            m_streamingConfig.h264Preset = h264Presets[currentPresetIndex];
             if (m_onStreamingH264PresetChanged)
             {
-                m_onStreamingH264PresetChanged(m_streamingH264Preset);
+                m_onStreamingH264PresetChanged(m_streamingConfig.h264Preset);
             }
             saveConfig();
         }
@@ -1861,7 +1861,7 @@ void UIManager::renderStreamingPanel()
     }
 
     // Qualidade H.265 (apenas se codec for h265)
-    if (m_streamingVideoCodec == "h265" || m_streamingVideoCodec == "hevc")
+    if (m_streamingConfig.videoCodec == "h265" || m_streamingConfig.videoCodec == "hevc")
     {
         const char *h265Presets[] = {
             "ultrafast",
@@ -1876,7 +1876,7 @@ void UIManager::renderStreamingPanel()
         int currentPresetIndex = 2; // Padrão: veryfast
         for (int i = 0; i < 9; i++)
         {
-            if (m_streamingH265Preset == h265Presets[i])
+            if (m_streamingConfig.h265Preset == h265Presets[i])
             {
                 currentPresetIndex = i;
                 break;
@@ -1885,10 +1885,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Quality", &currentPresetIndex, h265Presets, 9))
         {
-            m_streamingH265Preset = h265Presets[currentPresetIndex];
+            m_streamingConfig.h265Preset = h265Presets[currentPresetIndex];
             if (m_onStreamingH265PresetChanged)
             {
-                m_onStreamingH265PresetChanged(m_streamingH265Preset);
+                m_onStreamingH265PresetChanged(m_streamingConfig.h265Preset);
             }
             saveConfig();
         }
@@ -1905,7 +1905,7 @@ void UIManager::renderStreamingPanel()
         int currentProfileIndex = 0;
         for (int i = 0; i < 2; i++)
         {
-            if (m_streamingH265Profile == h265Profiles[i])
+            if (m_streamingConfig.h265Profile == h265Profiles[i])
             {
                 currentProfileIndex = i;
                 break;
@@ -1914,10 +1914,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Profile", &currentProfileIndex, h265Profiles, 2))
         {
-            m_streamingH265Profile = h265Profiles[currentProfileIndex];
+            m_streamingConfig.h265Profile = h265Profiles[currentProfileIndex];
             if (m_onStreamingH265ProfileChanged)
             {
-                m_onStreamingH265ProfileChanged(m_streamingH265Profile);
+                m_onStreamingH265ProfileChanged(m_streamingConfig.h265Profile);
             }
             saveConfig();
         }
@@ -1935,7 +1935,7 @@ void UIManager::renderStreamingPanel()
         int currentLevelIndex = 0;
         for (int i = 0; i < 14; i++)
         {
-            if (m_streamingH265Level == h265Levels[i])
+            if (m_streamingConfig.h265Level == h265Levels[i])
             {
                 currentLevelIndex = i;
                 break;
@@ -1944,10 +1944,10 @@ void UIManager::renderStreamingPanel()
 
         if (ImGui::Combo("H.265 Level", &currentLevelIndex, h265Levels, 14))
         {
-            m_streamingH265Level = h265Levels[currentLevelIndex];
+            m_streamingConfig.h265Level = h265Levels[currentLevelIndex];
             if (m_onStreamingH265LevelChanged)
             {
-                m_onStreamingH265LevelChanged(m_streamingH265Level);
+                m_onStreamingH265LevelChanged(m_streamingConfig.h265Level);
             }
             saveConfig();
         }
@@ -1961,15 +1961,15 @@ void UIManager::renderStreamingPanel()
     }
 
     // Configurações VP8 (apenas se codec for vp8)
-    if (m_streamingVideoCodec == "vp8")
+    if (m_streamingConfig.videoCodec == "vp8")
     {
-        int currentSpeed = m_streamingVP8Speed;
+        int currentSpeed = m_streamingConfig.vp8Speed;
         if (ImGui::SliderInt("VP8 Speed (0-16)", &currentSpeed, 0, 16))
         {
-            m_streamingVP8Speed = currentSpeed;
+            m_streamingConfig.vp8Speed = currentSpeed;
             if (m_onStreamingVP8SpeedChanged)
             {
-                m_onStreamingVP8SpeedChanged(m_streamingVP8Speed);
+                m_onStreamingVP8SpeedChanged(m_streamingConfig.vp8Speed);
             }
             saveConfig();
         }
@@ -1983,15 +1983,15 @@ void UIManager::renderStreamingPanel()
     }
 
     // Configurações VP9 (apenas se codec for vp9)
-    if (m_streamingVideoCodec == "vp9")
+    if (m_streamingConfig.videoCodec == "vp9")
     {
-        int currentSpeed = m_streamingVP9Speed;
+        int currentSpeed = m_streamingConfig.vp9Speed;
         if (ImGui::SliderInt("VP9 Speed (0-9)", &currentSpeed, 0, 9))
         {
-            m_streamingVP9Speed = currentSpeed;
+            m_streamingConfig.vp9Speed = currentSpeed;
             if (m_onStreamingVP9SpeedChanged)
             {
-                m_onStreamingVP9SpeedChanged(m_streamingVP9Speed);
+                m_onStreamingVP9SpeedChanged(m_streamingConfig.vp9Speed);
             }
             saveConfig();
         }
@@ -2009,16 +2009,16 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Bitrate de vídeo
-    int bitrate = static_cast<int>(m_streamingBitrate);
+    int bitrate = static_cast<int>(m_streamingConfig.bitrate);
     if (ImGui::InputInt("Video Bitrate (kbps, 0 = auto)", &bitrate, 100, 1000))
     {
         // Limites: 0 (auto) ou 100-100000 kbps
         if (bitrate == 0 || (bitrate >= 100 && bitrate <= 100000))
         {
-            m_streamingBitrate = static_cast<uint32_t>(bitrate);
+            m_streamingConfig.bitrate = static_cast<uint32_t>(bitrate);
             if (m_onStreamingBitrateChanged)
             {
-                m_onStreamingBitrateChanged(m_streamingBitrate);
+                m_onStreamingBitrateChanged(m_streamingConfig.bitrate);
             }
             saveConfig();
         }
@@ -2032,16 +2032,16 @@ void UIManager::renderStreamingPanel()
     }
 
     // Bitrate de áudio
-    int audioBitrate = static_cast<int>(m_streamingAudioBitrate);
+    int audioBitrate = static_cast<int>(m_streamingConfig.audioBitrate);
     if (ImGui::InputInt("Audio Bitrate (kbps)", &audioBitrate, 8, 32))
     {
         // Limites: 64-320 kbps (32 é muito baixo para qualidade aceitável)
         if (audioBitrate >= 64 && audioBitrate <= 320)
         {
-            m_streamingAudioBitrate = static_cast<uint32_t>(audioBitrate);
+            m_streamingConfig.audioBitrate = static_cast<uint32_t>(audioBitrate);
             if (m_onStreamingAudioBitrateChanged)
             {
-                m_onStreamingAudioBitrateChanged(m_streamingAudioBitrate);
+                m_onStreamingAudioBitrateChanged(m_streamingConfig.audioBitrate);
             }
             saveConfig();
         }
@@ -2058,13 +2058,13 @@ void UIManager::renderStreamingPanel()
     ImGui::Separator();
 
     // Max Video Buffer Size
-    int maxVideoBuffer = static_cast<int>(m_streamingMaxVideoBufferSize);
+    int maxVideoBuffer = static_cast<int>(m_streamingConfig.maxVideoBufferSize);
     if (ImGui::SliderInt("Max Frames in Buffer", &maxVideoBuffer, 1, 50))
     {
-        m_streamingMaxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
+        m_streamingConfig.maxVideoBufferSize = static_cast<size_t>(maxVideoBuffer);
         if (m_onStreamingMaxVideoBufferSizeChanged)
         {
-            m_onStreamingMaxVideoBufferSizeChanged(m_streamingMaxVideoBufferSize);
+            m_onStreamingMaxVideoBufferSizeChanged(m_streamingConfig.maxVideoBufferSize);
         }
         saveConfig();
     }
@@ -2077,13 +2077,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // Max Audio Buffer Size
-    int maxAudioBuffer = static_cast<int>(m_streamingMaxAudioBufferSize);
+    int maxAudioBuffer = static_cast<int>(m_streamingConfig.maxAudioBufferSize);
     if (ImGui::SliderInt("Max Chunks in Buffer", &maxAudioBuffer, 5, 100))
     {
-        m_streamingMaxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
+        m_streamingConfig.maxAudioBufferSize = static_cast<size_t>(maxAudioBuffer);
         if (m_onStreamingMaxAudioBufferSizeChanged)
         {
-            m_onStreamingMaxAudioBufferSizeChanged(m_streamingMaxAudioBufferSize);
+            m_onStreamingMaxAudioBufferSizeChanged(m_streamingConfig.maxAudioBufferSize);
         }
         saveConfig();
     }
@@ -2096,13 +2096,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // Max Buffer Time
-    int maxBufferTime = static_cast<int>(m_streamingMaxBufferTimeSeconds);
+    int maxBufferTime = static_cast<int>(m_streamingConfig.maxBufferTimeSeconds);
     if (ImGui::SliderInt("Max Buffer Time (seconds)", &maxBufferTime, 1, 30))
     {
-        m_streamingMaxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
+        m_streamingConfig.maxBufferTimeSeconds = static_cast<int64_t>(maxBufferTime);
         if (m_onStreamingMaxBufferTimeSecondsChanged)
         {
-            m_onStreamingMaxBufferTimeSecondsChanged(m_streamingMaxBufferTimeSeconds);
+            m_onStreamingMaxBufferTimeSecondsChanged(m_streamingConfig.maxBufferTimeSeconds);
         }
         saveConfig();
     }
@@ -2115,13 +2115,13 @@ void UIManager::renderStreamingPanel()
     }
 
     // AVIO Buffer Size
-    int avioBuffer = static_cast<int>(m_streamingAVIOBufferSize / 1024); // Converter para KB
+    int avioBuffer = static_cast<int>(m_streamingConfig.avioBufferSize / 1024); // Converter para KB
     if (ImGui::SliderInt("AVIO Buffer (KB)", &avioBuffer, 64, 1024))
     {
-        m_streamingAVIOBufferSize = static_cast<size_t>(avioBuffer * 1024);
+        m_streamingConfig.avioBufferSize = static_cast<size_t>(avioBuffer * 1024);
         if (m_onStreamingAVIOBufferSizeChanged)
         {
-            m_onStreamingAVIOBufferSizeChanged(m_streamingAVIOBufferSize);
+            m_onStreamingAVIOBufferSizeChanged(m_streamingConfig.avioBufferSize);
         }
         saveConfig();
     }
@@ -2255,7 +2255,7 @@ void UIManager::setStreamingPort(uint16_t port)
     // Note: uint16_t max is 65535, so we only need to check >= 1024
     if (port >= 1024)
     {
-        m_streamingPort = port;
+        m_streamingConfig.port = port;
     }
     else
     {
@@ -2269,14 +2269,14 @@ void UIManager::triggerStreamingPortChange(uint16_t port)
     setStreamingPort(port);
     if (m_onStreamingPortChanged)
     {
-        m_onStreamingPortChanged(m_streamingPort);
+        m_onStreamingPortChanged(m_streamingConfig.port);
     }
     saveConfig();
 }
 
 void UIManager::triggerStreamingWidthChange(uint32_t width)
 {
-    m_streamingWidth = width;
+    m_streamingConfig.width = width;
     if (m_onStreamingWidthChanged)
     {
         m_onStreamingWidthChanged(width);
@@ -2286,7 +2286,7 @@ void UIManager::triggerStreamingWidthChange(uint32_t width)
 
 void UIManager::triggerStreamingHeightChange(uint32_t height)
 {
-    m_streamingHeight = height;
+    m_streamingConfig.height = height;
     if (m_onStreamingHeightChanged)
     {
         m_onStreamingHeightChanged(height);
@@ -2296,7 +2296,7 @@ void UIManager::triggerStreamingHeightChange(uint32_t height)
 
 void UIManager::triggerStreamingFpsChange(uint32_t fps)
 {
-    m_streamingFps = fps;
+    m_streamingConfig.fps = fps;
     if (m_onStreamingFpsChanged)
     {
         m_onStreamingFpsChanged(fps);
@@ -2306,7 +2306,7 @@ void UIManager::triggerStreamingFpsChange(uint32_t fps)
 
 void UIManager::triggerStreamingBitrateChange(uint32_t bitrate)
 {
-    m_streamingBitrate = bitrate;
+    m_streamingConfig.bitrate = bitrate;
     if (m_onStreamingBitrateChanged)
     {
         m_onStreamingBitrateChanged(bitrate);
@@ -2316,7 +2316,7 @@ void UIManager::triggerStreamingBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerStreamingAudioBitrateChange(uint32_t bitrate)
 {
-    m_streamingAudioBitrate = bitrate;
+    m_streamingConfig.audioBitrate = bitrate;
     if (m_onStreamingAudioBitrateChanged)
     {
         m_onStreamingAudioBitrateChanged(bitrate);
@@ -2326,7 +2326,7 @@ void UIManager::triggerStreamingAudioBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerStreamingVideoCodecChange(const std::string &codec)
 {
-    m_streamingVideoCodec = codec;
+    m_streamingConfig.videoCodec = codec;
     if (m_onStreamingVideoCodecChanged)
     {
         m_onStreamingVideoCodecChanged(codec);
@@ -2336,7 +2336,7 @@ void UIManager::triggerStreamingVideoCodecChange(const std::string &codec)
 
 void UIManager::triggerStreamingAudioCodecChange(const std::string &codec)
 {
-    m_streamingAudioCodec = codec;
+    m_streamingConfig.audioCodec = codec;
     if (m_onStreamingAudioCodecChanged)
     {
         m_onStreamingAudioCodecChanged(codec);
@@ -2346,7 +2346,7 @@ void UIManager::triggerStreamingAudioCodecChange(const std::string &codec)
 
 void UIManager::triggerStreamingH264PresetChange(const std::string &preset)
 {
-    m_streamingH264Preset = preset;
+    m_streamingConfig.h264Preset = preset;
     if (m_onStreamingH264PresetChanged)
     {
         m_onStreamingH264PresetChanged(preset);
@@ -2356,7 +2356,7 @@ void UIManager::triggerStreamingH264PresetChange(const std::string &preset)
 
 void UIManager::triggerStreamingH265PresetChange(const std::string &preset)
 {
-    m_streamingH265Preset = preset;
+    m_streamingConfig.h265Preset = preset;
     if (m_onStreamingH265PresetChanged)
     {
         m_onStreamingH265PresetChanged(preset);
@@ -2366,7 +2366,7 @@ void UIManager::triggerStreamingH265PresetChange(const std::string &preset)
 
 void UIManager::triggerStreamingH265ProfileChange(const std::string &profile)
 {
-    m_streamingH265Profile = profile;
+    m_streamingConfig.h265Profile = profile;
     if (m_onStreamingH265ProfileChanged)
     {
         m_onStreamingH265ProfileChanged(profile);
@@ -2376,7 +2376,7 @@ void UIManager::triggerStreamingH265ProfileChange(const std::string &profile)
 
 void UIManager::triggerStreamingH265LevelChange(const std::string &level)
 {
-    m_streamingH265Level = level;
+    m_streamingConfig.h265Level = level;
     if (m_onStreamingH265LevelChanged)
     {
         m_onStreamingH265LevelChanged(level);
@@ -2395,7 +2395,7 @@ void UIManager::triggerDeviceChange(const std::string &device)
 
 void UIManager::triggerStreamingVP8SpeedChange(int speed)
 {
-    m_streamingVP8Speed = speed;
+    m_streamingConfig.vp8Speed = speed;
     if (m_onStreamingVP8SpeedChanged)
     {
         m_onStreamingVP8SpeedChanged(speed);
@@ -2405,7 +2405,7 @@ void UIManager::triggerStreamingVP8SpeedChange(int speed)
 
 void UIManager::triggerStreamingVP9SpeedChange(int speed)
 {
-    m_streamingVP9Speed = speed;
+    m_streamingConfig.vp9Speed = speed;
     if (m_onStreamingVP9SpeedChanged)
     {
         m_onStreamingVP9SpeedChanged(speed);
@@ -2415,7 +2415,7 @@ void UIManager::triggerStreamingVP9SpeedChange(int speed)
 
 void UIManager::triggerStreamingHardwareEncoderChange(int v)
 {
-    m_streamingHardwareEncoder = v;
+    m_streamingConfig.hardwareEncoder = v;
     if (m_onStreamingHardwareEncoderChanged)
     {
         m_onStreamingHardwareEncoderChanged(v);
@@ -2425,35 +2425,35 @@ void UIManager::triggerStreamingHardwareEncoderChange(int v)
 
 void UIManager::triggerStreamingNvencPresetChange(const std::string &v)
 {
-    m_streamingNvencPreset = v;
+    m_streamingConfig.nvencPreset = v;
     if (m_onStreamingNvencPresetChanged) m_onStreamingNvencPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingVaapiRcModeChange(const std::string &v)
 {
-    m_streamingVaapiRcMode = v;
+    m_streamingConfig.vaapiRcMode = v;
     if (m_onStreamingVaapiRcModeChanged) m_onStreamingVaapiRcModeChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingQsvPresetChange(const std::string &v)
 {
-    m_streamingQsvPreset = v;
+    m_streamingConfig.qsvPreset = v;
     if (m_onStreamingQsvPresetChanged) m_onStreamingQsvPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerStreamingAmfQualityChange(const std::string &v)
 {
-    m_streamingAmfQuality = v;
+    m_streamingConfig.amfQuality = v;
     if (m_onStreamingAmfQualityChanged) m_onStreamingAmfQualityChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRemoteInterpolationChange(const std::string &v)
 {
-    m_remoteInterpolation = v;
+    m_remoteState.interpolation = v;
     if (m_onRemoteInterpolationChanged) m_onRemoteInterpolationChanged(v);
     saveConfig();
 }
@@ -2469,27 +2469,27 @@ void UIManager::triggerRemoteAudioVolumeChange(float volume)
 {
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
-    m_remoteAudioVolume = volume;
+    m_remoteState.audioVolume = volume;
     // Moving the slider above zero is an implicit unmute.
-    if (volume > 0.0f) m_remoteAudioMuted = false;
-    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    if (volume > 0.0f) m_remoteState.audioMuted = false;
+    const float gain = m_remoteState.audioMuted ? 0.0f : m_remoteState.audioVolume;
     if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
     saveConfig();
 }
 
 void UIManager::triggerRemoteAudioMuteChange(bool muted)
 {
-    m_remoteAudioMuted = muted;
-    // Mute zeroes the effective gain but keeps m_remoteAudioVolume so
+    m_remoteState.audioMuted = muted;
+    // Mute zeroes the effective gain but keeps m_remoteState.audioVolume so
     // the slider position (and the value restored on unmute) survives.
-    const float gain = m_remoteAudioMuted ? 0.0f : m_remoteAudioVolume;
+    const float gain = m_remoteState.audioMuted ? 0.0f : m_remoteState.audioVolume;
     if (m_onRemoteAudioVolumeChanged) m_onRemoteAudioVolumeChanged(gain);
     saveConfig();
 }
 
 void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 {
-    m_streamingMaxVideoBufferSize = size;
+    m_streamingConfig.maxVideoBufferSize = size;
     if (m_onStreamingMaxVideoBufferSizeChanged)
     {
         m_onStreamingMaxVideoBufferSizeChanged(size);
@@ -2499,7 +2499,7 @@ void UIManager::triggerStreamingMaxVideoBufferSizeChange(size_t size)
 
 void UIManager::triggerStreamingMaxAudioBufferSizeChange(size_t size)
 {
-    m_streamingMaxAudioBufferSize = size;
+    m_streamingConfig.maxAudioBufferSize = size;
     if (m_onStreamingMaxAudioBufferSizeChanged)
     {
         m_onStreamingMaxAudioBufferSizeChanged(size);
@@ -2509,7 +2509,7 @@ void UIManager::triggerStreamingMaxAudioBufferSizeChange(size_t size)
 
 void UIManager::triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds)
 {
-    m_streamingMaxBufferTimeSeconds = seconds;
+    m_streamingConfig.maxBufferTimeSeconds = seconds;
     if (m_onStreamingMaxBufferTimeSecondsChanged)
     {
         m_onStreamingMaxBufferTimeSecondsChanged(seconds);
@@ -2519,7 +2519,7 @@ void UIManager::triggerStreamingMaxBufferTimeSecondsChange(int64_t seconds)
 
 void UIManager::triggerStreamingAVIOBufferSizeChange(size_t size)
 {
-    m_streamingAVIOBufferSize = size;
+    m_streamingConfig.avioBufferSize = size;
     if (m_onStreamingAVIOBufferSizeChanged)
     {
         m_onStreamingAVIOBufferSizeChanged(size);
@@ -2537,10 +2537,10 @@ void UIManager::triggerStreamingStartStop(bool start)
 
 void UIManager::triggerWebPortalEnabledChange(bool enabled)
 {
-    m_webPortalEnabled = enabled;
-    if (!enabled && m_webPortalHTTPSEnabled)
+    m_webPortalConfig.enabled = enabled;
+    if (!enabled && m_webPortalConfig.httpsEnabled)
     {
-        m_webPortalHTTPSEnabled = false;
+        m_webPortalConfig.httpsEnabled = false;
         if (m_onWebPortalHTTPSChanged)
         {
             m_onWebPortalHTTPSChanged(false);
@@ -2555,7 +2555,7 @@ void UIManager::triggerWebPortalEnabledChange(bool enabled)
 
 void UIManager::triggerWebPortalHTTPSChange(bool enabled)
 {
-    m_webPortalHTTPSEnabled = enabled;
+    m_webPortalConfig.httpsEnabled = enabled;
     if (m_onWebPortalHTTPSChanged)
     {
         m_onWebPortalHTTPSChanged(enabled);
@@ -2574,7 +2574,7 @@ void UIManager::triggerWebPortalStartStop(bool start)
 
 void UIManager::triggerWebPortalTitleChange(const std::string &title)
 {
-    m_webPortalTitle = title;
+    m_webPortalConfig.title = title;
     if (m_onWebPortalTitleChanged)
     {
         m_onWebPortalTitleChanged(title);
@@ -2584,7 +2584,7 @@ void UIManager::triggerWebPortalTitleChange(const std::string &title)
 
 void UIManager::triggerWebPortalSubtitleChange(const std::string &subtitle)
 {
-    m_webPortalSubtitle = subtitle;
+    m_webPortalConfig.subtitle = subtitle;
     if (m_onWebPortalSubtitleChanged)
     {
         m_onWebPortalSubtitleChanged(subtitle);
@@ -2594,7 +2594,7 @@ void UIManager::triggerWebPortalSubtitleChange(const std::string &subtitle)
 
 void UIManager::triggerWebPortalSSLCertPathChange(const std::string &path)
 {
-    m_webPortalSSLCertPath = path;
+    m_webPortalConfig.sslCertPath = path;
     if (m_onWebPortalSSLCertPathChanged)
     {
         m_onWebPortalSSLCertPathChanged(path);
@@ -2604,7 +2604,7 @@ void UIManager::triggerWebPortalSSLCertPathChange(const std::string &path)
 
 void UIManager::triggerWebPortalSSLKeyPathChange(const std::string &path)
 {
-    m_webPortalSSLKeyPath = path;
+    m_webPortalConfig.sslKeyPath = path;
     if (m_onWebPortalSSLKeyPathChanged)
     {
         m_onWebPortalSSLKeyPathChanged(path);
@@ -2685,81 +2685,81 @@ void UIManager::loadConfig()
         {
             auto &streaming = config["streaming"];
             if (streaming.contains("port"))
-                m_streamingPort = streaming["port"];
+                m_streamingConfig.port = streaming["port"];
             if (streaming.contains("width"))
-                m_streamingWidth = streaming["width"];
+                m_streamingConfig.width = streaming["width"];
             if (streaming.contains("height"))
-                m_streamingHeight = streaming["height"];
+                m_streamingConfig.height = streaming["height"];
             if (streaming.contains("fps"))
-                m_streamingFps = streaming["fps"];
+                m_streamingConfig.fps = streaming["fps"];
             if (streaming.contains("bitrate"))
-                m_streamingBitrate = streaming["bitrate"];
+                m_streamingConfig.bitrate = streaming["bitrate"];
             if (streaming.contains("audioBitrate"))
-                m_streamingAudioBitrate = streaming["audioBitrate"];
+                m_streamingConfig.audioBitrate = streaming["audioBitrate"];
             if (streaming.contains("videoCodec"))
-                m_streamingVideoCodec = streaming["videoCodec"].get<std::string>();
+                m_streamingConfig.videoCodec = streaming["videoCodec"].get<std::string>();
             if (streaming.contains("audioCodec"))
-                m_streamingAudioCodec = streaming["audioCodec"].get<std::string>();
+                m_streamingConfig.audioCodec = streaming["audioCodec"].get<std::string>();
             if (streaming.contains("h264Preset"))
-                m_streamingH264Preset = streaming["h264Preset"].get<std::string>();
+                m_streamingConfig.h264Preset = streaming["h264Preset"].get<std::string>();
             if (streaming.contains("h265Preset"))
-                m_streamingH265Preset = streaming["h265Preset"].get<std::string>();
+                m_streamingConfig.h265Preset = streaming["h265Preset"].get<std::string>();
             if (streaming.contains("h265Profile"))
-                m_streamingH265Profile = streaming["h265Profile"].get<std::string>();
+                m_streamingConfig.h265Profile = streaming["h265Profile"].get<std::string>();
             if (streaming.contains("h265Level"))
-                m_streamingH265Level = streaming["h265Level"].get<std::string>();
+                m_streamingConfig.h265Level = streaming["h265Level"].get<std::string>();
             if (streaming.contains("vp8Speed"))
-                m_streamingVP8Speed = streaming["vp8Speed"].get<int>();
+                m_streamingConfig.vp8Speed = streaming["vp8Speed"].get<int>();
             if (streaming.contains("vp9Speed"))
-                m_streamingVP9Speed = streaming["vp9Speed"].get<int>();
+                m_streamingConfig.vp9Speed = streaming["vp9Speed"].get<int>();
             if (streaming.contains("hardwareEncoder"))
-                m_streamingHardwareEncoder = streaming["hardwareEncoder"].get<int>();
+                m_streamingConfig.hardwareEncoder = streaming["hardwareEncoder"].get<int>();
             if (streaming.contains("nvencPreset"))
-                m_streamingNvencPreset = streaming["nvencPreset"].get<std::string>();
+                m_streamingConfig.nvencPreset = streaming["nvencPreset"].get<std::string>();
             if (streaming.contains("vaapiRcMode"))
-                m_streamingVaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
+                m_streamingConfig.vaapiRcMode = streaming["vaapiRcMode"].get<std::string>();
             if (streaming.contains("qsvPreset"))
-                m_streamingQsvPreset = streaming["qsvPreset"].get<std::string>();
+                m_streamingConfig.qsvPreset = streaming["qsvPreset"].get<std::string>();
             if (streaming.contains("amfQuality"))
-                m_streamingAmfQuality = streaming["amfQuality"].get<std::string>();
+                m_streamingConfig.amfQuality = streaming["amfQuality"].get<std::string>();
             if (streaming.contains("remoteInterpolation"))
-                m_remoteInterpolation = streaming["remoteInterpolation"].get<std::string>();
+                m_remoteState.interpolation = streaming["remoteInterpolation"].get<std::string>();
 
             // Carregar configurações de buffer
             if (streaming.contains("buffer"))
             {
                 auto &buffer = streaming["buffer"];
                 if (buffer.contains("maxVideoBufferSize"))
-                    m_streamingMaxVideoBufferSize = buffer["maxVideoBufferSize"].get<size_t>();
+                    m_streamingConfig.maxVideoBufferSize = buffer["maxVideoBufferSize"].get<size_t>();
                 if (buffer.contains("maxAudioBufferSize"))
-                    m_streamingMaxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
+                    m_streamingConfig.maxAudioBufferSize = buffer["maxAudioBufferSize"].get<size_t>();
                 if (buffer.contains("maxBufferTimeSeconds"))
-                    m_streamingMaxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
+                    m_streamingConfig.maxBufferTimeSeconds = buffer["maxBufferTimeSeconds"].get<int64_t>();
                 if (buffer.contains("avioBufferSize"))
-                    m_streamingAVIOBufferSize = buffer["avioBufferSize"].get<size_t>();
+                    m_streamingConfig.avioBufferSize = buffer["avioBufferSize"].get<size_t>();
             }
             if (streaming.contains("directory"))
             {
                 auto &dir = streaming["directory"];
-                if (dir.contains("publishEnabled"))   m_directoryPublishEnabled   = dir["publishEnabled"].get<bool>();
-                if (dir.contains("url"))              m_directoryUrl              = dir["url"].get<std::string>();
-                if (dir.contains("insecureSkipVerify")) m_directoryInsecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
-                if (dir.contains("streamName"))       m_directoryStreamName       = dir["streamName"].get<std::string>();
-                if (dir.contains("hostNickname"))     m_directoryHostNickname     = dir["hostNickname"].get<std::string>();
-                if (dir.contains("password"))         m_directoryPassword         = dir["password"].get<std::string>();
-                if (dir.contains("endpointMode"))     m_directoryEndpointMode     = dir["endpointMode"].get<std::string>();
-                if (dir.contains("customEndpoint"))   m_directoryCustomEndpoint   = dir["customEndpoint"].get<std::string>();
-                if (dir.contains("tunnelMode"))           m_directoryTunnelMode           = dir["tunnelMode"].get<std::string>();
-                if (dir.contains("namedTunnelId"))        m_directoryNamedTunnelId        = dir["namedTunnelId"].get<std::string>();
-                if (dir.contains("namedTunnelHostname"))  m_directoryNamedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
-                if (dir.contains("privacyAcked"))     m_directoryPrivacyAcked     = dir["privacyAcked"].get<bool>();
+                if (dir.contains("publishEnabled"))   m_directoryState.publishEnabled   = dir["publishEnabled"].get<bool>();
+                if (dir.contains("url"))              m_directoryState.url              = dir["url"].get<std::string>();
+                if (dir.contains("insecureSkipVerify")) m_directoryState.insecureSkipVerify = dir["insecureSkipVerify"].get<bool>();
+                if (dir.contains("streamName"))       m_directoryState.streamName       = dir["streamName"].get<std::string>();
+                if (dir.contains("hostNickname"))     m_directoryState.hostNickname     = dir["hostNickname"].get<std::string>();
+                if (dir.contains("password"))         m_directoryState.password         = dir["password"].get<std::string>();
+                if (dir.contains("endpointMode"))     m_directoryState.endpointMode     = dir["endpointMode"].get<std::string>();
+                if (dir.contains("customEndpoint"))   m_directoryState.customEndpoint   = dir["customEndpoint"].get<std::string>();
+                if (dir.contains("tunnelMode"))           m_directoryState.tunnelMode           = dir["tunnelMode"].get<std::string>();
+                if (dir.contains("namedTunnelId"))        m_directoryState.namedTunnelId        = dir["namedTunnelId"].get<std::string>();
+                if (dir.contains("namedTunnelHostname"))  m_directoryState.namedTunnelHostname  = dir["namedTunnelHostname"].get<std::string>();
+                if (dir.contains("privacyAcked"))     m_directoryState.privacyAcked     = dir["privacyAcked"].get<bool>();
             }
             // Chat URL (#84) — sibling to the directory block.
             if (streaming.contains("chat"))
             {
                 auto &chat = streaming["chat"];
-                if (chat.contains("baseUrl"))  m_chatBaseUrl  = chat["baseUrl"].get<std::string>();
-                if (chat.contains("nickname")) m_chatNickname = chat["nickname"].get<std::string>();
+                if (chat.contains("baseUrl"))  m_chatConfig.baseUrl  = chat["baseUrl"].get<std::string>();
+                if (chat.contains("nickname")) m_chatConfig.nickname = chat["nickname"].get<std::string>();
                 if (chat.contains("streamChatEnabled"))
                     m_streamChatEnabled = chat["streamChatEnabled"].get<bool>();
                 if (chat.contains("streamRoomTitle"))
@@ -2786,12 +2786,12 @@ void UIManager::loadConfig()
             }
             // #84 — One-shot migration: pre-rework configs stored
             // the directory's display nickname in a separate field
-            // (m_directoryHostNickname). The chat Profile now owns
+            // (m_directoryState.hostNickname). The chat Profile now owns
             // it; copy across when the chat nickname is empty so
             // legacy configs don't suddenly look "unnamed".
-            if (m_chatNickname.empty() && !m_directoryHostNickname.empty())
+            if (m_chatConfig.nickname.empty() && !m_directoryState.hostNickname.empty())
             {
-                m_chatNickname = m_directoryHostNickname;
+                m_chatConfig.nickname = m_directoryState.hostNickname;
             }
         }
 
@@ -2819,7 +2819,7 @@ void UIManager::loadConfig()
             // Chat overlay visibility (#84). Default true — same
             // discoverability story as the quick-actions widget.
             if (prefs.contains("chatOverlayVisible"))
-                m_chatOverlayVisible = prefs["chatOverlayVisible"].get<bool>();
+                m_chatConfig.overlayVisible = prefs["chatOverlayVisible"].get<bool>();
         }
 
         // Carregar configurações de captura
@@ -2865,19 +2865,19 @@ void UIManager::loadConfig()
         {
             auto &webPortal = config["webPortal"];
             if (webPortal.contains("enabled"))
-                m_webPortalEnabled = webPortal["enabled"];
+                m_webPortalConfig.enabled = webPortal["enabled"];
             if (webPortal.contains("httpsEnabled"))
-                m_webPortalHTTPSEnabled = webPortal["httpsEnabled"];
+                m_webPortalConfig.httpsEnabled = webPortal["httpsEnabled"];
             if (webPortal.contains("sslCertPath"))
-                m_webPortalSSLCertPath = webPortal["sslCertPath"].get<std::string>();
+                m_webPortalConfig.sslCertPath = webPortal["sslCertPath"].get<std::string>();
             if (webPortal.contains("sslKeyPath"))
-                m_webPortalSSLKeyPath = webPortal["sslKeyPath"].get<std::string>();
+                m_webPortalConfig.sslKeyPath = webPortal["sslKeyPath"].get<std::string>();
             if (webPortal.contains("title"))
-                m_webPortalTitle = webPortal["title"].get<std::string>();
+                m_webPortalConfig.title = webPortal["title"].get<std::string>();
             if (webPortal.contains("subtitle"))
-                m_webPortalSubtitle = webPortal["subtitle"].get<std::string>();
+                m_webPortalConfig.subtitle = webPortal["subtitle"].get<std::string>();
             if (webPortal.contains("imagePath"))
-                m_webPortalImagePath = webPortal["imagePath"].get<std::string>();
+                m_webPortalConfig.imagePath = webPortal["imagePath"].get<std::string>();
             if (webPortal.contains("backgroundImagePath"))
                 m_webPortalBackgroundImagePath = webPortal["backgroundImagePath"].get<std::string>();
 
@@ -2886,37 +2886,37 @@ void UIManager::loadConfig()
             {
                 auto &texts = webPortal["texts"];
                 if (texts.contains("streamInfo"))
-                    m_webPortalTextStreamInfo = texts["streamInfo"].get<std::string>();
+                    m_webPortalConfig.textStreamInfo = texts["streamInfo"].get<std::string>();
                 if (texts.contains("quickActions"))
-                    m_webPortalTextQuickActions = texts["quickActions"].get<std::string>();
+                    m_webPortalConfig.textQuickActions = texts["quickActions"].get<std::string>();
                 if (texts.contains("compatibility"))
-                    m_webPortalTextCompatibility = texts["compatibility"].get<std::string>();
+                    m_webPortalConfig.textCompatibility = texts["compatibility"].get<std::string>();
                 if (texts.contains("status"))
-                    m_webPortalTextStatus = texts["status"].get<std::string>();
+                    m_webPortalConfig.textStatus = texts["status"].get<std::string>();
                 if (texts.contains("codec"))
-                    m_webPortalTextCodec = texts["codec"].get<std::string>();
+                    m_webPortalConfig.textCodec = texts["codec"].get<std::string>();
                 if (texts.contains("resolution"))
-                    m_webPortalTextResolution = texts["resolution"].get<std::string>();
+                    m_webPortalConfig.textResolution = texts["resolution"].get<std::string>();
                 if (texts.contains("streamUrl"))
-                    m_webPortalTextStreamUrl = texts["streamUrl"].get<std::string>();
+                    m_webPortalConfig.textStreamUrl = texts["streamUrl"].get<std::string>();
                 if (texts.contains("copyUrl"))
-                    m_webPortalTextCopyUrl = texts["copyUrl"].get<std::string>();
+                    m_webPortalConfig.textCopyUrl = texts["copyUrl"].get<std::string>();
                 if (texts.contains("openNewTab"))
-                    m_webPortalTextOpenNewTab = texts["openNewTab"].get<std::string>();
+                    m_webPortalConfig.textOpenNewTab = texts["openNewTab"].get<std::string>();
                 if (texts.contains("supported"))
-                    m_webPortalTextSupported = texts["supported"].get<std::string>();
+                    m_webPortalConfig.textSupported = texts["supported"].get<std::string>();
                 if (texts.contains("format"))
-                    m_webPortalTextFormat = texts["format"].get<std::string>();
+                    m_webPortalConfig.textFormat = texts["format"].get<std::string>();
                 if (texts.contains("codecInfo"))
-                    m_webPortalTextCodecInfo = texts["codecInfo"].get<std::string>();
+                    m_webPortalConfig.textCodecInfo = texts["codecInfo"].get<std::string>();
                 if (texts.contains("supportedBrowsers"))
-                    m_webPortalTextSupportedBrowsers = texts["supportedBrowsers"].get<std::string>();
+                    m_webPortalConfig.textSupportedBrowsers = texts["supportedBrowsers"].get<std::string>();
                 if (texts.contains("formatInfo"))
-                    m_webPortalTextFormatInfo = texts["formatInfo"].get<std::string>();
+                    m_webPortalConfig.textFormatInfo = texts["formatInfo"].get<std::string>();
                 if (texts.contains("codecInfoValue"))
-                    m_webPortalTextCodecInfoValue = texts["codecInfoValue"].get<std::string>();
+                    m_webPortalConfig.textCodecInfoValue = texts["codecInfoValue"].get<std::string>();
                 if (texts.contains("connecting"))
-                    m_webPortalTextConnecting = texts["connecting"].get<std::string>();
+                    m_webPortalConfig.textConnecting = texts["connecting"].get<std::string>();
             }
 
             // Carregar cores
@@ -3131,13 +3131,13 @@ void UIManager::loadConfig()
             // #77 client-side remote audio volume + mute.
             if (audio.contains("remoteVolume") && audio["remoteVolume"].is_number())
             {
-                m_remoteAudioVolume = audio["remoteVolume"].get<float>();
-                if (m_remoteAudioVolume < 0.0f) m_remoteAudioVolume = 0.0f;
-                if (m_remoteAudioVolume > 1.0f) m_remoteAudioVolume = 1.0f;
+                m_remoteState.audioVolume = audio["remoteVolume"].get<float>();
+                if (m_remoteState.audioVolume < 0.0f) m_remoteState.audioVolume = 0.0f;
+                if (m_remoteState.audioVolume > 1.0f) m_remoteState.audioVolume = 1.0f;
             }
             if (audio.contains("remoteMuted") && audio["remoteMuted"].is_boolean())
             {
-                m_remoteAudioMuted = audio["remoteMuted"].get<bool>();
+                m_remoteState.audioMuted = audio["remoteMuted"].get<bool>();
             }
         }
 
@@ -3167,51 +3167,51 @@ void UIManager::loadConfig()
         {
             auto &recording = config["recording"];
             if (recording.contains("width"))
-                m_recordingWidth = recording["width"].get<uint32_t>();
+                m_recordingConfig.width = recording["width"].get<uint32_t>();
             if (recording.contains("height"))
-                m_recordingHeight = recording["height"].get<uint32_t>();
+                m_recordingConfig.height = recording["height"].get<uint32_t>();
             if (recording.contains("fps"))
-                m_recordingFps = recording["fps"].get<uint32_t>();
+                m_recordingConfig.fps = recording["fps"].get<uint32_t>();
             if (recording.contains("bitrate"))
-                m_recordingBitrate = recording["bitrate"].get<uint32_t>();
+                m_recordingConfig.bitrate = recording["bitrate"].get<uint32_t>();
             if (recording.contains("audioBitrate"))
-                m_recordingAudioBitrate = recording["audioBitrate"].get<uint32_t>();
+                m_recordingConfig.audioBitrate = recording["audioBitrate"].get<uint32_t>();
             if (recording.contains("videoCodec"))
-                m_recordingVideoCodec = recording["videoCodec"].get<std::string>();
+                m_recordingConfig.videoCodec = recording["videoCodec"].get<std::string>();
             if (recording.contains("audioCodec"))
-                m_recordingAudioCodec = recording["audioCodec"].get<std::string>();
+                m_recordingConfig.audioCodec = recording["audioCodec"].get<std::string>();
             if (recording.contains("h264Preset"))
-                m_recordingH264Preset = recording["h264Preset"].get<std::string>();
+                m_recordingConfig.h264Preset = recording["h264Preset"].get<std::string>();
             if (recording.contains("h265Preset"))
-                m_recordingH265Preset = recording["h265Preset"].get<std::string>();
+                m_recordingConfig.h265Preset = recording["h265Preset"].get<std::string>();
             if (recording.contains("h265Profile"))
-                m_recordingH265Profile = recording["h265Profile"].get<std::string>();
+                m_recordingConfig.h265Profile = recording["h265Profile"].get<std::string>();
             if (recording.contains("h265Level"))
-                m_recordingH265Level = recording["h265Level"].get<std::string>();
+                m_recordingConfig.h265Level = recording["h265Level"].get<std::string>();
             if (recording.contains("vp8Speed"))
-                m_recordingVP8Speed = recording["vp8Speed"].get<int>();
+                m_recordingConfig.vp8Speed = recording["vp8Speed"].get<int>();
             if (recording.contains("vp9Speed"))
-                m_recordingVP9Speed = recording["vp9Speed"].get<int>();
+                m_recordingConfig.vp9Speed = recording["vp9Speed"].get<int>();
             if (recording.contains("container"))
-                m_recordingContainer = recording["container"].get<std::string>();
+                m_recordingConfig.container = recording["container"].get<std::string>();
             if (recording.contains("outputPath"))
-                m_recordingOutputPath = recording["outputPath"].get<std::string>();
+                m_recordingConfig.outputPath = recording["outputPath"].get<std::string>();
             if (recording.contains("filenameTemplate"))
-                m_recordingFilenameTemplate = recording["filenameTemplate"].get<std::string>();
+                m_recordingConfig.filenameTemplate = recording["filenameTemplate"].get<std::string>();
             if (recording.contains("includeAudio"))
-                m_recordingIncludeAudio = recording["includeAudio"];
+                m_recordingConfig.includeAudio = recording["includeAudio"];
             if (recording.contains("applyShader"))
                 m_recordingApplyShader = recording["applyShader"].get<bool>();
             if (recording.contains("hardwareEncoder"))
-                m_recordingHardwareEncoder = recording["hardwareEncoder"].get<int>();
+                m_recordingConfig.hardwareEncoder = recording["hardwareEncoder"].get<int>();
             if (recording.contains("nvencPreset"))
-                m_recordingNvencPreset = recording["nvencPreset"].get<std::string>();
+                m_recordingConfig.nvencPreset = recording["nvencPreset"].get<std::string>();
             if (recording.contains("vaapiRcMode"))
-                m_recordingVaapiRcMode = recording["vaapiRcMode"].get<std::string>();
+                m_recordingConfig.vaapiRcMode = recording["vaapiRcMode"].get<std::string>();
             if (recording.contains("qsvPreset"))
-                m_recordingQsvPreset = recording["qsvPreset"].get<std::string>();
+                m_recordingConfig.qsvPreset = recording["qsvPreset"].get<std::string>();
             if (recording.contains("amfQuality"))
-                m_recordingAmfQuality = recording["amfQuality"].get<std::string>();
+                m_recordingConfig.amfQuality = recording["amfQuality"].get<std::string>();
         }
 
         if (config.contains("streaming"))
@@ -3239,51 +3239,51 @@ void UIManager::saveConfig()
 
         // Salvar configurações de streaming
         config["streaming"] = {
-            {"port", m_streamingPort},
-            {"width", m_streamingWidth},
-            {"height", m_streamingHeight},
-            {"fps", m_streamingFps},
-            {"bitrate", m_streamingBitrate},
-            {"audioBitrate", m_streamingAudioBitrate},
-            {"videoCodec", m_streamingVideoCodec},
-            {"audioCodec", m_streamingAudioCodec},
-            {"h264Preset", m_streamingH264Preset},
-            {"h265Preset", m_streamingH265Preset},
-            {"h265Profile", m_streamingH265Profile},
-            {"h265Level", m_streamingH265Level},
-            {"vp8Speed", m_streamingVP8Speed},
-            {"vp9Speed", m_streamingVP9Speed},
-            {"hardwareEncoder", m_streamingHardwareEncoder},
-            {"nvencPreset", m_streamingNvencPreset},
-            {"vaapiRcMode", m_streamingVaapiRcMode},
-            {"qsvPreset",   m_streamingQsvPreset},
-            {"amfQuality",  m_streamingAmfQuality},
-            {"remoteInterpolation", m_remoteInterpolation},
+            {"port", m_streamingConfig.port},
+            {"width", m_streamingConfig.width},
+            {"height", m_streamingConfig.height},
+            {"fps", m_streamingConfig.fps},
+            {"bitrate", m_streamingConfig.bitrate},
+            {"audioBitrate", m_streamingConfig.audioBitrate},
+            {"videoCodec", m_streamingConfig.videoCodec},
+            {"audioCodec", m_streamingConfig.audioCodec},
+            {"h264Preset", m_streamingConfig.h264Preset},
+            {"h265Preset", m_streamingConfig.h265Preset},
+            {"h265Profile", m_streamingConfig.h265Profile},
+            {"h265Level", m_streamingConfig.h265Level},
+            {"vp8Speed", m_streamingConfig.vp8Speed},
+            {"vp9Speed", m_streamingConfig.vp9Speed},
+            {"hardwareEncoder", m_streamingConfig.hardwareEncoder},
+            {"nvencPreset", m_streamingConfig.nvencPreset},
+            {"vaapiRcMode", m_streamingConfig.vaapiRcMode},
+            {"qsvPreset",   m_streamingConfig.qsvPreset},
+            {"amfQuality",  m_streamingConfig.amfQuality},
+            {"remoteInterpolation", m_remoteState.interpolation},
             {"applyShader", m_streamingApplyShader},
-            {"buffer", {{"maxVideoBufferSize", m_streamingMaxVideoBufferSize}, {"maxAudioBufferSize", m_streamingMaxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingMaxBufferTimeSeconds}, {"avioBufferSize", m_streamingAVIOBufferSize}}},
+            {"buffer", {{"maxVideoBufferSize", m_streamingConfig.maxVideoBufferSize}, {"maxAudioBufferSize", m_streamingConfig.maxAudioBufferSize}, {"maxBufferTimeSeconds", m_streamingConfig.maxBufferTimeSeconds}, {"avioBufferSize", m_streamingConfig.avioBufferSize}}},
             // #49 Phase 2: public directory publish settings.
             // The password is persisted because the user re-uses it
             // across sessions; the runtime streamId + ownerToken are
             // never persisted (per the spec — a new run is a new
             // directory entry).
             {"directory", {
-                {"publishEnabled", m_directoryPublishEnabled},
-                {"url",            m_directoryUrl},
-                {"insecureSkipVerify", m_directoryInsecureSkipVerify},
-                {"streamName",     m_directoryStreamName},
-                {"hostNickname",   m_directoryHostNickname},
-                {"password",       m_directoryPassword},
-                {"endpointMode",        m_directoryEndpointMode},
-                {"customEndpoint",      m_directoryCustomEndpoint},
-                {"tunnelMode",          m_directoryTunnelMode},
-                {"namedTunnelId",       m_directoryNamedTunnelId},
-                {"namedTunnelHostname", m_directoryNamedTunnelHostname},
-                {"privacyAcked",   m_directoryPrivacyAcked},
+                {"publishEnabled", m_directoryState.publishEnabled},
+                {"url",            m_directoryState.url},
+                {"insecureSkipVerify", m_directoryState.insecureSkipVerify},
+                {"streamName",     m_directoryState.streamName},
+                {"hostNickname",   m_directoryState.hostNickname},
+                {"password",       m_directoryState.password},
+                {"endpointMode",        m_directoryState.endpointMode},
+                {"customEndpoint",      m_directoryState.customEndpoint},
+                {"tunnelMode",          m_directoryState.tunnelMode},
+                {"namedTunnelId",       m_directoryState.namedTunnelId},
+                {"namedTunnelHostname", m_directoryState.namedTunnelHostname},
+                {"privacyAcked",   m_directoryState.privacyAcked},
             }},
             // Chat service URL + persistent nickname (#84).
             {"chat", {
-                {"baseUrl",            m_chatBaseUrl},
-                {"nickname",           m_chatNickname},
+                {"baseUrl",            m_chatConfig.baseUrl},
+                {"nickname",           m_chatConfig.nickname},
                 {"streamChatEnabled",  m_streamChatEnabled},
                 {"streamRoomTitle",    m_streamRoomTitle},
                 {"streamRoomSlug",     m_streamRoomSlug},
@@ -3315,7 +3315,7 @@ void UIManager::saveConfig()
                                    : m_shortcutsHelpVisible},
             {"chatOverlayVisible",
              m_chatOverlay ? m_chatOverlay->isVisible()
-                           : m_chatOverlayVisible},
+                           : m_chatConfig.overlayVisible},
         };
 
         // Salvar configurações de imagem
@@ -3330,15 +3330,15 @@ void UIManager::saveConfig()
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
-            {"enabled", m_webPortalEnabled},
-            {"httpsEnabled", m_webPortalHTTPSEnabled},
-            {"sslCertPath", m_webPortalSSLCertPath},
-            {"sslKeyPath", m_webPortalSSLKeyPath},
-            {"title", m_webPortalTitle},
-            {"subtitle", m_webPortalSubtitle},
-            {"imagePath", m_webPortalImagePath},
+            {"enabled", m_webPortalConfig.enabled},
+            {"httpsEnabled", m_webPortalConfig.httpsEnabled},
+            {"sslCertPath", m_webPortalConfig.sslCertPath},
+            {"sslKeyPath", m_webPortalConfig.sslKeyPath},
+            {"title", m_webPortalConfig.title},
+            {"subtitle", m_webPortalConfig.subtitle},
+            {"imagePath", m_webPortalConfig.imagePath},
             {"backgroundImagePath", m_webPortalBackgroundImagePath},
-            {"texts", {{"streamInfo", m_webPortalTextStreamInfo}, {"quickActions", m_webPortalTextQuickActions}, {"compatibility", m_webPortalTextCompatibility}, {"status", m_webPortalTextStatus}, {"codec", m_webPortalTextCodec}, {"resolution", m_webPortalTextResolution}, {"streamUrl", m_webPortalTextStreamUrl}, {"copyUrl", m_webPortalTextCopyUrl}, {"openNewTab", m_webPortalTextOpenNewTab}, {"supported", m_webPortalTextSupported}, {"format", m_webPortalTextFormat}, {"codecInfo", m_webPortalTextCodecInfo}, {"supportedBrowsers", m_webPortalTextSupportedBrowsers}, {"formatInfo", m_webPortalTextFormatInfo}, {"codecInfoValue", m_webPortalTextCodecInfoValue}, {"connecting", m_webPortalTextConnecting}}},
+            {"texts", {{"streamInfo", m_webPortalConfig.textStreamInfo}, {"quickActions", m_webPortalConfig.textQuickActions}, {"compatibility", m_webPortalConfig.textCompatibility}, {"status", m_webPortalConfig.textStatus}, {"codec", m_webPortalConfig.textCodec}, {"resolution", m_webPortalConfig.textResolution}, {"streamUrl", m_webPortalConfig.textStreamUrl}, {"copyUrl", m_webPortalConfig.textCopyUrl}, {"openNewTab", m_webPortalConfig.textOpenNewTab}, {"supported", m_webPortalConfig.textSupported}, {"format", m_webPortalConfig.textFormat}, {"codecInfo", m_webPortalConfig.textCodecInfo}, {"supportedBrowsers", m_webPortalConfig.textSupportedBrowsers}, {"formatInfo", m_webPortalConfig.textFormatInfo}, {"codecInfoValue", m_webPortalConfig.textCodecInfoValue}, {"connecting", m_webPortalConfig.textConnecting}}},
             {"colors", {{"background", {m_webPortalColorBackground[0], m_webPortalColorBackground[1], m_webPortalColorBackground[2], m_webPortalColorBackground[3]}}, {"text", {m_webPortalColorText[0], m_webPortalColorText[1], m_webPortalColorText[2], m_webPortalColorText[3]}}, {"primary", {m_webPortalColorPrimary[0], m_webPortalColorPrimary[1], m_webPortalColorPrimary[2], m_webPortalColorPrimary[3]}}, {"primaryLight", {m_webPortalColorPrimaryLight[0], m_webPortalColorPrimaryLight[1], m_webPortalColorPrimaryLight[2], m_webPortalColorPrimaryLight[3]}}, {"primaryDark", {m_webPortalColorPrimaryDark[0], m_webPortalColorPrimaryDark[1], m_webPortalColorPrimaryDark[2], m_webPortalColorPrimaryDark[3]}}, {"secondary", {m_webPortalColorSecondary[0], m_webPortalColorSecondary[1], m_webPortalColorSecondary[2], m_webPortalColorSecondary[3]}}, {"secondaryHighlight", {m_webPortalColorSecondaryHighlight[0], m_webPortalColorSecondaryHighlight[1], m_webPortalColorSecondaryHighlight[2], m_webPortalColorSecondaryHighlight[3]}}, {"cardHeader", {m_webPortalColorCardHeader[0], m_webPortalColorCardHeader[1], m_webPortalColorCardHeader[2], m_webPortalColorCardHeader[3]}}, {"border", {m_webPortalColorBorder[0], m_webPortalColorBorder[1], m_webPortalColorBorder[2], m_webPortalColorBorder[3]}}, {"success", {m_webPortalColorSuccess[0], m_webPortalColorSuccess[1], m_webPortalColorSuccess[2], m_webPortalColorSuccess[3]}}, {"warning", {m_webPortalColorWarning[0], m_webPortalColorWarning[1], m_webPortalColorWarning[2], m_webPortalColorWarning[3]}}, {"danger", {m_webPortalColorDanger[0], m_webPortalColorDanger[1], m_webPortalColorDanger[2], m_webPortalColorDanger[3]}}, {"info", {m_webPortalColorInfo[0], m_webPortalColorInfo[1], m_webPortalColorInfo[2], m_webPortalColorInfo[3]}}}}};
 
         // Salvar configurações de captura
@@ -3378,8 +3378,8 @@ void UIManager::saveConfig()
         // Salvar configurações de áudio
         config["audio"] = {
             {"inputSourceId", m_audioInputSourceId.empty() ? "" : m_audioInputSourceId},
-            {"remoteVolume", m_remoteAudioVolume},
-            {"remoteMuted", m_remoteAudioMuted}};
+            {"remoteVolume", m_remoteState.audioVolume},
+            {"remoteMuted", m_remoteState.audioMuted}};
 
         // AVFoundation device + format selection (macOS).
         config["avfoundation"] = {
@@ -3389,29 +3389,29 @@ void UIManager::saveConfig()
 
         // Salvar configurações de gravação
         config["recording"] = {
-            {"width", m_recordingWidth},
-            {"height", m_recordingHeight},
-            {"fps", m_recordingFps},
-            {"bitrate", m_recordingBitrate},
-            {"audioBitrate", m_recordingAudioBitrate},
-            {"videoCodec", m_recordingVideoCodec},
-            {"audioCodec", m_recordingAudioCodec},
-            {"h264Preset", m_recordingH264Preset},
-            {"h265Preset", m_recordingH265Preset},
-            {"h265Profile", m_recordingH265Profile},
-            {"h265Level", m_recordingH265Level},
-            {"vp8Speed", m_recordingVP8Speed},
-            {"vp9Speed", m_recordingVP9Speed},
-            {"container", m_recordingContainer},
-            {"outputPath", m_recordingOutputPath},
-            {"filenameTemplate", m_recordingFilenameTemplate},
-            {"includeAudio", m_recordingIncludeAudio},
+            {"width", m_recordingConfig.width},
+            {"height", m_recordingConfig.height},
+            {"fps", m_recordingConfig.fps},
+            {"bitrate", m_recordingConfig.bitrate},
+            {"audioBitrate", m_recordingConfig.audioBitrate},
+            {"videoCodec", m_recordingConfig.videoCodec},
+            {"audioCodec", m_recordingConfig.audioCodec},
+            {"h264Preset", m_recordingConfig.h264Preset},
+            {"h265Preset", m_recordingConfig.h265Preset},
+            {"h265Profile", m_recordingConfig.h265Profile},
+            {"h265Level", m_recordingConfig.h265Level},
+            {"vp8Speed", m_recordingConfig.vp8Speed},
+            {"vp9Speed", m_recordingConfig.vp9Speed},
+            {"container", m_recordingConfig.container},
+            {"outputPath", m_recordingConfig.outputPath},
+            {"filenameTemplate", m_recordingConfig.filenameTemplate},
+            {"includeAudio", m_recordingConfig.includeAudio},
             {"applyShader", m_recordingApplyShader},
-            {"hardwareEncoder", m_recordingHardwareEncoder},
-            {"nvencPreset", m_recordingNvencPreset},
-            {"vaapiRcMode", m_recordingVaapiRcMode},
-            {"qsvPreset", m_recordingQsvPreset},
-            {"amfQuality", m_recordingAmfQuality}};
+            {"hardwareEncoder", m_recordingConfig.hardwareEncoder},
+            {"nvencPreset", m_recordingConfig.nvencPreset},
+            {"vaapiRcMode", m_recordingConfig.vaapiRcMode},
+            {"qsvPreset", m_recordingConfig.qsvPreset},
+            {"amfQuality", m_recordingConfig.amfQuality}};
 
         // Escrever arquivo
         std::ofstream file(configPath);
@@ -3439,13 +3439,13 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // Web Portal Enable/Disable (configuração)
-    bool portalEnabled = m_webPortalEnabled;
+    bool portalEnabled = m_webPortalConfig.enabled;
     if (ImGui::Checkbox("Enable Web Portal", &portalEnabled))
     {
-        m_webPortalEnabled = portalEnabled;
-        if (!portalEnabled && m_webPortalHTTPSEnabled)
+        m_webPortalConfig.enabled = portalEnabled;
+        if (!portalEnabled && m_webPortalConfig.httpsEnabled)
         {
-            m_webPortalHTTPSEnabled = false;
+            m_webPortalConfig.httpsEnabled = false;
             if (m_onWebPortalHTTPSChanged)
             {
                 m_onWebPortalHTTPSChanged(false);
@@ -3461,7 +3461,7 @@ void UIManager::renderWebPortalPanel()
     if (!portalEnabled)
     {
         ImGui::Spacing();
-        std::string streamUrl = "http://localhost:" + std::to_string(m_streamingPort) + "/stream";
+        std::string streamUrl = "http://localhost:" + std::to_string(m_streamingConfig.port) + "/stream";
         ImGui::Text("Stream direto: %s", streamUrl.c_str());
         return;
     }
@@ -3482,8 +3482,8 @@ void UIManager::renderWebPortalPanel()
             }
         }
         ImGui::Spacing();
-        std::string portalUrl = (m_webPortalHTTPSEnabled ? "https://" : "http://") +
-                                std::string("localhost:") + std::to_string(m_streamingPort);
+        std::string portalUrl = (m_webPortalConfig.httpsEnabled ? "https://" : "http://") +
+                                std::string("localhost:") + std::to_string(m_streamingConfig.port);
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "✓ Portal Web Ativo");
         ImGui::Text("URL: %s", portalUrl.c_str());
     }
@@ -3506,10 +3506,10 @@ void UIManager::renderWebPortalPanel()
     ImGui::Spacing();
 
     // HTTPS Enable/Disable
-    bool httpsEnabled = m_webPortalHTTPSEnabled;
+    bool httpsEnabled = m_webPortalConfig.httpsEnabled;
     if (ImGui::Checkbox("Enable HTTPS", &httpsEnabled))
     {
-        m_webPortalHTTPSEnabled = httpsEnabled;
+        m_webPortalConfig.httpsEnabled = httpsEnabled;
         if (m_onWebPortalHTTPSChanged)
         {
             m_onWebPortalHTTPSChanged(httpsEnabled);
@@ -3536,31 +3536,31 @@ void UIManager::renderWebPortalPanel()
         if (ImGui::CollapsingHeader("Certificate Settings"))
         {
             char certPathBuffer[512];
-            strncpy(certPathBuffer, m_webPortalSSLCertPath.c_str(), sizeof(certPathBuffer) - 1);
+            strncpy(certPathBuffer, m_webPortalConfig.sslCertPath.c_str(), sizeof(certPathBuffer) - 1);
             certPathBuffer[sizeof(certPathBuffer) - 1] = '\0';
 
             ImGui::Text("Caminho do Certificado:");
             if (ImGui::InputText("##SSLCertPath", certPathBuffer, sizeof(certPathBuffer)))
             {
-                m_webPortalSSLCertPath = std::string(certPathBuffer);
+                m_webPortalConfig.sslCertPath = std::string(certPathBuffer);
                 if (m_onWebPortalSSLCertPathChanged)
                 {
-                    m_onWebPortalSSLCertPathChanged(m_webPortalSSLCertPath);
+                    m_onWebPortalSSLCertPathChanged(m_webPortalConfig.sslCertPath);
                 }
                 saveConfig();
             }
 
             char keyPathBuffer[512];
-            strncpy(keyPathBuffer, m_webPortalSSLKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
+            strncpy(keyPathBuffer, m_webPortalConfig.sslKeyPath.c_str(), sizeof(keyPathBuffer) - 1);
             keyPathBuffer[sizeof(keyPathBuffer) - 1] = '\0';
 
             ImGui::Text("Caminho da Chave Privada:");
             if (ImGui::InputText("##SSLKeyPath", keyPathBuffer, sizeof(keyPathBuffer)))
             {
-                m_webPortalSSLKeyPath = std::string(keyPathBuffer);
+                m_webPortalConfig.sslKeyPath = std::string(keyPathBuffer);
                 if (m_onWebPortalSSLKeyPathChanged)
                 {
-                    m_onWebPortalSSLKeyPathChanged(m_webPortalSSLKeyPath);
+                    m_onWebPortalSSLKeyPathChanged(m_webPortalConfig.sslKeyPath);
                 }
                 saveConfig();
             }
@@ -3578,15 +3578,15 @@ void UIManager::renderWebPortalPanel()
 
     // Título
     char titleBuffer[256];
-    strncpy(titleBuffer, m_webPortalTitle.c_str(), sizeof(titleBuffer) - 1);
+    strncpy(titleBuffer, m_webPortalConfig.title.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
     ImGui::Text("Title:");
     if (ImGui::InputText("##WebPortalTitle", titleBuffer, sizeof(titleBuffer)))
     {
-        m_webPortalTitle = std::string(titleBuffer);
+        m_webPortalConfig.title = std::string(titleBuffer);
         if (m_onWebPortalTitleChanged)
         {
-            m_onWebPortalTitleChanged(m_webPortalTitle);
+            m_onWebPortalTitleChanged(m_webPortalConfig.title);
         }
         saveConfig();
     }
@@ -3595,15 +3595,15 @@ void UIManager::renderWebPortalPanel()
 
     // Subtítulo
     char subtitleBuffer[256];
-    strncpy(subtitleBuffer, m_webPortalSubtitle.c_str(), sizeof(subtitleBuffer) - 1);
+    strncpy(subtitleBuffer, m_webPortalConfig.subtitle.c_str(), sizeof(subtitleBuffer) - 1);
     subtitleBuffer[sizeof(subtitleBuffer) - 1] = '\0';
     ImGui::Text("Subtitle:");
     if (ImGui::InputText("##WebPortalSubtitle", subtitleBuffer, sizeof(subtitleBuffer)))
     {
-        m_webPortalSubtitle = std::string(subtitleBuffer);
+        m_webPortalConfig.subtitle = std::string(subtitleBuffer);
         if (m_onWebPortalSubtitleChanged)
         {
-            m_onWebPortalSubtitleChanged(m_webPortalSubtitle);
+            m_onWebPortalSubtitleChanged(m_webPortalConfig.subtitle);
         }
         saveConfig();
     }
@@ -3802,14 +3802,14 @@ void UIManager::renderWebPortalPanel()
 
     // Portal URL
     std::string protocol = httpsEnabled ? "https" : "http";
-    std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingPort);
+    std::string portalUrl = protocol + "://localhost:" + std::to_string(m_streamingConfig.port);
     ImGui::Text("URL: %s", portalUrl.c_str());
 }
 
 // Recording trigger methods
 void UIManager::triggerRecordingWidthChange(uint32_t width)
 {
-    m_recordingWidth = width;
+    m_recordingConfig.width = width;
     if (m_onRecordingWidthChanged)
     {
         m_onRecordingWidthChanged(width);
@@ -3819,7 +3819,7 @@ void UIManager::triggerRecordingWidthChange(uint32_t width)
 
 void UIManager::triggerRecordingHeightChange(uint32_t height)
 {
-    m_recordingHeight = height;
+    m_recordingConfig.height = height;
     if (m_onRecordingHeightChanged)
     {
         m_onRecordingHeightChanged(height);
@@ -3829,7 +3829,7 @@ void UIManager::triggerRecordingHeightChange(uint32_t height)
 
 void UIManager::triggerRecordingFpsChange(uint32_t fps)
 {
-    m_recordingFps = fps;
+    m_recordingConfig.fps = fps;
     if (m_onRecordingFpsChanged)
     {
         m_onRecordingFpsChanged(fps);
@@ -3839,7 +3839,7 @@ void UIManager::triggerRecordingFpsChange(uint32_t fps)
 
 void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
 {
-    m_recordingBitrate = bitrate;
+    m_recordingConfig.bitrate = bitrate;
     if (m_onRecordingBitrateChanged)
     {
         m_onRecordingBitrateChanged(bitrate);
@@ -3849,7 +3849,7 @@ void UIManager::triggerRecordingBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
 {
-    m_recordingAudioBitrate = bitrate;
+    m_recordingConfig.audioBitrate = bitrate;
     if (m_onRecordingAudioBitrateChanged)
     {
         m_onRecordingAudioBitrateChanged(bitrate);
@@ -3859,7 +3859,7 @@ void UIManager::triggerRecordingAudioBitrateChange(uint32_t bitrate)
 
 void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
 {
-    m_recordingVideoCodec = codec;
+    m_recordingConfig.videoCodec = codec;
     if (m_onRecordingVideoCodecChanged)
     {
         m_onRecordingVideoCodecChanged(codec);
@@ -3869,7 +3869,7 @@ void UIManager::triggerRecordingVideoCodecChange(const std::string& codec)
 
 void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
 {
-    m_recordingAudioCodec = codec;
+    m_recordingConfig.audioCodec = codec;
     if (m_onRecordingAudioCodecChanged)
     {
         m_onRecordingAudioCodecChanged(codec);
@@ -3879,7 +3879,7 @@ void UIManager::triggerRecordingAudioCodecChange(const std::string& codec)
 
 void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
 {
-    m_recordingH264Preset = preset;
+    m_recordingConfig.h264Preset = preset;
     if (m_onRecordingH264PresetChanged)
     {
         m_onRecordingH264PresetChanged(preset);
@@ -3889,7 +3889,7 @@ void UIManager::triggerRecordingH264PresetChange(const std::string& preset)
 
 void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
 {
-    m_recordingH265Preset = preset;
+    m_recordingConfig.h265Preset = preset;
     if (m_onRecordingH265PresetChanged)
     {
         m_onRecordingH265PresetChanged(preset);
@@ -3899,7 +3899,7 @@ void UIManager::triggerRecordingH265PresetChange(const std::string& preset)
 
 void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
 {
-    m_recordingH265Profile = profile;
+    m_recordingConfig.h265Profile = profile;
     if (m_onRecordingH265ProfileChanged)
     {
         m_onRecordingH265ProfileChanged(profile);
@@ -3909,7 +3909,7 @@ void UIManager::triggerRecordingH265ProfileChange(const std::string& profile)
 
 void UIManager::triggerRecordingH265LevelChange(const std::string& level)
 {
-    m_recordingH265Level = level;
+    m_recordingConfig.h265Level = level;
     if (m_onRecordingH265LevelChanged)
     {
         m_onRecordingH265LevelChanged(level);
@@ -3919,7 +3919,7 @@ void UIManager::triggerRecordingH265LevelChange(const std::string& level)
 
 void UIManager::triggerRecordingVP8SpeedChange(int speed)
 {
-    m_recordingVP8Speed = speed;
+    m_recordingConfig.vp8Speed = speed;
     if (m_onRecordingVP8SpeedChanged)
     {
         m_onRecordingVP8SpeedChanged(speed);
@@ -3929,7 +3929,7 @@ void UIManager::triggerRecordingVP8SpeedChange(int speed)
 
 void UIManager::triggerRecordingVP9SpeedChange(int speed)
 {
-    m_recordingVP9Speed = speed;
+    m_recordingConfig.vp9Speed = speed;
     if (m_onRecordingVP9SpeedChanged)
     {
         m_onRecordingVP9SpeedChanged(speed);
@@ -3939,7 +3939,7 @@ void UIManager::triggerRecordingVP9SpeedChange(int speed)
 
 void UIManager::triggerRecordingContainerChange(const std::string& container)
 {
-    m_recordingContainer = container;
+    m_recordingConfig.container = container;
     if (m_onRecordingContainerChanged)
     {
         m_onRecordingContainerChanged(container);
@@ -3949,7 +3949,7 @@ void UIManager::triggerRecordingContainerChange(const std::string& container)
 
 void UIManager::triggerRecordingOutputPathChange(const std::string& path)
 {
-    m_recordingOutputPath = path;
+    m_recordingConfig.outputPath = path;
     if (m_onRecordingOutputPathChanged)
     {
         m_onRecordingOutputPathChanged(path);
@@ -3959,7 +3959,7 @@ void UIManager::triggerRecordingOutputPathChange(const std::string& path)
 
 void UIManager::triggerRecordingFilenameTemplateChange(const std::string& template_)
 {
-    m_recordingFilenameTemplate = template_;
+    m_recordingConfig.filenameTemplate = template_;
     if (m_onRecordingFilenameTemplateChanged)
     {
         m_onRecordingFilenameTemplateChanged(template_);
@@ -3969,7 +3969,7 @@ void UIManager::triggerRecordingFilenameTemplateChange(const std::string& templa
 
 void UIManager::triggerRecordingIncludeAudioChange(bool include)
 {
-    m_recordingIncludeAudio = include;
+    m_recordingConfig.includeAudio = include;
     if (m_onRecordingIncludeAudioChanged)
     {
         m_onRecordingIncludeAudioChanged(include);
@@ -3979,35 +3979,35 @@ void UIManager::triggerRecordingIncludeAudioChange(bool include)
 
 void UIManager::triggerRecordingHardwareEncoderChange(int v)
 {
-    m_recordingHardwareEncoder = v;
+    m_recordingConfig.hardwareEncoder = v;
     if (m_onRecordingHardwareEncoderChanged) m_onRecordingHardwareEncoderChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingNvencPresetChange(const std::string &v)
 {
-    m_recordingNvencPreset = v;
+    m_recordingConfig.nvencPreset = v;
     if (m_onRecordingNvencPresetChanged) m_onRecordingNvencPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingVaapiRcModeChange(const std::string &v)
 {
-    m_recordingVaapiRcMode = v;
+    m_recordingConfig.vaapiRcMode = v;
     if (m_onRecordingVaapiRcModeChanged) m_onRecordingVaapiRcModeChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingQsvPresetChange(const std::string &v)
 {
-    m_recordingQsvPreset = v;
+    m_recordingConfig.qsvPreset = v;
     if (m_onRecordingQsvPresetChanged) m_onRecordingQsvPresetChanged(v);
     saveConfig();
 }
 
 void UIManager::triggerRecordingAmfQualityChange(const std::string &v)
 {
-    m_recordingAmfQuality = v;
+    m_recordingConfig.amfQuality = v;
     if (m_onRecordingAmfQualityChanged) m_onRecordingAmfQualityChanged(v);
     saveConfig();
 }

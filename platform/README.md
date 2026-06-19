@@ -53,11 +53,9 @@ outside Compose if needed.
 | Anything compiled into the `retrocapture` binary | Anything that runs on a server, not on the user's machine |
 | C++ source | Any language appropriate to the job (Go, TS, …) |
 
-Wire protocols between the two sides (e.g.
-`docs/REMOTE_STREAM_PROTOCOL.md`,
-`docs/DIRECTORY_PROTOCOL.md`) live in the top-level `docs/` directory —
-they're contracts, not implementation details, so they sit in a neutral
-location both sides can consult.
+Wire protocols between the two sides are contracts shared by the client
+and the service; each service documents its own endpoints in its
+`README.md` under `platform/services/`.
 
 ## Conventions
 

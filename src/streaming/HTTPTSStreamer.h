@@ -203,25 +203,22 @@ private:
     void cleanupRawPipeline();    // Phase 2 of #47 — tears down the raw encoder + muxer.
     int  writeToRawClients(const uint8_t *buf, int buf_size); // Phase 2 of #47.
     void handleClient(int clientFd);
+    // #156 — phases extracted from the monolithic handleClient (behavior-preserving):
+    // request read-with-timeout loop, and the /raw and /stream serving branches.
+    bool readClientRequest(int clientFd, std::string &request);
+    void serveRawClient(int clientFd, const std::string &request);
+    void serveStreamClient(int clientFd);
     void send404(int clientFd);     // Enviar resposta 404
     void encodingThread();          // Thread para encoding com sincronização baseada em timestamps
     void cleanupOldData();          // Limpar dados antigos baseado em tempo
     int64_t getTimestampUs() const; // Obter timestamp atual em microssegundos
     bool initializeEncoding();      // Inicializar MediaEncoder e MediaMuxer
     void cleanupEncoding();         // Limpar MediaEncoder e MediaMuxer
-    bool initializeFFmpeg();
-    bool initializeVideoCodec();
-    bool initializeAudioCodec();
-    bool initializeMuxers();
-    void cleanupFFmpeg();
-    void flushCodecs();
-    bool encodeVideoFrame(const uint8_t *rgbData, uint32_t width, uint32_t height, int64_t captureTimestampUs);
-    bool encodeAudioFrame(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs);
-    bool muxPacket(void *packet);
-
-    // Funções de conversão
-    bool convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint32_t height, void *videoFrame);
-    bool convertInt16ToFloatPlanar(const int16_t *samples, size_t sampleCount, void *audioFrame, size_t outputSamples);
+    // (#151) The legacy in-class FFmpeg codec/mux path — initializeVideoCodec/
+    // AudioCodec/Muxers, encodeVideo/AudioFrame, convertRGBToYUV,
+    // convertInt16ToFloatPlanar, muxPacket, cleanupFFmpeg/flushCodecs — was
+    // dead: streaming/recording go through MediaEncoder + MediaMuxer
+    // (m_mediaEncoder / m_rawMediaEncoder). Removed.
 
     uint16_t m_port = 8080;
     uint32_t m_width = 0;
@@ -251,24 +248,9 @@ private:
     MediaEncoder::HardwareEncoder m_hardwareEncoder = MediaEncoder::HardwareEncoder::Auto;
     std::string m_hardwareEncoderPreset;
 
-    // Codec contexts (usando void* para evitar incluir headers FFmpeg no .h)
-    void *m_videoCodecContext = nullptr; // AVCodecContext*
-    void *m_audioCodecContext = nullptr; // AVCodecContext*
-    void *m_muxerContext = nullptr;      // AVFormatContext*
-    void *m_videoStream = nullptr;       // AVStream* (stream de vídeo no muxer)
-    void *m_audioStream = nullptr;       // AVStream* (stream de áudio no muxer)
-
-    // FFmpeg conversion contexts
-    void *m_swsContext = nullptr; // SwsContext* (RGB to YUV)
-    void *m_swrContext = nullptr; // SwrContext* (int16 to float planar)
-    void *m_videoFrame = nullptr; // AVFrame* (para encoding de vídeo)
-    void *m_audioFrame = nullptr; // AVFrame* (para encoding de áudio)
-
-    // Cache para dimensões do SwsContext (para recriar quando necessário)
-    uint32_t m_swsSrcWidth = 0;
-    uint32_t m_swsSrcHeight = 0;
-    uint32_t m_swsDstWidth = 0;
-    uint32_t m_swsDstHeight = 0;
+    // (#151) Codec/mux/conversion state for the legacy in-class FFmpeg path was
+    // removed with the dead functions above — encoding/muxing is owned by the
+    // MediaEncoder / MediaMuxer members below.
 
     // Novas classes de encoding/muxing
     MediaEncoder m_mediaEncoder;

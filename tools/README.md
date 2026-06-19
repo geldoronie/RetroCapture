@@ -169,6 +169,30 @@ Estes scripts são usados dentro dos containers Docker durante o build:
 
 **Nota:** Estes scripts são chamados automaticamente pelos scripts Docker principais. Não é necessário executá-los manualmente.
 
+## 🧪 Testes
+
+### `smoke-test.sh`
+
+Smoke-test ponta-a-ponta do pipeline de captura/stream/encode (#149). Sobe um
+RetroCapture já compilado com a fonte sintética de teste (`--source test`, sem
+hardware), habilita streaming, puxa `/stream`, decodifica um frame e valida que
+o vídeo continua correto: presença de brilho, variância espacial, cor (barras
+SMPTE saturadas), barras distintas e variância temporal (marcador móvel). É a
+rede de segurança para refatorações — uma refatoração que preserva comportamento
+deve mantê-lo verde.
+
+```bash
+# usa build-linux-x86_64/bin/retrocapture por padrão
+./tools/smoke-test.sh
+
+# ou aponte um binário específico
+./tools/smoke-test.sh /caminho/para/retrocapture
+```
+
+Requisitos: `ffmpeg`, `ffprobe`, `curl`, `python3` e um display (usa `$DISPLAY`,
+ou cai pra `xvfb-run` em CI). Usa a porta 8080 — recusa rodar se já houver uma
+instância servindo nela (use `SMOKE_PORT` para mudar). Exit 0 = passou.
+
 ## 📝 Notas
 
 - Todos os scripts de build suportam argumentos em qualquer ordem

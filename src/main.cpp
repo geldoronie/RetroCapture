@@ -194,6 +194,7 @@ int main(int argc, char *argv[])
     // Streaming options
     bool streamingEnabled = false;
     int streamingPort = 8080;
+    bool streamPortExplicit = false;  // user passed --stream-port / --web-portal-port (#163)
     int streamWidth = 640;                 // Padrão: 640px (0 = usar resolução de captura)
     int streamHeight = 480;                // Padrão: 480px (0 = usar resolução de captura)
     int streamFps = 60;                    // Padrão: 60fps (0 = usar FPS da captura)
@@ -205,7 +206,7 @@ int main(int argc, char *argv[])
     // Web Portal options
     bool webPortalEnabled = true; // Habilitado por padrão
     bool webPortalStart = false;   // Iniciar web portal automaticamente
-    int webPortalPort = 8080;     // Porta do web portal (mesma do streaming por padrão)
+    int webPortalPort = 0;        // 0 = não especificado → segue --stream-port (servidor compartilhado)
     bool webPortalHTTPSEnabled = false;
     std::string webPortalSSLCertPath = "ssl/server.crt";
     std::string webPortalSSLKeyPath = "ssl/server.key";
@@ -236,24 +237,26 @@ int main(int argc, char *argv[])
             sourceType = argv[++i];
             // Converter para minúsculas para comparação case-insensitive
             std::transform(sourceType.begin(), sourceType.end(), sourceType.begin(), ::tolower);
+            // 'test' is the synthetic test-pattern source (#149), valid on
+            // every platform — it has no hardware backend.
 #ifdef __linux__
-            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "v4l2" && sourceType != "remote" && sourceType != "test")
 #elif defined(_WIN32)
-            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "ds" && sourceType != "remote" && sourceType != "test")
 #elif defined(__APPLE__)
-            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "avfoundation" && sourceType != "remote" && sourceType != "test")
 #else
-            if (sourceType != "none" && sourceType != "remote")
+            if (sourceType != "none" && sourceType != "remote" && sourceType != "test")
 #endif
             {
 #ifdef __linux__
-                LOG_ERROR("Invalid source type. Use 'none', 'v4l2' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'v4l2', 'remote' or 'test'");
 #elif defined(_WIN32)
-                LOG_ERROR("Invalid source type. Use 'none', 'ds' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'ds', 'remote' or 'test'");
 #elif defined(__APPLE__)
-                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'avfoundation', 'remote' or 'test'");
 #else
-                LOG_ERROR("Invalid source type. Use 'none' or 'remote'");
+                LOG_ERROR("Invalid source type. Use 'none', 'remote' or 'test'");
 #endif
                 return 1;
             }
@@ -607,6 +610,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid streaming port. Use a value between 1024 and 65535");
                 return 1;
             }
+            streamPortExplicit = true;
         }
         else if (arg == "--stream-width" && i + 1 < argc)
         {
@@ -682,6 +686,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid web portal port. Use a value between 1024 and 65535");
                 return 1;
             }
+            streamPortExplicit = true;
         }
         else if (arg == "--web-portal-https")
         {
@@ -950,6 +955,7 @@ int main(int argc, char *argv[])
     // Configure streaming
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
+    app.setStreamingPortExplicit(streamPortExplicit);
     // Always set width/height (0 means use capture resolution)
     app.setStreamingWidth(streamWidth);
     app.setStreamingHeight(streamHeight);
@@ -963,9 +969,12 @@ int main(int argc, char *argv[])
 
     // Configure Web Portal
     app.setWebPortalEnabled(webPortalEnabled);
-    // Web portal port is the same as streaming (both use the same HTTP server)
-    // If a different port is specified for the portal, use that port for the server
-    if (webPortalPort != streamingPort)
+    // Web portal and streaming share the same HTTP server / port. Only override
+    // the (already-applied) --stream-port when the user EXPLICITLY passed
+    // --web-portal-port (webPortalPort != 0). Previously webPortalPort defaulted
+    // to 8080, so any --stream-port that wasn't 8080 got silently clobbered back
+    // to 8080 here (#163).
+    if (webPortalPort != 0 && webPortalPort != streamingPort)
     {
         app.setStreamingPort(webPortalPort);
         LOG_INFO("Web portal port: " + std::to_string(webPortalPort));
@@ -994,6 +1003,8 @@ int main(int argc, char *argv[])
 #endif
     if (sourceType == "remote")
         sourceTypeEnum = UIManager::SourceType::Remote;
+    if (sourceType == "test")
+        sourceTypeEnum = UIManager::SourceType::Test;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
     

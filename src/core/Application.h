@@ -31,6 +31,9 @@ class StreamManager;
 class HTTPTSStreamer;
 class PBOManager;
 class RecordingManager;
+class FrameCapturePipeline; // #157 — per-frame render/distribute pipeline
+class RemoteSourceManager;  // #158 — remote /meta worker + pending-meta drain
+class UICallbackWiring;     // #159 — UIManager callback registration
 
 // Forward declaration for API
 struct ShaderParameter;
@@ -40,6 +43,16 @@ namespace retrocapture { class ISystemTray; }
 
 class Application
 {
+    // #157 — FrameCapturePipeline runs the per-frame render/distribute path and
+    // reaches Application's collaborators and per-frame buffers directly.
+    friend class FrameCapturePipeline;
+    // #158 — RemoteSourceManager runs the remote /meta worker and drain and
+    // reaches Application's m_pendingRemote* fields + collaborators directly.
+    friend class RemoteSourceManager;
+    // #159 — UICallbackWiring registers the UIManager callbacks and reaches
+    // Application's collaborators + state through these lambdas.
+    friend class UICallbackWiring;
+
 public:
     Application();
     ~Application();
@@ -97,6 +110,10 @@ public:
     // Streaming configuration
     void setStreamingEnabled(bool enabled) { m_streamingEnabled = enabled; }
     void setStreamingPort(uint16_t port) { m_streamingPort = port; }
+    // Marks the port as an explicit CLI override (--stream-port / --web-portal-port)
+    // so the post-loadConfig sync keeps it instead of clobbering it with the saved
+    // UI value (#163).
+    void setStreamingPortExplicit(bool v) { m_streamingPortExplicit = v; }
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
@@ -153,11 +170,6 @@ public:
     // Shader path resolution (centralized)
     std::string resolveShaderPath(const std::string& shaderPath) const;
 
-    // Phase 4 of #47: drains pending remote /meta snapshot onto the GL
-    // thread. Called once per main-loop iteration; cheap no-op when
-    // m_hasPendingRemoteMeta is false.
-    void applyPendingRemoteMeta();
-
     // #49 Phase 2: reconciles the public-directory publish state with
     // the UI toggle. Called every frame; cheap when no transition.
     void syncDirectoryClient();
@@ -181,6 +193,9 @@ private:
 #endif
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
+    // #159 — declared BEFORE m_ui so it is destroyed AFTER the UIManager that
+    // stores its registered lambdas (which capture the wiring).
+    std::unique_ptr<UICallbackWiring> m_callbackWiring;
     std::unique_ptr<UIManager> m_ui;
 
     // #86 — system tray + hide-to-tray. m_tray is always non-null
@@ -263,6 +278,11 @@ private:
     // of the last completed main-loop iteration to compute the next sleep.
     uint32_t m_remoteSourceFps = 0;
     int64_t  m_lastFrameSwapUs = 0;
+
+    // #158 — owns the remote /meta worker wiring + pending-meta drain. Declared
+    // BEFORE m_remoteMetaSync so it is destroyed AFTER it: the worker thread (whose
+    // callback calls into the manager) is joined while the manager is still alive.
+    std::unique_ptr<RemoteSourceManager> m_remoteManager;
 
     // Phase 4 of #47: when source is Remote, this polls /meta and dispatches
     // shader/parameter deltas onto the main thread (see m_pendingRemote* below).
@@ -367,6 +387,7 @@ private:
     // Streaming configuration
     bool m_streamingEnabled = false;
     uint16_t m_streamingPort = 8080;
+    bool m_streamingPortExplicit = false;  // CLI --stream-port / --web-portal-port given (#163)
     uint32_t m_streamingWidth = 640;                // Padrão: 640px (0 = usar resolução de captura)
     uint32_t m_streamingHeight = 480;               // Padrão: 480px (0 = usar resolução de captura)
     uint32_t m_streamingFps = 60;                   // 0 = usar FPS da captura
@@ -490,4 +511,10 @@ private:
     bool initAudioCapture();
     void restoreAudioDeviceConnections();
     void handleKeyInput();
+
+    // #152 — pieces extracted from the monolithic run() loop (behavior-preserving).
+    void processAudioCapture();        // drain audio capture → stream/recording managers
+
+    // #157 — per-frame render+shader+capture/push pipeline (was renderAndDistributeFrame()).
+    std::unique_ptr<FrameCapturePipeline> m_pipeline;
 };

@@ -38,6 +38,138 @@ class UIRecordings;
 class RecordingProfileManager;
 class StreamingProfileManager;
 
+// #160 — UIManager streaming settings grouped into a config struct (first of the
+// config-struct groups). Storage consolidation: the per-field getters/setters are
+// now thin wrappers over this, plus bulk get/setStreamingConfig() accessors.
+struct StreamingConfig
+{
+    uint16_t    port            = 8080;
+    uint32_t    width           = 640;
+    uint32_t    height          = 480;
+    uint32_t    fps             = 60;
+    uint32_t    bitrate         = 8000;
+    uint32_t    audioBitrate    = 256;
+    std::string videoCodec      = "h264";
+    std::string audioCodec      = "aac";
+    std::string h264Preset      = "veryfast";
+    std::string h265Preset      = "veryfast";
+    std::string h265Profile     = "main";
+    std::string h265Level       = "auto";
+    int         vp8Speed        = 12;
+    int         vp9Speed        = 6;
+    int         hardwareEncoder = 0;       // 0 = Auto (MediaEncoder::HardwareEncoder::Auto)
+    std::string nvencPreset     = "p4";
+    std::string vaapiRcMode     = "CBR";
+    std::string qsvPreset       = "veryfast";
+    std::string amfQuality      = "speed";
+    size_t      maxVideoBufferSize   = 15;
+    size_t      maxAudioBufferSize   = 30;
+    int64_t     maxBufferTimeSeconds = 5;
+    size_t      avioBufferSize       = 256 * 1024;
+};
+
+// #160 — UIManager recording settings grouped into a config struct (group 2/N).
+struct RecordingConfig
+{
+    uint32_t    width            = 1920;
+    uint32_t    height           = 1080;
+    uint32_t    fps              = 60;
+    uint32_t    bitrate          = 8000000;
+    uint32_t    audioBitrate     = 256000;
+    std::string videoCodec       = "h264";
+    std::string audioCodec       = "aac";
+    std::string h264Preset       = "veryfast";
+    std::string h265Preset       = "veryfast";
+    std::string h265Profile      = "main";
+    std::string h265Level        = "auto";
+    int         vp8Speed         = 12;
+    int         vp9Speed         = 6;
+    std::string container        = "mp4";
+    std::string outputPath       = "recordings/";
+    std::string filenameTemplate = "recording_%Y%m%d_%H%M%S";
+    bool        includeAudio     = true;
+    int         hardwareEncoder  = 0;          // 0=Auto 1=SW 2=NVENC 3=VAAPI 4=QSV 5=AMF
+    std::string nvencPreset      = "p4";
+    std::string vaapiRcMode      = "VBR";
+    std::string qsvPreset        = "medium";
+    std::string amfQuality       = "quality";
+};
+
+// #160 — UIManager web-portal settings + theme strings grouped (group 3/N).
+struct WebPortalConfig
+{
+    bool        enabled       = true;
+    bool        httpsEnabled  = false;
+    std::string sslCertPath   = "ssl/server.crt";
+    std::string sslKeyPath    = "ssl/server.key";
+    std::string title         = "RetroCapture Stream";
+    std::string subtitle      = "Real-time video streaming";
+    std::string imagePath     = "logo.png";
+    std::string textStreamInfo        = "Stream Information";
+    std::string textQuickActions      = "Quick Actions";
+    std::string textCompatibility     = "Compatibilidade";
+    std::string textStatus            = "Status";
+    std::string textCodec             = "Codec";
+    std::string textResolution        = "Resolution";
+    std::string textStreamUrl         = "URL do Stream";
+    std::string textCopyUrl           = "Copiar URL";
+    std::string textOpenNewTab        = "Abrir em Nova Aba";
+    std::string textSupported         = "Suportado";
+    std::string textFormat            = "Formato";
+    std::string textCodecInfo         = "Codec";
+    std::string textSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
+    std::string textFormatInfo        = "HLS (HTTP Live Streaming)";
+    std::string textCodecInfoValue    = "H.264/AAC";
+    std::string textConnecting        = "Conectando...";
+};
+
+// #160 — UIManager directory publish settings + live status grouped (group 4/N).
+struct DirectoryState
+{
+    bool        publishEnabled      = false;
+    std::string url                 = "https://directory.retrocapture.com";
+    bool        insecureSkipVerify  = false;
+    std::string streamName          = "";
+    std::string hostNickname        = "";
+    std::string password            = "";       // optional; empty = no password
+    std::string endpointMode        = "direct"; // direct | tunnel-cloudflare | custom
+    std::string customEndpoint      = "";
+    std::string tunnelMode          = "quick";  // quick | named
+    std::string namedTunnelId       = "";
+    std::string namedTunnelHostname = "";
+    bool        privacyAcked        = false;    // sticky once the user accepts the warning
+    // Live status mirrored from Application/DirectoryClient; UI just reads.
+    std::string statusText          = "Idle";
+    std::string streamId            = "";
+    uint64_t    registerOk          = 0;
+    uint64_t    registerFail        = 0;
+    uint64_t    heartbeatOk         = 0;
+    uint64_t    heartbeatFail       = 0;
+    uint64_t    patchOk             = 0;
+    uint64_t    patchFail           = 0;
+    int64_t     secondsSinceLastHeartbeat = -1;
+};
+
+// #160 — UIManager remote-source playback status + client settings grouped (group 5/N).
+struct RemoteState
+{
+    bool        hostLikelyOffline     = false;
+    bool        receivingFrames       = false;
+    bool        initialConnectFailing = false;
+    uint32_t    upstreamClientCount   = 0;
+    std::string interpolation         = "linear";
+    float       audioVolume           = 1.0f;
+    bool        audioMuted            = false;
+};
+
+// #160 — UIManager chat settings grouped (group 6/N, final grouping group).
+struct ChatConfig
+{
+    bool        overlayVisible = true;
+    std::string baseUrl        = "https://chat.retrocapture.com";
+    std::string nickname       = "";
+};
+
 class UIManager
 {
 public:
@@ -166,7 +298,8 @@ public:
         DS = 2,           // DirectShow (Windows)
         Remote = 3,       // Remote /raw MPEG-TS from another RetroCapture (Phase 3 of #47)
         AVFoundation = 4, // AVFoundation (macOS)
-        Screen = 5        // Desktop / window / region screen capture (#107)
+        Screen = 5,       // Desktop / window / region screen capture (#107)
+        Test = 6          // Synthetic test-pattern source for the smoke-test (#149)
     };
 
     // Source type setter (para uso pelas classes de abas)
@@ -270,26 +403,30 @@ public:
     bool isStreamingProcessing() const { return m_streamingProcessing; }
 
     // ── Public-directory publish settings (#49 Phase 2) ──
-    bool getDirectoryPublishEnabled() const          { return m_directoryPublishEnabled; }
-    void setDirectoryPublishEnabled(bool v)          { m_directoryPublishEnabled = v; }
-    const std::string &getDirectoryUrl() const       { return m_directoryUrl; }
-    void setDirectoryUrl(const std::string &v)       { m_directoryUrl = v; }
-    bool getDirectoryInsecureSkipVerify() const      { return m_directoryInsecureSkipVerify; }
-    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryInsecureSkipVerify = v; }
+    bool getDirectoryPublishEnabled() const          { return m_directoryState.publishEnabled; }
+    void setDirectoryPublishEnabled(bool v)          { m_directoryState.publishEnabled = v; }
+    const std::string &getDirectoryUrl() const       { return m_directoryState.url; }
+    void setDirectoryUrl(const std::string &v)       { m_directoryState.url = v; }
+    bool getDirectoryInsecureSkipVerify() const      { return m_directoryState.insecureSkipVerify; }
+    void setDirectoryInsecureSkipVerify(bool v)      { m_directoryState.insecureSkipVerify = v; }
     // #84 — Chat service base URL (ws:// or wss://). Editable under
     // Configurations → Streaming → Advanced, mirroring the directory
     // URL field. Application reads this every frame and reconfigures
     // the ChatClient when it changes (cheap no-op when unchanged).
-    const std::string &getChatBaseUrl() const        { return m_chatBaseUrl; }
-    void setChatBaseUrl(const std::string &v)        { m_chatBaseUrl = v; }
+    const std::string &getChatBaseUrl() const        { return m_chatConfig.baseUrl; }
+    void setChatBaseUrl(const std::string &v)        { m_chatConfig.baseUrl = v; }
     // #84 — Persistent chat nickname. Shared between host and viewer
     // modes (you're "geldo" regardless of which side you're on); the
     // OSD chat panel writes here when the user clicks Apply. Empty
     // means "use a fallback": Application falls back to the directory
     // host nickname when publishing, or sends an empty hello (server
     // generates anon-<rand>) when viewing.
-    const std::string &getChatNickname() const       { return m_chatNickname; }
-    void setChatNickname(const std::string &v)       { m_chatNickname = v; }
+    const std::string &getChatNickname() const       { return m_chatConfig.nickname; }
+    void setChatNickname(const std::string &v)       { m_chatConfig.nickname = v; }
+    // #160 — bulk access to the chat settings group (per-field accessors are
+    // thin wrappers over the same struct).
+    const ChatConfig &getChatConfig() const { return m_chatConfig; }
+    void setChatConfig(const ChatConfig &cfg) { m_chatConfig = cfg; }
     // #84 — Cross-window request to open the Chat Profile dialog.
     // Set by UIConfigurationStreaming when the user clicks
     // "Configure Profile"; consumed by OSDChat on the next frame.
@@ -391,125 +528,140 @@ public:
     void setTrayStartMinimized(bool v)               { m_trayStartMinimized = v; }
     bool getTrayNotifications() const                { return m_trayNotifications; }
     void setTrayNotifications(bool v)                { m_trayNotifications = v; }
-    const std::string &getDirectoryStreamName() const { return m_directoryStreamName; }
-    void setDirectoryStreamName(const std::string &v) { m_directoryStreamName = v; }
+    const std::string &getDirectoryStreamName() const { return m_directoryState.streamName; }
+    void setDirectoryStreamName(const std::string &v) { m_directoryState.streamName = v; }
     // #84 — As of the profile unification, the directory's "host
-    // nickname" is derived from the chat Profile (m_chatNickname).
+    // nickname" is derived from the chat Profile (m_chatConfig.nickname).
     // The setter is still here for ConfigJSON round-trips of legacy
     // configs that have a separate hostNickname field; on first
-    // load we mirror it into m_chatNickname when the latter is
+    // load we mirror it into m_chatConfig.nickname when the latter is
     // empty, then the chat profile owns the value going forward.
     const std::string &getDirectoryHostNickname() const
     {
-        return m_chatNickname.empty() ? m_directoryHostNickname : m_chatNickname;
+        return m_chatConfig.nickname.empty() ? m_directoryState.hostNickname : m_chatConfig.nickname;
     }
-    void setDirectoryHostNickname(const std::string &v) { m_directoryHostNickname = v; }
-    const std::string &getDirectoryPassword() const  { return m_directoryPassword; }
-    void setDirectoryPassword(const std::string &v)  { m_directoryPassword = v; }
-    const std::string &getDirectoryEndpointMode() const { return m_directoryEndpointMode; }
-    void setDirectoryEndpointMode(const std::string &v) { m_directoryEndpointMode = v; }
-    const std::string &getDirectoryCustomEndpoint() const { return m_directoryCustomEndpoint; }
-    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryCustomEndpoint = v; }
+    void setDirectoryHostNickname(const std::string &v) { m_directoryState.hostNickname = v; }
+    const std::string &getDirectoryPassword() const  { return m_directoryState.password; }
+    void setDirectoryPassword(const std::string &v)  { m_directoryState.password = v; }
+    const std::string &getDirectoryEndpointMode() const { return m_directoryState.endpointMode; }
+    void setDirectoryEndpointMode(const std::string &v) { m_directoryState.endpointMode = v; }
+    const std::string &getDirectoryCustomEndpoint() const { return m_directoryState.customEndpoint; }
+    void setDirectoryCustomEndpoint(const std::string &v) { m_directoryState.customEndpoint = v; }
     // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
     // tunnelMode is "quick" (default) or "named". When "named", the
     // tunnel id + hostname identify which existing tunnel cloudflared
     // should run, and the directory entry's URL points at the user's
     // own hostname instead of a fresh trycloudflare.com one.
-    const std::string &getDirectoryTunnelMode() const { return m_directoryTunnelMode; }
-    void setDirectoryTunnelMode(const std::string &v) { m_directoryTunnelMode = v; }
-    const std::string &getDirectoryNamedTunnelId() const { return m_directoryNamedTunnelId; }
-    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryNamedTunnelId = v; }
-    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryNamedTunnelHostname; }
-    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryNamedTunnelHostname = v; }
-    bool getDirectoryPrivacyAcked() const            { return m_directoryPrivacyAcked; }
-    void setDirectoryPrivacyAcked(bool v)            { m_directoryPrivacyAcked = v; }
-    const std::string &getDirectoryStatusText() const { return m_directoryStatusText; }
-    void setDirectoryStatusText(const std::string &v) { m_directoryStatusText = v; }
+    const std::string &getDirectoryTunnelMode() const { return m_directoryState.tunnelMode; }
+    void setDirectoryTunnelMode(const std::string &v) { m_directoryState.tunnelMode = v; }
+    const std::string &getDirectoryNamedTunnelId() const { return m_directoryState.namedTunnelId; }
+    void setDirectoryNamedTunnelId(const std::string &v) { m_directoryState.namedTunnelId = v; }
+    const std::string &getDirectoryNamedTunnelHostname() const { return m_directoryState.namedTunnelHostname; }
+    void setDirectoryNamedTunnelHostname(const std::string &v) { m_directoryState.namedTunnelHostname = v; }
+    bool getDirectoryPrivacyAcked() const            { return m_directoryState.privacyAcked; }
+    void setDirectoryPrivacyAcked(bool v)            { m_directoryState.privacyAcked = v; }
+    const std::string &getDirectoryStatusText() const { return m_directoryState.statusText; }
+    void setDirectoryStatusText(const std::string &v) { m_directoryState.statusText = v; }
     // #84 — Currently-published directory streamId (empty when not
     // Active). Application mirrors DirectoryClient::getStreamId() here
     // every frame so APIController can embed it in /meta for the chat
     // panel on remote clients.
-    const std::string &getDirectoryStreamId() const   { return m_directoryStreamId; }
-    void setDirectoryStreamId(const std::string &v)   { m_directoryStreamId = v; }
+    const std::string &getDirectoryStreamId() const   { return m_directoryState.streamId; }
+    void setDirectoryStreamId(const std::string &v)   { m_directoryState.streamId = v; }
     const std::string &getRemoteAuthToken() const  { return m_remoteAuthToken; }
     void setRemoteAuthToken(const std::string &v)  { m_remoteAuthToken = v; }
 
     // Directory telemetry getters/setters (#49 Phase 5).
-    uint64_t getDirectoryRegisterOk()    const { return m_directoryRegisterOk; }
-    uint64_t getDirectoryRegisterFail()  const { return m_directoryRegisterFail; }
-    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryHeartbeatOk; }
-    uint64_t getDirectoryHeartbeatFail() const { return m_directoryHeartbeatFail; }
-    uint64_t getDirectoryPatchOk()       const { return m_directoryPatchOk; }
-    uint64_t getDirectoryPatchFail()     const { return m_directoryPatchFail; }
-    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directorySecondsSinceLastHeartbeat; }
+    uint64_t getDirectoryRegisterOk()    const { return m_directoryState.registerOk; }
+    uint64_t getDirectoryRegisterFail()  const { return m_directoryState.registerFail; }
+    uint64_t getDirectoryHeartbeatOk()   const { return m_directoryState.heartbeatOk; }
+    uint64_t getDirectoryHeartbeatFail() const { return m_directoryState.heartbeatFail; }
+    uint64_t getDirectoryPatchOk()       const { return m_directoryState.patchOk; }
+    uint64_t getDirectoryPatchFail()     const { return m_directoryState.patchFail; }
+    int64_t  getDirectorySecondsSinceLastHeartbeat() const { return m_directoryState.secondsSinceLastHeartbeat; }
+    // #160 — bulk access to the directory settings+status group (per-field
+    // accessors are thin wrappers over the same struct).
+    const DirectoryState &getDirectoryState() const { return m_directoryState; }
+    void setDirectoryState(const DirectoryState &st) { m_directoryState = st; }
     void setDirectoryStats(uint64_t regOk, uint64_t regFail,
                            uint64_t hbOk, uint64_t hbFail,
                            uint64_t patchOk, uint64_t patchFail,
                            int64_t secondsSinceLastHeartbeat)
     {
-        m_directoryRegisterOk    = regOk;
-        m_directoryRegisterFail  = regFail;
-        m_directoryHeartbeatOk   = hbOk;
-        m_directoryHeartbeatFail = hbFail;
-        m_directoryPatchOk       = patchOk;
-        m_directoryPatchFail     = patchFail;
-        m_directorySecondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
+        m_directoryState.registerOk    = regOk;
+        m_directoryState.registerFail  = regFail;
+        m_directoryState.heartbeatOk   = hbOk;
+        m_directoryState.heartbeatFail = hbFail;
+        m_directoryState.patchOk       = patchOk;
+        m_directoryState.patchFail     = patchFail;
+        m_directoryState.secondsSinceLastHeartbeat = secondsSinceLastHeartbeat;
     }
     void setStreamingPort(uint16_t port);
-    void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
-    void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
-    void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
-    void setStreamingBitrate(uint32_t bitrate) { m_streamingBitrate = bitrate; }
-    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
-    void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
-    void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
-    void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
-    void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
-    void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
-    void setStreamingH265Level(const std::string &level) { m_streamingH265Level = level; }
-    void setStreamingVP8Speed(int speed) { m_streamingVP8Speed = speed; }
-    void setStreamingVP9Speed(int speed) { m_streamingVP9Speed = speed; }
+    void setStreamingWidth(uint32_t width) { m_streamingConfig.width = width; }
+    void setStreamingHeight(uint32_t height) { m_streamingConfig.height = height; }
+    void setStreamingFps(uint32_t fps) { m_streamingConfig.fps = fps; }
+    void setStreamingBitrate(uint32_t bitrate) { m_streamingConfig.bitrate = bitrate; }
+    void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingConfig.audioBitrate = bitrate; }
+    void setStreamingVideoCodec(const std::string &codec) { m_streamingConfig.videoCodec = codec; }
+    void setStreamingAudioCodec(const std::string &codec) { m_streamingConfig.audioCodec = codec; }
+    void setStreamingH264Preset(const std::string &preset) { m_streamingConfig.h264Preset = preset; }
+    void setStreamingH265Preset(const std::string &preset) { m_streamingConfig.h265Preset = preset; }
+    void setStreamingH265Profile(const std::string &profile) { m_streamingConfig.h265Profile = profile; }
+    void setStreamingH265Level(const std::string &level) { m_streamingConfig.h265Level = level; }
+    void setStreamingVP8Speed(int speed) { m_streamingConfig.vp8Speed = speed; }
+    void setStreamingVP9Speed(int speed) { m_streamingConfig.vp9Speed = speed; }
     // Hardware encoder selection — uses int so we don't have to pull
     // MediaEncoder.h into the UI layer. Stored as int matching the
     // MediaEncoder::HardwareEncoder enum values (Auto=0, Software=1,
     // NVENC=2, VAAPI=3, QSV=4, AMF=5).
-    void setStreamingHardwareEncoder(int v) { m_streamingHardwareEncoder = v; }
+    void setStreamingHardwareEncoder(int v) { m_streamingConfig.hardwareEncoder = v; }
 
     // Buffer settings
-    void setStreamingMaxVideoBufferSize(size_t size) { m_streamingMaxVideoBufferSize = size; }
-    void setStreamingMaxAudioBufferSize(size_t size) { m_streamingMaxAudioBufferSize = size; }
-    void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingMaxBufferTimeSeconds = seconds; }
-    void setStreamingAVIOBufferSize(size_t size) { m_streamingAVIOBufferSize = size; }
+    void setStreamingMaxVideoBufferSize(size_t size) { m_streamingConfig.maxVideoBufferSize = size; }
+    void setStreamingMaxAudioBufferSize(size_t size) { m_streamingConfig.maxAudioBufferSize = size; }
+    void setStreamingMaxBufferTimeSeconds(int64_t seconds) { m_streamingConfig.maxBufferTimeSeconds = seconds; }
+    void setStreamingAVIOBufferSize(size_t size) { m_streamingConfig.avioBufferSize = size; }
 
-    size_t getStreamingMaxVideoBufferSize() const { return m_streamingMaxVideoBufferSize; }
-    size_t getStreamingMaxAudioBufferSize() const { return m_streamingMaxAudioBufferSize; }
-    int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingMaxBufferTimeSeconds; }
-    size_t getStreamingAVIOBufferSize() const { return m_streamingAVIOBufferSize; }
+    size_t getStreamingMaxVideoBufferSize() const { return m_streamingConfig.maxVideoBufferSize; }
+    size_t getStreamingMaxAudioBufferSize() const { return m_streamingConfig.maxAudioBufferSize; }
+    int64_t getStreamingMaxBufferTimeSeconds() const { return m_streamingConfig.maxBufferTimeSeconds; }
+    size_t getStreamingAVIOBufferSize() const { return m_streamingConfig.avioBufferSize; }
 
     // Streaming info getters (public)
-    uint16_t getStreamingPort() const { return m_streamingPort; }
-    uint32_t getStreamingWidth() const { return m_streamingWidth; }
-    uint32_t getStreamingHeight() const { return m_streamingHeight; }
-    uint32_t getStreamingFps() const { return m_streamingFps; }
-    uint32_t getStreamingBitrate() const { return m_streamingBitrate; }
-    uint32_t getStreamingAudioBitrate() const { return m_streamingAudioBitrate; }
-    std::string getStreamingVideoCodec() const { return m_streamingVideoCodec; }
-    std::string getStreamingAudioCodec() const { return m_streamingAudioCodec; }
-    std::string getStreamingH264Preset() const { return m_streamingH264Preset; }
-    std::string getStreamingH265Preset() const { return m_streamingH265Preset; }
-    std::string getStreamingH265Profile() const { return m_streamingH265Profile; }
-    std::string getStreamingH265Level() const { return m_streamingH265Level; }
-    int getStreamingVP8Speed() const { return m_streamingVP8Speed; }
-    int getStreamingVP9Speed() const { return m_streamingVP9Speed; }
-    int getStreamingHardwareEncoder() const { return m_streamingHardwareEncoder; }
-    std::string getStreamingNvencPreset() const { return m_streamingNvencPreset; }
-    std::string getStreamingVaapiRcMode() const { return m_streamingVaapiRcMode; }
-    std::string getStreamingQsvPreset()   const { return m_streamingQsvPreset; }
-    std::string getStreamingAmfQuality()  const { return m_streamingAmfQuality; }
-    std::string getRemoteInterpolation() const { return m_remoteInterpolation; }
+    uint16_t getStreamingPort() const { return m_streamingConfig.port; }
+    uint32_t getStreamingWidth() const { return m_streamingConfig.width; }
+    uint32_t getStreamingHeight() const { return m_streamingConfig.height; }
+    uint32_t getStreamingFps() const { return m_streamingConfig.fps; }
+    uint32_t getStreamingBitrate() const { return m_streamingConfig.bitrate; }
+    uint32_t getStreamingAudioBitrate() const { return m_streamingConfig.audioBitrate; }
+    std::string getStreamingVideoCodec() const { return m_streamingConfig.videoCodec; }
+    std::string getStreamingAudioCodec() const { return m_streamingConfig.audioCodec; }
+    std::string getStreamingH264Preset() const { return m_streamingConfig.h264Preset; }
+    std::string getStreamingH265Preset() const { return m_streamingConfig.h265Preset; }
+    std::string getStreamingH265Profile() const { return m_streamingConfig.h265Profile; }
+    std::string getStreamingH265Level() const { return m_streamingConfig.h265Level; }
+    int getStreamingVP8Speed() const { return m_streamingConfig.vp8Speed; }
+    int getStreamingVP9Speed() const { return m_streamingConfig.vp9Speed; }
+    int getStreamingHardwareEncoder() const { return m_streamingConfig.hardwareEncoder; }
+    std::string getStreamingNvencPreset() const { return m_streamingConfig.nvencPreset; }
+    std::string getStreamingVaapiRcMode() const { return m_streamingConfig.vaapiRcMode; }
+    std::string getStreamingQsvPreset()   const { return m_streamingConfig.qsvPreset; }
+    std::string getStreamingAmfQuality()  const { return m_streamingConfig.amfQuality; }
+
+    // #160 — bulk access to the whole streaming-settings group. New code should
+    // prefer these; the per-field accessors above are thin wrappers over the same
+    // struct and will be migrated/removed in follow-up PRs.
+    const StreamingConfig &getStreamingConfig() const { return m_streamingConfig; }
+    void setStreamingConfig(const StreamingConfig &cfg) { m_streamingConfig = cfg; }
+
+    std::string getRemoteInterpolation() const { return m_remoteState.interpolation; }
+    // #160 — bulk access to the remote-source state group (per-field accessors
+    // are thin wrappers over the same struct).
+    const RemoteState &getRemoteState() const { return m_remoteState; }
+    void setRemoteState(const RemoteState &st) { m_remoteState = st; }
     // #77 client-side volume for the incoming remote audio stream.
-    float getRemoteAudioVolume() const { return m_remoteAudioVolume; }
-    bool  getRemoteAudioMuted()  const { return m_remoteAudioMuted; }
+    float getRemoteAudioVolume() const { return m_remoteState.audioVolume; }
+    bool  getRemoteAudioMuted()  const { return m_remoteState.audioMuted; }
     // #107 screen-capture region crop (target pixels; 0,0,0,0 = full).
     uint32_t getScreenRegionX() const { return m_screenRegionX; }
     uint32_t getScreenRegionY() const { return m_screenRegionY; }
@@ -609,26 +761,26 @@ public:
     // nullptr to setCaptureControls to suppress the V4L2/DS hardware
     // controls) so the Info panel can't dynamic-cast its way to the
     // flag. Default false in host mode (#58).
-    bool getRemoteHostLikelyOffline() const { return m_remoteHostLikelyOffline; }
-    void setRemoteHostLikelyOffline(bool v) { m_remoteHostLikelyOffline = v; }
+    bool getRemoteHostLikelyOffline() const { return m_remoteState.hostLikelyOffline; }
+    void setRemoteHostLikelyOffline(bool v) { m_remoteState.hostLikelyOffline = v; }
     // 'Are we decoding frames right now' — distinct from
     // captureWidth > 0, which stays at the last seen value after
     // the stream drops. Mirrored by Application from
     // VideoCaptureRemote::isReceivingFrames() every frame.
-    bool getRemoteReceivingFrames() const { return m_remoteReceivingFrames; }
-    void setRemoteReceivingFrames(bool v) { m_remoteReceivingFrames = v; }
+    bool getRemoteReceivingFrames() const { return m_remoteState.receivingFrames; }
+    void setRemoteReceivingFrames(bool v) { m_remoteState.receivingFrames = v; }
     // First-connect-failing mirror: true while a brand-new connection
     // (no frame ever received yet) has failed a few times. Mirrored
     // from VideoCaptureRemote::isInitialConnectFailing() every frame.
-    bool getRemoteInitialConnectFailing() const { return m_remoteInitialConnectFailing; }
-    void setRemoteInitialConnectFailing(bool v) { m_remoteInitialConnectFailing = v; }
+    bool getRemoteInitialConnectFailing() const { return m_remoteState.initialConnectFailing; }
+    void setRemoteInitialConnectFailing(bool v) { m_remoteState.initialConnectFailing = v; }
 
     // Host's current viewer count, parsed from /meta when we're in
     // client mode (#68). Application piggybacks the
     // RemoteMetaSync::Snapshot callback to keep this fresh. 0 when
     // we're not a client or the host's /meta predates this field.
-    uint32_t getRemoteUpstreamClientCount() const { return m_remoteUpstreamClientCount; }
-    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteUpstreamClientCount = v; }
+    uint32_t getRemoteUpstreamClientCount() const { return m_remoteState.upstreamClientCount; }
+    void setRemoteUpstreamClientCount(uint32_t v) { m_remoteState.upstreamClientCount = v; }
     float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
     float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
     bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
@@ -729,23 +881,23 @@ public:
     void setRecordingDurationUs(uint64_t durationUs) { m_recordingDurationUs = durationUs; }
     void setRecordingFileSize(uint64_t fileSize) { m_recordingFileSize = fileSize; }
     void setRecordingFilename(const std::string& filename) { m_recordingFilename = filename; }
-    void setRecordingWidth(uint32_t width) { m_recordingWidth = width; }
-    void setRecordingHeight(uint32_t height) { m_recordingHeight = height; }
-    void setRecordingFps(uint32_t fps) { m_recordingFps = fps; }
-    void setRecordingBitrate(uint32_t bitrate) { m_recordingBitrate = bitrate; }
-    void setRecordingAudioBitrate(uint32_t bitrate) { m_recordingAudioBitrate = bitrate; }
-    void setRecordingVideoCodec(const std::string& codec) { m_recordingVideoCodec = codec; }
-    void setRecordingAudioCodec(const std::string& codec) { m_recordingAudioCodec = codec; }
-    void setRecordingH264Preset(const std::string& preset) { m_recordingH264Preset = preset; }
-    void setRecordingH265Preset(const std::string& preset) { m_recordingH265Preset = preset; }
-    void setRecordingH265Profile(const std::string& profile) { m_recordingH265Profile = profile; }
-    void setRecordingH265Level(const std::string& level) { m_recordingH265Level = level; }
-    void setRecordingVP8Speed(int speed) { m_recordingVP8Speed = speed; }
-    void setRecordingVP9Speed(int speed) { m_recordingVP9Speed = speed; }
-    void setRecordingContainer(const std::string& container) { m_recordingContainer = container; }
-    void setRecordingOutputPath(const std::string& path) { m_recordingOutputPath = path; }
-    void setRecordingFilenameTemplate(const std::string& template_) { m_recordingFilenameTemplate = template_; }
-    void setRecordingIncludeAudio(bool include) { m_recordingIncludeAudio = include; }
+    void setRecordingWidth(uint32_t width) { m_recordingConfig.width = width; }
+    void setRecordingHeight(uint32_t height) { m_recordingConfig.height = height; }
+    void setRecordingFps(uint32_t fps) { m_recordingConfig.fps = fps; }
+    void setRecordingBitrate(uint32_t bitrate) { m_recordingConfig.bitrate = bitrate; }
+    void setRecordingAudioBitrate(uint32_t bitrate) { m_recordingConfig.audioBitrate = bitrate; }
+    void setRecordingVideoCodec(const std::string& codec) { m_recordingConfig.videoCodec = codec; }
+    void setRecordingAudioCodec(const std::string& codec) { m_recordingConfig.audioCodec = codec; }
+    void setRecordingH264Preset(const std::string& preset) { m_recordingConfig.h264Preset = preset; }
+    void setRecordingH265Preset(const std::string& preset) { m_recordingConfig.h265Preset = preset; }
+    void setRecordingH265Profile(const std::string& profile) { m_recordingConfig.h265Profile = profile; }
+    void setRecordingH265Level(const std::string& level) { m_recordingConfig.h265Level = level; }
+    void setRecordingVP8Speed(int speed) { m_recordingConfig.vp8Speed = speed; }
+    void setRecordingVP9Speed(int speed) { m_recordingConfig.vp9Speed = speed; }
+    void setRecordingContainer(const std::string& container) { m_recordingConfig.container = container; }
+    void setRecordingOutputPath(const std::string& path) { m_recordingConfig.outputPath = path; }
+    void setRecordingFilenameTemplate(const std::string& template_) { m_recordingConfig.filenameTemplate = template_; }
+    void setRecordingIncludeAudio(bool include) { m_recordingConfig.includeAudio = include; }
 
     // Hardware encoder selection for recording (#59). Same int-based
     // encoding as the streaming side so we don't have to pull
@@ -753,39 +905,44 @@ public:
     // 2=NVENC, 3=VAAPI, 4=QSV, 5=AMF). Backend-specific preset
     // strings live in separate fields per backend, mirroring the
     // streaming layout exactly so the same UI block can render both.
-    void setRecordingHardwareEncoder(int v)           { m_recordingHardwareEncoder = v; }
-    void setRecordingNvencPreset(const std::string &v){ m_recordingNvencPreset = v; }
-    void setRecordingVaapiRcMode(const std::string &v){ m_recordingVaapiRcMode = v; }
-    void setRecordingQsvPreset(const std::string &v)  { m_recordingQsvPreset = v; }
-    void setRecordingAmfQuality(const std::string &v) { m_recordingAmfQuality = v; }
+    void setRecordingHardwareEncoder(int v)           { m_recordingConfig.hardwareEncoder = v; }
+    void setRecordingNvencPreset(const std::string &v){ m_recordingConfig.nvencPreset = v; }
+    void setRecordingVaapiRcMode(const std::string &v){ m_recordingConfig.vaapiRcMode = v; }
+    void setRecordingQsvPreset(const std::string &v)  { m_recordingConfig.qsvPreset = v; }
+    void setRecordingAmfQuality(const std::string &v) { m_recordingConfig.amfQuality = v; }
 
     // Recording info getters (public)
     bool getRecordingActive() const { return m_recordingActive; }
     uint64_t getRecordingDurationUs() const { return m_recordingDurationUs; }
     uint64_t getRecordingFileSize() const { return m_recordingFileSize; }
     std::string getRecordingFilename() const { return m_recordingFilename; }
-    uint32_t getRecordingWidth() const { return m_recordingWidth; }
-    uint32_t getRecordingHeight() const { return m_recordingHeight; }
-    uint32_t getRecordingFps() const { return m_recordingFps; }
-    uint32_t getRecordingBitrate() const { return m_recordingBitrate; }
-    uint32_t getRecordingAudioBitrate() const { return m_recordingAudioBitrate; }
-    std::string getRecordingVideoCodec() const { return m_recordingVideoCodec; }
-    std::string getRecordingAudioCodec() const { return m_recordingAudioCodec; }
-    std::string getRecordingH264Preset() const { return m_recordingH264Preset; }
-    std::string getRecordingH265Preset() const { return m_recordingH265Preset; }
-    std::string getRecordingH265Profile() const { return m_recordingH265Profile; }
-    std::string getRecordingH265Level() const { return m_recordingH265Level; }
-    int getRecordingVP8Speed() const { return m_recordingVP8Speed; }
-    int getRecordingVP9Speed() const { return m_recordingVP9Speed; }
-    std::string getRecordingContainer() const { return m_recordingContainer; }
-    std::string getRecordingOutputPath() const { return m_recordingOutputPath; }
-    std::string getRecordingFilenameTemplate() const { return m_recordingFilenameTemplate; }
-    bool getRecordingIncludeAudio() const { return m_recordingIncludeAudio; }
-    int  getRecordingHardwareEncoder() const         { return m_recordingHardwareEncoder; }
-    std::string getRecordingNvencPreset() const      { return m_recordingNvencPreset; }
-    std::string getRecordingVaapiRcMode() const      { return m_recordingVaapiRcMode; }
-    std::string getRecordingQsvPreset()   const      { return m_recordingQsvPreset; }
-    std::string getRecordingAmfQuality()  const      { return m_recordingAmfQuality; }
+    uint32_t getRecordingWidth() const { return m_recordingConfig.width; }
+    uint32_t getRecordingHeight() const { return m_recordingConfig.height; }
+    uint32_t getRecordingFps() const { return m_recordingConfig.fps; }
+    uint32_t getRecordingBitrate() const { return m_recordingConfig.bitrate; }
+    uint32_t getRecordingAudioBitrate() const { return m_recordingConfig.audioBitrate; }
+    std::string getRecordingVideoCodec() const { return m_recordingConfig.videoCodec; }
+    std::string getRecordingAudioCodec() const { return m_recordingConfig.audioCodec; }
+    std::string getRecordingH264Preset() const { return m_recordingConfig.h264Preset; }
+    std::string getRecordingH265Preset() const { return m_recordingConfig.h265Preset; }
+    std::string getRecordingH265Profile() const { return m_recordingConfig.h265Profile; }
+    std::string getRecordingH265Level() const { return m_recordingConfig.h265Level; }
+    int getRecordingVP8Speed() const { return m_recordingConfig.vp8Speed; }
+    int getRecordingVP9Speed() const { return m_recordingConfig.vp9Speed; }
+    std::string getRecordingContainer() const { return m_recordingConfig.container; }
+    std::string getRecordingOutputPath() const { return m_recordingConfig.outputPath; }
+    std::string getRecordingFilenameTemplate() const { return m_recordingConfig.filenameTemplate; }
+    bool getRecordingIncludeAudio() const { return m_recordingConfig.includeAudio; }
+    int  getRecordingHardwareEncoder() const         { return m_recordingConfig.hardwareEncoder; }
+    std::string getRecordingNvencPreset() const      { return m_recordingConfig.nvencPreset; }
+    std::string getRecordingVaapiRcMode() const      { return m_recordingConfig.vaapiRcMode; }
+    std::string getRecordingQsvPreset()   const      { return m_recordingConfig.qsvPreset; }
+    std::string getRecordingAmfQuality()  const      { return m_recordingConfig.amfQuality; }
+
+    // #160 — bulk access to the whole recording-settings group (per-field
+    // accessors above are thin wrappers over the same struct).
+    const RecordingConfig &getRecordingConfig() const { return m_recordingConfig; }
+    void setRecordingConfig(const RecordingConfig &cfg) { m_recordingConfig = cfg; }
 
     // Recording setters with callbacks
     void triggerRecordingWidthChange(uint32_t width);
@@ -856,14 +1013,14 @@ public:
     void setOnRecordingAmfQualityChanged (std::function<void(const std::string &)> cb) { m_onRecordingAmfQualityChanged = cb; }
 
     // Web Portal settings
-    void setWebPortalEnabled(bool enabled) { m_webPortalEnabled = enabled; }
-    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalHTTPSEnabled = enabled; }
-    void setWebPortalSSLCertPath(const std::string &path) { m_webPortalSSLCertPath = path; }
-    void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalSSLKeyPath = path; }
+    void setWebPortalEnabled(bool enabled) { m_webPortalConfig.enabled = enabled; }
+    void setWebPortalHTTPSEnabled(bool enabled) { m_webPortalConfig.httpsEnabled = enabled; }
+    void setWebPortalSSLCertPath(const std::string &path) { m_webPortalConfig.sslCertPath = path; }
+    void setWebPortalSSLKeyPath(const std::string &path) { m_webPortalConfig.sslKeyPath = path; }
     void setFoundSSLCertificatePath(const std::string &path) { m_foundSSLCertPath = path; }
     void setFoundSSLKeyPath(const std::string &path) { m_foundSSLKeyPath = path; }
-    void setWebPortalTitle(const std::string &title) { m_webPortalTitle = title; }
-    void setWebPortalImagePath(const std::string &path) { m_webPortalImagePath = path; }
+    void setWebPortalTitle(const std::string &title) { m_webPortalConfig.title = title; }
+    void setWebPortalImagePath(const std::string &path) { m_webPortalConfig.imagePath = path; }
     void setWebPortalBackgroundImagePath(const std::string &path) { m_webPortalBackgroundImagePath = path; }
     void setWebPortalColorBackground(const float color[4])
     {
@@ -911,34 +1068,38 @@ public:
             memcpy(m_webPortalColorDanger, color, 4 * sizeof(float));
     }
 
-    bool getWebPortalEnabled() const { return m_webPortalEnabled; }
-    bool getWebPortalHTTPSEnabled() const { return m_webPortalHTTPSEnabled; }
-    std::string getWebPortalSSLCertPath() const { return m_webPortalSSLCertPath; }
-    std::string getWebPortalSSLKeyPath() const { return m_webPortalSSLKeyPath; }
+    bool getWebPortalEnabled() const { return m_webPortalConfig.enabled; }
+    bool getWebPortalHTTPSEnabled() const { return m_webPortalConfig.httpsEnabled; }
+    std::string getWebPortalSSLCertPath() const { return m_webPortalConfig.sslCertPath; }
+    std::string getWebPortalSSLKeyPath() const { return m_webPortalConfig.sslKeyPath; }
     std::string getFoundSSLCertificatePath() const { return m_foundSSLCertPath; }
     std::string getFoundSSLKeyPath() const { return m_foundSSLKeyPath; }
-    std::string getWebPortalTitle() const { return m_webPortalTitle; }
-    std::string getWebPortalSubtitle() const { return m_webPortalSubtitle; }
-    std::string getWebPortalImagePath() const { return m_webPortalImagePath; }
+    std::string getWebPortalTitle() const { return m_webPortalConfig.title; }
+    std::string getWebPortalSubtitle() const { return m_webPortalConfig.subtitle; }
+    std::string getWebPortalImagePath() const { return m_webPortalConfig.imagePath; }
+    // #160 — bulk access to the web-portal settings group (per-field accessors
+    // are thin wrappers over the same struct).
+    const WebPortalConfig &getWebPortalConfig() const { return m_webPortalConfig; }
+    void setWebPortalConfig(const WebPortalConfig &cfg) { m_webPortalConfig = cfg; }
     std::string getWebPortalBackgroundImagePath() const { return m_webPortalBackgroundImagePath; }
 
     // Getters para textos editáveis
-    std::string getWebPortalTextStreamInfo() const { return m_webPortalTextStreamInfo; }
-    std::string getWebPortalTextQuickActions() const { return m_webPortalTextQuickActions; }
-    std::string getWebPortalTextCompatibility() const { return m_webPortalTextCompatibility; }
-    std::string getWebPortalTextStatus() const { return m_webPortalTextStatus; }
-    std::string getWebPortalTextCodec() const { return m_webPortalTextCodec; }
-    std::string getWebPortalTextResolution() const { return m_webPortalTextResolution; }
-    std::string getWebPortalTextStreamUrl() const { return m_webPortalTextStreamUrl; }
-    std::string getWebPortalTextCopyUrl() const { return m_webPortalTextCopyUrl; }
-    std::string getWebPortalTextOpenNewTab() const { return m_webPortalTextOpenNewTab; }
-    std::string getWebPortalTextSupported() const { return m_webPortalTextSupported; }
-    std::string getWebPortalTextFormat() const { return m_webPortalTextFormat; }
-    std::string getWebPortalTextCodecInfo() const { return m_webPortalTextCodecInfo; }
-    std::string getWebPortalTextSupportedBrowsers() const { return m_webPortalTextSupportedBrowsers; }
-    std::string getWebPortalTextFormatInfo() const { return m_webPortalTextFormatInfo; }
-    std::string getWebPortalTextCodecInfoValue() const { return m_webPortalTextCodecInfoValue; }
-    std::string getWebPortalTextConnecting() const { return m_webPortalTextConnecting; }
+    std::string getWebPortalTextStreamInfo() const { return m_webPortalConfig.textStreamInfo; }
+    std::string getWebPortalTextQuickActions() const { return m_webPortalConfig.textQuickActions; }
+    std::string getWebPortalTextCompatibility() const { return m_webPortalConfig.textCompatibility; }
+    std::string getWebPortalTextStatus() const { return m_webPortalConfig.textStatus; }
+    std::string getWebPortalTextCodec() const { return m_webPortalConfig.textCodec; }
+    std::string getWebPortalTextResolution() const { return m_webPortalConfig.textResolution; }
+    std::string getWebPortalTextStreamUrl() const { return m_webPortalConfig.textStreamUrl; }
+    std::string getWebPortalTextCopyUrl() const { return m_webPortalConfig.textCopyUrl; }
+    std::string getWebPortalTextOpenNewTab() const { return m_webPortalConfig.textOpenNewTab; }
+    std::string getWebPortalTextSupported() const { return m_webPortalConfig.textSupported; }
+    std::string getWebPortalTextFormat() const { return m_webPortalConfig.textFormat; }
+    std::string getWebPortalTextCodecInfo() const { return m_webPortalConfig.textCodecInfo; }
+    std::string getWebPortalTextSupportedBrowsers() const { return m_webPortalConfig.textSupportedBrowsers; }
+    std::string getWebPortalTextFormatInfo() const { return m_webPortalConfig.textFormatInfo; }
+    std::string getWebPortalTextCodecInfoValue() const { return m_webPortalConfig.textCodecInfoValue; }
+    std::string getWebPortalTextConnecting() const { return m_webPortalConfig.textConnecting; }
 
     // Getters para cores
     const float *getWebPortalColorBackground() const { return m_webPortalColorBackground; }
@@ -998,22 +1159,22 @@ public:
     float *getWebPortalColorInfoEditable() { return m_webPortalColorInfo; }
 
     // Getters para textos editáveis (retornam referências não-const)
-    std::string &getWebPortalTextStreamInfoEditable() { return m_webPortalTextStreamInfo; }
-    std::string &getWebPortalTextQuickActionsEditable() { return m_webPortalTextQuickActions; }
-    std::string &getWebPortalTextCompatibilityEditable() { return m_webPortalTextCompatibility; }
-    std::string &getWebPortalTextStatusEditable() { return m_webPortalTextStatus; }
-    std::string &getWebPortalTextCodecEditable() { return m_webPortalTextCodec; }
-    std::string &getWebPortalTextResolutionEditable() { return m_webPortalTextResolution; }
-    std::string &getWebPortalTextStreamUrlEditable() { return m_webPortalTextStreamUrl; }
-    std::string &getWebPortalTextCopyUrlEditable() { return m_webPortalTextCopyUrl; }
-    std::string &getWebPortalTextOpenNewTabEditable() { return m_webPortalTextOpenNewTab; }
-    std::string &getWebPortalTextSupportedEditable() { return m_webPortalTextSupported; }
-    std::string &getWebPortalTextFormatEditable() { return m_webPortalTextFormat; }
-    std::string &getWebPortalTextCodecInfoEditable() { return m_webPortalTextCodecInfo; }
-    std::string &getWebPortalTextSupportedBrowsersEditable() { return m_webPortalTextSupportedBrowsers; }
-    std::string &getWebPortalTextFormatInfoEditable() { return m_webPortalTextFormatInfo; }
-    std::string &getWebPortalTextCodecInfoValueEditable() { return m_webPortalTextCodecInfoValue; }
-    std::string &getWebPortalTextConnectingEditable() { return m_webPortalTextConnecting; }
+    std::string &getWebPortalTextStreamInfoEditable() { return m_webPortalConfig.textStreamInfo; }
+    std::string &getWebPortalTextQuickActionsEditable() { return m_webPortalConfig.textQuickActions; }
+    std::string &getWebPortalTextCompatibilityEditable() { return m_webPortalConfig.textCompatibility; }
+    std::string &getWebPortalTextStatusEditable() { return m_webPortalConfig.textStatus; }
+    std::string &getWebPortalTextCodecEditable() { return m_webPortalConfig.textCodec; }
+    std::string &getWebPortalTextResolutionEditable() { return m_webPortalConfig.textResolution; }
+    std::string &getWebPortalTextStreamUrlEditable() { return m_webPortalConfig.textStreamUrl; }
+    std::string &getWebPortalTextCopyUrlEditable() { return m_webPortalConfig.textCopyUrl; }
+    std::string &getWebPortalTextOpenNewTabEditable() { return m_webPortalConfig.textOpenNewTab; }
+    std::string &getWebPortalTextSupportedEditable() { return m_webPortalConfig.textSupported; }
+    std::string &getWebPortalTextFormatEditable() { return m_webPortalConfig.textFormat; }
+    std::string &getWebPortalTextCodecInfoEditable() { return m_webPortalConfig.textCodecInfo; }
+    std::string &getWebPortalTextSupportedBrowsersEditable() { return m_webPortalConfig.textSupportedBrowsers; }
+    std::string &getWebPortalTextFormatInfoEditable() { return m_webPortalConfig.textFormatInfo; }
+    std::string &getWebPortalTextCodecInfoValueEditable() { return m_webPortalConfig.textCodecInfoValue; }
+    std::string &getWebPortalTextConnectingEditable() { return m_webPortalConfig.textConnecting; }
 
 private:
     bool m_initialized = false;
@@ -1058,7 +1219,8 @@ private:
     // reveal it again on the next movement. Default on; toggled in
     // Preferences and persisted.
     bool m_quickActionsAutoHide = true;
-    bool m_chatOverlayVisible  = true;
+    // #160 — chat settings grouped (see ChatConfig above).
+    ChatConfig m_chatConfig;
     // Same persistence pattern for the shortcuts-help orientation
     // widget (#68 follow-up). Default true so new users see the
     // keyboard hints on first launch.
@@ -1153,10 +1315,8 @@ private:
     uint32_t m_actualCaptureWidth = 0;
     uint32_t m_actualCaptureHeight = 0;
     uint32_t m_captureFps = 0;
-    bool     m_remoteHostLikelyOffline = false;
-    bool     m_remoteReceivingFrames   = false;
-    bool     m_remoteInitialConnectFailing = false;
-    uint32_t m_remoteUpstreamClientCount = 0;
+    // #160 — remote-source playback state + settings grouped (see RemoteState above).
+    RemoteState m_remoteState;
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to
     // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
@@ -1200,30 +1360,13 @@ private:
 
     // Streaming controls
     bool m_streamingEnabled = false;
-    uint16_t m_streamingPort = 8080;
-    uint32_t m_streamingWidth = 640;  // Padrão: 640px
-    uint32_t m_streamingHeight = 480; // Padrão: 480px
-    uint32_t m_streamingFps = 60;
-    uint32_t m_streamingBitrate = 8000;
-    uint32_t m_streamingAudioBitrate = 256;
-    std::string m_streamingVideoCodec = "h264";
-    std::string m_streamingAudioCodec = "aac";
-    std::string m_streamingH264Preset = "veryfast"; // Preset H.264: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-    std::string m_streamingH265Preset = "veryfast"; // Preset H.265: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-    std::string m_streamingH265Profile = "main";    // Profile H.265: "main" (8-bit) ou "main10" (10-bit)
-    std::string m_streamingH265Level = "auto";      // Level H.265: "auto", "1", "2", "2.1", "3", "3.1", "4", "4.1", "5", "5.1", "5.2", "6", "6.1", "6.2"
-    int m_streamingVP8Speed = 12;                   // Speed VP8: 0-16 (0 = melhor qualidade, 16 = mais rápido, 12 = bom para streaming)
-    int m_streamingVP9Speed = 6;                    // Speed VP9: 0-9 (0 = melhor qualidade, 9 = mais rápido, 6 = bom para streaming)
-    int m_streamingHardwareEncoder = 0;             // 0 = Auto (matches MediaEncoder::HardwareEncoder::Auto)
+    // #160 — streaming settings grouped into one struct (see StreamingConfig above).
+    StreamingConfig m_streamingConfig;
     // Per-backend quality / preset values — the Streaming-tab UI shows
     // whichever combo matches the currently selected hardware encoder.
     // Stored separately so switching encoders preserves each backend's
     // previously chosen value rather than collapsing them onto one
     // shared string whose meaning would shift mid-flight.
-    std::string m_streamingNvencPreset = "p4";      // p1 (fastest) .. p7 (slowest)
-    std::string m_streamingVaapiRcMode = "CBR";     // CBR / VBR / CQP
-    std::string m_streamingQsvPreset   = "veryfast";// libx264-style names
-    std::string m_streamingAmfQuality  = "speed";   // speed / balanced / quality
 
     // Client-side interpolation mode for Remote-source playback. Picks
     // how each display refresh resolves the time between two consecutive
@@ -1231,12 +1374,9 @@ private:
     //   "linear"  — LERP between prev and next (smooth motion, ghosting)
     //   "nearest" — show the closer frame (clean image, 3:2 stutter)
     //   "off"     — strict PTS gate, hold prev until next is due
-    std::string m_remoteInterpolation = "linear";
-    // #77 client-side remote audio volume. m_remoteAudioVolume holds the
-    // slider level [0,1]; m_remoteAudioMuted overrides it to 0 while
+    // #77 client-side remote audio volume. m_remoteState.audioVolume holds the
+    // slider level [0,1]; m_remoteState.audioMuted overrides it to 0 while
     // preserving the level so unmuting restores it.
-    float m_remoteAudioVolume = 1.0f;
-    bool  m_remoteAudioMuted  = false;
     // #107 screen-capture region crop, target pixels (0,0,0,0 = full target).
     uint32_t m_screenRegionX = 0, m_screenRegionY = 0, m_screenRegionW = 0, m_screenRegionH = 0;
     // Live capture texture published by Application for the region selector.
@@ -1254,16 +1394,14 @@ private:
     // UI-side only; Application owns the DirectoryClient that
     // actually talks to the directory service and mirrors the toggle
     // from here every frame.
-    bool        m_directoryPublishEnabled = false;
-    std::string m_directoryUrl            = "https://directory.retrocapture.com";
+    // #160 — directory publish/tunnel settings + status grouped (see DirectoryState above).
+    DirectoryState m_directoryState;
     // #84 — Chat URL. Production default; --chat-url overrides at
     // launch; the Streaming → Advanced field overrides at runtime.
     // Accepts https://, http://, wss://, ws:// — ChatClient
     // normalizes the scheme when building REST vs WS endpoints.
-    std::string m_chatBaseUrl             = "https://chat.retrocapture.com";
     // #84 — Persistent chat display name. Default empty; OSD chat
     // panel's Apply button writes here + saveConfig.
-    std::string m_chatNickname            = "";
     // #84 — One-shot flag: UIConfigurationStreaming raises it when
     // the user clicks "Configure Profile" from the streaming
     // settings; OSDChat consumes it on the next frame and opens
@@ -1293,7 +1431,6 @@ private:
     // Dev-only: skip TLS peer-certificate verification when talking to
     // the directory. Off by default; toggled from Streaming → Public
     // Directory → Advanced. Never persisted as ON for the public host.
-    bool        m_directoryInsecureSkipVerify = false;
     // Preferences (#45 placeholder + window restructure)
     std::string m_language                = "en";    // "en" | "pt"
     bool        m_startFullscreen         = false;
@@ -1305,28 +1442,10 @@ private:
     bool        m_trayMinimizeOnClose     = true;
     bool        m_trayStartMinimized      = false;
     bool        m_trayNotifications       = false;
-    std::string m_directoryStreamName     = "";
-    std::string m_directoryHostNickname   = "";
-    std::string m_directoryPassword       = "";       // optional; empty = no password
-    std::string m_directoryEndpointMode   = "direct"; // "direct" | "tunnel-cloudflare" | "custom"
-    std::string m_directoryCustomEndpoint = "";       // used when mode == "custom"
     // Phase 2.5c (#60): Cloudflare Tunnel sub-mode + Named-tunnel state.
-    std::string m_directoryTunnelMode           = "quick"; // "quick" | "named"
-    std::string m_directoryNamedTunnelId        = "";       // cloudflared tunnel uuid
-    std::string m_directoryNamedTunnelHostname  = "";       // user's own hostname (e.g. stream.example.com)
-    bool        m_directoryPrivacyAcked   = false;    // sticky once the user accepts the warning
-    std::string m_directoryStatusText     = "Idle";   // surfaced by Application; UI just reads
-    std::string m_directoryStreamId       = "";       // #84 — mirrored from DirectoryClient for /meta
 
     // Per-session telemetry counters mirrored from DirectoryClient
     // (#49 Phase 5). Application writes each frame; UI reads.
-    uint64_t m_directoryRegisterOk     = 0;
-    uint64_t m_directoryRegisterFail   = 0;
-    uint64_t m_directoryHeartbeatOk    = 0;
-    uint64_t m_directoryHeartbeatFail  = 0;
-    uint64_t m_directoryPatchOk        = 0;
-    uint64_t m_directoryPatchFail      = 0;
-    int64_t  m_directorySecondsSinceLastHeartbeat = -1;
 
     // Transient bearer token for the next remote connect (#49 Phase 3).
     // sha256 hex of the password the user typed in the prompt. Not
@@ -1339,10 +1458,6 @@ private:
     // to give a bit more cushion against client/network jitter — small
     // frame loss showed up under load even on capable hardware. Audio
     // bumped to match. Still overridable from config.json.
-    size_t m_streamingMaxVideoBufferSize = 15;     // Máximo de frames no buffer de vídeo (1-50)
-    size_t m_streamingMaxAudioBufferSize = 30;     // Máximo de chunks no buffer de áudio (5-100)
-    int64_t m_streamingMaxBufferTimeSeconds = 5;   // Tempo máximo de buffer em segundos (1-30)
-    size_t m_streamingAVIOBufferSize = 256 * 1024; // 256KB para buffer AVIO do FFmpeg (64KB-1MB)
 
     std::function<void(bool)> m_onStreamingStartStop;
     std::function<void(uint16_t)> m_onStreamingPortChanged;
@@ -1377,31 +1492,11 @@ private:
     uint64_t m_recordingDurationUs = 0;
     uint64_t m_recordingFileSize = 0;
     std::string m_recordingFilename;
-    uint32_t m_recordingWidth = 1920;
-    uint32_t m_recordingHeight = 1080;
-    uint32_t m_recordingFps = 60;
-    uint32_t m_recordingBitrate = 8000000;
-    uint32_t m_recordingAudioBitrate = 256000;
-    std::string m_recordingVideoCodec = "h264";
-    std::string m_recordingAudioCodec = "aac";
-    std::string m_recordingH264Preset = "veryfast";
-    std::string m_recordingH265Preset = "veryfast";
-    std::string m_recordingH265Profile = "main";
-    std::string m_recordingH265Level = "auto";
-    int m_recordingVP8Speed = 12;
-    int m_recordingVP9Speed = 6;
-    std::string m_recordingContainer = "mp4";
-    std::string m_recordingOutputPath = "recordings/";
-    std::string m_recordingFilenameTemplate = "recording_%Y%m%d_%H%M%S";
-    bool m_recordingIncludeAudio = true;
+    // #160 — recording settings grouped (see RecordingConfig above).
+    RecordingConfig m_recordingConfig;
     // Mirrors the streaming side (#59). 0=Auto (try hardware,
     // fall back to libx264), 1=Software, 2=NVENC, 3=VAAPI, 4=QSV,
     // 5=AMF. Backend-specific presets live in separate fields.
-    int         m_recordingHardwareEncoder = 0;
-    std::string m_recordingNvencPreset = "p4";
-    std::string m_recordingVaapiRcMode = "VBR"; // VBR is the better default for files
-    std::string m_recordingQsvPreset   = "medium";
-    std::string m_recordingAmfQuality  = "quality"; // recordings can afford the latency for visual quality
 
     // Recording callbacks
     std::function<void(bool)> m_onRecordingStartStop;
@@ -1429,34 +1524,13 @@ private:
     std::function<void(const std::string &)> m_onRecordingAmfQualityChanged;
 
     // Web Portal settings
-    bool m_webPortalEnabled = true; // Habilitado por padrão
-    bool m_webPortalHTTPSEnabled = false;
-    std::string m_webPortalSSLCertPath = "ssl/server.crt";
-    std::string m_webPortalSSLKeyPath = "ssl/server.key";
+    // #160 — web-portal settings grouped (see WebPortalConfig above).
+    WebPortalConfig m_webPortalConfig;
     std::string m_foundSSLCertPath;                                       // Caminho real do certificado encontrado (após busca)
     std::string m_foundSSLKeyPath;                                        // Caminho real da chave encontrada (após busca)
-    std::string m_webPortalTitle = "RetroCapture Stream";                 // Título da página web
-    std::string m_webPortalSubtitle = "Real-time video streaming"; // Subtítulo
-    std::string m_webPortalImagePath = "logo.png";                        // Caminho da imagem para o título (padrão: logo.png)
     std::string m_webPortalBackgroundImagePath;                           // Caminho da imagem de fundo (opcional)
 
     // Textos editáveis dos cards
-    std::string m_webPortalTextStreamInfo = "Stream Information";
-    std::string m_webPortalTextQuickActions = "Quick Actions";
-    std::string m_webPortalTextCompatibility = "Compatibilidade";
-    std::string m_webPortalTextStatus = "Status";
-    std::string m_webPortalTextCodec = "Codec";
-    std::string m_webPortalTextResolution = "Resolution";
-    std::string m_webPortalTextStreamUrl = "URL do Stream";
-    std::string m_webPortalTextCopyUrl = "Copiar URL";
-    std::string m_webPortalTextOpenNewTab = "Abrir em Nova Aba";
-    std::string m_webPortalTextSupported = "Suportado";
-    std::string m_webPortalTextFormat = "Formato";
-    std::string m_webPortalTextCodecInfo = "Codec";
-    std::string m_webPortalTextSupportedBrowsers = "Chrome, Firefox, Safari, Edge";
-    std::string m_webPortalTextFormatInfo = "HLS (HTTP Live Streaming)";
-    std::string m_webPortalTextCodecInfoValue = "H.264/AAC";
-    std::string m_webPortalTextConnecting = "Conectando...";
 
     // Cores do portal baseadas no styleguide RetroCapture (RGBA, valores 0.0-1.0)
     // Primary - Retro Teal #0A7A83

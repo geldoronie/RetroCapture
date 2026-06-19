@@ -19,6 +19,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.2-alpha] - 2026-06-19
+
+Fifteenth alpha release. A large **internal architecture pass**: the
+god-object classes (`Application`, `ShaderEngine`, `UIManager`,
+`APIController`, `HTTPTSStreamer`) were decomposed into focused units
+(extracted `FrameCapturePipeline`, `RemoteSourceManager`,
+`UICallbackWiring`, `FormatNegotiator`, `PixelFormatConverter`; config
+structs; per-domain routers). The refactor was meant to be
+behavior-preserving — one shader-rendering regression slipped through and
+is fixed here, along with several streaming/recording correctness bugs
+surfaced during the regression pass. The smoke-test now applies a shader
+and asserts it actually rendered, so this class of break can't ship green
+again.
+
+### Fixed
+
+- Shaders rendered nothing on the live output (window, stream, recording,
+  virtual camera): the per-pass render loop exited early on an inner-loop
+  guard, returning the unshaded input. Restored shader rendering (#184).
+- Recording came out upside-down when the Recording tab's apply-shader
+  toggle was off: the raw-source readback used the opposite vertical
+  orientation from the shaded path. Recording, `/stream` and `/raw` now
+  share the host's canonical orientation (#187).
+- The Remote source client ignored the Streaming tab's apply-shader
+  toggle and kept applying the shader; the `/meta` snapshot now reports
+  the effective streaming shader state so the client follows it (#188).
+- `--stream-port` was ignored and the server always bound 8080: the CLI
+  value was overwritten both by the web-portal-port default and by the
+  post-config sync. The explicit CLI port is now honored (#163).
+
+### Changed
+
+- **Remote protocol orientation (breaking):** the `/raw` feed now carries
+  the capture in the host's canonical bottom-up orientation, matching
+  `/stream` and recording. A 0.8.2-alpha client paired with a
+  pre-0.8.2-alpha host (or vice-versa) renders the remote picture
+  upside-down. Mixing versions across this boundary is unsupported (#187).
+
+### Internal
+
+- God-object refactor milestone (#149–#161): behavior-preserving
+  decomposition, validated per-PR with the scripted smoke-test.
+- Smoke-test now applies a multipass shader preset and asserts the output
+  differs from the raw source, and launches with `--stream-port` so a
+  non-default port doubles as a bind regression check (#186, #163).
+- Stopped tracking the generated `RetroCapture.ini` (#169); removed a dead
+  request-prefix block in `HTTPTSStreamer::handleClient` (#172); trimmed
+  `docs/` to the core set.
+
+---
+
 ## [0.8.1-alpha] - 2026-06-12
 
 Fourteenth alpha release. A focused **Windows-hardening** pass: every Windows
