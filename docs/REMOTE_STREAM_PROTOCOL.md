@@ -166,6 +166,15 @@ Properties:
   actively consuming.
 - A single MPEG-TS muxer state per output — a brand-new `/raw` client
   starts receiving packets from the next keyframe boundary.
+- **Frame orientation (since 0.8.2-alpha):** `/raw` carries the capture
+  in the host's canonical **bottom-up** orientation — the same as the
+  post-shader `/stream` and the recording encoder. Earlier builds tapped
+  the raw source one vertical flip off from that, so a 0.8.2-alpha client
+  and an older host (or vice-versa) will render the remote picture
+  upside-down. This was an intentional standardization break: there is no
+  longer a per-tap orientation special-case, and the client compensates
+  the remote feed's inversion uniformly (with or without a client-side
+  shader). Mixing 0.8.2-alpha with pre-0.8.2-alpha peers is unsupported.
 
 ```console
 $ ffplay http://host:8080/raw     # raw source feed, no shader
