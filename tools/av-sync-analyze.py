@@ -39,11 +39,19 @@ def video_onsets(path):
     band_h = max(2, h // 16)
     # Mean luma of a strip inside the flash band (bottom 1/8 of the frame),
     # one value per decoded frame, no frame-rate conversion.
-    raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough",
-         "-vf", f"crop={w}:{band_h}:0:{h - band_h - 2},scale=16:1,format=gray",
-         "-f", "rawvideo", "-"],
-        capture_output=True, check=True).stdout
+    vf = f"crop={w}:{band_h}:0:{h - band_h - 2},scale=16:1,format=gray"
+    # -fps_mode needs FFmpeg >= 5.1; older builds (Ubuntu 22.04's 4.4, the
+    # CI runner) only know the equivalent -vsync passthrough.
+    try:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough",
+             "-vf", vf, "-f", "rawvideo", "-"],
+            capture_output=True, check=True).stdout
+    except subprocess.CalledProcessError:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-vsync", "passthrough",
+             "-vf", vf, "-f", "rawvideo", "-"],
+            capture_output=True, check=True).stdout
     luma = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 16).mean(axis=1)
     n = min(len(luma), len(pts))
     luma, pts = luma[:n], pts[:n]
@@ -133,7 +141,12 @@ def main():
         return 2
     t = np.array([p[0] for p in pairs])
     off = np.array([p[1] for p in pairs])
-    slope_ms_per_s = np.polyfit(t, off, 1)[0] if len(t) > 2 else 0.0
+    # Steady-state drift: skip the first 10 s, where the encoder's clock
+    # controller is still settling (a short run would otherwise read that
+    # transient as drift). Fall back to all pairs on very short captures.
+    steady = t >= t[0] + 10.0
+    ts, offs = (t[steady], off[steady]) if steady.sum() >= 8 else (t, off)
+    slope_ms_per_s = np.polyfit(ts, offs, 1)[0] if len(ts) > 2 else 0.0
     drift = slope_ms_per_s * 60.0
     duration = float(vpts[-1] - vpts[0]) if len(vpts) > 1 else 0.0
     fps = (nframes - 1) / duration if duration > 0 else 0.0
