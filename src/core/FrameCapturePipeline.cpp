@@ -157,17 +157,35 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         const float overscanYPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentY() : 0.0f;
         const bool needsOverscan = (overscanXPctRead > 0.001f || overscanYPctRead > 0.001f);
 
-        const bool needsDownscale = (m_app.m_logicalCaptureWidth > 0 &&
-                                     m_app.m_logicalCaptureHeight > 0 &&
-                                     m_app.m_logicalCaptureWidth < shaderSrcW &&
-                                     m_app.m_logicalCaptureHeight < shaderSrcH &&
-                                     shaderSrcTex != 0);
-
-        if ((needsDownscale || needsOverscan) && shaderSrcTex != 0)
+        // Logical size the shader should see. Local capture: what the user
+        // asked for (the driver may have picked something bigger). Remote
+        // source: the host's source size from /meta (#209) — the client
+        // decoder only downscales, so a larger host source is upscaled
+        // here on the GPU instead of per frame on the CPU.
+        uint32_t wantW = m_app.m_logicalCaptureWidth;
+        uint32_t wantH = m_app.m_logicalCaptureHeight;
+        const bool remoteSource = m_app.m_ui && m_app.m_ui->getSourceType() == UIManager::SourceType::Remote;
+        if (remoteSource)
         {
-            // FBO size: logical quando há downscale, source dims caso contrário.
-            const uint32_t fboW = needsDownscale ? m_app.m_logicalCaptureWidth : shaderSrcW;
-            const uint32_t fboH = needsDownscale ? m_app.m_logicalCaptureHeight : shaderSrcH;
+            wantW = wantH = 0;
+            if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_app.m_capture.get()))
+            {
+                remote->getTargetResolution(wantW, wantH);
+            }
+        }
+        const bool needsDownscale = (wantW > 0 && wantH > 0 &&
+                                     wantW < shaderSrcW &&
+                                     wantH < shaderSrcH &&
+                                     shaderSrcTex != 0);
+        const bool needsUpscale = (remoteSource && wantW > 0 && wantH > 0 &&
+                                   (wantW > shaderSrcW || wantH > shaderSrcH) &&
+                                   shaderSrcTex != 0);
+
+        if ((needsDownscale || needsUpscale || needsOverscan) && shaderSrcTex != 0)
+        {
+            // FBO size: logical quando há rescale, source dims caso contrário.
+            const uint32_t fboW = (needsDownscale || needsUpscale) ? wantW : shaderSrcW;
+            const uint32_t fboH = (needsDownscale || needsUpscale) ? wantH : shaderSrcH;
 
             if (m_app.m_shaderSourceFBO == 0 ||
                 m_app.m_shaderSourceFBOWidth != fboW ||
@@ -224,13 +242,16 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
             // Forçar NEAREST na textura source pra preservar look pixelado
             // no downscale, e restaurar pra config do FrameProcessor depois.
+            // Remote upscale (#209) uses LINEAR, matching the bilinear CPU
+            // upscale it replaces.
+            const GLint scaleFilter = needsUpscale ? GL_LINEAR : GL_NEAREST;
             const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
                                             ? GL_LINEAR
                                             : GL_NEAREST;
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, scaleFilter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, scaleFilter);
 
             m_app.m_renderer->renderTexture(shaderSrcTex,
                                       fboW, fboH,

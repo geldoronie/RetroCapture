@@ -14,6 +14,51 @@
       "thumbnailPath": "/home/geldo/Videos/RetroCapture/recording_20261124_111126.jpg",
       "videoCodec": "h264",
       "width": 1280
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:05:25Z",
+      "duration": 5920500,
+      "fileSize": 10059602,
+      "filename": "recording_20261124_120525.mp4",
+      "filepath": "/tmp/rc-crec.LklT/rec/recording_20261124_120525.mp4",
+      "fps": 60,
+      "height": 1080,
+      "id": "9194278091299916057",
+      "thumbnailPath": "/tmp/rc-crec.LklT/rec/recording_20261124_120525.jpg",
+      "videoCodec": "h264",
+      "width": 1920
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:05:59Z",
+      "duration": 5926906,
+      "fileSize": 14005499,
+      "filename": "recording_20261124_120559.mp4",
+      "filepath": "/tmp/rc-crec.Li4K/rec/recording_20261124_120559.mp4",
+      "fps": 60,
+      "height": 480,
+      "id": "15965914903319723592",
+      "thumbnailPath": "/tmp/rc-crec.Li4K/rec/recording_20261124_120559.jpg",
+      "videoCodec": "h264",
+      "width": 640
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:09:11Z",
+      "duration": 5957854,
+      "fileSize": 14180103,
+      "filename": "recording_20261124_120911.mp4",
+      "filepath": "/tmp/rc-crec.jFxk/rec/recording_20261124_120911.mp4",
+      "fps": 60,
+      "height": 480,
+      "id": "4772252695851664440",
+      "thumbnailPath": "/tmp/rc-crec.jFxk/rec/recording_20261124_120911.jpg",
+      "videoCodec": "h264",
+      "width": 640
     }
   ]
 }
