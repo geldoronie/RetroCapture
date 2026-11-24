@@ -39,11 +39,19 @@ def video_onsets(path):
     band_h = max(2, h // 16)
     # Mean luma of a strip inside the flash band (bottom 1/8 of the frame),
     # one value per decoded frame, no frame-rate conversion.
-    raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough",
-         "-vf", f"crop={w}:{band_h}:0:{h - band_h - 2},scale=16:1,format=gray",
-         "-f", "rawvideo", "-"],
-        capture_output=True, check=True).stdout
+    vf = f"crop={w}:{band_h}:0:{h - band_h - 2},scale=16:1,format=gray"
+    # -fps_mode needs FFmpeg >= 5.1; older builds (Ubuntu 22.04's 4.4, the
+    # CI runner) only know the equivalent -vsync passthrough.
+    try:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough",
+             "-vf", vf, "-f", "rawvideo", "-"],
+            capture_output=True, check=True).stdout
+    except subprocess.CalledProcessError:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-vsync", "passthrough",
+             "-vf", vf, "-f", "rawvideo", "-"],
+            capture_output=True, check=True).stdout
     luma = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 16).mean(axis=1)
     n = min(len(luma), len(pts))
     luma, pts = luma[:n], pts[:n]
