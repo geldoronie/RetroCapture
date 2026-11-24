@@ -72,8 +72,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Best-effort runtime check on the runner's window server. Kept
-      # non-blocking until it has proven stable on hosted macOS runners.
+      # Best-effort runtime check. Non-blocking: hosted macOS runners have
+      # no GUI session, so GLFW can't create the OpenGL window ("Failed to
+      # create GLFW window") and the app exits at startup. Kept so it starts
+      # testing automatically if the runners ever provide one.
       - name: Smoke test (synthetic source)
         continue-on-error: true
         run: |
