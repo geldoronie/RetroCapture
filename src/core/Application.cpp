@@ -2118,6 +2118,16 @@ void Application::shutdown()
         glDeleteFramebuffers(1, &m_shaderSourceFBO);
         m_shaderSourceFBO = 0;
     }
+    if (m_sourceCropTexture != 0)
+    {
+        glDeleteTextures(1, &m_sourceCropTexture);
+        m_sourceCropTexture = 0;
+    }
+    if (m_sourceCropFBO != 0)
+    {
+        glDeleteFramebuffers(1, &m_sourceCropFBO);
+        m_sourceCropFBO = 0;
+    }
 
     if (m_frameProcessor)
     {
