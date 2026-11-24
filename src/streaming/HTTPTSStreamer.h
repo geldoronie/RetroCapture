@@ -78,6 +78,15 @@ public:
 
     // Additional configuration methods
     void setVideoBitrate(uint32_t bitrate) { m_videoBitrate = bitrate; }
+    // #220 — size of the pre-shader frames that will feed /raw (the capture
+    // source). /raw is encoded at this size, fitted within the /stream
+    // bounds, instead of being upscaled to the /stream output size. Call
+    // before initialize(); 0x0 (default) falls back to the /stream size.
+    void setRawSourceSize(uint32_t width, uint32_t height)
+    {
+        m_rawSourceWidth = width;
+        m_rawSourceHeight = height;
+    }
     void setAudioBitrate(uint32_t bitrate) { m_audioBitrate = bitrate; }
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);
     void setVideoCodec(const std::string &codecName);
@@ -200,6 +209,16 @@ private:
     void serverThread();
     void rawEncodingThread();     // Phase 2 of #47 — drains the raw synchronizer.
     bool initializeRawPipeline(); // Phase 2 of #47 — sets up the raw encoder + muxer.
+    // #220 — open the /raw encoder + muxer at a given size (shared by the
+    // initial bring-up and a mid-stream source resize).
+    bool openRawEncoder(uint32_t width, uint32_t height);
+    // #220 — /raw encode size for a source size: fitted within the /stream
+    // bounds (aspect kept, never upscaled), even dimensions.
+    void fitRawSize(uint32_t srcW, uint32_t srcH, uint32_t &outW, uint32_t &outH) const;
+    // #220 — the capture source changed size mid-stream: re-open the /raw
+    // encoder at the new size and drop /raw clients so they reconnect onto
+    // a clean stream (new SPS + PAT/PMT) instead of a mid-GOP size switch.
+    void reopenRawPipelineForSource(uint32_t srcW, uint32_t srcH);
     void cleanupRawPipeline();    // Phase 2 of #47 — tears down the raw encoder + muxer.
     int  writeToRawClients(const uint8_t *buf, int buf_size); // Phase 2 of #47.
     void handleClient(int clientFd);
@@ -386,6 +405,17 @@ private:
 
     std::vector<uint8_t> m_rawFormatHeader;
     bool                 m_rawHeaderWritten = false;
+
+    // #220 — capture source size hint and the size /raw is encoded at.
+    uint32_t m_rawSourceWidth  = 0;
+    uint32_t m_rawSourceHeight = 0;
+    uint32_t m_rawEncodeWidth  = 0;
+    uint32_t m_rawEncodeHeight = 0;
+    // Source size the current /raw encoder was sized for; a pushed frame
+    // that differs triggers reopenRawPipelineForSource().
+    uint32_t m_rawSizedForW = 0;
+    uint32_t m_rawSizedForH = 0;
+    bool     m_rawVideoSent  = false; // a video packet went out since the last open
 
     // Web Portal - responsável por servir a página web
     WebPortal m_webPortal;

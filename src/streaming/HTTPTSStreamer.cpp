@@ -1571,13 +1571,67 @@ bool HTTPTSStreamer::initializeRawPipeline()
     m_rawStreamSynchronizer.setMaxAudioBufferSize(rawMaxAudio);
     m_rawStreamSynchronizer.setSyncTolerance(50 * 1000LL);
 
-    // Strategy B (#47): /raw shares codec config (bitrate, codec, preset)
-    // with /stream. Separate encoder/muxer state lives parallel below.
+    // #220 — /raw is the PRE-shader source feed. It used to be encoded at
+    // the /stream output size, so a 1280x720 capture streamed at 1080p was
+    // upscaled to 1920x1080 before encoding: 2.25x the pixels for the remote
+    // client to decode, no added information (the client already scales the
+    // shader input on the GPU, #209). Encode at the source size instead,
+    // fitted within the /stream bounds.
+    uint32_t srcW = m_rawSourceWidth  > 0 ? m_rawSourceWidth  : m_width;
+    uint32_t srcH = m_rawSourceHeight > 0 ? m_rawSourceHeight : m_height;
+    uint32_t encW = 0, encH = 0;
+    fitRawSize(srcW, srcH, encW, encH);
+    if (!openRawEncoder(encW, encH))
+    {
+        return false;
+    }
+    m_rawSizedForW = srcW;
+    m_rawSizedForH = srcH;
+    return true;
+}
+
+void HTTPTSStreamer::fitRawSize(uint32_t srcW, uint32_t srcH, uint32_t &outW, uint32_t &outH) const
+{
+    uint32_t w = srcW > 0 ? srcW : m_width;
+    uint32_t h = srcH > 0 ? srcH : m_height;
+    if (m_width > 0 && m_height > 0 && (w > m_width || h > m_height))
+    {
+        // Downscale into the /stream bounds, aspect preserved.
+        const double sx = static_cast<double>(m_width) / w;
+        const double sy = static_cast<double>(m_height) / h;
+        const double sc = std::min(sx, sy);
+        w = static_cast<uint32_t>(w * sc);
+        h = static_cast<uint32_t>(h * sc);
+    }
+    // Chroma-subsampled codecs need even dimensions.
+    w &= ~1u;
+    h &= ~1u;
+    outW = std::max<uint32_t>(w, 16);
+    outH = std::max<uint32_t>(h, 16);
+}
+
+bool HTTPTSStreamer::openRawEncoder(uint32_t width, uint32_t height)
+{
+    // Strategy B (#47): /raw shares codec config (codec, preset) with
+    // /stream. Separate encoder/muxer state lives parallel below.
     MediaEncoder::VideoConfig videoConfig;
-    videoConfig.width    = m_width;
-    videoConfig.height   = m_height;
+    videoConfig.width    = width;
+    videoConfig.height   = height;
     videoConfig.fps      = m_fps;
-    videoConfig.bitrate  = m_videoBitrate;
+    // #220 — scale the bitrate with the pixel count so a smaller /raw is
+    // also cheaper to receive and to entropy-decode, but never below half of
+    // the configured bitrate (keeps sharp pixel-art sources clean).
+    uint32_t bitrate = m_videoBitrate;
+    if (m_width > 0 && m_height > 0)
+    {
+        const double ratio = (static_cast<double>(width) * height) /
+                             (static_cast<double>(m_width) * m_height);
+        if (ratio < 1.0)
+        {
+            bitrate = static_cast<uint32_t>(m_videoBitrate * std::max(ratio, 0.5));
+        }
+    }
+    videoConfig.bitrate  = bitrate;
     videoConfig.codec    = m_videoCodecName;
     videoConfig.preset   = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? m_h264Preset : m_h265Preset;
     videoConfig.profile  = (m_videoCodecName == "h264" || m_videoCodecName == "libx264") ? "baseline" : "";
@@ -1594,7 +1648,9 @@ bool HTTPTSStreamer::initializeRawPipeline()
     audioConfig.bitrate    = m_audioBitrate;
     audioConfig.codec      = m_audioCodecName;
 
-    LOG_INFO("Initializing /raw MediaEncoder (same config as /stream)");
+    LOG_INFO("Initializing /raw MediaEncoder at " + std::to_string(width) + "x" +
+             std::to_string(height) + " (" + std::to_string(bitrate / 1000) +
+             " kbps; /stream is " + std::to_string(m_width) + "x" + std::to_string(m_height) + ")");
 
     if (!m_rawMediaEncoder.initialize(videoConfig, audioConfig, true))
     {
@@ -1619,8 +1675,54 @@ bool HTTPTSStreamer::initializeRawPipeline()
         return false;
     }
 
+    m_rawEncodeWidth  = width;
+    m_rawEncodeHeight = height;
+    m_rawVideoSent    = false;
     LOG_INFO("Raw pipeline initialized — /raw ready to serve pre-shader frames");
     return true;
+}
+
+void HTTPTSStreamer::reopenRawPipelineForSource(uint32_t srcW, uint32_t srcH)
+{
+    uint32_t encW = 0, encH = 0;
+    fitRawSize(srcW, srcH, encW, encH);
+    m_rawSizedForW = srcW;
+    m_rawSizedForH = srcH;
+    if (encW == m_rawEncodeWidth && encH == m_rawEncodeHeight)
+    {
+        return; // same encode size (e.g. both sources exceed the bounds)
+    }
+    LOG_INFO("/raw: source is now " + std::to_string(srcW) + "x" + std::to_string(srcH) +
+             " — re-opening the /raw encoder and reconnecting /raw clients");
+
+    // Drop the clients first so nothing of the old stream's tail, nor the
+    // new stream's header, lands on a half-switched connection. Their
+    // serveRawClient loops see the closed socket and exit; remote clients
+    // reconnect on their own. Skipped while no video has gone out yet (the
+    // size hint was off at bring-up): clients only hold the PAT/PMT then,
+    // and H.264 dimensions come from the in-band SPS, so they can stay.
+    if (m_rawVideoSent)
+    {
+        std::lock_guard<std::mutex> lock(m_rawOutputMutex);
+        for (int fd : m_rawClientSockets)
+        {
+            m_httpServer.closeClient(fd);
+        }
+        m_rawClientSockets.clear();
+        m_rawClientPending.clear();
+        m_rawClientCount = 0;
+    }
+    m_rawMediaMuxer.cleanup();
+    m_rawMediaEncoder.cleanup();
+    {
+        std::lock_guard<std::mutex> lock(m_rawHeaderMutex);
+        m_rawFormatHeader.clear();
+        m_rawHeaderWritten = false;
+    }
+    if (!openRawEncoder(encW, encH))
+    {
+        LOG_ERROR("/raw: failed to re-open the encoder at the new source size");
+    }
 }
 
 void HTTPTSStreamer::cleanupRawPipeline()
@@ -1964,6 +2066,13 @@ void HTTPTSStreamer::rawEncodingThread()
                 if (framesProcessed >= MAX_FRAMES_PER_ITERATION) break;
                 if (frame.processed || !frame.data || frame.width == 0 || frame.height == 0) continue;
 
+                // #220 — capture source resized mid-stream: re-size /raw.
+                if (frame.width != m_rawSizedForW || frame.height != m_rawSizedForH)
+                {
+                    reopenRawPipelineForSource(frame.width, frame.height);
+                    if (!m_rawMediaEncoder.isInitialized()) break;
+                }
+
                 std::vector<MediaEncoder::EncodedPacket> packets;
                 if (m_rawMediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
                                                  frame.captureTimestampUs, packets))
@@ -1975,6 +2084,7 @@ void HTTPTSStreamer::rawEncodingThread()
                     processedAny = true;
                     framesProcessed++;
                     ++statVideoEncoded;
+                    m_rawVideoSent = true;
                 }
                 m_rawStreamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
             }
