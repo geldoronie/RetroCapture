@@ -67,9 +67,12 @@ def audio_onsets(path):
     info = ffprobe_json(path, "-select_streams", "a:0", "-show_entries", "stream=start_time")
     if not info.get("streams"):
         return None
-    start = float(info["streams"][0].get("start_time") or 0.0)
-    # aresample=async pads/trims to the stream timestamps, so sample i is at
-    # start + i / rate even across gaps in the audio timeline.
+    # ffmpeg rebases decoded timestamps on the FILE's start time (the
+    # earliest stream), and aresample=async with first_pts=0 pads/trims the
+    # audio to those timestamps from 0 — including any leading gap before
+    # the first audio packet. So sample i is at file_start + i / rate.
+    fmt = ffprobe_json(path, "-show_entries", "format=start_time")
+    start = float(fmt.get("format", {}).get("start_time") or 0.0)
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", path, "-map", "0:a:0",
          "-af", f"aresample={AUDIO_RATE}:async=1:first_pts=0", "-ac", "1",
