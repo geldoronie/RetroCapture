@@ -1022,8 +1022,12 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         if (bytesPerPixel == 3)
                         {
                             frameData.resize(rgbDataSize);
+                            // #210 — same rule as the window draw
+                            // (shouldFlipY): a remote frame arrives in the
+                            // opposite orientation, so flip it here too or
+                            // client recordings / virtcam are upside-down.
                             frameDataReady = m_app.m_pboManager->getReadData(
-                                frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                frameData.data(), textureWidth, textureHeight, /*flipY=*/remoteSource);
                             // #85 — Virtual camera also gets fed from
                             // the RGB path (no-shader / direct capture
                             // passthrough). Without this branch the
@@ -1049,7 +1053,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                             static_cast<size_t>(textureHeight) * 4);
                             if (m_app.m_pboManager->getReadData(rgbaData.data(),
                                                           textureWidth, textureHeight,
-                                                          /*flipY=*/false))
+                                                          /*flipY=*/remoteSource)) // #210
                             {
                                 // #85 — Virtual camera piggybacks on
                                 // this RGBA readback (shader path).
@@ -1101,7 +1105,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         frameData.resize(rgbDataSize);
                         for (uint32_t row = 0; row < textureHeight; row++)
                         {
-                            const uint8_t *srcPtr = frameDataWithPadding.data() + (row * syncRowPadded);
+                            // #210 — flip remote frames, like the window draw does.
+                            const uint32_t srcRow = remoteSource ? (textureHeight - 1 - row) : row;
+                            const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * syncRowPadded);
                             uint8_t *dstPtr = frameData.data() + (row * textureWidth * 3);
 
                             if (isShaderTexture)
