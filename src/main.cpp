@@ -1,6 +1,7 @@
 #include "core/Application.h"
 #include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
+#include "ui/UIRemoteConnection.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
 
@@ -1049,6 +1050,18 @@ int main(int argc, char *argv[])
         sourceTypeEnum = UIManager::SourceType::Test;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
+
+    // #207 — setSourceType(Remote) stands up an idle remote source that
+    // waits for Connect; replay the CLI URL through the same Connect path
+    // the UI uses, so `--source remote --remote-url` actually connects.
+    if (sourceType == "remote" && !remoteUrl.empty() && app.getUIManager())
+    {
+        if (auto *remoteWin = app.getUIManager()->getRemoteConnectionWindow())
+        {
+            remoteWin->triggerConnect(remoteUrl);
+            LOG_INFO("Connecting to remote host: " + remoteUrl);
+        }
+    }
     
     // Hide UI if requested (same as pressing F12)
     // IMPORTANT: This must be done AFTER init() but BEFORE run()

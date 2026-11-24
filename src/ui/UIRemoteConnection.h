@@ -31,6 +31,11 @@ public:
     ~UIRemoteConnection();
 
     void render();
+    // Advance a pending Connect/Disconnect. render() does it every frame;
+    // UIManager also calls it while the UI is hidden (F12 / --hide-ui),
+    // otherwise a connect armed from the CLI or a remote trigger would
+    // never run (#207).
+    void advanceStateMachine();
     void setVisible(bool visible);
     bool isVisible() const { return m_visible; }
 
@@ -88,5 +93,4 @@ private:
 
     void renderManualTab(bool sourceIsRemote, const std::string &currentDevice, bool connected);
     void renderStatusFooter(bool connected);
-    void advanceStateMachine();
 };
