@@ -27,6 +27,7 @@
 #                 shaders/shaders_glsl/ (default crt/crt-hyllian-glow.glslp,
 #                 a 6-pass CRT preset with no external LUT textures).
 #                 Set SMOKE_PRESET=none to skip the shader pass.
+#   SMOKE_KEEP=1  keep the work dir (app logs, captured streams) for debugging
 #
 # Needs: ffmpeg, ffprobe, curl, python3. A display — uses $DISPLAY if set,
 # otherwise falls back to xvfb-run (install xvfb in CI).
@@ -48,7 +49,7 @@ APP_PID=""
 cleanup() {
     [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
     [ -n "$APP_PID" ] && wait "$APP_PID" 2>/dev/null
-    rm -rf "$WORK"
+    if [ "${SMOKE_KEEP:-0}" = 1 ]; then echo "   (kept $WORK)"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
 

@@ -50,17 +50,20 @@ jobs:
             xvfb xauth ffmpeg curl python3 python3-numpy
 
       - name: Smoke test
-        run: SMOKE_PORT=8093 ./tools/smoke-test.sh
+        run: SMOKE_PORT=8093 SMOKE_KEEP=1 ./tools/smoke-test.sh
 
       # 30 fps keeps the software x264 encode comfortably real-time on a
       # 4-core runner; the sync measurement doesn't depend on the rate.
       - name: A/V sync test (fake audio clock +1000 ppm)
         run: AVSYNC_PORT=8095 AVSYNC_SECONDS=40 AVSYNC_FPS=30 AVSYNC_SKEW_PPM=1000 ./tools/av-sync-test.sh
 
-      - name: Upload build log
+      - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-build-log
-          path: build-linux-x86_64.log
+          name: linux-logs
+          path: |
+            build-linux-x86_64.log
+            /tmp/rc-smoke.*/**/*.log
+            /tmp/rc-smoke.*/*.ts
           if-no-files-found: ignore
