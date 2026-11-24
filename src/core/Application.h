@@ -121,6 +121,15 @@ public:
     void setStreamingAudioBitrate(uint32_t bitrate) { m_streamingAudioBitrate = bitrate; }
     void setStreamingVideoCodec(const std::string &codec) { m_streamingVideoCodec = codec; }
     void setStreamingAudioCodec(const std::string &codec) { m_streamingAudioCodec = codec; }
+    // #196 — use the synthetic A/V-sync tone instead of the platform audio
+    // capture (`--audio-source test`); skewPpm fakes a device clock error.
+    // Must be called before init().
+    void setTestAudioSource(bool enabled, int skewPpm, int fragmentMs)
+    {
+        m_testAudioSource = enabled;
+        m_testAudioSkewPpm = skewPpm;
+        m_testAudioFragmentMs = fragmentMs;
+    }
     void setStreamingH264Preset(const std::string &preset) { m_streamingH264Preset = preset; }
     void setStreamingH265Preset(const std::string &preset) { m_streamingH265Preset = preset; }
     void setStreamingH265Profile(const std::string &profile) { m_streamingH265Profile = profile; }
@@ -509,6 +518,10 @@ private:
     bool initWebPortal();
     void stopWebPortal();
     bool initAudioCapture();
+    // #196 — synthetic A/V-sync audio source (`--audio-source test`).
+    bool m_testAudioSource = false;
+    int m_testAudioSkewPpm = 0;
+    int m_testAudioFragmentMs = 10;
     void restoreAudioDeviceConnections();
     void handleKeyInput();
 

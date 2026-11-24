@@ -55,6 +55,7 @@
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../audio/AudioCaptureTestTone.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
@@ -1354,7 +1355,15 @@ bool Application::initAudioCapture()
         return true; // Audio not needed, not an error
     }
 
-    m_audioCapture = AudioCaptureFactory::create();
+    if (m_testAudioSource)
+    {
+        // #196 — synthetic flash/beep sync source; ignores the saved device.
+        m_audioCapture = std::make_unique<AudioCaptureTestTone>(m_testAudioSkewPpm, m_testAudioFragmentMs);
+    }
+    else
+    {
+        m_audioCapture = AudioCaptureFactory::create();
+    }
     if (!m_audioCapture)
     {
         LOG_ERROR("Failed to create AudioCapture for this platform");
@@ -1374,7 +1383,7 @@ bool Application::initAudioCapture()
     // separate restoreAudioDeviceConnections() loops the saved source
     // into it" two-step.
     std::string savedSource;
-    if (m_ui)
+    if (m_ui && !m_testAudioSource)
     {
         savedSource = m_ui->getAudioInputSourceId();
     }

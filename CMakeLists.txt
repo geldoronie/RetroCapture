@@ -597,7 +597,8 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
-    list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
+    # AudioBus is portable C++ — kept on Windows (synthetic test tone #196,
+    # timestamped capture fan-out #197).
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend

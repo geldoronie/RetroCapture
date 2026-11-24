@@ -1,5 +1,6 @@
 #include "VideoCaptureTestPattern.h"
 #include "../utils/Logger.h"
+#include "../utils/MediaClock.h"
 
 #include <cstring>
 
@@ -53,7 +54,7 @@ std::vector<DeviceInfo> VideoCaptureTestPattern::listDevices()
     return {DeviceInfo{"test", "Test Pattern", "synthetic", true}};
 }
 
-void VideoCaptureTestPattern::renderPattern()
+void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
 {
     const size_t needed = static_cast<size_t>(m_width) * m_height * 3;
     if (m_buffer.size() < needed)
@@ -73,7 +74,9 @@ void VideoCaptureTestPattern::renderPattern()
         {16, 16, 16},    // near-black
     };
 
-    const uint64_t f = m_frameCounter.fetch_add(1, std::memory_order_relaxed);
+    // Sync flash: first 100 ms of every whole MediaClock second (#196).
+    const bool flash = (timestampUs % 1000000LL) < 100000LL;
+    const uint32_t flashY0 = m_height - m_height / 8;
     const uint32_t barW = (m_width > 0) ? (m_width / 8) : 1;
     // A moving block sweeps left→right one column per frame, giving temporal
     // variance so a frozen/duplicated frame is detectable downstream.
@@ -93,6 +96,11 @@ void VideoCaptureTestPattern::renderPattern()
             {
                 r = g = b = 0;
             }
+            // Sync band: white during the flash window, black otherwise.
+            if (y >= flashY0)
+            {
+                r = g = b = flash ? 255 : 0;
+            }
             uint8_t *px = row + static_cast<size_t>(x) * 3;
             px[0] = r;
             px[1] = g;
@@ -105,7 +113,24 @@ bool VideoCaptureTestPattern::captureFrame(Frame &frame)
 {
     if (!m_open)
         return false;
-    renderPattern();
+
+    // Pace like a real device: one frame per 1/fps slot of MediaClock.
+    // Repeated calls inside the same slot report "no new frame".
+    const int64_t now = MediaClock::nowUs();
+    const uint32_t fps = m_fps ? m_fps : 60;
+    if (m_epochUs == 0)
+    {
+        // Align slot 0 to a whole second so flashes land on frame slots.
+        m_epochUs = now - (now % 1000000LL);
+    }
+    const int64_t slot = ((now - m_epochUs) * static_cast<int64_t>(fps)) / 1000000LL;
+    if (slot == m_lastSlot)
+        return false;
+    m_lastSlot = slot;
+    const int64_t timestampUs = m_epochUs + (slot * 1000000LL) / static_cast<int64_t>(fps);
+
+    renderPattern(m_frameCounter.fetch_add(1, std::memory_order_relaxed), timestampUs);
+    frame.timestampUs = timestampUs;
     frame.data = m_buffer.data();
     frame.size = static_cast<size_t>(m_width) * m_height * 3;
     frame.width = m_width;
