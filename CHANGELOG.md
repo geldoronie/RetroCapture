@@ -15,6 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.1-alpha] - 2026-11-24
+
+Seventeenth alpha release, a hotfix for **streaming, recording and the remote client**. The video encoder had been coding every frame as a keyframe (all-intra) since 0.3–0.5. Streams and recordings were heavier and lower quality than their bitrate should allow, and a remote client on a laptop couldn't decode the host's `/raw` feed in real time.
+
+### Fixed
+
+- **Every video frame was a keyframe** (#220), in `/stream`, `/raw` and recordings. The encoder marked a reused frame as a keyframe and never cleared the mark, so from the first frame on everything was coded intra-only. On a real source this measured 329 keyframes in 329 frames; it is now 6 keyframes in 356 frames (one per second, as intended).
+  - **`/raw` bitrate:** a live `/raw` ran at ~28 Mbps for a 10 Mbps setting.
+  - **`/stream` and recordings:** where the bitrate held, picture quality was far lower than it should have been.
+- **Remote client couldn't keep up with the host** (#220). The client fell seconds behind, then glitched every few seconds as the host dropped its backlog.
+  - **Root cause:** the all-intra stream above.
+  - **`/raw` at the source size:** `/raw` is now encoded at the capture source's size, fitted within the stream size, instead of being upscaled to the stream output. A 720p capture was sent as 1080p. The `/raw` bitrate scales with the pixel count, but never drops below half the configured bitrate.
+  - **Threaded client decode:** the client decodes with up to 4 threads instead of 1, which halves the decode time.
+
+### Tooling
+
+- `tools/smoke-test.sh` now fails if the stream is all-intra (#220).
+
+---
+
 ## [0.9.0-alpha] - 2026-11-24
 
 Sixteenth alpha release. An **A/V sync overhaul** (#201): recording,
