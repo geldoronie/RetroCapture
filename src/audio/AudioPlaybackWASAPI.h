@@ -51,6 +51,12 @@ public:
     int64_t getClockUs() const override;
     void    flush() override;
 
+    // #200 — monitor latency control: frames queued for the render thread
+    // and dropping the oldest of them. (Doesn't touch the playback clock
+    // bookkeeping; only the host-side monitor uses these.)
+    size_t  queuedFrames() const;
+    size_t  discardQueuedFrames(size_t frames);
+
 private:
     void renderThreadFn();
 

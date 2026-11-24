@@ -648,7 +648,26 @@ void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable, in
     // operator can hear the capture card live (skipped for loopback sources).
     if (m_monitorActive && m_monitor && m_monitor->isOpen())
     {
-        m_monitor->submit(flt, framesAvailable, 0);
+        // #200 — the render queue is fed here and drained by the device
+        // clock; keep it at ~40 ms instead of letting the clock difference
+        // pile up without bound (it used to need a manual Resync).
+        if (!m_monitorLatency.configured() || m_monitorLatency.sampleRate() != m_sampleRate)
+        {
+            m_monitorLatency.configure(m_sampleRate, m_channels, 40, 200);
+        }
+        const size_t snap = m_monitorLatency.update(m_monitor->queuedFrames());
+        if (snap > 0)
+        {
+            m_monitor->discardQueuedFrames(snap);
+            LOG_INFO("Audio monitor latency snap — dropped " +
+                     std::to_string(snap * 1000 / (m_sampleRate ? m_sampleRate : 48000)) + " ms");
+        }
+        m_monitorOut.clear();
+        m_monitorLatency.process(flt, framesAvailable, m_monitorOut);
+        if (!m_monitorOut.empty() && m_channels > 0)
+        {
+            m_monitor->submit(m_monitorOut.data(), m_monitorOut.size() / m_channels, 0);
+        }
     }
 
     // Encode / stream path keeps the int16 buffer that getSamples() expects.

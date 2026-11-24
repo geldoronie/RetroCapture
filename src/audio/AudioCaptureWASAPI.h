@@ -3,6 +3,7 @@
 #include "IAudioCapture.h"
 #include "AudioPlaybackWASAPI.h"
 #include "AudioBus.h"
+#include "MonitorLatencyController.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -113,6 +114,8 @@ private:
     std::unique_ptr<AudioPlaybackWASAPI> m_monitor;
     bool m_monitorActive = false;
     std::vector<float> m_monitorScratch;
+    std::vector<float> m_monitorOut;          // #200 rate-controlled monitor chunk
+    MonitorLatencyController m_monitorLatency; // #200 (capture thread only)
 
     // Helper methods
     bool initializeCOM();
