@@ -1,4 +1,5 @@
 #include "MediaSynchronizer.h"
+#include "../utils/MediaClock.h"
 #include "../utils/Logger.h"
 #include <algorithm>
 #include <ctime>
@@ -14,9 +15,8 @@ MediaSynchronizer::~MediaSynchronizer()
 
 int64_t MediaSynchronizer::getTimestampUs() const
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+    // Same clock as every capture timestamp (#197).
+    return MediaClock::nowUs();
 }
 
 bool MediaSynchronizer::addVideoFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
@@ -96,6 +96,8 @@ bool MediaSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount
     audio.sampleCount = sampleCount;
     audio.captureTimestampUs = captureTimestampUs;
     audio.durationUs = durationUs;
+    audio.sampleRate = sampleRate;
+    audio.channels = channels;
     audio.processed = false;
 
     {

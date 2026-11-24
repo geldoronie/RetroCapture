@@ -30,6 +30,12 @@ public:
     
     // Write audio samples (non-blocking, returns number of samples written)
     virtual size_t write(const int16_t* samples, size_t numSamples) = 0;
+
+    // #200 — interleaved samples queued but not yet played, and dropping
+    // the oldest of them. Used by the monitor latency control; outputs
+    // that block in write() (nothing piles up) keep the defaults.
+    virtual size_t getQueuedSamples() const { return 0; }
+    virtual size_t discardQueuedSamples(size_t numSamples) { (void)numSamples; return 0; }
     
     // Get audio format information
     virtual uint32_t getSampleRate() const = 0;

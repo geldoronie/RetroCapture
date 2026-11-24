@@ -5,7 +5,7 @@
 > capture cards. Includes HTTP MPEG-TS streaming, local recording, a virtual
 > camera output, and a full web portal for remote control.
 
-![Version](https://img.shields.io/badge/version-0.8.2--alpha-orange)
+![Version](https://img.shields.io/badge/version-0.9.0--alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Raspberry%20Pi-lightgrey)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
@@ -16,7 +16,7 @@
      Target ~1600x900. Save as docs/screenshots/hero.png -->
 ![Hero](docs/screenshots/hero.png)
 
-**[⬇ Download 0.8.2-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+**[⬇ Download 0.9.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
 [Documentation](#documentation) ·
 [Issues](https://github.com/geldoronie/RetroCapture/issues) ·
 [Changelog](CHANGELOG.md)
@@ -59,6 +59,36 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
   contrast, saturation, hue, gain, exposure, gamma, white balance, …).
 - 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
   (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
+
+### What's new in 0.9.0-alpha
+
+An **A/V sync overhaul**: recording, streaming and the local monitor kept
+drifting out of sync because nothing in the pipeline knew when audio or video
+had actually been captured. Every sample and frame now carries its capture
+time on one shared clock, from the device to the file or stream.
+
+- **No more progressive drift (#199, #124)** — audio stays locked to the
+  video even when the capture card's audio clock runs fast or slow: with a
+  1000 ppm clock error, drift went from +63 ms/min to +0.2 ms/min.
+- **Constant offset gone (#197, #198)** — audio and video are stamped at
+  capture, so the A/V offset is now ~0 ms (was tens of ms).
+- **Monitor stays in lip-sync (#200)** — monitor latency no longer grows
+  during a session (no more pressing *Resync*), on Linux, Windows and macOS.
+- **Smoother recordings and streams (#199)** — no out-of-order frames, no
+  video held back by late audio, and no seconds of audio before the picture.
+- **48 kHz audio fixed (#197)** — streaming audio no longer plays 8.8 % slow
+  on 48 kHz devices when streaming starts with the app.
+- **Remote client** — no more stutter and A/V swings with a large host source
+  (#209), recordings no longer upside-down (#210), and
+  `--source remote --remote-url` now connects (#207).
+- **Web portal player reconnects (#216)** instead of freezing when the
+  connection drops or can't keep up.
+- **No audio device? Streams still work (#193).** Ctrl+C now shuts down
+  cleanly (recording finalized).
+- **macOS on Apple Silicon** — new arm64 build alongside x86_64, built on
+  GitHub Actions (not tested on Mac hardware for this release).
+- **Tooling:** `tools/av-sync-test.sh` measures A/V offset and drift; CI runs
+  the smoke and A/V tests on every change.
 
 ### What's new in 0.8.2-alpha
 
@@ -183,16 +213,17 @@ shader:
 
 ## Download
 
-Pre-built binaries for **0.8.2-alpha** are attached to the
+Pre-built binaries for **0.9.0-alpha** are attached to the
 [latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
 
 | Platform | Artifact |
 | --- | --- |
-| Linux x86_64 | `RetroCapture-0.8.2-alpha-linux-x86_64.AppImage` |
-| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.8.2-alpha-linux-arm64v8.tar.gz` |
-| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.8.2-alpha-linux-arm32v7.tar.gz` |
-| Windows x86_64 | `RetroCapture-0.8.2-alpha-windows-x86_64-Setup.exe` |
-| macOS x86_64 | `RetroCapture-0.8.2-alpha-macos-x86_64.tar.gz` |
+| Linux x86_64 | `RetroCapture-0.9.0-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.9.0-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.9.0-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.9.0-alpha-windows-x86_64-Setup.exe` |
+| macOS Apple Silicon (arm64) | `RetroCapture-0.9.0-alpha-macos-arm64.tar.gz` |
+| macOS Intel (x86_64) | `RetroCapture-0.9.0-alpha-macos-x86_64.tar.gz` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
@@ -246,21 +277,21 @@ For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 # Download from Releases, then:
-chmod +x RetroCapture-0.8.2-alpha-linux-x86_64.AppImage
-./RetroCapture-0.8.2-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+chmod +x RetroCapture-0.9.0-alpha-linux-x86_64.AppImage
+./RetroCapture-0.9.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
 ```
 
 ### Windows
 
-Run the installer (`RetroCapture-0.8.2-alpha-windows-x86_64-Setup.exe`),
+Run the installer (`RetroCapture-0.9.0-alpha-windows-x86_64-Setup.exe`),
 then launch RetroCapture from the Start menu. DirectShow is the default
 capture source on Windows.
 
 ### Raspberry Pi
 
 ```bash
-tar -xzf RetroCapture-0.8.2-alpha-linux-arm64v8.tar.gz
-cd RetroCapture-0.8.2-alpha-linux-arm64v8
+tar -xzf RetroCapture-0.9.0-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.9.0-alpha-linux-arm64v8
 ./retrocapture --source v4l2 --v4l2-device /dev/video0
 ```
 

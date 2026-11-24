@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(RetroCapture VERSION 0.8.2 LANGUAGES CXX)
+project(RetroCapture VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -597,7 +597,8 @@ elseif(PLATFORM_WINDOWS)
     list(FILTER SOURCES EXCLUDE REGEX ".*AudioCapturePulse\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*PipeSourcePublisher\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*MonitorPlayback\\.(cpp|h)$")
-    list(FILTER SOURCES EXCLUDE REGEX ".*AudioBus\\.(cpp|h)$")
+    # AudioBus is portable C++ — kept on Windows (synthetic test tone #196,
+    # timestamped capture fan-out #197).
     list(FILTER SOURCES EXCLUDE REGEX ".*V4L2.*\\.(cpp|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureAVFoundation.*\\.(mm|h)$")
     list(FILTER SOURCES EXCLUDE REGEX ".*VideoCaptureScreen_mac\\.(mm|h)$") # #107 macOS SCK backend
@@ -648,6 +649,29 @@ elseif(PLATFORM_MACOS)
 
     # macOS usa GLFW (não SDL2 por padrão)
     list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
+endif()
+
+# macOS: pkg-config hands back bare library names (png16, avcodec, ...) for
+# the Homebrew packages. On Intel the Homebrew prefix (/usr/local/lib) is a
+# default linker path, on Apple Silicon (/opt/homebrew/lib) it isn't, so the
+# arm64 link failed with "library 'png16' not found" (#214). Add the
+# directories pkg-config / Homebrew report. Must precede add_executable.
+if(PLATFORM_MACOS)
+    set(_RC_MAC_LIB_DIRS
+        ${PNG_LIBRARY_DIRS} ${AVCODEC_LIBRARY_DIRS} ${AVFORMAT_LIBRARY_DIRS}
+        ${AVUTIL_LIBRARY_DIRS} ${SWSCALE_LIBRARY_DIRS} ${SWRESAMPLE_LIBRARY_DIRS}
+        ${GLFW_LIBRARY_DIRS})
+    execute_process(COMMAND brew --prefix
+                    OUTPUT_VARIABLE _RC_BREW_PREFIX
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_RC_BREW_PREFIX AND EXISTS "${_RC_BREW_PREFIX}/lib")
+        list(APPEND _RC_MAC_LIB_DIRS "${_RC_BREW_PREFIX}/lib")
+    endif()
+    if(_RC_MAC_LIB_DIRS)
+        list(REMOVE_DUPLICATES _RC_MAC_LIB_DIRS)
+        link_directories(${_RC_MAC_LIB_DIRS})
+        message(STATUS "macOS library search dirs: ${_RC_MAC_LIB_DIRS}")
+    endif()
 endif()
 
 # Executável principal

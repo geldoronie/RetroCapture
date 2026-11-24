@@ -83,9 +83,14 @@ void MonitorPlayback::stop()
 
 void MonitorPlayback::writerLoop()
 {
-    constexpr size_t kChunkSamples = 882 * 2;
-    std::vector<int16_t> chunk(kChunkSamples);
+    // ~10 ms per pull.
+    const size_t chunkSamples = static_cast<size_t>(m_sampleRate / 100) * m_channels;
+    std::vector<int16_t> chunk(chunkSamples);
     std::vector<int16_t> drain;
+    std::vector<int16_t> out;
+    // #200 — keep ~20 ms queued in the tap on top of the sink's 50 ms.
+    m_latency.configure(m_sampleRate, m_channels, 20, 200);
+    auto lastReport = std::chrono::steady_clock::now();
 
     while (m_running.load())
     {
@@ -105,9 +110,20 @@ void MonitorPlayback::writerLoop()
             // pa_simple_write below will refill from "now".
             int err = 0;
             pa_simple_flush(m_stream, &err);
+            m_latency.reset();
             LOG_INFO("MonitorPlayback: resync (dropped " +
                      std::to_string(available / (m_channels ? m_channels : 1)) +
                      " queued frames)");
+        }
+
+        // #200 — latency control on the tap backlog.
+        const size_t backlogFrames = m_tap->available() / m_channels;
+        const size_t snap = m_latency.update(backlogFrames);
+        if (snap > 0)
+        {
+            m_tap->discard(snap * m_channels);
+            LOG_INFO("MonitorPlayback: latency snap — dropped " +
+                     std::to_string(snap * 1000 / m_sampleRate) + " ms of backlog");
         }
 
         const size_t got = m_tap->pull(chunk.data(), chunk.size());
@@ -116,10 +132,24 @@ void MonitorPlayback::writerLoop()
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
+        out.clear();
+        m_latency.process(chunk.data(), got / m_channels, out);
 
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastReport > std::chrono::seconds(60))
+        {
+            lastReport = now;
+            LOG_INFO("MonitorPlayback: backlog " + std::to_string(backlogFrames * 1000 / m_sampleRate) +
+                     " ms, rate adjust " + std::to_string(static_cast<int>(m_latency.rateAdjustPpm())) + " ppm");
+        }
+
+        if (out.empty())
+        {
+            continue;
+        }
         int err = 0;
-        if (pa_simple_write(m_stream, chunk.data(),
-                            got * sizeof(int16_t), &err) < 0)
+        if (pa_simple_write(m_stream, out.data(),
+                            out.size() * sizeof(int16_t), &err) < 0)
         {
             LOG_ERROR(std::string("MonitorPlayback: pa_simple_write failed — ") +
                       pa_strerror(err));

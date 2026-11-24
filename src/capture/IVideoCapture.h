@@ -12,6 +12,9 @@ struct Frame
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t format = 0; // Platform-specific pixel format
+    // Capture time of this frame on MediaClock (monotonic µs). 0 = the
+    // backend didn't stamp it; consumers fall back to the dequeue time.
+    int64_t timestampUs = 0;
 };
 
 // Packed 32-bit pixel formats used by the screen-capture source (#107).

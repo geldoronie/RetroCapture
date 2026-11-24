@@ -1,4 +1,5 @@
 #include "RecordingManager.h"
+#include "../utils/MediaClock.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 #include "../utils/FilesystemCompat.h"
@@ -32,9 +33,8 @@ RecordingManager::~RecordingManager()
 
 int64_t RecordingManager::getTimestampUs() const
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+    // Same clock as every capture timestamp (#197).
+    return MediaClock::nowUs();
 }
 
 std::string RecordingManager::generateFilename(const RecordingSettings &settings)
@@ -170,7 +170,7 @@ bool RecordingManager::startRecording(const RecordingSettings &settings)
     // Configure MediaSynchronizer
     m_synchronizer.setMaxBufferTime(5 * 1000000LL); // 5 seconds
     m_synchronizer.setMaxVideoBufferSize(10);
-    m_synchronizer.setMaxAudioBufferSize(20);
+    m_synchronizer.setMaxAudioBufferSize(200); // >= 2 s of ~10 ms chunks (#199)
     m_synchronizer.setSyncTolerance(50 * 1000LL); // 50ms
     m_synchronizer.clear();
 
@@ -422,16 +422,15 @@ void RecordingManager::stopRecording()
     LOG_INFO("RecordingManager: Stopped recording");
 }
 
-void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
+void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!m_recording)
     {
         return;
     }
 
-    // Use absolute timestamp when frame arrives
-    // This ensures frames are timestamped based on when they're actually captured
-    int64_t timestampUs = getTimestampUs();
+    // #198 — capture time of the frame, not its arrival after render.
+    const int64_t timestampUs = captureTimestampUs > 0 ? captureTimestampUs : getTimestampUs();
 
     bool added = m_synchronizer.addVideoFrame(data, width, height, timestampUs);
 
@@ -455,18 +454,15 @@ void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t h
     }
 }
 
-void RecordingManager::pushAudio(const int16_t *samples, size_t sampleCount)
+void RecordingManager::pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
 {
     if (!m_recording || !m_settings.includeAudio)
     {
         return;
     }
 
-    // Use absolute timestamp when audio chunk arrives
-    // This ensures audio is timestamped based on when it's actually captured
-    int64_t timestampUs = getTimestampUs();
-
-    m_synchronizer.addAudioChunk(samples, sampleCount, timestampUs, m_audioSampleRate, m_audioChannels);
+    // #197 — capture time from the audio backend, not arrival time.
+    m_synchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannels);
 }
 
 void RecordingManager::encodingThread()
@@ -507,7 +503,8 @@ void RecordingManager::encodingThread()
 
                 std::vector<MediaEncoder::EncodedPacket> aPackets;
                 if (m_encoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
-                                          chunk.captureTimestampUs, aPackets))
+                                          chunk.captureTimestampUs, chunk.sampleRate,
+                                          chunk.channels, aPackets))
                 {
                     for (const auto &p : aPackets)
                     {
@@ -543,59 +540,23 @@ void RecordingManager::encodingThread()
                      ", AudioCh: " + std::to_string(m_audioChannels));
         }
 
-        // Calculate sync zone
-        MediaSynchronizer::SyncZone syncZone = m_synchronizer.calculateSyncZone();
-
-        // Log sync zone status periodically
-        static int syncZoneLogCounter = 0;
-        syncZoneLogCounter++;
-        if (syncZoneLogCounter == 1 || syncZoneLogCounter % 100 == 0)
+        // #199 — encode video in capture order, independently of audio. The
+        // old sync-zone gate (and its "first 2 slots" fallback) encoded stale
+        // frames after newer ones — visible back-and-forth stutter — and
+        // starved video whenever audio timestamps lagged. Alignment comes
+        // from the capture timestamps; the muxer interleaves by DTS.
+        if (videoBufferSize == 0)
         {
-            if (syncZone.isValid())
+            if (!processedAny)
             {
-                LOG_INFO("RecordingManager: SyncZone valid - Video: [" + std::to_string(syncZone.videoStartIdx) +
-                         "-" + std::to_string(syncZone.videoEndIdx) + "], Audio: [" +
-                         std::to_string(syncZone.audioStartIdx) + "-" + std::to_string(syncZone.audioEndIdx) +
-                         "], Time: [" + std::to_string(syncZone.startTimeUs) + "-" +
-                         std::to_string(syncZone.endTimeUs) + "]");
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
-            else
-            {
-                LOG_INFO("RecordingManager: SyncZone invalid - Video buffer: " + std::to_string(videoBufferSize) +
-                         ", Audio buffer: " + std::to_string(audioBufferSize));
-            }
+            continue;
         }
-
-        // Sem sync zone válido: processa vídeo sozinho. Áudio já foi
-        // drenado acima, então não precisamos esperar nada por ele.
-        if (!syncZone.isValid())
         {
-            if (videoBufferSize > 0)
-            {
-                syncZone = MediaSynchronizer::SyncZone();
-                syncZone.videoStartIdx = 0;
-                syncZone.videoEndIdx = std::min(videoBufferSize, static_cast<size_t>(2));
-                syncZone.audioStartIdx = 0;
-                syncZone.audioEndIdx = 1; // satisfaz isValid()
-                syncZone.startTimeUs = 0;
-                syncZone.endTimeUs = 1;
-            }
-            else
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                continue;
-            }
-        }
-
-        if (syncZone.isValid() && syncZone.videoEndIdx > syncZone.videoStartIdx)
-        {
-            // Get synchronized video frames (or video-only if audio not included)
-            auto videoFrames = m_synchronizer.getVideoFrames(syncZone);
-
-            // Process video frames
-            // Use same limits as streaming for consistency
+            auto videoFrames = m_synchronizer.getAllUnprocessedVideo();
             size_t framesProcessed = 0;
-            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2; // Same as streaming
+            size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 5 : 2;
 
             for (const auto &frame : videoFrames)
             {
@@ -603,55 +564,36 @@ void RecordingManager::encodingThread()
                 {
                     break;
                 }
-
                 if (framesProcessed >= MAX_FRAMES_PER_ITERATION)
                 {
                     break;
                 }
-
-                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
+                if (frame.processed || !frame.data || frame.width == 0 || frame.height == 0)
                 {
-                    // Encode frame
-                    std::vector<MediaEncoder::EncodedPacket> packets;
-                    if (m_encoder.encodeVideo(frame.data->data(), frame.width, frame.height,
-                                              frame.captureTimestampUs, packets))
-                    {
-                        // Mux packets
-                        for (const auto &packet : packets)
-                        {
-                            if (!m_recorder.muxPacket(packet))
-                            {
-                                LOG_ERROR("RecordingManager: Failed to mux packet");
-                            }
-                        }
-                        processedAny = true;
-                        framesProcessed++;
+                    continue;
+                }
 
-                        // Log first successful frame
-                        static bool firstFrameLogged = false;
-                        if (!firstFrameLogged)
+                std::vector<MediaEncoder::EncodedPacket> packets;
+                if (m_encoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                          frame.captureTimestampUs, packets))
+                {
+                    for (const auto &packet : packets)
+                    {
+                        if (!m_recorder.muxPacket(packet))
                         {
-                            LOG_INFO("RecordingManager: First frame encoded and muxed successfully");
-                            firstFrameLogged = true;
+                            LOG_ERROR("RecordingManager: Failed to mux packet");
                         }
                     }
-                    else
+                    processedAny = true;
+
+                    static bool firstFrameLogged = false;
+                    if (!firstFrameLogged)
                     {
-                        static int encodeErrorCount = 0;
-                        if (encodeErrorCount++ < 3)
-                        {
-                            LOG_WARN("RecordingManager: Failed to encode video frame");
-                        }
+                        LOG_INFO("RecordingManager: First frame encoded and muxed successfully");
+                        firstFrameLogged = true;
                     }
                 }
-            }
-
-            // Áudio já foi drenado no topo da iteração — aqui só vídeo.
-
-            // Marcar frames de vídeo processados (não áudio).
-            for (const auto &frame : videoFrames)
-            {
-                if (frame.processed || !frame.data) continue;
+                framesProcessed++;
                 m_synchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
             }
 

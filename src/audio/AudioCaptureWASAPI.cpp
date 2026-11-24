@@ -1,5 +1,6 @@
 #include "AudioCaptureWASAPI.h"
 #include "../utils/Logger.h"
+#include "../utils/MediaClock.h"
 #include <comdef.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -274,6 +275,13 @@ bool AudioCaptureWASAPI::initializeAudioClient()
     m_channels = m_waveFormat->nChannels;
     m_bytesPerSample = m_waveFormat->wBitsPerSample / 8;
 
+    // #197 — fan-out bus + local tap (~2 s) in the negotiated format.
+    {
+        std::lock_guard<std::mutex> lock(m_bufferMutex);
+        m_bus = std::make_unique<AudioBus>(m_sampleRate, m_channels);
+        m_localTap = m_bus->createTap(static_cast<size_t>(m_sampleRate) * m_channels * 2);
+    }
+
     // #137 — figure out the actual sample format. Shared-mode GetMixFormat
     // almost always reports WAVE_FORMAT_EXTENSIBLE wrapping 32-bit IEEE float;
     // the old code blindly read the buffer as int16 → white noise. Resolve
@@ -387,7 +395,8 @@ void AudioCaptureWASAPI::close()
 
     {
         std::lock_guard<std::mutex> lock(m_bufferMutex);
-        m_audioBuffer.clear();
+        m_localTap.reset();
+        m_bus.reset();
     }
 
     m_isOpen = false;
@@ -544,14 +553,38 @@ void AudioCaptureWASAPI::captureThreadFunction()
             BYTE *data = nullptr;
             UINT32 framesAvailable = 0;
             DWORD flags = 0;
+            UINT64 qpcPosition = 0; // 100 ns units of the performance counter
 
-            hr = m_captureClient->GetBuffer(&data, &framesAvailable, &flags, nullptr, nullptr);
+            hr = m_captureClient->GetBuffer(&data, &framesAvailable, &flags, nullptr, &qpcPosition);
 
             if (SUCCEEDED(hr))
             {
                 if (framesAvailable > 0)
                 {
-                    processAudioData(data, framesAvailable);
+                    // #197 — date the packet's first frame. qpcPosition is
+                    // when the device recorded it; convert its age to
+                    // MediaClock so we don't depend on the two clocks sharing
+                    // an epoch.
+                    const int64_t nowUs = MediaClock::nowUs();
+                    int64_t tsUs = 0;
+                    LARGE_INTEGER qpcNow, qpcFreq;
+                    if (!(flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) && qpcPosition != 0 &&
+                        QueryPerformanceCounter(&qpcNow) && QueryPerformanceFrequency(&qpcFreq) &&
+                        qpcFreq.QuadPart > 0)
+                    {
+                        const double now100ns = static_cast<double>(qpcNow.QuadPart) * 1e7 /
+                                                static_cast<double>(qpcFreq.QuadPart);
+                        const int64_t ageUs =
+                            static_cast<int64_t>((now100ns - static_cast<double>(qpcPosition)) / 10.0);
+                        if (ageUs >= 0 && ageUs < 2000000)
+                            tsUs = nowUs - ageUs;
+                    }
+                    if (tsUs == 0 && m_sampleRate > 0)
+                    {
+                        // No usable device timestamp: assume the packet just ended.
+                        tsUs = nowUs - static_cast<int64_t>(framesAvailable) * 1000000LL / m_sampleRate;
+                    }
+                    processAudioData(data, framesAvailable, tsUs);
                 }
 
                 m_captureClient->ReleaseBuffer(framesAvailable);
@@ -598,7 +631,7 @@ size_t AudioCaptureWASAPI::decodeToFloat(const BYTE *data, UINT32 framesAvailabl
     return total;
 }
 
-void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable)
+void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable, int64_t firstFrameTsUs)
 {
     if (!data || framesAvailable == 0)
     {
@@ -615,15 +648,37 @@ void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable)
     // operator can hear the capture card live (skipped for loopback sources).
     if (m_monitorActive && m_monitor && m_monitor->isOpen())
     {
-        m_monitor->submit(flt, framesAvailable, 0);
+        // #200 — the render queue is fed here and drained by the device
+        // clock; keep it at ~40 ms instead of letting the clock difference
+        // pile up without bound (it used to need a manual Resync).
+        if (!m_monitorLatency.configured() || m_monitorLatency.sampleRate() != m_sampleRate)
+        {
+            m_monitorLatency.configure(m_sampleRate, m_channels, 40, 200);
+        }
+        const size_t snap = m_monitorLatency.update(m_monitor->queuedFrames());
+        if (snap > 0)
+        {
+            m_monitor->discardQueuedFrames(snap);
+            LOG_INFO("Audio monitor latency snap — dropped " +
+                     std::to_string(snap * 1000 / (m_sampleRate ? m_sampleRate : 48000)) + " ms");
+        }
+        m_monitorOut.clear();
+        m_monitorLatency.process(flt, framesAvailable, m_monitorOut);
+        if (!m_monitorOut.empty() && m_channels > 0)
+        {
+            m_monitor->submit(m_monitorOut.data(), m_monitorOut.size() / m_channels, 0);
+        }
     }
 
     // Encode / stream path keeps the int16 buffer that getSamples() expects.
     {
         std::lock_guard<std::mutex> lock(m_bufferMutex);
-        size_t oldSize = m_audioBuffer.size();
-        m_audioBuffer.resize(oldSize + total);
-        int16_t *dst = m_audioBuffer.data() + oldSize;
+        if (!m_bus)
+        {
+            return;
+        }
+        m_int16Scratch.resize(total);
+        int16_t *dst = m_int16Scratch.data();
         for (size_t i = 0; i < total; ++i)
         {
             float s = flt[i];
@@ -631,39 +686,46 @@ void AudioCaptureWASAPI::processAudioData(BYTE *data, UINT32 framesAvailable)
             else if (s < -1.0f) s = -1.0f;
             dst[i] = static_cast<int16_t>(s * 32767.0f);
         }
+        m_bus->push(dst, total, firstFrameTsUs);
     }
 }
 
 size_t AudioCaptureWASAPI::getSamples(std::vector<float> &samples)
 {
+    samples.clear();
     if (!m_isOpen)
     {
-        samples.clear();
         return 0;
     }
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
-
-    if (m_audioBuffer.empty())
+    if (!m_localTap)
     {
-        samples.clear();
         return 0;
     }
-
-    size_t numSamples = m_audioBuffer.size();
-    samples.resize(numSamples);
-
-    // Convert from int16_t (-32768 to 32767) to float (-1.0 to 1.0)
-    for (size_t i = 0; i < numSamples; ++i)
+    const size_t available = m_localTap->available();
+    if (available == 0)
     {
-        samples[i] = static_cast<float>(m_audioBuffer[i]) / 32768.0f;
+        return 0;
     }
-
-    m_audioBuffer.clear();
-    return numSamples;
+    std::vector<int16_t> raw(available);
+    const size_t n = m_localTap->pull(raw.data(), available);
+    samples.resize(n);
+    for (size_t i = 0; i < n; ++i)
+    {
+        samples[i] = static_cast<float>(raw[i]) / 32768.0f;
+    }
+    return n;
 }
 
 size_t AudioCaptureWASAPI::getSamples(int16_t *buffer, size_t maxSamples)
+{
+    int64_t ignored = 0;
+    return getTimestampedSamples(buffer, maxSamples, ignored);
+}
+
+size_t AudioCaptureWASAPI::getTimestampedSamples(int16_t *buffer, size_t maxSamples,
+                                                 int64_t &firstSampleTsUs)
 {
     if (!m_isOpen || !buffer || maxSamples == 0)
     {
@@ -671,21 +733,11 @@ size_t AudioCaptureWASAPI::getSamples(int16_t *buffer, size_t maxSamples)
     }
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
-
-    if (m_audioBuffer.empty())
+    if (!m_localTap)
     {
         return 0;
     }
-
-    size_t samplesToCopy = std::min(maxSamples, m_audioBuffer.size());
-    if (samplesToCopy > 0)
-    {
-        std::memcpy(buffer, m_audioBuffer.data(), samplesToCopy * sizeof(int16_t));
-        m_audioBuffer.erase(m_audioBuffer.begin(),
-                            m_audioBuffer.begin() + samplesToCopy);
-    }
-
-    return samplesToCopy;
+    return m_localTap->pull(buffer, maxSamples, firstSampleTsUs);
 }
 
 uint32_t AudioCaptureWASAPI::getSampleRate() const

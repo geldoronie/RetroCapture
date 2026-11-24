@@ -52,18 +52,21 @@ public:
      * @param height Frame height
      * @return true if frame was queued successfully
      */
-    virtual bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) = 0;
+    // captureTimestampUs: MediaClock capture time of the frame (#198).
+    virtual bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs) = 0;
 
     /**
      * Push audio samples to be streamed
      * @param samples Audio samples (16-bit PCM)
      * @param sampleCount Number of samples
+     * @param captureTimestampUs MediaClock capture time of samples[0] (#197)
      * @return true if audio was queued successfully
      */
-    virtual bool pushAudio(const int16_t *samples, size_t sampleCount)
+    virtual bool pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
     {
         (void)samples;
         (void)sampleCount;
+        (void)captureTimestampUs;
         return false; // Default: no audio support
     }
 

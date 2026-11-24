@@ -193,6 +193,33 @@ Requisitos: `ffmpeg`, `ffprobe`, `curl`, `python3` e um display (usa `$DISPLAY`,
 ou cai pra `xvfb-run` em CI). Usa a porta 8080 — recusa rodar se já houver uma
 instância servindo nela (use `SMOKE_PORT` para mudar). Exit 0 = passou.
 
+### `av-sync-test.sh`
+
+Medição de sincronia A/V (#196), a régua do epic #201. Sobe o RetroCapture com
+as fontes sintéticas de sincronia — `--source test` pisca a faixa inferior do
+frame e `--audio-source test` emite um beep de 1 kHz, ambos nos primeiros
+100 ms de cada segundo cheio do mesmo relógio monotônico — e, em paralelo,
+puxa `/stream` e faz uma gravação (via API REST). Para cada saída mede o offset
+áudio − vídeo de cada par flash/beep (`av-sync-analyze.py`): média, máximo,
+dispersão e o drift em ms/min.
+
+`AVSYNC_SKEW_PPM` faz o relógio do "dispositivo" de áudio falso correr
+adiantado/atrasado em relação ao relógio do sistema, como o cristal de áudio
+de uma placa de captura real (#124). Um pipeline correto mantém o áudio
+travado na linha do tempo da captura qualquer que seja o skew; um pipeline que
+confia na contagem de amostras deriva exatamente o skew (1000 ppm = 60 ms/min).
+
+```bash
+./tools/av-sync-test.sh                       # 40 s, skew 1000 ppm
+AVSYNC_SKEW_PPM=0 AVSYNC_SECONDS=120 ./tools/av-sync-test.sh
+AVSYNC_REPORT_ONLY=1 ./tools/av-sync-test.sh  # só reporta (baselines)
+```
+
+Variáveis: `AVSYNC_SECONDS`, `AVSYNC_SKEW_PPM`, `AVSYNC_FRAGMENT_MS`,
+`AVSYNC_PORT` (padrão 8091), `AVSYNC_FPS`, limites `AVSYNC_MAX_MEAN_MS` /
+`AVSYNC_MAX_ABS_MS` / `AVSYNC_MAX_DRIFT`, `AVSYNC_KEEP=1` (mantém os arquivos).
+Requisitos: os do smoke-test + `numpy`. Exit 0 = em sincronia.
+
 ## 📝 Notas
 
 - Todos os scripts de build suportam argumentos em qualquer ordem

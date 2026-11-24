@@ -464,6 +464,19 @@ size_t AudioCaptureCoreAudio::getSamples(int16_t *buffer, size_t maxSamples)
     return m_localTap->pull(buffer, maxSamples);
 }
 
+size_t AudioCaptureCoreAudio::getTimestampedSamples(int16_t *buffer, size_t maxSamples,
+                                                    int64_t &firstSampleTsUs)
+{
+    // #197 — the input callback pushes right after the device delivers a
+    // block, so the bus dates each block on arrival; the tap carries that
+    // date through any backlog.
+    if (!m_isOpen || !m_isCapturing || !buffer || maxSamples == 0 || !m_localTap)
+    {
+        return 0;
+    }
+    return m_localTap->pull(buffer, maxSamples, firstSampleTsUs);
+}
+
 bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDeviceId)
 {
 #ifdef __APPLE__
@@ -607,6 +620,12 @@ bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDevi
     // mono devices will deliver a single channel; the rest of the
     // bus / monitor pipeline handles channel counts > 0 fine.
     AudioStreamBasicDescription streamFormat = {};
+    // #197 — keep the bus (and its taps' timestamp math) on the format
+    // actually delivered by the AudioUnit.
+    if (m_bus)
+    {
+        m_bus->setFormat(m_sampleRate, m_channels);
+    }
     streamFormat.mSampleRate       = m_sampleRate;
     streamFormat.mFormatID         = kAudioFormatLinearPCM;
     streamFormat.mFormatFlags      = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
@@ -775,6 +794,12 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
     constexpr size_t kChunkSamples = 882 * 2;
     std::vector<int16_t> chunk(kChunkSamples);
     std::vector<int16_t> drain;
+    std::vector<int16_t> out;
+    // #200 — the output's write() doesn't block: the clock difference
+    // piles up in its queue (capped at 1 s), not in the tap. Keep the
+    // total (tap + output queue) at ~40 ms.
+    const uint32_t ch = m_channels ? m_channels : 2;
+    m_monitorLatency.configure(m_sampleRate, ch, 40, 200);
 
     while (m_monitorRunning.load())
     {
@@ -788,6 +813,11 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
                 drain.resize(available);
                 m_monitorTap->pull(drain.data(), available);
             }
+            if (m_monitor)
+            {
+                m_monitor->discardQueuedSamples(m_monitor->getQueuedSamples());
+            }
+            m_monitorLatency.reset();
             LOG_INFO("AudioCaptureCoreAudio: monitor resync (dropped " +
                      std::to_string(available / (m_channels ? m_channels : 1)) +
                      " queued frames)");
@@ -806,9 +836,23 @@ void AudioCaptureCoreAudio::monitorWriterLoop()
             continue;
         }
 
-        if (m_monitor->isEnabled() && m_monitor->isOpen())
+        // #200 — latency control on what's queued ahead of the device.
         {
-            const size_t written = m_monitor->write(chunk.data(), got);
+            const size_t queuedFrames = (m_monitor->getQueuedSamples() + m_monitorTap->available()) / ch;
+            const size_t snap = m_monitorLatency.update(queuedFrames);
+            if (snap > 0)
+            {
+                m_monitor->discardQueuedSamples(snap * ch);
+                LOG_INFO("AudioCaptureCoreAudio: monitor latency snap — dropped " +
+                         std::to_string(snap * 1000 / (m_sampleRate ? m_sampleRate : 48000)) + " ms");
+            }
+            out.clear();
+            m_monitorLatency.process(chunk.data(), got / ch, out);
+        }
+
+        if (m_monitor->isEnabled() && m_monitor->isOpen() && !out.empty())
+        {
+            const size_t written = m_monitor->write(out.data(), out.size());
             // Mirror the input-callback diagnostic — first few iterations
             // plus a periodic heartbeat so an open-but-silent monitor
             // playback path can be told apart from an empty input.

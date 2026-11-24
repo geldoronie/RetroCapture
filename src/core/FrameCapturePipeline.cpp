@@ -157,17 +157,35 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         const float overscanYPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentY() : 0.0f;
         const bool needsOverscan = (overscanXPctRead > 0.001f || overscanYPctRead > 0.001f);
 
-        const bool needsDownscale = (m_app.m_logicalCaptureWidth > 0 &&
-                                     m_app.m_logicalCaptureHeight > 0 &&
-                                     m_app.m_logicalCaptureWidth < shaderSrcW &&
-                                     m_app.m_logicalCaptureHeight < shaderSrcH &&
-                                     shaderSrcTex != 0);
-
-        if ((needsDownscale || needsOverscan) && shaderSrcTex != 0)
+        // Logical size the shader should see. Local capture: what the user
+        // asked for (the driver may have picked something bigger). Remote
+        // source: the host's source size from /meta (#209) — the client
+        // decoder only downscales, so a larger host source is upscaled
+        // here on the GPU instead of per frame on the CPU.
+        uint32_t wantW = m_app.m_logicalCaptureWidth;
+        uint32_t wantH = m_app.m_logicalCaptureHeight;
+        const bool remoteSource = m_app.m_ui && m_app.m_ui->getSourceType() == UIManager::SourceType::Remote;
+        if (remoteSource)
         {
-            // FBO size: logical quando há downscale, source dims caso contrário.
-            const uint32_t fboW = needsDownscale ? m_app.m_logicalCaptureWidth : shaderSrcW;
-            const uint32_t fboH = needsDownscale ? m_app.m_logicalCaptureHeight : shaderSrcH;
+            wantW = wantH = 0;
+            if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_app.m_capture.get()))
+            {
+                remote->getTargetResolution(wantW, wantH);
+            }
+        }
+        const bool needsDownscale = (wantW > 0 && wantH > 0 &&
+                                     wantW < shaderSrcW &&
+                                     wantH < shaderSrcH &&
+                                     shaderSrcTex != 0);
+        const bool needsUpscale = (remoteSource && wantW > 0 && wantH > 0 &&
+                                   (wantW > shaderSrcW || wantH > shaderSrcH) &&
+                                   shaderSrcTex != 0);
+
+        if ((needsDownscale || needsUpscale || needsOverscan) && shaderSrcTex != 0)
+        {
+            // FBO size: logical quando há rescale, source dims caso contrário.
+            const uint32_t fboW = (needsDownscale || needsUpscale) ? wantW : shaderSrcW;
+            const uint32_t fboH = (needsDownscale || needsUpscale) ? wantH : shaderSrcH;
 
             if (m_app.m_shaderSourceFBO == 0 ||
                 m_app.m_shaderSourceFBOWidth != fboW ||
@@ -224,13 +242,16 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
             // Forçar NEAREST na textura source pra preservar look pixelado
             // no downscale, e restaurar pra config do FrameProcessor depois.
+            // Remote upscale (#209) uses LINEAR, matching the bilinear CPU
+            // upscale it replaces.
+            const GLint scaleFilter = needsUpscale ? GL_LINEAR : GL_NEAREST;
             const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
                                             ? GL_LINEAR
                                             : GL_NEAREST;
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, scaleFilter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, scaleFilter);
 
             m_app.m_renderer->renderTexture(shaderSrcTex,
                                       fboW, fboH,
@@ -592,6 +613,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
     if (needsFrameCapture)
     {
+        // #198 — the captured frame currently on screen. Synchronous
+        // readbacks are of this frame; the async PBO one is of the frame
+        // read back on the previous call (see m_pboInFlight).
+        const FrameMeta curMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
+                                m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
 
         // Capturar do viewport (o que está sendo renderizado)
         uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -854,13 +880,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // arrival jittered slightly below 1/fps (observed as
                         // "push throttle skips=20-24/s" while the encoder sat
                         // idle waiting for input).
-                        if (m_app.m_streamManager && m_app.m_streamManager->isActive())
+                        // #198 — once per captured frame, with its capture time.
+                        if (m_app.m_streamManager && m_app.m_streamManager->isActive() &&
+                            curMeta.seq != m_lastStreamSeq)
                         {
-                            m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                            m_lastStreamSeq = curMeta.seq;
+                            m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
                         }
-                        if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
+                        if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording() &&
+                            curMeta.seq != m_lastRecordSeq)
                         {
-                            m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                            m_lastRecordSeq = curMeta.seq;
+                            m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
                         }
                     }
                     else
@@ -943,6 +974,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
                     auto &frameData = m_app.m_captureFrameData;
                     bool frameDataReady = false;
+                    // Which captured frame frameData holds (#198).
+                    FrameMeta dataMeta = curMeta;
 
                     // Decidir entre PBO async e leitura síncrona ANTES de tocar no FBO.
                     // O PBO precisa do FBO bound durante startAsyncRead; o sync precisa
@@ -970,6 +1003,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
                     if (useAsyncPBO)
                     {
+                        // #198 — getReadData() below returns the readback
+                        // started on the previous call: label it with the
+                        // frame that readback was of.
+                        dataMeta = m_pboInFlight;
+                        m_pboInFlight = curMeta;
                         // Agenda glReadPixels no PBO (não bloqueia).
                         m_app.m_pboManager->startAsyncRead(0, 0,
                                                      static_cast<GLsizei>(textureWidth),
@@ -984,8 +1022,12 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         if (bytesPerPixel == 3)
                         {
                             frameData.resize(rgbDataSize);
+                            // #210 — same rule as the window draw
+                            // (shouldFlipY): a remote frame arrives in the
+                            // opposite orientation, so flip it here too or
+                            // client recordings / virtcam are upside-down.
                             frameDataReady = m_app.m_pboManager->getReadData(
-                                frameData.data(), textureWidth, textureHeight, /*flipY=*/false);
+                                frameData.data(), textureWidth, textureHeight, /*flipY=*/remoteSource);
                             // #85 — Virtual camera also gets fed from
                             // the RGB path (no-shader / direct capture
                             // passthrough). Without this branch the
@@ -1011,7 +1053,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                             static_cast<size_t>(textureHeight) * 4);
                             if (m_app.m_pboManager->getReadData(rgbaData.data(),
                                                           textureWidth, textureHeight,
-                                                          /*flipY=*/false))
+                                                          /*flipY=*/remoteSource)) // #210
                             {
                                 // #85 — Virtual camera piggybacks on
                                 // this RGBA readback (shader path).
@@ -1063,7 +1105,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         frameData.resize(rgbDataSize);
                         for (uint32_t row = 0; row < textureHeight; row++)
                         {
-                            const uint8_t *srcPtr = frameDataWithPadding.data() + (row * syncRowPadded);
+                            // #210 — flip remote frames, like the window draw does.
+                            const uint32_t srcRow = remoteSource ? (textureHeight - 1 - row) : row;
+                            const uint8_t *srcPtr = frameDataWithPadding.data() + (srcRow * syncRowPadded);
                             uint8_t *dstPtr = frameData.data() + (row * textureWidth * 3);
 
                             if (isShaderTexture)
@@ -1223,15 +1267,22 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // lagging the audio (and overflowed the /stream
                             // synchronizer continuously). Idle the /stream
                             // encoder when no one is watching it.
-                            if (m_app.m_streamManager->hasClients())
+                            //
+                            // #198 — push each captured frame once, stamped
+                            // with its capture time (the source readback is
+                            // synchronous → current frame; frameData may be
+                            // the previous frame on the async PBO path).
+                            const FrameMeta streamMeta = useSource ? curMeta : dataMeta;
+                            if (m_app.m_streamManager->hasClients() && streamMeta.seq != m_lastStreamSeq)
                             {
+                                m_lastStreamSeq = streamMeta.seq;
                                 if (useSource)
                                 {
-                                    m_app.m_streamManager->pushFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                    m_app.m_streamManager->pushFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, streamMeta.tsUs);
                                 }
                                 else
                                 {
-                                    m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, streamMeta.tsUs);
                                 }
                             }
 
@@ -1253,13 +1304,16 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             //     stop while audio kept flowing).
                             if (m_app.m_streamManager->hasRawClients())
                             {
-                                if (sourceFrameReady)
+                                if (sourceFrameReady && curMeta.seq != m_lastRawSeq)
                                 {
-                                    m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
+                                    m_lastRawSeq = curMeta.seq;
+                                    m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
                                 }
-                                else if (!masterOn || !shaderActive)
+                                else if (!sourceFrameReady && (!masterOn || !shaderActive) &&
+                                         dataMeta.seq != m_lastRawSeq)
                                 {
-                                    m_app.m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                    m_lastRawSeq = dataMeta.seq;
+                                    m_app.m_streamManager->pushRawFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, dataMeta.tsUs);
                                 }
                             }
                         }
@@ -1276,13 +1330,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 LOG_INFO("Recording target resolution: " + std::to_string(recSettings.width) + "x" + std::to_string(recSettings.height));
                                 LOG_DEBUG("===================================");
                             }
-                            if (useSource)
+                            const FrameMeta recordMeta = useSource ? curMeta : dataMeta;
+                            if (recordMeta.seq != m_lastRecordSeq)
                             {
-                                m_app.m_recordingManager->pushFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH);
-                            }
-                            else
-                            {
-                                m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight);
+                                m_lastRecordSeq = recordMeta.seq;
+                                if (useSource)
+                                {
+                                    m_app.m_recordingManager->pushFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, recordMeta.tsUs);
+                                }
+                                else
+                                {
+                                    m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, recordMeta.tsUs);
+                                }
                             }
                         }
                 } // fim do else (textura válida)

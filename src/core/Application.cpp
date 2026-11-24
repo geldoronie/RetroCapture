@@ -55,6 +55,7 @@
 #include "../streaming/HTTPTSStreamer.h"
 #include "../audio/IAudioCapture.h"
 #include "../audio/AudioCaptureFactory.h"
+#include "../audio/AudioCaptureTestTone.h"
 #ifdef __linux__
 #include "../audio/AudioCapturePulse.h"
 #endif
@@ -217,8 +218,16 @@ bool Application::init()
     }
 
     // Initialize audio capture (required for streaming and/or recording)
-    // Audio is needed for recording even if streaming is not enabled
-    if (m_streamingEnabled || m_recordingManager)
+    // Audio is needed for recording even if streaming is not enabled.
+    // initStreaming() already brought it up when streaming is enabled (#197).
+    if (m_audioCapture && m_audioCapture->isOpen())
+    {
+        if (m_recordingManager)
+        {
+            m_recordingManager->setAudioFormat(m_audioCapture->getSampleRate(), m_audioCapture->getChannels());
+        }
+    }
+    else if (m_streamingEnabled || m_recordingManager)
     {
         if (!initAudioCapture())
         {
@@ -1074,6 +1083,20 @@ bool Application::initStreaming()
 
     m_streamManager = std::make_unique<StreamManager>();
 
+    // #197 — audio capture must be up BEFORE the streamer is configured:
+    // setAudioFormat() below bakes the capture's sample rate / channels into
+    // the encoder. It used to be initialized at the end of this function
+    // (and after initStreaming() in init()), so a streaming-on-startup
+    // session kept the 44.1 kHz default and a 48 kHz device (Windows /
+    // macOS defaults) streamed audio 8.8 % slow.
+    if (!m_audioCapture)
+    {
+        if (!initAudioCapture())
+        {
+            LOG_WARN("Failed to initialize audio capture - continuing without audio");
+        }
+    }
+
     // IMPORTANT: Streaming resolution must be fixed, based on streaming tab settings
     // If not configured, use capture resolution (NEVER use window resolution which can change)
     // IMPORTANT: Check if device is open before accessing getWidth/getHeight
@@ -1228,15 +1251,6 @@ bool Application::initStreaming()
     m_foundSSLCertPath.clear();
     m_foundSSLKeyPath.clear();
 
-    // Initialize audio capture if not already initialized (always required for streaming)
-    if (!m_audioCapture)
-    {
-        if (!initAudioCapture())
-        {
-            LOG_WARN("Failed to initialize audio capture - continuing without audio");
-        }
-    }
-
     return true;
 }
 
@@ -1354,7 +1368,15 @@ bool Application::initAudioCapture()
         return true; // Audio not needed, not an error
     }
 
-    m_audioCapture = AudioCaptureFactory::create();
+    if (m_testAudioSource)
+    {
+        // #196 — synthetic flash/beep sync source; ignores the saved device.
+        m_audioCapture = std::make_unique<AudioCaptureTestTone>(m_testAudioSkewPpm, m_testAudioFragmentMs);
+    }
+    else
+    {
+        m_audioCapture = AudioCaptureFactory::create();
+    }
     if (!m_audioCapture)
     {
         LOG_ERROR("Failed to create AudioCapture for this platform");
@@ -1374,7 +1396,7 @@ bool Application::initAudioCapture()
     // separate restoreAudioDeviceConnections() loops the saved source
     // into it" two-step.
     std::string savedSource;
-    if (m_ui)
+    if (m_ui && !m_testAudioSource)
     {
         savedSource = m_ui->getAudioInputSourceId();
     }
@@ -1641,125 +1663,61 @@ void Application::refreshTrayMenu()
     m_tray->setMenu(items);
 }
 
+std::atomic<bool> Application::s_quitRequested{false};
+
 void Application::processAudioCapture()
 {
-    // #152 - extracted verbatim from run(): drain the audio capture into
-    // the stream/recording managers (and keep the PulseAudio mainloop
-    // serviced even when idle so system audio doesn't freeze).
-    if (m_audioCapture && m_audioCapture->isOpen())
+    // #152 — drains the audio capture into the stream/recording managers.
+    // #197 — capture runs on its own thread and timestamps at the source;
+    // this only moves already-dated chunks from the capture's local tap to
+    // the encoders, so main-loop jitter no longer shifts audio in time.
+    if (!m_audioCapture || !m_audioCapture->isOpen())
     {
-        // Process PulseAudio mainloop to avoid blocking system audio
-        // This should be done always, not only when streaming is active
-        if (m_streamManager && m_streamManager->isActive())
+        return;
+    }
+
+    const bool streaming = m_streamManager && m_streamManager->isActive();
+    const bool recording = m_recordingManager && m_recordingManager->isRecording();
+
+    const uint32_t rate = m_audioCapture->getSampleRate();
+    const uint32_t channels = m_audioCapture->getChannels() ? m_audioCapture->getChannels() : 2;
+    // ~10 ms chunks (interleaved samples = frames * channels; the old
+    // per-"video frame" size forgot the channel count, #197).
+    const size_t chunkSamples = std::max<size_t>(64, (rate / 100) * channels);
+    std::vector<int16_t> &buf = m_audioPumpBuffer;
+    buf.resize(chunkSamples);
+
+    if (!streaming && !recording)
+    {
+        // Nobody consumes the local tap: keep it from backing up. (The
+        // host-side monitor has its own tap and keeps playing.)
+        while (m_audioCapture->getSamples(buf.data(), buf.size()) == buf.size())
         {
-
-            // Calculate buffer size based on time for synchronization
-            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
-            uint32_t videoFps = m_streamingFps > 0 ? m_streamingFps : m_captureFps;
-
-            // Calculate samples corresponding to 1 video frame
-            // For 60 FPS and 44100Hz: 44100/60 = 735 samples per frame
-            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
-                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
-                                              : 512;
-            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
-
-            // Process audio in loop until all available samples are exhausted
-            // OPTIMIZATION: Reuse buffer to avoid unnecessary allocations
-            // IMPORTANT: Add iteration limit to avoid infinite loop that would freeze main thread
-            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
-
-            // Iteration limit to avoid infinite loop (process at most 10 audio frames per cycle)
-            const int maxIterations = 10;
-            int iteration = 0;
-
-            while (iteration < maxIterations)
-            {
-                // Read audio in chunks corresponding to 1 video frame time
-                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-
-                if (samplesRead > 0)
-                {
-                    // Share audio data between streaming and recording
-                    if (m_streamManager && m_streamManager->isActive())
-                    {
-                        m_streamManager->pushAudio(audioBuffer.data(), samplesRead);
-                    }
-                    if (m_recordingManager && m_recordingManager->isRecording())
-                    {
-                        m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
-                    }
-
-                    // If we read less than expected, no more samples available
-                    if (samplesRead < samplesPerVideoFrame)
-                    {
-                        break; // No more samples available
-                    }
-                }
-                else
-                {
-                    // No more samples available, stop
-                    break;
-                }
-
-                iteration++;
-            }
-
-            // If we reached the limit, too much audio accumulated - log only occasionally
-            if (iteration >= maxIterations)
-            {
-                static int logCount = 0;
-                if (logCount < 3)
-                {
-                    LOG_WARN("Audio accumulated: processing in chunks to avoid blocking main thread");
-                    logCount++;
-                }
-            }
         }
-        else if (m_recordingManager && m_recordingManager->isRecording())
+        return;
+    }
+
+    // Bounded per iteration (~1 s of audio) so a long stall can't freeze
+    // the main thread; the tap holds the rest with its timestamps intact.
+    for (int i = 0; i < 100; ++i)
+    {
+        int64_t tsUs = 0;
+        const size_t n = m_audioCapture->getTimestampedSamples(buf.data(), buf.size(), tsUs);
+        if (n == 0)
         {
-            // Recording is active (but streaming is not), process audio for recording
-            uint32_t audioSampleRate = m_audioCapture->getSampleRate();
-            uint32_t videoFps = m_captureFps;
-            size_t samplesPerVideoFrame = (audioSampleRate > 0 && videoFps > 0)
-                                              ? static_cast<size_t>((audioSampleRate + videoFps / 2) / videoFps)
-                                              : 512;
-            samplesPerVideoFrame = std::max(static_cast<size_t>(64), std::min(samplesPerVideoFrame, static_cast<size_t>(audioSampleRate)));
-
-            std::vector<int16_t> audioBuffer(samplesPerVideoFrame);
-            const int maxIterations = 10;
-            int iteration = 0;
-
-            while (iteration < maxIterations)
-            {
-                size_t samplesRead = m_audioCapture->getSamples(audioBuffer.data(), samplesPerVideoFrame);
-                if (samplesRead > 0)
-                {
-                    m_recordingManager->pushAudio(audioBuffer.data(), samplesRead);
-                    if (samplesRead < samplesPerVideoFrame)
-                    {
-                        break;
-                    }
-                }
-                else
-                {
-                    break;
-                }
-                iteration++;
-            }
+            break;
         }
-        else
+        if (streaming)
         {
-            // Neither streaming nor recording active, but we still need to process mainloop
-            // to prevent PulseAudio from freezing system audio
-            // Read and discard samples to keep the capture buffer
-            // from backing up. The host-side monitor (Linux:
-            // MonitorPlayback inside AudioCapturePulse; macOS:
-            // monitor inside AudioCaptureCoreAudio) has its own
-            // tap on the bus, so the user still hears the input.
-            const size_t maxSamples = 4096;
-            std::vector<int16_t> tempBuffer(maxSamples);
-            m_audioCapture->getSamples(tempBuffer.data(), maxSamples);
+            m_streamManager->pushAudio(buf.data(), n, tsUs);
+        }
+        if (recording)
+        {
+            m_recordingManager->pushAudio(buf.data(), n, tsUs);
+        }
+        if (n < buf.size())
+        {
+            break;
         }
     }
 }
@@ -1787,7 +1745,7 @@ void Application::run()
         m_shaderEngine->setViewport(currentWidth, currentHeight);
     }
 
-    while (!m_window->shouldClose())
+    while (!m_window->shouldClose() && !s_quitRequested.load())
     {
         // Check if window is still valid before polling events
         // This prevents crashes when window is invalidated (e.g., KVM switch)

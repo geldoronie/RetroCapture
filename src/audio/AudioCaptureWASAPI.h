@@ -2,6 +2,8 @@
 
 #include "IAudioCapture.h"
 #include "AudioPlaybackWASAPI.h"
+#include "AudioBus.h"
+#include "MonitorLatencyController.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -52,6 +54,7 @@ public:
     bool startCapture() override;
     void stopCapture() override;
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
+    size_t getTimestampedSamples(int16_t *buffer, size_t maxSamples, int64_t &firstSampleTsUs) override;
     uint32_t getBytesPerSample() const override;
 
     // #137 — drop any backlog accumulated in the local monitor playback so it
@@ -87,7 +90,12 @@ private:
     bool m_useLoopback; // Flag para usar loopback (áudio do sistema) em vez de captura (microfone)
 
     // Audio buffer (thread-safe)
-    std::vector<int16_t> m_audioBuffer;
+    // #197 — captured int16 audio + per-packet capture timestamps (the
+    // packet's QPC position), drained by getSamples(). Created in open()
+    // once the mix format is known.
+    std::unique_ptr<AudioBus> m_bus;
+    std::shared_ptr<AudioBus::Tap> m_localTap;
+    std::vector<int16_t> m_int16Scratch;
     std::mutex m_bufferMutex;
 
     // Callbacks
@@ -106,6 +114,8 @@ private:
     std::unique_ptr<AudioPlaybackWASAPI> m_monitor;
     bool m_monitorActive = false;
     std::vector<float> m_monitorScratch;
+    std::vector<float> m_monitorOut;          // #200 rate-controlled monitor chunk
+    MonitorLatencyController m_monitorLatency; // #200 (capture thread only)
 
     // Helper methods
     bool initializeCOM();
@@ -116,7 +126,7 @@ private:
     bool startCaptureThread();
     void stopCaptureThread();
     void captureThreadFunction();
-    void processAudioData(BYTE *data, UINT32 framesAvailable);
+    void processAudioData(BYTE *data, UINT32 framesAvailable, int64_t firstFrameTsUs);
     void convertToFloat(const int16_t *input, float *output, size_t samples);
     // #137 — decode the WASAPI mix-format buffer to interleaved float per the
     // detected m_sampleFormat. Returns the number of float samples written.

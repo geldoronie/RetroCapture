@@ -1,6 +1,7 @@
 #include "core/Application.h"
 #include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
+#include "ui/UIRemoteConnection.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
 
@@ -12,9 +13,7 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
-#ifndef _WIN32
-#include <csignal>
-#endif
+#include <csignal> // SIGINT/SIGTERM on every platform; SIGPIPE on POSIX
 
 void printUsage(const char *programName)
 {
@@ -32,6 +31,9 @@ void printUsage(const char *programName)
 #else
     std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
+    std::cout << "  --audio-source test    Synthetic A/V-sync beep (pairs with --source test's flash)\n";
+    std::cout << "  --test-audio-skew-ppm <n>  Fake audio device clock error for the sync test (e.g. 1000)\n";
+    std::cout << "  --test-audio-fragment-ms <n>  Test tone delivery fragment size (default 10)\n";
     std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
     std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
@@ -127,6 +129,12 @@ int main(int argc, char *argv[])
     // Windows has no SIGPIPE.
     std::signal(SIGPIPE, SIG_IGN);
 #endif
+    // SIGINT (Ctrl+C) / SIGTERM: leave the main loop and run the orderly
+    // shutdown instead of dying mid-write. A hard kill used to leave the
+    // recording without its trailer and the RetroCapture PulseAudio
+    // modules loaded; it also lets the test scripts stop the app cleanly.
+    std::signal(SIGINT, [](int) { Application::requestQuit(); });
+    std::signal(SIGTERM, [](int) { Application::requestQuit(); });
 
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 
@@ -138,6 +146,9 @@ int main(int argc, char *argv[])
     std::string chatBaseUrl;                 // #84: --chat-url, empty = let UIManager pick (default https://chat.retrocapture.com)
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
+    bool testAudioSource = false; // #196 --audio-source test
+    int testAudioSkewPpm = 0;     // #196 --test-audio-skew-ppm
+    int testAudioFragmentMs = 10; // #196 --test-audio-fragment-ms
 #ifdef __linux__
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
@@ -231,6 +242,36 @@ int main(int argc, char *argv[])
         else if (arg == "--preset" && i + 1 < argc)
         {
             presetPath = argv[++i];
+        }
+        else if (arg == "--audio-source" && i + 1 < argc)
+        {
+            // #196 — only the synthetic sync tone is selectable from the CLI;
+            // real devices are picked in the UI / web portal.
+            std::string audioSource = argv[++i];
+            if (audioSource != "test")
+            {
+                LOG_ERROR("Invalid audio source. Use 'test'");
+                return 1;
+            }
+            testAudioSource = true;
+        }
+        else if (arg == "--test-audio-fragment-ms" && i + 1 < argc)
+        {
+            testAudioFragmentMs = std::stoi(argv[++i]);
+            if (testAudioFragmentMs < 1 || testAudioFragmentMs > 500)
+            {
+                LOG_ERROR("Invalid --test-audio-fragment-ms (range 1..500)");
+                return 1;
+            }
+        }
+        else if (arg == "--test-audio-skew-ppm" && i + 1 < argc)
+        {
+            testAudioSkewPpm = std::stoi(argv[++i]);
+            if (testAudioSkewPpm < -100000 || testAudioSkewPpm > 100000)
+            {
+                LOG_ERROR("Invalid --test-audio-skew-ppm (range -100000..100000)");
+                return 1;
+            }
         }
         else if (arg == "--source" && i + 1 < argc)
         {
@@ -983,6 +1024,8 @@ int main(int argc, char *argv[])
     app.setWebPortalSSLCertPath(webPortalSSLCertPath);
     app.setWebPortalSSLKeyPath(webPortalSSLKeyPath);
 
+    app.setTestAudioSource(testAudioSource, testAudioSkewPpm, testAudioFragmentMs);
+
     if (!app.init())
     {
         LOG_ERROR("Failed to initialize application");
@@ -1007,6 +1050,18 @@ int main(int argc, char *argv[])
         sourceTypeEnum = UIManager::SourceType::Test;
     app.getUIManager()->setSourceType(sourceTypeEnum);
     LOG_INFO("Source type: " + sourceType);
+
+    // #207 — setSourceType(Remote) stands up an idle remote source that
+    // waits for Connect; replay the CLI URL through the same Connect path
+    // the UI uses, so `--source remote --remote-url` actually connects.
+    if (sourceType == "remote" && !remoteUrl.empty() && app.getUIManager())
+    {
+        if (auto *remoteWin = app.getUIManager()->getRemoteConnectionWindow())
+        {
+            remoteWin->triggerConnect(remoteUrl);
+            LOG_INFO("Connecting to remote host: " + remoteUrl);
+        }
+    }
     
     // Hide UI if requested (same as pressing F12)
     // IMPORTANT: This must be done AFTER init() but BEFORE run()

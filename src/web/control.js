@@ -2424,86 +2424,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 // ============================================================
-// Live HTTP-TS player (mpegts.js)
+// Live HTTP-TS player — shared implementation in live-player.js (#216),
+// same reconnect / stall recovery as the home page.
 // ============================================================
 
 let _livePlayer = null;
 
-function liveStreamUrl() {
-    // Stream is served on the same HTTPServer as the portal, so a relative
-    // URL works regardless of port. Add a cache-buster so reconnects don't
-    // hit a stale TS segment cached by intermediaries.
-    return '/stream?t=' + Date.now();
+function livePlayer() {
+    if (!_livePlayer) {
+        _livePlayer = createLivePlayer({
+            videoId: 'livePlayer',
+            statusId: 'livePlayerStatus',
+            startBtnId: 'livePlayerStartBtn',
+            stopBtnId: 'livePlayerStopBtn',
+        });
+    }
+    return _livePlayer;
 }
 
-function startLivePlayer() {
-    const video = document.getElementById('livePlayer');
-    const status = document.getElementById('livePlayerStatus');
-    const startBtn = document.getElementById('livePlayerStartBtn');
-    const stopBtn = document.getElementById('livePlayerStopBtn');
-    if (!video) return;
-
-    stopLivePlayer(); // tear down any previous instance
-
-    if (typeof mpegts === 'undefined' || !mpegts.isSupported || !mpegts.isSupported()) {
-        // Safari plays MPEG-TS natively; for everything else without MSE
-        // support we fall back to a direct <video> src and hope the
-        // browser can deal with it.
-        video.src = liveStreamUrl();
-        video.play().catch(() => {});
-        if (status) status.textContent = 'Using native browser playback (Safari / fallback).';
-    } else {
-        try {
-            _livePlayer = mpegts.createPlayer({
-                type: 'mpegts',
-                isLive: true,
-                url: liveStreamUrl(),
-            }, {
-                liveBufferLatencyChasing: true,
-                liveBufferLatencyMaxLatency: 1.5,
-                liveBufferLatencyMinRemain: 0.5,
-                lazyLoad: false,
-            });
-            _livePlayer.attachMediaElement(video);
-            _livePlayer.load();
-            _livePlayer.play().catch(() => {});
-            if (status) status.textContent = 'Playing live stream.';
-        } catch (err) {
-            console.error('mpegts.js error:', err);
-            if (status) status.textContent = 'Live player error: ' + err.message;
-            return;
-        }
-    }
-    if (startBtn) startBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = false;
-}
-
-function stopLivePlayer() {
-    const video = document.getElementById('livePlayer');
-    const startBtn = document.getElementById('livePlayerStartBtn');
-    const stopBtn = document.getElementById('livePlayerStopBtn');
-    const status = document.getElementById('livePlayerStatus');
-
-    if (_livePlayer) {
-        try {
-            _livePlayer.pause();
-            _livePlayer.unload();
-            _livePlayer.detachMediaElement();
-            _livePlayer.destroy();
-        } catch (err) {
-            console.warn('Error tearing down mpegts player:', err);
-        }
-        _livePlayer = null;
-    }
-    if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-    }
-    if (startBtn) startBtn.disabled = false;
-    if (stopBtn) stopBtn.disabled = true;
-    if (status) status.textContent = 'Stopped.';
-}
+function startLivePlayer() { livePlayer().start(); }
+function stopLivePlayer() { livePlayer().stop(); }
 
 document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('livePlayerStartBtn');

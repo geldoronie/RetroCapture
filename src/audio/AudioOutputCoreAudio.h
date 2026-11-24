@@ -36,6 +36,8 @@ public:
     bool start() override;
     void stop() override;
     size_t write(const int16_t* samples, size_t numSamples) override;
+    size_t getQueuedSamples() const override;
+    size_t discardQueuedSamples(size_t numSamples) override;
     uint32_t getSampleRate() const override;
     uint32_t getChannels() const override;
     void setVolume(float volume) override;
@@ -48,7 +50,7 @@ private:
     AudioComponentInstance m_audioUnit;
     AudioComponent m_audioComponent;
     AudioOutputContext* m_context;
-    std::mutex m_bufferMutex;
+    mutable std::mutex m_bufferMutex;
     std::vector<int16_t> m_audioBuffer;
     std::atomic<float> m_volume;
     std::atomic<bool> m_enabled;

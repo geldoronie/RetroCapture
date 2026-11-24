@@ -103,8 +103,13 @@ public:
 
     // Encoding de áudio: int16 → float planar → codec
     // Retorna true se samples foram processados (pode gerar 0 ou mais pacotes)
+    // #199 — captureTimestampUs is the MediaClock capture time of
+    // samples[0]; inRate / inChannels the capture format (resampled to the
+    // encoder's format). Output audio PTS is sample-count based but steered
+    // to stay on the capture clock (see encodeAudio()).
     bool encodeAudio(const int16_t *samples, size_t sampleCount,
-                     int64_t captureTimestampUs, std::vector<EncodedPacket> &packets);
+                     int64_t captureTimestampUs, uint32_t inRate, uint32_t inChannels,
+                     std::vector<EncodedPacket> &packets);
 
     // Flush codecs - processar frames pendentes
     void flush(std::vector<EncodedPacket> &packets);
@@ -156,7 +161,9 @@ private:
 
     // Conversão de formatos
     bool convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint32_t height, void *videoFrame);
-    bool convertInt16ToFloatPlanar(const int16_t *samples, size_t sampleCount, void *audioFrame, size_t outputSamples);
+    bool createAudioResampler(uint32_t inRate, uint32_t inChannels);
+    void writeSilenceToFifo(int64_t frames);
+    bool drainAudioFifo(std::vector<EncodedPacket> &packets, int64_t captureTimestampUs, bool final);
 
     // Processar pacotes do codec
     bool receiveVideoPackets(std::vector<EncodedPacket> &packets, int64_t captureTimestampUs);
@@ -164,7 +171,6 @@ private:
 
     // Calcular PTS baseado em timestamp de captura
     int64_t calculateVideoPTS(int64_t captureTimestampUs);
-    int64_t calculateAudioPTS(int64_t captureTimestampUs, size_t sampleCount);
 
     // Garantir monotonicidade de PTS/DTS
     void ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo);
@@ -209,22 +215,32 @@ private:
     // memory. See convertRGBToYUV.
     std::vector<uint8_t> m_swsSrcPadded;
 
-    // Timestamps de referência (primeiro frame/chunk) - apenas para referência
-    int64_t m_firstVideoTimestampUs = 0;
-    int64_t m_firstAudioTimestampUs = 0;
-    bool m_firstVideoTimestampSet = false;
-    bool m_firstAudioTimestampSet = false;
-    // #109 — SHARED A/V epoch. Video and audio capture timestamps come
-    // from the same clock (HTTPTSStreamer::getTimestampUs), but PTS used
-    // to be made relative to two SEPARATE first-timestamps; the gap
-    // between the first video frame and first audio chunk arriving then
-    // became a permanent A/V skew baked into the muxed stream (the client
-    // saw video consistently behind audio). Latched by whichever media
-    // arrives first and subtracted by BOTH the video PTS and the
-    // streaming audio PTS so they share one origin.
-    int64_t m_firstMediaTimestampUs = 0;
-    bool    m_firstMediaTimestampSet = false;
-    
+    // #199 — shared A/V epoch: capture time of the first video frame.
+    // Video PTS = capture time - epoch; audio output samples are placed on
+    // the same timeline.
+    int64_t m_epochUs = 0;
+    bool    m_epochSet = false;
+
+    // #199 — audio timeline. m_audioOutPos is the output-sample position
+    // (since the epoch) of the next sample handed to the codec; the FIFO
+    // holds resampled FLTP samples waiting to fill a codec frame.
+    void *m_audioFifo = nullptr; // AVAudioFifo*
+    uint32_t m_swrInRate = 0;
+    uint32_t m_swrInChannels = 0;
+    bool m_audioStarted = false;
+    int64_t m_audioOutPos = 0;
+    double m_audioDriftEma = 0.0; // smoothed (output timeline - capture time), in samples
+    std::vector<std::vector<float>> m_audioPlanes; // resampler output scratch
+    uint64_t m_audioGapsFilled = 0;
+    uint64_t m_audioOverlapsDropped = 0;
+    uint64_t m_videoFramesOutOfOrder = 0;
+    // #193 — MediaClock time of the last encodeAudio() call (0 = never).
+    // With no audio for > 1 s, encodeVideo() keeps the audio track alive
+    // with silence so the output always carries a valid audio stream.
+    int64_t m_lastAudioInputUs = 0;
+    bool m_silenceKeepaliveActive = false;
+    void keepAudioAliveWithSilence(int64_t videoCaptureTsUs, std::vector<EncodedPacket> &packets);
+
     // Contadores precisos para cálculo de PTS (baseado em samples/frames, não timestamps)
     int64_t m_audioFrameCount = 0;  // Número de frames de áudio processados
     int64_t m_videoFrameCountForPTS = 0;  // Número de frames de vídeo processados (para PTS)
@@ -240,22 +256,6 @@ private:
 
     // Contador de frames para keyframes periódicos
     int64_t m_videoFrameCount = 0;
-
-    // Audio accumulator para acumular samples até ter um frame completo
-    std::mutex m_audioAccumulatorMutex;
-    std::vector<int16_t> m_audioAccumulator;
-
-    // Track total samples processed (mantido pra estatísticas/debug; o PTS
-    // agora vem de capture timestamps, não desta contagem).
-    int64_t m_totalAudioSamplesProcessed = 0;
-
-    // Capture wall-clock timestamp do *primeiro sample* atualmente no
-    // accumulator. Avança conforme samples são consumidos. Permite que
-    // o PTS do áudio acompanhe o wall clock — se chunks dropam no
-    // synchronizer, a próxima chamada detecta o gap e ressincroniza,
-    // evitando que o áudio termine antes do vídeo (sintoma do desync).
-    int64_t m_audioAccumulatorStartCaptureTsUs = 0;
-    bool m_audioAccumulatorTsValid = false;
 
     // Contador de eventos de retrocesso de PTS: cada incremento é uma vez que
     // o calculatedPTS teria ficado <= ao último PTS já emitido e tivemos que

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioBus.h"
+#include "MonitorLatencyController.h"
 
 #include <atomic>
 #include <cstdint>
@@ -24,9 +25,11 @@ struct pa_simple;
  * independent hardware crystals; even nominally-44100 Hz they differ
  * by ppm and would drift visibly over a long session if we just
  * blindly pa_simple_write everything the tap delivers. The writer
- * loop watches tap backlog and discards excess samples once it crosses
- * a small catch-up threshold — that bounds monitor latency to a small
- * constant regardless of how the two clocks differ.
+ * paces on the sink (pa_simple_write blocks), so the clock difference
+ * accumulates in the tap: MonitorLatencyController watches that backlog
+ * and keeps it at a small target by steering the playback rate within
+ * +-0.5 %, snapping back after a stall (#200). Monitor latency therefore
+ * stays constant without the manual Resync.
  */
 class MonitorPlayback
 {
@@ -59,4 +62,5 @@ private:
     std::atomic<bool>              m_running{false};
     std::atomic<bool>              m_resyncPending{false};
     std::thread                    m_thread;
+    MonitorLatencyController       m_latency;
 };

@@ -981,8 +981,19 @@ void VideoCaptureRemote::decodeLoop()
             // host renders locally). When unset, pass through at stream size.
             const uint32_t tgtW32 = m_targetWidth.load();
             const uint32_t tgtH32 = m_targetHeight.load();
-            const int dstW = (tgtW32 > 0) ? static_cast<int>(tgtW32) : srcW;
-            const int dstH = (tgtH32 > 0) ? static_cast<int>(tgtH32) : srcH;
+            int dstW = (tgtW32 > 0) ? static_cast<int>(tgtW32) : srcW;
+            int dstH = (tgtH32 > 0) ? static_cast<int>(tgtH32) : srcH;
+            // #209 — never UPscale here. A 1080p host source streamed at
+            // 640x480/720p meant a ~6 MB bilinear RGB upscale per frame on
+            // this thread (which also decodes and feeds the audio sink),
+            // dropping the client below real time: backlog, live-edge
+            // re-anchor, A/V sawtooth. Upscaling adds no information; the
+            // render pipeline scales the shader input on the GPU instead.
+            if (dstW > srcW || dstH > srcH)
+            {
+                dstW = srcW;
+                dstH = srcH;
+            }
 
             // (Re)build the sws context if dimensions or pixfmt changed.
             const AVPixelFormat srcFmt = static_cast<AVPixelFormat>(frame->format);

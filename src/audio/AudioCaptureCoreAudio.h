@@ -2,6 +2,7 @@
 
 #include "IAudioCapture.h"
 #include "AudioBus.h"
+#include "MonitorLatencyController.h"
 #include "IAudioOutput.h"
 #include "SckSystemAudioHub.h" // #109 system-audio (output) capture coordinator
 #include <atomic>
@@ -49,6 +50,7 @@ public:
     bool startCapture() override;
     void stopCapture() override;
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
+    size_t getTimestampedSamples(int16_t *buffer, size_t maxSamples, int64_t &firstSampleTsUs) override;
     uint32_t getBytesPerSample() const override { return m_bytesPerSample; }
 
     // Método público para callback acessar AudioUnit
@@ -101,6 +103,7 @@ private:
     // bypassed and the local monitor is left off.
     bool m_systemAudio = false;
     std::atomic<bool>              m_monitorResyncPending{false};
+    MonitorLatencyController       m_monitorLatency; // #200 (monitor writer thread only)
     std::thread                    m_monitorThread;
 
     // Internal methods

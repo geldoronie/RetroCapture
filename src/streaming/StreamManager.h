@@ -49,8 +49,10 @@ public:
      * @param width Frame width
      * @param height Frame height
      */
-    void pushFrame(const uint8_t *data, uint32_t width, uint32_t height);
-    void pushAudio(const int16_t *samples, size_t sampleCount);
+    // captureTimestampUs: MediaClock capture time of the frame (#198).
+    void pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs);
+    // captureTimestampUs: MediaClock capture time of samples[0] (#197).
+    void pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs);
 
     /**
      * Push a pre-shader frame to the /raw output of every MPEG-TS streamer
@@ -58,7 +60,7 @@ public:
      * shader-preserving distributed playback work (#47). Frames pushed here
      * MUST be pre-shader; /raw's contract is shader-free by definition.
      */
-    void pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height);
+    void pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs);
 
     /**
      * True if at least one MPEG-TS streamer has a connected /raw client.
