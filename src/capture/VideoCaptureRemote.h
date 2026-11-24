@@ -88,6 +88,15 @@ public:
      * decoded frames through at their native size.
      */
     void setTargetResolution(uint32_t width, uint32_t height);
+    // Host's logical source size from /meta (0x0 = none). The decoder only
+    // DOWNscales to it on the CPU; when it is larger than the stream the
+    // frames pass through at stream size and the render pipeline upscales
+    // the shader input on the GPU (#209).
+    void getTargetResolution(uint32_t &width, uint32_t &height) const
+    {
+        width = m_targetWidth.load();
+        height = m_targetHeight.load();
+    }
 
     // Per-refresh interpolation strategy when filling display refreshes
     // between two consecutive stream frames. See captureLatestFrame for
