@@ -34,6 +34,8 @@ public:
         size_t sampleCount;
         int64_t captureTimestampUs; // Timestamp absoluto de captura
         int64_t durationUs;         // Duração deste chunk em microssegundos
+        uint32_t sampleRate = 0;    // capture format of this chunk (#199)
+        uint32_t channels = 0;
         bool processed = false;     // Flag para marcar se já foi processado
     };
 

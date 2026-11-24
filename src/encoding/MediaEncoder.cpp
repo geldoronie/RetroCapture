@@ -10,12 +10,16 @@ extern "C"
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include <libavutil/audio_fifo.h>
+#include <libavutil/mathematics.h>
 }
 
 #include "../utils/FFmpegCompat.h"
 #include <cstring>
 #include <mutex>
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 
 const char *MediaEncoder::hardwareEncoderName(HardwareEncoder h)
 {
@@ -826,65 +830,47 @@ bool MediaEncoder::initializeAudioCodec()
 
     m_audioCodecContext = codecCtx;
 
-    SwrContext *swrCtx = swr_alloc();
-    if (!swrCtx)
+    // #199 — the resampler converts the capture's S16 interleaved input to
+    // the encoder's FLTP at the encoder rate AND applies the drift
+    // compensation that keeps audio on the capture clock. Its input format
+    // follows the actual capture (rebuilt if a chunk arrives in another
+    // format), so a 48 kHz device feeding a 44.1 kHz encoder is resampled
+    // instead of played at the wrong speed.
+    // A previous session's resampler / FIFO are left alone (same "don't
+    // free FFmpeg objects across sessions" policy as cleanup(): a detached
+    // stuck encoding thread may still touch them). Only an in-session
+    // format change frees the resampler it replaces.
+    m_swrContext = nullptr;
+    m_audioFifo = nullptr;
+    if (!createAudioResampler(m_audioConfig.sampleRate, m_audioConfig.channels))
     {
-        LOG_ERROR("Failed to allocate SWR context");
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
         return false;
     }
+    SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
 
-    #if LIBAVCODEC_VERSION_MAJOR >= 59
-    AVChannelLayout inChLayout, outChLayout;
-    av_channel_layout_default(&inChLayout, m_audioConfig.channels);
-    av_channel_layout_default(&outChLayout, m_audioConfig.channels);
-
-    av_opt_set_chlayout(swrCtx, "in_chlayout", &inChLayout, 0);
-    av_opt_set_int(swrCtx, "in_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
-    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-
-    av_opt_set_chlayout(swrCtx, "out_chlayout", &outChLayout, 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
-
-    if (swr_init(swrCtx) < 0)
+    m_audioFifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP, static_cast<int>(m_audioConfig.channels),
+                                      static_cast<int>(m_audioConfig.sampleRate));
+    if (!m_audioFifo)
     {
-        LOG_ERROR("Failed to initialize SWR context");
-        av_channel_layout_uninit(&inChLayout);
-        av_channel_layout_uninit(&outChLayout);
+        LOG_ERROR("Failed to allocate audio FIFO");
         swr_free(&swrCtx);
+        m_swrContext = nullptr;
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
         return false;
     }
-
-    av_channel_layout_uninit(&inChLayout);
-    av_channel_layout_uninit(&outChLayout);
-    #else
-    av_opt_set_int(swrCtx, "in_channel_layout", av_get_default_channel_layout(m_audioConfig.channels), 0);
-    av_opt_set_int(swrCtx, "in_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
-    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-
-    av_opt_set_int(swrCtx, "out_channel_layout", av_get_default_channel_layout(m_audioConfig.channels), 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
-
-    if (swr_init(swrCtx) < 0)
-    {
-        LOG_ERROR("Failed to initialize SWR context");
-        swr_free(&swrCtx);
-        avcodec_free_context(&codecCtx);
-        m_audioCodecContext = nullptr;
-        return false;
-    }
-    #endif
-    m_swrContext = swrCtx;
 
     AVFrame *audioFrame = av_frame_alloc();
     if (!audioFrame)
     {
         LOG_ERROR("Failed to allocate audio frame");
+        {
+            AVAudioFifo *f = static_cast<AVAudioFifo *>(m_audioFifo);
+            av_audio_fifo_free(f);
+            m_audioFifo = nullptr;
+        }
         swr_free(&swrCtx);
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
@@ -900,6 +886,11 @@ bool MediaEncoder::initializeAudioCodec()
     {
         LOG_ERROR("Failed to allocate audio frame buffer");
         av_frame_free(&audioFrame);
+        {
+            AVAudioFifo *f = static_cast<AVAudioFifo *>(m_audioFifo);
+            av_audio_fifo_free(f);
+            m_audioFifo = nullptr;
+        }
         swr_free(&swrCtx);
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
@@ -1042,153 +1033,95 @@ bool MediaEncoder::convertRGBToYUV(const uint8_t *rgbData, uint32_t width, uint3
     return true;
 }
 
-bool MediaEncoder::convertInt16ToFloatPlanar(const int16_t *samples, size_t sampleCount, void *audioFrame, size_t outputSamples)
+bool MediaEncoder::createAudioResampler(uint32_t inRate, uint32_t inChannels)
 {
-    if (!samples || !audioFrame || sampleCount == 0 || outputSamples == 0)
+    if (inRate == 0 || inChannels == 0)
     {
         return false;
     }
-
-    SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
-    AVFrame *frame = static_cast<AVFrame *>(audioFrame);
-
-    if (!swrCtx || !frame)
+    SwrContext *old = static_cast<SwrContext *>(m_swrContext);
+    if (old)
     {
-        LOG_ERROR("convertInt16ToFloatPlanar: swrCtx or frame is null");
+        swr_free(&old);
+        m_swrContext = nullptr;
+    }
+
+    SwrContext *swrCtx = swr_alloc();
+    if (!swrCtx)
+    {
+        LOG_ERROR("Failed to allocate SWR context");
         return false;
     }
+#if LIBAVCODEC_VERSION_MAJOR >= 59
+    AVChannelLayout inChLayout, outChLayout;
+    av_channel_layout_default(&inChLayout, static_cast<int>(inChannels));
+    av_channel_layout_default(&outChLayout, static_cast<int>(m_audioConfig.channels));
+    av_opt_set_chlayout(swrCtx, "in_chlayout", &inChLayout, 0);
+    av_opt_set_chlayout(swrCtx, "out_chlayout", &outChLayout, 0);
+    av_channel_layout_uninit(&inChLayout);
+    av_channel_layout_uninit(&outChLayout);
+#else
+    av_opt_set_int(swrCtx, "in_channel_layout", av_get_default_channel_layout(static_cast<int>(inChannels)), 0);
+    av_opt_set_int(swrCtx, "out_channel_layout", av_get_default_channel_layout(static_cast<int>(m_audioConfig.channels)), 0);
+#endif
+    av_opt_set_int(swrCtx, "in_sample_rate", static_cast<int>(inRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", static_cast<int>(m_audioConfig.sampleRate), 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+    // Always run the real resampler (even at equal rates) so
+    // swr_set_compensation() has something to act on without re-initialising.
+    av_opt_set_int(swrCtx, "swr_flags", SWR_FLAG_RESAMPLE, 0);
 
-    if (av_frame_make_writable(frame) < 0)
+    if (swr_init(swrCtx) < 0)
     {
-        LOG_ERROR("convertInt16ToFloatPlanar: av_frame_make_writable failed");
+        LOG_ERROR("Failed to initialize SWR context");
+        swr_free(&swrCtx);
         return false;
     }
-
-    // Verify input sample count matches expected
-    const size_t expectedInputSamples = outputSamples * m_audioConfig.channels;
-    if (sampleCount != expectedInputSamples)
+    m_swrContext = swrCtx;
+    m_swrInRate = inRate;
+    m_swrInChannels = inChannels;
+    if (inRate != m_audioConfig.sampleRate || inChannels != m_audioConfig.channels)
     {
-        LOG_ERROR("convertInt16ToFloatPlanar: sample count mismatch - got " + 
-                  std::to_string(sampleCount) + ", expected " + std::to_string(expectedInputSamples));
-        return false;
+        LOG_INFO("MediaEncoder: audio input " + std::to_string(inRate) + " Hz x " +
+                 std::to_string(inChannels) + " ch resampled to " +
+                 std::to_string(m_audioConfig.sampleRate) + " Hz x " +
+                 std::to_string(m_audioConfig.channels) + " ch");
     }
-
-    // Prepare input data for swr_convert
-    // Input is S16 interleaved: [L0, R0, L1, R1, ...]
-    // For swr_convert, we need to pass the number of samples per channel (not total samples)
-    const uint8_t *srcData[1] = {reinterpret_cast<const uint8_t *>(samples)};
-    const int inputSamples = static_cast<int>(outputSamples); // Number of samples per channel
-
-    // Use swr_convert to convert S16 interleaved to FLTP planar
-    // This is the correct and tested way to do format conversion in FFmpeg
-    // swr_convert expects: (dst, dst_count, src, src_count)
-    // where src_count is the number of samples per channel in the input
-    int ret = swr_convert(swrCtx, frame->data, static_cast<int>(outputSamples),
-                          srcData, inputSamples);
-    
-    if (ret < 0)
-    {
-        char errbuf[256];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        LOG_ERROR("swr_convert failed: " + std::to_string(ret) + " (" + std::string(errbuf) + ")");
-        return false;
-    }
-
-    // For format-only conversion (same sample rate), swr_convert should return exactly outputSamples
-    // If it returns fewer, check for configuration issues
-    if (ret != static_cast<int>(outputSamples))
-    {
-        // Check resampler delay - this should be minimal for format-only conversion
-        int64_t delay = swr_get_delay(swrCtx, m_audioConfig.sampleRate);
-        if (delay > 0)
-        {
-            LOG_WARN("swr_convert returned " + std::to_string(ret) + " samples, expected " + 
-                     std::to_string(outputSamples) + " (resampler delay: " + std::to_string(delay) + 
-                     ") - this may cause audio issues");
-        }
-        
-        // For format conversion only, we should get exactly what we request
-        // If not, there's a configuration problem
-        if (ret == 0)
-        {
-            // Resampler needs more input - this shouldn't happen for format-only conversion
-            LOG_WARN("swr_convert returned 0 samples - resampler needs more input (unexpected for format conversion)");
-            return false;
-        }
-        
-        // Use what we got, but log a warning
-        frame->nb_samples = ret;
-        return true;
-    }
-
-    frame->nb_samples = outputSamples;
     return true;
 }
 
 int64_t MediaEncoder::calculateVideoPTS(int64_t captureTimestampUs)
 {
-    // Store first timestamp for reference
-    if (!m_firstVideoTimestampSet)
+    // #199 — capture timestamps (#197/#198) put audio and video on one
+    // clock. The first VIDEO frame latches the shared epoch: audio
+    // captured before it is trimmed, so the output starts with both
+    // streams at t=0 instead of leading audio (the /stream encoder used to
+    // receive audio for as long as it waited for its first client).
+    if (!m_epochSet)
     {
-        m_firstVideoTimestampUs = captureTimestampUs;
-        m_firstVideoTimestampSet = true;
-        m_videoFrameCountForPTS = 0;
-    }
-    // #109 — latch the SHARED A/V epoch from whichever stream (audio or
-    // video) is encoded first, so audio and video PTS share one origin.
-    if (!m_firstMediaTimestampSet)
-    {
-        m_firstMediaTimestampUs  = captureTimestampUs;
-        m_firstMediaTimestampSet = true;
+        m_epochUs = captureTimestampUs;
+        m_epochSet = true;
     }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_videoCodecContext);
     if (!codecCtx)
     {
-        return 0;
+        return -1;
     }
 
-    // CRITICAL: Calculate PTS based on actual timestamps, not frame count
-    // Using frame count assumes frames arrive at exactly the configured FPS,
-    // which may not be true. Using real timestamps ensures video speed matches reality.
-    // This is the same approach used for audio (samples_processed / sample_rate)
-    AVRational timeBase = codecCtx->time_base;
-    int64_t calculatedPTS = 0;
-    
-    // Calculate PTS based on actual elapsed time since first frame
-    // This ensures video speed matches real time, regardless of actual capture FPS
-    int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
-    // The shared epoch may be latched by an audio chunk captured slightly
-    // after a video frame that's encoded later — clamp so the video PTS
-    // never goes negative (audio does the same below).
-    if (relativeTimeUs < 0) relativeTimeUs = 0;
-    double relativeTimeSeconds = static_cast<double>(relativeTimeUs) / 1000000.0;
-    calculatedPTS = static_cast<int64_t>(relativeTimeSeconds * timeBase.den / timeBase.num);
-    
-    // Increment frame count for statistics (but don't use it for PTS calculation)
-    m_videoFrameCountForPTS++;
-
-    // Log PTS calculation occasionally for debugging
-    static int ptsLogCounter = 0;
-    ptsLogCounter++;
-    if (ptsLogCounter == 1 || ptsLogCounter % 300 == 0) // Every 5 seconds at 60fps
+    const int64_t relativeTimeUs = captureTimestampUs - m_epochUs;
+    if (relativeTimeUs < 0)
     {
-        LOG_DEBUG("MediaEncoder: Video PTS - calculated: " + std::to_string(calculatedPTS) + 
-                 ", relativeTimeUs: " + std::to_string(relativeTimeUs) + 
-                 ", relativeTimeSeconds: " + std::to_string(relativeTimeSeconds) +
-                 ", timeBase: " + std::to_string(timeBase.num) + "/" + std::to_string(timeBase.den) +
-                 ", fps: " + std::to_string(m_videoConfig.fps));
+        return -1; // captured before the epoch
     }
-
-    // Use timestamp-based PTS directly - let MediaMuxer handle monotonicity
-    // This ensures correct speed based on actual timestamps
-    // MediaMuxer will ensure PTS doesn't go backwards when writing packets
-
-    return calculatedPTS;
+    m_videoFrameCountForPTS++;
+    return av_rescale_q(relativeTimeUs, AVRational{1, 1000000}, codecCtx->time_base);
 }
 
 bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
-                               int64_t captureTimestampUs, std::vector<EncodedPacket> &packets)
+                               int64_t captureTimestampUs, uint32_t inRate, uint32_t inChannels,
+                               std::vector<EncodedPacket> &packets)
 {
     if (!samples || !m_initialized || sampleCount == 0)
     {
@@ -1196,245 +1129,286 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
-    AVFrame *audioFrame = static_cast<AVFrame *>(m_audioFrame);
+    AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
+    if (!codecCtx || !fifo)
+    {
+        return false;
+    }
+    if (inRate == 0) inRate = m_audioConfig.sampleRate;
+    if (inChannels == 0) inChannels = m_audioConfig.channels;
+    if (inRate != m_swrInRate || inChannels != m_swrInChannels)
+    {
+        // Capture format changed (device switch): push what the old
+        // resampler still holds into the FIFO, then rebuild it. The timeline
+        // (m_audioOutPos + FIFO) is kept, so the controller below simply sees
+        // the new chunk's error — no re-anchor that would re-stamp queued
+        // samples or move PTS backwards.
+        SwrContext *oldSwr = static_cast<SwrContext *>(m_swrContext);
+        if (oldSwr && m_audioStarted)
+        {
+            const int outChannels = static_cast<int>(m_audioConfig.channels);
+            const int maxOut = static_cast<int>(swr_get_out_samples(oldSwr, 0)) + 64;
+            if (maxOut > 0)
+            {
+                m_audioPlanes.resize(static_cast<size_t>(outChannels));
+                std::vector<uint8_t *> planePtrs(static_cast<size_t>(outChannels));
+                for (int c = 0; c < outChannels; ++c)
+                {
+                    m_audioPlanes[c].resize(static_cast<size_t>(maxOut));
+                    planePtrs[c] = reinterpret_cast<uint8_t *>(m_audioPlanes[c].data());
+                }
+                const int got = swr_convert(oldSwr, planePtrs.data(), maxOut, nullptr, 0);
+                if (got > 0)
+                {
+                    av_audio_fifo_write(fifo, reinterpret_cast<void **>(planePtrs.data()), got);
+                }
+            }
+        }
+        if (!createAudioResampler(inRate, inChannels))
+        {
+            return false;
+        }
+    }
+    SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
 
-    if (!codecCtx || !audioFrame)
+    // No video yet → no epoch → nothing to align to. Dropping here is what
+    // keeps a not-yet-watched /stream from accumulating leading audio.
+    if (!m_epochSet)
     {
         return false;
     }
 
-    // Acumular samples — sem reset/gap detection. PTS é sample-count
-    // based; contar tudo que entra mantém audio smooth e o drain no
-    // RecordingManager garante que nada drope antes de chegar aqui.
+    const double outRate = static_cast<double>(m_audioConfig.sampleRate);
+    const double inToOut = outRate / static_cast<double>(inRate);
+    const int64_t inFramesTotal = static_cast<int64_t>(sampleCount / inChannels);
+    const int16_t *in = samples;
+    int64_t inFrames = inFramesTotal;
+
+    // Where this chunk's first sample belongs on the output timeline
+    // (output samples since the epoch).
+    double targetPos = static_cast<double>(captureTimestampUs - m_epochUs) * outRate / 1e6;
+
+    if (!m_audioStarted)
     {
-        std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-        if (m_audioAccumulator.empty())
+        if (targetPos + static_cast<double>(inFrames) * inToOut <= 0.0)
         {
-            m_audioAccumulatorStartCaptureTsUs = captureTimestampUs;
-            m_audioAccumulatorTsValid = true;
+            return false; // entirely before the epoch
         }
-        m_audioAccumulator.insert(m_audioAccumulator.end(), samples, samples + sampleCount);
-    }
-
-    const int samplesPerFrame = codecCtx->frame_size;
-    if (samplesPerFrame <= 0)
-    {
-        LOG_ERROR("MediaEncoder: Invalid frame_size: " + std::to_string(samplesPerFrame));
-        return false;
-    }
-
-    const int totalSamplesNeeded = samplesPerFrame * m_audioConfig.channels;
-    bool processedAny = false;
-    
-    // Log accumulator status occasionally for debugging
-    static int debugLogCounter = 0;
-    debugLogCounter++;
-    if (debugLogCounter == 1 || debugLogCounter % 100 == 0)
-    {
-        std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-        LOG_DEBUG("MediaEncoder: Audio accumulator - size: " + std::to_string(m_audioAccumulator.size()) + 
-                 ", needed: " + std::to_string(totalSamplesNeeded) + 
-                 ", frame_size: " + std::to_string(samplesPerFrame) +
-                 ", channels: " + std::to_string(m_audioConfig.channels));
-    }
-
-    // Processar frames completos enquanto houver samples suficientes
-    // CRITICAL: Maintain a minimum buffer to avoid gaps in audio
-    // If we process a frame and the accumulator would be too low, wait for more samples
-    const int MIN_BUFFER_AFTER_PROCESSING = totalSamplesNeeded; // Keep at least one frame worth of samples
-    
-    while (true)
-    {
-        std::vector<int16_t> samplesToProcess;
-
+        if (targetPos < 0.0)
         {
-            std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-            // Check if we have enough samples for a frame AND enough to maintain minimum buffer
-            if (static_cast<int>(m_audioAccumulator.size()) < totalSamplesNeeded + MIN_BUFFER_AFTER_PROCESSING)
-            {
-                break; // Não há samples suficientes para um frame completo + buffer mínimo
-            }
-
-            // Pegar samples para este frame
-            samplesToProcess.assign(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
-            // Don't erase yet - we'll erase after successful conversion
+            const int64_t skip = std::min<int64_t>(inFrames,
+                                                   static_cast<int64_t>(std::ceil(-targetPos / inToOut)));
+            in += skip * inChannels;
+            inFrames -= skip;
+            targetPos += static_cast<double>(skip) * inToOut;
         }
-
-        // Converter int16 para float planar
-        // This may return false if resampler needs more input (internal delay)
-        // CRITICAL: If conversion fails, we must NOT remove samples from accumulator
-        // The samples are still in the accumulator and will be retried when more arrive
-        if (!convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
-        {
-            // Resampler needs more input - this is normal
-            // The resampler has internal buffering and needs more samples to produce output
-            // We keep the samples in the accumulator and will retry when more samples arrive
-            // Don't log as error, this is expected behavior
-            break;
-        }
-
-        // Get actual samples converted (from frame->nb_samples set by convertInt16ToFloatPlanar)
-        int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
-
-        // Log frame processing occasionally for debugging
-        static int frameLogCounter = 0;
-        frameLogCounter++;
-        if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
-        {
-            LOG_DEBUG("MediaEncoder: Processing audio frame - actual: " + std::to_string(actualFrameSamples) + 
-                     ", expected: " + std::to_string(samplesPerFrame) + 
-                     ", input consumed: " + std::to_string(totalSamplesNeeded));
-        }
-
-        // Frame timestamp = capture ts do primeiro sample que está saindo
-        // agora. Igual o vídeo, anda no wall clock real. Pegar antes de
-        // consumir os samples do accumulator.
-        int64_t frameTimestampUs = m_audioAccumulatorStartCaptureTsUs;
-
-        // Conversion successful - now we can remove the samples from accumulator
-        {
-            std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-            size_t sizeBefore = m_audioAccumulator.size();
-            m_audioAccumulator.erase(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
-            size_t sizeAfter = m_audioAccumulator.size();
-
-            // Avança o capture ts do accumulator pra refletir o que sobrou.
-            if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
-            {
-                int64_t consumedSamplesPerCh = static_cast<int64_t>(totalSamplesNeeded) /
-                                               static_cast<int64_t>(m_audioConfig.channels);
-                m_audioAccumulatorStartCaptureTsUs += (consumedSamplesPerCh * 1000000LL) /
-                                                       static_cast<int64_t>(m_audioConfig.sampleRate);
-            }
-            if (m_audioAccumulator.empty())
-            {
-                m_audioAccumulatorTsValid = false;
-            }
-
-            if (frameLogCounter == 1 || frameLogCounter % 50 == 0)
-            {
-                LOG_DEBUG("MediaEncoder: After processing - accumulator: " + std::to_string(sizeBefore) +
-                         " -> " + std::to_string(sizeAfter) +
-                         " (removed " + std::to_string(totalSamplesNeeded) + ")");
-            }
-        }
-
-        // PTS agora é wall-clock-relative (igual vídeo).
-        int64_t calculatedPTS = calculateAudioPTS(frameTimestampUs, actualFrameSamples * m_audioConfig.channels);
-        audioFrame->pts = calculatedPTS;
-        
-        // Increment total samples processed AFTER calculating PTS
-        // Use actual samples processed (from frame), not totalSamplesNeeded
-        // This ensures PTS progression matches actual audio data
-        m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
-        m_audioFrameCount++;
-
-        // Enviar frame para codec
-        int ret = avcodec_send_frame(codecCtx, audioFrame);
-        if (ret < 0)
-        {
-            if (ret == AVERROR(EAGAIN))
-            {
-                // Codec está cheio, receber pacotes pendentes
-                receiveAudioPackets(packets, frameTimestampUs);
-                // Tentar novamente
-                ret = avcodec_send_frame(codecCtx, audioFrame);
-            }
-            if (ret < 0 && ret != AVERROR(EAGAIN))
-            {
-                LOG_ERROR("MediaEncoder: avcodec_send_frame (audio) failed: " + std::to_string(ret));
-                break;
-            }
-        }
-
-        // Receber pacotes gerados
-        if (receiveAudioPackets(packets, frameTimestampUs))
-        {
-            processedAny = true;
-        }
-    }
-
-    return processedAny;
-}
-
-int64_t MediaEncoder::calculateAudioPTS(int64_t captureTimestampUs, size_t /* sampleCount */)
-{
-    // Sample-count-based PTS: cada output frame avança PTS por
-    // exatamente samples_processados/sample_rate. Smooth, monotônico,
-    // sem jitter de capture timestamp (pulseaudio entrega chunks com
-    // variabilidade de chegada que não reflete tempo real de captura).
-    // O alinhamento com wall clock é garantido pelo drain de áudio no
-    // RecordingManager — chunks não dropam mais no synchronizer, então
-    // a contagem de samples casa com a duração real da gravação.
-    if (!m_firstAudioTimestampSet)
-    {
-        m_firstAudioTimestampUs = captureTimestampUs;
-        m_firstAudioTimestampSet = true;
-        m_totalAudioSamplesProcessed = 0;
-        m_audioFrameCount = 0;
-    }
-    // #109 — latch the SHARED A/V epoch (see calculateVideoPTS) so audio
-    // arriving before the first video frame still anchors both timelines.
-    if (!m_firstMediaTimestampSet)
-    {
-        m_firstMediaTimestampUs  = captureTimestampUs;
-        m_firstMediaTimestampSet = true;
-    }
-
-    AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
-    if (!codecCtx)
-    {
-        return 0;
-    }
-
-    AVRational timeBase = codecCtx->time_base;
-    int64_t calculatedPTS = 0;
-    if (m_forStreaming)
-    {
-        // Live streaming: wall-clock PTS, same clock source as the video
-        // PTS (both come from HTTPTSStreamer::getTimestampUs at push time),
-        // so audio and video share one timeline. Sample-count PTS assumes
-        // zero dropped chunks; the lossy live audio bus *does* drop chunks
-        // (esp. system-audio bursts), so sample-count drifts behind real
-        // time and the client ended up playing video with no usable audio
-        // (#109). Wall-clock tracks real time regardless of drops.
-        // Subtract the SHARED epoch (not the audio-only first timestamp) so
-        // audio and video PTS share one origin — otherwise the gap between
-        // the first video frame and first audio chunk is a constant skew.
-        int64_t relativeTimeUs = captureTimestampUs - m_firstMediaTimestampUs;
-        if (relativeTimeUs < 0) relativeTimeUs = 0;
-        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
-    }
-    else if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
-    {
-        // File recording: sample-count PTS — smooth and jitter-free, and the
-        // recording drain doesn't drop chunks, so the count matches duration.
-        int64_t samplesPerChannel = m_totalAudioSamplesProcessed / m_audioConfig.channels;
-        calculatedPTS = (samplesPerChannel * timeBase.den) / (m_audioConfig.sampleRate * timeBase.num);
+        m_audioOutPos = static_cast<int64_t>(std::llround(targetPos));
+        m_audioDriftEma = 0.0;
+        m_audioStarted = true;
+        swr_set_compensation(swrCtx, 0, 0);
     }
     else
     {
-        int64_t relativeTimeUs = captureTimestampUs - m_firstAudioTimestampUs;
-        if (relativeTimeUs < 0) relativeTimeUs = 0;
-        calculatedPTS = (relativeTimeUs * timeBase.den) / (timeBase.num * 1000000LL);
-    }
+        // Timeline position the next produced sample will get: what was
+        // already handed to the encoder + what waits in the FIFO + what the
+        // resampler still holds.
+        const double queued = static_cast<double>(av_audio_fifo_size(fifo)) +
+                              static_cast<double>(swr_get_delay(swrCtx, m_audioConfig.sampleRate));
+        const double currentPos = static_cast<double>(m_audioOutPos) + queued;
+        // > 0: our samples would play later than they were captured.
+        const double err = currentPos - targetPos;
+        const double hardLimit = 0.2 * outRate; // 200 ms
 
-    {
-        std::lock_guard<std::mutex> lock(m_ptsMutex);
-        if (m_lastAudioFramePTS >= 0 && calculatedPTS <= m_lastAudioFramePTS)
+        if (err < -hardLimit)
         {
-            calculatedPTS = m_lastAudioFramePTS + 1;
-            uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (total == 1 || (total % 60) == 0)
+            const int64_t gap = static_cast<int64_t>(std::llround(-err));
+            if (gap <= static_cast<int64_t>(outRate)) // <= 1 s
             {
-                LOG_WARN("MediaEncoder: PTS retrocession on audio frame (total: " +
-                         std::to_string(total) + ")");
+                // A real but short gap (capture stall, dropped chunks,
+                // device hiccup): fill it with silence so the following
+                // audio lands on time.
+                writeSilenceToFifo(gap);
+            }
+            else
+            {
+                // A long gap (no /raw client for an hour, audio device gone
+                // for minutes): don't synthesize it. Flush what's queued
+                // (padded to a whole frame) and jump the timeline forward
+                // to this chunk. PTS stays monotonic: target > current.
+                drainAudioFifo(packets, captureTimestampUs, true);
+                const double delay = static_cast<double>(swr_get_delay(swrCtx, m_audioConfig.sampleRate));
+                m_audioOutPos = std::max<int64_t>(m_audioOutPos,
+                                                  static_cast<int64_t>(std::llround(targetPos - delay)));
+            }
+            m_audioDriftEma = 0.0;
+            swr_set_compensation(swrCtx, 0, 0);
+            const uint64_t n = ++m_audioGapsFilled;
+            if (n <= 5 || n % 50 == 0)
+                LOG_WARN("MediaEncoder: audio gap of " + std::to_string(gap * 1000 / m_audioConfig.sampleRate) +
+                         " ms " +
+                         std::string(gap <= static_cast<int64_t>(outRate) ? "filled with silence"
+                                                                          : "skipped (timeline re-anchored)") +
+                         " (total " + std::to_string(n) + ")");
+        }
+        else if (err > hardLimit)
+        {
+            // Audio is far ahead of its capture time (timestamps jumped
+            // back, or a burst we can't place): drop the excess input.
+            const int64_t drop = std::min<int64_t>(inFrames,
+                                                   static_cast<int64_t>(std::llround(err / inToOut)));
+            in += drop * inChannels;
+            inFrames -= drop;
+            m_audioDriftEma = 0.0;
+            swr_set_compensation(swrCtx, 0, 0);
+            const uint64_t n = ++m_audioOverlapsDropped;
+            if (n <= 5 || n % 50 == 0)
+                LOG_WARN("MediaEncoder: dropped " + std::to_string(drop * 1000 / static_cast<int64_t>(inRate)) +
+                         " ms of audio ahead of its capture time (total " + std::to_string(n) + ")");
+            if (inFrames <= 0)
+            {
+                return false;
             }
         }
-        m_lastAudioFramePTS = calculatedPTS;
+        else
+        {
+            // Soft lock: the capture timestamps jitter by a few ms, the
+            // device clock drifts by ppm. Smooth the error, then steer the
+            // resampler rate to bleed it off over ~2 s, capped at 0.5 %
+            // (inaudible). Steady-state error under a 1000 ppm skewed
+            // device is ~2 ms.
+            m_audioDriftEma += 0.05 * (err - m_audioDriftEma);
+            double ratio = -m_audioDriftEma / (outRate * 2.0);
+            ratio = std::max(-0.005, std::min(0.005, ratio));
+            const int distance = static_cast<int>(m_audioConfig.sampleRate);
+            const int delta = static_cast<int>(std::lround(ratio * distance));
+            swr_set_compensation(swrCtx, delta, distance);
+        }
     }
 
-    return calculatedPTS;
+    if (inFrames > 0)
+    {
+        // Resample into the FIFO.
+        const int maxOut = static_cast<int>(swr_get_out_samples(swrCtx, static_cast<int>(inFrames))) + 64;
+        if (maxOut <= 0)
+        {
+            return false;
+        }
+        const int outChannels = static_cast<int>(m_audioConfig.channels);
+        m_audioPlanes.resize(static_cast<size_t>(outChannels));
+        std::vector<uint8_t *> planePtrs(static_cast<size_t>(outChannels));
+        for (int c = 0; c < outChannels; ++c)
+        {
+            m_audioPlanes[c].resize(static_cast<size_t>(maxOut));
+            planePtrs[c] = reinterpret_cast<uint8_t *>(m_audioPlanes[c].data());
+        }
+        const uint8_t *inPtr[1] = {reinterpret_cast<const uint8_t *>(in)};
+        const int got = swr_convert(swrCtx, planePtrs.data(), maxOut, inPtr, static_cast<int>(inFrames));
+        if (got < 0)
+        {
+            LOG_ERROR("MediaEncoder: swr_convert failed: " + std::to_string(got));
+            return false;
+        }
+        if (got > 0)
+        {
+            av_audio_fifo_write(fifo, reinterpret_cast<void **>(planePtrs.data()), got);
+        }
+    }
+
+    return drainAudioFifo(packets, captureTimestampUs, false);
+}
+
+void MediaEncoder::writeSilenceToFifo(int64_t frames)
+{
+    AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
+    if (!fifo || frames <= 0)
+    {
+        return;
+    }
+    const int outChannels = static_cast<int>(m_audioConfig.channels);
+    const int chunk = 4096;
+    std::vector<float> zeros(static_cast<size_t>(chunk), 0.0f);
+    std::vector<void *> ptrs(static_cast<size_t>(outChannels), zeros.data());
+    while (frames > 0)
+    {
+        const int n = static_cast<int>(std::min<int64_t>(frames, chunk));
+        av_audio_fifo_write(fifo, ptrs.data(), n);
+        frames -= n;
+    }
+}
+
+bool MediaEncoder::drainAudioFifo(std::vector<EncodedPacket> &packets, int64_t captureTimestampUs, bool final)
+{
+    AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
+    AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
+    AVFrame *audioFrame = static_cast<AVFrame *>(m_audioFrame);
+    if (!codecCtx || !fifo || !audioFrame)
+    {
+        return false;
+    }
+    const int frameSize = codecCtx->frame_size > 0 ? codecCtx->frame_size : 1024;
+    if (final)
+    {
+        // Pad the tail to a whole codec frame so no audio is lost.
+        const int rem = av_audio_fifo_size(fifo) % frameSize;
+        if (rem > 0)
+        {
+            writeSilenceToFifo(frameSize - rem);
+        }
+    }
+
+    bool producedAny = false;
+    while (av_audio_fifo_size(fifo) >= frameSize)
+    {
+        if (av_frame_make_writable(audioFrame) < 0)
+        {
+            LOG_ERROR("MediaEncoder: audio frame not writable");
+            return producedAny;
+        }
+        audioFrame->nb_samples = frameSize;
+        if (av_audio_fifo_read(fifo, reinterpret_cast<void **>(audioFrame->data), frameSize) < frameSize)
+        {
+            break;
+        }
+
+        // Sample-count PTS on the output timeline (smooth), which the drift
+        // controller above keeps aligned with the capture clock.
+        int64_t pts = av_rescale_q(m_audioOutPos, AVRational{1, static_cast<int>(m_audioConfig.sampleRate)},
+                                   codecCtx->time_base);
+        m_audioOutPos += frameSize;
+        {
+            std::lock_guard<std::mutex> lock(m_ptsMutex);
+            if (m_lastAudioFramePTS >= 0 && pts <= m_lastAudioFramePTS)
+            {
+                pts = m_lastAudioFramePTS + 1;
+                uint64_t total = m_desyncFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (total == 1 || (total % 60) == 0)
+                {
+                    LOG_WARN("MediaEncoder: PTS retrocession on audio frame (total: " +
+                             std::to_string(total) + ")");
+                }
+            }
+            m_lastAudioFramePTS = pts;
+        }
+        audioFrame->pts = pts;
+        m_audioFrameCount++;
+
+        int ret = avcodec_send_frame(codecCtx, audioFrame);
+        if (ret == AVERROR(EAGAIN))
+        {
+            receiveAudioPackets(packets, captureTimestampUs);
+            ret = avcodec_send_frame(codecCtx, audioFrame);
+        }
+        if (ret < 0 && ret != AVERROR(EAGAIN))
+        {
+            LOG_ERROR("MediaEncoder: avcodec_send_frame (audio) failed: " + std::to_string(ret));
+            break;
+        }
+        if (receiveAudioPackets(packets, captureTimestampUs))
+        {
+            producedAny = true;
+        }
+    }
+    return producedAny;
 }
 
 void MediaEncoder::ensureMonotonicPTS(int64_t &pts, int64_t &dts, bool isVideo)
@@ -1547,6 +1521,17 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
     auto stageAfterConvert = stage_clock::now();
 
     int64_t calculatedPTS = calculateVideoPTS(captureTimestampUs);
+    // #199 — never encode a frame captured before the epoch or not after
+    // the previous one: out-of-order frames are what showed up as
+    // back-and-forth stutter in recordings.
+    if (calculatedPTS < 0 || calculatedPTS <= m_lastVideoFramePTS)
+    {
+        const uint64_t n = ++m_videoFramesOutOfOrder;
+        if (n <= 5 || n % 100 == 0)
+            LOG_WARN("MediaEncoder: dropped out-of-order video frame (total " + std::to_string(n) + ")");
+        return false;
+    }
+    m_lastVideoFramePTS = calculatedPTS;
     videoFrame->pts = calculatedPTS;
 
     bool forceKeyframe = false;
@@ -1783,110 +1768,32 @@ void MediaEncoder::flush(std::vector<EncodedPacket> &packets)
     AVFrame *audioFrame = static_cast<AVFrame *>(m_audioFrame);
     if (audioCtx && audioFrame)
     {
-        // CRITICAL: Process all remaining samples in accumulator before flushing
-        // This ensures no audio is lost at the end of recording
-        const int samplesPerFrame = audioCtx->frame_size;
-        if (samplesPerFrame > 0)
+        // #199 — push what the resampler still holds and the FIFO tail
+        // (padded to a whole frame) through the encoder.
+        SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
+        AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
+        if (m_audioStarted && swrCtx && fifo)
         {
-            const int totalSamplesNeeded = samplesPerFrame * m_audioConfig.channels;
-            
-            while (true)
+            const int outChannels = static_cast<int>(m_audioConfig.channels);
+            const int maxOut = static_cast<int>(swr_get_out_samples(swrCtx, 0)) + 64;
+            if (maxOut > 0)
             {
-                std::vector<int16_t> samplesToProcess;
-                int64_t frameTsUs = 0;
+                m_audioPlanes.resize(static_cast<size_t>(outChannels));
+                std::vector<uint8_t *> planePtrs(static_cast<size_t>(outChannels));
+                for (int c = 0; c < outChannels; ++c)
                 {
-                    std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-                    if (static_cast<int>(m_audioAccumulator.size()) < totalSamplesNeeded)
-                    {
-                        break;
-                    }
-                    samplesToProcess.assign(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
-                    frameTsUs = m_audioAccumulatorStartCaptureTsUs;
+                    m_audioPlanes[c].resize(static_cast<size_t>(maxOut));
+                    planePtrs[c] = reinterpret_cast<uint8_t *>(m_audioPlanes[c].data());
                 }
-
-                if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
+                const int got = swr_convert(swrCtx, planePtrs.data(), maxOut, nullptr, 0);
+                if (got > 0)
                 {
-                    int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
-
-                    int64_t calculatedPTS = calculateAudioPTS(frameTsUs, actualFrameSamples * m_audioConfig.channels);
-                    audioFrame->pts = calculatedPTS;
-                    m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
-
-                    int ret = avcodec_send_frame(audioCtx, audioFrame);
-                    if (ret < 0 && ret != AVERROR(EAGAIN))
-                    {
-                        break;
-                    }
-
-                    receiveAudioPackets(packets, frameTsUs);
-
-                    {
-                        std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-                        m_audioAccumulator.erase(m_audioAccumulator.begin(), m_audioAccumulator.begin() + totalSamplesNeeded);
-                        if (m_audioConfig.sampleRate > 0 && m_audioConfig.channels > 0)
-                        {
-                            int64_t consumedSamplesPerCh = static_cast<int64_t>(totalSamplesNeeded) /
-                                                           static_cast<int64_t>(m_audioConfig.channels);
-                            m_audioAccumulatorStartCaptureTsUs += (consumedSamplesPerCh * 1000000LL) /
-                                                                   static_cast<int64_t>(m_audioConfig.sampleRate);
-                        }
-                        if (m_audioAccumulator.empty()) m_audioAccumulatorTsValid = false;
-                    }
-                }
-                else
-                {
-                    break;
+                    av_audio_fifo_write(fifo, reinterpret_cast<void **>(planePtrs.data()), got);
                 }
             }
-
-            // Flush resampler: send null input to get remaining samples from internal buffer
-            SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
-            if (swrCtx && audioFrame)
-            {
-                int64_t delay = swr_get_delay(swrCtx, m_audioConfig.sampleRate);
-                if (delay > 0)
-                {
-                    const uint8_t *nullInput[1] = {nullptr};
-                    int flushedSamples = swr_convert(swrCtx, audioFrame->data, samplesPerFrame,
-                                                      nullInput, 0);
-
-                    if (flushedSamples > 0)
-                    {
-                        audioFrame->nb_samples = flushedSamples;
-                        int64_t frameTsUs = m_audioAccumulatorStartCaptureTsUs;
-                        int64_t calculatedPTS = calculateAudioPTS(frameTsUs, flushedSamples * m_audioConfig.channels);
-                        audioFrame->pts = calculatedPTS;
-                        m_totalAudioSamplesProcessed += (flushedSamples * m_audioConfig.channels);
-
-                        avcodec_send_frame(audioCtx, audioFrame);
-                        receiveAudioPackets(packets, frameTsUs);
-                    }
-                }
-            }
-
-            // Padding final do accumulator com zero pra completar último frame
-            {
-                std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-                if (!m_audioAccumulator.empty() && m_audioAccumulator.size() < static_cast<size_t>(totalSamplesNeeded))
-                {
-                    m_audioAccumulator.resize(totalSamplesNeeded, 0);
-                    std::vector<int16_t> samplesToProcess = m_audioAccumulator;
-                    int64_t frameTsUs = m_audioAccumulatorStartCaptureTsUs;
-
-                    if (convertInt16ToFloatPlanar(samplesToProcess.data(), totalSamplesNeeded, audioFrame, samplesPerFrame))
-                    {
-                        int actualFrameSamples = static_cast<AVFrame *>(audioFrame)->nb_samples;
-                        int64_t calculatedPTS = calculateAudioPTS(frameTsUs, actualFrameSamples * m_audioConfig.channels);
-                        audioFrame->pts = calculatedPTS;
-                        m_totalAudioSamplesProcessed += (actualFrameSamples * m_audioConfig.channels);
-
-                        avcodec_send_frame(audioCtx, audioFrame);
-                        receiveAudioPackets(packets, frameTsUs);
-                    }
-                }
-            }
+            drainAudioFifo(packets, 0, true);
         }
-        
+
         // Now flush the codec
         avcodec_send_frame(audioCtx, nullptr);
         receiveAudioPackets(packets, 0);
@@ -1898,23 +1805,23 @@ void MediaEncoder::cleanup()
     // SIMPLIFICADO: Apenas marcar como não inicializado e limpar estado
     // Não liberar recursos FFmpeg - deixar na memória para evitar crashes
     
-    // Limpar apenas o acumulador de áudio (é seguro)
+    // Reset the audio timeline (#199). The FIFO is emptied, not freed —
+    // same "keep FFmpeg objects alive" policy as below.
+    if (m_audioFifo)
     {
-        std::lock_guard<std::mutex> lock(m_audioAccumulatorMutex);
-        m_audioAccumulator.clear();
-        m_audioAccumulatorStartCaptureTsUs = 0;
-        m_audioAccumulatorTsValid = false;
+        av_audio_fifo_reset(static_cast<AVAudioFifo *>(m_audioFifo));
     }
+    m_audioStarted = false;
+    m_audioOutPos = 0;
+    m_audioDriftEma = 0.0;
+    m_audioGapsFilled = 0;
+    m_audioOverlapsDropped = 0;
+    m_videoFramesOutOfOrder = 0;
 
     m_initialized = false;
     m_videoFrameCount = 0;
-    m_firstVideoTimestampSet = false;
-    m_firstAudioTimestampSet = false;
-    m_firstVideoTimestampUs = 0;
-    m_firstAudioTimestampUs = 0;
-    m_firstMediaTimestampSet = false;
-    m_firstMediaTimestampUs = 0;
-    m_totalAudioSamplesProcessed = 0;
+    m_epochSet = false;
+    m_epochUs = 0;
     m_audioFrameCount = 0;
     m_videoFrameCountForPTS = 0;
     m_desyncFrameCount.store(0, std::memory_order_relaxed);

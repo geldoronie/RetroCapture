@@ -96,6 +96,8 @@ bool MediaSynchronizer::addAudioChunk(const int16_t *samples, size_t sampleCount
     audio.sampleCount = sampleCount;
     audio.captureTimestampUs = captureTimestampUs;
     audio.durationUs = durationUs;
+    audio.sampleRate = sampleRate;
+    audio.channels = channels;
     audio.processed = false;
 
     {

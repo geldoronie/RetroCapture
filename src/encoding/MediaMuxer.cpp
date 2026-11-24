@@ -256,6 +256,14 @@ bool MediaMuxer::initializeStreams(void *videoCodecContext, void *audioCodecCont
     // O FFmpeg escreve o moov atom corretamente no final com av_write_trailer()
     m_formatOptions = nullptr;
 
+    // #199 — live output: bound how long av_interleaved_write_frame may hold
+    // packets of one stream waiting for the other. FFmpeg's default is 10 s,
+    // so when audio stopped arriving the clients got no video for seconds.
+    if (filePath.empty())
+    {
+        formatCtx->max_interleave_delta = 500000; // 0.5 s
+    }
+
     // Criar stream de vídeo
     AVStream *videoStream = avformat_new_stream(formatCtx, nullptr);
     if (!videoStream)

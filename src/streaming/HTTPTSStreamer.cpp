@@ -1481,7 +1481,9 @@ bool HTTPTSStreamer::initializeEncoding()
     m_streamSynchronizer.setName("stream");
     m_streamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_streamSynchronizer.setMaxVideoBufferSize(m_maxVideoBufferSize);
-    m_streamSynchronizer.setMaxAudioBufferSize(m_maxAudioBufferSize);
+    // #199 — audio chunks are ~10 ms now (#197): keep >= 2 s of audio so a
+    // slow video encode can never make the synchronizer drop audio.
+    m_streamSynchronizer.setMaxAudioBufferSize(std::max<size_t>(m_maxAudioBufferSize, 200));
     m_streamSynchronizer.setSyncTolerance(50 * 1000LL); // 50ms
 
     // Configurar MediaEncoder
@@ -1562,7 +1564,7 @@ bool HTTPTSStreamer::initializeRawPipeline()
     // up. The bigger buffer absorbs those bursts without imposing
     // meaningful latency — the encoder still pulls in near-real-time.
     const size_t rawMaxVideo = std::max<size_t>(m_maxVideoBufferSize, 60);
-    const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 120);
+    const size_t rawMaxAudio = std::max<size_t>(m_maxAudioBufferSize, 200); // >= 2 s (#199)
     m_rawStreamSynchronizer.setName("raw");
     m_rawStreamSynchronizer.setMaxBufferTime(m_maxBufferTimeSeconds * 1000000LL);
     m_rawStreamSynchronizer.setMaxVideoBufferSize(rawMaxVideo);
@@ -1778,7 +1780,8 @@ void HTTPTSStreamer::encodingThread()
 
                 std::vector<MediaEncoder::EncodedPacket> aPackets;
                 if (m_mediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
-                                               chunk.captureTimestampUs, aPackets))
+                                               chunk.captureTimestampUs, chunk.sampleRate,
+                                               chunk.channels, aPackets))
                 {
                     for (const auto &p : aPackets)
                     {
@@ -1794,67 +1797,36 @@ void HTTPTSStreamer::encodingThread()
         size_t audioBufferSize = m_streamSynchronizer.getAudioBufferSize();
         bool hasBacklog = (videoBufferSize > 5 || audioBufferSize > 10);
 
-        MediaSynchronizer::SyncZone syncZone = m_streamSynchronizer.calculateSyncZone();
-
-        if (syncZone.isValid())
+        // #199 — drain video in capture order, independently of audio (as
+        // /raw does). Gating it on calculateSyncZone() overlap starved video
+        // whenever audio timestamps lagged a little (dropping frames at the
+        // synchronizer) and its fallback encoded stale frames after newer
+        // ones. A/V alignment comes from the capture timestamps; the muxer
+        // interleaves by DTS.
         {
-            // Obter frames de vídeo da zona sincronizada
-            auto videoFrames = m_streamSynchronizer.getVideoFrames(syncZone);
-
-            // Processar frames de vídeo (com controle de taxa para evitar aceleração)
-            // Aumentar limite quando há backlog para evitar perda de frames
+            auto videoFrames = m_streamSynchronizer.getAllUnprocessedVideo();
             size_t framesProcessed = 0;
-            // Bigger catchup batch under backlog — when the bound on
-            // frames-per-iteration is too small the encoder thread can't
-            // drain a transient spike before the next push, the
-            // synchronizer fills, and addVideoFrame starts dropping at
-            // the source even though the encoder is well within its
-            // throughput budget. 30 covers a full second of vsync push
-            // in a single iteration.
             size_t MAX_FRAMES_PER_ITERATION = hasBacklog ? 30 : 2;
 
             for (const auto &frame : videoFrames)
             {
-                if (m_stopRequest)
-                {
-                    break;
-                }
+                if (m_stopRequest) break;
+                if (framesProcessed >= MAX_FRAMES_PER_ITERATION) break;
+                if (frame.processed || !frame.data || frame.width == 0 || frame.height == 0) continue;
 
-                // Limitar número de frames processados por iteração
-                if (framesProcessed >= MAX_FRAMES_PER_ITERATION)
+                std::vector<MediaEncoder::EncodedPacket> packets;
+                if (m_mediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
+                                               frame.captureTimestampUs, packets))
                 {
-                    break;
-                }
-
-                if (!frame.processed && frame.data && frame.width > 0 && frame.height > 0)
-                {
-                    // Encodar frame usando MediaEncoder
-                    std::vector<MediaEncoder::EncodedPacket> packets;
-                    if (m_mediaEncoder.encodeVideo(frame.data->data(), frame.width, frame.height,
-                                                   frame.captureTimestampUs, packets))
+                    for (const auto &packet : packets)
                     {
-                        // Muxar pacotes usando MediaMuxer
-                        for (const auto &packet : packets)
-                        {
-                            m_mediaMuxer.muxPacket(packet);
-                        }
-                        processedAny = true;
-                        framesProcessed++;
-                        // Mark this specific frame as processed by its
-                        // capture timestamp — see the matching note in
-                        // rawEncodingThread for why index-range marking
-                        // was wrong (it marked the first N slots of the
-                        // sync zone, but the loop skips already-
-                        // processed frames so the actually-encoded ones
-                        // were not at those positions and got re-encoded
-                        // on subsequent iterations).
-                        m_streamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
+                        m_mediaMuxer.muxPacket(packet);
                     }
+                    processedAny = true;
                 }
+                framesProcessed++;
+                m_streamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
             }
-
-            // Audio was already drained at the top of the loop, no need
-            // to process it again here.
 
             // Capturar header do formato se disponível
             {
@@ -1953,7 +1925,8 @@ void HTTPTSStreamer::rawEncodingThread()
 
                 std::vector<MediaEncoder::EncodedPacket> aPackets;
                 if (m_rawMediaEncoder.encodeAudio(chunk.samples->data(), chunk.sampleCount,
-                                                  chunk.captureTimestampUs, aPackets))
+                                                  chunk.captureTimestampUs, chunk.sampleRate,
+                                                  chunk.channels, aPackets))
                 {
                     for (const auto &p : aPackets)
                     {
