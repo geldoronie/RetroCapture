@@ -46,8 +46,28 @@ W=1280; H=720
 WORK="$(mktemp -d /tmp/rc-smoke.XXXXXX)"
 APP_PID=""
 
+# Stop the app under test. Under xvfb-run the app is a grandchild: killing
+# only xvfb-run orphaned it, and the orphan kept serving the port, so the
+# next launch silently tested the OLD process (#214). The launch runs in its
+# own session (setsid), so we can signal exactly the app, and kill the whole
+# session as a last resort.
+stop_signal() {
+    [ -n "$APP_PID" ] || return 0
+    if [ "$USE_XVFB" = 1 ]; then
+        pkill -TERM -s "$APP_PID" -x retrocapture 2>/dev/null || kill -TERM -- -"$APP_PID" 2>/dev/null
+    else
+        kill -TERM "$APP_PID" 2>/dev/null
+    fi
+}
+force_kill() {
+    [ -n "$APP_PID" ] || return 0
+    kill -9 -- -"$APP_PID" 2>/dev/null || kill -9 "$APP_PID" 2>/dev/null
+}
+
 cleanup() {
-    [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
+    stop_signal
+    for _ in $(seq 1 20); do [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
+    force_kill
     [ -n "$APP_PID" ] && wait "$APP_PID" 2>/dev/null
     if [ "${SMOKE_KEEP:-0}" = 1 ]; then echo "   (kept $WORK)"; else rm -rf "$WORK"; fi
 }
@@ -63,11 +83,18 @@ done
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
 # Wrap in xvfb when there's no display (CI). GLFW needs a GL context.
-LAUNCH_PREFIX=""
+LAUNCH_PREFIX=()
+USE_XVFB=0
 # macOS has its own window server (no X/DISPLAY): launch directly there.
 if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
     if command -v xvfb-run >/dev/null 2>&1; then
-        LAUNCH_PREFIX="xvfb-run -a"
+        # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
+        # The window is pinned to 640x480 below (= the stream size): the shader
+        # renders at window size, and a near-fullscreen window downscaled to
+        # the stream averaged the CRT scanlines away, so the "shader changed
+        # the image" check depended on the display (flaky in CI, #214).
+        LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
+        USE_XVFB=1
         note "no DISPLAY — using xvfb-run"
     else
         fail "no DISPLAY and xvfb-run not installed (need a GL context)"
@@ -101,8 +128,9 @@ launch_app() {
     local cfg="$WORK/$sub/cfg" data="$WORK/$sub/data"
     mkdir -p "$cfg" "$data"
     XDG_CONFIG_HOME="$cfg" XDG_DATA_HOME="$data" \
-        $LAUNCH_PREFIX "$BIN" --source test --stream-enable --hide-ui \
-        --stream-port "$PORT" --width "$W" --height "$H" "$@" \
+        ${LAUNCH_PREFIX[@]+"${LAUNCH_PREFIX[@]}"} "$BIN" --source test --stream-enable --hide-ui \
+        --stream-port "$PORT" --width "$W" --height "$H" \
+        --window-width 640 --window-height 480 "$@" \
         > "$WORK/$sub-app.log" 2>&1 &
     APP_PID=$!
 
@@ -138,14 +166,16 @@ launch_app() {
 # stop_app — kill the current instance and wait for the port to free up so the
 # next launch_app binds cleanly.
 stop_app() {
-    [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
-    [ -n "$APP_PID" ] && wait "$APP_PID" 2>/dev/null
+    stop_signal
+    for _ in $(seq 1 30); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
+    kill -0 "$APP_PID" 2>/dev/null && force_kill
+    wait "$APP_PID" 2>/dev/null
     APP_PID=""
     for _ in $(seq 1 20); do
         port_up || return 0
         sleep 0.5
     done
-    note "warning: port $PORT still up after stop"
+    fail "port $PORT still up after stopping the app — the next pass would test a stale process"
 }
 
 # capture_stream <out.ts> — pull a few seconds of /stream.

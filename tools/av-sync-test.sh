@@ -49,9 +49,29 @@ WORK="$(mktemp -d /tmp/rc-avsync.XXXXXX)"
 APP_PID=""
 CURL_PID=""
 
+# Stop the app under test. Under xvfb-run the app is a grandchild: killing
+# only xvfb-run orphaned it, and the orphan kept serving the port, so the
+# next launch silently tested the OLD process (#214). The launch runs in its
+# own session (setsid), so we can signal exactly the app, and kill the whole
+# session as a last resort.
+stop_signal() {
+    [ -n "$APP_PID" ] || return 0
+    if [ "$USE_XVFB" = 1 ]; then
+        pkill -TERM -s "$APP_PID" -x retrocapture 2>/dev/null || kill -TERM -- -"$APP_PID" 2>/dev/null
+    else
+        kill -TERM "$APP_PID" 2>/dev/null
+    fi
+}
+force_kill() {
+    [ -n "$APP_PID" ] || return 0
+    kill -9 -- -"$APP_PID" 2>/dev/null || kill -9 "$APP_PID" 2>/dev/null
+}
+
 cleanup() {
     [ -n "$CURL_PID" ] && kill "$CURL_PID" 2>/dev/null
-    [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
+    stop_signal
+    for _ in $(seq 1 20); do [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
+    force_kill
     [ -n "$APP_PID" ] && wait "$APP_PID" 2>/dev/null
     if [ "${AVSYNC_KEEP:-0}" = 1 ]; then echo "   (kept $WORK)"; else rm -rf "$WORK"; fi
 }
@@ -66,11 +86,14 @@ done
 python3 -c "import numpy" 2>/dev/null || fail "python3 numpy is required"
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
-LAUNCH_PREFIX=""
+LAUNCH_PREFIX=()
+USE_XVFB=0
 # macOS has its own window server (no X/DISPLAY): launch directly there.
 if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
     command -v xvfb-run >/dev/null 2>&1 || fail "no DISPLAY and xvfb-run not installed"
-    LAUNCH_PREFIX="xvfb-run -a"
+    # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
+    LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
+    USE_XVFB=1
 fi
 
 port_up() {
@@ -87,7 +110,7 @@ note "${SECONDS_TO_RUN}s @ ${FPS} fps, fake audio clock skew ${SKEW} ppm, ${FRAG
 mkdir -p "$WORK/cfg" "$WORK/data" "$WORK/run"
 (
     cd "$WORK/run" && XDG_CONFIG_HOME="$WORK/cfg" XDG_DATA_HOME="$WORK/data" \
-    exec $LAUNCH_PREFIX "$BIN" --source test --audio-source test \
+    exec ${LAUNCH_PREFIX[@]+"${LAUNCH_PREFIX[@]}"} "$BIN" --source test --audio-source test \
         --test-audio-skew-ppm "$SKEW" --test-audio-fragment-ms "$FRAGMENT_MS" --stream-enable --hide-ui \
         --stream-port "$PORT" --width "$W" --height "$H" --fps "$FPS" \
         --stream-fps "$FPS"
@@ -129,10 +152,10 @@ sleep 3
 
 # SIGTERM runs the orderly shutdown; a hang there (e.g. an audio thread
 # deadlock) is a failure in its own right.
-kill "$APP_PID" 2>/dev/null
+stop_signal
 for _ in $(seq 1 30); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
 if kill -0 "$APP_PID" 2>/dev/null; then
-    kill -9 "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; APP_PID=""
+    force_kill; wait "$APP_PID" 2>/dev/null; APP_PID=""
     fail "app did not shut down within 15 s of SIGTERM"
 fi
 wait "$APP_PID" 2>/dev/null; APP_PID=""
