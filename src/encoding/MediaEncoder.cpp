@@ -836,6 +836,12 @@ bool MediaEncoder::initializeAudioCodec()
     // follows the actual capture (rebuilt if a chunk arrives in another
     // format), so a 48 kHz device feeding a 44.1 kHz encoder is resampled
     // instead of played at the wrong speed.
+    // A previous session's resampler / FIFO are left alone (same "don't
+    // free FFmpeg objects across sessions" policy as cleanup(): a detached
+    // stuck encoding thread may still touch them). Only an in-session
+    // format change frees the resampler it replaces.
+    m_swrContext = nullptr;
+    m_audioFifo = nullptr;
     if (!createAudioResampler(m_audioConfig.sampleRate, m_audioConfig.channels))
     {
         avcodec_free_context(&codecCtx);
@@ -860,6 +866,11 @@ bool MediaEncoder::initializeAudioCodec()
     if (!audioFrame)
     {
         LOG_ERROR("Failed to allocate audio frame");
+        {
+            AVAudioFifo *f = static_cast<AVAudioFifo *>(m_audioFifo);
+            av_audio_fifo_free(f);
+            m_audioFifo = nullptr;
+        }
         swr_free(&swrCtx);
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
@@ -875,6 +886,11 @@ bool MediaEncoder::initializeAudioCodec()
     {
         LOG_ERROR("Failed to allocate audio frame buffer");
         av_frame_free(&audioFrame);
+        {
+            AVAudioFifo *f = static_cast<AVAudioFifo *>(m_audioFifo);
+            av_audio_fifo_free(f);
+            m_audioFifo = nullptr;
+        }
         swr_free(&swrCtx);
         avcodec_free_context(&codecCtx);
         m_audioCodecContext = nullptr;
@@ -1122,13 +1138,36 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     if (inChannels == 0) inChannels = m_audioConfig.channels;
     if (inRate != m_swrInRate || inChannels != m_swrInChannels)
     {
-        // Capture format changed (device switch): rebuild the resampler and
-        // re-anchor on the next chunk.
+        // Capture format changed (device switch): push what the old
+        // resampler still holds into the FIFO, then rebuild it. The timeline
+        // (m_audioOutPos + FIFO) is kept, so the controller below simply sees
+        // the new chunk's error — no re-anchor that would re-stamp queued
+        // samples or move PTS backwards.
+        SwrContext *oldSwr = static_cast<SwrContext *>(m_swrContext);
+        if (oldSwr && m_audioStarted)
+        {
+            const int outChannels = static_cast<int>(m_audioConfig.channels);
+            const int maxOut = static_cast<int>(swr_get_out_samples(oldSwr, 0)) + 64;
+            if (maxOut > 0)
+            {
+                m_audioPlanes.resize(static_cast<size_t>(outChannels));
+                std::vector<uint8_t *> planePtrs(static_cast<size_t>(outChannels));
+                for (int c = 0; c < outChannels; ++c)
+                {
+                    m_audioPlanes[c].resize(static_cast<size_t>(maxOut));
+                    planePtrs[c] = reinterpret_cast<uint8_t *>(m_audioPlanes[c].data());
+                }
+                const int got = swr_convert(oldSwr, planePtrs.data(), maxOut, nullptr, 0);
+                if (got > 0)
+                {
+                    av_audio_fifo_write(fifo, reinterpret_cast<void **>(planePtrs.data()), got);
+                }
+            }
+        }
         if (!createAudioResampler(inRate, inChannels))
         {
             return false;
         }
-        m_audioStarted = false;
     }
     SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
 
@@ -1182,16 +1221,34 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
 
         if (err < -hardLimit)
         {
-            // A real gap (capture stall, dropped chunks, device hiccup):
-            // fill it with silence so the following audio lands on time.
             const int64_t gap = static_cast<int64_t>(std::llround(-err));
-            writeSilenceToFifo(gap);
+            if (gap <= static_cast<int64_t>(outRate)) // <= 1 s
+            {
+                // A real but short gap (capture stall, dropped chunks,
+                // device hiccup): fill it with silence so the following
+                // audio lands on time.
+                writeSilenceToFifo(gap);
+            }
+            else
+            {
+                // A long gap (no /raw client for an hour, audio device gone
+                // for minutes): don't synthesize it. Flush what's queued
+                // (padded to a whole frame) and jump the timeline forward
+                // to this chunk. PTS stays monotonic: target > current.
+                drainAudioFifo(packets, captureTimestampUs, true);
+                const double delay = static_cast<double>(swr_get_delay(swrCtx, m_audioConfig.sampleRate));
+                m_audioOutPos = std::max<int64_t>(m_audioOutPos,
+                                                  static_cast<int64_t>(std::llround(targetPos - delay)));
+            }
             m_audioDriftEma = 0.0;
             swr_set_compensation(swrCtx, 0, 0);
             const uint64_t n = ++m_audioGapsFilled;
             if (n <= 5 || n % 50 == 0)
                 LOG_WARN("MediaEncoder: audio gap of " + std::to_string(gap * 1000 / m_audioConfig.sampleRate) +
-                         " ms filled with silence (total " + std::to_string(n) + ")");
+                         " ms " +
+                         std::string(gap <= static_cast<int64_t>(outRate) ? "filled with silence"
+                                                                          : "skipped (timeline re-anchored)") +
+                         " (total " + std::to_string(n) + ")");
         }
         else if (err > hardLimit)
         {
@@ -1216,11 +1273,11 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         {
             // Soft lock: the capture timestamps jitter by a few ms, the
             // device clock drifts by ppm. Smooth the error, then steer the
-            // resampler rate to bleed it off over ~5 s, capped at 0.5 %
+            // resampler rate to bleed it off over ~2 s, capped at 0.5 %
             // (inaudible). Steady-state error under a 1000 ppm skewed
-            // device is ~5 ms.
+            // device is ~2 ms.
             m_audioDriftEma += 0.05 * (err - m_audioDriftEma);
-            double ratio = -m_audioDriftEma / (outRate * 5.0);
+            double ratio = -m_audioDriftEma / (outRate * 2.0);
             ratio = std::max(-0.005, std::min(0.005, ratio));
             const int distance = static_cast<int>(m_audioConfig.sampleRate);
             const int delta = static_cast<int>(std::lround(ratio * distance));
