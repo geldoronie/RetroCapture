@@ -37,7 +37,7 @@
 // YouTube-style layout, removed localhost-hostname rewrite). Without
 // this bump, browsers carry the old chat.js until the user manually
 // clears storage or closes every open tab.
-const CACHE_NAME = 'retrocapture-v14';
+const CACHE_NAME = 'retrocapture-v15'; // v15: shared live-player.js (#216)
 const RUNTIME_CACHE = 'retrocapture-runtime-v7';
 
 // Resources to precache so the PWA shell works offline. Keep small
@@ -49,6 +49,7 @@ const PRECACHE_URLS = [
   '/manifest.json',
   '/api.js',
   '/home.js',
+  '/live-player.js',
   '/chat.js',
   '/i18n.js',
   '/vendor/bootstrap.min.css',
