@@ -422,16 +422,15 @@ void RecordingManager::stopRecording()
     LOG_INFO("RecordingManager: Stopped recording");
 }
 
-void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
+void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!m_recording)
     {
         return;
     }
 
-    // Use absolute timestamp when frame arrives
-    // This ensures frames are timestamped based on when they're actually captured
-    int64_t timestampUs = getTimestampUs();
+    // #198 — capture time of the frame, not its arrival after render.
+    const int64_t timestampUs = captureTimestampUs > 0 ? captureTimestampUs : getTimestampUs();
 
     bool added = m_synchronizer.addVideoFrame(data, width, height, timestampUs);
 

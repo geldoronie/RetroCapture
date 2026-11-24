@@ -167,7 +167,7 @@ void HTTPTSStreamer::setStreamPasswordHash(const std::string &sha256Hex)
     m_apiController.setStreamPasswordHash(sha256Hex);
 }
 
-bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
+bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!data || !m_active || width == 0 || height == 0)
     {
@@ -182,8 +182,12 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
         return false;
     }
 
-    // Capturar timestamp de captura (quando o frame chega ao streamer)
-    int64_t captureTimestampUs = getTimestampUs();
+    // #198 — capture time of the frame (from the capture backend), not
+    // when it reached the streamer after render + readback.
+    if (captureTimestampUs <= 0)
+    {
+        captureTimestampUs = getTimestampUs();
+    }
 
     // Adicionar frame ao MediaSynchronizer
     return m_streamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
@@ -228,7 +232,7 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount, int64
     return ok;
 }
 
-bool HTTPTSStreamer::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height)
+bool HTTPTSStreamer::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!data || !m_active || width == 0 || height == 0)
     {
@@ -240,7 +244,10 @@ bool HTTPTSStreamer::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t 
         // don't have to special-case it.
         return false;
     }
-    int64_t captureTimestampUs = getTimestampUs();
+    if (captureTimestampUs <= 0)
+    {
+        captureTimestampUs = getTimestampUs();
+    }
     return m_rawStreamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 

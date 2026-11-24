@@ -99,7 +99,7 @@ bool StreamManager::isActive() const
     return m_active;
 }
 
-void StreamManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height)
+void StreamManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!m_active || !data)
     {
@@ -110,7 +110,7 @@ void StreamManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t heig
     {
         if (streamer->isActive())
         {
-            streamer->pushFrame(data, width, height);
+            streamer->pushFrame(data, width, height, captureTimestampUs);
         }
     }
 }
@@ -131,7 +131,7 @@ void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount, int64_
     }
 }
 
-void StreamManager::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height)
+void StreamManager::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs)
 {
     if (!m_active || !data)
     {
@@ -147,7 +147,7 @@ void StreamManager::pushRawFrame(const uint8_t *data, uint32_t width, uint32_t h
         if (!streamer->isActive()) continue;
         if (auto *ts = dynamic_cast<HTTPTSStreamer *>(streamer.get()))
         {
-            ts->pushRawFrame(data, width, height);
+            ts->pushRawFrame(data, width, height, captureTimestampUs);
         }
     }
 }

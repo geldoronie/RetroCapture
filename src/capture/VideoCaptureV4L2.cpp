@@ -1,4 +1,5 @@
 #include "VideoCaptureV4L2.h"
+#include "../utils/MediaClock.h"
 #include "FormatNegotiator.h"
 #include "../utils/Logger.h"
 #include "../utils/V4L2DeviceScanner.h"
@@ -378,6 +379,24 @@ bool VideoCaptureV4L2::captureFrame(Frame &frame)
     frame.width = m_width;
     frame.height = m_height;
     frame.format = m_pixelFormat;
+    // #198 — the driver's capture timestamp. With
+    // V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC it is CLOCK_MONOTONIC, i.e. the
+    // MediaClock timeline on Linux. Anything else (or an implausible value)
+    // falls back to the dequeue time.
+    {
+        const int64_t nowUs = MediaClock::nowUs();
+        int64_t tsUs = nowUs;
+        if ((buf.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC)
+        {
+            const int64_t drvUs = static_cast<int64_t>(buf.timestamp.tv_sec) * 1000000LL +
+                                  static_cast<int64_t>(buf.timestamp.tv_usec);
+            if (drvUs > 0 && drvUs <= nowUs && nowUs - drvUs < 1000000LL)
+            {
+                tsUs = drvUs;
+            }
+        }
+        frame.timestampUs = tsUs;
+    }
 
     // Validar tamanho do frame
     size_t expectedSize = m_width * m_height * 2; // YUYV: 2 bytes por pixel

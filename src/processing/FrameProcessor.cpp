@@ -1,4 +1,5 @@
 #include "FrameProcessor.h"
+#include "../utils/MediaClock.h"
 #include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
@@ -66,6 +67,9 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             m_textureWidth    = gw;
             m_textureHeight   = gh;
             m_hasValidFrame   = true;
+            // The zero-copy path has no per-frame signal: date it now.
+            ++m_frameSeq;
+            m_frameTimestampUs = MediaClock::nowUs();
             return true;
         }
         m_externalTexture = 0; // not on the GPU path this frame
@@ -89,6 +93,10 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
                  ", dim: " + std::to_string(frame.width) + "x" + std::to_string(frame.height) + ")");
         return false;
     }
+
+    // #198 — a new captured frame: remember when it was captured.
+    ++m_frameSeq;
+    m_frameTimestampUs = frame.timestampUs > 0 ? frame.timestampUs : MediaClock::nowUs();
 
     // Se a textura ainda não foi criada ou o tamanho mudou
     bool textureCreated = false;
