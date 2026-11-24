@@ -1,0 +1,88 @@
+# macOS release builds (#214). No Mac is available to build releases
+# locally, so the .app bundles are built here:
+#   - macos-15        → arm64 (Apple Silicon)
+#   - macos-15-intel  → x86_64
+# Runs on PRs / milestone pushes as the only macOS compile check, and on
+# release tags. Each job builds with tools/build-macos-bundle.sh, smoke-tests the binary
+# with the synthetic sources, uploads the tarball as an artifact and — when
+# run for a release tag (push or manual with `release_tag`) — attaches it
+# to that GitHub Release.
+#
+# Same limitations as the locally built 0.8.x bundles: not signed /
+# notarized, and Homebrew dylibs are not relocated into the bundle.
+name: macOS build
+
+on:
+  push:
+    tags: ['[0-9]*.[0-9]*.[0-9]*-alpha*']
+    branches: [master, '*-alpha']
+  # Also on PRs: there's no Mac to build on locally, so this is the only
+  # check that Core Audio / AVFoundation changes still compile.
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Attach the tarballs to this existing release tag (leave empty for artifacts only)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Homebrew)
+        run: |
+          brew update
+          brew install cmake pkg-config glfw ffmpeg libpng openssl@3 sdl2 || true
+          brew list --versions cmake pkg-config glfw ffmpeg libpng openssl@3
+
+      - name: Build bundle
+        run: ./tools/build-macos-bundle.sh --clean Release
+
+      - name: Locate tarball
+        id: tarball
+        run: |
+          f=$(ls dist/RetroCapture-*-macos-*.tar.gz | head -1)
+          test -n "$f"
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$f")" >> "$GITHUB_OUTPUT"
+          echo "Built $f"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Best-effort runtime check on the runner's window server. Kept
+      # non-blocking until it has proven stable on hosted macOS runners.
+      - name: Smoke test (synthetic source)
+        continue-on-error: true
+        run: |
+          pip install numpy
+          SMOKE_PORT=8093 SMOKE_PRESET=none ./tools/smoke-test.sh "$PWD/build-macos-${{ matrix.arch }}/bin/retrocapture"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tarball.outputs.name }}
+          path: ${{ steps.tarball.outputs.path }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+        run: gh release upload "$TAG" "${{ steps.tarball.outputs.path }}" --clobber

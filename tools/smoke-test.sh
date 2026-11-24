@@ -63,7 +63,8 @@ done
 
 # Wrap in xvfb when there's no display (CI). GLFW needs a GL context.
 LAUNCH_PREFIX=""
-if [ -z "${DISPLAY:-}" ]; then
+# macOS has its own window server (no X/DISPLAY): launch directly there.
+if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
     if command -v xvfb-run >/dev/null 2>&1; then
         LAUNCH_PREFIX="xvfb-run -a"
         note "no DISPLAY — using xvfb-run"
@@ -149,7 +150,7 @@ stop_app() {
 # capture_stream <out.ts> — pull a few seconds of /stream.
 capture_stream() {
     local out="$1"
-    timeout 6 curl -s -o "$out" "http://127.0.0.1:$PORT/stream"
+    curl -s --max-time 6 -o "$out" "http://127.0.0.1:$PORT/stream"
     [ -s "$out" ] || fail "no stream data captured ($out)"
     note "captured $(wc -c < "$out") bytes of MPEG-TS"
 }

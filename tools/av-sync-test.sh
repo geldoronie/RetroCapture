@@ -67,7 +67,8 @@ python3 -c "import numpy" 2>/dev/null || fail "python3 numpy is required"
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
 LAUNCH_PREFIX=""
-if [ -z "${DISPLAY:-}" ]; then
+# macOS has its own window server (no X/DISPLAY): launch directly there.
+if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
     command -v xvfb-run >/dev/null 2>&1 || fail "no DISPLAY and xvfb-run not installed"
     LAUNCH_PREFIX="xvfb-run -a"
 fi
@@ -105,7 +106,7 @@ grep -q "AudioCaptureTestTone opened" "$WORK/app.log" "$WORK"/data/*/retrocaptur
 sleep 2
 
 # /stream client (also wakes the /stream encoder, which idles without one).
-timeout $((SECONDS_TO_RUN + 4)) curl -s -o "$WORK/stream.ts" "http://127.0.0.1:$PORT/stream" &
+curl -s --max-time $((SECONDS_TO_RUN + 4)) -o "$WORK/stream.ts" "http://127.0.0.1:$PORT/stream" &
 CURL_PID=$!
 sleep 1
 

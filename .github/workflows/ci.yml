@@ -1,0 +1,66 @@
+# CI (#214): build Linux x86_64 with the same Docker image as the releases,
+# then run the hardware-free test suite (synthetic sources, no capture card,
+# no audio device) under xvfb:
+#   - tools/smoke-test.sh   capture → shader → encode → stream → decode
+#   - tools/av-sync-test.sh A/V offset / drift of /stream and a recording
+#                           with a skewed fake audio clock (#196 / #201)
+name: CI
+
+on:
+  push:
+    branches: [master, '*-alpha']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x86_64 — build + smoke + A/V sync
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Docker, release toolchain)
+        run: ./tools/build-linux-x86_64-docker.sh
+
+      - name: Verify build
+        run: |
+          if grep -E " error|Error [0-9]" build-linux-x86_64.log; then
+            echo "::error::compile errors in build-linux-x86_64.log"; exit 1
+          fi
+          test -x build-linux-x86_64/bin/retrocapture
+
+      # The binary is built in the Ubuntu 22.04 image; the runner is the same
+      # release, so the -dev packages pull exactly the runtime libs it links.
+      - name: Install runtime and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglfw3 libsdl2-2.0-0 libpng16-16 libv4l-0 libpulse0 libdbus-1-3 \
+            libpipewire-0.3-0 libegl1 libgbm1 libdrm2 libgl1-mesa-dri \
+            libavcodec58 libavformat58 libavutil56 libswscale5 libswresample3 \
+            libavfilter7 libavdevice58 \
+            xvfb xauth ffmpeg curl python3 python3-numpy
+
+      - name: Smoke test
+        run: SMOKE_PORT=8093 ./tools/smoke-test.sh
+
+      # 30 fps keeps the software x264 encode comfortably real-time on a
+      # 4-core runner; the sync measurement doesn't depend on the rate.
+      - name: A/V sync test (fake audio clock +1000 ppm)
+        run: AVSYNC_PORT=8095 AVSYNC_SECONDS=40 AVSYNC_FPS=30 AVSYNC_SKEW_PPM=1000 ./tools/av-sync-test.sh
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-log
+          path: build-linux-x86_64.log
+          if-no-files-found: ignore

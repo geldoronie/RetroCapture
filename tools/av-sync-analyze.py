@@ -133,7 +133,12 @@ def main():
         return 2
     t = np.array([p[0] for p in pairs])
     off = np.array([p[1] for p in pairs])
-    slope_ms_per_s = np.polyfit(t, off, 1)[0] if len(t) > 2 else 0.0
+    # Steady-state drift: skip the first 10 s, where the encoder's clock
+    # controller is still settling (a short run would otherwise read that
+    # transient as drift). Fall back to all pairs on very short captures.
+    steady = t >= t[0] + 10.0
+    ts, offs = (t[steady], off[steady]) if steady.sum() >= 8 else (t, off)
+    slope_ms_per_s = np.polyfit(ts, offs, 1)[0] if len(ts) > 2 else 0.0
     drift = slope_ms_per_s * 60.0
     duration = float(vpts[-1] - vpts[0]) if len(vpts) > 1 else 0.0
     fps = (nframes - 1) / duration if duration > 0 else 0.0

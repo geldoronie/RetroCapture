@@ -1518,6 +1518,8 @@ void UICallbackWiring::wireSourceAndMiscCallbacks()
                                          {
                                              m_app.m_capture->open("test");
                                              m_app.m_capture->setFormat(m_app.m_captureWidth, m_app.m_captureHeight, 0);
+                                             // Honor --fps: the pattern is paced at this rate (#196).
+                                             m_app.m_capture->setFramerate(m_app.m_captureFps);
                                              m_app.m_capture->startCapture();
                                              if (m_app.m_ui)
                                                  m_app.m_ui->setCaptureInfo(m_app.m_capture->getWidth(), m_app.m_capture->getHeight(),
