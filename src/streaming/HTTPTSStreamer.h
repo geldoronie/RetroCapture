@@ -51,7 +51,7 @@ public:
     bool isActive() const override;
     bool canStart() const;                  // Verifica se pode iniciar (não está em cooldown)
     int64_t getCooldownRemainingMs() const; // Retorna tempo restante de cooldown em ms
-    bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) override;
+    bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs) override;
     bool pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs) override;
     std::string getStreamUrl() const override;
     uint32_t getClientCount() const override;
@@ -61,7 +61,7 @@ public:
     // at /raw, fed with pre-shader frames. Same codec config as /stream; the
     // contract is that /raw is ALWAYS pre-shader regardless of any
     // per-pipeline shader-bypass toggle that may flip /stream's contents.
-    bool pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height);
+    bool pushRawFrame(const uint8_t *data, uint32_t width, uint32_t height, int64_t captureTimestampUs);
     uint32_t getRawClientCount() const { return m_rawClientCount.load(); }
     bool hasRawClients() const { return m_rawClientCount.load() > 0; }
 

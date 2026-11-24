@@ -66,6 +66,14 @@ public:
      */
     bool hasValidFrame() const { return m_hasValidFrame; }
 
+    // #198 — identity and capture time of the frame behind the current
+    // texture. The sequence number changes once per captured frame (not
+    // per render), so outputs can push each captured frame exactly once;
+    // the timestamp is the backend's capture time on MediaClock (dequeue
+    // time when the backend doesn't stamp frames).
+    uint64_t getFrameSeq() const { return m_frameSeq; }
+    int64_t getFrameTimestampUs() const { return m_frameTimestampUs; }
+
     /**
      * Delete the current texture (call when reconfiguring).
      */
@@ -92,6 +100,8 @@ private:
     uint32_t m_textureWidth = 0;
     uint32_t m_textureHeight = 0;
     bool m_hasValidFrame = false;
+    uint64_t m_frameSeq = 0;
+    int64_t m_frameTimestampUs = 0;
     
     // Buffer RGB reutilizável para conversão YUYV→RGB
     // Redimensionado apenas quando necessário (quando dimensões mudam)
