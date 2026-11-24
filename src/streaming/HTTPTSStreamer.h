@@ -52,7 +52,7 @@ public:
     bool canStart() const;                  // Verifica se pode iniciar (não está em cooldown)
     int64_t getCooldownRemainingMs() const; // Retorna tempo restante de cooldown em ms
     bool pushFrame(const uint8_t *data, uint32_t width, uint32_t height) override;
-    bool pushAudio(const int16_t *samples, size_t sampleCount) override;
+    bool pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs) override;
     std::string getStreamUrl() const override;
     uint32_t getClientCount() const override;
     void cleanup() override;

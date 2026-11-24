@@ -124,6 +124,11 @@ public:
     // #196 — use the synthetic A/V-sync tone instead of the platform audio
     // capture (`--audio-source test`); skewPpm fakes a device clock error.
     // Must be called before init().
+    // Ask the main loop to exit and run the normal teardown (finalize the
+    // recording, unload the PulseAudio modules, ...). Async-signal-safe:
+    // main() calls it from its SIGINT/SIGTERM handler.
+    static void requestQuit() { s_quitRequested.store(true); }
+
     void setTestAudioSource(bool enabled, int skewPpm, int fragmentMs)
     {
         m_testAudioSource = enabled;
@@ -522,6 +527,8 @@ private:
     bool m_testAudioSource = false;
     int m_testAudioSkewPpm = 0;
     int m_testAudioFragmentMs = 10;
+    std::vector<int16_t> m_audioPumpBuffer; // #197 processAudioCapture scratch
+    static std::atomic<bool> s_quitRequested;
     void restoreAudioDeviceConnections();
     void handleKeyInput();
 

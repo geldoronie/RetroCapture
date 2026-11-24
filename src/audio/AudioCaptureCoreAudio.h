@@ -49,6 +49,7 @@ public:
     bool startCapture() override;
     void stopCapture() override;
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
+    size_t getTimestampedSamples(int16_t *buffer, size_t maxSamples, int64_t &firstSampleTsUs) override;
     uint32_t getBytesPerSample() const override { return m_bytesPerSample; }
 
     // Método público para callback acessar AudioUnit

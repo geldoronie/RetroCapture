@@ -1,4 +1,5 @@
 #include "RecordingManager.h"
+#include "../utils/MediaClock.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
 #include "../utils/FilesystemCompat.h"
@@ -32,9 +33,8 @@ RecordingManager::~RecordingManager()
 
 int64_t RecordingManager::getTimestampUs() const
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+    // Same clock as every capture timestamp (#197).
+    return MediaClock::nowUs();
 }
 
 std::string RecordingManager::generateFilename(const RecordingSettings &settings)
@@ -455,18 +455,15 @@ void RecordingManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t h
     }
 }
 
-void RecordingManager::pushAudio(const int16_t *samples, size_t sampleCount)
+void RecordingManager::pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
 {
     if (!m_recording || !m_settings.includeAudio)
     {
         return;
     }
 
-    // Use absolute timestamp when audio chunk arrives
-    // This ensures audio is timestamped based on when it's actually captured
-    int64_t timestampUs = getTimestampUs();
-
-    m_synchronizer.addAudioChunk(samples, sampleCount, timestampUs, m_audioSampleRate, m_audioChannels);
+    // #197 — capture time from the audio backend, not arrival time.
+    m_synchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannels);
 }
 
 void RecordingManager::encodingThread()

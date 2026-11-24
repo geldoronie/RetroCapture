@@ -50,7 +50,8 @@ public:
      * @param height Frame height
      */
     void pushFrame(const uint8_t *data, uint32_t width, uint32_t height);
-    void pushAudio(const int16_t *samples, size_t sampleCount);
+    // captureTimestampUs: MediaClock capture time of samples[0] (#197).
+    void pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs);
 
     /**
      * Push a pre-shader frame to the /raw output of every MPEG-TS streamer

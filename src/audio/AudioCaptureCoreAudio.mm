@@ -464,6 +464,19 @@ size_t AudioCaptureCoreAudio::getSamples(int16_t *buffer, size_t maxSamples)
     return m_localTap->pull(buffer, maxSamples);
 }
 
+size_t AudioCaptureCoreAudio::getTimestampedSamples(int16_t *buffer, size_t maxSamples,
+                                                    int64_t &firstSampleTsUs)
+{
+    // #197 — the input callback pushes right after the device delivers a
+    // block, so the bus dates each block on arrival; the tap carries that
+    // date through any backlog.
+    if (!m_isOpen || !m_isCapturing || !buffer || maxSamples == 0 || !m_localTap)
+    {
+        return 0;
+    }
+    return m_localTap->pull(buffer, maxSamples, firstSampleTsUs);
+}
+
 bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDeviceId)
 {
 #ifdef __APPLE__
@@ -607,6 +620,12 @@ bool AudioCaptureCoreAudio::initializeAudioUnit(const std::string &requestedDevi
     // mono devices will deliver a single channel; the rest of the
     // bus / monitor pipeline handles channel counts > 0 fine.
     AudioStreamBasicDescription streamFormat = {};
+    // #197 — keep the bus (and its taps' timestamp math) on the format
+    // actually delivered by the AudioUnit.
+    if (m_bus)
+    {
+        m_bus->setFormat(m_sampleRate, m_channels);
+    }
     streamFormat.mSampleRate       = m_sampleRate;
     streamFormat.mFormatID         = kAudioFormatLinearPCM;
     streamFormat.mFormatFlags      = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;

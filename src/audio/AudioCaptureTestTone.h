@@ -51,6 +51,7 @@ public:
     bool startCapture() override { return m_open; }
     void stopCapture() override {}
     size_t getSamples(int16_t *buffer, size_t maxSamples) override;
+    size_t getTimestampedSamples(int16_t *buffer, size_t maxSamples, int64_t &firstSampleTsUs) override;
     uint32_t getBytesPerSample() const override { return 2; }
 
 private:

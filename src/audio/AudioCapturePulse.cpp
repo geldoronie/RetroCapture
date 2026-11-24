@@ -1,5 +1,6 @@
 #include "AudioCapturePulse.h"
 #include "../utils/Logger.h"
+#include "../utils/MediaClock.h"
 #include <pulse/pulseaudio.h>
 #include <pulse/simple.h>
 #include <pulse/error.h>
@@ -77,11 +78,53 @@ bool AudioCapturePulse::initializePulseAudio()
         return false;
     }
 
+    startPump();
     return true;
+}
+
+void AudioCapturePulse::startPump()
+{
+    if (m_pumpRunning.load())
+        return;
+    m_pumpRunning = true;
+    m_pumpThread = std::thread(&AudioCapturePulse::pumpLoop, this);
+}
+
+void AudioCapturePulse::stopPump()
+{
+    m_pumpRunning = false;
+    if (m_pumpThread.joinable())
+        m_pumpThread.join();
+}
+
+void AudioCapturePulse::pumpLoop()
+{
+    // Service the mainloop every ~2 ms: well under the 10 ms record
+    // fragment, so audio is read (and timestamped) as soon as PulseAudio
+    // hands it over, independent of rendering.
+    while (m_pumpRunning.load())
+    {
+        {
+            std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
+            if (m_mainloop)
+            {
+                int ret = 0;
+                for (int i = 0; i < 16; ++i)
+                {
+                    if (pa_mainloop_iterate(m_mainloop, 0, &ret) <= 0)
+                        break;
+                }
+            }
+        }
+        usleep(2000);
+    }
 }
 
 void AudioCapturePulse::cleanupPulseAudio()
 {
+    // Stop the pump before tearing down the objects it iterates.
+    stopPump();
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     stopCapture();
     if (m_monitor)
     {
@@ -199,32 +242,69 @@ void AudioCapturePulse::streamRead(size_t length)
         return;
     }
 
-    const void *data;
-    size_t bytes;
-
-    if (pa_stream_peek(m_stream, &data, &bytes) < 0)
+    // #197 — timestamp at capture. For a record stream the latency is the
+    // age of the oldest unread sample: source (hardware) latency plus what
+    // sits in our record buffer. So the first peeked sample was captured
+    // at now - latency, and each following fragment starts where the
+    // previous one ended.
+    const int64_t nowUs = MediaClock::nowUs();
+    const size_t frameBytes = static_cast<size_t>(m_bytesPerSample) * m_channels;
+    auto bytesToUs = [&](size_t bytes) -> int64_t
     {
-        LOG_ERROR("Failed to ler dados do stream PulseAudio");
-        return;
+        if (frameBytes == 0 || m_sampleRate == 0)
+            return 0;
+        return static_cast<int64_t>(bytes / frameBytes) * 1000000LL / m_sampleRate;
+    };
+
+    int64_t tsUs = 0;
+    pa_usec_t latencyUs = 0;
+    int negative = 0;
+    if (pa_stream_get_latency(m_stream, &latencyUs, &negative) == 0 && !negative)
+    {
+        tsUs = nowUs - static_cast<int64_t>(latencyUs);
+    }
+    else
+    {
+        // No timing info yet: assume everything readable was just captured.
+        tsUs = nowUs - bytesToUs(pa_stream_readable_size(m_stream));
     }
 
-    if (data && bytes > 0)
+    while (pa_stream_readable_size(m_stream) > 0)
     {
-        size_t samples = bytes / m_bytesPerSample;
-        const int16_t *sampleData = static_cast<const int16_t *>(data);
-
-        if (m_bus)
+        const void *data = nullptr;
+        size_t bytes = 0;
+        if (pa_stream_peek(m_stream, &data, &bytes) < 0)
         {
-            m_bus->push(sampleData, samples);
+            LOG_ERROR("Failed to ler dados do stream PulseAudio");
+            return;
+        }
+        if (bytes == 0)
+        {
+            break; // nothing buffered after all
         }
 
-        if (m_audioCallback)
+        if (data)
         {
-            m_audioCallback(sampleData, samples);
+            const size_t samples = bytes / m_bytesPerSample;
+            const int16_t *sampleData = static_cast<const int16_t *>(data);
+
+            if (m_bus)
+            {
+                m_bus->push(sampleData, samples, tsUs);
+            }
+
+            if (m_audioCallback)
+            {
+                m_audioCallback(sampleData, samples);
+            }
         }
+        // data == nullptr with bytes > 0 is a hole (lost data): skip it but
+        // keep the clock moving, so the next fragment is dated correctly
+        // and the encoder sees the gap.
+        tsUs += bytesToUs(bytes);
+
+        pa_stream_drop(m_stream);
     }
-
-    pa_stream_drop(m_stream);
 }
 
 void AudioCapturePulse::streamSuccessCallback(pa_stream *s, int success, void *userdata)
@@ -236,6 +316,7 @@ void AudioCapturePulse::streamSuccessCallback(pa_stream *s, int success, void *u
 
 bool AudioCapturePulse::open(const std::string &deviceName)
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (m_isOpen)
     {
         LOG_WARN("AudioCapture already open");
@@ -347,7 +428,9 @@ bool AudioCapturePulse::connectRecordStream(const std::string &device)
     bufferAttr.tlength = static_cast<uint32_t>(-1);
     bufferAttr.prebuf = static_cast<uint32_t>(-1);
     bufferAttr.minreq = static_cast<uint32_t>(-1);
-    bufferAttr.fragsize = static_cast<uint32_t>(m_sampleRate * m_bytesPerSample * m_channels / 10);
+    // #197 — 10 ms fragments (was 100 ms): audio reaches the bus, the
+    // monitor and the encoders in small, evenly spaced pieces.
+    bufferAttr.fragsize = static_cast<uint32_t>(m_sampleRate * m_bytesPerSample * m_channels / 100);
 
     const char *streamName = "RetroCapture Audio Capture";
     m_stream = pa_stream_new(m_context, streamName, &sampleSpec, nullptr);
@@ -361,7 +444,8 @@ bool AudioCapturePulse::connectRecordStream(const std::string &device)
     pa_stream_set_read_callback(m_stream, streamReadCallback, this);
 
     pa_stream_flags_t flags = static_cast<pa_stream_flags>(
-        PA_STREAM_START_CORKED | PA_STREAM_ADJUST_LATENCY);
+        PA_STREAM_START_CORKED | PA_STREAM_ADJUST_LATENCY |
+        PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_AUTO_TIMING_UPDATE);
 
     const char *deviceArg = device.empty() ? nullptr : device.c_str();
 
@@ -422,6 +506,7 @@ void AudioCapturePulse::disconnectRecordStream()
 
 void AudioCapturePulse::close()
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (!m_isOpen)
     {
         return;
@@ -447,6 +532,7 @@ bool AudioCapturePulse::isOpen() const
 
 bool AudioCapturePulse::startCapture()
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (!m_isOpen)
     {
         LOG_ERROR("AudioCapture not open");
@@ -478,6 +564,7 @@ bool AudioCapturePulse::startCapture()
 
 void AudioCapturePulse::stopCapture()
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (!m_isCapturing)
     {
         return;
@@ -498,17 +585,8 @@ void AudioCapturePulse::stopCapture()
 
 size_t AudioCapturePulse::getSamples(std::vector<float> &samples)
 {
-    // Drive the PA mainloop even if not open so reconnect/teardown
-    // callbacks still fire.
-    if (m_mainloop)
-    {
-        int ret = 0;
-        for (int i = 0; i < 5; i++)
-        {
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
-        }
-    }
-
+    // The PA mainloop is serviced by the pump thread (#197); this only
+    // drains the local tap.
     if (!m_localTap)
     {
         samples.clear();
@@ -534,21 +612,23 @@ size_t AudioCapturePulse::getSamples(std::vector<float> &samples)
 
 size_t AudioCapturePulse::getSamples(int16_t *buffer, size_t maxSamples)
 {
-    if (m_mainloop)
-    {
-        int ret = 0;
-        for (int i = 0; i < 5; i++)
-        {
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
-        }
-    }
-
     if (!m_isOpen || !buffer || maxSamples == 0 || !m_localTap)
     {
         return 0;
     }
 
     return m_localTap->pull(buffer, maxSamples);
+}
+
+size_t AudioCapturePulse::getTimestampedSamples(int16_t *buffer, size_t maxSamples,
+                                                int64_t &firstSampleTsUs)
+{
+    if (!m_isOpen || !buffer || maxSamples == 0 || !m_localTap)
+    {
+        return 0;
+    }
+
+    return m_localTap->pull(buffer, maxSamples, firstSampleTsUs);
 }
 
 uint32_t AudioCapturePulse::getSampleRate() const
@@ -637,6 +717,7 @@ void AudioCapturePulse::waitForContextReady()
 
 std::vector<AudioDeviceInfo> AudioCapturePulse::listInputSources()
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     std::vector<AudioDeviceInfo> devices;
 
     if (!initializePulseAudio())
@@ -673,10 +754,7 @@ std::vector<AudioDeviceInfo> AudioCapturePulse::listInputSources()
 
     while (iteration < maxIterations)
     {
-        {
-            std::lock_guard<std::mutex> mainloopLock(m_mainloopMutex);
-            pa_mainloop_iterate(m_mainloop, 0, &ret);
-        }
+        pa_mainloop_iterate(m_mainloop, 0, &ret);
 
         // Check if operation is done (we can't directly check, so we wait a bit)
         if (iteration > 10) // Give it some time
@@ -778,6 +856,7 @@ void AudioCapturePulse::startMonitorPlayback()
 
 bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (sourceName.empty())
     {
         LOG_ERROR("Source name is empty");
@@ -822,6 +901,7 @@ bool AudioCapturePulse::connectInputSource(const std::string &sourceName)
 
 void AudioCapturePulse::disconnectInputSource()
 {
+    std::lock_guard<std::recursive_mutex> paLock(m_paMutex);
     if (!m_stream && m_currentInputSourceName.empty())
     {
         return;

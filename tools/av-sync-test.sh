@@ -126,7 +126,15 @@ CURL_PID=""
 # Give the recorder time to write the trailer.
 sleep 3
 
-kill "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; APP_PID=""
+# SIGTERM runs the orderly shutdown; a hang there (e.g. an audio thread
+# deadlock) is a failure in its own right.
+kill "$APP_PID" 2>/dev/null
+for _ in $(seq 1 30); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
+if kill -0 "$APP_PID" 2>/dev/null; then
+    kill -9 "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; APP_PID=""
+    fail "app did not shut down within 15 s of SIGTERM"
+fi
+wait "$APP_PID" 2>/dev/null; APP_PID=""
 
 REC=$(find "$WORK/rec" -type f \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) \
           -newer "$WORK/rec-start.json" 2>/dev/null | head -1)
