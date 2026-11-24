@@ -1,5 +1,6 @@
 #include "MediaEncoder.h"
 #include "../utils/Logger.h"
+#include "../utils/MediaClock.h"
 
 extern "C"
 {
@@ -1127,6 +1128,12 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     {
         return false;
     }
+    m_lastAudioInputUs = MediaClock::nowUs();
+    if (m_silenceKeepaliveActive)
+    {
+        m_silenceKeepaliveActive = false;
+        LOG_INFO("MediaEncoder: audio input resumed — leaving silence keepalive");
+    }
 
     AVCodecContext *codecCtx = static_cast<AVCodecContext *>(m_audioCodecContext);
     AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
@@ -1315,6 +1322,58 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
     }
 
     return drainAudioFifo(packets, captureTimestampUs, false);
+}
+
+void MediaEncoder::keepAudioAliveWithSilence(int64_t videoCaptureTsUs, std::vector<EncodedPacket> &packets)
+{
+    // #193 — a host with no (or a stalled) audio source used to mux an
+    // audio track that never got a packet: demuxers then saw "aac, 0
+    // channels" and remote clients failed to open the stream. When no audio
+    // has arrived for over a second, emit silence up to the video position
+    // so the track stays valid; real audio takes over as soon as it arrives
+    // (the drift controller just sees a continuous timeline).
+    AVAudioFifo *fifo = static_cast<AVAudioFifo *>(m_audioFifo);
+    SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
+    if (!m_epochSet || !fifo || !swrCtx || m_audioConfig.sampleRate == 0)
+    {
+        return;
+    }
+    const int64_t nowUs = MediaClock::nowUs();
+    if (m_lastAudioInputUs != 0 && nowUs - m_lastAudioInputUs < 1000000LL)
+    {
+        return;
+    }
+    if (!m_silenceKeepaliveActive)
+    {
+        m_silenceKeepaliveActive = true;
+        LOG_INFO("MediaEncoder: no audio input — keeping the audio track alive with silence");
+    }
+
+    const double outRate = static_cast<double>(m_audioConfig.sampleRate);
+    const int64_t targetPos = static_cast<int64_t>(
+        std::llround(static_cast<double>(videoCaptureTsUs - m_epochUs) * outRate / 1e6));
+    if (!m_audioStarted)
+    {
+        m_audioOutPos = 0;
+        m_audioDriftEma = 0.0;
+        m_audioStarted = true;
+    }
+    const int64_t currentPos = m_audioOutPos + av_audio_fifo_size(fifo) +
+                               swr_get_delay(swrCtx, m_audioConfig.sampleRate);
+    int64_t missing = targetPos - currentPos;
+    if (missing <= 0)
+    {
+        return;
+    }
+    if (missing > static_cast<int64_t>(outRate))
+    {
+        // Don't synthesize long stretches: flush and jump the timeline.
+        drainAudioFifo(packets, videoCaptureTsUs, true);
+        m_audioOutPos = std::max<int64_t>(m_audioOutPos, targetPos);
+        return;
+    }
+    writeSilenceToFifo(missing);
+    drainAudioFifo(packets, videoCaptureTsUs, false);
 }
 
 void MediaEncoder::writeSilenceToFifo(int64_t frames)
@@ -1532,6 +1591,7 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         return false;
     }
     m_lastVideoFramePTS = calculatedPTS;
+    keepAudioAliveWithSilence(captureTimestampUs, packets);
     videoFrame->pts = calculatedPTS;
 
     bool forceKeyframe = false;
@@ -1817,6 +1877,8 @@ void MediaEncoder::cleanup()
     m_audioGapsFilled = 0;
     m_audioOverlapsDropped = 0;
     m_videoFramesOutOfOrder = 0;
+    m_lastAudioInputUs = 0;
+    m_silenceKeepaliveActive = false;
 
     m_initialized = false;
     m_videoFrameCount = 0;

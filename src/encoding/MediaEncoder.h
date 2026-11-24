@@ -234,6 +234,12 @@ private:
     uint64_t m_audioGapsFilled = 0;
     uint64_t m_audioOverlapsDropped = 0;
     uint64_t m_videoFramesOutOfOrder = 0;
+    // #193 — MediaClock time of the last encodeAudio() call (0 = never).
+    // With no audio for > 1 s, encodeVideo() keeps the audio track alive
+    // with silence so the output always carries a valid audio stream.
+    int64_t m_lastAudioInputUs = 0;
+    bool m_silenceKeepaliveActive = false;
+    void keepAudioAliveWithSilence(int64_t videoCaptureTsUs, std::vector<EncodedPacket> &packets);
 
     // Contadores precisos para cálculo de PTS (baseado em samples/frames, não timestamps)
     int64_t m_audioFrameCount = 0;  // Número de frames de áudio processados
