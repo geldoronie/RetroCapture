@@ -234,6 +234,17 @@ PRESET_PATH="$REPO_ROOT/shaders/shaders_glsl/$SMOKE_PRESET"
 
 echo "── pass 2: shader applied ($SMOKE_PRESET)"
 launch_app shaded --preset "$PRESET_PATH"
+# The shader chain compiles after startup; on a software-GL CI runner
+# (llvmpipe) a 6-pass preset takes seconds. Capture only once it's active,
+# else the "shaded" pass grabs unshaded frames (flaky in CI, #214).
+if [ -n "$APP_LOG" ]; then
+    for _ in $(seq 1 40); do
+        grep -q "Preset loaded with" "$APP_LOG" && break
+        sleep 0.5
+    done
+    grep -q "Preset loaded with" "$APP_LOG" || fail "shader preset never finished loading (check $APP_LOG)"
+fi
+sleep 2
 
 # Fail fast and clearly if the preset didn't load / compile on this GL, so a
 # shader-compile problem isn't misreported as "shader had no effect".

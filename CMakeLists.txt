@@ -651,6 +651,29 @@ elseif(PLATFORM_MACOS)
     list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
 endif()
 
+# macOS: pkg-config hands back bare library names (png16, avcodec, ...) for
+# the Homebrew packages. On Intel the Homebrew prefix (/usr/local/lib) is a
+# default linker path, on Apple Silicon (/opt/homebrew/lib) it isn't, so the
+# arm64 link failed with "library 'png16' not found" (#214). Add the
+# directories pkg-config / Homebrew report. Must precede add_executable.
+if(PLATFORM_MACOS)
+    set(_RC_MAC_LIB_DIRS
+        ${PNG_LIBRARY_DIRS} ${AVCODEC_LIBRARY_DIRS} ${AVFORMAT_LIBRARY_DIRS}
+        ${AVUTIL_LIBRARY_DIRS} ${SWSCALE_LIBRARY_DIRS} ${SWRESAMPLE_LIBRARY_DIRS}
+        ${GLFW_LIBRARY_DIRS})
+    execute_process(COMMAND brew --prefix
+                    OUTPUT_VARIABLE _RC_BREW_PREFIX
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_RC_BREW_PREFIX AND EXISTS "${_RC_BREW_PREFIX}/lib")
+        list(APPEND _RC_MAC_LIB_DIRS "${_RC_BREW_PREFIX}/lib")
+    endif()
+    if(_RC_MAC_LIB_DIRS)
+        list(REMOVE_DUPLICATES _RC_MAC_LIB_DIRS)
+        link_directories(${_RC_MAC_LIB_DIRS})
+        message(STATUS "macOS library search dirs: ${_RC_MAC_LIB_DIRS}")
+    endif()
+endif()
+
 # Executável principal
 if(PLATFORM_WINDOWS)
     # Adicionar arquivo de recursos (.rc) para ícone do executável
