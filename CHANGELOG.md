@@ -12,10 +12,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WebRTC streaming support (#52)
 - Shader bundle fetch so a client without the host's preset still
   reproduces the host's look (#54)
-- Long-session A/V drift validation (#67 follow-up) — the
-  catastrophic mid-join drift is fixed; the 30 min / 4 h offset
-  targets in #67's original acceptance still want a long-session
-  measurement pass.
+
+---
+
+## [0.9.0-alpha] - 2026-11-24
+
+Sixteenth alpha release. An **A/V sync overhaul** (#201): recording,
+streaming and the local monitor kept losing sync because nothing in the
+pipeline knew when audio or video had been captured. Both were stamped when
+they reached the encoder, on the main thread that also renders shaders, draws
+the UI and waits on vsync, and the audio timestamps came from a sample count
+anchored once. Every captured sample and frame now carries its capture time
+on one shared clock, from the device to the muxer. Each fix was validated
+with a new measurable A/V sync test.
+
+### Fixed
+
+- **Progressive A/V drift in recordings and streams** (#199, #124, #67). The
+  audio timestamps followed the capture device's own clock, which runs a
+  little fast or slow against the system clock (~0.06 % on USB capture
+  cards), so audio drifted away from the video. Audio is now kept on the
+  capture clock with an inaudible ≤ 0.5 % rate correction. With an audio
+  clock 1000 ppm off, drift went from **+63 ms/min to +0.2 ms/min** over
+  3 minutes, on `/stream`, `/raw` and recordings.
+- **Constant A/V offset**: audio was stamped up to 100 ms late (#197) and
+  video after render and readback (#198). Both are now stamped at capture,
+  and the measured offset dropped from tens of ms to ~0.
+- **Recordings stuttered back and forth**: video frames could be encoded out
+  of capture order. Video is now encoded strictly in capture order (#199).
+- **Streams and recordings dropped video frames or held them back when audio
+  arrived late**: video no longer waits for audio. Audio before the first
+  video frame is trimmed, so a stream no longer starts with seconds of audio
+  and no picture (#199).
+- **Streaming audio played 8.8 % slow on 48 kHz devices** (Windows/macOS
+  defaults) when streaming was enabled at startup: the streamer was set up
+  before the audio capture and kept a 44.1 kHz default (#197).
+- **Monitor latency grew during a session** until you pressed *Resync*
+  (unbounded on Windows). It now stays at ~30–45 ms on every platform and
+  recovers automatically after a stall (#200).
+- **Audio capture depended on the render loop** (Linux): a heavy shader or a
+  window drag stalled audio and delivered it in bursts. Capture now runs on
+  its own thread with 10 ms fragments (#197).
+- **A host without an audio device broke remote clients**: the stream
+  carried an empty audio track ("aac, 0 channels"). It now carries valid
+  silence until real audio arrives (#193).
+- **Remote client fell behind and its picture stuttered** (A/V offset
+  swinging 0 → −445 ms) when the host's source was larger than the stream:
+  the client upscaled every frame on the CPU. The shader input is now
+  upscaled on the GPU (#209).
+- **Client-mode recordings and virtual camera were upside-down** (#210).
+- **`--source remote --remote-url` never connected**, including with the UI
+  hidden (#207).
+- **Web portal player froze for good** when the host dropped a viewer whose
+  connection couldn't keep up with the bitrate (or when the stream
+  restarted): it now reconnects automatically, on both the Home and the
+  Configuration pages, and returns to live when the tab is shown again
+  (#216).
+- **Ctrl+C / SIGTERM killed the app mid-write**, leaving the recording
+  unfinished and the PulseAudio modules loaded. They now run the normal
+  shutdown (#197).
+
+### Added
+
+- `--audio-source test` / `--test-audio-skew-ppm` / `--test-audio-fragment-ms`:
+  a synthetic beep source in sync with the `--source test` flash, with an
+  optional fake audio clock error (#196).
+- `tools/av-sync-test.sh`: measures the A/V offset and drift of `/stream`
+  and a recording, plus frame-order glitches (#196).
+- GitHub Actions (#214): Linux build + smoke and A/V sync tests on every PR,
+  and macOS **arm64** (new: Apple Silicon) and **x86_64** bundles built in CI
+  for releases.
+
+### Notes
+
+- **macOS** bundles are built on GitHub Actions and were **not tested on
+  real Mac hardware** for this release (Core Audio changes in #197 and #200).
+  Still unsigned, with Homebrew dylibs not bundled: install the runtime
+  libraries with `brew install glfw ffmpeg libpng` (as in 0.8.x).
 
 ---
 
