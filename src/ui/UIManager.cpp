@@ -574,6 +574,12 @@ void UIManager::render()
 
     if (!m_uiVisible)
     {
+        // #207 — the remote-connection state machine must progress with
+        // the UI hidden too (its render() is behind this gate).
+        if (m_remoteConnectionWindow)
+        {
+            m_remoteConnectionWindow->advanceStateMachine();
+        }
         return;
     }
 

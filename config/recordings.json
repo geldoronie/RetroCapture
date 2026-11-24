@@ -1,0 +1,19 @@
+{
+  "recordings": [
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T14:11:26Z",
+      "duration": 1915097004,
+      "fileSize": 4498000708,
+      "filename": "recording_20261124_111126.mp4",
+      "filepath": "/home/geldo/Videos/RetroCapture/recording_20261124_111126.mp4",
+      "fps": 60,
+      "height": 720,
+      "id": "8144850837889889465",
+      "thumbnailPath": "/home/geldo/Videos/RetroCapture/recording_20261124_111126.jpg",
+      "videoCodec": "h264",
+      "width": 1280
+    }
+  ]
+}
