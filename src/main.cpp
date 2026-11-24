@@ -32,6 +32,9 @@ void printUsage(const char *programName)
 #else
     std::cout << "  --source <type>        Source type: none, remote (default: none)\n";
 #endif
+    std::cout << "  --audio-source test    Synthetic A/V-sync beep (pairs with --source test's flash)\n";
+    std::cout << "  --test-audio-skew-ppm <n>  Fake audio device clock error for the sync test (e.g. 1000)\n";
+    std::cout << "  --test-audio-fragment-ms <n>  Test tone delivery fragment size (default 10)\n";
     std::cout << "  --remote-url <url>     Base URL of a remote RetroCapture server when --source remote\n";
     std::cout << "                         (e.g. http://host:8080). Client fetches /raw and /meta.\n";
     std::cout << "  --browse-directory     Print the public stream directory listing and exit.\n";
@@ -138,6 +141,9 @@ int main(int argc, char *argv[])
     std::string chatBaseUrl;                 // #84: --chat-url, empty = let UIManager pick (default https://chat.retrocapture.com)
     // Detectar plataforma e definir sourceType padrão
     std::string sourceType;
+    bool testAudioSource = false; // #196 --audio-source test
+    int testAudioSkewPpm = 0;     // #196 --test-audio-skew-ppm
+    int testAudioFragmentMs = 10; // #196 --test-audio-fragment-ms
 #ifdef __linux__
     sourceType = "v4l2"; // Linux usa V4L2
 #elif defined(_WIN32)
@@ -231,6 +237,36 @@ int main(int argc, char *argv[])
         else if (arg == "--preset" && i + 1 < argc)
         {
             presetPath = argv[++i];
+        }
+        else if (arg == "--audio-source" && i + 1 < argc)
+        {
+            // #196 — only the synthetic sync tone is selectable from the CLI;
+            // real devices are picked in the UI / web portal.
+            std::string audioSource = argv[++i];
+            if (audioSource != "test")
+            {
+                LOG_ERROR("Invalid audio source. Use 'test'");
+                return 1;
+            }
+            testAudioSource = true;
+        }
+        else if (arg == "--test-audio-fragment-ms" && i + 1 < argc)
+        {
+            testAudioFragmentMs = std::stoi(argv[++i]);
+            if (testAudioFragmentMs < 1 || testAudioFragmentMs > 500)
+            {
+                LOG_ERROR("Invalid --test-audio-fragment-ms (range 1..500)");
+                return 1;
+            }
+        }
+        else if (arg == "--test-audio-skew-ppm" && i + 1 < argc)
+        {
+            testAudioSkewPpm = std::stoi(argv[++i]);
+            if (testAudioSkewPpm < -100000 || testAudioSkewPpm > 100000)
+            {
+                LOG_ERROR("Invalid --test-audio-skew-ppm (range -100000..100000)");
+                return 1;
+            }
         }
         else if (arg == "--source" && i + 1 < argc)
         {
@@ -982,6 +1018,8 @@ int main(int argc, char *argv[])
     app.setWebPortalHTTPSEnabled(webPortalHTTPSEnabled);
     app.setWebPortalSSLCertPath(webPortalSSLCertPath);
     app.setWebPortalSSLKeyPath(webPortalSSLKeyPath);
+
+    app.setTestAudioSource(testAudioSource, testAudioSkewPpm, testAudioFragmentMs);
 
     if (!app.init())
     {

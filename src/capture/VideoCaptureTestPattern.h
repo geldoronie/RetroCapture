@@ -15,6 +15,13 @@
  * `--source test`. It is NOT in the platform factory and never touches a
  * real capture backend, so it can't regress the production capture path —
  * it only adds an isolated, content-known input the smoke-test can assert on.
+ *
+ * A/V sync test (#196): frames are paced at the configured fps off
+ * MediaClock (a new frame only when its slot is due, like a real device)
+ * and carry their ideal capture timestamp. The bottom band of the frame
+ * flashes white for the first 100 ms of every whole MediaClock second —
+ * the same instants AudioCaptureTestTone beeps — so the output's A/V
+ * offset can be measured from the flash/beep onsets.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -46,7 +53,7 @@ public:
     uint32_t getPixelFormat() const override { return 0; } // RGB24
 
 private:
-    void renderPattern();
+    void renderPattern(uint64_t frameIndex, int64_t timestampUs);
 
     uint32_t m_width = 1280;
     uint32_t m_height = 720;
@@ -55,5 +62,7 @@ private:
     bool m_capturing = false;
     bool m_dummy = false;
     std::atomic<uint64_t> m_frameCounter{0};
+    int64_t m_epochUs = 0;          // MediaClock time of frame slot 0
+    int64_t m_lastSlot = -1;        // last frame slot delivered
     std::vector<uint8_t> m_buffer; // RGB24, width*height*3
 };
