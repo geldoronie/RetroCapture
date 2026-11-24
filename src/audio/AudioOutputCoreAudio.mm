@@ -259,6 +259,31 @@ size_t AudioOutputCoreAudio::write(const int16_t* samples, size_t numSamples)
 #endif
 }
 
+size_t AudioOutputCoreAudio::getQueuedSamples() const
+{
+#ifdef __APPLE__
+    std::lock_guard<std::mutex> lock(m_bufferMutex);
+    return m_audioBuffer.size();
+#else
+    return 0;
+#endif
+}
+
+size_t AudioOutputCoreAudio::discardQueuedSamples(size_t numSamples)
+{
+#ifdef __APPLE__
+    std::lock_guard<std::mutex> lock(m_bufferMutex);
+    const size_t ch = m_channels ? m_channels : 1;
+    size_t n = std::min(numSamples, m_audioBuffer.size());
+    n -= n % ch; // whole frames only
+    m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + n);
+    return n;
+#else
+    (void)numSamples;
+    return 0;
+#endif
+}
+
 uint32_t AudioOutputCoreAudio::getSampleRate() const
 {
     return m_sampleRate;

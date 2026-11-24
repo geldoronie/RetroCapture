@@ -2,6 +2,7 @@
 
 #include "IAudioCapture.h"
 #include "AudioBus.h"
+#include "MonitorLatencyController.h"
 #include "IAudioOutput.h"
 #include "SckSystemAudioHub.h" // #109 system-audio (output) capture coordinator
 #include <atomic>
@@ -102,6 +103,7 @@ private:
     // bypassed and the local monitor is left off.
     bool m_systemAudio = false;
     std::atomic<bool>              m_monitorResyncPending{false};
+    MonitorLatencyController       m_monitorLatency; // #200 (monitor writer thread only)
     std::thread                    m_monitorThread;
 
     // Internal methods

@@ -1,4 +1,5 @@
 #include "AudioPlaybackWASAPI.h"
+#include <algorithm>
 
 #ifdef _WIN32
 
@@ -237,6 +238,21 @@ int64_t AudioPlaybackWASAPI::getClockUs() const
     // position / frequency = seconds played since the stream started.
     const int64_t playedUs = static_cast<int64_t>((position * 1'000'000ULL) / frequency);
     return m_firstSubmittedPtsUs + playedUs;
+}
+
+size_t AudioPlaybackWASAPI::queuedFrames() const
+{
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    return m_channels ? m_queue.size() / m_channels : 0;
+}
+
+size_t AudioPlaybackWASAPI::discardQueuedFrames(size_t frames)
+{
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    if (!m_channels) return 0;
+    const size_t n = std::min(frames, m_queue.size() / m_channels);
+    m_queue.erase(m_queue.begin(), m_queue.begin() + n * m_channels);
+    return n;
 }
 
 void AudioPlaybackWASAPI::flush()
