@@ -9,6 +9,8 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <thread>
 #include <functional>
 
 // Forward declarations for PulseAudio
@@ -45,6 +47,7 @@ public:
     bool startCapture();
     void stopCapture();
     size_t getSamples(int16_t *buffer, size_t maxSamples);
+    size_t getTimestampedSamples(int16_t *buffer, size_t maxSamples, int64_t &firstSampleTsUs) override;
     uint32_t getBytesPerSample() const { return m_bytesPerSample; }
     std::vector<std::string> getAvailableDevices();
     void setAudioCallback(std::function<void(const int16_t *data, size_t samples)> callback);
@@ -156,8 +159,18 @@ private:
     // sit between the bus and the playback.
     std::unique_ptr<MonitorPlayback> m_monitor;
     
-    // Mainloop mutex (thread-safe access to pa_mainloop)
-    std::mutex m_mainloopMutex;
+    // #197 — the PA mainloop runs on its own pump thread, so capture
+    // delivery no longer depends on the render loop calling getSamples().
+    // pa_mainloop/pa_context/pa_stream are not thread-safe: every access
+    // (the pump's iterate, which dispatches all callbacks, and every public
+    // method that touches PA) holds m_paMutex. Recursive because public
+    // methods nest (open → connectRecordStream → ...).
+    std::recursive_mutex m_paMutex;
+    std::thread m_pumpThread;
+    std::atomic<bool> m_pumpRunning{false};
+    void pumpLoop();
+    void startPump();
+    void stopPump();
 
     // Callbacks
     std::function<void(const int16_t *data, size_t samples)> m_audioCallback;

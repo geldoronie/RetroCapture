@@ -58,12 +58,14 @@ public:
      * Push audio samples to be streamed
      * @param samples Audio samples (16-bit PCM)
      * @param sampleCount Number of samples
+     * @param captureTimestampUs MediaClock capture time of samples[0] (#197)
      * @return true if audio was queued successfully
      */
-    virtual bool pushAudio(const int16_t *samples, size_t sampleCount)
+    virtual bool pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
     {
         (void)samples;
         (void)sampleCount;
+        (void)captureTimestampUs;
         return false; // Default: no audio support
     }
 

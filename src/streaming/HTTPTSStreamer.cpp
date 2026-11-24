@@ -1,4 +1,5 @@
 #include "HTTPTSStreamer.h"
+#include "../utils/MediaClock.h"
 #include "../utils/HttpAuth.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
@@ -188,7 +189,7 @@ bool HTTPTSStreamer::pushFrame(const uint8_t *data, uint32_t width, uint32_t hei
     return m_streamSynchronizer.addVideoFrame(data, width, height, captureTimestampUs);
 }
 
-bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
+bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
 {
     if (m_stopRequest)
     {
@@ -200,9 +201,9 @@ bool HTTPTSStreamer::pushAudio(const int16_t *samples, size_t sampleCount)
         return false;
     }
 
-    // Capturar timestamp de captura (quando o áudio chega ao streamer)
-    int64_t captureTimestampUs = getTimestampUs();
-
+    // #197 — captureTimestampUs is the capture time of samples[0], carried
+    // from the audio backend through the bus (no longer "when it reached
+    // the streamer").
     // Adicionar áudio ao MediaSynchronizer
     bool ok = m_streamSynchronizer.addAudioChunk(samples, sampleCount, captureTimestampUs, m_audioSampleRate, m_audioChannelsCount);
 
@@ -1686,9 +1687,8 @@ void HTTPTSStreamer::cleanupEncoding()
 
 int64_t HTTPTSStreamer::getTimestampUs() const
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000LL + static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+    // Same clock as every capture timestamp (#197).
+    return MediaClock::nowUs();
 }
 
 void HTTPTSStreamer::cleanupOldData()

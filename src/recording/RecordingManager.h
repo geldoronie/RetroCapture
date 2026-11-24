@@ -71,7 +71,8 @@ public:
 
     // Frame/Audio input (called by Application)
     void pushFrame(const uint8_t* data, uint32_t width, uint32_t height);
-    void pushAudio(const int16_t* samples, size_t sampleCount);
+    // captureTimestampUs: MediaClock capture time of samples[0] (#197).
+    void pushAudio(const int16_t* samples, size_t sampleCount, int64_t captureTimestampUs);
     
     // Set audio format (called by Application)
     void setAudioFormat(uint32_t sampleRate, uint32_t channels);

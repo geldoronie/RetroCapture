@@ -12,9 +12,7 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
-#ifndef _WIN32
-#include <csignal>
-#endif
+#include <csignal> // SIGINT/SIGTERM on every platform; SIGPIPE on POSIX
 
 void printUsage(const char *programName)
 {
@@ -130,6 +128,12 @@ int main(int argc, char *argv[])
     // Windows has no SIGPIPE.
     std::signal(SIGPIPE, SIG_IGN);
 #endif
+    // SIGINT (Ctrl+C) / SIGTERM: leave the main loop and run the orderly
+    // shutdown instead of dying mid-write. A hard kill used to leave the
+    // recording without its trailer and the RetroCapture PulseAudio
+    // modules loaded; it also lets the test scripts stop the app cleanly.
+    std::signal(SIGINT, [](int) { Application::requestQuit(); });
+    std::signal(SIGTERM, [](int) { Application::requestQuit(); });
 
     LOG_INFO(std::string("RetroCapture ") + RETROCAPTURE_VERSION);
 

@@ -82,6 +82,14 @@ size_t AudioCaptureTestTone::getSamples(int16_t *buffer, size_t maxSamples)
     return m_localTap->pull(buffer, maxSamples);
 }
 
+size_t AudioCaptureTestTone::getTimestampedSamples(int16_t *buffer, size_t maxSamples,
+                                                   int64_t &firstSampleTsUs)
+{
+    if (!m_open || !buffer || maxSamples == 0 || !m_localTap)
+        return 0;
+    return m_localTap->pull(buffer, maxSamples, firstSampleTsUs);
+}
+
 void AudioCaptureTestTone::generatorLoop()
 {
     // The device's real sample rate, as seen by the system clock.
@@ -117,7 +125,10 @@ void AudioCaptureTestTone::generatorLoop()
                 for (uint32_t c = 0; c < m_channels; ++c)
                     chunk[static_cast<size_t>(i) * m_channels + c] = v;
             }
-            m_bus->push(chunk.data(), chunk.size());
+            // Exact capture time of the chunk's first sample.
+            const int64_t firstTsUs =
+                startUs + static_cast<int64_t>(static_cast<double>(produced) * 1e6 / deviceRate);
+            m_bus->push(chunk.data(), chunk.size(), firstTsUs);
             produced = target;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

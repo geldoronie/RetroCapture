@@ -115,7 +115,7 @@ void StreamManager::pushFrame(const uint8_t *data, uint32_t width, uint32_t heig
     }
 }
 
-void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount)
+void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount, int64_t captureTimestampUs)
 {
     if (!m_active || !samples || sampleCount == 0)
     {
@@ -126,7 +126,7 @@ void StreamManager::pushAudio(const int16_t *samples, size_t sampleCount)
     {
         if (streamer->isActive())
         {
-            streamer->pushAudio(samples, sampleCount);
+            streamer->pushAudio(samples, sampleCount, captureTimestampUs);
         }
     }
 }
