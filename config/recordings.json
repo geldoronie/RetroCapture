@@ -59,6 +59,51 @@
       "thumbnailPath": "/tmp/rc-crec.jFxk/rec/recording_20261124_120911.jpg",
       "videoCodec": "h264",
       "width": 640
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:13:39Z",
+      "duration": 5840553,
+      "fileSize": 5217324,
+      "filename": "recording_20261124_121339.mp4",
+      "filepath": "/tmp/rc-crec.q3Qx/rec/recording_20261124_121339.mp4",
+      "fps": 60,
+      "height": 1080,
+      "id": "4772795043710114722",
+      "thumbnailPath": "/tmp/rc-crec.q3Qx/rec/recording_20261124_121339.jpg",
+      "videoCodec": "h264",
+      "width": 1920
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:14:12Z",
+      "duration": 5888631,
+      "fileSize": 6864970,
+      "filename": "recording_20261124_121412.mp4",
+      "filepath": "/tmp/rc-crec.fe56/rec/recording_20261124_121412.mp4",
+      "fps": 60,
+      "height": 480,
+      "id": "14974510126227256098",
+      "thumbnailPath": "/tmp/rc-crec.fe56/rec/recording_20261124_121412.jpg",
+      "videoCodec": "h264",
+      "width": 640
+    },
+    {
+      "audioCodec": "aac",
+      "container": "mp4",
+      "createdAt": "2026-11-24T15:14:46Z",
+      "duration": 5942945,
+      "fileSize": 13728964,
+      "filename": "recording_20261124_121446.mp4",
+      "filepath": "/tmp/rc-crec.zJHj/rec/recording_20261124_121446.mp4",
+      "fps": 60,
+      "height": 480,
+      "id": "7629250527669264324",
+      "thumbnailPath": "/tmp/rc-crec.zJHj/rec/recording_20261124_121446.jpg",
+      "videoCodec": "h264",
+      "width": 640
     }
   ]
 }
