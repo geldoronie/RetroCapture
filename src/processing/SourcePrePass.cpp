@@ -187,6 +187,22 @@ bool SourcePrePass::ensureProgram()
     m_locField = glGetUniformLocation(prog, "uField");
     m_locTexH = glGetUniformLocation(prog, "uTexH");
 
+    // The shared vertex shader carries the output-geometry UV transform
+    // (#227). Uniforms default to zero, which would collapse every texcoord
+    // to the centre texel and turn this pass into a flat colour: pin it to
+    // identity — the source pre-pass never rotates or mirrors.
+    {
+        const GLint locUv = glGetUniformLocation(prog, "uvXform");
+        if (locUv >= 0)
+        {
+            GLint prevProg = 0;
+            glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+            glUseProgram(prog);
+            glUniform4f(locUv, 1.0f, 0.0f, 0.0f, 1.0f);
+            glUseProgram(static_cast<GLuint>(prevProg));
+        }
+    }
+
     // Full-screen quad; texcoords map 1:1 so the output keeps the input's
     // row order (row 0 of the source lands in row 0 of the output).
     const float vertices[] = {

@@ -7,10 +7,12 @@
 #include <cstring>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include "../renderer/glad_loader.h"
 #include "../capture/IVideoCapture.h"
 #include "../processing/SourceCrop.h"
 #include "../osd/FpsOverlay.h"
+#include "../renderer/OutputGeometry.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -318,6 +320,23 @@ public:
     }
     // Last 1 s window of FPS metrics; safe from any thread.
     FpsStats getFpsStats() const { return m_fpsOverlay ? m_fpsOverlay->getStats() : FpsStats(); }
+    // #227 — output geometry (integer scaling, aspect override,
+    // rotation / mirror). Written by the UI and the web API thread, read
+    // by the render loop every frame, hence the copy-out under a lock.
+    OutputGeometry getOutputGeometry() const
+    {
+        std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+        return m_outputGeometry;
+    }
+    void setOutputGeometry(const OutputGeometry &g)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+            m_outputGeometry = g;
+            m_outputGeometry.rotation = OutputGeometry::normalizeRotation(g.rotation);
+        }
+        saveConfig();
+    }
 
     // Controles V4L2
     void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
@@ -1374,6 +1393,10 @@ private:
     uint32_t m_outputWidth = 0;
     uint32_t m_outputHeight = 0;
     std::function<void(uint32_t, uint32_t)> m_onOutputResolutionChanged;
+
+    // #227 — see getOutputGeometry().
+    OutputGeometry m_outputGeometry;
+    mutable std::mutex m_outputGeometryMutex;
 
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;

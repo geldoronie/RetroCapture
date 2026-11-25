@@ -2990,6 +2990,27 @@ void UIManager::loadConfig()
                 if (fps.contains("graph") && fps["graph"].is_boolean())
                     m_fpsOverlayGraph = fps["graph"].get<bool>();
             }
+            // #227 — output geometry (absent in older configs: defaults).
+            {
+                std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+                OutputGeometry &g = m_outputGeometry;
+                if (image.contains("integerScale") && image["integerScale"].is_number_integer())
+                    g.integerScale = static_cast<OutputGeometry::IntegerScale>(
+                        std::max(0, std::min(2, image["integerScale"].get<int>())));
+                if (image.contains("aspectMode") && image["aspectMode"].is_number_integer())
+                    g.aspect = static_cast<OutputGeometry::Aspect>(
+                        std::max(0, std::min(6, image["aspectMode"].get<int>())));
+                if (image.contains("customAspectW") && image["customAspectW"].is_number())
+                    g.customAspectW = image["customAspectW"].get<float>();
+                if (image.contains("customAspectH") && image["customAspectH"].is_number())
+                    g.customAspectH = image["customAspectH"].get<float>();
+                if (image.contains("rotation") && image["rotation"].is_number_integer())
+                    g.rotation = OutputGeometry::normalizeRotation(image["rotation"].get<int>());
+                if (image.contains("flipH") && image["flipH"].is_boolean())
+                    g.flipH = image["flipH"].get<bool>();
+                if (image.contains("flipV") && image["flipV"].is_boolean())
+                    g.flipV = image["flipV"].get<bool>();
+            }
         }
 
         // Carregar configurações do Web Portal
@@ -3473,6 +3494,17 @@ void UIManager::saveConfig()
                 {"compact", m_fpsOverlayCompact},
                 {"graph",   m_fpsOverlayGraph},
             }}};
+        {
+            // #227 — output geometry.
+            const OutputGeometry g = getOutputGeometry();
+            config["image"]["integerScale"] = static_cast<int>(g.integerScale);
+            config["image"]["aspectMode"] = static_cast<int>(g.aspect);
+            config["image"]["customAspectW"] = g.customAspectW;
+            config["image"]["customAspectH"] = g.customAspectH;
+            config["image"]["rotation"] = g.rotation;
+            config["image"]["flipH"] = g.flipH;
+            config["image"]["flipV"] = g.flipV;
+        }
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {

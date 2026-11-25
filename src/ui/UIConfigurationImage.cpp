@@ -3,6 +3,7 @@
 #include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
 #include <imgui.h>
+#include <algorithm>
 
 UIConfigurationImage::UIConfigurationImage(UIManager *uiManager)
     : m_uiManager(uiManager)
@@ -17,7 +18,7 @@ void UIConfigurationImage::render()
 {
     if (!m_visible || !m_uiManager) return;
 
-    ImGui::SetNextWindowSize(ImVec2(520, 460), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520, 600), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(T("image.title").c_str(), &m_visible))
     {
         ImGui::End();
@@ -132,12 +133,104 @@ void UIConfigurationImage::renderSourceColor()
 
 void UIConfigurationImage::renderAspectRatio()
 {
+    OutputGeometry geom = m_uiManager->getOutputGeometry();
+    bool geomChanged = false;
+
+    // Legacy toggle: governs the Auto aspect without integer scaling
+    // (off = stretch to the window). An explicit aspect or integer
+    // scaling always letterboxes.
     bool maintainAspect = m_uiManager->getMaintainAspect();
     if (ImGui::Checkbox("Maintain Aspect Ratio", &maintainAspect))
     {
         m_uiManager->setMaintainAspect(maintainAspect);
         m_uiManager->saveConfig();
     }
+    if (geom.forcesAspect())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(implied by the geometry below)");
+    }
+
+    // #227 — output geometry.
+    ui_section_header("Geometry",
+                      "Aspect and rotation/mirror also apply to the stream, "
+                      "recording and virtual camera (fitted into their frame). "
+                      "Integer scaling only affects this window.");
+
+    const char *scaleItems[] = {"Off (fit)", "Integer (uniform NxN)",
+                                "Integer + fill (per-axis NxM)"};
+    int scale = static_cast<int>(geom.integerScale);
+    ImGui::PushItemWidth(260);
+    if (ImGui::Combo("Integer scaling", &scale, scaleItems, 3))
+    {
+        geom.integerScale = static_cast<OutputGeometry::IntegerScale>(scale);
+        geomChanged = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Integer: same whole factor on both axes (1x, 2x, 3x...), "
+                          "source pixel aspect, black borders.\n"
+                          "Integer + fill: whole factors per axis (e.g. 4x by 3x) chosen "
+                          "to best match the aspect ratio below while fitting the window.\n"
+                          "Falls back to fit when the window is smaller than 1x.");
+
+    const char *aspectItems[] = {"Auto (source)", "4:3", "8:7 (NES/SNES square pixels)",
+                                 "16:9", "10:9 (Game Boy)", "3:2 (GBA)", "Custom"};
+    int aspect = static_cast<int>(geom.aspect);
+    if (ImGui::Combo("Aspect ratio", &aspect, aspectItems, 7))
+    {
+        geom.aspect = static_cast<OutputGeometry::Aspect>(aspect);
+        geomChanged = true;
+    }
+    ImGui::PopItemWidth();
+    if (geom.aspect == OutputGeometry::Aspect::Custom)
+    {
+        ImGui::PushItemWidth(80);
+        float cw = geom.customAspectW;
+        float ch = geom.customAspectH;
+        if (ImGui::InputFloat("##aspectW", &cw, 0.0f, 0.0f, "%.3g"))
+        {
+            geom.customAspectW = std::max(0.01f, cw);
+            geomChanged = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(":");
+        ImGui::SameLine();
+        if (ImGui::InputFloat("##aspectH", &ch, 0.0f, 0.0f, "%.3g"))
+        {
+            geom.customAspectH = std::max(0.01f, ch);
+            geomChanged = true;
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Custom (W:H)");
+    }
+
+    ImGui::TextUnformatted("Rotation:");
+    const int rotations[] = {0, 90, 180, 270};
+    const char *rotLabels[] = {"0##rot", "90##rot", "180##rot", "270##rot"};
+    for (int i = 0; i < 4; ++i)
+    {
+        ImGui::SameLine();
+        if (ImGui::RadioButton(rotLabels[i], geom.rotation == rotations[i]))
+        {
+            geom.rotation = rotations[i];
+            geomChanged = true;
+        }
+    }
+    if (ImGui::Checkbox("Mirror horizontally", &geom.flipH))
+        geomChanged = true;
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Mirror vertically", &geom.flipV))
+        geomChanged = true;
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##geometry"))
+    {
+        geom = OutputGeometry();
+        geomChanged = true;
+    }
+
+    if (geomChanged)
+        m_uiManager->setOutputGeometry(geom); // saves the config
 }
 
 void UIConfigurationImage::renderFullscreen()

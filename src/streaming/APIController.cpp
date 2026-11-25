@@ -1208,7 +1208,16 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"fpsOverlayCorner\": \""
          << UIManager::fpsOverlayCornerName(m_uiManager->getFpsOverlayCorner()) << "\", "
          << "\"fpsOverlayCompact\": " << jsonBool(m_uiManager->getFpsOverlayCompact()) << ", "
-         << "\"fpsOverlayGraph\": " << jsonBool(m_uiManager->getFpsOverlayGraph())
+         << "\"fpsOverlayGraph\": " << jsonBool(m_uiManager->getFpsOverlayGraph()) << ", ";
+    // #227 — output geometry.
+    const OutputGeometry geom = m_uiManager->getOutputGeometry();
+    json << "\"integerScale\": " << jsonNumber(static_cast<int>(geom.integerScale)) << ", "
+         << "\"aspectMode\": " << jsonNumber(static_cast<int>(geom.aspect)) << ", "
+         << "\"customAspectW\": " << jsonNumber(geom.customAspectW) << ", "
+         << "\"customAspectH\": " << jsonNumber(geom.customAspectH) << ", "
+         << "\"rotation\": " << jsonNumber(geom.rotation) << ", "
+         << "\"flipH\": " << jsonBool(geom.flipH) << ", "
+         << "\"flipV\": " << jsonBool(geom.flipV)
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -2294,6 +2303,57 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         {
             m_uiManager->setFpsOverlayGraph(json["fpsOverlayGraph"].get<bool>());
             updated = true;
+        }
+
+        // #227 — output geometry. integerScale: 0 off, 1 integer,
+        // 2 integer + fill. aspectMode: 0 auto, 1 4:3, 2 8:7, 3 16:9,
+        // 4 10:9, 5 3:2, 6 custom (customAspectW:customAspectH).
+        // rotation: degrees clockwise (snapped to 0/90/180/270).
+        {
+            OutputGeometry geom = m_uiManager->getOutputGeometry();
+            bool geomUpdated = false;
+            if (json.contains("integerScale"))
+            {
+                geom.integerScale = static_cast<OutputGeometry::IntegerScale>(
+                    std::max(0, std::min(2, json["integerScale"].get<int>())));
+                geomUpdated = true;
+            }
+            if (json.contains("aspectMode"))
+            {
+                geom.aspect = static_cast<OutputGeometry::Aspect>(
+                    std::max(0, std::min(6, json["aspectMode"].get<int>())));
+                geomUpdated = true;
+            }
+            if (json.contains("customAspectW"))
+            {
+                geom.customAspectW = std::max(0.01f, json["customAspectW"].get<float>());
+                geomUpdated = true;
+            }
+            if (json.contains("customAspectH"))
+            {
+                geom.customAspectH = std::max(0.01f, json["customAspectH"].get<float>());
+                geomUpdated = true;
+            }
+            if (json.contains("rotation"))
+            {
+                geom.rotation = OutputGeometry::normalizeRotation(json["rotation"].get<int>());
+                geomUpdated = true;
+            }
+            if (json.contains("flipH"))
+            {
+                geom.flipH = json["flipH"].get<bool>();
+                geomUpdated = true;
+            }
+            if (json.contains("flipV"))
+            {
+                geom.flipV = json["flipV"].get<bool>();
+                geomUpdated = true;
+            }
+            if (geomUpdated)
+            {
+                m_uiManager->setOutputGeometry(geom);
+                updated = true;
+            }
         }
 
         if (updated) m_uiManager->saveConfig();
