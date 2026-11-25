@@ -73,9 +73,32 @@ std::string buildFragmentShader()
            "uniform float uExpand;\n"
            "uniform float uSaturation;\n"
            "uniform float uInvGamma;\n"
+           "uniform float uDeint;\n"   // 0 none, 1 bob, 2 blend (#229)
+           "uniform float uField;\n"   // bob: row parity kept (0 = even/top)
+           "uniform float uTexH;\n"
+           "\n"
+           "vec3 rowSample(float r) {\n"
+           "    return SRC_TEX(uTex, vec2(TexCoord.x, (r + 0.5) / uTexH)).rgb;\n"
+           "}\n"
            "\n"
            "void main() {\n"
-           "    vec3 c = SRC_TEX(uTex, TexCoord).rgb;\n"
+           "    vec3 c;\n"
+           "    if (uDeint > 0.5) {\n"
+           "        // Row 0 of the texture is the first (top) line of the frame.\n"
+           "        float r = floor(TexCoord.y * uTexH);\n"
+           "        float up = (r >= 1.0) ? r - 1.0 : r + 1.0;\n"
+           "        float dn = (r + 1.0 <= uTexH - 1.0) ? r + 1.0 : r - 1.0;\n"
+           "        if (uDeint < 1.5) {\n"
+           "            // Bob: keep the chosen field, interpolate the other one.\n"
+           "            if (abs(mod(r, 2.0) - uField) < 0.5) c = rowSample(r);\n"
+           "            else c = 0.5 * (rowSample(up) + rowSample(dn));\n"
+           "        } else {\n"
+           "            // Blend: [1 2 1]/4 vertical filter across both fields.\n"
+           "            c = 0.5 * rowSample(r) + 0.25 * (rowSample(up) + rowSample(dn));\n"
+           "        }\n"
+           "    } else {\n"
+           "        c = SRC_TEX(uTex, TexCoord).rgb;\n"
+           "    }\n"
            "    // Limited (16-235) -> full (0-255) range.\n"
            "    if (uExpand > 0.5) c = (c - 16.0 / 255.0) * (255.0 / 219.0);\n"
            "    c = clamp(c, 0.0, 1.0);\n"
@@ -115,7 +138,7 @@ SourcePrePass::~SourcePrePass()
 
 bool SourcePrePass::isActive(const Params &p)
 {
-    return p.expandLimitedRange ||
+    return p.expandLimitedRange || p.deinterlace != 0 ||
            std::fabs(p.saturation - 1.0f) > 1e-4f ||
            std::fabs(p.gamma - 1.0f) > 1e-4f;
 }
@@ -160,6 +183,9 @@ bool SourcePrePass::ensureProgram()
     m_locExpand = glGetUniformLocation(prog, "uExpand");
     m_locSaturation = glGetUniformLocation(prog, "uSaturation");
     m_locInvGamma = glGetUniformLocation(prog, "uInvGamma");
+    m_locDeint = glGetUniformLocation(prog, "uDeint");
+    m_locField = glGetUniformLocation(prog, "uField");
+    m_locTexH = glGetUniformLocation(prog, "uTexH");
 
     // Full-screen quad; texcoords map 1:1 so the output keeps the input's
     // row order (row 0 of the source lands in row 0 of the output).
@@ -254,6 +280,9 @@ GLuint SourcePrePass::apply(GLuint srcTex, uint32_t w, uint32_t h, const Params 
         if (m_locSaturation >= 0) glUniform1f(m_locSaturation, p.saturation);
         if (m_locInvGamma >= 0)
             glUniform1f(m_locInvGamma, 1.0f / (p.gamma > 0.01f ? p.gamma : 0.01f));
+        if (m_locDeint >= 0) glUniform1f(m_locDeint, static_cast<float>(p.deinterlace));
+        if (m_locField >= 0) glUniform1f(m_locField, p.field ? 1.0f : 0.0f);
+        if (m_locTexH >= 0) glUniform1f(m_locTexH, static_cast<float>(h));
         glBindVertexArray(m_vao);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         result = m_outTex;

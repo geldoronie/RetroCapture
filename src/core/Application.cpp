@@ -1955,6 +1955,8 @@ void Application::run()
             adj.colorRange = static_cast<SourceColorRange>(m_ui->getColorRange());
             adj.saturation = m_ui->getSaturation();
             adj.gamma = m_ui->getGamma();
+            adj.deinterlace = static_cast<DeinterlaceMode>(m_ui->getDeinterlaceMode());
+            adj.fieldOrder = static_cast<FieldOrder>(m_ui->getFieldOrder());
             m_frameProcessor->setSourceAdjustments(adj);
         }
 
@@ -2553,6 +2555,8 @@ void Application::applyPreset(const std::string &presetName)
         m_ui->setSaturation(data.imageSaturation);
         m_ui->setGamma(data.imageGamma);
         m_ui->setColorRange(data.imageColorRange);
+        m_ui->setDeinterlaceMode(data.deinterlaceMode);
+        m_ui->setFieldOrder(data.fieldOrder);
         m_ui->setMaintainAspect(m_maintainAspect);
         // fullscreen and monitorIndex are NOT updated - they vary per user/system
 
@@ -2728,6 +2732,8 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.imageSaturation = m_ui->getSaturation();
         data.imageGamma = m_ui->getGamma();
         data.imageColorRange = m_ui->getColorRange();
+        data.deinterlaceMode = m_ui->getDeinterlaceMode();
+        data.fieldOrder = m_ui->getFieldOrder();
     }
     data.maintainAspect = m_maintainAspect;
     // fullscreen is NOT saved - varies per user preference

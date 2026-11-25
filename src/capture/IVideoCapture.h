@@ -123,6 +123,13 @@ public:
      */
     virtual int getReportedColorRange() const { return 0; }
 
+    /**
+     * Field order of interlaced frames as reported by the backend (#229):
+     * 0 = unknown / progressive, 1 = top field first, 2 = bottom first.
+     * FrameProcessor uses it when the field order is set to Auto.
+     */
+    virtual int getReportedFieldOrder() const { return 0; }
+
     // AVFoundation-specific extensions. Default no-op so V4L2,
     // DirectShow and Remote captures don't need to implement them.
     virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "")

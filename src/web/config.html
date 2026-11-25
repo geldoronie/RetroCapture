@@ -568,6 +568,28 @@
                                         <div class="col-12">
                                             <button type="button" class="btn btn-outline-secondary btn-sm" id="resetColor" data-i18n="web.config.image.reset_color">Reset color to defaults</button>
                                         </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.deinterlace">Deinterlacing</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.deinterlace_hint">For interlaced sources (480i/576i). Applied before the shader chain. Bob doubles the frame rate.</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="deinterlaceMode" data-i18n="web.config.image.deinterlace_mode">Mode</label>
+                                            <select class="form-select" id="deinterlaceMode">
+                                                <option value="off" data-i18n="web.config.image.deinterlace_off">Off</option>
+                                                <option value="bob" data-i18n="web.config.image.deinterlace_bob">Bob (double rate)</option>
+                                                <option value="weave" data-i18n="web.config.image.deinterlace_weave">Weave</option>
+                                                <option value="blend" data-i18n="web.config.image.deinterlace_blend">Blend</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="fieldOrder" data-i18n="web.config.image.field_order">Field order</label>
+                                            <select class="form-select" id="fieldOrder">
+                                                <option value="auto" data-i18n="web.config.image.field_order_auto">Auto</option>
+                                                <option value="tff" data-i18n="web.config.image.field_order_tff">Top field first</option>
+                                                <option value="bff" data-i18n="web.config.image.field_order_bff">Bottom field first</option>
+                                            </select>
+                                        </div>
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
                                                 <input class="form-check-input" type="checkbox" id="maintainAspect">

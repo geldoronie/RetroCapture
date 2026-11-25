@@ -179,6 +179,7 @@ private:
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETSourceOverscan(int clientFd);
+    bool handleGETSourceDeinterlace(int clientFd);                        // #229
     /**
      * GET /api/v1/preferences — exposes the host application's current
      * UI language so the portal can default to it on first load.
@@ -192,6 +193,7 @@ private:
     bool handleSourceAutoCrop(int clientFd, const std::string& body);
     // #225 — the source crop as JSON (4 sides + legacy x/y/locked).
     std::string sourceCropJSON() const;
+    bool handleSetSourceDeinterlace(int clientFd, const std::string& body); // #229
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
 #ifdef __APPLE__

@@ -2682,6 +2682,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // ============================================================
+// #229 — Deinterlacing (mode + field order) via /api/v1/source/deinterlace.
+// ============================================================
+
+async function loadDeinterlace() {
+    try {
+        const data = await api.getSourceDeinterlace();
+        const modeEl = document.getElementById('deinterlaceMode');
+        const orderEl = document.getElementById('fieldOrder');
+        if (modeEl) modeEl.value = data.mode || 'off';
+        if (orderEl) orderEl.value = data.fieldOrder || 'auto';
+    } catch (err) {
+        console.warn('Failed to load deinterlace settings:', err);
+    }
+}
+
+async function commitDeinterlace() {
+    const modeEl = document.getElementById('deinterlaceMode');
+    const orderEl = document.getElementById('fieldOrder');
+    if (!modeEl || !orderEl) return;
+    try {
+        await api.setSourceDeinterlace(modeEl.value, orderEl.value);
+    } catch (err) {
+        console.warn('Failed to set deinterlace settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const modeEl = document.getElementById('deinterlaceMode');
+    const orderEl = document.getElementById('fieldOrder');
+    if (!modeEl || !orderEl) return;
+    modeEl.addEventListener('change', commitDeinterlace);
+    orderEl.addEventListener('change', commitDeinterlace);
+    loadDeinterlace();
+});
+
+// ============================================================
 // Source crop (#225) — mirrors the native UI's Source Crop section:
 // 4 independent sides in percent or source pixels, link modes, and
 // auto-crop. Values are persisted server-side via

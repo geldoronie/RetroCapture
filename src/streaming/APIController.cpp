@@ -74,6 +74,45 @@ namespace
         return "\"" + jsonEscape(str) + "\"";
     }
 
+    // #229 — deinterlace wire names (UIManager stores ints).
+    const char *deinterlaceModeName(int mode)
+    {
+        switch (mode)
+        {
+        case 1: return "bob";
+        case 2: return "weave";
+        case 3: return "blend";
+        default: return "off";
+        }
+    }
+
+    int deinterlaceModeFromName(const std::string &name)
+    {
+        if (name == "off") return 0;
+        if (name == "bob") return 1;
+        if (name == "weave") return 2;
+        if (name == "blend") return 3;
+        return -1;
+    }
+
+    const char *fieldOrderName(int order)
+    {
+        switch (order)
+        {
+        case 1: return "tff";
+        case 2: return "bff";
+        default: return "auto";
+        }
+    }
+
+    int fieldOrderFromName(const std::string &name)
+    {
+        if (name == "auto") return 0;
+        if (name == "tff") return 1;
+        if (name == "bff") return 2;
+        return -1;
+    }
+
     // #228 — colour range wire names (UIManager stores 0/1/2).
     const char *colorRangeName(int range)
     {
@@ -521,6 +560,11 @@ bool APIController::routeGETSource(int clientFd, const std::string &path, bool &
         result = handleGETSourceOverscan(clientFd);
         return true;
     }
+    if (path == "/api/v1/source/deinterlace")
+    {
+        result = handleGETSourceDeinterlace(clientFd);
+        return true;
+    }
     return false;
 }
 
@@ -740,6 +784,11 @@ bool APIController::routePOSTSource(int clientFd, const std::string &path, const
     if (path == "/api/v1/source/overscan/auto")
     {
         result = handleSourceAutoCrop(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/source/deinterlace")
+    {
+        result = handleSetSourceDeinterlace(clientFd, body);
         return true;
     }
     return false;
@@ -1259,6 +1308,70 @@ bool APIController::handleGETSourceOverscan(int clientFd)
     }
     sendJSONResponse(clientFd, 200, sourceCropJSON());
     return true;
+}
+
+bool APIController::handleGETSourceDeinterlace(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    std::ostringstream out;
+    out << "{"
+        << "\"mode\": " << jsonString(deinterlaceModeName(m_uiManager->getDeinterlaceMode())) << ", "
+        << "\"fieldOrder\": " << jsonString(fieldOrderName(m_uiManager->getFieldOrder()))
+        << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSetSourceDeinterlace(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        // Validate both before applying either.
+        int mode = -2, order = -2;
+        if (json.contains("mode"))
+        {
+            const auto &m = json["mode"];
+            mode = m.is_number_integer() ? m.get<int>()
+                 : m.is_string()         ? deinterlaceModeFromName(m.get<std::string>())
+                                         : -1;
+            if (mode < 0 || mode > 3)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, bob, weave or blend)");
+                return true;
+            }
+        }
+        if (json.contains("fieldOrder"))
+        {
+            const auto &o = json["fieldOrder"];
+            order = o.is_number_integer() ? o.get<int>()
+                  : o.is_string()         ? fieldOrderFromName(o.get<std::string>())
+                                          : -1;
+            if (order < 0 || order > 2)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'fieldOrder' (use auto, tff or bff)");
+                return true;
+            }
+        }
+        if (mode >= 0) m_uiManager->setDeinterlaceMode(mode);
+        if (order >= 0) m_uiManager->setFieldOrder(order);
+        m_uiManager->saveConfig();
+        return handleGETSourceDeinterlace(clientFd);
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
 }
 
 bool APIController::handleSetSourceOverscan(int clientFd, const std::string &body)

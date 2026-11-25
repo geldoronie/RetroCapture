@@ -49,6 +49,9 @@ public:
         float imageSaturation = 1.0f;
         float imageGamma = 1.0f;
         int imageColorRange = 0; // 0 = Auto, 1 = Limited, 2 = Full
+        // #229 — deinterlacing (older presets load as Off / Auto)
+        int deinterlaceMode = 0; // 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend
+        int fieldOrder = 0;      // 0 = Auto, 1 = TFF, 2 = BFF
         bool maintainAspect = true;
         bool fullscreen = false;
         int monitorIndex = 0;

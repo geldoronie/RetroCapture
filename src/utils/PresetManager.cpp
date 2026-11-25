@@ -208,6 +208,8 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         presetJson["image"]["saturation"] = data.imageSaturation;
         presetJson["image"]["gamma"] = data.imageGamma;
         presetJson["image"]["colorRange"] = data.imageColorRange;
+        presetJson["deinterlace"]["mode"] = data.deinterlaceMode;
+        presetJson["deinterlace"]["fieldOrder"] = data.fieldOrder;
         presetJson["image"]["maintainAspect"] = data.maintainAspect;
         // fullscreen is NOT saved - varies per user preference
         // monitorIndex is NOT saved - varies per system
@@ -382,6 +384,20 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             data.sourceCrop.unit = SourceCrop::unitFromName(c.value("unit", std::string("percent")).c_str(), SourceCrop::Percent);
             data.sourceCrop.link = SourceCrop::linkFromName(c.value("link", std::string("none")).c_str(), SourceCrop::LinkNone);
             data.hasSourceCrop = true;
+        }
+
+        // #229 — deinterlacing
+        if (presetJson.contains("deinterlace"))
+        {
+            const auto& deint = presetJson["deinterlace"];
+            if (deint.contains("mode"))
+            {
+                data.deinterlaceMode = deint["mode"].get<int>();
+            }
+            if (deint.contains("fieldOrder"))
+            {
+                data.fieldOrder = deint["fieldOrder"].get<int>();
+            }
         }
 
         // Load image settings

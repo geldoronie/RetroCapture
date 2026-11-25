@@ -40,6 +40,7 @@ void UIConfigurationSource::render()
     m_capture = m_uiManager->getCapture();
 
     renderSourceTypeSelection();
+    renderDeinterlace();
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -93,6 +94,46 @@ void UIConfigurationSource::render()
 #endif
 
     ImGui::End();
+}
+
+void UIConfigurationSource::renderDeinterlace()
+{
+    // #229 — applies to every source type, before the shader chain.
+    ui_section_header("Deinterlacing",
+                      "For interlaced sources (480i/576i: PS2, GameCube, "
+                      "Wii, DVD). Applied before the shader chain.");
+
+    static const char *kModes[] = {"Off", "Bob (double rate)", "Weave", "Blend"};
+    int mode = m_uiManager->getDeinterlaceMode();
+    if (ImGui::Combo("Mode##deinterlace", &mode, kModes, 4))
+    {
+        m_uiManager->setDeinterlaceMode(mode);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Bob: each field line-doubled and shown on its own "
+                          "(smooth motion, doubles the frame rate, at most "
+                          "one field of latency).\n"
+                          "Weave: fields left interleaved (full detail, "
+                          "combs on motion).\n"
+                          "Blend: fields mixed (no combing, no latency, "
+                          "slight ghosting on motion).");
+    }
+
+    static const char *kOrders[] = {"Auto", "Top field first", "Bottom field first"};
+    int order = m_uiManager->getFieldOrder();
+    if (ImGui::Combo("Field order##deinterlace", &order, kOrders, 3))
+    {
+        m_uiManager->setFieldOrder(order);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Only used by Bob. Auto uses what the device "
+                          "reports, else top field first. If motion "
+                          "judders back and forth, flip it.");
+    }
 }
 
 void UIConfigurationSource::renderSourceTypeSelection()

@@ -36,6 +36,7 @@ public:
     uint32_t getHeight() const override { return m_height; }
     uint32_t getPixelFormat() const override { return m_pixelFormat; }
     int getReportedColorRange() const override { return m_reportedColorRange; }
+    int getReportedFieldOrder() const override { return m_reportedFieldOrder; }
 
     // Additional V4L2-specific methods (for backward compatibility)
     bool setControl(uint32_t controlId, int32_t value);
@@ -58,6 +59,7 @@ private:
     uint32_t m_height = 0;
     uint32_t m_pixelFormat = 0;
     int m_reportedColorRange = 0; // #228: from v4l2_pix_format.quantization
+    int m_reportedFieldOrder = 0; // #229: from v4l2_pix_format.field
 
     struct Buffer
     {

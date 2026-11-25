@@ -138,6 +138,22 @@ private:
     void runPrePass();
     bool wantYUVFullRange() const;
 
+    // #229 — deinterlacing. Bob shows the first field when the frame
+    // arrives and the second one half a frame period later, as its own
+    // frame (new sequence number, timestamp + half a period).
+    int m_reportedFieldOrder = 0;   // capture's field-order hint
+    int m_currentField = 0;         // field bob keeps (0 = top/even rows)
+    bool m_secondFieldPending = false;
+    int64_t m_secondFieldDueUs = 0; // MediaClock time to present it
+    int64_t m_secondFieldTsUs = 0;  // its capture timestamp
+    int64_t m_lastFrameTsUs = 0;
+    int64_t m_framePeriodUs = 0;    // estimated source frame period
+    uint64_t m_droppedSecondFields = 0;
+
+    int firstField() const;
+    void beginFrameFields(int64_t frameTsUs);
+    bool emitSecondFieldIfDue();
+
     // Texture filtering configurável
     bool m_textureFilterLinear = false; // Padrão: GL_NEAREST (mais rápido)
 

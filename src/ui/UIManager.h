@@ -241,6 +241,10 @@ public:
     void setSaturation(float saturation) { m_saturation = saturation; }
     void setGamma(float gamma) { m_gamma = gamma; }
     void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
+    // #229 — deinterlacing, applied before the shader chain.
+    // mode: 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend. order: 0 = Auto, 1 = TFF, 2 = BFF.
+    void setDeinterlaceMode(int mode) { m_deinterlaceMode = (mode >= 0 && mode <= 3) ? mode : 0; }
+    void setFieldOrder(int order) { m_fieldOrder = (order >= 0 && order <= 2) ? order : 0; }
     void setOnBrightnessChanged(std::function<void(float)> callback) { m_onBrightnessChanged = callback; }
     void setOnContrastChanged(std::function<void(float)> callback) { m_onContrastChanged = callback; }
 
@@ -763,6 +767,8 @@ public:
     float getSaturation() const { return m_saturation; }
     float getGamma() const { return m_gamma; }
     int getColorRange() const { return m_colorRange; }
+    int getDeinterlaceMode() const { return m_deinterlaceMode; }
+    int getFieldOrder() const { return m_fieldOrder; }
     bool getMaintainAspect() const { return m_maintainAspect; }
     bool getFullscreen() const { return m_fullscreen; }
     int getMonitorIndex() const { return m_monitorIndex; }
@@ -1342,6 +1348,9 @@ private:
     float m_saturation = 1.0f;
     float m_gamma = 1.0f;
     int m_colorRange = 0;
+    // #229 — deinterlacing (Off by default)
+    int m_deinterlaceMode = 0;
+    int m_fieldOrder = 0;
     std::function<void(float)> m_onBrightnessChanged;
     std::function<void(float)> m_onContrastChanged;
 

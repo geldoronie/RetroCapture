@@ -13,9 +13,12 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
 {
     m_open = true;
     const char *variant = std::getenv("RETROCAPTURE_TEST_PATTERN");
-    m_variant = (variant && std::string(variant) == "levels") ? Variant::Levels : Variant::Bars;
+    const std::string v = variant ? variant : "";
+    m_variant = v == "levels" ? Variant::Levels : v == "interlaced" ? Variant::Interlaced : Variant::Bars;
     if (m_variant == Variant::Levels)
         LOG_INFO("VideoCaptureTestPattern: 'levels' variant (grey steps + colour bars)");
+    else if (m_variant == Variant::Interlaced)
+        LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
     if (m_buffer.empty())
         m_buffer.resize(static_cast<size_t>(m_width) * m_height * 3, 0);
     LOG_INFO("VideoCaptureTestPattern opened: " + std::to_string(m_width) + "x" +
@@ -90,6 +93,22 @@ void VideoCaptureTestPattern::renderLevels()
     }
 }
 
+void VideoCaptureTestPattern::renderInterlaced(uint64_t f)
+{
+    const uint32_t barW = 64;
+    const uint32_t step = 16; // px per field
+    const uint32_t span = m_width > barW ? m_width - barW : 1;
+    for (uint32_t y = 0; y < m_height; ++y)
+    {
+        // Even rows = top field (first in time), odd rows = bottom field.
+        const uint64_t fieldIndex = 2 * f + (y & 1u);
+        const uint32_t x0 = static_cast<uint32_t>((fieldIndex * step) % span);
+        uint8_t *row = m_buffer.data() + static_cast<size_t>(y) * m_width * 3;
+        std::memset(row, 0, static_cast<size_t>(m_width) * 3);
+        std::memset(row + static_cast<size_t>(x0) * 3, 255, static_cast<size_t>(barW) * 3);
+    }
+}
+
 void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
 {
     const size_t needed = static_cast<size_t>(m_width) * m_height * 3;
@@ -98,6 +117,11 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
     if (m_variant == Variant::Levels)
     {
         renderLevels();
+        return;
+    }
+    if (m_variant == Variant::Interlaced)
+    {
+        renderInterlaced(f);
         return;
     }
 
