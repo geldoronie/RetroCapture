@@ -30,8 +30,8 @@
 #   AVSYNC_REPORT_ONLY=1  print the numbers but always exit 0 (baselines)
 #   AVSYNC_KEEP=1      keep the work dir (captured files) for inspection
 #
-# Needs: ffmpeg, ffprobe, curl, python3 + numpy, and a display ($DISPLAY or
-# xvfb-run), same as tools/smoke-test.sh. Exit 0 = in sync.
+# Needs: ffmpeg, ffprobe, curl, python3 + numpy, xvfb-run on Linux (runs
+# headless and isolated like tools/smoke-test.sh). Exit 0 = in sync.
 
 set -u
 
@@ -86,11 +86,20 @@ done
 python3 -c "import numpy" 2>/dev/null || fail "python3 numpy is required"
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
+# #240 — isolate the app under test from the user's desktop session. xvfb-run
+# alone isn't enough: GLFW prefers Wayland when WAYLAND_DISPLAY is inherited
+# (test windows popped up on the real desktop) and the tray registers on the
+# session D-Bus. On Linux, always run headless in a private session unless
+# RC_TEST_REAL_DISPLAY=1 asks for the real display (debugging).
 LAUNCH_PREFIX=()
 USE_XVFB=0
-# macOS has its own window server (no X/DISPLAY): launch directly there.
-if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
-    command -v xvfb-run >/dev/null 2>&1 || fail "no DISPLAY and xvfb-run not installed"
+if [ "$(uname)" != "Darwin" ] && [ "${RC_TEST_REAL_DISPLAY:-0}" != 1 ]; then
+    command -v xvfb-run >/dev/null 2>&1 || \
+        fail "xvfb-run not installed (need a headless GL context; RC_TEST_REAL_DISPLAY=1 uses \$DISPLAY)"
+    unset WAYLAND_DISPLAY XDG_SESSION_TYPE DISPLAY
+    mkdir -p "$WORK/runtime" && chmod 700 "$WORK/runtime"
+    export XDG_RUNTIME_DIR="$WORK/runtime"
+    export DBUS_SESSION_BUS_ADDRESS="disabled:"
     # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
     LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
     USE_XVFB=1
