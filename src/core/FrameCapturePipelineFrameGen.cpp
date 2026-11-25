@@ -271,6 +271,6 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     plan.liveVirtcam = !fg.virtcam;
     plan.liveOutputsActive = (!fg.stream && streamActive) || (!fg.record && recording) ||
                              (!fg.virtcam && virtcamRunning) ||
-                             (streamActive && m_app.m_streamManager->hasRawClients());
+                             (!fg.stream && streamActive && m_app.m_streamManager->hasRawClients());
     return plan;
 }

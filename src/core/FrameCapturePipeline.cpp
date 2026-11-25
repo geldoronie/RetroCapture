@@ -414,7 +414,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         gen.stream = plan.genStream;
         gen.record = plan.genRecord;
         gen.virtcam = plan.genVirtcam;
-        gen.raw = false;
+        // /raw is pre-shader, not pre-frame-generation: with frame
+        // generation on the stream it carries the generated timeline too
+        // (the generated frames are made from the cropped source, before the
+        // shader chain and the upscaler).
+        gen.raw = plan.genStream;
         if (!m_genPbo)
             m_genPbo = std::make_unique<PBOManager>();
         gen.pbo = m_genPbo.get();
@@ -424,7 +428,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         live.stream = plan.liveStream;
         live.record = plan.liveRecord;
         live.virtcam = plan.liveVirtcam;
-        live.raw = true;
+        live.raw = !plan.genStream;
         const bool liveNeeded = live.window || plan.liveOutputsActive;
 
         // The chain's temporal state (FrameCount, feedback, history) follows
@@ -485,6 +489,13 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
 
     // #251 — set by runUpscaler() when the upscaler produced this pass's image.
     m_upscalerRan = false;
+
+    // The picture without the shader chain: what /raw (and a stream /
+    // recording with apply-shader off) carries. The cropped source, or the
+    // upscaler's output when it runs before the chain (#251) — /raw keeps
+    // the upscale, only the shader is left to the client.
+    GLuint preShaderTex = sourceTex;
+    uint32_t preShaderW = sourceW, preShaderH = sourceH;
 
     // Master toggle: when the user disables the shader pipeline
     // from the Shader tab we keep the loaded preset / parameters
@@ -623,6 +634,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         const uint32_t nativeW = shaderSrcW, nativeH = shaderSrcH;
         shaderSrcTex = runUpscaler(UpscalerSettings::Position::Before, shaderSrcTex,
                                    shaderSrcW, shaderSrcH, nativeW, nativeH);
+        if (m_upscalerRan)
+        {
+            preShaderTex = shaderSrcTex;
+            preShaderW = shaderSrcW;
+            preShaderH = shaderSrcH;
+        }
         if (m_app.m_upscaler && nativeW > 0 && nativeH > 0 &&
             UpscalerStage::runsAt(m_upscalerSettings, UpscalerSettings::Position::After))
         {
@@ -1631,10 +1648,13 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // single-readback path.
                         const bool masterOn = (m_app.m_ui && m_app.m_ui->getShaderPipelineEnabled());
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
-                        // #251 — the output is processed (shader chain and / or the
+                        // #251 — the output went through the shader chain: /raw and an
+                        // apply-shader-off stream / recording then need the separate
+                        // pre-shader readback. The upscaler alone isn't a reason: /raw
+                        // carries the upscaled picture, which is then the output itself.
                         // upscaler): /raw and an apply-shader-off stream / recording
                         // then need the separate pre-shader source readback.
-                        const bool processed = (masterOn && shaderActive) || m_upscalerRan;
+                        const bool processed = masterOn && shaderActive;
                         const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
                         const bool recordWantsSource = m_app.m_ui && passRecord &&
@@ -1651,9 +1671,9 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         {
                             // #224 — /raw carries the source crop: read the
                             // pre-pass texture, not the raw capture texture.
-                            GLuint srcTex = sourceTex;
-                            sourceFrameW = sourceW;
-                            sourceFrameH = sourceH;
+                            GLuint srcTex = preShaderTex;
+                            sourceFrameW = preShaderW;
+                            sourceFrameH = preShaderH;
                             if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
                             {
                                 GLuint tmpFBO = 0;
@@ -1765,12 +1785,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                             //     stop while audio kept flowing).
                             if (passRaw && m_app.m_streamManager->hasRawClients())
                             {
-                                if (sourceFrameReady && curMeta.seq != m_lastRawSeq)
+                                if (sourceFrameReady && curMeta.streamOk && curMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = curMeta.seq;
                                     m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
                                 }
-                                else if (!sourceFrameReady && !processed &&
+                                else if (!sourceFrameReady && !processed && dataMeta.streamOk &&
                                          dataMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = dataMeta.seq;
