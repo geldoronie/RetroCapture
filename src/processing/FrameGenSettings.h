@@ -22,6 +22,10 @@
  *  - Motion: GPU optical flow ("fast" mode): bilateral block matching on a
  *            downscaled luma pyramid, bidirectional warp of both frames to
  *            the intermediate time, confidence fallback to the blend.
+ *  - RIFE:   neural interpolation ("quality" mode, #248): RIFE 4.x on ncnn +
+ *            Vulkan, on a worker thread. Needs a Vulkan device and a build
+ *            with ENABLE_RIFE; frames it cannot deliver in time (or at all)
+ *            are synthesised with Motion.
  */
 struct FrameGenSettings
 {
@@ -37,6 +41,7 @@ struct FrameGenSettings
     {
         Blend = 0,
         Motion = 1,
+        RIFE = 2,
     };
 
     int mode = Off;
@@ -93,13 +98,14 @@ struct FrameGenSettings
         if (n == "display") return Display;
         return -1;
     }
-    static const char *methodName(int m) { return m == Blend ? "blend" : "motion"; }
+    static const char *methodName(int m) { return m == Blend ? "blend" : (m == RIFE ? "rife" : "motion"); }
     static int methodFromName(const std::string &n)
     {
         if (n == "blend") return Blend;
         if (n == "motion") return Motion;
+        if (n == "rife") return RIFE;
         return -1;
     }
     static int clampMode(int m) { return (m >= Off && m <= Display) ? m : Off; }
-    static int clampMethod(int m) { return (m == Blend || m == Motion) ? m : Motion; }
+    static int clampMethod(int m) { return (m == Blend || m == Motion || m == RIFE) ? m : Motion; }
 };

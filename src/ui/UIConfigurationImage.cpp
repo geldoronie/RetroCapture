@@ -504,6 +504,29 @@ void UIConfigurationImage::renderFpsOverlay()
     if (!enabled) ImGui::EndDisabled();
 }
 
+// #248 — what the RIFE backend is doing (it starts with frame generation).
+static void renderRifeStatus(const UIManager::FrameGenStatus &st)
+{
+    const ImVec4 warn(0.95f, 0.80f, 0.30f, 1.0f);
+    ImGui::PushTextWrapPos(0.0f);
+    if (!st.rifeCompiled)
+        ImGui::TextColored(warn, "RIFE: not in this build (no ncnn/Vulkan). Using Motion.");
+    else if (st.rifeState == 3)
+        ImGui::TextColored(warn, "RIFE unavailable: %s. Using Motion.", st.rifeReason.c_str());
+    else if (st.rifeState == 1)
+        ImGui::TextDisabled("RIFE: starting Vulkan / loading the model... (Motion meanwhile)");
+    else if (st.rifeState == 2)
+    {
+        ImGui::TextDisabled("RIFE on %s: %.1f ms/frame, %llu frames, %llu late (shown with Motion)",
+                            st.rifeDevice.c_str(), st.rifeInferMs,
+                            static_cast<unsigned long long>(st.rifeDelivered),
+                            static_cast<unsigned long long>(st.rifeLate));
+    }
+    else
+        ImGui::TextDisabled("RIFE starts with frame generation (needs a Vulkan GPU).");
+    ImGui::PopTextWrapPos();
+}
+
 void UIConfigurationImage::renderFrameGeneration()
 {
     // #247 — output clock + GPU motion-compensated interpolation.
@@ -536,7 +559,8 @@ void UIConfigurationImage::renderFrameGeneration()
         fg.mode = mode;
         changed = true;
     }
-    static const char *methods[] = {"Blend (cheap, ghosts on motion)", "Motion (GPU optical flow)"};
+    static const char *methods[] = {"Blend (cheap, ghosts on motion)", "Motion (GPU optical flow)",
+                                    "RIFE (neural, Vulkan; best quality)"};
     int method = fg.method;
     if (ImGui::Combo("Method##framegen", &method, methods, IM_ARRAYSIZE(methods)))
     {
@@ -576,6 +600,8 @@ void UIConfigurationImage::renderFrameGeneration()
         ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
                            "This GPU has no float render targets: using Blend.");
     }
+    if (fg.method == FrameGenSettings::RIFE)
+        renderRifeStatus(st);
     if (st.active)
     {
         if (st.outputFps > 0.0f)

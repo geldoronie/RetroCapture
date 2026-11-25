@@ -46,6 +46,31 @@ void FrameCapturePipeline::releaseGL()
     }
 }
 
+namespace
+{
+// #248 — the RIFE backend's state for the UI / web API.
+void fillRifeStatus(UIManager::FrameGenStatus &st, const FrameInterpolator &fi, bool selected)
+{
+    const RifeBackend &r = fi.rife();
+    st.rifeCompiled = RifeBackend::compiledIn();
+    const RifeBackend::State s = r.state();
+    st.rifeState = static_cast<int>(s);
+    if (!st.rifeCompiled)
+        st.rifeReason = "this build has no RIFE support (built without ncnn/Vulkan)";
+    else if (s == RifeBackend::State::Unavailable)
+        st.rifeReason = r.reason();
+    st.rifeDevice = r.device();
+    if (selected && s == RifeBackend::State::Ready)
+    {
+        const RifeBackend::Stats rs = r.stats();
+        st.rifeInferMs = static_cast<float>(rs.inferMs);
+        st.rifeLatencyMs = static_cast<float>(rs.latencyMs);
+        st.rifeDelivered = rs.delivered;
+        st.rifeLate = rs.late;
+    }
+}
+} // namespace
+
 FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLuint srcTex, uint32_t w,
                                                                              uint32_t h, const FrameMeta &live)
 {
@@ -113,6 +138,7 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
                 LOG_INFO("Frame generation: off");
             m_frameGenLoggedMode = 0;
         }
+        fillRifeStatus(st, fi, false);
         ui->setFrameGenStatus(st);
         return plan;
     }
@@ -123,8 +149,9 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     fi.setFilterLinear(srcIsProcessor && m_app.m_frameProcessor->getTextureFilterLinear());
 
     FrameInterpolator::Options opt;
-    opt.method = fg.method == FrameGenSettings::Blend ? FrameInterpolator::Method::Blend
-                                                      : FrameInterpolator::Method::Motion;
+    opt.method = fg.method == FrameGenSettings::Blend  ? FrameInterpolator::Method::Blend
+                 : fg.method == FrameGenSettings::RIFE ? FrameInterpolator::Method::RIFE
+                                                       : FrameInterpolator::Method::Motion;
     opt.protectStatic = fg.protectStatic;
     const int factor = display ? 0 : fg.factor();
     const FrameGenStage::Frame frame =
@@ -137,9 +164,11 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     st.outputFps = display ? 0.0f : static_cast<float>(srcFps * factor);
     st.addedLatencyMs = static_cast<float>(
         display ? period / 1000.0 : (period * (factor - 1)) / (1000.0 * (factor > 0 ? factor : 1)));
+    st.addedLatencyMs += static_cast<float>(m_frameGen->clock().extraDelayUs() / 1000.0);
+    fillRifeStatus(st, fi, fg.method == FrameGenSettings::RIFE);
     ui->setFrameGenStatus(st);
 
-    const int logKey = 1 + fg.mode * 4 + fg.method * 2 + (st.remoteDriven ? 1 : 0);
+    const int logKey = 1 + fg.mode * 8 + fg.method * 2 + (st.remoteDriven ? 1 : 0);
     if (logKey != m_frameGenLoggedMode)
     {
         m_frameGenLoggedMode = logKey;
@@ -149,7 +178,9 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
         if (fg.record) outs += " recording";
         if (fg.virtcam) outs += " virtual-camera";
         LOG_INFO(std::string("Frame generation: ") + FrameGenSettings::modeName(fg.mode) + ", " +
-                 (opt.method == FrameInterpolator::Method::Motion && fi.motionSupported() ? "motion" : "blend") +
+                 (opt.method == FrameInterpolator::Method::RIFE ? "rife"
+                  : opt.method == FrameInterpolator::Method::Motion && fi.motionSupported() ? "motion"
+                                                                                           : "blend") +
                  (st.remoteDriven ? " (remote interpolation)" : "") + ", outputs:" + (outs.empty() ? " none" : outs));
     }
 

@@ -8,6 +8,9 @@
 #   blend   — 50/50 (linear) blend of the two neighbours
 #   motion  — the optical-flow interpolator (frame generation "Motion")
 #   motion_nopick — same, without the edge-aware vector pick (ablation)
+#   rife    — RIFE 4.6 neural interpolation on ncnn + Vulkan (#248); only
+#             when the build has ENABLE_RIFE and a Vulkan device is found
+#             (FG_RIFE=0 skips it)
 # PSNR and SSIM come from ffmpeg's psnr / ssim filters (Y'CbCr, all planes).
 # The bench also prints the GPU time of each stage (glFinish-timed).
 #
@@ -98,9 +101,10 @@ for name in $INPUTS; do
     mkdir -p "$dir/cfg" "$dir/data" "$dir/run"
     (cd "$dir/run" && XDG_CONFIG_HOME="$dir/cfg" XDG_DATA_HOME="$dir/data" \
         ${LAUNCH[@]+"${LAUNCH[@]}"} "$BIN" --source test --hide-ui --stream-port "$PORT" \
-        --framegen-bench "in=$src,size=$SIZE,frames=$FRAMES,step=$STEP,out=$dir") > "$dir/bench.log" 2>&1 \
+        --framegen-bench "in=$src,size=$SIZE,frames=$FRAMES,step=$STEP,out=$dir,rife=${FG_RIFE:-1}") > "$dir/bench.log" 2>&1 \
         || { tail -20 "$dir/bench.log"; fail "bench failed on $name"; }
-    for m in repeat blend motion motion_nopick; do
+    for m in repeat blend motion motion_nopick rife; do
+        [ -f "$dir/$m.rgb" ] || continue # rife: only when a Vulkan device + model were found
         read -r psnr ssim < <(score "$dir/ref.rgb" "$dir/$m.rgb")
         printf "  %-9s %-14s %10s %8s\n" "$name" "$m" "$psnr" "$ssim"
     done

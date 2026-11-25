@@ -56,6 +56,34 @@ jobs:
           brew install cmake pkg-config glfw ffmpeg libpng openssl@3 || true
           brew list --versions cmake pkg-config glfw ffmpeg libpng openssl@3
 
+      # #248 — RIFE frame generation (ncnn + Vulkan via MoltenVK). Optional:
+      # if ncnn fails to build, the app builds without RIFE (the method
+      # falls back to Motion). ncnn is cached per build-script revision.
+      # MoltenVK / the Vulkan loader are runtime-only (dlopen'ed by ncnn);
+      # users need `brew install molten-vk vulkan-loader` for RIFE.
+      - name: Cache ncnn
+        id: ncnn-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ncnn
+          key: ncnn-${{ matrix.arch }}-${{ hashFiles('tools/build-ncnn.sh') }}
+
+      - name: Build ncnn (RIFE, optional)
+        if: steps.ncnn-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          ./tools/build-ncnn.sh "$RUNNER_TEMP/ncnn" \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+
+      - name: Use ncnn
+        run: |
+          if [ -f "$RUNNER_TEMP/ncnn/lib/cmake/ncnn/ncnnConfig.cmake" ]; then
+            echo "RIFE_NCNN_DIR=$RUNNER_TEMP/ncnn" >> "$GITHUB_ENV"
+            echo "ncnn found: RIFE enabled"
+          else
+            echo "::warning::ncnn not built: this bundle has no RIFE frame generation"
+          fi
+
       - name: Build bundle
         run: ./tools/build-macos-bundle.sh --clean Release
 

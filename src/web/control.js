@@ -2756,6 +2756,19 @@ function renderFrameGenStatus(data) {
     } else {
         el.textContent = '';
     }
+    // #248 — RIFE backend state (falls back to Motion when unavailable).
+    const rife = st.rife;
+    if (data.method === 'rife' && rife) {
+        let note = '';
+        if (!rife.compiled || rife.state === 'unavailable') {
+            note = tr('web.config.image.framegen_rife_unavailable', 'RIFE unavailable, using Motion:') + ' ' + rife.reason;
+        } else if (rife.state === 'loading') {
+            note = tr('web.config.image.framegen_rife_loading', 'RIFE: loading the model (Motion meanwhile)');
+        } else if (rife.state === 'ready') {
+            note = 'RIFE: ' + rife.device + ', ' + rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
+        }
+        if (note) el.textContent = (el.textContent ? el.textContent + ' — ' : '') + note;
+    }
 }
 
 function applyFrameGenToForm(data) {

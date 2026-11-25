@@ -139,7 +139,8 @@ echo ""
 cmake .. \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+    ${RIFE_NCNN_DIR:+-DRIFE_NCNN_DIR="$RIFE_NCNN_DIR"}
 
 if [ $? -ne 0 ]; then
     echo ""
