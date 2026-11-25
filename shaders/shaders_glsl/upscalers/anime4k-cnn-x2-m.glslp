@@ -1,0 +1,81 @@
+# Anime4K v4 Upscale CNN x2 (M) for 2D / anime / cartoon / pixel-art content.
+# The CNN runs at source resolution and reconstructs a 2x image; the last
+# pass resamples that to the viewport (bilinear). Works best when the
+# viewport is about 2x the source (e.g. 540p/720p -> 1080p/1440p).
+shaders = 10
+
+shader0 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass0.glsl
+filter_linear0 = true
+wrap_mode0 = clamp_to_edge
+scale_type0 = source
+scale0 = 1.0
+float_framebuffer0 = true
+alias0 = conv2d_tf
+
+shader1 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass1.glsl
+filter_linear1 = false
+wrap_mode1 = clamp_to_edge
+scale_type1 = source
+scale1 = 1.0
+float_framebuffer1 = true
+alias1 = conv2d_1_tf
+
+shader2 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass2.glsl
+filter_linear2 = false
+wrap_mode2 = clamp_to_edge
+scale_type2 = source
+scale2 = 1.0
+float_framebuffer2 = true
+alias2 = conv2d_2_tf
+
+shader3 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass3.glsl
+filter_linear3 = false
+wrap_mode3 = clamp_to_edge
+scale_type3 = source
+scale3 = 1.0
+float_framebuffer3 = true
+alias3 = conv2d_3_tf
+
+shader4 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass4.glsl
+filter_linear4 = false
+wrap_mode4 = clamp_to_edge
+scale_type4 = source
+scale4 = 1.0
+float_framebuffer4 = true
+alias4 = conv2d_4_tf
+
+shader5 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass5.glsl
+filter_linear5 = false
+wrap_mode5 = clamp_to_edge
+scale_type5 = source
+scale5 = 1.0
+float_framebuffer5 = true
+alias5 = conv2d_5_tf
+
+shader6 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass6.glsl
+filter_linear6 = false
+wrap_mode6 = clamp_to_edge
+scale_type6 = source
+scale6 = 1.0
+float_framebuffer6 = true
+alias6 = conv2d_6_tf
+
+shader7 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass7.glsl
+filter_linear7 = false
+wrap_mode7 = clamp_to_edge
+scale_type7 = source
+scale7 = 1.0
+float_framebuffer7 = true
+alias7 = conv2d_last_tf
+
+shader8 = shaders/anime4k/anime4k-upscale-cnn-x2-m-pass8.glsl
+filter_linear8 = false
+wrap_mode8 = clamp_to_edge
+scale_type8 = source
+scale8 = 2.0
+
+shader9 = ../stock.glsl
+filter_linear9 = true
+wrap_mode9 = clamp_to_edge
+scale_type9 = viewport
+scale9 = 1.0
