@@ -105,9 +105,18 @@ public:
     {
         Linear,  // LERP prev/next — smooth motion, slight ghosting
         Nearest, // pick the temporally closer frame — clean image, 3:2 pulldown
-        Off      // strict PTS gate, hold prev until next is due
+        Off,     // strict PTS gate, hold prev until next is due
+        // #247 — motion-compensated frame generation on the GPU (the
+        // render pipeline's frame-generation engine, per refresh). Here the
+        // capture only hands each decoded frame over ONCE, one frame period
+        // ahead of its target time and stamped with that target time, so the
+        // engine's one-frame look-ahead lands it back on schedule.
+        Motion
     };
     void setInterpolationMode(InterpolationMode mode);
+    // Config / UI name ("linear", "nearest", "off", "motion") -> mode;
+    // unknown names map to Linear (the historical default).
+    static InterpolationMode interpolationModeFromName(const std::string &name);
 
     /**
      * #77 — client-side playback gain for the incoming audio, linear
@@ -223,6 +232,10 @@ private:
     // as one of the two endpoints for the per-refresh interpolation
     // (see m_blendBuffer below).
     QueuedFrame             m_lastConsumed;
+    // #247 — Motion mode: estimated frame period (release lead) and the
+    // previous released frame's target time.
+    int64_t                 m_motionLeadUs = 0;
+    int64_t                 m_motionPrevTargetUs = 0;
     std::atomic<bool>       m_hasFrame{false};
 
     std::atomic<InterpolationMode> m_interpolationMode{InterpolationMode::Linear};
