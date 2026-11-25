@@ -1129,6 +1129,56 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         return false;
     }
     m_lastAudioInputUs = MediaClock::nowUs();
+
+    // #241 — no video yet → no epoch → nothing to align to. Hold the chunk
+    // instead of dropping it: it may well have been captured after the
+    // video frame that is about to become the epoch (the callers drain
+    // audio before video). Only the last second is kept, so a
+    // not-yet-watched /stream doesn't accumulate leading audio.
+    if (!m_epochSet)
+    {
+        PendingAudio pending;
+        pending.samples.assign(samples, samples + sampleCount);
+        pending.captureTimestampUs = captureTimestampUs;
+        pending.inRate = inRate;
+        pending.inChannels = inChannels;
+        m_preEpochAudio.push_back(std::move(pending));
+        while (!m_preEpochAudio.empty() &&
+               captureTimestampUs - m_preEpochAudio.front().captureTimestampUs > 1000000LL)
+        {
+            m_preEpochAudio.pop_front();
+        }
+        return false;
+    }
+
+    bool produced = false;
+    if (!m_preEpochAudio.empty())
+    {
+        // First chunk since the epoch latched: place the held audio first,
+        // in capture order. encodeAudioChunk() trims whatever precedes the
+        // epoch.
+        std::deque<PendingAudio> held;
+        held.swap(m_preEpochAudio);
+        for (const auto &p : held)
+        {
+            if (encodeAudioChunk(p.samples.data(), p.samples.size(), p.captureTimestampUs,
+                                 p.inRate, p.inChannels, packets))
+            {
+                produced = true;
+            }
+        }
+    }
+    if (encodeAudioChunk(samples, sampleCount, captureTimestampUs, inRate, inChannels, packets))
+    {
+        produced = true;
+    }
+    return produced;
+}
+
+bool MediaEncoder::encodeAudioChunk(const int16_t *samples, size_t sampleCount,
+                                    int64_t captureTimestampUs, uint32_t inRate, uint32_t inChannels,
+                                    std::vector<EncodedPacket> &packets)
+{
     if (m_silenceKeepaliveActive)
     {
         m_silenceKeepaliveActive = false;
@@ -1177,13 +1227,6 @@ bool MediaEncoder::encodeAudio(const int16_t *samples, size_t sampleCount,
         }
     }
     SwrContext *swrCtx = static_cast<SwrContext *>(m_swrContext);
-
-    // No video yet → no epoch → nothing to align to. Dropping here is what
-    // keeps a not-yet-watched /stream from accumulating leading audio.
-    if (!m_epochSet)
-    {
-        return false;
-    }
 
     const double outRate = static_cast<double>(m_audioConfig.sampleRate);
     const double inToOut = outRate / static_cast<double>(inRate);
@@ -1883,6 +1926,7 @@ void MediaEncoder::cleanup()
     m_videoFramesOutOfOrder = 0;
     m_lastAudioInputUs = 0;
     m_silenceKeepaliveActive = false;
+    m_preEpochAudio.clear();
 
     m_initialized = false;
     m_videoFrameCount = 0;
