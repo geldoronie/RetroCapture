@@ -249,7 +249,8 @@ bool VideoCaptureRemote::initDecoder()
     // help; frame threading adds (threads - 1) frames of latency, so cap it.
     {
         const unsigned hw = std::thread::hardware_concurrency();
-        const int threads = static_cast<int>(std::clamp<unsigned>(hw > 1 ? hw - 1 : 1, 1, 4));
+        // std::clamp is missing from the old MinGW used for Windows builds.
+        const int threads = static_cast<int>(std::min<unsigned>(std::max<unsigned>(hw > 1 ? hw - 1 : 1, 1), 4));
         m_codecCtx->thread_count = threads;
         m_codecCtx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
         LOG_INFO("VideoCaptureRemote: video decoder using " + std::to_string(threads) + " thread(s)");
