@@ -64,6 +64,10 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+
 UIManager::UIManager()
     : m_creditsWindow(nullptr)
 {
@@ -1665,7 +1669,8 @@ void UIManager::renderInfoPanel()
 
     ImGui::Separator();
     ImGui::Text("Application Info");
-    ImGui::Text("RetroCapture v0.1.0");
+    // The project version from CMake (was a hard-coded "v0.1.0").
+    ImGui::Text("RetroCapture v%s", RETROCAPTURE_VERSION);
     ImGui::Text("ImGui: %s", ImGui::GetVersion());
 }
 
