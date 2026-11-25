@@ -456,6 +456,8 @@
   "web.config.image.framegen_fill": "Igualar a taxa da captura (preencher repetidos)",
   "web.config.image.framegen_skip_repeats": "Ignorar quadros repetidos (jogo abaixo da taxa da captura)",
   "web.config.image.framegen_game": "jogo",
+  "web.config.image.framegen_fill_needs_skip": "Igualar a taxa da captura precisa de \"Ignorar quadros repetidos\".",
+  "web.config.image.framegen_rife_above_720": "RIFE acima de 720p pode engasgar; o Motion fica fluido nesse tamanho.",
   "web.config.image.framegen_outputs": "Quadros gerados vão para:",
   "web.config.image.framegen_out_window": "Janela",
   "web.config.image.framegen_out_stream": "Stream",

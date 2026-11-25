@@ -3,6 +3,7 @@
 #include "FrameGenClock.h"
 #include "FrameInterpolator.h"
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <vector>
 
@@ -61,7 +62,14 @@ public:
     FrameInterpolator &interpolator() { return m_interp; }
     const FrameGenClock &clock() const { return m_clock; }
 
-    void destroy() { m_interp.destroy(); }
+    void destroy()
+    {
+        m_interp.destroy();
+        if (m_csv) std::fclose(m_csv);
+        m_csv = nullptr;
+    }
+    /** Scene cuts found so far (monotonic): pairs not interpolated. */
+    uint64_t sceneCuts() const { return m_sceneCuts; }
 
 private:
     // Timing stats, logged every few seconds (#247 acceptance numbers):
@@ -112,5 +120,13 @@ private:
         std::vector<float> noise, peak;
     };
     DiffStats m_diffStats;
+    static bool debugEnabled();
+    void noteDebug(const FrameInterpolator::Difference &diff, int64_t srcTsUs);
+    const bool m_debug = debugEnabled();
+    FILE *m_csv = nullptr;
+    int m_csvRows = 0;
+    bool m_csvTried = false;
+    bool m_lastWasCut = false;
+    uint64_t m_sceneCuts = 0;
     int m_diffBlocks = 0;
 };

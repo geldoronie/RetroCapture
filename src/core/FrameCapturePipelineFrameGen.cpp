@@ -169,6 +169,9 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     st.sourceFps = static_cast<float>(srcFps);
     st.captureFps = static_cast<float>(capFps);
     st.repeatsSkipped = m_frameGen->repeatsSkipped();
+    st.sceneCuts = m_frameGen->sceneCuts();
+    st.sourceWidth = w;
+    st.sourceHeight = h;
     if (display)
         st.outputFps = 0.0f;
     else if (fill)

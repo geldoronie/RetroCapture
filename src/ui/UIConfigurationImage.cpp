@@ -626,6 +626,19 @@ void UIConfigurationImage::renderFrameGeneration()
         ImGui::TextDisabled("Stream / recording carry the generated frames their FPS allows: "
                             "set them to the output rate (e.g. 60 for 30 fps at 2x).");
     }
+    if (fg.mode == FrameGenSettings::Fill && !fg.skipRepeats)
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
+                           "Match capture rate needs \"Skip repeated frames\": without it every capture "
+                           "is a new frame and there is nothing to fill.");
+    }
+    if (fg.method == FrameGenSettings::RIFE && st.active && st.sourceHeight > 720)
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
+                           "RIFE above 720p (%ux%u) may not keep up at 60 fps and stutter; "
+                           "Motion stays smooth at this size.",
+                           st.sourceWidth, st.sourceHeight);
+    }
     if (fg.mode == FrameGenSettings::Fill)
     {
         ImGui::TextDisabled("Match capture rate: each game frame gets as many slots as the capture "

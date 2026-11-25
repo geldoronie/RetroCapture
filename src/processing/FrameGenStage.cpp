@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 namespace
 {
@@ -32,14 +33,28 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     }
     m_lastCapTsUs = srcTsUs;
 
-    if (!skipRepeats || m_interp.frameCount() < 1)
+    m_lastWasCut = false;
+    if (m_interp.frameCount() < 1)
     {
         m_lastDistinctTsUs = srcTsUs;
         m_lastWasHeld = false;
         return true;
     }
+    // The comparison also finds scene cuts, so it runs with repeat
+    // skipping off too (one small readback per captured frame).
     const FrameInterpolator::Difference diff = m_interp.compareWithLatest(srcTex, w, h);
     if (!diff.valid)
+    {
+        m_lastDistinctTsUs = srcTsUs;
+        m_lastWasHeld = false;
+        return true;
+    }
+    if (diff.sceneCut())
+    {
+        m_lastWasCut = true;
+        ++m_sceneCuts;
+    }
+    if (!skipRepeats)
     {
         m_lastDistinctTsUs = srcTsUs;
         m_lastWasHeld = false;
@@ -57,33 +72,8 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     else
         m_noiseFloor += (diff.noise - m_noiseFloor) / 64.0f;
 
-    m_diffBlocks = diff.blocks;
-    // Diagnostics: RETROCAPTURE_FRAMEGEN_DIFF_CSV=<file> logs every
-    // comparison (first 3000 captures) to tune the repeat thresholds.
-    static FILE *csv = nullptr;
-    static int csvRows = 0;
-    static bool csvTried = false;
-    if (!csvTried)
-    {
-        csvTried = true;
-        if (const char *path = std::getenv("RETROCAPTURE_FRAMEGEN_DIFF_CSV"))
-            if ((csv = std::fopen(path, "w")))
-                std::fprintf(csv, "ts_us,changed,noise,peak,changed_avg,peak_avg\n");
-    }
-    if (csv && csvRows < 3000)
-    {
-        std::fprintf(csv, "%lld,%d,%.1f,%.1f,%d,%.2f\n", static_cast<long long>(srcTsUs), diff.changedBlocks,
-                     diff.noise * 255.0f, diff.peak * 255.0f, diff.changedAvg, diff.peakAvg * 255.0f);
-        if (++csvRows == 3000) { std::fclose(csv); csv = nullptr; }
-        else if (csvRows % 60 == 0) std::fflush(csv);
-    }
-    if (m_diffStats.n >= 4000) m_diffStats = DiffStats(); // bounded if nothing is emitted
-    m_diffStats.n++;
-    m_diffStats.changed.push_back(diff.changedBlocks);
-    m_diffStats.changedAvg.push_back(diff.changedAvg);
-    m_diffStats.peakAvg.push_back(diff.peakAvg * 255.0f);
-    m_diffStats.noise.push_back(diff.noise * 255.0f);
-    m_diffStats.peak.push_back(diff.peak * 255.0f);
+    if (m_debug)
+        noteDebug(diff, srcTsUs);
     // Hold limit: ~1.5 game frames (the learnt cadence), at most
     // kMaxHoldPeriods. A picture that stays still longer (a pause, a still
     // camera) goes through as a real frame, so the pair that ends the pause
@@ -111,6 +101,50 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     m_lastWasHeld = repeat;
     m_lastDistinctTsUs = srcTsUs;
     return true;
+}
+
+bool FrameGenStage::debugEnabled()
+{
+    static const bool on = [] {
+        const char *v = std::getenv("RETROCAPTURE_FRAMEGEN_DEBUG");
+        return v && *v && std::string(v) != "0";
+    }();
+    return on;
+}
+
+void FrameGenStage::noteDebug(const FrameInterpolator::Difference &diff, int64_t srcTsUs)
+{
+    // RETROCAPTURE_FRAMEGEN_DEBUG=1: comparison percentiles in the 10 s log
+    // and, with RETROCAPTURE_FRAMEGEN_DIFF_CSV=<file>, every comparison of
+    // the first 3000 captures (to tune the thresholds on a new source).
+    m_diffBlocks = diff.blocks;
+    if (!m_csvTried)
+    {
+        m_csvTried = true;
+        if (const char *path = std::getenv("RETROCAPTURE_FRAMEGEN_DIFF_CSV"))
+            if ((m_csv = std::fopen(path, "w")))
+                std::fprintf(m_csv, "ts_us,changed,noise,peak,changed_avg,peak_avg,cut_blocks\n");
+    }
+    if (m_csv && m_csvRows < 3000)
+    {
+        std::fprintf(m_csv, "%lld,%d,%.1f,%.1f,%d,%.2f,%d\n", static_cast<long long>(srcTsUs), diff.changedBlocks,
+                     diff.noise * 255.0f, diff.peak * 255.0f, diff.changedAvg, diff.peakAvg * 255.0f,
+                     diff.cutBlocks);
+        if (++m_csvRows == 3000)
+        {
+            std::fclose(m_csv);
+            m_csv = nullptr;
+        }
+        else if (m_csvRows % 60 == 0)
+            std::fflush(m_csv);
+    }
+    if (m_diffStats.n >= 4000) m_diffStats = DiffStats(); // bounded if nothing is emitted
+    m_diffStats.n++;
+    m_diffStats.changed.push_back(diff.changedBlocks);
+    m_diffStats.changedAvg.push_back(diff.changedAvg);
+    m_diffStats.peakAvg.push_back(diff.peakAvg * 255.0f);
+    m_diffStats.noise.push_back(diff.noise * 255.0f);
+    m_diffStats.peak.push_back(diff.peak * 255.0f);
 }
 
 void FrameGenStage::noteDistinctSpan(int64_t srcTsUs)
@@ -156,6 +190,8 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
         {
             pushed = true;
             m_clock.onRealFrame(srcTsUs, nowUs);
+            if (m_lastWasCut)
+                m_clock.breakPair(); // scene cut: no cross-fade into the new scene
             m_stats.liveLagSum += static_cast<double>(nowUs - srcTsUs);
             ++m_stats.liveN;
         }
@@ -259,15 +295,16 @@ void FrameGenStage::noteEmit(int64_t nowUs, int64_t tsUs)
     std::snprintf(buf, sizeof(buf),
                   "Frame generation: %d frames in %.1f s (%.2f fps), interval %.2f +- %.2f ms "
                   "[%.2f..%.2f], capture->output lag %.1f ms vs %.1f ms on arrival (added %.1f ms), "
-                  "dropped so far %llu, repeats skipped %llu, held through %llu, game cadence %.1f ms",
+                  "dropped so far %llu, repeats skipped %llu, held through %llu, scene cuts %llu, game cadence %.1f ms",
                   s.n, (nowUs - s.windowStartUs) / 1e6, s.n * 1e6 / static_cast<double>(nowUs - s.windowStartUs),
                   mean, sd, s.ivMin, s.ivMax, outLag, liveLag, outLag - liveLag,
                   static_cast<unsigned long long>(m_clock.dropped()),
                   static_cast<unsigned long long>(m_repeats), static_cast<unsigned long long>(m_heldThrough),
+                  static_cast<unsigned long long>(m_sceneCuts),
                   m_cadenceUs / 1000.0);
     LOG_INFO(buf);
     DiffStats &d = m_diffStats;
-    if (d.n > 0)
+    if (m_debug && d.n > 0)
     {
         // Percentiles 10/50/90 of the comparison against the latest
         // distinct frame: blocks changed, block noise and peak (8-bit).

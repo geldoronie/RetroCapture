@@ -69,6 +69,9 @@ public:
     int64_t extraDelayUs() const { return m_extraDelayUs; }
 
     bool hasPair() const { return m_hasPair; }
+    /** Do not interpolate into the frame just added (scene cut, #256): it
+     *  is presented as is, like after a discontinuity. */
+    void breakPair() { m_hasPair = false; }
     int64_t spanUs() const { return m_tsB - m_tsA; }
     int64_t delayUs() const { return m_delayUs; }
     int64_t periodUs() const { return m_periodUs; }

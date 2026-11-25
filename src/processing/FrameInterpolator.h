@@ -117,6 +117,11 @@ public:
         float peak = 0.0f;      // largest block mean |dLuma|
         int changedBlocks = 0;  // blocks clearly above the noise floor
         int changedAvg = 0;     // blocks whose average luma moved (> 2 steps)
+        int cutBlocks = 0;      // blocks whose average luma moved a lot (>= 24 steps)
+        /** Scene cut: most of the picture changed at once (a new scene, a
+         *  flash, a menu over gameplay). Interpolating across it would only
+         *  produce a cross-fade "morph" frame. */
+        bool sceneCut() const { return valid && blocks > 0 && cutBlocks * 2 > blocks; }
         float peakAvg = 0.0f;   // largest block-average change
         int blocks = 0;
         /**

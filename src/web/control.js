@@ -2758,6 +2758,15 @@ function renderFrameGenStatus(data) {
     } else {
         el.textContent = '';
     }
+    // #256 — configuration hints.
+    const hints = [];
+    if (data.mode === 'fill' && data.skipRepeats === false) {
+        hints.push(tr('web.config.image.framegen_fill_needs_skip', 'Match capture rate needs "Skip repeated frames".'));
+    }
+    if (data.method === 'rife' && st.active && st.sourceHeight > 720) {
+        hints.push(tr('web.config.image.framegen_rife_above_720', 'RIFE above 720p may stutter; Motion stays smooth at this size.'));
+    }
+    if (hints.length) el.textContent = (el.textContent ? el.textContent + ' \u2014 ' : '') + hints.join(' ');
     // #248 — RIFE backend state (falls back to Motion when unavailable).
     const rife = st.rife;
     if (data.method === 'rife' && rife) {

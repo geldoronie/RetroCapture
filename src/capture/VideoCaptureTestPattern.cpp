@@ -29,6 +29,8 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
         LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
     else if (m_variant == Variant::Motion)
         LOG_INFO("VideoCaptureTestPattern: 'motion' variant (scrolling background, sprites, static HUD)");
+    if (const char *cs = std::getenv("RETROCAPTURE_TEST_CUT"))
+        m_cutPeriod = std::atof(cs);
     if (const char *ps = std::getenv("RETROCAPTURE_TEST_PAUSE"))
         std::sscanf(ps, "%lf,%lf", &m_pauseRun, &m_pauseStill);
     if (const char *g = std::getenv("RETROCAPTURE_TEST_GAME_FPS"))
@@ -347,6 +349,15 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
         }
         renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(ts) / 1e6,
                      (ts % 1000000LL) < 100000LL);
+        // RETROCAPTURE_TEST_CUT=S: every S seconds the picture switches
+        // between normal and inverted colours, a scene cut on every block.
+        if (m_cutPeriod > 0.0 &&
+            (static_cast<long long>(std::floor(static_cast<double>(ts) / 1e6 / m_cutPeriod)) & 1) != 0)
+        {
+            const size_t n = static_cast<size_t>(m_width) * m_height * 3;
+            for (size_t i = 0; i < n; ++i)
+                m_buffer[i] = static_cast<uint8_t>(255 - m_buffer[i]);
+        }
         return;
     }
     if (m_variant == Variant::Edges)

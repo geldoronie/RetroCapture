@@ -46,6 +46,9 @@ constexpr int kDiffMeanStep = 3;
 constexpr int kDiffMaxStep = 24;
 // Block-average channel: 8 units per luma step, so 16 = 2 luma steps.
 constexpr int kDiffAvgStep = 16;
+// Scene-cut block: average luma moved >= 24 steps (x8 scale; the channel
+// saturates at ~31.9 steps).
+constexpr int kDiffCutStep = 24 * 8;
 constexpr int kMaxLevels = 5;
 constexpr uint32_t kMinLevelDim = 16;
 // Matching parameters (luma in 0..1, SAD = mean absolute difference).
@@ -741,7 +744,7 @@ FrameInterpolator::Difference FrameInterpolator::compareWithLatest(GLuint srcTex
     sorted = avg;
     std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
     const int avgNoise = sorted[n / 2];
-    int peak = 0, changed = 0, changedAvg = 0, peakAvg = 0;
+    int peak = 0, changed = 0, changedAvg = 0, peakAvg = 0, cutBlocks = 0;
     for (size_t i = 0; i < n; ++i)
     {
         const int m = means[i];
@@ -750,8 +753,10 @@ FrameInterpolator::Difference FrameInterpolator::compareWithLatest(GLuint srcTex
         if (m > noise + kDiffMeanStep || mx > 2 * noise + kDiffMaxStep) ++changed;
         if (avg[i] > peakAvg) peakAvg = avg[i];
         if (avg[i] > avgNoise + kDiffAvgStep) ++changedAvg;
+        if (avg[i] >= kDiffCutStep) ++cutBlocks;
     }
     d.changedAvg = changedAvg;
+    d.cutBlocks = cutBlocks;
     d.peakAvg = peakAvg / 8.0f / 255.0f;
     d.valid = true;
     d.noise = noise / 255.0f;

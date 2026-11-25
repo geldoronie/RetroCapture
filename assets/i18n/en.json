@@ -456,6 +456,8 @@
   "web.config.image.framegen_fill": "Match capture rate (fill repeats)",
   "web.config.image.framegen_skip_repeats": "Skip repeated frames (game below the capture rate)",
   "web.config.image.framegen_game": "game",
+  "web.config.image.framegen_fill_needs_skip": "Match capture rate needs \"Skip repeated frames\".",
+  "web.config.image.framegen_rife_above_720": "RIFE above 720p may stutter; Motion stays smooth at this size.",
   "web.config.image.framegen_outputs": "Generated frames go to:",
   "web.config.image.framegen_out_window": "Window",
   "web.config.image.framegen_out_stream": "Stream",
