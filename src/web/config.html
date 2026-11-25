@@ -527,16 +527,18 @@
                                         <div class="col-md-6">
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.brightness">Brightness</span>
-                                                <span id="brightnessValue" class="badge bg-primary ms-2">0.0</span>
+                                                <span id="brightnessValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="brightness" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
-                                            <input type="range" class="form-range" id="brightness" min="-1.0" max="1.0" step="0.01" value="0.0">
+                                            <input type="range" class="form-range" id="brightness" min="0.0" max="2.0" step="0.01" value="1.0">
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.contrast">Contrast</span>
-                                                <span id="contrastValue" class="badge bg-primary ms-2">1.0</span>
+                                                <span id="contrastValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="contrast" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
-                                            <input type="range" class="form-range" id="contrast" min="0.0" max="2.0" step="0.01" value="1.0">
+                                            <input type="range" class="form-range" id="contrast" min="0.0" max="5.0" step="0.01" value="1.0">
                                         </div>
                                         <div class="col-12">
                                             <hr>
@@ -555,6 +557,7 @@
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.saturation">Saturation</span>
                                                 <span id="saturationValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="saturation" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
                                             <input type="range" class="form-range" id="saturation" min="0.0" max="3.0" step="0.01" value="1.0">
                                         </div>
@@ -562,6 +565,7 @@
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.gamma">Gamma</span>
                                                 <span id="gammaValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="gamma" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
                                             <input type="range" class="form-range" id="gamma" min="0.2" max="3.0" step="0.01" value="1.0">
                                         </div>

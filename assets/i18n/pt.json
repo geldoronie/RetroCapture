@@ -427,6 +427,7 @@
   "web.config.image.color_range_full": "Completa (0-255)",
   "web.config.image.saturation": "Saturação",
   "web.config.image.gamma": "Gama",
+  "web.config.image.reset": "Restaurar",
   "web.config.image.reset_color": "Restaurar cores padrão",
   "web.config.image.deinterlace": "Desentrelaçamento",
   "web.config.image.deinterlace_hint": "Para fontes entrelaçadas (480i/576i). Aplicado antes da cadeia de shaders. Bob dobra a taxa de quadros.",
