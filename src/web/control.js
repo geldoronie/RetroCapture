@@ -8,7 +8,7 @@ let appState = {
     shader: { name: '' },
     shaderParameters: [],
     capture: { width: 0, height: 0, fps: 0 },
-    image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
+    image: { brightness: 1, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
     recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
@@ -1058,29 +1058,16 @@ async function loadImageSettings() {
         const settings = await api.getImageSettings();
         appState.image = settings;
         
-        const brightnessEl = document.getElementById('brightness');
-        const contrastEl = document.getElementById('contrast');
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
         const outputWidthEl = document.getElementById('outputWidth');
         const outputHeightEl = document.getElementById('outputHeight');
         
-        if (brightnessEl) {
-            brightnessEl.value = settings.brightness || 0;
-            const brightnessValueEl = document.getElementById('brightnessValue');
-            if (brightnessValueEl) {
-                brightnessValueEl.textContent = (settings.brightness || 0).toFixed(2);
-            }
-        }
-        
-        if (contrastEl) {
-            contrastEl.value = settings.contrast || 1;
-            const contrastValueEl = document.getElementById('contrastValue');
-            if (contrastValueEl) {
-                contrastValueEl.textContent = (settings.contrast || 1).toFixed(2);
-            }
-        }
+        // Brightness/contrast are multipliers: 1.0 = unchanged (#242).
+        // Use explicit undefined checks so a legitimate 0 isn't replaced.
+        setSliderWithBadge('brightness', settings.brightness !== undefined ? settings.brightness : 1);
+        setSliderWithBadge('contrast', settings.contrast !== undefined ? settings.contrast : 1);
         
         // #228 — source colour controls
         setSliderWithBadge('saturation', settings.saturation !== undefined ? settings.saturation : 1);
@@ -1173,7 +1160,7 @@ async function updateImageSettings() {
         const outputHeightEl = document.getElementById('outputHeight');
         
         const settings = {
-            brightness: brightnessEl ? parseFloat(brightnessEl.value) : 0,
+            brightness: brightnessEl ? parseFloat(brightnessEl.value) : 1,
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
             saturation: document.getElementById('saturation') ? parseFloat(document.getElementById('saturation').value) : 1,
             gamma: document.getElementById('gamma') ? parseFloat(document.getElementById('gamma').value) : 1,
@@ -1462,11 +1449,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Event listeners para sliders
     document.getElementById('brightness').addEventListener('input', function() {
-        document.getElementById('brightnessValue').textContent = parseFloat(this.value).toFixed(2);
+        setSliderWithBadge('brightness', this.value);
     });
     
     document.getElementById('contrast').addEventListener('input', function() {
-        document.getElementById('contrastValue').textContent = parseFloat(this.value).toFixed(2);
+        setSliderWithBadge('contrast', this.value);
     });
     
     // Event listener para mudança de tipo de fonte - aplica automaticamente
@@ -1606,6 +1593,16 @@ document.addEventListener('DOMContentLoaded', function() {
     if (colorRangeSel) {
         colorRangeSel.addEventListener('change', updateImageSettingsDebounced);
     }
+    // #242 — per-slider reset buttons (data-reset-target / data-reset-value).
+    document.querySelectorAll('.slider-reset').forEach(function(btn) {
+        btn.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            const target = btn.getAttribute('data-reset-target');
+            const value = parseFloat(btn.getAttribute('data-reset-value'));
+            setSliderWithBadge(target, isNaN(value) ? 1 : value);
+            updateImageSettings();
+        });
+    });
     const resetColorBtn = document.getElementById('resetColor');
     if (resetColorBtn) {
         resetColorBtn.addEventListener('click', function() {

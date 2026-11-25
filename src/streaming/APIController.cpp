@@ -2201,15 +2201,18 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
 
         if (json.contains("brightness"))
         {
+            // #242 — multiplier, 1.0 = unchanged. Clamp to the CLI's
+            // 0..5 range so a stale portal (old -1..1 slider) can't
+            // push a negative value.
             float brightness = json["brightness"].get<float>();
-            m_uiManager->setBrightness(brightness);
+            m_uiManager->setBrightness(std::max(0.0f, std::min(5.0f, brightness)));
             updated = true;
         }
 
         if (json.contains("contrast"))
         {
             float contrast = json["contrast"].get<float>();
-            m_uiManager->setContrast(contrast);
+            m_uiManager->setContrast(std::max(0.0f, std::min(5.0f, contrast)));
             updated = true;
         }
 
