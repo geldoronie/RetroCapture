@@ -206,6 +206,9 @@ int main(int argc, char *argv[])
     bool streamingEnabled = false;
     int streamingPort = 8080;
     bool streamPortExplicit = false;  // user passed --stream-port / --web-portal-port (#163)
+    // #223 — stream size / fps / bitrate given on the CLI win over the saved config.
+    bool streamWidthExplicit = false, streamHeightExplicit = false;
+    bool streamFpsExplicit = false, streamBitrateExplicit = false;
     int streamWidth = 640;                 // Padrão: 640px (0 = usar resolução de captura)
     int streamHeight = 480;                // Padrão: 480px (0 = usar resolução de captura)
     int streamFps = 60;                    // Padrão: 60fps (0 = usar FPS da captura)
@@ -661,6 +664,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream width. Use a value between 1 and 7680");
                 return 1;
             }
+            streamWidthExplicit = true;
         }
         else if (arg == "--stream-height" && i + 1 < argc)
         {
@@ -670,6 +674,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream height. Use a value between 1 and 4320");
                 return 1;
             }
+            streamHeightExplicit = true;
         }
         else if (arg == "--stream-fps" && i + 1 < argc)
         {
@@ -679,6 +684,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream FPS. Use a value between 1 and 120");
                 return 1;
             }
+            streamFpsExplicit = true;
         }
         else if (arg == "--stream-bitrate" && i + 1 < argc)
         {
@@ -688,6 +694,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream bitrate. Use a value between 100 and 50000 kbps");
                 return 1;
             }
+            streamBitrateExplicit = true;
         }
         else if (arg == "--stream-audio-bitrate" && i + 1 < argc)
         {
@@ -997,6 +1004,8 @@ int main(int argc, char *argv[])
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
     app.setStreamingPortExplicit(streamPortExplicit);
+    app.setStreamingCliOverrides(streamWidthExplicit, streamHeightExplicit,
+                                 streamFpsExplicit, streamBitrateExplicit);
     // Always set width/height (0 means use capture resolution)
     app.setStreamingWidth(streamWidth);
     app.setStreamingHeight(streamHeight);

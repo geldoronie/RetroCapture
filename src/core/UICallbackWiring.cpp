@@ -410,10 +410,25 @@ void UICallbackWiring::wireVisualCallbacks()
         m_app.m_ui->setStreamingPort(m_app.m_streamingPort);
     else
         m_app.m_streamingPort = m_app.m_ui->getStreamingPort();
-    m_app.m_streamingWidth = m_app.m_ui->getStreamingWidth();
-    m_app.m_streamingHeight = m_app.m_ui->getStreamingHeight();
-    m_app.m_streamingFps = m_app.m_ui->getStreamingFps();
-    m_app.m_streamingBitrate = m_app.m_ui->getStreamingBitrate();
+    // #223 — same rule for the stream size / fps / bitrate: an explicit CLI
+    // value wins (and is pushed into the UI so the settings window shows it),
+    // otherwise the saved config is adopted.
+    if (m_app.m_streamingWidthExplicit)
+        m_app.m_ui->setStreamingWidth(m_app.m_streamingWidth);
+    else
+        m_app.m_streamingWidth = m_app.m_ui->getStreamingWidth();
+    if (m_app.m_streamingHeightExplicit)
+        m_app.m_ui->setStreamingHeight(m_app.m_streamingHeight);
+    else
+        m_app.m_streamingHeight = m_app.m_ui->getStreamingHeight();
+    if (m_app.m_streamingFpsExplicit)
+        m_app.m_ui->setStreamingFps(m_app.m_streamingFps);
+    else
+        m_app.m_streamingFps = m_app.m_ui->getStreamingFps();
+    if (m_app.m_streamingBitrateExplicit)
+        m_app.m_ui->setStreamingBitrate(m_app.m_streamingBitrate);
+    else
+        m_app.m_streamingBitrate = m_app.m_ui->getStreamingBitrate();
     m_app.m_streamingAudioBitrate = m_app.m_ui->getStreamingAudioBitrate();
     m_app.m_streamingVideoCodec = m_app.m_ui->getStreamingVideoCodec();
     m_app.m_streamingAudioCodec = m_app.m_ui->getStreamingAudioCodec();
