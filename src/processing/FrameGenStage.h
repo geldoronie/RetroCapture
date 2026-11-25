@@ -3,6 +3,7 @@
 #include "FrameGenClock.h"
 #include "FrameInterpolator.h"
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 /**
@@ -94,6 +95,13 @@ private:
     float m_noiseFloor = 0.0f;
     bool m_noiseValid = false;
     uint64_t m_repeats = 0;
+    // Game cadence (#256): recent spans between new pictures, their low
+    // percentile, and the repeats let through by the hold limit.
+    void noteDistinctSpan(int64_t srcTsUs);
+    std::deque<int64_t> m_spans;
+    int64_t m_cadenceUs = 0;
+    bool m_lastWasHeld = false;
+    uint64_t m_heldThrough = 0;
     int m_effFactor = 0;
     // Repeat-detection diagnostics (logged with the timing stats).
     struct DiffStats

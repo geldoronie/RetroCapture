@@ -35,12 +35,14 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     if (!skipRepeats || m_interp.frameCount() < 1)
     {
         m_lastDistinctTsUs = srcTsUs;
+        m_lastWasHeld = false;
         return true;
     }
     const FrameInterpolator::Difference diff = m_interp.compareWithLatest(srcTex, w, h);
     if (!diff.valid)
     {
         m_lastDistinctTsUs = srcTsUs;
+        m_lastWasHeld = false;
         return true;
     }
     // Usual frame-to-frame noise of this source, min-biased: repeats pull it
@@ -82,15 +84,53 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     m_diffStats.peakAvg.push_back(diff.peakAvg * 255.0f);
     m_diffStats.noise.push_back(diff.noise * 255.0f);
     m_diffStats.peak.push_back(diff.peak * 255.0f);
-    const bool held = m_capPeriodUs > 0 && srcTsUs - m_lastDistinctTsUs >= kMaxHoldPeriods * m_capPeriodUs;
-    if (diff.repeat(m_noiseFloor) && !held)
+    // Hold limit: ~1.5 game frames (the learnt cadence), at most
+    // kMaxHoldPeriods. A picture that stays still longer (a pause, a still
+    // camera) goes through as a real frame, so the pair that ends the pause
+    // spans one game frame: motion resumes at its own speed instead of
+    // being spread (slowed down) over the whole pause, and the latency stays
+    // at about one game frame.
+    int64_t holdPeriods = kMaxHoldPeriods;
+    if (m_cadenceUs > 0 && m_capPeriodUs > 0)
+    {
+        const double c = static_cast<double>(m_cadenceUs) / static_cast<double>(m_capPeriodUs);
+        holdPeriods = std::max<int64_t>(2, std::min<int64_t>(kMaxHoldPeriods, std::llround(1.5 * c)));
+    }
+    const bool held = m_capPeriodUs > 0 && srcTsUs - m_lastDistinctTsUs >= holdPeriods * m_capPeriodUs;
+    const bool repeat = diff.repeat(m_noiseFloor);
+    if (repeat && !held)
     {
         ++m_repeats;
         ++m_diffStats.repeats;
         return false;
     }
+    if (repeat)
+        ++m_heldThrough;
+    else
+        noteDistinctSpan(srcTsUs);
+    m_lastWasHeld = repeat;
     m_lastDistinctTsUs = srcTsUs;
     return true;
+}
+
+void FrameGenStage::noteDistinctSpan(int64_t srcTsUs)
+{
+    // Cadence = a low percentile of the recent spans between new pictures.
+    // Spans that start at a held-through repeat are not the game's cadence
+    // (they are its remainder) and are left out.
+    const int64_t span = srcTsUs - m_lastDistinctTsUs;
+    if (m_lastDistinctTsUs > 0 && !m_lastWasHeld && span >= 2000 && span <= 250000)
+    {
+        m_spans.push_back(span);
+        if (m_spans.size() > 32) m_spans.pop_front();
+        if (m_spans.size() >= 6)
+        {
+            std::vector<int64_t> s(m_spans.begin(), m_spans.end());
+            const size_t k = s.size() * 3 / 10;
+            std::nth_element(s.begin(), s.begin() + k, s.end());
+            m_cadenceUs = s[k];
+        }
+    }
 }
 
 FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h, uint64_t srcSeq,
@@ -219,11 +259,12 @@ void FrameGenStage::noteEmit(int64_t nowUs, int64_t tsUs)
     std::snprintf(buf, sizeof(buf),
                   "Frame generation: %d frames in %.1f s (%.2f fps), interval %.2f +- %.2f ms "
                   "[%.2f..%.2f], capture->output lag %.1f ms vs %.1f ms on arrival (added %.1f ms), "
-                  "dropped so far %llu, repeats skipped %llu",
+                  "dropped so far %llu, repeats skipped %llu, held through %llu, game cadence %.1f ms",
                   s.n, (nowUs - s.windowStartUs) / 1e6, s.n * 1e6 / static_cast<double>(nowUs - s.windowStartUs),
                   mean, sd, s.ivMin, s.ivMax, outLag, liveLag, outLag - liveLag,
                   static_cast<unsigned long long>(m_clock.dropped()),
-                  static_cast<unsigned long long>(m_repeats));
+                  static_cast<unsigned long long>(m_repeats), static_cast<unsigned long long>(m_heldThrough),
+                  m_cadenceUs / 1000.0);
     LOG_INFO(buf);
     DiffStats &d = m_diffStats;
     if (d.n > 0)
@@ -277,4 +318,7 @@ void FrameGenStage::deactivate()
     m_lastDistinctTsUs = 0;
     m_noiseValid = false;
     m_effFactor = 0;
+    m_spans.clear();
+    m_cadenceUs = 0;
+    m_lastWasHeld = false;
 }

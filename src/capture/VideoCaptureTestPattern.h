@@ -88,6 +88,7 @@ private:
 
     enum class Variant { Bars, Levels, Interlaced, Motion, Edges };
     Variant m_variant = Variant::Bars;
+    double m_pauseRun = 0.0, m_pauseStill = 0.0; // #256: RETROCAPTURE_TEST_PAUSE
     double m_gameFps = 0.0; // #256: RETROCAPTURE_TEST_GAME_FPS (0 = every frame new)
 
     uint32_t m_width = 1280;

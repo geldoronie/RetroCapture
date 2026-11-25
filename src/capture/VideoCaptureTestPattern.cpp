@@ -3,6 +3,7 @@
 #include "../utils/MediaClock.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -28,6 +29,8 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
         LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
     else if (m_variant == Variant::Motion)
         LOG_INFO("VideoCaptureTestPattern: 'motion' variant (scrolling background, sprites, static HUD)");
+    if (const char *ps = std::getenv("RETROCAPTURE_TEST_PAUSE"))
+        std::sscanf(ps, "%lf,%lf", &m_pauseRun, &m_pauseStill);
     if (const char *g = std::getenv("RETROCAPTURE_TEST_GAME_FPS"))
     {
         m_gameFps = std::atof(g);
@@ -330,6 +333,17 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
         {
             const double picture = std::floor(static_cast<double>(f) * m_gameFps / static_cast<double>(m_fps));
             ts = static_cast<int64_t>(picture / m_gameFps * 1e6);
+        }
+        // RETROCAPTURE_TEST_PAUSE=run,still (seconds): the picture moves for
+        // `run` s, then stays still for `still` s, repeatedly (a paused game
+        // or a still camera), resuming where it stopped.
+        if (m_pauseRun > 0.0 && m_pauseStill > 0.0)
+        {
+            const double t = static_cast<double>(ts) / 1e6;
+            const double period = m_pauseRun + m_pauseStill;
+            const double k = std::floor(t / period);
+            const double eff = k * m_pauseRun + std::min(t - k * period, m_pauseRun);
+            ts = static_cast<int64_t>(eff * 1e6);
         }
         renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(ts) / 1e6,
                      (ts % 1000000LL) < 100000LL);
