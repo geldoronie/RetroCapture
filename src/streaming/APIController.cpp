@@ -565,6 +565,11 @@ bool APIController::routeGETSource(int clientFd, const std::string &path, bool &
         result = handleGETSourceDeinterlace(clientFd);
         return true;
     }
+    if (path == "/api/v1/frame-generation")
+    {
+        result = handleGETFrameGeneration(clientFd);
+        return true;
+    }
     return false;
 }
 
@@ -789,6 +794,11 @@ bool APIController::routePOSTSource(int clientFd, const std::string &path, const
     if (path == "/api/v1/source/deinterlace")
     {
         result = handleSetSourceDeinterlace(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/frame-generation")
+    {
+        result = handleSetFrameGeneration(clientFd, body);
         return true;
     }
     return false;
@@ -1257,7 +1267,14 @@ bool APIController::handleGETFpsStats(int clientFd)
          << "\"raw\": {\"active\": " << jsonBool(st.rawActive)
          << ", \"fps\": " << jsonNumber(st.rawFps) << "}, "
          << "\"recording\": {\"active\": " << jsonBool(st.recordActive)
-         << ", \"fps\": " << jsonNumber(st.recordFps) << "}}"
+         << ", \"fps\": " << jsonNumber(st.recordFps) << "}}, "
+         // #247 — output timeline (frame generation): real vs generated.
+         << "\"frameGeneration\": {"
+         << "\"active\": " << jsonBool(st.genActive) << ", "
+         << "\"realFps\": " << jsonNumber(st.genRealFps) << ", "
+         << "\"generatedFps\": " << jsonNumber(st.genFps) << ", "
+         << "\"dropped\": " << st.genDropped << ", "
+         << "\"targetFps\": " << jsonNumber(st.genTargetFps) << "}"
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -1318,6 +1335,102 @@ bool APIController::handleGETSourceOverscan(int clientFd)
     }
     sendJSONResponse(clientFd, 200, sourceCropJSON());
     return true;
+}
+
+bool APIController::handleGETFrameGeneration(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    const FrameGenSettings g = m_uiManager->getFrameGenSettings();
+    const UIManager::FrameGenStatus st = m_uiManager->getFrameGenStatus();
+    const FpsStats fps = m_uiManager->getFpsStats();
+    std::ostringstream out;
+    out << "{"
+        << "\"mode\": " << jsonString(FrameGenSettings::modeName(g.mode)) << ", "
+        << "\"method\": " << jsonString(FrameGenSettings::methodName(g.method)) << ", "
+        << "\"protectStatic\": " << jsonBool(g.protectStatic) << ", "
+        << "\"outputs\": {"
+        << "\"window\": " << jsonBool(g.window) << ", "
+        << "\"stream\": " << jsonBool(g.stream) << ", "
+        << "\"recording\": " << jsonBool(g.record) << ", "
+        << "\"virtualCamera\": " << jsonBool(g.virtcam) << "}, "
+        << "\"status\": {"
+        << "\"supported\": " << jsonBool(st.supported) << ", "
+        << "\"motionSupported\": " << jsonBool(st.motionSupported) << ", "
+        << "\"active\": " << jsonBool(st.active) << ", "
+        << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
+        << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
+        << "\"outputFps\": " << jsonNumber(st.outputFps) << ", "
+        << "\"addedLatencyMs\": " << jsonNumber(st.addedLatencyMs) << ", "
+        << "\"realFps\": " << jsonNumber(fps.genRealFps) << ", "
+        << "\"generatedFps\": " << jsonNumber(fps.genFps) << ", "
+        << "\"dropped\": " << fps.genDropped << "}"
+        << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSetFrameGeneration(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        FrameGenSettings g = m_uiManager->getFrameGenSettings();
+        // Validate everything before applying anything.
+        if (json.contains("mode"))
+        {
+            const int m = json["mode"].is_string() ? FrameGenSettings::modeFromName(json["mode"].get<std::string>()) : -1;
+            if (m < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, 2x, 3x, 4x or display)");
+                return true;
+            }
+            g.mode = m;
+        }
+        if (json.contains("method"))
+        {
+            const int m = json["method"].is_string() ? FrameGenSettings::methodFromName(json["method"].get<std::string>()) : -1;
+            if (m < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'method' (use blend or motion)");
+                return true;
+            }
+            g.method = m;
+        }
+        auto readBool = [&](const nlohmann::json &obj, const char *key, bool &dst) -> bool {
+            if (!obj.contains(key)) return true;
+            if (!obj[key].is_boolean()) return false;
+            dst = obj[key].get<bool>();
+            return true;
+        };
+        bool ok = readBool(json, "protectStatic", g.protectStatic);
+        if (ok && json.contains("outputs"))
+        {
+            const auto &o = json["outputs"];
+            ok = o.is_object() && readBool(o, "window", g.window) && readBool(o, "stream", g.stream) &&
+                 readBool(o, "recording", g.record) && readBool(o, "virtualCamera", g.virtcam);
+        }
+        if (!ok)
+        {
+            sendErrorResponse(clientFd, 400, "'protectStatic' and 'outputs.*' must be booleans");
+            return true;
+        }
+        m_uiManager->setFrameGenSettings(g);
+        return handleGETFrameGeneration(clientFd);
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
 }
 
 bool APIController::handleGETSourceDeinterlace(int clientFd)

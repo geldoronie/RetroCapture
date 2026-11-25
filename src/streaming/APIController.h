@@ -180,6 +180,8 @@ private:
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETSourceOverscan(int clientFd);
     bool handleGETSourceDeinterlace(int clientFd);                        // #229
+    bool handleGETFrameGeneration(int clientFd);                          // #247
+    bool handleSetFrameGeneration(int clientFd, const std::string& body); // #247
     /**
      * GET /api/v1/preferences — exposes the host application's current
      * UI language so the portal can default to it on first load.

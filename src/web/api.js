@@ -106,6 +106,15 @@ class RetroCaptureAPI {
         return await this.request('POST', '/source/deinterlace', { mode, fieldOrder });
     }
 
+    // #247 — frame generation
+    async getFrameGeneration() {
+        return await this.request('GET', '/frame-generation');
+    }
+
+    async setFrameGeneration(settings) {
+        return await this.request('POST', '/frame-generation', settings);
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }
