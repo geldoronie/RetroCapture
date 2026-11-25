@@ -120,12 +120,27 @@ GLuint UpscalerStage::process(const UpscalerSettings &s, UpscalerSettings::Posit
 {
     if (!runsAt(s, where) || tex == 0 || w == 0 || h == 0)
         return tex;
+
+    // An upscaler only upscales: when the target is not larger than the
+    // input on either axis (a 1080p capture in a smaller window), EASU /
+    // NIS / Anime4K would just be an expensive, lower-quality downscale, so
+    // the stage stands aside and the output scaling does the job.
+    uint32_t tw = 0, th = 0;
+    s.targetSize(refW ? refW : w, refH ? refH : h, autoW, autoH, fitAspect, tw, th);
+    const bool skip = tw <= w && th <= h;
+    if (skip != m_skipping)
+    {
+        m_skipping = skip;
+        if (skip)
+            LOG_INFO("Upscaler: idle, the target " + std::to_string(tw) + "x" + std::to_string(th) +
+                     " is not larger than the input " + std::to_string(w) + "x" + std::to_string(h));
+    }
+    if (skip)
+        return tex;
+
     if (!ensureMode(s.mode))
         return tex;
     applySharpness(s);
-
-    uint32_t tw = 0, th = 0;
-    s.targetSize(refW ? refW : w, refH ? refH : h, autoW, autoH, fitAspect, tw, th);
     m_engine->setViewport(tw, th);
 
     const GLuint out = m_engine->applyShader(tex, w, h);
