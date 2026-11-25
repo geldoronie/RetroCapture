@@ -57,6 +57,10 @@ public:
     // ShaderEngine::setStateFrozen(). Remembered for a lazily made engine.
     void setStateFrozen(bool frozen);
 
+    // True while the last process() stood aside because the target was not
+    // larger than the input (nothing to upscale).
+    bool isIdleNoUpscale() const { return m_skipping; }
+
     // Directory holding the internal upscaler presets.
     static std::string presetDir();
 
@@ -71,5 +75,6 @@ private:
     UpscalerSettings::Mode m_failedMode = UpscalerSettings::Mode::Off;
     float m_appliedSharpness = -1.0f;
     int m_logCount = 0;
+    bool m_skipping = false; // target not larger than the input: stage idle
     bool m_stateFrozen = false;
 };

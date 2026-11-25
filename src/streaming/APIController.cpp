@@ -1235,7 +1235,8 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"flipH\": " << jsonBool(geom.flipH) << ", "
          << "\"flipV\": " << jsonBool(geom.flipV) << ", "
          // #251 — built-in upscaler.
-         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump()
+         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump() << ", "
+         << "\"upscalerIdle\": " << jsonBool(m_uiManager->getUpscalerIdle())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;

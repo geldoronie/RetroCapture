@@ -275,6 +275,8 @@ GLuint FrameCapturePipeline::runUpscaler(UpscalerSettings::Position where, GLuin
     s.target = UpscalerSettings::Target::Auto;
     const GLuint out = m_app.m_upscaler->process(s, where, tex, w, h, refW, refH,
                                                  tw, th, /*fitAspect=*/false);
+    if (m_app.m_ui)
+        m_app.m_ui->setUpscalerIdle(m_app.m_upscaler->isIdleNoUpscale());
     if (out != tex)
         m_upscalerRan = true;
     return out;

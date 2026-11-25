@@ -397,6 +397,11 @@ public:
         m_frameGenStatus = st;
     }
 
+    // The render loop reports whether the upscaler stood aside this frame
+    // (target not larger than the input: nothing to upscale).
+    void setUpscalerIdle(bool idle) { m_upscalerIdle.store(idle); }
+    bool getUpscalerIdle() const { return m_upscalerIdle.load(); }
+
     // #251 — built-in upscaler (Image window > Upscaler). Written by the UI
     // and the web API thread, read by the render loop every frame.
     UpscalerSettings getUpscalerSettings() const
@@ -1477,6 +1482,7 @@ private:
     mutable std::mutex m_outputGeometryMutex;
     // #251 — see getUpscalerSettings().
     UpscalerSettings m_upscaler;
+    std::atomic<bool> m_upscalerIdle{false};
     mutable std::mutex m_upscalerMutex;
 
     // #247 — see getFrameGenSettings().
