@@ -3,7 +3,9 @@
 #include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
+#include <algorithm>
 #include <iostream>
+#include <thread>
 
 // Core GL since 1.2; define defensively in case the active loader header
 // didn't expose it (used by the screen-capture 32-bit upload path).
@@ -30,11 +32,14 @@ FrameProcessor::~FrameProcessor()
 {
     deleteTexture();
     m_prePass.destroy();
-    if (m_swsContext)
-    {
-        sws_freeContext(m_swsContext);
-        m_swsContext = nullptr;
-    }
+    freeSwsSlices();
+}
+
+void FrameProcessor::freeSwsSlices()
+{
+    for (SwsSlice &s : m_swsSlices)
+        if (s.ctx) sws_freeContext(s.ctx);
+    m_swsSlices.clear();
 }
 
 void FrameProcessor::init(OpenGLRenderer *renderer)
@@ -448,50 +453,74 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
         return;
     }
 
-    if (!m_swsContext || m_swsWidth != static_cast<int>(width) || m_swsHeight != static_cast<int>(height))
+    if (m_swsSlices.empty() || m_swsWidth != static_cast<int>(width) || m_swsHeight != static_cast<int>(height))
     {
-        if (m_swsContext)
+        freeSwsSlices();
+        // Up to 4 slices (one per spare core), each at least 64 rows.
+        const unsigned hw = std::thread::hardware_concurrency();
+        int n = static_cast<int>(std::min<unsigned>(4u, hw > 1 ? hw - 1 : 1u));
+        while (n > 1 && static_cast<int>(height) / n < 64) --n;
+        const int base = static_cast<int>(height) / n, extra = static_cast<int>(height) % n;
+        int y = 0;
+        for (int i = 0; i < n; ++i)
         {
-            sws_freeContext(m_swsContext);
-            m_swsContext = nullptr;
-        }
-        m_swsContext = sws_getContext(
-            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_YUYV422,
-            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_RGB24,
-            SWS_POINT, nullptr, nullptr, nullptr);
-        if (!m_swsContext)
-        {
-            LOG_ERROR("sws_getContext falhou para YUYV→RGB " +
-                      std::to_string(width) + "x" + std::to_string(height));
-            return;
+            SwsSlice sl;
+            sl.y0 = y;
+            sl.h = base + (i < extra ? 1 : 0);
+            sl.ctx = sws_getContext(static_cast<int>(width), sl.h, AV_PIX_FMT_YUYV422,
+                                    static_cast<int>(width), sl.h, AV_PIX_FMT_RGB24,
+                                    SWS_POINT, nullptr, nullptr, nullptr);
+            if (!sl.ctx)
+            {
+                LOG_ERROR("sws_getContext falhou para YUYV→RGB " +
+                          std::to_string(width) + "x" + std::to_string(sl.h));
+                freeSwsSlices();
+                return;
+            }
+            m_swsSlices.push_back(sl);
+            y += sl.h;
         }
         m_swsWidth = static_cast<int>(width);
         m_swsHeight = static_cast<int>(height);
         m_swsFullRange = false; // libswscale's default for YUYV input
+        LOG_INFO("YUYV->RGB: " + std::to_string(width) + "x" + std::to_string(height) + " in " +
+                 std::to_string(n) + " parallel slice(s)");
     }
 
-    // #228 — source range of the Y'CbCr input. Only touch the context when
-    // it differs from what it decodes now, so the default stays bit-exact.
+    // #228 — source range of the Y'CbCr input. Only touch the contexts when
+    // it differs from what they decode now, so the default stays bit-exact.
     const bool fullRange = wantYUVFullRange();
     if (fullRange != m_swsFullRange)
     {
-        int *invTable = nullptr, *table = nullptr;
-        int srcRange = 0, dstRange = 0, brightness = 0, contrast = 0, saturation = 0;
-        if (sws_getColorspaceDetails(m_swsContext, &invTable, &srcRange, &table, &dstRange,
-                                     &brightness, &contrast, &saturation) >= 0)
+        for (SwsSlice &sl : m_swsSlices)
         {
-            sws_setColorspaceDetails(m_swsContext, invTable, fullRange ? 1 : 0, table, dstRange,
-                                     brightness, contrast, saturation);
-            LOG_INFO(std::string("YUV decode range: ") + (fullRange ? "full (0-255)" : "limited (16-235)"));
+            int *invTable = nullptr, *table = nullptr;
+            int srcRange = 0, dstRange = 0, brightness = 0, contrast = 0, saturation = 0;
+            if (sws_getColorspaceDetails(sl.ctx, &invTable, &srcRange, &table, &dstRange,
+                                         &brightness, &contrast, &saturation) >= 0)
+            {
+                sws_setColorspaceDetails(sl.ctx, invTable, fullRange ? 1 : 0, table, dstRange,
+                                         brightness, contrast, saturation);
+            }
         }
+        LOG_INFO(std::string("YUV decode range: ") + (fullRange ? "full (0-255)" : "limited (16-235)"));
         m_swsFullRange = fullRange;
     }
 
-    const uint8_t *srcSlice[1] = { yuyv };
-    int srcStride[1] = { static_cast<int>(width) * 2 };
-    uint8_t *dstSlice[1] = { rgb };
-    int dstStride[1] = { static_cast<int>(width) * 3 };
-
-    sws_scale(m_swsContext, srcSlice, srcStride, 0, static_cast<int>(height), dstSlice, dstStride);
+    auto convertSlice = [&](const SwsSlice &sl) {
+        const uint8_t *srcSlice[1] = {yuyv + static_cast<size_t>(sl.y0) * width * 2};
+        int srcStride[1] = {static_cast<int>(width) * 2};
+        uint8_t *dstSlice[1] = {rgb + static_cast<size_t>(sl.y0) * width * 3};
+        int dstStride[1] = {static_cast<int>(width) * 3};
+        sws_scale(sl.ctx, srcSlice, srcStride, 0, sl.h, dstSlice, dstStride);
+    };
+    // Slice 0 on this thread, the others on short-lived workers.
+    std::vector<std::thread> workers;
+    workers.reserve(m_swsSlices.size() > 1 ? m_swsSlices.size() - 1 : 0);
+    for (size_t i = 1; i < m_swsSlices.size(); ++i)
+        workers.emplace_back(convertSlice, std::cref(m_swsSlices[i]));
+    convertSlice(m_swsSlices[0]);
+    for (std::thread &t : workers)
+        t.join();
 }
 

@@ -89,6 +89,7 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
+#include "../utils/LoopProfiler.h"
 
 // swscale removed - resize is now done in encoding (HTTPTSStreamer)
 
@@ -1785,6 +1786,17 @@ void Application::run()
 
     while (!m_window->shouldClose() && !s_quitRequested.load())
     {
+        // Per-iteration stage timing, logged every 10 s (LoopProfiler).
+        struct IterationTimer
+        {
+            std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+            ~IterationTimer()
+            {
+                LoopProfiler::get().endIteration(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+        } iterationTimer;
+
         // Check if window is still valid before polling events
         // This prevents crashes when window is invalidated (e.g., KVM switch)
         if (!m_window)
@@ -1990,7 +2002,10 @@ void Application::run()
                     {
                         break; // Stop processing if reconfiguration started
                     }
-                    newFrame = m_frameProcessor->processFrame(m_capture.get());
+                    {
+                        LoopProfiler::Scope prof(LoopProfiler::Capture);
+                        newFrame = m_frameProcessor->processFrame(m_capture.get());
+                    }
 
                     if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
                     {
@@ -2015,7 +2030,12 @@ void Application::run()
         {
             // true → this frame was already presented (invalid-dims early-out),
             // skip the rest of the iteration exactly as the old inline continue did.
-            if (m_pipeline->renderAndDistributeFrame())
+            bool presented = false;
+            {
+                LoopProfiler::Scope prof(LoopProfiler::Render);
+                presented = m_pipeline->renderAndDistributeFrame();
+            }
+            if (presented)
                 continue;
         }
         else
