@@ -23,6 +23,15 @@
 #                      pre-#197 PulseAudio capture delivered 100 ms)
 #   AVSYNC_PORT        stream port (default 8091)
 #   AVSYNC_FPS         capture / stream fps (default 60)
+#   AVSYNC_STREAM_FPS  stream fps when it differs from the capture's (#247:
+#                      e.g. 30 fps source + --frame-gen 2x at 60)
+#   AVSYNC_PATTERN     test-pattern variant (RETROCAPTURE_TEST_PATTERN, e.g.
+#                      "motion"); the sync flash band is in every variant
+#                      except levels / interlaced
+#   AVSYNC_WIDTH / AVSYNC_HEIGHT  capture size (default 1280x720)
+#   AVSYNC_RECORD_FPS  recording fps (default: the app's)
+#   AVSYNC_EXTRA_ARGS  extra app arguments (word-split), e.g.
+#                      "--frame-gen 2x --frame-gen-method motion"
 #   AVSYNC_MAX_MEAN_MS / AVSYNC_MAX_ABS_MS / AVSYNC_MAX_DRIFT  thresholds
 #                      (defaults 40 ms / 80 ms / 5 ms per min)
 #   AVSYNC_MAX_GLITCHES  allowed frame-order glitches (default 0): extra flash
@@ -43,8 +52,10 @@ SECONDS_TO_RUN="${AVSYNC_SECONDS:-40}"
 SKEW="${AVSYNC_SKEW_PPM:-1000}"
 PORT="${AVSYNC_PORT:-8091}"
 FPS="${AVSYNC_FPS:-60}"
+STREAM_FPS="${AVSYNC_STREAM_FPS:-$FPS}"
+read -r -a EXTRA_ARGS <<< "${AVSYNC_EXTRA_ARGS:-}"
 FRAGMENT_MS="${AVSYNC_FRAGMENT_MS:-20}"
-W=1280; H=720
+W="${AVSYNC_WIDTH:-1280}"; H="${AVSYNC_HEIGHT:-720}"
 WORK="$(mktemp -d /tmp/rc-avsync.XXXXXX)"
 APP_PID=""
 CURL_PID=""
@@ -113,16 +124,18 @@ port_up() {
 port_up && fail "port $PORT is already serving — stop it first (or set AVSYNC_PORT)"
 
 echo "▶ av-sync-test: $BIN"
-note "${SECONDS_TO_RUN}s @ ${FPS} fps, fake audio clock skew ${SKEW} ppm, ${FRAGMENT_MS} ms fragments"
+note "${SECONDS_TO_RUN}s @ ${FPS} fps (stream ${STREAM_FPS}), fake audio clock skew ${SKEW} ppm, ${FRAGMENT_MS} ms fragments"
+[ -n "${AVSYNC_EXTRA_ARGS:-}" ] && note "extra args: ${AVSYNC_EXTRA_ARGS}"
 
 # Isolated XDG dirs + cwd so the recording (relative output path) lands here.
 mkdir -p "$WORK/cfg" "$WORK/data" "$WORK/run"
 (
     cd "$WORK/run" && XDG_CONFIG_HOME="$WORK/cfg" XDG_DATA_HOME="$WORK/data" \
+    RETROCAPTURE_TEST_PATTERN="${AVSYNC_PATTERN:-}" \
     exec ${LAUNCH_PREFIX[@]+"${LAUNCH_PREFIX[@]}"} "$BIN" --source test --audio-source test \
         --test-audio-skew-ppm "$SKEW" --test-audio-fragment-ms "$FRAGMENT_MS" --stream-enable --hide-ui \
         --stream-port "$PORT" --width "$W" --height "$H" --fps "$FPS" \
-        --stream-fps "$FPS"
+        --stream-fps "$STREAM_FPS" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 ) > "$WORK/app.log" 2>&1 &
 APP_PID=$!
 
@@ -145,7 +158,7 @@ sleep 1
 # Record into the work dir, not the user's Videos folder.
 mkdir -p "$WORK/rec"
 curl -s -m 5 -X POST -H 'Content-Type: application/json' \
-     -d "{\"outputPath\":\"$WORK/rec/\"}" "http://127.0.0.1:$PORT/api/v1/recording/settings" > /dev/null \
+     -d "{\"outputPath\":\"$WORK/rec/\"${AVSYNC_RECORD_FPS:+,\"fps\":$AVSYNC_RECORD_FPS}}" "http://127.0.0.1:$PORT/api/v1/recording/settings" > /dev/null \
     || fail "could not set the recording output path"
 sleep 0.5
 curl -s -m 5 -X POST -H 'Content-Type: application/json' \
