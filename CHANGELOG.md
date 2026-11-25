@@ -32,7 +32,7 @@ Dreamcast through SCART→HDMI and a PS4 at 1080p60.
   - **Methods:**
     - **Motion:** GPU optical flow, everywhere OpenGL 3.3 / GLES 3 runs.
     - **RIFE:** a neural interpolator on ncnn + Vulkan, best quality, in the
-      Linux x86_64 build. It falls back to Motion frame by frame when it can't
+      Linux x86_64 and Windows builds. It falls back to Motion frame by frame when it can't
       deliver in time.
     - **Blend:** the cheapest.
   - **Modes:**

@@ -67,7 +67,7 @@ picture before your shader, and generate in-between frames for smooth motion.
 
 - **Frame generation (#247, #248, #256).**
   - **Methods:** GPU optical flow (Motion), or RIFE (neural, Vulkan) on
-    Linux x86_64.
+    Linux x86_64 and Windows.
   - **Match capture rate:** a game drawing 30, 20 or 14 pictures a second on
     a 60 Hz signal plays at ~60 fps.
   - **Repeated frames** are detected, even on analog sources through a
