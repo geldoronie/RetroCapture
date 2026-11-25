@@ -88,6 +88,15 @@ class RetroCaptureAPI {
         return await this.request('POST', '/source/overscan', { x, y, locked });
     }
 
+    // #225 — 4-side crop: any of top/bottom/left/right/unit/link.
+    async setSourceCrop(fields) {
+        return await this.request('POST', '/source/overscan', fields);
+    }
+
+    async startSourceAutoCrop(threshold) {
+        return await this.request('POST', '/source/overscan/auto', { threshold });
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }

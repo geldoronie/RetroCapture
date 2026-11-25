@@ -2663,6 +2663,63 @@ std::string UIManager::getConfigPath() const
     return "retrocapture_config.json";
 }
 
+void UIManager::setLegacyOverscanAxis(bool horizontal, float pct)
+{
+    // Legacy X/Y setters (pre-#225 web API): a percentage applied to both
+    // sides of the axis, in the crop's current unit.
+    if (pct < 0.0f)
+        pct = 0.0f;
+    const int a = horizontal ? SourceCrop::Left : SourceCrop::Top;
+    float v = pct;
+    if (m_sourceCrop.unit == SourceCrop::Pixels)
+    {
+        const uint32_t dim = horizontal ? m_captureTexW : m_captureTexH;
+        v = static_cast<float>(static_cast<int>(pct * static_cast<float>(dim) / 100.0f + 0.5f));
+    }
+    if (m_sourceCrop.link == SourceCrop::LinkAll)
+    {
+        m_sourceCrop.setSide(a, v);
+        return;
+    }
+    m_sourceCrop.value[a] = v;
+    m_sourceCrop.value[a + 1] = v;
+}
+
+void UIManager::applySourceAutoCrop(bool found, uint32_t top, uint32_t bottom,
+                                    uint32_t left, uint32_t right,
+                                    uint32_t srcW, uint32_t srcH)
+{
+    if (!found || srcW == 0 || srcH == 0)
+    {
+        m_autoCropState.store(static_cast<int>(AutoCropState::NoSignal));
+        return;
+    }
+    if (top == 0 && bottom == 0 && left == 0 && right == 0)
+    {
+        m_autoCropState.store(static_cast<int>(AutoCropState::NoBorders));
+        return;
+    }
+    SourceCrop crop = m_sourceCrop;
+    const uint32_t px[4] = {top, bottom, left, right};
+    for (int side = 0; side < 4; ++side)
+    {
+        const bool horiz = (side == SourceCrop::Left || side == SourceCrop::Right);
+        const float dim = static_cast<float>(horiz ? srcW : srcH);
+        crop.value[side] = (crop.unit == SourceCrop::Pixels)
+                               ? static_cast<float>(px[side])
+                               : static_cast<float>(px[side]) * 100.0f / dim;
+    }
+    // Keep the link mode only if the detected borders satisfy it.
+    if (crop.link == SourceCrop::LinkAll &&
+        !(top == bottom && top == left && top == right))
+        crop.link = (top == bottom && left == right) ? SourceCrop::LinkPairs : SourceCrop::LinkNone;
+    if (crop.link == SourceCrop::LinkPairs && !(top == bottom && left == right))
+        crop.link = SourceCrop::LinkNone;
+    m_sourceCrop = crop;
+    m_autoCropState.store(static_cast<int>(AutoCropState::Done));
+    saveConfig();
+}
+
 void UIManager::loadConfig()
 {
     std::string configPath = getConfigPath();
@@ -2838,12 +2895,37 @@ void UIManager::loadConfig()
                 m_captureHeight = capture["height"].get<uint32_t>();
             if (capture.contains("fps"))
                 m_captureFps = capture["fps"].get<uint32_t>();
-            if (capture.contains("sourceOverscanX"))
-                m_sourceOverscanPercentX = capture["sourceOverscanX"].get<float>();
-            if (capture.contains("sourceOverscanY"))
-                m_sourceOverscanPercentY = capture["sourceOverscanY"].get<float>();
-            if (capture.contains("sourceOverscanLocked"))
-                m_sourceOverscanLocked = capture["sourceOverscanLocked"].get<bool>();
+            // #225 — 4-side crop. Configs written before it only carry the
+            // symmetric overscan: X maps to left = right, Y to top = bottom
+            // (percent), and the old X/Y lock to "all sides linked".
+            if (capture.contains("sourceCrop") && capture["sourceCrop"].is_object())
+            {
+                const auto &c = capture["sourceCrop"];
+                SourceCrop crop;
+                crop.value[SourceCrop::Top] = c.value("top", 0.0f);
+                crop.value[SourceCrop::Bottom] = c.value("bottom", 0.0f);
+                crop.value[SourceCrop::Left] = c.value("left", 0.0f);
+                crop.value[SourceCrop::Right] = c.value("right", 0.0f);
+                crop.unit = SourceCrop::unitFromName(c.value("unit", std::string("percent")).c_str(), SourceCrop::Percent);
+                crop.link = SourceCrop::linkFromName(c.value("link", std::string("none")).c_str(), SourceCrop::LinkNone);
+                m_sourceCrop = crop;
+                if (c.contains("autoCropThreshold") && c["autoCropThreshold"].is_number_integer())
+                    m_autoCropThreshold = c["autoCropThreshold"].get<int>();
+            }
+            else if (capture.contains("sourceOverscanX") || capture.contains("sourceOverscanY"))
+            {
+                const float x = capture.value("sourceOverscanX", 0.0f);
+                const float y = capture.value("sourceOverscanY", 0.0f);
+                const bool locked = capture.value("sourceOverscanLocked", true);
+                SourceCrop crop;
+                crop.value[SourceCrop::Left] = crop.value[SourceCrop::Right] = x;
+                crop.value[SourceCrop::Top] = crop.value[SourceCrop::Bottom] = y;
+                crop.unit = SourceCrop::Percent;
+                // Old "locked" kept X == Y; only keep all four linked when
+                // they really are equal, otherwise left/right + top/bottom.
+                crop.link = (locked && x == y) ? SourceCrop::LinkAll : SourceCrop::LinkPairs;
+                m_sourceCrop = crop;
+            }
         }
 
         // Carregar configurações de imagem
@@ -3352,9 +3434,19 @@ void UIManager::saveConfig()
             {"width", m_captureWidth},
             {"height", m_captureHeight},
             {"fps", m_captureFps},
-            {"sourceOverscanX", m_sourceOverscanPercentX},
-            {"sourceOverscanY", m_sourceOverscanPercentY},
-            {"sourceOverscanLocked", m_sourceOverscanLocked}};
+            {"sourceCrop", {
+                {"top", m_sourceCrop.value[SourceCrop::Top]},
+                {"bottom", m_sourceCrop.value[SourceCrop::Bottom]},
+                {"left", m_sourceCrop.value[SourceCrop::Left]},
+                {"right", m_sourceCrop.value[SourceCrop::Right]},
+                {"unit", SourceCrop::unitName(m_sourceCrop.unit)},
+                {"link", SourceCrop::linkName(m_sourceCrop.link)},
+                {"autoCropThreshold", m_autoCropThreshold}}},
+            // Legacy symmetric keys (pre-#225), kept so an older build
+            // reading this config still gets an approximate crop.
+            {"sourceOverscanX", getSourceOverscanPercentX()},
+            {"sourceOverscanY", getSourceOverscanPercentY()},
+            {"sourceOverscanLocked", getSourceOverscanLocked()}};
 
         // Salvar shader atual
         config["shader"] = {

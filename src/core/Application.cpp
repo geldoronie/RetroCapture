@@ -2474,6 +2474,12 @@ void Application::applyPreset(const std::string &presetName)
         m_captureFps = data.captureFps;
     }
 
+    // #225 — source crop (only presets that carry one)
+    if (data.hasSourceCrop && m_ui)
+    {
+        m_ui->setSourceCrop(data.sourceCrop);
+    }
+
     // 4. Apply image settings
     // Note: fullscreen and monitorIndex are NOT applied - they vary per user/system
     m_brightness = data.imageBrightness;
@@ -2661,6 +2667,13 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.captureHeight = m_captureHeight;
         data.captureFps = m_captureFps;
         // devicePath is NOT saved - varies between systems
+    }
+
+    // #225 — source crop
+    if (m_ui)
+    {
+        data.hasSourceCrop = true;
+        data.sourceCrop = m_ui->getSourceCrop();
     }
 
     // Collect image settings

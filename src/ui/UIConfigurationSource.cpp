@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #ifdef __linux__
 #include <linux/videodev2.h>
 #endif
@@ -548,36 +549,7 @@ void UIConfigurationSource::renderCaptureSettings()
                             actualW, actualH, requestedW, requestedH);
     }
 
-    // Overscan: corta uma % das bordas do source antes do downscale. Útil pra
-    // remover letterbox do dispositivo de captura ou aproximar o crop de TV CRT.
-    // Eixos X/Y independentes; lock espelha um no outro.
-    ImGui::Text("Source Overscan:");
-    bool overscanLocked = m_uiManager->getSourceOverscanLocked();
-    if (ImGui::Checkbox("Lock X/Y##overscan_lock", &overscanLocked))
-    {
-        m_uiManager->setSourceOverscanLocked(overscanLocked);
-        m_uiManager->saveConfig();
-    }
-    float overscanX = m_uiManager->getSourceOverscanPercentX();
-    float overscanY = m_uiManager->getSourceOverscanPercentY();
-    ImGui::PushItemWidth(180);
-    if (ImGui::SliderFloat("Horizontal##source_overscan_x", &overscanX, 0.0f, 30.0f, "%.1f%%"))
-    {
-        m_uiManager->setSourceOverscanPercentX(overscanX);
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit())
-    {
-        m_uiManager->saveConfig();
-    }
-    if (ImGui::SliderFloat("Vertical##source_overscan_y", &overscanY, 0.0f, 30.0f, "%.1f%%"))
-    {
-        m_uiManager->setSourceOverscanPercentY(overscanY);
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit())
-    {
-        m_uiManager->saveConfig();
-    }
-    ImGui::PopItemWidth();
+    renderSourceCrop();
 
     // Controle de FPS
     ImGui::Text("Framerate:");
@@ -595,6 +567,176 @@ void UIConfigurationSource::renderCaptureSettings()
             m_uiManager->triggerFramerateChange(static_cast<uint32_t>(fps));
         }
     }
+}
+
+void UIConfigurationSource::renderSourceCrop()
+{
+    // #225 — independent crop per side, in percent or source pixels.
+    // Applied in the source pre-pass, so it reaches every output (preview,
+    // /stream, recording, virtual camera, /raw) with or without a shader.
+    ImGui::Text("Source Crop:");
+    const uint32_t srcW = m_uiManager->getCaptureTextureWidth();
+    const uint32_t srcH = m_uiManager->getCaptureTextureHeight();
+    const SourceCrop &crop = m_uiManager->getSourceCrop();
+
+    int unit = crop.unit;
+    if (ImGui::RadioButton("%##crop_unit_pct", &unit, SourceCrop::Percent))
+    {
+        m_uiManager->setSourceCropUnit(SourceCrop::Percent);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("px##crop_unit_px", &unit, SourceCrop::Pixels))
+    {
+        m_uiManager->setSourceCropUnit(SourceCrop::Pixels);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    ImGui::PushItemWidth(190);
+    const char *linkItems[] = {"Independent sides", "Lock left/right + top/bottom", "Lock all sides"};
+    int link = crop.link;
+    if (ImGui::Combo("##crop_link", &link, linkItems, IM_ARRAYSIZE(linkItems)))
+    {
+        m_uiManager->setSourceCropLink(link);
+        m_uiManager->saveConfig();
+    }
+    ImGui::PopItemWidth();
+
+    bool anyActive = false;
+    const struct
+    {
+        int side;
+        const char *label;
+    } rows[4] = {{SourceCrop::Top, "Top##source_crop_top"},
+                 {SourceCrop::Bottom, "Bottom##source_crop_bottom"},
+                 {SourceCrop::Left, "Left##source_crop_left"},
+                 {SourceCrop::Right, "Right##source_crop_right"}};
+    ImGui::PushItemWidth(180);
+    for (const auto &row : rows)
+    {
+        float v = m_uiManager->getSourceCrop().value[row.side];
+        const float maxV = m_uiManager->getSourceCrop().maxSideValue(row.side, srcW, srcH);
+        const bool px = (m_uiManager->getSourceCrop().unit == SourceCrop::Pixels);
+        if (ImGui::SliderFloat(row.label, &v, 0.0f, maxV, px ? "%.0f px" : "%.1f%%"))
+        {
+            if (px)
+                v = static_cast<float>(static_cast<int>(v + 0.5f));
+            m_uiManager->setSourceCropSide(row.side, v);
+        }
+        if (ImGui::IsItemActive())
+            anyActive = true;
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            m_uiManager->saveConfig();
+    }
+    ImGui::PopItemWidth();
+
+    // Auto-crop: detect the black borders on a few live frames.
+    const UIManager::AutoCropState acState = m_uiManager->getSourceAutoCropState();
+    const bool running = (acState == UIManager::AutoCropState::Running);
+    ImGui::BeginDisabled(running);
+    if (ImGui::Button("Auto-crop##source_crop_auto"))
+    {
+        m_uiManager->requestSourceAutoCrop(m_uiManager->getSourceAutoCropThreshold());
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Detect black borders on the live picture and fill the 4 sides");
+    ImGui::SameLine();
+    ImGui::PushItemWidth(90);
+    int threshold = m_uiManager->getSourceAutoCropThreshold();
+    if (ImGui::SliderInt("Threshold##source_crop_thr", &threshold, 0, 96))
+        m_uiManager->setSourceAutoCropThreshold(threshold);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        m_uiManager->saveConfig();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Pixels whose brightest channel is at or below this count as black");
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##source_crop_reset"))
+    {
+        SourceCrop cleared = m_uiManager->getSourceCrop();
+        for (float &s : cleared.value)
+            s = 0.0f;
+        m_uiManager->setSourceCrop(cleared);
+        m_uiManager->saveConfig();
+    }
+    switch (acState)
+    {
+    case UIManager::AutoCropState::Running:
+        ImGui::TextDisabled("Auto-crop: sampling frames...");
+        break;
+    case UIManager::AutoCropState::Done:
+        ImGui::TextDisabled("Auto-crop: borders applied");
+        break;
+    case UIManager::AutoCropState::NoBorders:
+        ImGui::TextDisabled("Auto-crop: no black borders found");
+        break;
+    case UIManager::AutoCropState::NoSignal:
+        ImGui::TextDisabled("Auto-crop: picture is all black, nothing to detect");
+        break;
+    default:
+        break;
+    }
+
+    // Visual guide while a crop slider is being dragged.
+    if (anyActive)
+        drawCropGuide();
+}
+
+void UIConfigurationSource::drawCropGuide()
+{
+    // Shows the full, uncropped frame over the main window with the crop
+    // lines on top, so the user sees what is being cut while dragging.
+    // Drawn on the background draw list: above the rendered video, below
+    // the ImGui windows (the Source window stays usable).
+    const unsigned int tex = m_uiManager->getCaptureTextureId();
+    const float fullW = static_cast<float>(m_uiManager->getCaptureTextureWidth());
+    const float fullH = static_cast<float>(m_uiManager->getCaptureTextureHeight());
+    if (tex == 0 || fullW < 1.0f || fullH < 1.0f)
+        return;
+
+    const ImGuiIO &io = ImGui::GetIO();
+    const float dispW = io.DisplaySize.x;
+    const float dispH = io.DisplaySize.y;
+    if (dispW < 1.0f || dispH < 1.0f)
+        return;
+    // Fit the frame into the display, keeping its aspect ratio.
+    const float scale = std::min(dispW / fullW, dispH / fullH);
+    const float w = fullW * scale;
+    const float h = fullH * scale;
+    const ImVec2 p0((dispW - w) * 0.5f, (dispH - h) * 0.5f);
+    const ImVec2 p1(p0.x + w, p0.y + h);
+
+    ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(dispW, dispH), IM_COL32(0, 0, 0, 255));
+    // A Remote source's texture is stored bottom-up: flip it for display.
+    const bool remote = (m_uiManager->getSourceType() == UIManager::SourceType::Remote);
+    dl->AddImage(static_cast<ImTextureID>(tex), p0, p1,
+                 remote ? ImVec2(0, 1) : ImVec2(0, 0),
+                 remote ? ImVec2(1, 0) : ImVec2(1, 1));
+
+    float l = 0, r = 0, t = 0, b = 0;
+    m_uiManager->getSourceCrop().fractions(static_cast<uint32_t>(fullW), static_cast<uint32_t>(fullH),
+                                           l, r, t, b);
+    const ImVec2 c0(p0.x + l * w, p0.y + t * h);
+    const ImVec2 c1(p1.x - r * w, p1.y - b * h);
+    const ImU32 shade = IM_COL32(0, 0, 0, 150);
+    dl->AddRectFilled(p0, ImVec2(p1.x, c0.y), shade);              // top
+    dl->AddRectFilled(ImVec2(p0.x, c1.y), p1, shade);              // bottom
+    dl->AddRectFilled(ImVec2(p0.x, c0.y), ImVec2(c0.x, c1.y), shade); // left
+    dl->AddRectFilled(ImVec2(c1.x, c0.y), ImVec2(p1.x, c1.y), shade); // right
+    const ImU32 line = IM_COL32(255, 64, 64, 255);
+    dl->AddLine(ImVec2(p0.x, c0.y), ImVec2(p1.x, c0.y), line, 2.0f);
+    dl->AddLine(ImVec2(p0.x, c1.y), ImVec2(p1.x, c1.y), line, 2.0f);
+    dl->AddLine(ImVec2(c0.x, p0.y), ImVec2(c0.x, p1.y), line, 2.0f);
+    dl->AddLine(ImVec2(c1.x, p0.y), ImVec2(c1.x, p1.y), line, 2.0f);
+
+    char info[96];
+    snprintf(info, sizeof(info), "Visible: %d x %d of %d x %d",
+             static_cast<int>((1.0f - l - r) * fullW + 0.5f),
+             static_cast<int>((1.0f - t - b) * fullH + 0.5f),
+             static_cast<int>(fullW), static_cast<int>(fullH));
+    dl->AddText(ImVec2(c0.x + 6.0f, c0.y + 6.0f), IM_COL32(255, 255, 255, 255), info);
 }
 
 void UIConfigurationSource::renderQuickFPS()

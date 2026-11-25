@@ -5,6 +5,7 @@
 #include <map>
 #include <cstdint>
 #include "../utils/FilesystemCompat.h"
+#include "../processing/SourceCrop.h"
 
 /**
  * @brief Manages capture presets (save, load, list, delete)
@@ -34,6 +35,11 @@ public:
         uint32_t captureFps = 0;
         std::string devicePath;
         int sourceType = 0; // 0=None, 1=V4L2, 2=DirectShow
+
+        // #225 — source crop. Presets saved before it have none and leave
+        // the current crop alone when applied.
+        bool hasSourceCrop = false;
+        SourceCrop sourceCrop;
         
         // Image settings
         float imageBrightness = 1.0f;

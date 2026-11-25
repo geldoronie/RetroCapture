@@ -713,6 +713,11 @@ bool APIController::routePOSTSource(int clientFd, const std::string &path, const
         result = handleSetSourceOverscan(clientFd, body);
         return true;
     }
+    if (path == "/api/v1/source/overscan/auto")
+    {
+        result = handleSourceAutoCrop(clientFd, body);
+        return true;
+    }
     return false;
 }
 
@@ -1128,6 +1133,52 @@ bool APIController::handleGETImageSettings(int clientFd)
     return true;
 }
 
+namespace
+{
+const char *autoCropStateName(UIManager::AutoCropState st)
+{
+    switch (st)
+    {
+    case UIManager::AutoCropState::Running:
+        return "running";
+    case UIManager::AutoCropState::Done:
+        return "done";
+    case UIManager::AutoCropState::NoBorders:
+        return "no_borders";
+    case UIManager::AutoCropState::NoSignal:
+        return "no_signal";
+    default:
+        return "idle";
+    }
+}
+} // namespace
+
+std::string APIController::sourceCropJSON() const
+{
+    // #225 — 4-side crop. "x" / "y" / "locked" are the pre-#225 symmetric
+    // view (percent), kept so older clients keep working.
+    const SourceCrop &c = m_uiManager->getSourceCrop();
+    std::ostringstream out;
+    out << "{"
+        << "\"top\": " << jsonNumber(c.value[SourceCrop::Top]) << ", "
+        << "\"bottom\": " << jsonNumber(c.value[SourceCrop::Bottom]) << ", "
+        << "\"left\": " << jsonNumber(c.value[SourceCrop::Left]) << ", "
+        << "\"right\": " << jsonNumber(c.value[SourceCrop::Right]) << ", "
+        << "\"unit\": " << jsonString(SourceCrop::unitName(c.unit)) << ", "
+        << "\"link\": " << jsonString(SourceCrop::linkName(c.link)) << ", "
+        << "\"sourceWidth\": " << jsonNumber(m_uiManager->getCaptureTextureWidth()) << ", "
+        << "\"sourceHeight\": " << jsonNumber(m_uiManager->getCaptureTextureHeight()) << ", "
+        << "\"autoCrop\": {"
+        <<   "\"state\": " << jsonString(autoCropStateName(m_uiManager->getSourceAutoCropState())) << ", "
+        <<   "\"threshold\": " << jsonNumber(m_uiManager->getSourceAutoCropThreshold())
+        << "}, "
+        << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+        << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+        << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+        << "}";
+    return out.str();
+}
+
 bool APIController::handleGETSourceOverscan(int clientFd)
 {
     if (!m_uiManager)
@@ -1135,13 +1186,7 @@ bool APIController::handleGETSourceOverscan(int clientFd)
         sendErrorResponse(clientFd, 500, "UIManager not available");
         return true;
     }
-    std::ostringstream out;
-    out << "{"
-        << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-        << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-        << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-        << "}";
-    sendJSONResponse(clientFd, 200, out.str());
+    sendJSONResponse(clientFd, 200, sourceCropJSON());
     return true;
 }
 
@@ -1155,7 +1200,32 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
     try
     {
         nlohmann::json json = nlohmann::json::parse(body);
-        // `locked` updated first so the X/Y setters mirror correctly.
+        // Order matters: the unit first (it converts the stored values),
+        // then the link mode, then the sides (mirrored by the link).
+        if (json.contains("unit") && json["unit"].is_string())
+        {
+            const std::string u = json["unit"].get<std::string>();
+            const int unit = SourceCrop::unitFromName(u.c_str(), -1);
+            if (unit < 0)
+            {
+                sendErrorResponse(clientFd, 400, "unit must be \"percent\" or \"px\"");
+                return true;
+            }
+            m_uiManager->setSourceCropUnit(unit);
+        }
+        if (json.contains("link") && json["link"].is_string())
+        {
+            const std::string l = json["link"].get<std::string>();
+            const int link = SourceCrop::linkFromName(l.c_str(), -1);
+            if (link < 0)
+            {
+                sendErrorResponse(clientFd, 400, "link must be \"none\", \"pairs\" or \"all\"");
+                return true;
+            }
+            m_uiManager->setSourceCropLink(link);
+        }
+        // Legacy symmetric fields (pre-#225): `locked` first so the X/Y
+        // setters mirror correctly. Percent, 0..30 as before.
         if (json.contains("locked") && json["locked"].is_boolean())
         {
             m_uiManager->setSourceOverscanLocked(json["locked"].get<bool>());
@@ -1174,15 +1244,38 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
             if (y > 30.0f) y = 30.0f;
             m_uiManager->setSourceOverscanPercentY(y);
         }
+        const struct
+        {
+            const char *key;
+            int side;
+        } sides[4] = {{"top", SourceCrop::Top},
+                      {"bottom", SourceCrop::Bottom},
+                      {"left", SourceCrop::Left},
+                      {"right", SourceCrop::Right}};
+        for (const auto &sd : sides)
+        {
+            if (json.contains(sd.key) && json[sd.key].is_number())
+            {
+                const SourceCrop &c = m_uiManager->getSourceCrop();
+                float v = json[sd.key].get<float>();
+                const float maxV = c.maxSideValue(sd.side, m_uiManager->getCaptureTextureWidth(),
+                                                  m_uiManager->getCaptureTextureHeight());
+                if (v < 0.0f) v = 0.0f;
+                if (v > maxV) v = maxV;
+                if (c.unit == SourceCrop::Pixels)
+                    v = static_cast<float>(static_cast<int>(v + 0.5f));
+                m_uiManager->setSourceCropSide(sd.side, v);
+            }
+        }
+        if (json.contains("autoCropThreshold") && json["autoCropThreshold"].is_number_integer())
+        {
+            int t = json["autoCropThreshold"].get<int>();
+            if (t < 0) t = 0;
+            if (t > 128) t = 128;
+            m_uiManager->setSourceAutoCropThreshold(t);
+        }
         m_uiManager->saveConfig();
-
-        std::ostringstream out;
-        out << "{"
-            << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-            << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-            << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-            << "}";
-        sendJSONResponse(clientFd, 200, out.str());
+        sendJSONResponse(clientFd, 200, sourceCropJSON());
         return true;
     }
     catch (const std::exception &e)
@@ -1190,6 +1283,41 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
         sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
         return true;
     }
+}
+
+bool APIController::handleSourceAutoCrop(int clientFd, const std::string &body)
+{
+    // #225 — POST /api/v1/source/overscan/auto {"threshold": 0..128}
+    // Starts black-border detection on the next few live frames; poll
+    // GET /api/v1/source/overscan for autoCrop.state and the new values.
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    int threshold = m_uiManager->getSourceAutoCropThreshold();
+    if (!body.empty())
+    {
+        try
+        {
+            nlohmann::json json = nlohmann::json::parse(body);
+            if (json.contains("threshold") && json["threshold"].is_number_integer())
+            {
+                threshold = json["threshold"].get<int>();
+                if (threshold < 0) threshold = 0;
+                if (threshold > 128) threshold = 128;
+                m_uiManager->setSourceAutoCropThreshold(threshold);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+            return true;
+        }
+    }
+    m_uiManager->requestSourceAutoCrop(threshold);
+    sendJSONResponse(clientFd, 200, sourceCropJSON());
+    return true;
 }
 
 bool APIController::handleGETStreamingSettings(int clientFd)
@@ -1386,11 +1514,7 @@ std::string APIController::buildMetaSnapshotJSON()
          <<   "\"width\": "  << jsonNumber(metaSrcW)   << ", "
          <<   "\"height\": " << jsonNumber(metaSrcH)  << ", "
          <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
-         <<   "\"overscan\": {"
-         <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-         <<     "\"y\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-         <<     "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-         <<   "}"
+         <<   "\"overscan\": " << sourceCropJSON()
          << "}, "
          << "\"image\": {"
          <<   "\"brightness\": "     << jsonNumber(m_uiManager->getBrightness())     << ", "

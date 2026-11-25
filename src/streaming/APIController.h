@@ -188,6 +188,10 @@ private:
      */
     bool handleGETPreferences(int clientFd);
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
+    // #225 — POST /api/v1/source/overscan/auto: start black-border detection.
+    bool handleSourceAutoCrop(int clientFd, const std::string& body);
+    // #225 — the source crop as JSON (4 sides + legacy x/y/locked).
+    std::string sourceCropJSON() const;
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
 #ifdef __APPLE__

@@ -2619,94 +2619,163 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // ============================================================
-// Source overscan — mirrors the native UI's Source Overscan
-// section. X/Y sliders share a "lock" toggle that copies one onto
-// the other; values are persisted server-side via the new
-// /api/v1/source/overscan endpoint.
+// Source crop (#225) — mirrors the native UI's Source Crop section:
+// 4 independent sides in percent or source pixels, link modes, and
+// auto-crop. Values are persisted server-side via
+// /api/v1/source/overscan (which still accepts the old x/y/locked).
 // ============================================================
 
-let _overscanLoaded = false;
-let _overscanLocked = false;
+const CROP_SIDES = ['top', 'bottom', 'left', 'right'];
+let _crop = null; // last state from the server
 
-function fmtOverscan(v) {
-    return Number(v).toFixed(1) + '%';
+function cropEl(side) {
+    return document.getElementById('crop' + side.charAt(0).toUpperCase() + side.slice(1));
 }
 
-async function loadOverscan() {
-    try {
-        const data = await api.getSourceOverscan();
-        const xEl = document.getElementById('overscanX');
-        const yEl = document.getElementById('overscanY');
-        const lockEl = document.getElementById('overscanLocked');
-        if (!xEl || !yEl || !lockEl) return;
-        xEl.value = data.x ?? 0;
-        yEl.value = data.y ?? 0;
-        lockEl.checked = !!data.locked;
-        _overscanLocked = lockEl.checked;
-        document.getElementById('overscanXValue').textContent = fmtOverscan(xEl.value);
-        document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
-        _overscanLoaded = true;
-    } catch (err) {
-        console.warn('Failed to load overscan:', err);
+function fmtCrop(v, unit) {
+    return unit === 'px' ? Math.round(Number(v)) + ' px' : Number(v).toFixed(1) + '%';
+}
+
+function cropMax(side, data) {
+    if (data.unit !== 'px') return 45;
+    const dim = (side === 'left' || side === 'right') ? data.sourceWidth : data.sourceHeight;
+    return dim > 0 ? Math.floor(dim * 0.45) : 512;
+}
+
+function renderCrop(data) {
+    if (!data) return;
+    _crop = data;
+    const unitEl = document.getElementById('cropUnit');
+    const linkEl = document.getElementById('cropLink');
+    if (unitEl) unitEl.value = data.unit || 'percent';
+    if (linkEl) linkEl.value = data.link || 'none';
+    for (const side of CROP_SIDES) {
+        const el = cropEl(side);
+        if (!el) continue;
+        el.max = cropMax(side, data);
+        el.step = data.unit === 'px' ? 1 : 0.5;
+        el.value = data[side] ?? 0;
+        const lbl = document.getElementById(el.id + 'Value');
+        if (lbl) lbl.textContent = fmtCrop(el.value, data.unit);
+    }
+    const thr = document.getElementById('cropThreshold');
+    if (thr && data.autoCrop) {
+        thr.value = data.autoCrop.threshold;
+        document.getElementById('cropThresholdValue').textContent = data.autoCrop.threshold;
+    }
+    const status = document.getElementById('cropAutoStatus');
+    if (status && data.autoCrop) {
+        const st = data.autoCrop.state;
+        const key = 'web.config.source.crop_auto_' + st;
+        const fallback = {
+            running: 'Sampling frames...', done: 'Borders applied',
+            no_borders: 'No black borders found', no_signal: 'Picture is all black',
+        }[st] || '';
+        status.textContent = (st && st !== 'idle')
+            ? ((typeof window.t === 'function' && window.t(key) !== key) ? window.t(key) : fallback)
+            : '';
     }
 }
 
-const _overscanThrottle = { pending: null, timer: null };
-function commitOverscan() {
-    if (!_overscanLoaded) return;
-    const xEl = document.getElementById('overscanX');
-    const yEl = document.getElementById('overscanY');
-    const payload = {
-        x: parseFloat(xEl.value),
-        y: parseFloat(yEl.value),
-        locked: _overscanLocked,
-    };
-    _overscanThrottle.pending = payload;
-    if (_overscanThrottle.timer) return;
-    _overscanThrottle.timer = setTimeout(async () => {
-        const p = _overscanThrottle.pending;
-        _overscanThrottle.timer = null;
-        _overscanThrottle.pending = null;
+async function loadCrop() {
+    try {
+        renderCrop(await api.getSourceOverscan());
+    } catch (err) {
+        console.warn('Failed to load source crop:', err);
+    }
+}
+
+const _cropThrottle = { pending: null, timer: null };
+function commitCrop(fields) {
+    if (!_crop) return;
+    _cropThrottle.pending = Object.assign(_cropThrottle.pending || {}, fields);
+    if (_cropThrottle.timer) return;
+    _cropThrottle.timer = setTimeout(async () => {
+        const p = _cropThrottle.pending;
+        _cropThrottle.timer = null;
+        _cropThrottle.pending = null;
         try {
-            await api.setSourceOverscan(p.x, p.y, p.locked);
+            const data = await api.setSourceCrop(p);
+            // Don't fight the slider being dragged: only refresh the
+            // other controls (link mirroring, unit conversion).
+            const active = document.activeElement;
+            renderCrop(data);
+            if (active && active.classList && active.classList.contains('crop-side')) active.focus();
         } catch (err) {
-            console.warn('Failed to set overscan:', err);
+            console.warn('Failed to set source crop:', err);
         }
     }, 80);
 }
 
+async function pollAutoCrop(triesLeft) {
+    await loadCrop();
+    if (_crop && _crop.autoCrop && _crop.autoCrop.state === 'running' && triesLeft > 0) {
+        setTimeout(() => pollAutoCrop(triesLeft - 1), 300);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    const xEl = document.getElementById('overscanX');
-    const yEl = document.getElementById('overscanY');
-    const lockEl = document.getElementById('overscanLocked');
-    if (!xEl || !yEl || !lockEl) return;
+    const unitEl = document.getElementById('cropUnit');
+    const linkEl = document.getElementById('cropLink');
+    if (!unitEl || !linkEl) return;
 
-    const onInput = (sourceAxis, value) => {
-        document.getElementById('overscan' + sourceAxis + 'Value').textContent = fmtOverscan(value);
-        if (_overscanLocked) {
-            const otherAxis = sourceAxis === 'X' ? 'Y' : 'X';
-            const otherEl = document.getElementById('overscan' + otherAxis);
-            if (otherEl) {
-                otherEl.value = value;
-                document.getElementById('overscan' + otherAxis + 'Value').textContent = fmtOverscan(value);
+    for (const side of CROP_SIDES) {
+        const el = cropEl(side);
+        if (!el) continue;
+        el.addEventListener('input', () => {
+            const unit = _crop ? _crop.unit : 'percent';
+            const v = parseFloat(el.value);
+            // Mirror linked sides locally for immediate feedback.
+            const link = linkEl.value;
+            const mirrored = link === 'all' ? CROP_SIDES
+                : link === 'pairs' ? [side, { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[side]]
+                : [side];
+            for (const s of mirrored) {
+                const o = cropEl(s);
+                if (!o) continue;
+                o.value = v;
+                const lbl = document.getElementById(o.id + 'Value');
+                if (lbl) lbl.textContent = fmtCrop(v, unit);
             }
-        }
-        commitOverscan();
-    };
+            commitCrop({ [side]: v });
+        });
+    }
+    unitEl.addEventListener('change', () => commitCrop({ unit: unitEl.value }));
+    linkEl.addEventListener('change', () => commitCrop({ link: linkEl.value }));
 
-    xEl.addEventListener('input', () => onInput('X', xEl.value));
-    yEl.addEventListener('input', () => onInput('Y', yEl.value));
-    lockEl.addEventListener('change', () => {
-        _overscanLocked = lockEl.checked;
-        if (_overscanLocked) {
-            // Lock just enabled — mirror X to Y so they start in sync.
-            yEl.value = xEl.value;
-            document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
-        }
-        commitOverscan();
-    });
+    const thr = document.getElementById('cropThreshold');
+    if (thr) {
+        thr.addEventListener('input', () => {
+            document.getElementById('cropThresholdValue').textContent = thr.value;
+        });
+        thr.addEventListener('change', () => commitCrop({ autoCropThreshold: parseInt(thr.value, 10) }));
+    }
+    const autoBtn = document.getElementById('cropAutoBtn');
+    if (autoBtn) {
+        autoBtn.addEventListener('click', async () => {
+            try {
+                renderCrop(await api.startSourceAutoCrop(parseInt(thr ? thr.value : '24', 10)));
+                pollAutoCrop(20);
+            } catch (err) {
+                console.warn('Failed to start auto-crop:', err);
+            }
+        });
+    }
+    const resetBtn = document.getElementById('cropResetBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            try {
+                // Unlink first so each side really goes to 0, then restore.
+                const link = linkEl.value;
+                await api.setSourceCrop({ link: 'none', top: 0, bottom: 0, left: 0, right: 0 });
+                renderCrop(await api.setSourceCrop({ link }));
+            } catch (err) {
+                console.warn('Failed to reset source crop:', err);
+            }
+        });
+    }
 
-    loadOverscan();
+    loadCrop();
 });
 
 

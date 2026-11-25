@@ -6,8 +6,10 @@
 #include <functional>
 #include <cstring>
 #include <memory>
+#include <atomic>
 #include "../renderer/glad_loader.h"
 #include "../capture/IVideoCapture.h"
+#include "../processing/SourceCrop.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -781,21 +783,60 @@ public:
     // we're not a client or the host's /meta predates this field.
     uint32_t getRemoteUpstreamClientCount() const { return m_remoteState.upstreamClientCount; }
     void setRemoteUpstreamClientCount(uint32_t v) { m_remoteState.upstreamClientCount = v; }
-    float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
-    float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
-    bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
-    void setSourceOverscanPercentX(float pct) {
-        m_sourceOverscanPercentX = pct;
-        if (m_sourceOverscanLocked) m_sourceOverscanPercentY = pct;
+    // #225 — independent 4-side source crop (see SourceCrop). Pixel values
+    // are relative to the capture texture (getCaptureTextureWidth/Height).
+    const SourceCrop &getSourceCrop() const { return m_sourceCrop; }
+    void setSourceCropSide(int side, float v) { m_sourceCrop.setSide(side, v); }
+    void setSourceCropLink(int link) { m_sourceCrop.setLink(link); }
+    void setSourceCropUnit(int unit) { m_sourceCrop.setUnit(unit, m_captureTexW, m_captureTexH); }
+    void setSourceCrop(const SourceCrop &crop) { m_sourceCrop = crop; }
+    // Legacy symmetric overscan view (pre-#225 API / config): X is the
+    // left/right crop, Y the top/bottom crop, in percent; "locked" means
+    // all four sides are linked.
+    float getSourceOverscanPercentX() const {
+        return 0.5f * (m_sourceCrop.sidePercent(SourceCrop::Left, m_captureTexW, m_captureTexH) +
+                       m_sourceCrop.sidePercent(SourceCrop::Right, m_captureTexW, m_captureTexH));
     }
-    void setSourceOverscanPercentY(float pct) {
-        m_sourceOverscanPercentY = pct;
-        if (m_sourceOverscanLocked) m_sourceOverscanPercentX = pct;
+    float getSourceOverscanPercentY() const {
+        return 0.5f * (m_sourceCrop.sidePercent(SourceCrop::Top, m_captureTexW, m_captureTexH) +
+                       m_sourceCrop.sidePercent(SourceCrop::Bottom, m_captureTexW, m_captureTexH));
     }
+    bool getSourceOverscanLocked() const { return m_sourceCrop.link == SourceCrop::LinkAll; }
+    void setSourceOverscanPercentX(float pct) { setLegacyOverscanAxis(true, pct); }
+    void setSourceOverscanPercentY(float pct) { setLegacyOverscanAxis(false, pct); }
     void setSourceOverscanLocked(bool locked) {
-        m_sourceOverscanLocked = locked;
-        if (locked) m_sourceOverscanPercentY = m_sourceOverscanPercentX;
+        m_sourceCrop.setLink(locked ? SourceCrop::LinkAll : SourceCrop::LinkPairs);
     }
+
+    // #225 — auto-crop: the request is taken by the render pipeline, which
+    // samples a few frames, detects the black borders and calls
+    // applySourceAutoCrop(). Safe to call from the web API thread.
+    enum class AutoCropState { Idle = 0, Running = 1, Done = 2, NoBorders = 3, NoSignal = 4 };
+    void requestSourceAutoCrop(int threshold) {
+        if (threshold < 0) threshold = 0;
+        if (threshold > 128) threshold = 128;
+        m_autoCropRequest.store(threshold);
+        m_autoCropState.store(static_cast<int>(AutoCropState::Running));
+    }
+    bool takeSourceAutoCropRequest(int &threshold) {
+        const int t = m_autoCropRequest.exchange(-1);
+        if (t < 0) return false;
+        threshold = t;
+        return true;
+    }
+    AutoCropState getSourceAutoCropState() const {
+        return static_cast<AutoCropState>(m_autoCropState.load());
+    }
+    // Apply detected borders (source pixels on a srcW x srcH frame), in
+    // the current unit; drops the link mode when the borders aren't
+    // symmetric so the detected values survive. found=false reports a
+    // dark frame (no signal) and leaves the crop untouched.
+    void applySourceAutoCrop(bool found, uint32_t top, uint32_t bottom,
+                             uint32_t left, uint32_t right,
+                             uint32_t srcW, uint32_t srcH);
+    int getSourceAutoCropThreshold() const { return m_autoCropThreshold; }
+    void setSourceAutoCropThreshold(int t) { m_autoCropThreshold = t; }
+
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
     IVideoCapture *getCapture() const { return m_capture; }
@@ -1320,11 +1361,13 @@ private:
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to
     // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
-    // Overscan: crop % das bordas do source antes do downscale.
-    // X horizontal, Y vertical. Locked espelha um no outro.
-    float m_sourceOverscanPercentX = 0.0f;
-    float m_sourceOverscanPercentY = 0.0f;
-    bool m_sourceOverscanLocked = true;
+    // #225 — source crop per side (replaces the symmetric X/Y overscan;
+    // old configs are migrated in loadConfig).
+    SourceCrop m_sourceCrop;
+    void setLegacyOverscanAxis(bool horizontal, float pct);
+    std::atomic<int> m_autoCropRequest{-1};
+    std::atomic<int> m_autoCropState{0};
+    int m_autoCropThreshold = 24;
     std::string m_captureDevice;
     std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
     std::function<void(uint32_t)> m_onFramerateChanged;
