@@ -4,6 +4,7 @@
 #include "ui/UIRemoteConnection.h"
 #include "processing/FrameGenBench.h"
 #include "processing/UpscalerBench.h"
+#include "processing/DenoiseBench.h"
 #include "processing/FrameGenSettings.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
@@ -234,7 +235,7 @@ int main(int argc, char *argv[])
     // UI visibility
     bool hideUI = false; // Hide ImGui UI on startup
     // #247 — frame generation overrides (this run only) and the bench.
-    std::string frameGenMode, frameGenMethod, frameGenOutputs, frameGenBench, upscalerBench;
+    std::string frameGenMode, frameGenMethod, frameGenOutputs, frameGenBench, upscalerBench, denoiseBench;
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -777,6 +778,11 @@ int main(int argc, char *argv[])
             // Test tooling (see UpscalerBench.h), not in --help.
             upscalerBench = argv[++i];
         }
+        else if (arg == "--denoise-bench" && i + 1 < argc)
+        {
+            // Test tooling (see DenoiseBench.h), not in --help.
+            denoiseBench = argv[++i];
+        }
         else if (arg == "--framegen-bench" && i + 1 < argc)
         {
             // Test tooling (see FrameGenBench.h), not in --help.
@@ -1106,6 +1112,14 @@ int main(int argc, char *argv[])
     if (!upscalerBench.empty())
     {
         const int rc = runUpscalerBench(upscalerBench);
+        app.shutdown();
+        return rc;
+    }
+
+    // #268 — temporal denoise bench: needs only the GL context; exit after.
+    if (!denoiseBench.empty())
+    {
+        const int rc = runDenoiseBench(denoiseBench);
         app.shutdown();
         return rc;
     }

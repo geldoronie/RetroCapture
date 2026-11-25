@@ -1208,6 +1208,7 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
          << "\"saturation\": " << jsonNumber(m_uiManager->getSaturation()) << ", "
          << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
+         << "\"temporalDenoise\": " << jsonNumber(m_uiManager->getTemporalDenoise()) << ", "
          << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
          << "\"expandLimitedAfterDecode\": " << jsonBool(m_uiManager->getExpandLimitedAfterDecode()) << ", "
          << "\"downscaleFilter\": "
@@ -2374,6 +2375,16 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         if (json.contains("saturation"))
         {
             m_uiManager->setSaturation(std::max(0.0f, std::min(3.0f, json["saturation"].get<float>())));
+            updated = true;
+        }
+        if (json.contains("temporalDenoise"))
+        {
+            if (!json["temporalDenoise"].is_number())
+            {
+                sendErrorResponse(clientFd, 400, "'temporalDenoise' must be a number from 0 (off) to 1");
+                return true;
+            }
+            m_uiManager->setTemporalDenoise(json["temporalDenoise"].get<float>()); // clamped to 0..1
             updated = true;
         }
 

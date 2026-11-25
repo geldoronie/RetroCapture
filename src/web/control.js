@@ -1072,6 +1072,7 @@ async function loadImageSettings() {
         // #228 — source colour controls
         setSliderWithBadge('saturation', settings.saturation !== undefined ? settings.saturation : 1);
         setSliderWithBadge('gamma', settings.gamma !== undefined ? settings.gamma : 1);
+        setSliderWithBadge('temporalDenoise', settings.temporalDenoise !== undefined ? settings.temporalDenoise : 0);
         const colorRangeEl = document.getElementById('colorRange');
         if (colorRangeEl) {
             colorRangeEl.value = settings.colorRange || 'auto';
@@ -1173,6 +1174,7 @@ async function updateImageSettings() {
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
             saturation: document.getElementById('saturation') ? parseFloat(document.getElementById('saturation').value) : 1,
             gamma: document.getElementById('gamma') ? parseFloat(document.getElementById('gamma').value) : 1,
+            temporalDenoise: document.getElementById('temporalDenoise') ? parseFloat(document.getElementById('temporalDenoise').value) : 0,
             colorRange: document.getElementById('colorRange') ? document.getElementById('colorRange').value : 'auto',
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
@@ -1201,6 +1203,7 @@ async function updateImageSettings() {
             contrast: settings.contrast,
             saturation: settings.saturation,
             gamma: settings.gamma,
+            temporalDenoise: settings.temporalDenoise,
             colorRange: settings.colorRange,
             expandLimitedAfterDecode: settings.expandLimitedAfterDecode,
             downscaleFilter: settings.downscaleFilter,
@@ -1599,7 +1602,7 @@ document.addEventListener('DOMContentLoaded', function() {
         contrast.addEventListener('change', updateImageSettingsDebounced);
     }
     // #228 — source colour controls
-    ['saturation', 'gamma'].forEach(function(id) {
+    ['saturation', 'gamma', 'temporalDenoise'].forEach(function(id) {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('input', function() {

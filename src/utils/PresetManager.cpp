@@ -207,6 +207,7 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         presetJson["image"]["contrast"] = data.imageContrast;
         presetJson["image"]["saturation"] = data.imageSaturation;
         presetJson["image"]["gamma"] = data.imageGamma;
+        presetJson["image"]["temporalDenoise"] = data.imageTemporalDenoise;
         presetJson["image"]["colorRange"] = data.imageColorRange;
         presetJson["image"]["expandLimitedAfterDecode"] = data.imageExpandLimitedAfterDecode;
         presetJson["image"]["downscaleFilter"] = data.imageDownscaleFilter;
@@ -422,6 +423,10 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (image.contains("gamma"))
             {
                 data.imageGamma = image["gamma"].get<float>();
+            }
+            if (image.contains("temporalDenoise") && image["temporalDenoise"].is_number())
+            {
+                data.imageTemporalDenoise = image["temporalDenoise"].get<float>();
             }
             if (image.contains("colorRange"))
             {

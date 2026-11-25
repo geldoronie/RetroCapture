@@ -49,6 +49,7 @@ public:
         // without these keys load as identity)
         float imageSaturation = 1.0f;
         float imageGamma = 1.0f;
+        float imageTemporalDenoise = 0.0f; // #268 — 0 = off
         int imageColorRange = 0; // 0 = Auto, 1 = Limited, 2 = Full
         bool imageExpandLimitedAfterDecode = false; // #243 (older presets: off)
         int imageDownscaleFilter = 0; // 0 Auto, 1 Nearest, 2 Area (older presets: Auto)

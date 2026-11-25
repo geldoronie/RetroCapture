@@ -2999,6 +2999,8 @@ void UIManager::loadConfig()
                 m_saturation = image["saturation"].get<float>();
             if (image.contains("gamma"))
                 m_gamma = image["gamma"].get<float>();
+            if (image.contains("temporalDenoise") && image["temporalDenoise"].is_number())
+                setTemporalDenoise(image["temporalDenoise"].get<float>());
             if (image.contains("colorRange"))
                 setColorRange(image["colorRange"].get<int>());
             if (image.contains("expandLimitedAfterDecode"))
@@ -3549,6 +3551,7 @@ void UIManager::saveConfig()
             {"gamma", m_gamma},
             {"colorRange", m_colorRange},
             {"expandLimitedAfterDecode", m_expandLimitedAfterDecode},
+            {"temporalDenoise", m_temporalDenoise},
             {"downscaleFilter", m_sourceDownscaleFilter},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
