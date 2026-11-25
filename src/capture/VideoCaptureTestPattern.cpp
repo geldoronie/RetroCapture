@@ -128,18 +128,23 @@ void VideoCaptureTestPattern::renderLevels()
 
 void VideoCaptureTestPattern::renderEdges()
 {
+    renderEdgesTo(m_buffer.data(), m_width, m_height);
+}
+
+void VideoCaptureTestPattern::renderEdgesTo(uint8_t *rgb, uint32_t width, uint32_t height)
+{
     // Static and resolution-independent: every pixel samples the same
     // continuous pattern at its centre, so a WxH render is the ground truth
     // for an upscale of a smaller render (#251).
-    const double W = m_width ? m_width : 1, H = m_height ? m_height : 1;
+    const double W = width ? width : 1, H = height ? height : 1;
     const double aspect = W / H;
     const double kPi = 3.14159265358979323846;
     const double ca = std::cos(15.0 * kPi / 180.0), sa = std::sin(15.0 * kPi / 180.0);
-    for (uint32_t y = 0; y < m_height; ++y)
+    for (uint32_t y = 0; y < height; ++y)
     {
-        uint8_t *row = m_buffer.data() + static_cast<size_t>(y) * m_width * 3;
+        uint8_t *row = rgb + static_cast<size_t>(y) * width * 3;
         const double v = (y + 0.5) / H;
-        for (uint32_t x = 0; x < m_width; ++x)
+        for (uint32_t x = 0; x < width; ++x)
         {
             const double u = (x + 0.5) / W;
             const double px = u * aspect, py = v; // height units
