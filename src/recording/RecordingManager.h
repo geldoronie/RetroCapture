@@ -35,6 +35,8 @@ public:
     bool startRecording(const RecordingSettings& settings);
     void stopRecording();
     bool isRecording() const { return m_recording; }
+    // #226 — monotonic count of video frames accepted by the encoder.
+    uint64_t getVideoFramesEncoded() const { return m_videoEncodedTotal.load(std::memory_order_relaxed); }
 
     // Configuration
     void setRecordingSettings(const RecordingSettings& settings) { m_settings = settings; }
@@ -119,6 +121,7 @@ private:
     std::atomic<bool> m_recording{false};
     std::atomic<bool> m_stopRequest{false};
     std::atomic<bool> m_encodingThreadExited{false};
+    std::atomic<uint64_t> m_videoEncodedTotal{0}; // #226
     
     std::mutex m_statusMutex;
     std::string m_currentFilename;

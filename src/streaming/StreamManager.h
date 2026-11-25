@@ -88,6 +88,14 @@ public:
     uint32_t getTotalClientCount() const;
 
     /**
+     * #226 — video frames accepted so far by the /stream and /raw
+     * encoders, summed over every MPEG-TS streamer. Monotonic while the
+     * streamers live; the FPS overlay diffs them once per second.
+     */
+    uint64_t getStreamVideoFramesEncoded() const;
+    uint64_t getRawVideoFramesEncoded() const;
+
+    /**
      * Check if streaming can be started (not in cooldown)
      */
     bool canStartStreaming() const;

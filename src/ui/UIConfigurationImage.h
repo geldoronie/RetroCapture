@@ -25,4 +25,5 @@ private:
     void renderFullscreen();
     void renderMonitorSelection();
     void renderOutputResolution();
+    void renderFpsOverlay();
 };

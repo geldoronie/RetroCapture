@@ -34,6 +34,7 @@ void UIConfigurationImage::render()
     renderAspectRatio();
     renderFullscreen();
     renderMonitorSelection();
+    renderFpsOverlay();
 
     ImGui::End();
 }
@@ -173,4 +174,45 @@ void UIConfigurationImage::renderMonitorSelection()
     {
         m_uiManager->setMonitorIndex(-1);
     }
+}
+
+void UIConfigurationImage::renderFpsOverlay()
+{
+    ui_section_header("FPS counter",
+                      "On-screen capture / render / encoder rates (F9). "
+                      "Drawn on this window only, never in the stream "
+                      "or recording.");
+
+    bool enabled = m_uiManager->getFpsOverlayEnabled();
+    if (ImGui::Checkbox("Show FPS counter", &enabled))
+    {
+        m_uiManager->setFpsOverlayEnabled(enabled);
+    }
+
+    if (!enabled) ImGui::BeginDisabled();
+
+    static const char *corners[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
+    int corner = m_uiManager->getFpsOverlayCorner();
+    ImGui::PushItemWidth(160);
+    if (ImGui::Combo("Corner##fps", &corner, corners, IM_ARRAYSIZE(corners)))
+    {
+        m_uiManager->setFpsOverlayCorner(corner);
+    }
+    ImGui::PopItemWidth();
+
+    bool compact = m_uiManager->getFpsOverlayCompact();
+    if (ImGui::Checkbox("Compact (one line)##fps", &compact))
+    {
+        m_uiManager->setFpsOverlayCompact(compact);
+    }
+    ImGui::SameLine();
+    if (compact) ImGui::BeginDisabled();
+    bool graph = m_uiManager->getFpsOverlayGraph();
+    if (ImGui::Checkbox("Frame-time graph##fps", &graph))
+    {
+        m_uiManager->setFpsOverlayGraph(graph);
+    }
+    if (compact) ImGui::EndDisabled();
+
+    if (!enabled) ImGui::EndDisabled();
 }

@@ -222,6 +222,7 @@ private:
     bool handleSetCaptureResolution(int clientFd, const std::string &body);
     bool handleSetCaptureFPS(int clientFd, const std::string &body);
     bool handleSetImageSettings(int clientFd, const std::string &body);
+    bool handleGETFpsStats(int clientFd); // #226
     bool handleSetStreamingSettings(int clientFd, const std::string &body);
     bool handleSetStreamingControl(int clientFd, const std::string &body);
     bool handleSetRecordingSettings(int clientFd, const std::string &body);

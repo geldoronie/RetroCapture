@@ -585,6 +585,7 @@ void RecordingManager::encodingThread()
                         }
                     }
                     processedAny = true;
+                    m_videoEncodedTotal.fetch_add(1, std::memory_order_relaxed);
 
                     static bool firstFrameLogged = false;
                     if (!firstFrameLogged)

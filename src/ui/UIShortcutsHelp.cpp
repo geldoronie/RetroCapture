@@ -53,11 +53,13 @@ void UIShortcutsHelp::render()
         ImGui::TextDisabled("%s", desc);
     };
 
+    row("F9",  T("shortcuts.f9").c_str());
     row("F11", T("shortcuts.f11").c_str());
     row("F12", T("shortcuts.f12").c_str());
 
     ImGui::Spacing();
     ImGui::TextDisabled("%s", T("shortcuts.dismiss_hint").c_str());
 
+    m_lastRenderedHeight = ImGui::GetWindowHeight();
     ImGui::End();
 }
