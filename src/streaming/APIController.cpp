@@ -1199,6 +1199,7 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"saturation\": " << jsonNumber(m_uiManager->getSaturation()) << ", "
          << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
          << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
+         << "\"expandLimitedAfterDecode\": " << jsonBool(m_uiManager->getExpandLimitedAfterDecode()) << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
          << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
@@ -2243,6 +2244,13 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
                 return true;
             }
             m_uiManager->setColorRange(range);
+            updated = true;
+        }
+
+        // #243 — extra 16-235 -> 0-255 expansion after the decode.
+        if (json.contains("expandLimitedAfterDecode"))
+        {
+            m_uiManager->setExpandLimitedAfterDecode(json["expandLimitedAfterDecode"].get<bool>());
             updated = true;
         }
 

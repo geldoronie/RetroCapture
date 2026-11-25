@@ -261,9 +261,15 @@ void FrameProcessor::setSourceAdjustments(const SourceAdjustments &adj)
         adj.saturation == m_adjust.saturation &&
         adj.gamma == m_adjust.gamma &&
         adj.deinterlace == m_adjust.deinterlace &&
-        adj.fieldOrder == m_adjust.fieldOrder)
+        adj.fieldOrder == m_adjust.fieldOrder &&
+        adj.expandAfterDecode == m_adjust.expandAfterDecode)
     {
         return;
+    }
+    if (adj.expandAfterDecode != m_adjust.expandAfterDecode)
+    {
+        LOG_INFO(std::string("Expand limited range after decode: ") +
+                 (adj.expandAfterDecode ? "on" : "off"));
     }
     if (adj.deinterlace != m_adjust.deinterlace || adj.fieldOrder != m_adjust.fieldOrder)
     {
@@ -391,6 +397,8 @@ void FrameProcessor::runPrePass()
             m_adjust.colorRange == SourceColorRange::Limited ||
             (m_adjust.colorRange == SourceColorRange::Auto && m_reportedColorRange == 1);
     }
+    // #243 — independent of colorRange and of the frame format.
+    p.expandAfterDecode = m_adjust.expandAfterDecode;
 
     if (!SourcePrePass::isActive(p))
     {

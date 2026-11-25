@@ -1076,6 +1076,11 @@ async function loadImageSettings() {
         if (colorRangeEl) {
             colorRangeEl.value = settings.colorRange || 'auto';
         }
+        // #243
+        const expandAfterEl = document.getElementById('expandLimitedAfterDecode');
+        if (expandAfterEl) {
+            expandAfterEl.checked = settings.expandLimitedAfterDecode === true;
+        }
 
         if (maintainAspectEl) {
             maintainAspectEl.checked = settings.maintainAspect || false;
@@ -1175,6 +1180,10 @@ async function updateImageSettings() {
         if (fpsOverlayEl) {
             settings.fpsOverlay = fpsOverlayEl.checked;
         }
+        const expandAfterEl = document.getElementById('expandLimitedAfterDecode');
+        if (expandAfterEl) {
+            settings.expandLimitedAfterDecode = expandAfterEl.checked; // #243
+        }
         
         await api.setImageSettings(settings);
         
@@ -1185,6 +1194,7 @@ async function updateImageSettings() {
             saturation: settings.saturation,
             gamma: settings.gamma,
             colorRange: settings.colorRange,
+            expandLimitedAfterDecode: settings.expandLimitedAfterDecode,
             maintainAspect: settings.maintainAspect,
             fullscreen: settings.fullscreen
         };
@@ -1593,6 +1603,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (colorRangeSel) {
         colorRangeSel.addEventListener('change', updateImageSettingsDebounced);
     }
+    const expandAfterChk = document.getElementById('expandLimitedAfterDecode');
+    if (expandAfterChk) {
+        expandAfterChk.addEventListener('change', updateImageSettingsDebounced); // #243
+    }
     // #242 — per-slider reset buttons (data-reset-target / data-reset-value).
     document.querySelectorAll('.slider-reset').forEach(function(btn) {
         btn.addEventListener('click', function(ev) {
@@ -1611,6 +1625,7 @@ document.addEventListener('DOMContentLoaded', function() {
             setSliderWithBadge('saturation', 1);
             setSliderWithBadge('gamma', 1);
             if (colorRangeSel) colorRangeSel.value = 'auto';
+            if (expandAfterChk) expandAfterChk.checked = false;
             updateImageSettings();
         });
     }

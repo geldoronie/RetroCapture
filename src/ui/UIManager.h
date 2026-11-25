@@ -243,6 +243,8 @@ public:
     void setSaturation(float saturation) { m_saturation = saturation; }
     void setGamma(float gamma) { m_gamma = gamma; }
     void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
+    // #243 — extra 16-235 -> 0-255 expansion after the decode (off = identity).
+    void setExpandLimitedAfterDecode(bool enabled) { m_expandLimitedAfterDecode = enabled; }
     // #229 — deinterlacing, applied before the shader chain.
     // mode: 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend. order: 0 = Auto, 1 = TFF, 2 = BFF.
     void setDeinterlaceMode(int mode) { m_deinterlaceMode = (mode >= 0 && mode <= 3) ? mode : 0; }
@@ -786,6 +788,7 @@ public:
     float getSaturation() const { return m_saturation; }
     float getGamma() const { return m_gamma; }
     int getColorRange() const { return m_colorRange; }
+    bool getExpandLimitedAfterDecode() const { return m_expandLimitedAfterDecode; }
     int getDeinterlaceMode() const { return m_deinterlaceMode; }
     int getFieldOrder() const { return m_fieldOrder; }
     bool getMaintainAspect() const { return m_maintainAspect; }
@@ -1367,6 +1370,7 @@ private:
     float m_saturation = 1.0f;
     float m_gamma = 1.0f;
     int m_colorRange = 0;
+    bool m_expandLimitedAfterDecode = false; // #243
     // #229 — deinterlacing (Off by default)
     int m_deinterlaceMode = 0;
     int m_fieldOrder = 0;

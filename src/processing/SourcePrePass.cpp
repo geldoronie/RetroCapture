@@ -70,7 +70,7 @@ std::string buildFragmentShader()
 
     return header +
            "uniform sampler2D uTex;\n"
-           "uniform float uExpand;\n"
+           "uniform float uExpand;\n"  // number of 16-235 -> 0-255 expansions (0..2)
            "uniform float uSaturation;\n"
            "uniform float uInvGamma;\n"
            "uniform float uDeint;\n"   // 0 none, 1 bob, 2 blend (#229)
@@ -99,8 +99,10 @@ std::string buildFragmentShader()
            "    } else {\n"
            "        c = SRC_TEX(uTex, TexCoord).rgb;\n"
            "    }\n"
-           "    // Limited (16-235) -> full (0-255) range.\n"
+           "    // Limited (16-235) -> full (0-255) range: once for a limited RGB\n"
+           "    // source, once more for 'expand limited range after decode' (#243).\n"
            "    if (uExpand > 0.5) c = (c - 16.0 / 255.0) * (255.0 / 219.0);\n"
+           "    if (uExpand > 1.5) c = (clamp(c, 0.0, 1.0) - 16.0 / 255.0) * (255.0 / 219.0);\n"
            "    c = clamp(c, 0.0, 1.0);\n"
            "    // Saturation around Rec.601 luma (matches the YUV decode).\n"
            "    float y = dot(c, vec3(0.299, 0.587, 0.114));\n"
@@ -138,7 +140,7 @@ SourcePrePass::~SourcePrePass()
 
 bool SourcePrePass::isActive(const Params &p)
 {
-    return p.expandLimitedRange || p.deinterlace != 0 ||
+    return p.expandLimitedRange || p.expandAfterDecode || p.deinterlace != 0 ||
            std::fabs(p.saturation - 1.0f) > 1e-4f ||
            std::fabs(p.gamma - 1.0f) > 1e-4f;
 }
@@ -292,7 +294,9 @@ GLuint SourcePrePass::apply(GLuint srcTex, uint32_t w, uint32_t h, const Params 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, srcTex);
         if (m_locTex >= 0) glUniform1i(m_locTex, 0);
-        if (m_locExpand >= 0) glUniform1f(m_locExpand, p.expandLimitedRange ? 1.0f : 0.0f);
+        if (m_locExpand >= 0)
+            glUniform1f(m_locExpand, static_cast<float>((p.expandLimitedRange ? 1 : 0) +
+                                                        (p.expandAfterDecode ? 1 : 0)));
         if (m_locSaturation >= 0) glUniform1f(m_locSaturation, p.saturation);
         if (m_locInvGamma >= 0)
             glUniform1f(m_locInvGamma, 1.0f / (p.gamma > 0.01f ? p.gamma : 0.01f));

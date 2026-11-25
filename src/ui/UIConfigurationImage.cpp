@@ -94,6 +94,20 @@ void UIConfigurationImage::renderSourceColor()
                           "device reports, else YUV = limited, RGB = full.");
     }
 
+    bool expandAfter = m_uiManager->getExpandLimitedAfterDecode();
+    if (ImGui::Checkbox("Expand limited range after decode", &expandAfter))
+    {
+        m_uiManager->setExpandLimitedAfterDecode(expandAfter);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Stretches 16-235 to 0-255 after the YUV->RGB decode, "
+                          "independent of Color range. For grabbers that put "
+                          "limited-range RGB inside a limited-range YUV signal "
+                          "(blacks still grey after picking the right range).");
+    }
+
     float saturation = m_uiManager->getSaturation();
     if (ImGui::SliderFloat("Saturation", &saturation, 0.0f, 3.0f, "%.2f"))
     {
@@ -127,6 +141,7 @@ void UIConfigurationImage::renderSourceColor()
         m_uiManager->setSaturation(1.0f);
         m_uiManager->setGamma(1.0f);
         m_uiManager->setColorRange(0);
+        m_uiManager->setExpandLimitedAfterDecode(false);
         m_uiManager->saveConfig();
     }
 }
