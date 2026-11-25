@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "Logger.h"
@@ -14,6 +15,8 @@
  * and the worst iteration, plus the loop rate and how many iterations
  * took longer than a 60 Hz frame. Used to find what keeps the loop from
  * keeping up (e.g. frame generation at 1080p60).
+ *
+ * Off unless RETROCAPTURE_LOOP_PROFILE=1: then nothing is timed or logged.
  */
 class LoopProfiler
 {
@@ -33,6 +36,15 @@ public:
         return p;
     }
 
+    static bool enabled()
+    {
+        static const bool on = [] {
+            const char *v = std::getenv("RETROCAPTURE_LOOP_PROFILE");
+            return v && *v && std::string(v) != "0";
+        }();
+        return on;
+    }
+
     void add(Stage s, double ms)
     {
         m_cur[s] += ms;
@@ -41,6 +53,7 @@ public:
     /** End of one loop iteration: fold it into the window, log every 10 s. */
     void endIteration(double iterMs)
     {
+        if (!enabled()) return;
         const auto now = std::chrono::steady_clock::now();
         if (m_n == 0 && m_windowStart.time_since_epoch().count() == 0)
             m_windowStart = now;
@@ -82,6 +95,7 @@ public:
         explicit Scope(Stage st) : s(st) {}
         ~Scope()
         {
+            if (!LoopProfiler::enabled()) return;
             LoopProfiler::get().add(
                 s, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
         }
