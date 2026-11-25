@@ -250,6 +250,16 @@ void UIConfigurationImage::renderUpscaler()
 
     if (!on) ImGui::EndDisabled();
 
+    if (on && m_uiManager->getUpscalerIdle())
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
+                           "Idle: the target is not larger than the source, so there is nothing to "
+                           "upscale (e.g. a 1080p capture in a smaller window). Pick a 2x-4x or "
+                           "custom target, or enlarge the window, to use it.");
+        ImGui::PopTextWrapPos();
+    }
+
     if (ImGui::Button("Reset##upscaler"))
     {
         up = UpscalerSettings();
