@@ -2750,7 +2750,9 @@ function renderFrameGenStatus(data) {
         el.textContent = tr('web.config.image.framegen_unsupported', 'Not available on this GPU (needs OpenGL 3.3 / GLES 3.0).');
     } else if (st.active) {
         const out = st.outputFps > 0 ? st.outputFps.toFixed(2) + ' fps' : tr('web.config.image.framegen_per_refresh', 'one frame per refresh');
-        el.textContent = st.sourceFps.toFixed(2) + ' fps \u2192 ' + out +
+        const game = (data.skipRepeats && st.captureFps > 0 && st.sourceFps > 0 && st.sourceFps < st.captureFps * 0.9)
+            ? tr('web.config.image.framegen_game', 'game') + ' ' : '';
+        el.textContent = game + st.sourceFps.toFixed(2) + ' fps \u2192 ' + out +
             ' (+' + st.addedLatencyMs.toFixed(1) + ' ms) \u2014 ' +
             st.realFps.toFixed(1) + ' real + ' + st.generatedFps.toFixed(1) + ' gen';
     } else {
@@ -2779,6 +2781,8 @@ function applyFrameGenToForm(data) {
     if (modeEl) modeEl.value = data.mode || 'off';
     if (methodEl) methodEl.value = data.method || 'motion';
     if (protectEl) protectEl.checked = !!data.protectStatic;
+    const skipEl = document.getElementById('frameGenSkipRepeats');
+    if (skipEl) skipEl.checked = data.skipRepeats !== false;
     const outputs = data.outputs || {};
     for (const [id, key] of Object.entries(FRAMEGEN_OUTPUTS)) {
         const el = document.getElementById(id);
@@ -2814,6 +2818,7 @@ async function commitFrameGeneration() {
             mode: modeEl.value,
             method: methodEl.value,
             protectStatic: protectEl ? protectEl.checked : true,
+            skipRepeats: (document.getElementById('frameGenSkipRepeats') || {checked: true}).checked,
             outputs,
         }));
     } catch (err) {
@@ -2824,7 +2829,7 @@ async function commitFrameGeneration() {
 document.addEventListener('DOMContentLoaded', () => {
     const modeEl = document.getElementById('frameGenMode');
     if (!modeEl) return;
-    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', ...Object.keys(FRAMEGEN_OUTPUTS)];
+    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
     for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.addEventListener('change', commitFrameGeneration);

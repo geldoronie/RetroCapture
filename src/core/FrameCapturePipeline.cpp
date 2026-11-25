@@ -1877,6 +1877,8 @@ bool FrameCapturePipeline::finishFrame()
             pc.genDropped   = clk.dropped();
             const UIManager::FrameGenStatus st = m_app.m_ui->getFrameGenStatus();
             pc.genTargetFps = st.outputFps;
+            pc.genSourceFps = st.sourceFps;
+            pc.genRepeats   = st.repeatsSkipped;
         }
         m_app.m_ui->setPerfCounters(pc);
     }

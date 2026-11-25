@@ -614,6 +614,7 @@
                                                 <option value="3x" data-i18n="web.config.image.framegen_3x">3x source rate</option>
                                                 <option value="4x" data-i18n="web.config.image.framegen_4x">4x source rate</option>
                                                 <option value="display" data-i18n="web.config.image.framegen_display">Display refresh (window only)</option>
+                                                <option value="fill" data-i18n="web.config.image.framegen_fill">Match capture rate (fill repeats)</option>
                                             </select>
                                         </div>
                                         <div class="col-md-6">
@@ -628,6 +629,10 @@
                                             <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="frameGenProtectStatic">
                                                 <label class="form-check-label" for="frameGenProtectStatic" data-i18n="web.config.image.framegen_protect">Keep static regions still (HUD, borders)</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="frameGenSkipRepeats">
+                                                <label class="form-check-label" for="frameGenSkipRepeats" data-i18n="web.config.image.framegen_skip_repeats">Skip repeated frames (game below the capture rate)</label>
                                             </div>
                                             <div class="small mt-2" data-i18n="web.config.image.framegen_outputs">Generated frames go to:</div>
                                             <div class="form-check form-check-inline">

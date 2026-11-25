@@ -551,7 +551,7 @@ void UIConfigurationImage::renderFrameGeneration()
     }
 
     static const char *modes[] = {"Off", "2x source rate", "3x source rate", "4x source rate",
-                                  "Display refresh (window only)"};
+                                  "Display refresh (window only)", "Match capture rate (fill repeats)"};
     int mode = fg.mode;
     ImGui::PushItemWidth(240);
     if (ImGui::Combo("Mode##framegen", &mode, modes, IM_ARRAYSIZE(modes)))
@@ -570,6 +570,12 @@ void UIConfigurationImage::renderFrameGeneration()
     ImGui::PopItemWidth();
     if (ImGui::Checkbox("Keep static regions still (HUD, borders)##framegen", &fg.protectStatic))
         changed = true;
+    if (ImGui::Checkbox("Skip repeated frames (game below the capture rate)##framegen", &fg.skipRepeats))
+        changed = true;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Many games draw 30 or 20 fps on a 60 Hz signal: the capture repeats each\n"
+                          "picture 2-3 times. With this on, repeats are not source frames, so\n"
+                          "interpolation runs between the game's own frames.");
 
     const bool display = fg.mode == FrameGenSettings::Display;
     ImGui::TextUnformatted("Generated frames go to:");
@@ -604,6 +610,9 @@ void UIConfigurationImage::renderFrameGeneration()
         renderRifeStatus(st);
     if (st.active)
     {
+        if (fg.skipRepeats && st.captureFps > 0.0f && st.sourceFps > 0.0f &&
+            st.sourceFps < st.captureFps * 0.9f)
+            ImGui::Text("Game %.2f fps on a %.2f fps capture (repeats skipped)", st.sourceFps, st.captureFps);
         if (st.outputFps > 0.0f)
             ImGui::Text("Source %.2f fps -> output %.2f fps, +%.1f ms latency", st.sourceFps, st.outputFps,
                         st.addedLatencyMs);
@@ -616,6 +625,12 @@ void UIConfigurationImage::renderFrameGeneration()
     {
         ImGui::TextDisabled("Stream / recording carry the generated frames their FPS allows: "
                             "set them to the output rate (e.g. 60 for 30 fps at 2x).");
+    }
+    if (fg.mode == FrameGenSettings::Fill)
+    {
+        ImGui::TextDisabled("Match capture rate: each game frame gets as many slots as the capture "
+                            "repeats it (30 fps game on 60 Hz -> 2, 20 fps -> 3); a game at the "
+                            "capture rate passes through with no added latency.");
     }
     if (display)
     {

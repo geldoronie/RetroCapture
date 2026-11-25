@@ -28,6 +28,13 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
         LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
     else if (m_variant == Variant::Motion)
         LOG_INFO("VideoCaptureTestPattern: 'motion' variant (scrolling background, sprites, static HUD)");
+    if (const char *g = std::getenv("RETROCAPTURE_TEST_GAME_FPS"))
+    {
+        m_gameFps = std::atof(g);
+        if (m_variant == Variant::Motion && m_gameFps > 0.0)
+            LOG_INFO("VideoCaptureTestPattern: new picture at " + std::to_string(m_gameFps) +
+                     " fps (repeated captures in between)");
+    }
     if (m_buffer.empty())
         m_buffer.resize(static_cast<size_t>(m_width) * m_height * 3, 0);
     LOG_INFO("VideoCaptureTestPattern opened: " + std::to_string(m_width) + "x" +
@@ -313,8 +320,19 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
     }
     if (m_variant == Variant::Motion)
     {
-        renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(timestampUs) / 1e6,
-                     (timestampUs % 1000000LL) < 100000LL);
+        // #256: RETROCAPTURE_TEST_GAME_FPS=N draws a new picture only N
+        // times a second (a game below the capture rate), so the capture
+        // repeats each one exactly, like a console's 60 Hz signal does.
+        // Counted in captured frames (not timestamps), so every picture
+        // repeats exactly fps / N times, as on a console's fixed refresh.
+        int64_t ts = timestampUs;
+        if (m_gameFps > 0.0 && m_fps > 0)
+        {
+            const double picture = std::floor(static_cast<double>(f) * m_gameFps / static_cast<double>(m_fps));
+            ts = static_cast<int64_t>(picture / m_gameFps * 1e6);
+        }
+        renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(ts) / 1e6,
+                     (ts % 1000000LL) < 100000LL);
         return;
     }
     if (m_variant == Variant::Edges)

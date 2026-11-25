@@ -37,6 +37,8 @@
  *    second, plus the sync flash band. Positions are a pure function of
  *    the frame timestamp (see renderMotion), so any instant can be
  *    rendered exactly: frame generation is measured against it.
+ *    RETROCAPTURE_TEST_GAME_FPS=N (#256) draws a new picture only N times a
+ *    second, the captures in between repeat it (a 30 fps game on 60 Hz).
  *  - "edges" (#251): a static, hard-edged pattern defined in normalised
  *    coordinates (concentric rings, a rotated checkerboard, a colour
  *    starburst), so the same pattern rendered at a higher --width/--height
@@ -86,6 +88,7 @@ private:
 
     enum class Variant { Bars, Levels, Interlaced, Motion, Edges };
     Variant m_variant = Variant::Bars;
+    double m_gameFps = 0.0; // #256: RETROCAPTURE_TEST_GAME_FPS (0 = every frame new)
 
     uint32_t m_width = 1280;
     uint32_t m_height = 720;

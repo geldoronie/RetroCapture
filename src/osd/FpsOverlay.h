@@ -39,6 +39,8 @@ struct PerfCounters
     uint64_t genGenerated    = 0;
     uint64_t genDropped      = 0;
     float    genTargetFps    = 0.0f; // output timeline rate (0 = per refresh)
+    float    genSourceFps    = 0.0f; // distinct source frames (the game's rate, #256)
+    uint64_t genRepeats      = 0;    // captures skipped as repeats (#256)
 };
 
 /**
@@ -77,6 +79,8 @@ struct FpsStats
     float    genFps       = 0.0f;  // generated frames per second
     uint32_t genDropped   = 0;     // in this window
     float    genTargetFps = 0.0f;
+    float    genSourceFps = 0.0f;
+    float    genRepeatFps = 0.0f;  // repeats skipped per second
 };
 
 /**
@@ -153,6 +157,7 @@ private:
     uint64_t m_winRawStart    = 0;
     uint64_t m_winRecordStart = 0;
     uint64_t m_winGenRealStart = 0;
+    uint64_t m_winGenRepeatsStart = 0;
     uint64_t m_winGenStart     = 0;
     uint64_t m_winGenDropStart = 0;
 

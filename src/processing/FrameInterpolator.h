@@ -97,6 +97,32 @@ public:
     /** Store a new real frame (copied; srcTex may be reused afterwards). */
     bool pushFrame(GLuint srcTex, uint32_t w, uint32_t h);
 
+    /**
+     * Repeat detection (#256): how srcTex differs from the latest real frame
+     * (B). A block-wise luma difference on a small grid is read back; the
+     * noise floor is the median block difference, so an analog capture's
+     * noise does not count as change. Synchronous (one small readback).
+     */
+    struct Difference
+    {
+        bool valid = false;     // false = no history / different size
+        float noise = 0.0f;     // median block mean |dLuma| (0..1)
+        float peak = 0.0f;      // largest block mean |dLuma|
+        int changedBlocks = 0;  // blocks clearly above the noise floor
+        int blocks = 0;
+        /**
+         * The game did not draw a new picture. noiseFloor = the source's
+         * usual frame-to-frame noise (tracked by the caller): a uniform
+         * change (fade) lifts the median above it and is not a repeat.
+         */
+        bool repeat(float noiseFloor) const
+        {
+            return valid && changedBlocks < 2 && peak - noise < 24.0f / 255.0f &&
+                   noise <= noiseFloor + 2.0f / 255.0f;
+        }
+    };
+    Difference compareWithLatest(GLuint srcTex, uint32_t w, uint32_t h);
+
     /** Real frames held: 0, 1 or 2. */
     int frameCount() const { return m_count; }
     /** Latest real frame (B) / the one before it (A); 0 if absent. */
@@ -166,6 +192,7 @@ private:
     GLuint m_progSearch = 0;
     GLuint m_progConsensus = 0;
     GLuint m_progWarp = 0;
+    GLuint m_progDiff = 0;
     GLuint m_vao = 0, m_vbo = 0, m_ebo = 0;
     bool m_programsTried = false;
     bool m_programsOk = false;
@@ -185,6 +212,8 @@ private:
     Target m_out;
     std::vector<Target> m_flow; // per level
     Target m_flowFinal;         // consensus output (finest level)
+    Target m_diff;              // repeat detection grid (#256)
+    std::vector<uint8_t> m_diffPixels;
     bool m_flowValid = false;
 
     RifeBackend m_rife;

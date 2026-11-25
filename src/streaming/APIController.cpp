@@ -1354,6 +1354,7 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"mode\": " << jsonString(FrameGenSettings::modeName(g.mode)) << ", "
         << "\"method\": " << jsonString(FrameGenSettings::methodName(g.method)) << ", "
         << "\"protectStatic\": " << jsonBool(g.protectStatic) << ", "
+        << "\"skipRepeats\": " << jsonBool(g.skipRepeats) << ", "
         << "\"outputs\": {"
         << "\"window\": " << jsonBool(g.window) << ", "
         << "\"stream\": " << jsonBool(g.stream) << ", "
@@ -1376,6 +1377,8 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"active\": " << jsonBool(st.active) << ", "
         << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
         << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
+        << "\"captureFps\": " << jsonNumber(st.captureFps) << ", "
+        << "\"repeatsSkipped\": " << st.repeatsSkipped << ", "
         << "\"outputFps\": " << jsonNumber(st.outputFps) << ", "
         << "\"addedLatencyMs\": " << jsonNumber(st.addedLatencyMs) << ", "
         << "\"realFps\": " << jsonNumber(fps.genRealFps) << ", "
@@ -1403,7 +1406,7 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
             const int m = json["mode"].is_string() ? FrameGenSettings::modeFromName(json["mode"].get<std::string>()) : -1;
             if (m < 0)
             {
-                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, 2x, 3x, 4x or display)");
+                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, 2x, 3x, 4x, display or fill)");
                 return true;
             }
             g.mode = m;
@@ -1424,7 +1427,7 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
             dst = obj[key].get<bool>();
             return true;
         };
-        bool ok = readBool(json, "protectStatic", g.protectStatic);
+        bool ok = readBool(json, "protectStatic", g.protectStatic) && readBool(json, "skipRepeats", g.skipRepeats);
         if (ok && json.contains("outputs"))
         {
             const auto &o = json["outputs"];
@@ -1433,7 +1436,7 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
         }
         if (!ok)
         {
-            sendErrorResponse(clientFd, 400, "'protectStatic' and 'outputs.*' must be booleans");
+            sendErrorResponse(clientFd, 400, "'protectStatic', 'skipRepeats' and 'outputs.*' must be booleans");
             return true;
         }
         m_uiManager->setFrameGenSettings(g);
