@@ -1,5 +1,6 @@
 #include "FrameCapturePipeline.h"
 #include "../renderer/AreaDownscaler.h"
+#include "../utils/LoopProfiler.h"
 #include "Application.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
@@ -392,7 +393,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     live.pbo = m_app.m_pboManager.get();
     live.pboInFlight = &m_pboInFlight;
 
-    const FrameGenPlan plan = planFrameGeneration(sourceTex, sourceW, sourceH, liveMeta);
+    FrameGenPlan plan;
+    {
+        LoopProfiler::Scope prof(LoopProfiler::FrameGen);
+        plan = planFrameGeneration(sourceTex, sourceW, sourceH, liveMeta);
+    }
     if (!plan.active)
     {
         if (renderPass(live))
@@ -695,7 +700,10 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         {
             m_app.m_ui->endFrame();
         }
-        m_app.m_window->swapBuffers();
+        {
+            LoopProfiler::Scope prof(LoopProfiler::Swap);
+            m_app.m_window->swapBuffers();
+        }
         return true;
     }
 
@@ -1930,7 +1938,10 @@ bool FrameCapturePipeline::finishFrame()
     // Check if window is still valid before swapping
     if (m_app.m_window && !m_app.m_window->shouldClose())
     {
-        m_app.m_window->swapBuffers();
+        {
+            LoopProfiler::Scope prof(LoopProfiler::Swap);
+            m_app.m_window->swapBuffers();
+        }
     }
 
     // Pacing policy:

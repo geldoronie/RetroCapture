@@ -121,10 +121,21 @@ private:
     // Redimensionado apenas quando necessário (quando dimensões mudam)
     std::vector<uint8_t> m_rgbBuffer;
 
-    // Contexto libswscale para YUYV→RGB. Recriado se as dimensões mudarem.
-    SwsContext* m_swsContext = nullptr;
+    // libswscale YUYV->RGB, one context per horizontal slice: the slices are
+    // converted in parallel (SWS_POINT and 4:2:2 have no vertical
+    // dependency, so the result is bit-identical to one full-frame call).
+    // A single-threaded 1080p conversion took ~9 ms per frame, over half of
+    // a 60 fps frame budget. Recreated when the dimensions change.
+    struct SwsSlice
+    {
+        SwsContext *ctx = nullptr;
+        int y0 = 0;
+        int h = 0;
+    };
+    std::vector<SwsSlice> m_swsSlices;
     int m_swsWidth = 0;
     int m_swsHeight = 0;
+    void freeSwsSlices();
 
     // #228 — source colour adjustments and the GPU pass applying them.
     SourceAdjustments m_adjust;
