@@ -1973,6 +1973,7 @@ void Application::run()
             adj.expandAfterDecode = m_ui->getExpandLimitedAfterDecode();
             adj.deinterlace = static_cast<DeinterlaceMode>(m_ui->getDeinterlaceMode());
             adj.fieldOrder = static_cast<FieldOrder>(m_ui->getFieldOrder());
+            adj.temporalDenoise = m_ui->getTemporalDenoise(); // #268
             m_frameProcessor->setSourceAdjustments(adj);
         }
 
@@ -2590,6 +2591,7 @@ void Application::applyPreset(const std::string &presetName)
         m_ui->setContrast(m_contrast);
         m_ui->setSaturation(data.imageSaturation);
         m_ui->setGamma(data.imageGamma);
+        m_ui->setTemporalDenoise(data.imageTemporalDenoise); // #268
         m_ui->setColorRange(data.imageColorRange);
         m_ui->setExpandLimitedAfterDecode(data.imageExpandLimitedAfterDecode);
         m_ui->setSourceDownscaleFilter(data.imageDownscaleFilter);
@@ -2770,6 +2772,7 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
     {
         data.imageSaturation = m_ui->getSaturation();
         data.imageGamma = m_ui->getGamma();
+        data.imageTemporalDenoise = m_ui->getTemporalDenoise(); // #268
         data.imageColorRange = m_ui->getColorRange();
         data.imageExpandLimitedAfterDecode = m_ui->getExpandLimitedAfterDecode();
         data.imageDownscaleFilter = m_ui->getSourceDownscaleFilter();

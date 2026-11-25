@@ -157,6 +157,25 @@ void UIConfigurationImage::renderSourceColor()
         m_uiManager->saveConfig();
     }
 
+    // #268 — temporal denoise (analog noise, chroma speckle, shimmer).
+    float denoise = m_uiManager->getTemporalDenoise();
+    if (ImGui::SliderFloat("Temporal denoise", &denoise, 0.0f, 1.0f, denoise <= 0.0f ? "Off" : "%.2f"))
+    {
+        m_uiManager->setTemporalDenoise(denoise);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Averages still areas over several frames and leaves moving ones alone:\n"
+                          "cleans the noise and shimmer of analog consoles through a converter.\n"
+                          "No added latency. Higher = stronger; too high can smear slow motion.\n"
+                          "Runs before the shader chain and frame generation; /raw gets it too.");
+    ImGui::SameLine();
+    if (ImGui::Button("Off##denoise"))
+    {
+        m_uiManager->setTemporalDenoise(0.0f);
+        m_uiManager->saveConfig();
+    }
+
     if (ImGui::Button("Reset color to defaults"))
     {
         m_uiManager->setBrightness(1.0f);
