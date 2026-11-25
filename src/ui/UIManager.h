@@ -1572,6 +1572,8 @@ public:
 
     // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
+    /** Scan again where the startup scan looked (the assets' shader dir). */
+    void rescanShaders() { scanShaders(m_shaderBasePath); }
 
 private:
     void scanV4L2Devices();

@@ -95,7 +95,10 @@ void UIConfigurationShader::renderShaderSelection()
     ImGui::SameLine();
     if (ImGui::Button(rescanLabel.c_str()))
     {
-        m_uiManager->scanShaders("shaders/shaders_glsl");
+        // The same directory as the startup scan: a relative path only
+        // worked when the app was started from the repo / install root
+        // (from an AppImage it found nothing and emptied the list).
+        m_uiManager->rescanShaders();
     }
     if (ImGui::IsItemHovered())
     {
