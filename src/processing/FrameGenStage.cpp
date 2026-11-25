@@ -4,13 +4,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 namespace
 {
-// A repeat is held at most this many capture periods (= the 4-slot cap, so
-// down to a 15 fps game on 60 Hz): past it (a static scene, a menu) the
+// A repeat is held at most this many capture periods (= the fill slot cap,
+// so down to a 10 fps game on 60 Hz): past it (a static scene, a menu) the
 // capture goes through anyway, so the outputs never stall.
-constexpr int64_t kMaxHoldPeriods = 4;
+constexpr int64_t kMaxHoldPeriods = 6;
+constexpr int kMaxFillSlots = 6;
 } // namespace
 
 bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, int64_t srcTsUs,
@@ -53,10 +55,38 @@ bool FrameGenStage::acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, i
     else
         m_noiseFloor += (diff.noise - m_noiseFloor) / 64.0f;
 
+    m_diffBlocks = diff.blocks;
+    // Diagnostics: RETROCAPTURE_FRAMEGEN_DIFF_CSV=<file> logs every
+    // comparison (first 3000 captures) to tune the repeat thresholds.
+    static FILE *csv = nullptr;
+    static int csvRows = 0;
+    static bool csvTried = false;
+    if (!csvTried)
+    {
+        csvTried = true;
+        if (const char *path = std::getenv("RETROCAPTURE_FRAMEGEN_DIFF_CSV"))
+            if ((csv = std::fopen(path, "w")))
+                std::fprintf(csv, "ts_us,changed,noise,peak,changed_avg,peak_avg\n");
+    }
+    if (csv && csvRows < 3000)
+    {
+        std::fprintf(csv, "%lld,%d,%.1f,%.1f,%d,%.2f\n", static_cast<long long>(srcTsUs), diff.changedBlocks,
+                     diff.noise * 255.0f, diff.peak * 255.0f, diff.changedAvg, diff.peakAvg * 255.0f);
+        if (++csvRows == 3000) { std::fclose(csv); csv = nullptr; }
+        else if (csvRows % 60 == 0) std::fflush(csv);
+    }
+    if (m_diffStats.n >= 4000) m_diffStats = DiffStats(); // bounded if nothing is emitted
+    m_diffStats.n++;
+    m_diffStats.changed.push_back(diff.changedBlocks);
+    m_diffStats.changedAvg.push_back(diff.changedAvg);
+    m_diffStats.peakAvg.push_back(diff.peakAvg * 255.0f);
+    m_diffStats.noise.push_back(diff.noise * 255.0f);
+    m_diffStats.peak.push_back(diff.peak * 255.0f);
     const bool held = m_capPeriodUs > 0 && srcTsUs - m_lastDistinctTsUs >= kMaxHoldPeriods * m_capPeriodUs;
     if (diff.repeat(m_noiseFloor) && !held)
     {
         ++m_repeats;
+        ++m_diffStats.repeats;
         return false;
     }
     m_lastDistinctTsUs = srcTsUs;
@@ -98,7 +128,7 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
         {
             n = static_cast<int>(std::llround(static_cast<double>(m_clock.spanUs()) /
                                               static_cast<double>(m_capPeriodUs)));
-            n = std::max(1, std::min(4, n));
+            n = std::max(1, std::min(kMaxFillSlots, n));
         }
         factor = n;
     }
@@ -191,6 +221,38 @@ void FrameGenStage::noteEmit(int64_t nowUs, int64_t tsUs)
                   static_cast<unsigned long long>(m_clock.dropped()),
                   static_cast<unsigned long long>(m_repeats));
     LOG_INFO(buf);
+    DiffStats &d = m_diffStats;
+    if (d.n > 0)
+    {
+        // Percentiles 10/50/90 of the comparison against the latest
+        // distinct frame: blocks changed, block noise and peak (8-bit).
+        auto pct = [](auto v, double q) {
+            std::sort(v.begin(), v.end());
+            return static_cast<double>(v[static_cast<size_t>(q * (v.size() - 1))]);
+        };
+        char dbuf[320];
+        std::snprintf(dbuf, sizeof(dbuf),
+                      "Frame generation repeats: %d of %d captures, changed blocks p10/50/90 %.0f/%.0f/%.0f "
+                      "of %d, noise %.1f/%.1f/%.1f (floor %.1f), peak %.1f/%.1f/%.1f",
+                      d.repeats, d.n, pct(d.changed, 0.1), pct(d.changed, 0.5), pct(d.changed, 0.9),
+                      m_diffBlocks, pct(d.noise, 0.1), pct(d.noise, 0.5), pct(d.noise, 0.9),
+                      m_noiseFloor * 255.0f, pct(d.peak, 0.1), pct(d.peak, 0.5), pct(d.peak, 0.9));
+        LOG_INFO(dbuf);
+        // Deciles of the block-average metric: a game below the capture
+        // rate shows two populations (repeats near 0, new pictures high).
+        std::string dec = "Frame generation repeats (block average): changed deciles";
+        for (int q = 1; q <= 9; ++q)
+            dec += " " + std::to_string(static_cast<int>(pct(d.changedAvg, q / 10.0)));
+        dec += ", peak deciles";
+        for (int q = 1; q <= 9; ++q)
+        {
+            char t[16];
+            std::snprintf(t, sizeof(t), " %.1f", pct(d.peakAvg, q / 10.0));
+            dec += t;
+        }
+        LOG_INFO(dec);
+    }
+    d = DiffStats();
     s = TimingStats();
     s.windowStartUs = nowUs;
     s.lastEmitWallUs = nowUs;

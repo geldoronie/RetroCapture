@@ -3,6 +3,7 @@
 #include "FrameGenClock.h"
 #include "FrameInterpolator.h"
 #include <cstdint>
+#include <vector>
 
 /**
  * Frame generation stage (#247): the output clock (FrameGenClock) driving
@@ -94,4 +95,14 @@ private:
     bool m_noiseValid = false;
     uint64_t m_repeats = 0;
     int m_effFactor = 0;
+    // Repeat-detection diagnostics (logged with the timing stats).
+    struct DiffStats
+    {
+        int n = 0, repeats = 0;
+        std::vector<int> changed, changedAvg;
+        std::vector<float> peakAvg;
+        std::vector<float> noise, peak;
+    };
+    DiffStats m_diffStats;
+    int m_diffBlocks = 0;
 };

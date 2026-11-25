@@ -109,15 +109,30 @@ public:
         float noise = 0.0f;     // median block mean |dLuma| (0..1)
         float peak = 0.0f;      // largest block mean |dLuma|
         int changedBlocks = 0;  // blocks clearly above the noise floor
+        int changedAvg = 0;     // blocks whose average luma moved (> 2 steps)
+        float peakAvg = 0.0f;   // largest block-average change
         int blocks = 0;
         /**
          * The game did not draw a new picture. noiseFloor = the source's
-         * usual frame-to-frame noise (tracked by the caller): a uniform
-         * change (fade) lifts the median above it and is not a repeat.
+         * usual frame-to-frame noise (tracked by the caller).
+         *  - Clean (digital) source: pixel-level test; a uniform change
+         *    (fade) lifts the median above the floor and is not a repeat.
+         *  - Noisy (analog through a converter) source: noise, field
+         *    shimmer of a deinterlaced 480i signal and scaler ringing touch
+         *    hundreds of blocks on every capture, so the test is on block
+         *    averages instead: a new picture moves some block's average
+         *    luma by > kAvgPeak steps, a repeat stays far below it
+         *    (measured on a Dreamcast through SCART->HDMI: repeats <= 17,
+         *    new pictures >= 29).
          */
+        static constexpr float kNoisySource = 0.5f / 255.0f;
+        static constexpr float kAvgPeak = 22.0f / 255.0f;
         bool repeat(float noiseFloor) const
         {
-            return valid && changedBlocks < 2 && peak - noise < 24.0f / 255.0f &&
+            if (!valid) return false;
+            if (noiseFloor >= kNoisySource)
+                return peakAvg < kAvgPeak;
+            return changedBlocks < 2 && peak - noise < 24.0f / 255.0f &&
                    noise <= noiseFloor + 2.0f / 255.0f;
         }
     };

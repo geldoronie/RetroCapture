@@ -16,7 +16,7 @@
  *  - delay  = typical arrival lag (arrival - capture timestamp), tracked
  *             min-biased so a late frame does not push the schedule back.
  *
- * Fixed-multiple mode (factor N = 1..4; 1 = pass-through, used per pair by
+ * Fixed-multiple mode (factor N = 1..6; 1 = pass-through, used per pair by
  * the capture-rate fill mode, #256): slot j (1..N) of the pair has
  * phase j/N, timestamp tsA + j/N * span and is due at
  *     tsB + delay + (j-1)/N * span   (minus a quarter slot of slack),
@@ -56,7 +56,7 @@ public:
     /** A new real frame arrived (capture timestamp, MediaClock now). */
     void onRealFrame(int64_t tsUs, int64_t nowUs);
 
-    /** Is an output frame due? factor = 1..4 (fixed multiple), 0 = display. */
+    /** Is an output frame due? factor = 1..6 (fixed multiple), 0 = display. */
     Emit poll(int64_t nowUs, int factor);
 
     /**

@@ -44,6 +44,8 @@ constexpr uint32_t kDiffMaxW = 128;
 constexpr uint32_t kDiffMaxH = 72;
 constexpr int kDiffMeanStep = 3;
 constexpr int kDiffMaxStep = 24;
+// Block-average channel: 8 units per luma step, so 16 = 2 luma steps.
+constexpr int kDiffAvgStep = 16;
 constexpr int kMaxLevels = 5;
 constexpr uint32_t kMinLevelDim = 16;
 // Matching parameters (luma in 0..1, SAD = mean absolute difference).
@@ -174,12 +176,17 @@ void main() {
 }
 )";
 
-// Repeat detection (#256): one texel per block of the source, R = mean and
-// G = max |dLuma| over a 4x4 grid of exact texels in the block, A vs B.
+// Repeat detection (#256): one texel per block of the source.
+//  R = mean |dLuma| over a 4x4 grid of exact texels (pixel-level change);
+//  G = max of those;
+//  B = |mean luma A - mean luma B| over the whole block (8x8 bilinear taps,
+//      ~16x16 texels): blind to sub-pixel shifts (the field shimmer of a
+//      bob-deinterlaced 480i source, scaler ringing), not to real motion.
 const char *kDiffFS = R"(
 uniform sampler2D uA;
 uniform sampler2D uB;
 uniform vec2 uBlock;
+uniform vec2 uSize;
 const vec3 W = vec3(0.299, 0.587, 0.114);
 void main() {
     ivec2 sz = textureSize(uA, 0);
@@ -194,7 +201,15 @@ void main() {
             acc += d;
             mx = max(mx, d);
         }
-    FragColor = vec4(acc / 16.0, mx, 0.0, 1.0);
+    float ma = 0.0;
+    float mb = 0.0;
+    for (int j = 0; j < 8; ++j)
+        for (int i = 0; i < 8; ++i) {
+            vec2 q = (base + (vec2(float(i), float(j)) + 0.5) * uBlock * 0.125) / uSize;
+            ma += dot(texture(uA, q).rgb, W);
+            mb += dot(texture(uB, q).rgb, W);
+        }
+    FragColor = vec4(acc / 16.0, mx, abs(ma - mb) / 64.0 * 8.0, 1.0);
 }
 )";
 
@@ -691,9 +706,10 @@ FrameInterpolator::Difference FrameInterpolator::compareWithLatest(GLuint srcTex
     GLStateGuard guard;
     glDisable(GL_BLEND);
     glUseProgram(m_progDiff);
-    bindTex(0, srcTex, false);
-    bindTex(1, b, false);
+    bindTex(0, srcTex, true);
+    bindTex(1, b, true);
     setI(m_progDiff, "uA", 0);
+    set2F(m_progDiff, "uSize", static_cast<float>(w), static_cast<float>(h));
     setI(m_progDiff, "uB", 1);
     set2F(m_progDiff, "uBlock", static_cast<float>(w) / static_cast<float>(m_diff.w),
           static_cast<float>(h) / static_cast<float>(m_diff.h));
@@ -711,19 +727,32 @@ FrameInterpolator::Difference FrameInterpolator::compareWithLatest(GLuint srcTex
 
     // Noise floor = median block mean; a block "changed" when its mean is
     // clearly above it, or a single texel in it jumped (a small sprite).
-    std::vector<uint8_t> means(n);
-    for (size_t i = 0; i < n; ++i) means[i] = m_diffPixels[i * 4];
+    // The block-average channel (x8 scale, 1/8 luma step) counts its own
+    // changed blocks: that one ignores sub-pixel shimmer.
+    std::vector<uint8_t> means(n), avg(n);
+    for (size_t i = 0; i < n; ++i)
+    {
+        means[i] = m_diffPixels[i * 4];
+        avg[i] = m_diffPixels[i * 4 + 2];
+    }
     std::vector<uint8_t> sorted = means;
     std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
     const int noise = sorted[n / 2];
-    int peak = 0, changed = 0;
+    sorted = avg;
+    std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
+    const int avgNoise = sorted[n / 2];
+    int peak = 0, changed = 0, changedAvg = 0, peakAvg = 0;
     for (size_t i = 0; i < n; ++i)
     {
         const int m = means[i];
         const int mx = m_diffPixels[i * 4 + 1];
         if (m > peak) peak = m;
         if (m > noise + kDiffMeanStep || mx > 2 * noise + kDiffMaxStep) ++changed;
+        if (avg[i] > peakAvg) peakAvg = avg[i];
+        if (avg[i] > avgNoise + kDiffAvgStep) ++changedAvg;
     }
+    d.changedAvg = changedAvg;
+    d.peakAvg = peakAvg / 8.0f / 255.0f;
     d.valid = true;
     d.noise = noise / 255.0f;
     d.peak = peak / 255.0f;

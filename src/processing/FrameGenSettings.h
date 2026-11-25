@@ -19,7 +19,7 @@
  *  - Fill:     match the capture rate (#256): a game drawing below the
  *              signal rate (30 / 20 fps on a 60 Hz signal) gets its repeated
  *              captures replaced by in-between frames, round(span / capture
- *              period) slots per game frame (1..4). A game at the capture
+ *              period) slots per game frame (1..6). A game at the capture
  *              rate passes through untouched, with no added latency.
  *
  * Repeated frames (#256): with skipRepeats on, a captured frame identical to
