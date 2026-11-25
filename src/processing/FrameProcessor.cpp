@@ -58,6 +58,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     }
 
     m_reportedColorRange = capture->getReportedColorRange();
+    m_reportedFieldOrder = capture->getReportedFieldOrder();
 
     // #107 zero-copy GPU path: if the capture hands us a ready GL texture
     // (DMABUF imported via EGL), use it directly and skip the CPU upload.
@@ -74,6 +75,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             ++m_frameSeq;
             m_frameTimestampUs = MediaClock::nowUs();
             m_lastFrameWasYUV = false;
+            beginFrameFields(m_frameTimestampUs);
             runPrePass();
             return true;
         }
@@ -87,6 +89,12 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // Log de depuração para dummy mode
     if (!captured)
     {
+        // #229 — bob: present the second field of the last frame once its
+        // time has come (half a frame period after the first).
+        if (emitSecondFieldIfDue())
+        {
+            return true;
+        }
         // #228 — adjustments changed while the source is idle (paused or
         // static screen): re-run the pass on the last uploaded frame so the
         // change shows without waiting for the next one.
@@ -109,6 +117,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // #198 — a new captured frame: remember when it was captured.
     ++m_frameSeq;
     m_frameTimestampUs = frame.timestampUs > 0 ? frame.timestampUs : MediaClock::nowUs();
+    beginFrameFields(m_frameTimestampUs);
 
     // Se a textura ainda não foi criada ou o tamanho mudou
     bool textureCreated = false;
@@ -250,12 +259,95 @@ void FrameProcessor::setSourceAdjustments(const SourceAdjustments &adj)
 {
     if (adj.colorRange == m_adjust.colorRange &&
         adj.saturation == m_adjust.saturation &&
-        adj.gamma == m_adjust.gamma)
+        adj.gamma == m_adjust.gamma &&
+        adj.deinterlace == m_adjust.deinterlace &&
+        adj.fieldOrder == m_adjust.fieldOrder)
     {
         return;
     }
+    if (adj.deinterlace != m_adjust.deinterlace || adj.fieldOrder != m_adjust.fieldOrder)
+    {
+        static const char *kModes[] = {"off", "bob", "weave", "blend"};
+        static const char *kOrders[] = {"auto", "tff", "bff"};
+        const int m = static_cast<int>(adj.deinterlace);
+        const int o = static_cast<int>(adj.fieldOrder);
+        LOG_INFO(std::string("Deinterlace: ") + (m >= 0 && m <= 3 ? kModes[m] : "?") +
+                 ", field order " + (o >= 0 && o <= 2 ? kOrders[o] : "?"));
+        m_secondFieldPending = false;
+    }
     m_adjust = adj;
     m_adjustDirty = true;
+}
+
+int FrameProcessor::firstField() const
+{
+    switch (m_adjust.fieldOrder)
+    {
+    case FieldOrder::TopFirst:
+        return 0;
+    case FieldOrder::BottomFirst:
+        return 1;
+    case FieldOrder::Auto:
+    default:
+        // Backend hint, else top field first (the common case).
+        return m_reportedFieldOrder == 2 ? 1 : 0;
+    }
+}
+
+void FrameProcessor::beginFrameFields(int64_t frameTsUs)
+{
+    // Source frame period from consecutive capture timestamps (EMA), used
+    // to place bob's second field halfway to the next frame.
+    if (m_lastFrameTsUs > 0)
+    {
+        const int64_t d = frameTsUs - m_lastFrameTsUs;
+        if (d >= 5000 && d <= 200000)
+            m_framePeriodUs = m_framePeriodUs > 0 ? (m_framePeriodUs * 7 + d) / 8 : d;
+    }
+    m_lastFrameTsUs = frameTsUs;
+
+    if (m_secondFieldPending)
+    {
+        // The next frame arrived before the second field was shown (the
+        // loop ran late): drop it rather than show it late.
+        ++m_droppedSecondFields;
+        if (m_droppedSecondFields == 1 || m_droppedSecondFields % 600 == 0)
+            LOG_INFO("Deinterlace (bob): dropped second fields so far: " +
+                     std::to_string(m_droppedSecondFields));
+    }
+
+    m_currentField = firstField();
+    m_secondFieldPending = (m_adjust.deinterlace == DeinterlaceMode::Bob);
+    if (m_secondFieldPending)
+    {
+        const int64_t half = (m_framePeriodUs > 0 ? m_framePeriodUs : 33367) / 2;
+        // Present it from 3/4 of a field after the first one: a main loop
+        // paced at 2x the source rate (e.g. 60 Hz for 30 fps) then always
+        // has an iteration inside the window despite a few ms of jitter,
+        // instead of missing it and dropping the field when the next frame
+        // lands first. The timestamp stays at the exact half period.
+        m_secondFieldDueUs = MediaClock::nowUs() + (half * 3) / 4;
+        m_secondFieldTsUs = frameTsUs + half;
+    }
+}
+
+bool FrameProcessor::emitSecondFieldIfDue()
+{
+    if (!m_secondFieldPending || !m_hasValidFrame ||
+        m_adjust.deinterlace != DeinterlaceMode::Bob)
+    {
+        return false;
+    }
+    if (MediaClock::nowUs() < m_secondFieldDueUs)
+    {
+        return false;
+    }
+    m_secondFieldPending = false;
+    m_currentField = 1 - firstField();
+    ++m_frameSeq;
+    m_frameTimestampUs = m_secondFieldTsUs;
+    runPrePass();
+    return true;
 }
 
 bool FrameProcessor::wantYUVFullRange() const
@@ -281,6 +373,16 @@ void FrameProcessor::runPrePass()
     SourcePrePass::Params p;
     p.saturation = m_adjust.saturation;
     p.gamma = m_adjust.gamma;
+    // #229 — Weave (and Off) leave the woven frame as is.
+    if (m_adjust.deinterlace == DeinterlaceMode::Bob)
+    {
+        p.deinterlace = 1;
+        p.field = m_currentField;
+    }
+    else if (m_adjust.deinterlace == DeinterlaceMode::Blend)
+    {
+        p.deinterlace = 2;
+    }
     // Y'CbCr frames get their range in the YUV->RGB decode (libswscale);
     // RGB frames are expanded here when the source is limited range.
     if (!m_lastFrameWasYUV)
@@ -311,6 +413,9 @@ void FrameProcessor::deleteTexture()
         m_hasValidFrame = false;
     }
     m_processedTexture = 0;
+    m_secondFieldPending = false;
+    m_lastFrameTsUs = 0;
+    m_framePeriodUs = 0;
 }
 
 void FrameProcessor::setTextureFilterLinear(bool linear)

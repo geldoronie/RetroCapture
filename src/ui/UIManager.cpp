@@ -2940,6 +2940,16 @@ void UIManager::loadConfig()
             }
         }
 
+        // #229 — deinterlacing (own block; absent in older configs = Off)
+        if (config.contains("deinterlace"))
+        {
+            auto &deint = config["deinterlace"];
+            if (deint.contains("mode"))
+                setDeinterlaceMode(deint["mode"].get<int>());
+            if (deint.contains("fieldOrder"))
+                setFieldOrder(deint["fieldOrder"].get<int>());
+        }
+
         // Carregar configurações de imagem
         if (config.contains("image"))
         {
@@ -3439,6 +3449,11 @@ void UIManager::saveConfig()
              m_chatOverlay ? m_chatOverlay->isVisible()
                            : m_chatConfig.overlayVisible},
         };
+
+        // #229 — deinterlacing
+        config["deinterlace"] = {
+            {"mode", m_deinterlaceMode},
+            {"fieldOrder", m_fieldOrder}};
 
         // Salvar configurações de imagem
         config["image"] = {

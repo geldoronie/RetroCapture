@@ -27,6 +27,10 @@
  * tests (default: the bars above):
  *  - "levels" (#228): top half = 8 grey steps (0,16,32,64,128,192,235,255),
  *    bottom half = the colour bars. Measures range/saturation/gamma.
+ *  - "interlaced" (#229): synthetic woven interlaced frames, top field
+ *    first. A white bar moves 16 px per FIELD on black: even rows hold the
+ *    bar at field time 2f, odd rows at 2f+1, so motion combs exactly like a
+ *    480i/576i capture. Measures deinterlacing.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -60,8 +64,9 @@ public:
 private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
     void renderLevels();
+    void renderInterlaced(uint64_t frameIndex);
 
-    enum class Variant { Bars, Levels };
+    enum class Variant { Bars, Levels, Interlaced };
     Variant m_variant = Variant::Bars;
 
     uint32_t m_width = 1280;

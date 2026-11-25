@@ -20,6 +20,34 @@ enum class SourceColorRange : int
 };
 
 /**
+ * Deinterlacing mode (#229) for interlaced sources delivered as woven
+ * frames (both fields interleaved line by line, e.g. 480i/576i).
+ *  - Off:   no processing.
+ *  - Bob:   each field line-doubled (missing lines interpolated from the
+ *           field's neighbours) and shown as its own frame, doubling the
+ *           frame rate; the second field adds at most one field of latency.
+ *  - Weave: fields kept interleaved (full vertical detail, combs on
+ *           motion). Frames already arrive woven, so this is a pass-through.
+ *  - Blend: [1 2 1]/4 vertical filter mixing both fields: no combing, no
+ *           added latency, some vertical softness / ghosting on motion.
+ */
+enum class DeinterlaceMode : int
+{
+    Off = 0,
+    Bob = 1,
+    Weave = 2,
+    Blend = 3,
+};
+
+/** Field order (#229). Auto = what the backend reports, else TFF. */
+enum class FieldOrder : int
+{
+    Auto = 0,
+    TopFirst = 1,
+    BottomFirst = 2,
+};
+
+/**
  * Per-frame source adjustments applied before the shader chain (#228), so
  * the shader chain and every output (window, stream, recording, virtual
  * camera, /raw) see the corrected image. Defaults are the identity.
@@ -29,6 +57,8 @@ struct SourceAdjustments
     SourceColorRange colorRange = SourceColorRange::Auto;
     float saturation = 1.0f; // 0 = greyscale, 1 = unchanged
     float gamma = 1.0f;      // out = in^(1/gamma); >1 brightens mid-tones
+    DeinterlaceMode deinterlace = DeinterlaceMode::Off; // #229
+    FieldOrder fieldOrder = FieldOrder::Auto;           // #229
 };
 
 /**
@@ -43,6 +73,10 @@ public:
         bool expandLimitedRange = false; // RGB 16-235 -> 0-255
         float saturation = 1.0f;
         float gamma = 1.0f;
+        // #229 - 0 = none, 1 = bob (keep `field`, interpolate the other
+        // field's lines), 2 = blend.
+        int deinterlace = 0;
+        int field = 0; // bob: 0 = keep even rows (top field), 1 = odd rows
     };
 
     SourcePrePass() = default;
@@ -87,4 +121,7 @@ private:
     GLint m_locExpand = -1;
     GLint m_locSaturation = -1;
     GLint m_locInvGamma = -1;
+    GLint m_locDeint = -1;
+    GLint m_locField = -1;
+    GLint m_locTexH = -1;
 };

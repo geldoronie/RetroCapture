@@ -97,6 +97,15 @@ class RetroCaptureAPI {
         return await this.request('POST', '/source/overscan/auto', { threshold });
     }
 
+    // #229 — deinterlacing
+    async getSourceDeinterlace() {
+        return await this.request('GET', '/source/deinterlace');
+    }
+
+    async setSourceDeinterlace(mode, fieldOrder) {
+        return await this.request('POST', '/source/deinterlace', { mode, fieldOrder });
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }

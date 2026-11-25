@@ -35,6 +35,7 @@ private:
     IVideoCapture *m_capture = nullptr;
 
     void renderSourceTypeSelection();
+    void renderDeinterlace();
     void renderV4L2Controls();
     void renderV4L2DeviceSelection();
 #ifdef _WIN32
