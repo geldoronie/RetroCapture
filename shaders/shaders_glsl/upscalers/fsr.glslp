@@ -1,0 +1,19 @@
+# AMD FidelityFX Super Resolution 1.0 (spatial): EASU upscale + RCAS sharpen.
+# EASU upscales straight to the viewport; RCAS sharpens at output size.
+shaders = 2
+
+shader0 = shaders/fsr/fsr-easu.glsl
+filter_linear0 = true
+wrap_mode0 = clamp_to_edge
+scale_type0 = viewport
+scale0 = 1.0
+
+shader1 = shaders/fsr/fsr-rcas.glsl
+filter_linear1 = false
+wrap_mode1 = clamp_to_edge
+scale_type1 = source
+scale1 = 1.0
+
+parameters = "FSR_SHARPENING;FSR_RCAS_DENOISE"
+FSR_SHARPENING = 0.2
+FSR_RCAS_DENOISE = 0.0
