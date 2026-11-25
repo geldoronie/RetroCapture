@@ -31,6 +31,12 @@
  *    first. A white bar moves 16 px per FIELD on black: even rows hold the
  *    bar at field time 2f, odd rows at 2f+1, so motion combs exactly like a
  *    480i/576i capture. Measures deinterlacing.
+ *  - "motion" (#247): game-like moving content for frame generation — a
+ *    textured background scrolling 240 px/s with parallax, three sprites
+ *    on curved paths, a static HUD bar with a counter that changes twice a
+ *    second, plus the sync flash band. Positions are a pure function of
+ *    the frame timestamp (see renderMotion), so any instant can be
+ *    rendered exactly: frame generation is measured against it.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -61,12 +67,19 @@ public:
     uint32_t getHeight() const override { return m_height; }
     uint32_t getPixelFormat() const override { return 0; } // RGB24
 
+    /**
+     * #247 — the "motion" picture at time tSec (RGB24, w*h*3 bytes). The
+     * sync band at the bottom flashes when `flash` is set. Static so the
+     * frame-generation bench renders the exact same content offline.
+     */
+    static void renderMotion(uint8_t *rgb, uint32_t w, uint32_t h, double tSec, bool flash);
+
 private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
     void renderLevels();
     void renderInterlaced(uint64_t frameIndex);
 
-    enum class Variant { Bars, Levels, Interlaced };
+    enum class Variant { Bars, Levels, Interlaced, Motion };
     Variant m_variant = Variant::Bars;
 
     uint32_t m_width = 1280;
