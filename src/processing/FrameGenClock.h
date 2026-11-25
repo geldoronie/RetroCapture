@@ -58,6 +58,15 @@ public:
     /** Is an output frame due? factor = 2..4 (fixed multiple), 0 = display. */
     Emit poll(int64_t nowUs, int factor);
 
+    /**
+     * Extra presentation delay on top of the arrival lag (#248): an
+     * asynchronous synthesiser (RIFE) gets this much time after B arrives
+     * before the pair's first slot is due. Shifts the whole timeline (both
+     * modes); 0 = the phase-1 schedule.
+     */
+    void setExtraDelayUs(int64_t us) { m_extraDelayUs = us > 0 ? us : 0; }
+    int64_t extraDelayUs() const { return m_extraDelayUs; }
+
     bool hasPair() const { return m_hasPair; }
     int64_t spanUs() const { return m_tsB - m_tsA; }
     int64_t delayUs() const { return m_delayUs; }
@@ -82,6 +91,7 @@ private:
     int64_t m_periodUs = 0;
     int64_t m_delayUs = 0;
     bool m_delayValid = false;
+    int64_t m_extraDelayUs = 0;
 
     // Progress through the current pair.
     int m_lastSlot = 0;          // fixed mode: last slot emitted (0 = none)

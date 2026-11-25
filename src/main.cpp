@@ -106,7 +106,7 @@ void printUsage(const char *programName)
     std::cout << "\nOther:\n";
     std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
     std::cout << "  --frame-gen <mode>     Frame generation (#247): off, 2x, 3x, 4x, display (this run only)\n";
-    std::cout << "  --frame-gen-method <m> blend or motion (GPU optical flow, default)\n";
+    std::cout << "  --frame-gen-method <m> blend, motion (GPU optical flow, default) or rife (neural, Vulkan)\n";
     std::cout << "  --frame-gen-outputs <list>  Comma list of window,stream,recording,virtcam (default: all)\n";
     std::cout << "  --help, -h             Show this help\n";
     std::cout << "\nExamples:\n";

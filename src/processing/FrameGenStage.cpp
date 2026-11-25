@@ -11,6 +11,27 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
     m_active = true;
     m_current.fresh = false;
 
+    // RIFE (#248) runs on a worker thread: give it the time it needs after
+    // B arrives (measured, +15 %) by delaying the timeline. Capped so that B
+    // itself still goes out before the next real frame is due; a slot whose
+    // result is late anyway is synthesised with Motion.
+    m_interp.setMethodHint(opt.method);
+    int64_t extraUs = 0;
+    if (opt.method == FrameInterpolator::Method::RIFE &&
+        m_interp.rife().state() == RifeBackend::State::Ready)
+    {
+        const double latMs = m_interp.rife().stats().latencyMs;
+        extraUs = static_cast<int64_t>(latMs * 1150.0) + 1000;
+        const int64_t span = m_clock.periodUs();
+        if (span > 0)
+        {
+            const int64_t cap = factor >= 2 ? span * (factor - 1) / factor - 2000 : span / 2;
+            if (extraUs > cap) extraUs = cap;
+        }
+        extraUs = (extraUs / 1000) * 1000; // whole ms: no per-frame jitter from the EMA
+    }
+    m_clock.setExtraDelayUs(extraUs);
+
     if (srcTex != 0 && w > 0 && h > 0 && srcSeq != 0 && srcSeq != m_lastSrcSeq)
     {
         m_lastSrcSeq = srcSeq;

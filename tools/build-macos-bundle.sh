@@ -148,6 +148,12 @@ done
 if [ -d "$REPO_ROOT/assets" ]; then
     cp -R "$REPO_ROOT/assets" "$APP_DIR/Contents/Resources/"
 fi
+# #248 — RIFE model (only in builds with ENABLE_RIFE; CMake downloads it
+# into the build output).
+if [ -d "$REPO_ROOT/$BUILD_DIR/bin/assets/models" ]; then
+    mkdir -p "$APP_DIR/Contents/Resources/assets"
+    cp -R "$REPO_ROOT/$BUILD_DIR/bin/assets/models" "$APP_DIR/Contents/Resources/assets/"
+fi
 # ssl/ ships templates for the optional HTTPS web portal. Include if
 # present (developer dirs only — not always populated).
 if [ -d "$REPO_ROOT/ssl" ]; then

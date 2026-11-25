@@ -492,6 +492,7 @@ void FrameInterpolator::freeTarget(Target &t)
 
 void FrameInterpolator::releaseTargets()
 {
+    m_rife.reset(); // new geometry: the held frames no longer pair
     for (Slot &s : m_slots)
     {
         freeTarget(s.color);
@@ -630,6 +631,7 @@ bool FrameInterpolator::pushFrame(GLuint srcTex, uint32_t w, uint32_t h)
     drawTo(s.color);
     if (m_motionOk) buildPyramid(s);
     restoreFilters();
+    if (m_rifeWanted) m_rife.submitFrame(s.color.fbo, w, h);
 
     m_latest = slot;
     if (m_count < 2) ++m_count;
@@ -698,13 +700,42 @@ void FrameInterpolator::computeFlow()
     m_flowValid = true;
 }
 
+void FrameInterpolator::setMethodHint(Method m)
+{
+    m_rifeWanted = (m == Method::RIFE);
+    if (m_rifeWanted) m_rife.start();
+}
+
 GLuint FrameInterpolator::render(float t, const Options &opt)
 {
+    m_lastRife = false;
     if (m_count < 2 || !m_out.tex) return 0;
     GLStateGuard guard;
     glDisable(GL_BLEND);
+    const float tc = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 
-    const bool motion = (opt.method == Method::Motion) && m_motionOk;
+    if (opt.method == Method::RIFE)
+    {
+        setMethodHint(Method::RIFE);
+        if (m_rife.state() == RifeBackend::State::Ready)
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = m_rife.fetch(tc, opt.rifeWaitMs, m_out.tex);
+            if (m_profile)
+            {
+                glFinish();
+                m_timings.rifeMs = msSince(t0);
+            }
+            if (ok)
+            {
+                m_lastRife = true;
+                return m_out.tex;
+            }
+        }
+        // Not ready in time (or unavailable): this frame is a Motion one.
+    }
+
+    const bool motion = (opt.method == Method::Motion || opt.method == Method::RIFE) && m_motionOk;
     if (motion && !m_flowValid)
     {
         const auto t0 = std::chrono::steady_clock::now();
@@ -732,7 +763,7 @@ GLuint FrameInterpolator::render(float t, const Options &opt)
     {
         bindTex(2, 0, true);
     }
-    setF(m_progWarp, "uT", t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t));
+    setF(m_progWarp, "uT", tc);
     setF(m_progWarp, "uMethod", motion ? 1.0f : 0.0f);
     setF(m_progWarp, "uProtect", opt.protectStatic ? 1.0f : 0.0f);
     setF(m_progWarp, "uPick", opt.edgeAwarePick ? 1.0f : 0.0f);
@@ -758,6 +789,7 @@ GLuint FrameInterpolator::previousTexture() const
 
 void FrameInterpolator::reset()
 {
+    m_rife.reset();
     m_count = 0;
     m_latest = -1;
     m_flowValid = false;
@@ -776,6 +808,7 @@ void FrameInterpolator::setFilterLinear(bool linear)
 
 void FrameInterpolator::destroy()
 {
+    m_rife.shutdown();
     releaseTargets();
     GLuint *progs[] = {&m_progCopy, &m_progLuma, &m_progDown, &m_progSearch, &m_progConsensus, &m_progWarp};
     for (GLuint *p : progs)

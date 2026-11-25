@@ -142,9 +142,28 @@ int runFrameGenBench(const std::string &spec)
     }
     fi.setProfiling(true);
 
-    const char *names[] = {"ref", "repeat", "blend", "motion", "motion_nopick"};
-    std::ofstream outs[5];
-    for (int i = 0; i < 5; ++i)
+    // #248 -- RIFE (neural, Vulkan): started before the first frame so every
+    // frame reaches it. rife=0 skips it; unavailable = no rife.rgb output.
+    bool rife = !(kv.count("rife") && kv["rife"] == "0");
+    if (rife)
+    {
+        fi.setMethodHint(FrameInterpolator::Method::RIFE);
+        if (!fi.rife().waitReady(300000))
+        {
+            std::printf("BENCH rife=unavailable reason=%s\n", fi.rife().reason().c_str());
+            fi.setMethodHint(FrameInterpolator::Method::Motion);
+            rife = false;
+        }
+        else
+        {
+            std::printf("BENCH rife=ready device=%s\n", fi.rife().device().c_str());
+        }
+    }
+
+    const char *names[] = {"ref", "repeat", "blend", "motion", "motion_nopick", "rife"};
+    const int nOuts = rife ? 6 : 5;
+    std::ofstream outs[6];
+    for (int i = 0; i < nOuts; ++i)
     {
         outs[i].open(outDir + "/" + names[i] + ".rgb", std::ios::binary | std::ios::trunc);
         if (!outs[i])
@@ -157,8 +176,8 @@ int runFrameGenBench(const std::string &spec)
     GLuint texIn = makeTexture(w, h);
     std::vector<std::vector<uint8_t>> group(static_cast<size_t>(step) + 1);
     std::vector<uint8_t> rgba, rgb;
-    Stat push, flow, warpMotion, warpBlend;
-    int generated = 0;
+    Stat push, flow, warpMotion, warpBlend, rifeFetch;
+    int generated = 0, rifeFallbacks = 0;
 
     // Frames 0, K, 2K, ... are kept; the K-1 in between are regenerated.
     int index = 0;
@@ -201,6 +220,20 @@ int runFrameGenBench(const std::string &spec)
             o.edgeAwarePick = false;
             readBack(fi.render(t, o), w, h, rgba, rgb);
             outs[4].write(reinterpret_cast<const char *>(rgb.data()), static_cast<std::streamsize>(frameBytes));
+
+            if (rife)
+            {
+                FrameInterpolator::Options r;
+                r.method = FrameInterpolator::Method::RIFE;
+                r.rifeWaitMs = -1; // quality run: always wait for the network
+                GLuint rt = fi.render(t, r);
+                if (fi.lastWasRife())
+                    rifeFetch.add(fi.timings().rifeMs);
+                else
+                    ++rifeFallbacks;
+                readBack(rt, w, h, rgba, rgb);
+                outs[5].write(reinterpret_cast<const char *>(rgb.data()), static_cast<std::streamsize>(frameBytes));
+            }
             ++generated;
         }
         group[0].swap(group[static_cast<size_t>(step)]);
@@ -221,6 +254,17 @@ int runFrameGenBench(const std::string &spec)
     line("warp_blend_ms", warpBlend, "blend synthesis, per generated frame");
     std::printf("BENCH generated_frame_motion_ms=%.3f (push + flow + warp: GPU time per generated frame at 2x)\n",
                 push.median() + flow.median() + warpMotion.median());
+    if (rife)
+    {
+        const RifeBackend::Stats rs = fi.rife().stats();
+        line("rife_fetch_ms", rifeFetch, "render(): wait for the worker + texture upload, per generated frame");
+        std::printf("BENCH rife_infer_ms=%.3f (Vulkan inference + transfers, per generated frame, EMA)\n", rs.inferMs);
+        std::printf("BENCH rife_frame_upload_ms=%.3f (host -> Vulkan + pre-process, per real frame, EMA)\n",
+                    rs.frameUploadMs);
+        std::printf("BENCH rife_gl_readback_ms=%.3f rife_gl_upload_ms=%.3f (GL side of the host round trip, EMA)\n",
+                    rs.readbackMs, rs.uploadMs);
+        std::printf("BENCH rife_fallbacks=%d (frames shown with Motion instead)\n", rifeFallbacks);
+    }
     std::fflush(stdout);
     fi.destroy();
     return generated > 0 ? 0 : 4;

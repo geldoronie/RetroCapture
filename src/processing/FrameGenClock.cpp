@@ -11,7 +11,9 @@ void FrameGenClock::reset()
 {
     const uint64_t seq = m_seq;
     const uint64_t real = m_realEmitted, gen = m_generatedEmitted, drop = m_dropped;
+    const int64_t extra = m_extraDelayUs;
     *this = FrameGenClock();
+    m_extraDelayUs = extra; // a setting, not pair state
     // Sequence numbers and counters stay monotonic across resets: outputs
     // dedupe on the sequence, the overlay derives rates from the counters.
     m_seq = seq;
@@ -136,7 +138,7 @@ FrameGenClock::Emit FrameGenClock::poll(int64_t nowUs, int factor)
             m_lastSlot = m_realBEmitted ? factor : 0;
         }
         const int n = factor;
-        const int64_t base = m_tsB + m_delayUs;
+        const int64_t base = m_tsB + m_delayUs + m_extraDelayUs;
         const int64_t slack = span / (4 * n);
         int latestDue = 0;
         for (int j = m_lastSlot + 1; j <= n; ++j)
@@ -159,7 +161,7 @@ FrameGenClock::Emit FrameGenClock::poll(int64_t nowUs, int factor)
 
     // Display mode: the phase of this very refresh.
     m_pairSlots = 0;
-    const int64_t content = nowUs - m_delayUs - span;
+    const int64_t content = nowUs - m_delayUs - m_extraDelayUs - span;
     const double alpha = static_cast<double>(content - m_tsA) / static_cast<double>(span);
     if (alpha >= 0.999)
     {

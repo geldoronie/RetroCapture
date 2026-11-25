@@ -1362,6 +1362,17 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"status\": {"
         << "\"supported\": " << jsonBool(st.supported) << ", "
         << "\"motionSupported\": " << jsonBool(st.motionSupported) << ", "
+        << "\"rife\": {"
+        << "\"compiled\": " << jsonBool(st.rifeCompiled) << ", "
+        << "\"state\": "
+        << jsonString(st.rifeState == 1 ? "loading" : st.rifeState == 2 ? "ready" : st.rifeState == 3 ? "unavailable" : "idle")
+        << ", "
+        << "\"reason\": " << jsonString(st.rifeReason) << ", "
+        << "\"device\": " << jsonString(st.rifeDevice) << ", "
+        << "\"inferMs\": " << jsonNumber(st.rifeInferMs) << ", "
+        << "\"latencyMs\": " << jsonNumber(st.rifeLatencyMs) << ", "
+        << "\"delivered\": " << st.rifeDelivered << ", "
+        << "\"late\": " << st.rifeLate << "}, "
         << "\"active\": " << jsonBool(st.active) << ", "
         << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
         << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
@@ -1402,7 +1413,7 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
             const int m = json["method"].is_string() ? FrameGenSettings::methodFromName(json["method"].get<std::string>()) : -1;
             if (m < 0)
             {
-                sendErrorResponse(clientFd, 400, "Invalid 'method' (use blend or motion)");
+                sendErrorResponse(clientFd, 400, "Invalid 'method' (use blend, motion or rife)");
                 return true;
             }
             g.method = m;

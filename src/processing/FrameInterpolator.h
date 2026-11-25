@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../renderer/glad_loader.h"
+#include "rife/RifeBackend.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -33,6 +34,12 @@
  *     A/B blend where matching failed (occlusions, new content). Static
  *     regions (HUD) can be pinned to the plain blend.
  *
+ * Method RIFE (#248) hands the pair to a neural interpolator (RIFE 4.x on
+ * ncnn + Vulkan, see rife/RifeBackend.h) running on its own thread. Its
+ * result replaces step 3 when it is ready in time; otherwise (still loading,
+ * no Vulkan device, inference late) the frame is synthesised with Motion,
+ * so the output never stalls on the network.
+ *
  * All GL state the passes touch (framebuffer, viewport, program, VAO,
  * texture bindings on units 0-3, active unit) is restored. GL thread only.
  */
@@ -43,12 +50,16 @@ public:
     {
         Blend,
         Motion,
+        RIFE, // neural (#248); falls back to Motion frame by frame
     };
     struct Options
     {
         Method method = Method::Motion;
         bool protectStatic = true;
         bool edgeAwarePick = true; // step 3 candidate pick (bench A/B switch)
+        // RIFE: how long render() may wait for the worker's result before
+        // falling back to Motion (< 0 = no limit, bench only).
+        int rifeWaitMs = 4;
     };
     // Wall time of each stage, measured with glFinish() around it. Only
     // filled while profiling is on (it stalls the pipeline): bench use.
@@ -57,6 +68,7 @@ public:
         double pushMs = 0.0;  // copy + luma pyramid (per real frame)
         double flowMs = 0.0;  // motion search (per pair)
         double warpMs = 0.0;  // synthesis (per generated frame)
+        double rifeMs = 0.0;  // RIFE: wait for the worker + texture upload
     };
 
     FrameInterpolator() = default;
@@ -70,6 +82,17 @@ public:
     const std::string &unsupportedReason() const { return m_failReason; }
     /** The Motion method needs float render targets; false = Blend only. */
     bool motionSupported() const { return m_motionOk; }
+
+    /**
+     * The method the next frames will be rendered with. RIFE starts the
+     * backend (async) and makes pushFrame() feed it; other methods stop
+     * feeding it (the model stays loaded until destroy()).
+     */
+    void setMethodHint(Method m);
+    RifeBackend &rife() { return m_rife; }
+    const RifeBackend &rife() const { return m_rife; }
+    /** The last render() output came from RIFE (not the Motion fallback). */
+    bool lastWasRife() const { return m_lastRife; }
 
     /** Store a new real frame (copied; srcTex may be reused afterwards). */
     bool pushFrame(GLuint srcTex, uint32_t w, uint32_t h);
@@ -163,6 +186,10 @@ private:
     std::vector<Target> m_flow; // per level
     Target m_flowFinal;         // consensus output (finest level)
     bool m_flowValid = false;
+
+    RifeBackend m_rife;
+    bool m_rifeWanted = false;
+    bool m_lastRife = false;
 
     bool m_filterLinear = false;
     bool m_profile = false;

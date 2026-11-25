@@ -371,6 +371,16 @@ public:
         float sourceFps = 0.0f;       // measured source rate
         float outputFps = 0.0f;       // output timeline rate (source x factor)
         float addedLatencyMs = 0.0f;  // look-ahead latency it adds
+        // #248 — RIFE backend (RifeBackend::State: 0 idle, 1 loading,
+        // 2 ready, 3 unavailable).
+        bool rifeCompiled = false;
+        int rifeState = 0;
+        std::string rifeReason;      // why unavailable
+        std::string rifeDevice;      // Vulkan device in use
+        float rifeInferMs = 0.0f;    // per generated frame, on the worker
+        float rifeLatencyMs = 0.0f;  // real frame in -> first result out
+        uint64_t rifeDelivered = 0;  // frames RIFE delivered in time
+        uint64_t rifeLate = 0;       // frames that fell back to Motion
     };
     FrameGenStatus getFrameGenStatus() const
     {

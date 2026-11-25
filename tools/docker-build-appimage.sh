@@ -97,6 +97,11 @@ echo "📋 Copiando assets..."
 if [ -d "/work/assets" ]; then
     cp -r /work/assets/* "$APP_DIR/usr/share/retrocapture/assets/" 2>/dev/null || true
     echo "✅ Assets copiados"
+    # #248 — RIFE model (downloaded by CMake into the build output)
+    if [ -d "/work/build-linux-x86_64/bin/assets/models" ]; then
+        cp -r /work/build-linux-x86_64/bin/assets/models "$APP_DIR/usr/share/retrocapture/assets/"
+        echo "✅ RIFE model copied"
+    fi
 else
     echo "⚠️  Aviso: Diretório /work/assets não encontrado"
 fi
