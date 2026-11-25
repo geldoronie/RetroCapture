@@ -1955,6 +1955,7 @@ void Application::run()
             adj.colorRange = static_cast<SourceColorRange>(m_ui->getColorRange());
             adj.saturation = m_ui->getSaturation();
             adj.gamma = m_ui->getGamma();
+            adj.expandAfterDecode = m_ui->getExpandLimitedAfterDecode();
             adj.deinterlace = static_cast<DeinterlaceMode>(m_ui->getDeinterlaceMode());
             adj.fieldOrder = static_cast<FieldOrder>(m_ui->getFieldOrder());
             m_frameProcessor->setSourceAdjustments(adj);
@@ -2555,6 +2556,7 @@ void Application::applyPreset(const std::string &presetName)
         m_ui->setSaturation(data.imageSaturation);
         m_ui->setGamma(data.imageGamma);
         m_ui->setColorRange(data.imageColorRange);
+        m_ui->setExpandLimitedAfterDecode(data.imageExpandLimitedAfterDecode);
         m_ui->setDeinterlaceMode(data.deinterlaceMode);
         m_ui->setFieldOrder(data.fieldOrder);
         m_ui->setMaintainAspect(m_maintainAspect);
@@ -2732,6 +2734,7 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.imageSaturation = m_ui->getSaturation();
         data.imageGamma = m_ui->getGamma();
         data.imageColorRange = m_ui->getColorRange();
+        data.imageExpandLimitedAfterDecode = m_ui->getExpandLimitedAfterDecode();
         data.deinterlaceMode = m_ui->getDeinterlaceMode();
         data.fieldOrder = m_ui->getFieldOrder();
     }

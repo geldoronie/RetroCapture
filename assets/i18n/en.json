@@ -427,6 +427,8 @@
   "web.config.image.color_range_full": "Full (0-255)",
   "web.config.image.saturation": "Saturation",
   "web.config.image.gamma": "Gamma",
+  "web.config.image.expand_after_decode": "Expand limited range after decode",
+  "web.config.image.expand_after_decode_hint": "Stretches 16-235 to 0-255 after the YUV to RGB decode, independent of Color range. For grabbers that send limited-range RGB inside a limited-range YUV signal (blacks still grey).",
   "web.config.image.reset": "Reset",
   "web.config.image.reset_color": "Reset color to defaults",
   "web.config.image.deinterlace": "Deinterlacing",

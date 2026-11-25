@@ -2964,6 +2964,8 @@ void UIManager::loadConfig()
                 m_gamma = image["gamma"].get<float>();
             if (image.contains("colorRange"))
                 setColorRange(image["colorRange"].get<int>());
+            if (image.contains("expandLimitedAfterDecode"))
+                m_expandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
             if (image.contains("maintainAspect"))
                 m_maintainAspect = image["maintainAspect"];
             if (image.contains("fullscreen"))
@@ -3483,6 +3485,7 @@ void UIManager::saveConfig()
             {"saturation", m_saturation},
             {"gamma", m_gamma},
             {"colorRange", m_colorRange},
+            {"expandLimitedAfterDecode", m_expandLimitedAfterDecode},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
             {"monitorIndex", m_monitorIndex},

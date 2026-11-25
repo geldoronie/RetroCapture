@@ -208,6 +208,7 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         presetJson["image"]["saturation"] = data.imageSaturation;
         presetJson["image"]["gamma"] = data.imageGamma;
         presetJson["image"]["colorRange"] = data.imageColorRange;
+        presetJson["image"]["expandLimitedAfterDecode"] = data.imageExpandLimitedAfterDecode;
         presetJson["deinterlace"]["mode"] = data.deinterlaceMode;
         presetJson["deinterlace"]["fieldOrder"] = data.fieldOrder;
         presetJson["image"]["maintainAspect"] = data.maintainAspect;
@@ -423,6 +424,10 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (image.contains("colorRange"))
             {
                 data.imageColorRange = image["colorRange"].get<int>();
+            }
+            if (image.contains("expandLimitedAfterDecode"))
+            {
+                data.imageExpandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
             }
             if (image.contains("maintainAspect"))
             {

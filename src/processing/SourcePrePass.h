@@ -59,6 +59,10 @@ struct SourceAdjustments
     float gamma = 1.0f;      // out = in^(1/gamma); >1 brightens mid-tones
     DeinterlaceMode deinterlace = DeinterlaceMode::Off; // #229
     FieldOrder fieldOrder = FieldOrder::Auto;           // #229
+    // #243 — map 16-235 -> 0-255 on the RGB *after* decode, independent of
+    // colorRange. For grabbers that ignore the HDMI quantization flag and
+    // put limited-range RGB inside a limited-range YUV signal.
+    bool expandAfterDecode = false;
 };
 
 /**
@@ -71,6 +75,9 @@ public:
     struct Params
     {
         bool expandLimitedRange = false; // RGB 16-235 -> 0-255
+        // #243 — one more 16-235 -> 0-255 expansion after the decode /
+        // expandLimitedRange, applied on its own regardless of colorRange.
+        bool expandAfterDecode = false;
         float saturation = 1.0f;
         float gamma = 1.0f;
         // #229 - 0 = none, 1 = bob (keep `field`, interpolate the other

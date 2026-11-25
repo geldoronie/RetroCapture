@@ -427,6 +427,8 @@
   "web.config.image.color_range_full": "Completa (0-255)",
   "web.config.image.saturation": "Saturação",
   "web.config.image.gamma": "Gama",
+  "web.config.image.expand_after_decode": "Expandir faixa limitada após a decodificação",
+  "web.config.image.expand_after_decode_hint": "Estica 16-235 para 0-255 após a decodificação YUV para RGB, independente da Faixa de cor. Para capturadoras que enviam RGB em faixa limitada dentro de um sinal YUV limitado (pretos ainda acinzentados).",
   "web.config.image.reset": "Restaurar",
   "web.config.image.reset_color": "Restaurar cores padrão",
   "web.config.image.deinterlace": "Desentrelaçamento",
