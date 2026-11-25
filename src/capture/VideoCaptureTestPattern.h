@@ -82,6 +82,13 @@ private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
     void renderLevels();
     void renderEdges();
+
+public:
+    /** #251 — the "edges" picture at w x h (RGB24, w*h*3 bytes): the ground
+     *  truth of an upscale of a smaller render (used by --upscaler-bench). */
+    static void renderEdgesTo(uint8_t *rgb, uint32_t w, uint32_t h);
+
+private:
     void renderInterlaced(uint64_t frameIndex);
 
     enum class Variant { Bars, Levels, Interlaced, Motion, Edges };
