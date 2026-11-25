@@ -264,6 +264,7 @@
   "quickactions.record_client.tip": "Grava o que está na tela (vídeo pós-decode).\nO áudio vem do dispositivo de entrada local, NÃO\ndo stream remoto — sem loopback do sistema a gravação\nficará muda. Configure uma fonte loopback no OS\npara capturar o áudio do stream também.",
 
   "shortcuts.title":       "Atalhos do teclado",
+  "shortcuts.f9":          "Alternar contador de FPS",
   "shortcuts.f11":         "Alternar tela cheia",
   "shortcuts.f12":         "Mostrar/Ocultar UI",
   "shortcuts.dismiss_hint": "Oculte em Visualizar → Atalhos do teclado",
@@ -420,6 +421,7 @@
   "web.config.image.contrast":    "Contraste",
   "web.config.image.maintain_aspect": "Manter proporção",
   "web.config.image.fullscreen":  "Tela cheia",
+  "web.config.image.fps_overlay": "Mostrar contador de FPS (janela local)",
   "web.config.image.output_res":  "Resolução de saída",
   "web.config.image.output_res_hint": "Aplicada após o shader, antes de esticar para a janela. 0 = automático (usar resolução da fonte).",
   "web.config.image.width":       "Largura",

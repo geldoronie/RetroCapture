@@ -30,7 +30,12 @@ public:
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const        { return m_visible; }
 
+    // Height on its last rendered frame, so the FPS overlay (#226) can
+    // stack below it when both share the top-right corner.
+    float renderedHeight() const  { return m_lastRenderedHeight; }
+
 private:
     UIManager *m_uiManager = nullptr;
     bool       m_visible = true;
+    float      m_lastRenderedHeight = 0.0f;
 };

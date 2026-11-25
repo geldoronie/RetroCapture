@@ -264,6 +264,7 @@
   "quickactions.record_client.tip": "Records what's on screen (post-decode video).\nAudio is captured from the local input device, NOT\nfrom the remote stream — without system loopback\nthe recording will be silent. Configure a loopback\nsource in your OS to capture stream audio too.",
 
   "shortcuts.title":       "Keyboard shortcuts",
+  "shortcuts.f9":          "Toggle FPS counter",
   "shortcuts.f11":         "Toggle fullscreen",
   "shortcuts.f12":         "Toggle UI",
   "shortcuts.dismiss_hint": "Hide via View → Keyboard shortcuts",
@@ -420,6 +421,7 @@
   "web.config.image.contrast":    "Contrast",
   "web.config.image.maintain_aspect": "Maintain aspect ratio",
   "web.config.image.fullscreen":  "Fullscreen",
+  "web.config.image.fps_overlay": "Show FPS counter (local window)",
   "web.config.image.output_res":  "Output resolution",
   "web.config.image.output_res_hint": "Applied after the shader, before stretching to the window. 0 = auto (use source resolution).",
   "web.config.image.width":       "Width",

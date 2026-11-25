@@ -542,6 +542,11 @@ bool APIController::routeGETCapture(int clientFd, const std::string &path, bool 
         result = handleGETImageSettings(clientFd);
         return true;
     }
+    if (path == "/api/v1/stats/fps")
+    {
+        result = handleGETFpsStats(clientFd);
+        return true;
+    }
     return false;
 }
 
@@ -1127,7 +1132,51 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
          << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
          << "\"outputWidth\": " << jsonNumber(m_uiManager->getOutputWidth()) << ", "
-         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight())
+         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight()) << ", "
+         << "\"fpsOverlay\": " << jsonBool(m_uiManager->getFpsOverlayEnabled()) << ", "
+         << "\"fpsOverlayCorner\": \""
+         << UIManager::fpsOverlayCornerName(m_uiManager->getFpsOverlayCorner()) << "\", "
+         << "\"fpsOverlayCompact\": " << jsonBool(m_uiManager->getFpsOverlayCompact()) << ", "
+         << "\"fpsOverlayGraph\": " << jsonBool(m_uiManager->getFpsOverlayGraph())
+         << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+// #226 — last 1 s window of the FPS counter metrics. Measured whether or
+// not the overlay is shown.
+bool APIController::handleGETFpsStats(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    const FpsStats st = m_uiManager->getFpsStats();
+    std::ostringstream json;
+    json << "{"
+         << "\"valid\": " << jsonBool(st.valid) << ", "
+         << "\"overlayEnabled\": " << jsonBool(m_uiManager->getFpsOverlayEnabled()) << ", "
+         << "\"render\": {"
+         << "\"fps\": " << jsonNumber(st.renderFps) << ", "
+         << "\"frameTimeMinMs\": " << jsonNumber(st.frameMinMs) << ", "
+         << "\"frameTimeAvgMs\": " << jsonNumber(st.frameAvgMs) << ", "
+         << "\"frameTimeMaxMs\": " << jsonNumber(st.frameMaxMs) << "}, "
+         << "\"capture\": {"
+         << "\"fps\": " << jsonNumber(st.captureFps) << ", "
+         << "\"nominalFps\": " << jsonNumber(st.captureNominalFps) << ", "
+         << "\"dropped\": " << st.captureDropped << ", "
+         << "\"duplicated\": " << st.captureDuplicated << ", "
+         << "\"droppedTotal\": " << st.captureDroppedTotal << ", "
+         << "\"duplicatedTotal\": " << st.captureDuplicatedTotal << "}, "
+         << "\"encoders\": {"
+         << "\"stream\": {\"active\": " << jsonBool(st.streamActive)
+         << ", \"fps\": " << jsonNumber(st.streamFps) << "}, "
+         << "\"raw\": {\"active\": " << jsonBool(st.rawActive)
+         << ", \"fps\": " << jsonNumber(st.rawFps) << "}, "
+         << "\"recording\": {\"active\": " << jsonBool(st.recordActive)
+         << ", \"fps\": " << jsonNumber(st.recordFps) << "}}"
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -2046,6 +2095,39 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
             uint32_t outputWidth = json["outputWidth"].get<uint32_t>();
             uint32_t outputHeight = json["outputHeight"].get<uint32_t>();
             m_uiManager->setOutputResolution(outputWidth, outputHeight);
+            updated = true;
+        }
+
+        // #226 — FPS counter overlay.
+        if (json.contains("fpsOverlay"))
+        {
+            m_uiManager->setFpsOverlayEnabled(json["fpsOverlay"].get<bool>());
+            updated = true;
+        }
+        if (json.contains("fpsOverlayCorner"))
+        {
+            const int corner = json["fpsOverlayCorner"].is_number_integer()
+                                   ? json["fpsOverlayCorner"].get<int>()
+                                   : UIManager::fpsOverlayCornerFromName(
+                                         json["fpsOverlayCorner"].get<std::string>());
+            if (corner < 0 || corner > 3)
+            {
+                sendErrorResponse(clientFd, 400,
+                                  "Invalid 'fpsOverlayCorner'. Use top-left, top-right, "
+                                  "bottom-left or bottom-right");
+                return true;
+            }
+            m_uiManager->setFpsOverlayCorner(corner);
+            updated = true;
+        }
+        if (json.contains("fpsOverlayCompact"))
+        {
+            m_uiManager->setFpsOverlayCompact(json["fpsOverlayCompact"].get<bool>());
+            updated = true;
+        }
+        if (json.contains("fpsOverlayGraph"))
+        {
+            m_uiManager->setFpsOverlayGraph(json["fpsOverlayGraph"].get<bool>());
             updated = true;
         }
 

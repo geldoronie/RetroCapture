@@ -1925,6 +1925,7 @@ void HTTPTSStreamer::encodingThread()
                         m_mediaMuxer.muxPacket(packet);
                     }
                     processedAny = true;
+                    m_streamVideoEncodedTotal.fetch_add(1, std::memory_order_relaxed);
                 }
                 framesProcessed++;
                 m_streamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);
@@ -2084,6 +2085,7 @@ void HTTPTSStreamer::rawEncodingThread()
                     processedAny = true;
                     framesProcessed++;
                     ++statVideoEncoded;
+                    m_rawVideoEncodedTotal.fetch_add(1, std::memory_order_relaxed);
                     m_rawVideoSent = true;
                 }
                 m_rawStreamSynchronizer.markVideoFrameProcessedByTimestamp(frame.captureTimestampUs);

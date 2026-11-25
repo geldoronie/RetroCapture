@@ -1586,6 +1586,34 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         }
     }
 
+    // #226 — counters for the FPS overlay. Cheap reads (atomics + a
+    // couple of streamer flags); the overlay derives the rates.
+    if (m_app.m_ui)
+    {
+        PerfCounters pc;
+        if (m_app.m_frameProcessor)
+        {
+            pc.captureSeq  = m_app.m_frameProcessor->getFrameSeq();
+            pc.captureTsUs = m_app.m_frameProcessor->getFrameTimestampUs();
+        }
+        const bool remote = m_app.m_ui->getSourceType() == UIManager::SourceType::Remote;
+        pc.captureNominalFps = static_cast<float>(remote ? m_app.m_remoteSourceFps
+                                                         : m_app.m_ui->getCaptureFps());
+        if (streamManager && streamManager->isActive())
+        {
+            pc.streamActive  = streamManager->hasClients();
+            pc.streamEncoded = streamManager->getStreamVideoFramesEncoded();
+            pc.rawActive     = streamManager->hasRawClients();
+            pc.rawEncoded    = streamManager->getRawVideoFramesEncoded();
+        }
+        if (m_app.m_recordingManager)
+        {
+            pc.recordActive  = m_app.m_recordingManager->isRecording();
+            pc.recordEncoded = m_app.m_recordingManager->getVideoFramesEncoded();
+        }
+        m_app.m_ui->setPerfCounters(pc);
+    }
+
     // Render UI (after capturing capture area)
     if (m_app.m_ui)
     {

@@ -10,6 +10,7 @@
 #include "../renderer/glad_loader.h"
 #include "../capture/IVideoCapture.h"
 #include "../processing/SourceCrop.h"
+#include "../osd/FpsOverlay.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -281,6 +282,33 @@ public:
     void setOnOutputResolutionChanged(std::function<void(uint32_t, uint32_t)> callback) { m_onOutputResolutionChanged = callback; }
     uint32_t getOutputWidth() const { return m_outputWidth; }
     uint32_t getOutputHeight() const { return m_outputHeight; }
+
+    // FPS counter OSD (#226). Toggled from the Image window, F9 and the
+    // web API; persisted under config.json image.fpsOverlay. Corner:
+    // 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right.
+    bool getFpsOverlayEnabled() const { return m_fpsOverlayEnabled; }
+    int  getFpsOverlayCorner() const  { return m_fpsOverlayCorner; }
+    bool getFpsOverlayCompact() const { return m_fpsOverlayCompact; }
+    bool getFpsOverlayGraph() const   { return m_fpsOverlayGraph; }
+    void setFpsOverlayEnabled(bool enabled) { m_fpsOverlayEnabled = enabled; saveConfig(); }
+    void setFpsOverlayCorner(int corner)
+    {
+        m_fpsOverlayCorner = (corner >= 0 && corner <= 3) ? corner : 0;
+        saveConfig();
+    }
+    void setFpsOverlayCompact(bool compact) { m_fpsOverlayCompact = compact; saveConfig(); }
+    void setFpsOverlayGraph(bool graph)     { m_fpsOverlayGraph = graph; saveConfig(); }
+    // Corner <-> config/API string ("top-left", ...). Unknown -> -1.
+    static const char *fpsOverlayCornerName(int corner);
+    static int fpsOverlayCornerFromName(const std::string &name);
+    // Pipeline counters for the overlay, pushed by the render loop once
+    // per frame before render().
+    void setPerfCounters(const PerfCounters &counters)
+    {
+        if (m_fpsOverlay) m_fpsOverlay->setCounters(counters);
+    }
+    // Last 1 s window of FPS metrics; safe from any thread.
+    FpsStats getFpsStats() const { return m_fpsOverlay ? m_fpsOverlay->getStats() : FpsStats(); }
 
     // Controles V4L2
     void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
@@ -1250,6 +1278,8 @@ private:
     // ChatClient (held by Application; pointer wired via
     // setChatClient).
     std::unique_ptr<class OSDChat>                  m_chatOverlay;
+    // FPS counter OSD (#226).
+    std::unique_ptr<FpsOverlay>                     m_fpsOverlay;
     class ChatClient                               *m_chatClient = nullptr;
     // Loaded from config.json before m_quickActionsOverlay exists,
     // applied via setVisible() right after construction. Defaults to
@@ -1306,6 +1336,12 @@ private:
     // Aspect ratio
     bool m_maintainAspect = false;
     std::function<void(bool)> m_onMaintainAspectChanged;
+
+    // FPS counter overlay (#226). Off by default.
+    bool m_fpsOverlayEnabled = false;
+    int  m_fpsOverlayCorner  = 0;
+    bool m_fpsOverlayCompact = false;
+    bool m_fpsOverlayGraph   = true;
 
     // Fullscreen
     bool m_fullscreen = false;

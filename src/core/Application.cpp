@@ -982,6 +982,19 @@ void Application::handleKeyInput()
         {
             f8Pressed = false;
         }
+
+        // F9 toggles the FPS counter overlay (#226).
+        static bool f9Pressed = false;
+        bool f9Now = sdlWindow->isKeyPressed(SDLK_F9);
+        if (f9Now && !f9Pressed)
+        {
+            m_ui->setFpsOverlayEnabled(!m_ui->getFpsOverlayEnabled());
+            f9Pressed = true;
+        }
+        else if (!f9Now)
+        {
+            f9Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -1040,6 +1053,21 @@ void Application::handleKeyInput()
     else
     {
         f8Pressed = false;
+    }
+
+    // F9 toggles the FPS counter overlay (#226).
+    static bool f9Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS)
+    {
+        if (!f9Pressed)
+        {
+            m_ui->setFpsOverlayEnabled(!m_ui->getFpsOverlayEnabled());
+            f9Pressed = true;
+        }
+    }
+    else
+    {
+        f9Pressed = false;
     }
 #endif // USE_SDL2
 }

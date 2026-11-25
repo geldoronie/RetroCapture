@@ -1089,6 +1089,11 @@ async function loadImageSettings() {
         if (fullscreenEl) {
             fullscreenEl.checked = settings.fullscreen || false;
         }
+
+        const fpsOverlayEl = document.getElementById('fpsOverlay');
+        if (fpsOverlayEl) {
+            fpsOverlayEl.checked = settings.fpsOverlay || false;
+        }
         
         if (monitorIndexEl) {
             monitorIndexEl.value = settings.monitorIndex !== undefined ? settings.monitorIndex : -1;
@@ -1157,6 +1162,10 @@ async function updateImageSettings() {
             outputWidth: outputWidthEl ? parseInt(outputWidthEl.value) : 0,
             outputHeight: outputHeightEl ? parseInt(outputHeightEl.value) : 0
         };
+        const fpsOverlayEl = document.getElementById('fpsOverlay');
+        if (fpsOverlayEl) {
+            settings.fpsOverlay = fpsOverlayEl.checked;
+        }
         
         await api.setImageSettings(settings);
         
@@ -1563,6 +1572,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     if (fullscreen) {
         fullscreen.addEventListener('change', updateImageSettingsDebounced);
+    }
+    const fpsOverlay = document.getElementById('fpsOverlay');
+    if (fpsOverlay) {
+        fpsOverlay.addEventListener('change', updateImageSettingsDebounced);
     }
     if (monitorIndex) {
         monitorIndex.addEventListener('input', updateImageSettingsDebounced);

@@ -18,6 +18,7 @@
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
 #include "../osd/OSDChat.h"
+#include "../osd/FpsOverlay.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -85,6 +86,7 @@ UIManager::~UIManager()
 #endif
     m_infoWindow.reset();
     m_preferencesWindow.reset();
+    m_fpsOverlay.reset();
     m_shortcutsHelpWindow.reset();
     m_connectionOverlay.reset();
     m_quickActionsOverlay.reset();
@@ -314,6 +316,9 @@ bool UIManager::init(void *window)
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
     m_shortcutsHelpWindow->setVisible(m_shortcutsHelpVisible);
+    // FPS counter OSD (#226) — stacks clear of quick actions / shortcuts.
+    m_fpsOverlay = std::make_unique<FpsOverlay>(
+        this, m_quickActionsOverlay.get(), m_shortcutsHelpWindow.get());
 
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
@@ -550,6 +555,13 @@ void UIManager::render()
     // Chat overlay (#84) — also outside the m_uiVisible gate so the
     // user can keep an eye on chat while everything else is hidden.
     if (m_chatOverlay) m_chatOverlay->render();
+    // FPS counter (#226). tick() measures every frame so the web API has
+    // numbers even while the overlay is off; render() is a no-op then.
+    if (m_fpsOverlay)
+    {
+        m_fpsOverlay->tick();
+        m_fpsOverlay->render();
+    }
     // Directory browser (#84) — promoted from the regular UI layer
     // to the OSD layer so it stays reachable when F12 hides the
     // config windows. Same one-button entry from QuickActions
@@ -2946,6 +2958,22 @@ void UIManager::loadConfig()
                 m_outputWidth = image["outputWidth"].get<uint32_t>();
             if (image.contains("outputHeight"))
                 m_outputHeight = image["outputHeight"].get<uint32_t>();
+            // #226 — absent in older configs; defaults apply.
+            if (image.contains("fpsOverlay") && image["fpsOverlay"].is_object())
+            {
+                auto &fps = image["fpsOverlay"];
+                if (fps.contains("enabled") && fps["enabled"].is_boolean())
+                    m_fpsOverlayEnabled = fps["enabled"].get<bool>();
+                if (fps.contains("corner") && fps["corner"].is_string())
+                {
+                    const int corner = fpsOverlayCornerFromName(fps["corner"].get<std::string>());
+                    if (corner >= 0) m_fpsOverlayCorner = corner;
+                }
+                if (fps.contains("compact") && fps["compact"].is_boolean())
+                    m_fpsOverlayCompact = fps["compact"].get<bool>();
+                if (fps.contains("graph") && fps["graph"].is_boolean())
+                    m_fpsOverlayGraph = fps["graph"].get<bool>();
+            }
         }
 
         // Carregar configurações do Web Portal
@@ -3414,7 +3442,13 @@ void UIManager::saveConfig()
             {"fullscreen", m_fullscreen},
             {"monitorIndex", m_monitorIndex},
             {"outputWidth", m_outputWidth},
-            {"outputHeight", m_outputHeight}};
+            {"outputHeight", m_outputHeight},
+            {"fpsOverlay", {
+                {"enabled", m_fpsOverlayEnabled},
+                {"corner",  fpsOverlayCornerName(m_fpsOverlayCorner)},
+                {"compact", m_fpsOverlayCompact},
+                {"graph",   m_fpsOverlayGraph},
+            }}};
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
@@ -4342,4 +4376,24 @@ void UIManager::renderConnectionOverlay()
     // callers (Application's render path) don't need to learn about
     // the new location.
     if (m_connectionOverlay) m_connectionOverlay->render();
+}
+
+const char *UIManager::fpsOverlayCornerName(int corner)
+{
+    switch (corner)
+    {
+    case 1:  return "top-right";
+    case 2:  return "bottom-left";
+    case 3:  return "bottom-right";
+    default: return "top-left";
+    }
+}
+
+int UIManager::fpsOverlayCornerFromName(const std::string &name)
+{
+    if (name == "top-left")     return 0;
+    if (name == "top-right")    return 1;
+    if (name == "bottom-left")  return 2;
+    if (name == "bottom-right") return 3;
+    return -1;
 }

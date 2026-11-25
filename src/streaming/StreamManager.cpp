@@ -208,6 +208,32 @@ uint32_t StreamManager::getTotalClientCount() const
     return total;
 }
 
+uint64_t StreamManager::getStreamVideoFramesEncoded() const
+{
+    uint64_t total = 0;
+    for (const auto &streamer : m_streamers)
+    {
+        if (auto *ts = dynamic_cast<const HTTPTSStreamer *>(streamer.get()))
+        {
+            total += ts->getStreamVideoFramesEncoded();
+        }
+    }
+    return total;
+}
+
+uint64_t StreamManager::getRawVideoFramesEncoded() const
+{
+    uint64_t total = 0;
+    for (const auto &streamer : m_streamers)
+    {
+        if (auto *ts = dynamic_cast<const HTTPTSStreamer *>(streamer.get()))
+        {
+            total += ts->getRawVideoFramesEncoded();
+        }
+    }
+    return total;
+}
+
 bool StreamManager::canStartStreaming() const
 {
     // Se já está ativo, pode "iniciar" (já está iniciado)
