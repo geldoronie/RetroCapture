@@ -5,6 +5,7 @@
 #include "Application.h"
 #include "../processing/FrameGenSettings.h"
 #include "../renderer/PBOManager.h"
+#include "../renderer/AreaDownscaler.h"
 #include "../processing/FrameProcessor.h"
 #include "../recording/RecordingManager.h"
 #include "../recording/RecordingSettings.h"
@@ -43,6 +44,11 @@ void FrameCapturePipeline::releaseGL()
     {
         m_genPbo->cleanup();
         m_genPbo.reset();
+    }
+    if (m_areaDownscaler)
+    {
+        m_areaDownscaler->destroy();
+        m_areaDownscaler.reset();
     }
 }
 

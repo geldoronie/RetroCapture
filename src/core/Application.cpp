@@ -2592,6 +2592,7 @@ void Application::applyPreset(const std::string &presetName)
         m_ui->setGamma(data.imageGamma);
         m_ui->setColorRange(data.imageColorRange);
         m_ui->setExpandLimitedAfterDecode(data.imageExpandLimitedAfterDecode);
+        m_ui->setSourceDownscaleFilter(data.imageDownscaleFilter);
         m_ui->setUpscalerSettings(data.upscaler); // #251
         m_ui->setDeinterlaceMode(data.deinterlaceMode);
         m_ui->setFieldOrder(data.fieldOrder);
@@ -2771,6 +2772,7 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.imageGamma = m_ui->getGamma();
         data.imageColorRange = m_ui->getColorRange();
         data.imageExpandLimitedAfterDecode = m_ui->getExpandLimitedAfterDecode();
+        data.imageDownscaleFilter = m_ui->getSourceDownscaleFilter();
         data.upscaler = m_ui->getUpscalerSettings(); // #251
         data.deinterlaceMode = m_ui->getDeinterlaceMode();
         data.fieldOrder = m_ui->getFieldOrder();

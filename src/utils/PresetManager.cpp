@@ -209,6 +209,7 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         presetJson["image"]["gamma"] = data.imageGamma;
         presetJson["image"]["colorRange"] = data.imageColorRange;
         presetJson["image"]["expandLimitedAfterDecode"] = data.imageExpandLimitedAfterDecode;
+        presetJson["image"]["downscaleFilter"] = data.imageDownscaleFilter;
         presetJson["image"]["upscaler"] = data.upscaler.toJson(); // #251
         presetJson["deinterlace"]["mode"] = data.deinterlaceMode;
         presetJson["deinterlace"]["fieldOrder"] = data.fieldOrder;
@@ -429,6 +430,10 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (image.contains("expandLimitedAfterDecode"))
             {
                 data.imageExpandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
+            }
+            if (image.contains("downscaleFilter") && image["downscaleFilter"].is_number_integer())
+            {
+                data.imageDownscaleFilter = image["downscaleFilter"].get<int>();
             }
             if (image.contains("upscaler") && image["upscaler"].is_object())
             {

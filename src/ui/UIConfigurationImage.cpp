@@ -97,6 +97,26 @@ void UIConfigurationImage::renderSourceColor()
                           "device reports, else YUV = limited, RGB = full.");
     }
 
+    {
+        static const char *filters[] = {"Auto", "Nearest (sharp pixels)", "Area average"};
+        int filter = m_uiManager->getSourceDownscaleFilter();
+        ImGui::PushItemWidth(200);
+        if (ImGui::Combo("Source downscale", &filter, filters, IM_ARRAYSIZE(filters)))
+        {
+            m_uiManager->setSourceDownscaleFilter(filter);
+            m_uiManager->saveConfig();
+        }
+        ImGui::PopItemWidth();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Used when the capture resolution you picked is smaller than what the\n"
+                              "device delivers (e.g. 640x480 from a 1280x720 grabber).\n"
+                              "Nearest keeps hard pixel edges but drops lines on non-whole ratios.\n"
+                              "Area average keeps every line and averages analog noise down.\n"
+                              "Auto: Nearest for whole ratios (2x, 3x), else Area average.");
+        }
+    }
+
     bool expandAfter = m_uiManager->getExpandLimitedAfterDecode();
     if (ImGui::Checkbox("Expand limited range after decode", &expandAfter))
     {
@@ -249,6 +269,16 @@ void UIConfigurationImage::renderUpscaler()
                           "that fits the target, and the upscaler scales that to the target.");
 
     if (!on) ImGui::EndDisabled();
+
+    if (on && m_uiManager->getUpscalerIdle())
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
+                           "Idle: the target is not larger than the source, so there is nothing to "
+                           "upscale (e.g. a 1080p capture in a smaller window). Pick a 2x-4x or "
+                           "custom target, or enlarge the window, to use it.");
+        ImGui::PopTextWrapPos();
+    }
 
     if (ImGui::Button("Reset##upscaler"))
     {

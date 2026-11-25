@@ -247,6 +247,10 @@ public:
     void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
     // #243 — extra 16-235 -> 0-255 expansion after the decode (off = identity).
     void setExpandLimitedAfterDecode(bool enabled) { m_expandLimitedAfterDecode = enabled; }
+    // Source downscale filter, when the logical capture size is below what
+    // the device delivers: 0 = Auto (NEAREST for whole ratios, else area
+    // average), 1 = Nearest, 2 = Area average.
+    void setSourceDownscaleFilter(int f) { m_sourceDownscaleFilter = (f >= 0 && f <= 2) ? f : 0; }
     // #229 — deinterlacing, applied before the shader chain.
     // mode: 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend. order: 0 = Auto, 1 = TFF, 2 = BFF.
     void setDeinterlaceMode(int mode) { m_deinterlaceMode = (mode >= 0 && mode <= 3) ? mode : 0; }
@@ -392,6 +396,11 @@ public:
         std::lock_guard<std::mutex> lock(m_frameGenMutex);
         m_frameGenStatus = st;
     }
+
+    // The render loop reports whether the upscaler stood aside this frame
+    // (target not larger than the input: nothing to upscale).
+    void setUpscalerIdle(bool idle) { m_upscalerIdle.store(idle); }
+    bool getUpscalerIdle() const { return m_upscalerIdle.load(); }
 
     // #251 — built-in upscaler (Image window > Upscaler). Written by the UI
     // and the web API thread, read by the render loop every frame.
@@ -857,6 +866,7 @@ public:
     float getGamma() const { return m_gamma; }
     int getColorRange() const { return m_colorRange; }
     bool getExpandLimitedAfterDecode() const { return m_expandLimitedAfterDecode; }
+    int getSourceDownscaleFilter() const { return m_sourceDownscaleFilter; }
     int getDeinterlaceMode() const { return m_deinterlaceMode; }
     int getFieldOrder() const { return m_fieldOrder; }
     bool getMaintainAspect() const { return m_maintainAspect; }
@@ -1439,6 +1449,7 @@ private:
     float m_gamma = 1.0f;
     int m_colorRange = 0;
     bool m_expandLimitedAfterDecode = false; // #243
+    int m_sourceDownscaleFilter = 0;          // Auto
     // #229 — deinterlacing (Off by default)
     int m_deinterlaceMode = 0;
     int m_fieldOrder = 0;
@@ -1471,6 +1482,7 @@ private:
     mutable std::mutex m_outputGeometryMutex;
     // #251 — see getUpscalerSettings().
     UpscalerSettings m_upscaler;
+    std::atomic<bool> m_upscalerIdle{false};
     mutable std::mutex m_upscalerMutex;
 
     // #247 — see getFrameGenSettings().

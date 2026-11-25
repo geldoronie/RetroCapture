@@ -1210,6 +1210,11 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
          << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
          << "\"expandLimitedAfterDecode\": " << jsonBool(m_uiManager->getExpandLimitedAfterDecode()) << ", "
+         << "\"downscaleFilter\": "
+         << jsonString(m_uiManager->getSourceDownscaleFilter() == 1   ? "nearest"
+                       : m_uiManager->getSourceDownscaleFilter() == 2 ? "area"
+                                                                       : "auto")
+         << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
          << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
@@ -1230,7 +1235,8 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"flipH\": " << jsonBool(geom.flipH) << ", "
          << "\"flipV\": " << jsonBool(geom.flipV) << ", "
          // #251 — built-in upscaler.
-         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump()
+         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump() << ", "
+         << "\"upscalerIdle\": " << jsonBool(m_uiManager->getUpscalerIdle())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -2377,6 +2383,20 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         if (json.contains("expandLimitedAfterDecode"))
         {
             m_uiManager->setExpandLimitedAfterDecode(json["expandLimitedAfterDecode"].get<bool>());
+            updated = true;
+        }
+
+        // Source downscale filter (logical capture size below the device's).
+        if (json.contains("downscaleFilter"))
+        {
+            const std::string f = json["downscaleFilter"].is_string() ? json["downscaleFilter"].get<std::string>() : "";
+            const int v = f == "auto" ? 0 : f == "nearest" ? 1 : f == "area" ? 2 : -1;
+            if (v < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'downscaleFilter' (use auto, nearest or area)");
+                return true;
+            }
+            m_uiManager->setSourceDownscaleFilter(v);
             updated = true;
         }
 

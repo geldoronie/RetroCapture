@@ -23,6 +23,10 @@
  * the same instants AudioCaptureTestTone beeps — so the output's A/V
  * offset can be measured from the flash/beep onsets.
  *
+ * RETROCAPTURE_TEST_NATIVE=WxH makes the source deliver that size whatever
+ * is asked (like a grabber that lacks the requested mode), to exercise the
+ * pipeline's logical-size downscale.
+ *
  * RETROCAPTURE_TEST_PATTERN selects an alternative layout for image-path
  * tests (default: the bars above):
  *  - "levels" (#228): top half = 8 grey steps (0,16,32,64,128,192,235,255),

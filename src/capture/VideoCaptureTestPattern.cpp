@@ -3,6 +3,7 @@
 #include "../utils/MediaClock.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -45,6 +46,18 @@ bool VideoCaptureTestPattern::setFormat(uint32_t width, uint32_t height, uint32_
 {
     if (width > 0) m_width = width;
     if (height > 0) m_height = height;
+    // RETROCAPTURE_TEST_NATIVE=WxH: always deliver this size, whatever is
+    // asked (a grabber that only offers some modes), so the pipeline's
+    // logical-size downscale can be tested.
+    if (const char *n = std::getenv("RETROCAPTURE_TEST_NATIVE"))
+    {
+        uint32_t nw = 0, nh = 0;
+        if (std::sscanf(n, "%ux%u", &nw, &nh) == 2 && nw > 0 && nh > 0)
+        {
+            m_width = nw;
+            m_height = nh;
+        }
+    }
     m_buffer.assign(static_cast<size_t>(m_width) * m_height * 3, 0);
     return true;
 }

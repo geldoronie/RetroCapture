@@ -2996,6 +2996,8 @@ void UIManager::loadConfig()
                 setColorRange(image["colorRange"].get<int>());
             if (image.contains("expandLimitedAfterDecode"))
                 m_expandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
+            if (image.contains("downscaleFilter") && image["downscaleFilter"].is_number_integer())
+                setSourceDownscaleFilter(image["downscaleFilter"].get<int>());
             if (image.contains("maintainAspect"))
                 m_maintainAspect = image["maintainAspect"];
             if (image.contains("fullscreen"))
@@ -3538,6 +3540,7 @@ void UIManager::saveConfig()
             {"gamma", m_gamma},
             {"colorRange", m_colorRange},
             {"expandLimitedAfterDecode", m_expandLimitedAfterDecode},
+            {"downscaleFilter", m_sourceDownscaleFilter},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
             {"monitorIndex", m_monitorIndex},
