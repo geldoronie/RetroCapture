@@ -1608,11 +1608,15 @@ bool MediaEncoder::encodeVideo(const uint8_t *rgbData, uint32_t width, uint32_t 
         }
     }
 
-    if (forceKeyframe)
-    {
-        videoFrame->pict_type = AV_PICTURE_TYPE_I;
-        FFmpegCompat::setKeyFrame(videoFrame, true);
-    }
+    // #220 — set the picture type on EVERY frame. m_videoFrame is reused
+    // across calls, so the old "only set it when forcing" left
+    // pict_type = I sticky after the very first frame: libx264 then coded
+    // every frame as a keyframe. Every /stream, /raw and recording was
+    // all-intra — ~3x the configured bitrate on /raw (28 Mbps measured for
+    // a 10 Mbps setting) or, where ABR held the rate, far lower quality — and
+    // all-intra 1080p is what remote clients failed to decode in real time.
+    videoFrame->pict_type = forceKeyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    FFmpegCompat::setKeyFrame(videoFrame, forceKeyframe);
     m_videoFrameCount++;
 
     // HW backends that hold pixel data in a GPU surface (VAAPI / QSV /

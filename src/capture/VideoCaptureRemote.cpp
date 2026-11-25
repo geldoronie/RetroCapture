@@ -20,7 +20,9 @@ extern "C"
 }
 
 #include "../utils/FFmpegCompat.h"
+#include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstring>
 
 VideoCaptureRemote::VideoCaptureRemote() = default;
@@ -237,6 +239,21 @@ bool VideoCaptureRemote::initDecoder()
     {
         LOG_ERROR("VideoCaptureRemote: avcodec_parameters_to_context failed");
         return false;
+    }
+    // #220 — multi-threaded decode. FFmpeg defaults to ONE decoder thread,
+    // and this decode thread also runs the RGB conversion and the AAC
+    // decode: 1080p60 H.264 on a laptop core at reduced clock missed the
+    // 16.6 ms budget, the socket backed up (receive-window limited) and the
+    // host dropped the backlog every few seconds. The host's x264 uses frame
+    // threading (one slice per frame), so slice threading alone wouldn't
+    // help; frame threading adds (threads - 1) frames of latency, so cap it.
+    {
+        const unsigned hw = std::thread::hardware_concurrency();
+        // std::clamp is missing from the old MinGW used for Windows builds.
+        const int threads = static_cast<int>(std::min<unsigned>(std::max<unsigned>(hw > 1 ? hw - 1 : 1, 1), 4));
+        m_codecCtx->thread_count = threads;
+        m_codecCtx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        LOG_INFO("VideoCaptureRemote: video decoder using " + std::to_string(threads) + " thread(s)");
     }
     if (avcodec_open2(m_codecCtx, codec, nullptr) < 0)
     {

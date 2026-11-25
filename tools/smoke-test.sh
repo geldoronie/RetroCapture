@@ -199,6 +199,19 @@ res=$(ffprobe -v error -select_streams v -show_entries stream=width,height \
 [ -n "$res" ] || fail "no decodable video stream"
 note "stream resolution: $res"
 
+# #220 — the encoder must emit a real GOP, not all-intra. A sticky
+# pict_type=I once made every frame a keyframe (~3x bitrate, remote clients
+# unable to decode in real time) and went unnoticed for many releases.
+gop=$(ffprobe -v error -select_streams v -show_entries packet=flags \
+      -of csv=p=0 "$WORK/stream.ts" 2>/dev/null |
+      awk '{n++; if ($1 ~ /K/) k++} END {printf "%d %d", n, k}')
+read -r gop_frames gop_keys <<< "$gop"
+[ "${gop_frames:-0}" -ge 30 ] || fail "too few video packets to check the GOP ($gop_frames)"
+note "keyframes: $gop_keys of $gop_frames packets"
+[ $((gop_keys * 5)) -lt "$gop_frames" ] || \
+    fail "stream is (nearly) all-intra: $gop_keys keyframes in $gop_frames packets"
+note "[ok] stream has inter frames (keyframes < 20 % of packets)"
+
 # decode two frames (1s apart) for spatial + temporal checks
 ffmpeg -v error -ss 2 -i "$WORK/stream.ts" -frames:v 1 -f rawvideo -pix_fmt rgb24 "$WORK/a.rgb" 2>/dev/null
 ffmpeg -v error -ss 4 -i "$WORK/stream.ts" -frames:v 1 -f rawvideo -pix_fmt rgb24 "$WORK/b.rgb" 2>/dev/null

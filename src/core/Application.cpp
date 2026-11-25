@@ -1112,6 +1112,13 @@ bool Application::initStreaming()
     // Always use MPEG-TS streamer (audio + video required)
     auto tsStreamer = std::make_unique<HTTPTSStreamer>();
 
+    // #220 — /raw carries the pre-shader source; size it to the capture
+    // instead of the /stream output (a later resize is followed in-stream).
+    if (m_capture && m_capture->isOpen() && m_capture->getWidth() > 0 && m_capture->getHeight() > 0)
+    {
+        tsStreamer->setRawSourceSize(m_capture->getWidth(), m_capture->getHeight());
+    }
+
     // Configure video bitrate
     if (m_streamingBitrate > 0)
     {
