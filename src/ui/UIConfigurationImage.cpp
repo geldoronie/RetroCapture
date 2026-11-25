@@ -34,6 +34,7 @@ void UIConfigurationImage::render()
     renderBrightnessContrast();
     renderSourceColor();
     renderFrameGeneration();
+    renderUpscaler();
     renderOutputResolution();
     renderAspectRatio();
     renderFullscreen();
@@ -144,6 +145,120 @@ void UIConfigurationImage::renderSourceColor()
         m_uiManager->setGamma(1.0f);
         m_uiManager->setColorRange(0);
         m_uiManager->setExpandLimitedAfterDecode(false);
+        m_uiManager->saveConfig();
+    }
+}
+
+// #251 — built-in upscaler stage (FSR 1 / NIS / Anime4K), run in its own
+// shader engine before or after the user's shader chain.
+void UIConfigurationImage::renderUpscaler()
+{
+    ui_section_header("Upscaler",
+                      "Built-in spatial upscaler. It runs in the pipeline "
+                      "before or after your shader preset, so both work "
+                      "together. Applies to the window, stream, recording "
+                      "and virtual camera; /raw stays the untouched source.");
+
+    UpscalerSettings up = m_uiManager->getUpscalerSettings();
+    bool changed = false;
+
+    const char *modeItems[] = {"Off", "FSR 1", "FSR 1 (EASU only)", "NVIDIA NIS",
+                               "Anime4K S", "Anime4K M", "Denoise + FSR"};
+    int mode = static_cast<int>(up.mode);
+    ImGui::PushItemWidth(220);
+    if (ImGui::Combo("Mode##upscaler", &mode, modeItems, UpscalerSettings::kModeCount))
+    {
+        up.mode = static_cast<UpscalerSettings::Mode>(mode);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("FSR 1: edge-adaptive upscale + sharpening, general purpose.\n"
+                          "NIS: NVIDIA's directional scaler with adaptive sharpening.\n"
+                          "Anime4K: CNN for 2D / anime / pixel art (a fixed 2x network).\n"
+                          "Denoise + FSR: bilateral denoise first, for noisy analog captures.");
+
+    const bool on = up.active();
+    if (!on) ImGui::BeginDisabled();
+
+    const char *targetItems[] = {"Auto (window / output size)", "2x", "3x", "4x", "Custom"};
+    int target = static_cast<int>(up.target);
+    if (ImGui::Combo("Target##upscaler", &target, targetItems, UpscalerSettings::kTargetCount))
+    {
+        up.target = static_cast<UpscalerSettings::Target>(target);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Auto: the output resolution when one is set, else the window size\n"
+                          "(keeping the source aspect when Maintain Aspect Ratio is on).\n"
+                          "2x / 3x / 4x: multiples of the source size.");
+    ImGui::PopItemWidth();
+    if (up.target == UpscalerSettings::Target::Custom)
+    {
+        ImGui::PushItemWidth(120);
+        int cw = up.customWidth, ch = up.customHeight;
+        if (ImGui::InputInt("Width##upscaler", &cw, 16, 256))
+        {
+            up.customWidth = cw;
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::InputInt("Height##upscaler", &ch, 16, 256))
+        {
+            up.customHeight = ch;
+            changed = true;
+        }
+        ImGui::PopItemWidth();
+    }
+
+    const bool sharpOff = on && !up.usesSharpness();
+    if (sharpOff) ImGui::BeginDisabled();
+    ImGui::PushItemWidth(220);
+    float sharp = up.sharpness;
+    if (ImGui::SliderFloat("Sharpness##upscaler", &sharp, 0.0f, 1.0f, "%.2f"))
+    {
+        up.sharpness = sharp;
+        changed = true;
+    }
+    ImGui::PopItemWidth();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("FSR 1 / Denoise + FSR: RCAS sharpening (FSR_SHARPENING = 2 x (1 - value) stops).\n"
+                          "NIS: NIS_SHARPNESS. Not used by EASU only and Anime4K.");
+    if (sharpOff) ImGui::EndDisabled();
+
+    ImGui::TextUnformatted("Position:");
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Before the shader chain##upscaler",
+                           up.position == UpscalerSettings::Position::Before))
+    {
+        up.position = UpscalerSettings::Position::Before;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Your shader preset runs on the upscaled image.");
+    ImGui::SameLine();
+    if (ImGui::RadioButton("After##upscaler", up.position == UpscalerSettings::Position::After))
+    {
+        up.position = UpscalerSettings::Position::After;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("CRT and pixel-art shaders expect the native resolution: run them\n"
+                          "first and upscale their output. With a CRT shader, 'After' keeps\n"
+                          "the scanline density right (one scanline per source line).\n"
+                          "The chain then renders at the largest whole multiple of the source\n"
+                          "that fits the target, and the upscaler scales that to the target.");
+
+    if (!on) ImGui::EndDisabled();
+
+    if (ImGui::Button("Reset##upscaler"))
+    {
+        up = UpscalerSettings();
+        changed = true;
+    }
+
+    if (changed)
+    {
+        m_uiManager->setUpscalerSettings(up);
         m_uiManager->saveConfig();
     }
 }

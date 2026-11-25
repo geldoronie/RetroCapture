@@ -18,9 +18,12 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
     m_variant = v == "levels"       ? Variant::Levels
                 : v == "interlaced" ? Variant::Interlaced
                 : v == "motion"     ? Variant::Motion
+                : v == "edges"      ? Variant::Edges
                                     : Variant::Bars;
     if (m_variant == Variant::Levels)
         LOG_INFO("VideoCaptureTestPattern: 'levels' variant (grey steps + colour bars)");
+    else if (m_variant == Variant::Edges)
+        LOG_INFO("VideoCaptureTestPattern: 'edges' variant (static rings / checkerboard / starburst)");
     else if (m_variant == Variant::Interlaced)
         LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
     else if (m_variant == Variant::Motion)
@@ -95,6 +98,57 @@ void VideoCaptureTestPattern::renderLevels()
                 px[1] = bars[c][1];
                 px[2] = bars[c][2];
             }
+        }
+    }
+}
+
+void VideoCaptureTestPattern::renderEdges()
+{
+    // Static and resolution-independent: every pixel samples the same
+    // continuous pattern at its centre, so a WxH render is the ground truth
+    // for an upscale of a smaller render (#251).
+    const double W = m_width ? m_width : 1, H = m_height ? m_height : 1;
+    const double aspect = W / H;
+    const double kPi = 3.14159265358979323846;
+    const double ca = std::cos(15.0 * kPi / 180.0), sa = std::sin(15.0 * kPi / 180.0);
+    for (uint32_t y = 0; y < m_height; ++y)
+    {
+        uint8_t *row = m_buffer.data() + static_cast<size_t>(y) * m_width * 3;
+        const double v = (y + 0.5) / H;
+        for (uint32_t x = 0; x < m_width; ++x)
+        {
+            const double u = (x + 0.5) / W;
+            const double px = u * aspect, py = v; // height units
+            uint8_t r, g, b;
+            if (u < 0.5)
+            {
+                // Concentric rings.
+                const double dx = px - 0.25 * aspect, dy = py - 0.5;
+                const bool on = (static_cast<long>(std::floor(std::sqrt(dx * dx + dy * dy) * 20.0)) & 1) != 0;
+                r = g = b = on ? 230 : 20;
+            }
+            else if (v < 0.5)
+            {
+                // Checkerboard rotated by 15 degrees.
+                const double qx = (px * ca - py * sa) * 12.0, qy = (px * sa + py * ca) * 12.0;
+                const bool on = ((static_cast<long>(std::floor(qx)) + static_cast<long>(std::floor(qy))) & 1) != 0;
+                r = on ? 240 : 30;
+                g = on ? 240 : 30;
+                b = on ? 200 : 60;
+            }
+            else
+            {
+                // Colour starburst, 24 sectors.
+                const double a = std::atan2(py - 0.75, px - 0.75 * aspect);
+                const bool on = (static_cast<long>(std::floor((a + kPi) / (2.0 * kPi) * 24.0)) & 1) != 0;
+                r = on ? 220 : 30;
+                g = on ? 70 : 90;
+                b = on ? 40 : 210;
+            }
+            uint8_t *p = row + static_cast<size_t>(x) * 3;
+            p[0] = r;
+            p[1] = g;
+            p[2] = b;
         }
     }
 }
@@ -261,6 +315,11 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
     {
         renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(timestampUs) / 1e6,
                      (timestampUs % 1000000LL) < 100000LL);
+        return;
+    }
+    if (m_variant == Variant::Edges)
+    {
+        renderEdges();
         return;
     }
 

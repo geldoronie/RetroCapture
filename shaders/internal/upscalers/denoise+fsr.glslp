@@ -3,7 +3,7 @@
 # Denoising first keeps EASU/RCAS from sharpening capture noise.
 shaders = 3
 
-shader0 = ../denoisers/shaders/fast-bilateral.glsl
+shader0 = shaders/denoise/fast-bilateral.glsl
 filter_linear0 = false
 wrap_mode0 = clamp_to_edge
 scale_type0 = source

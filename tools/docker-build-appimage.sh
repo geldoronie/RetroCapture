@@ -83,6 +83,14 @@ if [ -d "/work/shaders/shaders_glsl" ]; then
 else
     echo "⚠️  Aviso: Diretório /work/shaders/shaders_glsl não encontrado"
 fi
+# #251 — built-in upscaler passes (shaders/internal/upscalers); the app finds
+# them next to RETROCAPTURE_SHADER_PATH (.../shaders/internal).
+if [ -d "/work/shaders/internal" ]; then
+    cp -r /work/shaders/internal "$APP_DIR/usr/share/retrocapture/shaders/"
+    echo "✅ Internal shaders copied"
+else
+    echo "⚠️  Warning: /work/shaders/internal not found (built-in upscaler unavailable)"
+fi
 
 # Copiar assets
 echo "📋 Copiando assets..."

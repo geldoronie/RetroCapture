@@ -3043,6 +3043,13 @@ void UIManager::loadConfig()
                 if (image.contains("flipV") && image["flipV"].is_boolean())
                     g.flipV = image["flipV"].get<bool>();
             }
+            // #251 — built-in upscaler (absent in older configs: Off).
+            if (image.contains("upscaler") && image["upscaler"].is_object())
+            {
+                UpscalerSettings u;
+                u.applyJson(image["upscaler"]);
+                setUpscalerSettings(u);
+            }
         }
 
         // Carregar configurações do Web Portal
@@ -3553,6 +3560,7 @@ void UIManager::saveConfig()
             config["image"]["flipH"] = g.flipH;
             config["image"]["flipV"] = g.flipV;
         }
+        config["image"]["upscaler"] = getUpscalerSettings().toJson(); // #251
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
