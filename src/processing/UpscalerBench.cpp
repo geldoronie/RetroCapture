@@ -21,6 +21,12 @@ namespace
 {
 using Image = std::vector<uint8_t>; // RGB24
 
+// std::clamp is C++17; the old MinGW of the Windows build lacks it.
+double clampd(double v, double lo, double hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 std::map<std::string, std::string> parseSpec(const std::string &spec)
 {
     std::map<std::string, std::string> kv;
@@ -92,7 +98,7 @@ Image decimateArea(const Image &src, uint32_t sw, uint32_t sh, uint32_t dw, uint
             }
             for (int c = 0; c < 3; ++c)
                 out[(static_cast<size_t>(y) * dw + x) * 3 + c] =
-                    static_cast<uint8_t>(std::lround(std::clamp(acc[c] / wsum, 0.0, 255.0)));
+                    static_cast<uint8_t>(std::lround(clampd(acc[c] / wsum, 0.0, 255.0)));
         }
     }
     return out;
@@ -112,7 +118,7 @@ Image analogize(const Image &src, uint32_t w, uint32_t h)
                 auto at = [&](uint32_t xx) { return src[(static_cast<size_t>(y) * w + xx) * 3 + c]; };
                 const double v = 0.25 * at(x > 0 ? x - 1 : x) + 0.5 * at(x) + 0.25 * at(x + 1 < w ? x + 1 : x);
                 out[(static_cast<size_t>(y) * w + x) * 3 + c] =
-                    static_cast<uint8_t>(std::lround(std::clamp(v + noise(rng), 0.0, 255.0)));
+                    static_cast<uint8_t>(std::lround(clampd(v + noise(rng), 0.0, 255.0)));
             }
     return out;
 }
@@ -128,12 +134,12 @@ Image upBilinear(const Image &src, uint32_t sw, uint32_t sh, uint32_t dw, uint32
     Image out(static_cast<size_t>(dw) * dh * 3);
     for (uint32_t y = 0; y < dh; ++y)
     {
-        const double fy = std::clamp((y + 0.5) * sh / dh - 0.5, 0.0, sh - 1.0);
+        const double fy = clampd((y + 0.5) * sh / dh - 0.5, 0.0, sh - 1.0);
         const uint32_t y0 = static_cast<uint32_t>(fy), y1 = std::min(sh - 1, y0 + 1);
         const double ty = fy - y0;
         for (uint32_t x = 0; x < dw; ++x)
         {
-            const double fx = std::clamp((x + 0.5) * sw / dw - 0.5, 0.0, sw - 1.0);
+            const double fx = clampd((x + 0.5) * sw / dw - 0.5, 0.0, sw - 1.0);
             const uint32_t x0 = static_cast<uint32_t>(fx), x1 = std::min(sw - 1, x0 + 1);
             const double tx = fx - x0;
             for (int c = 0; c < 3; ++c)
