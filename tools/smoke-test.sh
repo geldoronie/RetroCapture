@@ -29,8 +29,8 @@
 #                 Set SMOKE_PRESET=none to skip the shader pass.
 #   SMOKE_KEEP=1  keep the work dir (app logs, captured streams) for debugging
 #
-# Needs: ffmpeg, ffprobe, curl, python3. A display — uses $DISPLAY if set,
-# otherwise falls back to xvfb-run (install xvfb in CI).
+# Needs: ffmpeg, ffprobe, curl, python3, xvfb-run (Linux). Runs headless in a
+# private session; RC_TEST_REAL_DISPLAY=1 uses the real $DISPLAY instead.
 
 set -u
 
@@ -82,23 +82,28 @@ for tool in ffmpeg ffprobe curl python3; do
 done
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
-# Wrap in xvfb when there's no display (CI). GLFW needs a GL context.
+# #240 — isolate the app under test from the user's desktop session. xvfb-run
+# alone isn't enough: GLFW prefers Wayland when WAYLAND_DISPLAY is inherited
+# (test windows popped up on the real desktop) and the tray registers on the
+# session D-Bus. On Linux, always run headless in a private session unless
+# RC_TEST_REAL_DISPLAY=1 asks for the real display (debugging).
 LAUNCH_PREFIX=()
 USE_XVFB=0
-# macOS has its own window server (no X/DISPLAY): launch directly there.
-if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
-    if command -v xvfb-run >/dev/null 2>&1; then
-        # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
-        # The window is pinned to 640x480 below (= the stream size): the shader
-        # renders at window size, and a near-fullscreen window downscaled to
-        # the stream averaged the CRT scanlines away, so the "shader changed
-        # the image" check depended on the display (flaky in CI, #214).
-        LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
-        USE_XVFB=1
-        note "no DISPLAY — using xvfb-run"
-    else
-        fail "no DISPLAY and xvfb-run not installed (need a GL context)"
-    fi
+if [ "$(uname)" != "Darwin" ] && [ "${RC_TEST_REAL_DISPLAY:-0}" != 1 ]; then
+    command -v xvfb-run >/dev/null 2>&1 || \
+        fail "xvfb-run not installed (need a headless GL context; RC_TEST_REAL_DISPLAY=1 uses \$DISPLAY)"
+    unset WAYLAND_DISPLAY XDG_SESSION_TYPE DISPLAY
+    mkdir -p "$WORK/runtime" && chmod 700 "$WORK/runtime"
+    export XDG_RUNTIME_DIR="$WORK/runtime"
+    export DBUS_SESSION_BUS_ADDRESS="disabled:"
+    # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
+    # The window is pinned to 640x480 below (= the stream size): the shader
+    # renders at window size, and a near-fullscreen window downscaled to
+    # the stream averaged the CRT scanlines away, so the "shader changed
+    # the image" check depended on the display (flaky in CI, #214).
+    LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
+    USE_XVFB=1
+    note "headless: xvfb-run, isolated session (RC_TEST_REAL_DISPLAY=1 to use the real display)"
 fi
 
 echo "▶ smoke-test: $BIN  (test pattern, port $PORT)"

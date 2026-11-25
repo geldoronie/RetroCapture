@@ -189,8 +189,9 @@ deve mantê-lo verde.
 ./tools/smoke-test.sh /caminho/para/retrocapture
 ```
 
-Requisitos: `ffmpeg`, `ffprobe`, `curl`, `python3` e um display (usa `$DISPLAY`,
-ou cai pra `xvfb-run` em CI). Usa a porta 8080 — recusa rodar se já houver uma
+Requisitos: `ffmpeg`, `ffprobe`, `curl`, `python3` e `xvfb-run` (Linux). Roda sempre
+headless numa sessão isolada (sem Wayland/D-Bus do usuário, #240);
+`RC_TEST_REAL_DISPLAY=1` usa o `$DISPLAY` real para depurar. Usa a porta 8080 — recusa rodar se já houver uma
 instância servindo nela (use `SMOKE_PORT` para mudar). Exit 0 = passou.
 
 ### `av-sync-test.sh`
