@@ -236,6 +236,11 @@ public:
             m_onContrastChanged(contrast);
         }
     }
+    // #228 — source colour controls, applied before the shader chain.
+    // colorRange: 0 = Auto, 1 = Limited (16-235), 2 = Full (0-255).
+    void setSaturation(float saturation) { m_saturation = saturation; }
+    void setGamma(float gamma) { m_gamma = gamma; }
+    void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
     void setOnBrightnessChanged(std::function<void(float)> callback) { m_onBrightnessChanged = callback; }
     void setOnContrastChanged(std::function<void(float)> callback) { m_onContrastChanged = callback; }
 
@@ -755,6 +760,9 @@ public:
     // Image settings getters
     float getBrightness() const { return m_brightness; }
     float getContrast() const { return m_contrast; }
+    float getSaturation() const { return m_saturation; }
+    float getGamma() const { return m_gamma; }
+    int getColorRange() const { return m_colorRange; }
     bool getMaintainAspect() const { return m_maintainAspect; }
     bool getFullscreen() const { return m_fullscreen; }
     int getMonitorIndex() const { return m_monitorIndex; }
@@ -1330,6 +1338,10 @@ private:
     // Brightness/Contrast
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
+    // #228 — source colour controls (identity defaults)
+    float m_saturation = 1.0f;
+    float m_gamma = 1.0f;
+    int m_colorRange = 0;
     std::function<void(float)> m_onBrightnessChanged;
     std::function<void(float)> m_onContrastChanged;
 

@@ -30,6 +30,7 @@ void UIConfigurationImage::render()
                       "embedded in the stream or recording.");
 
     renderBrightnessContrast();
+    renderSourceColor();
     renderOutputResolution();
     renderAspectRatio();
     renderFullscreen();
@@ -65,6 +66,67 @@ void UIConfigurationImage::renderBrightnessContrast()
     if (ImGui::Button("Reset##contrast"))
     {
         m_uiManager->setContrast(1.0f);
+    }
+}
+
+void UIConfigurationImage::renderSourceColor()
+{
+    // #228 — applied to the captured frame before the shader chain, so the
+    // shaders and every output (stream, recording, virtual camera, /raw)
+    // see the corrected image.
+    ui_section_header("Source color",
+                      "Applied to the captured frame before the shader "
+                      "chain; affects the preview and every output.");
+
+    static const char *kRanges[] = {"Auto", "Limited (16-235)", "Full (0-255)"};
+    int range = m_uiManager->getColorRange();
+    if (ImGui::Combo("Color range", &range, kRanges, 3))
+    {
+        m_uiManager->setColorRange(range);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Levels of the incoming signal. Pick Limited if "
+                          "blacks look grey (washed out), Full if shadows "
+                          "and highlights look crushed. Auto uses what the "
+                          "device reports, else YUV = limited, RGB = full.");
+    }
+
+    float saturation = m_uiManager->getSaturation();
+    if (ImGui::SliderFloat("Saturation", &saturation, 0.0f, 3.0f, "%.2f"))
+    {
+        m_uiManager->setSaturation(saturation);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##saturation"))
+    {
+        m_uiManager->setSaturation(1.0f);
+        m_uiManager->saveConfig();
+    }
+
+    float gamma = m_uiManager->getGamma();
+    if (ImGui::SliderFloat("Gamma", &gamma, 0.2f, 3.0f, "%.2f"))
+    {
+        m_uiManager->setGamma(gamma);
+        m_uiManager->saveConfig();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##gamma"))
+    {
+        m_uiManager->setGamma(1.0f);
+        m_uiManager->saveConfig();
+    }
+
+    if (ImGui::Button("Reset color to defaults"))
+    {
+        m_uiManager->setBrightness(1.0f);
+        m_uiManager->setContrast(1.0f);
+        m_uiManager->setSaturation(1.0f);
+        m_uiManager->setGamma(1.0f);
+        m_uiManager->setColorRange(0);
+        m_uiManager->saveConfig();
     }
 }
 

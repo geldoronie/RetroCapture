@@ -29,6 +29,7 @@ FrameProcessor::FrameProcessor()
 FrameProcessor::~FrameProcessor()
 {
     deleteTexture();
+    m_prePass.destroy();
     if (m_swsContext)
     {
         sws_freeContext(m_swsContext);
@@ -56,6 +57,8 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         return false; // Device is closed, cannot process frames
     }
 
+    m_reportedColorRange = capture->getReportedColorRange();
+
     // #107 zero-copy GPU path: if the capture hands us a ready GL texture
     // (DMABUF imported via EGL), use it directly and skip the CPU upload.
     {
@@ -70,6 +73,8 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             // The zero-copy path has no per-frame signal: date it now.
             ++m_frameSeq;
             m_frameTimestampUs = MediaClock::nowUs();
+            m_lastFrameWasYUV = false;
+            runPrePass();
             return true;
         }
         m_externalTexture = 0; // not on the GPU path this frame
@@ -82,6 +87,13 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // Log de depuração para dummy mode
     if (!captured)
     {
+        // #228 — adjustments changed while the source is idle (paused or
+        // static screen): re-run the pass on the last uploaded frame so the
+        // change shows without waiting for the next one.
+        if (m_adjustDirty && m_hasValidFrame)
+        {
+            runPrePass();
+        }
         return false; // Nenhum frame novo disponível
     }
 
@@ -173,6 +185,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             m_rgbBuffer.resize(requiredSize);
         }
         convertYUYVtoRGB(frame.data, m_rgbBuffer.data(), frame.width, frame.height);
+        m_lastFrameWasYUV = true;
 
         if (textureCreated)
         {
@@ -187,6 +200,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     }
     else if (frame.size == frame.width * frame.height * 3)
     {
+        m_lastFrameWasYUV = false;
         // RGB24: usar diretamente
         if (textureCreated)
         {
@@ -204,6 +218,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         // matching source format and let the driver swizzle into the RGB
         // texture — no CPU colour conversion, which is what keeps a full
         // monitor / 4K grab at the compositor's frame rate.
+        m_lastFrameWasYUV = false;
         const GLenum srcFmt = (frame.format == RC_PIXFMT_RGBA) ? GL_RGBA : GL_BGRA;
         if (textureCreated)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0,
@@ -215,6 +230,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     else
     {
         // Outros formatos: usar renderer (pode ter conversão específica)
+        m_lastFrameWasYUV = false;
         if (textureCreated)
         {
             m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
@@ -226,7 +242,62 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     }
 
     m_hasValidFrame = true;
+    runPrePass();
     return true; // Frame processado com sucesso
+}
+
+void FrameProcessor::setSourceAdjustments(const SourceAdjustments &adj)
+{
+    if (adj.colorRange == m_adjust.colorRange &&
+        adj.saturation == m_adjust.saturation &&
+        adj.gamma == m_adjust.gamma)
+    {
+        return;
+    }
+    m_adjust = adj;
+    m_adjustDirty = true;
+}
+
+bool FrameProcessor::wantYUVFullRange() const
+{
+    switch (m_adjust.colorRange)
+    {
+    case SourceColorRange::Full:
+        return true;
+    case SourceColorRange::Limited:
+        return false;
+    case SourceColorRange::Auto:
+    default:
+        // Historical behaviour: Y'CbCr is limited range unless the driver
+        // explicitly says otherwise.
+        return m_reportedColorRange == 2;
+    }
+}
+
+void FrameProcessor::runPrePass()
+{
+    m_adjustDirty = false;
+
+    SourcePrePass::Params p;
+    p.saturation = m_adjust.saturation;
+    p.gamma = m_adjust.gamma;
+    // Y'CbCr frames get their range in the YUV->RGB decode (libswscale);
+    // RGB frames are expanded here when the source is limited range.
+    if (!m_lastFrameWasYUV)
+    {
+        p.expandLimitedRange =
+            m_adjust.colorRange == SourceColorRange::Limited ||
+            (m_adjust.colorRange == SourceColorRange::Auto && m_reportedColorRange == 1);
+    }
+
+    if (!SourcePrePass::isActive(p))
+    {
+        m_processedTexture = 0; // identity: hand out the uploaded texture
+        return;
+    }
+
+    const GLuint src = m_externalTexture ? m_externalTexture : m_texture;
+    m_processedTexture = m_prePass.apply(src, m_textureWidth, m_textureHeight, p);
 }
 
 void FrameProcessor::deleteTexture()
@@ -239,11 +310,13 @@ void FrameProcessor::deleteTexture()
         m_textureHeight = 0;
         m_hasValidFrame = false;
     }
+    m_processedTexture = 0;
 }
 
 void FrameProcessor::setTextureFilterLinear(bool linear)
 {
     m_textureFilterLinear = linear;
+    m_prePass.setFilterLinear(linear);
     // Atualizar textura existente se houver
     if (m_texture != 0)
     {
@@ -281,6 +354,24 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
         }
         m_swsWidth = static_cast<int>(width);
         m_swsHeight = static_cast<int>(height);
+        m_swsFullRange = false; // libswscale's default for YUYV input
+    }
+
+    // #228 — source range of the Y'CbCr input. Only touch the context when
+    // it differs from what it decodes now, so the default stays bit-exact.
+    const bool fullRange = wantYUVFullRange();
+    if (fullRange != m_swsFullRange)
+    {
+        int *invTable = nullptr, *table = nullptr;
+        int srcRange = 0, dstRange = 0, brightness = 0, contrast = 0, saturation = 0;
+        if (sws_getColorspaceDetails(m_swsContext, &invTable, &srcRange, &table, &dstRange,
+                                     &brightness, &contrast, &saturation) >= 0)
+        {
+            sws_setColorspaceDetails(m_swsContext, invTable, fullRange ? 1 : 0, table, dstRange,
+                                     brightness, contrast, saturation);
+            LOG_INFO(std::string("YUV decode range: ") + (fullRange ? "full (0-255)" : "limited (16-235)"));
+        }
+        m_swsFullRange = fullRange;
     }
 
     const uint8_t *srcSlice[1] = { yuyv };

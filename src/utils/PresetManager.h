@@ -44,6 +44,11 @@ public:
         // Image settings
         float imageBrightness = 1.0f;
         float imageContrast = 1.0f;
+        // #228 — source colour controls (identity defaults; older presets
+        // without these keys load as identity)
+        float imageSaturation = 1.0f;
+        float imageGamma = 1.0f;
+        int imageColorRange = 0; // 0 = Auto, 1 = Limited, 2 = Full
         bool maintainAspect = true;
         bool fullscreen = false;
         int monitorIndex = 0;

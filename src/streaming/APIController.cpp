@@ -74,6 +74,25 @@ namespace
         return "\"" + jsonEscape(str) + "\"";
     }
 
+    // #228 — colour range wire names (UIManager stores 0/1/2).
+    const char *colorRangeName(int range)
+    {
+        switch (range)
+        {
+        case 1: return "limited";
+        case 2: return "full";
+        default: return "auto";
+        }
+    }
+
+    int colorRangeFromName(const std::string &name)
+    {
+        if (name == "auto") return 0;
+        if (name == "limited") return 1;
+        if (name == "full") return 2;
+        return -1;
+    }
+
     std::string jsonNumber(int value)
     {
         return std::to_string(value);
@@ -1128,6 +1147,9 @@ bool APIController::handleGETImageSettings(int clientFd)
     json << "{"
          << "\"brightness\": " << jsonNumber(m_uiManager->getBrightness()) << ", "
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
+         << "\"saturation\": " << jsonNumber(m_uiManager->getSaturation()) << ", "
+         << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
+         << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
          << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
@@ -2069,6 +2091,36 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
             updated = true;
         }
 
+        // #228 — source colour controls
+        if (json.contains("saturation"))
+        {
+            m_uiManager->setSaturation(std::max(0.0f, std::min(3.0f, json["saturation"].get<float>())));
+            updated = true;
+        }
+
+        if (json.contains("gamma"))
+        {
+            m_uiManager->setGamma(std::max(0.2f, std::min(3.0f, json["gamma"].get<float>())));
+            updated = true;
+        }
+
+        if (json.contains("colorRange"))
+        {
+            const auto &cr = json["colorRange"];
+            int range = -1;
+            if (cr.is_number_integer())
+                range = cr.get<int>();
+            else if (cr.is_string())
+                range = colorRangeFromName(cr.get<std::string>());
+            if (range < 0 || range > 2)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'colorRange' (use auto, limited or full)");
+                return true;
+            }
+            m_uiManager->setColorRange(range);
+            updated = true;
+        }
+
         if (json.contains("maintainAspect"))
         {
             bool maintainAspect = json["maintainAspect"].get<bool>();
@@ -2130,6 +2182,8 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
             m_uiManager->setFpsOverlayGraph(json["fpsOverlayGraph"].get<bool>());
             updated = true;
         }
+
+        if (updated) m_uiManager->saveConfig();
 
         std::ostringstream response;
         response << "{\"success\": " << jsonBool(updated) << "}";

@@ -215,6 +215,21 @@ bool VideoCaptureV4L2::setFormat(uint32_t width, uint32_t height, uint32_t pixel
     m_height = fmt.fmt.pix.height;
     m_pixelFormat = fmt.fmt.pix.pixelformat;
 
+    // #228 — explicit quantization reported by the driver (only trusted
+    // when the extended fields are valid). V4L2_QUANTIZATION_DEFAULT stays
+    // "unknown" so Auto keeps the historical decode.
+    m_reportedColorRange = 0;
+    if (fmt.fmt.pix.priv == V4L2_PIX_FMT_PRIV_MAGIC)
+    {
+        if (fmt.fmt.pix.quantization == V4L2_QUANTIZATION_LIM_RANGE)
+            m_reportedColorRange = 1;
+        else if (fmt.fmt.pix.quantization == V4L2_QUANTIZATION_FULL_RANGE)
+            m_reportedColorRange = 2;
+    }
+    LOG_INFO("V4L2 colorimetry: colorspace=" + std::to_string(fmt.fmt.pix.colorspace) +
+             " quantization=" + std::to_string(fmt.fmt.pix.quantization) +
+             " field=" + std::to_string(fmt.fmt.pix.field));
+
     // Verificar se o formato foi aceito corretamente (#161 — policy in FormatNegotiator).
     if (!rc::capture::FormatNegotiator::isAcceptedFormat(pixelFormat, m_pixelFormat))
     {

@@ -22,6 +22,11 @@
  * flashes white for the first 100 ms of every whole MediaClock second —
  * the same instants AudioCaptureTestTone beeps — so the output's A/V
  * offset can be measured from the flash/beep onsets.
+ *
+ * RETROCAPTURE_TEST_PATTERN selects an alternative layout for image-path
+ * tests (default: the bars above):
+ *  - "levels" (#228): top half = 8 grey steps (0,16,32,64,128,192,235,255),
+ *    bottom half = the colour bars. Measures range/saturation/gamma.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -54,6 +59,10 @@ public:
 
 private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
+    void renderLevels();
+
+    enum class Variant { Bars, Levels };
+    Variant m_variant = Variant::Bars;
 
     uint32_t m_width = 1280;
     uint32_t m_height = 720;
