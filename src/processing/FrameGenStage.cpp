@@ -101,6 +101,7 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
     m_current.fresh = false;
     m_interp.setMethodHint(opt.method);
 
+    bool pushed = false;
     if (srcTex != 0 && w > 0 && h > 0 && srcSeq != 0 && srcSeq != m_lastSrcSeq)
     {
         m_lastSrcSeq = srcSeq;
@@ -113,6 +114,7 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
         }
         if (acceptAsSourceFrame(srcTex, w, h, srcTsUs, skipRepeats) && m_interp.pushFrame(srcTex, w, h))
         {
+            pushed = true;
             m_clock.onRealFrame(srcTsUs, nowUs);
             m_stats.liveLagSum += static_cast<double>(nowUs - srcTsUs);
             ++m_stats.liveN;
@@ -133,6 +135,8 @@ FrameGenStage::Frame FrameGenStage::update(GLuint srcTex, uint32_t w, uint32_t h
         factor = n;
     }
     m_effFactor = factor;
+    if (pushed && factor >= 2 && m_clock.hasPair() && opt.method == FrameInterpolator::Method::RIFE)
+        m_interp.requestPhases(factor);
 
     // RIFE (#248) runs on a worker thread: give it the time it needs after
     // B arrives (measured, +15 %) by delaying the timeline. Capped so that B

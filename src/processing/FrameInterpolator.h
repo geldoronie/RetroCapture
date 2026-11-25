@@ -90,6 +90,13 @@ public:
      */
     void setMethodHint(Method m);
     RifeBackend &rife() { return m_rife; }
+    /**
+     * RIFE: schedule phases 1/n .. (n-1)/n of the current pair up front, so
+     * the worker starts on all of them as soon as B is uploaded (#256: the
+     * capture-rate fill mode changes n from pair to pair, which the
+     * backend's own "same phases as last pair" prefetch never catches).
+     */
+    void requestPhases(int n);
     const RifeBackend &rife() const { return m_rife; }
     /** The last render() output came from RIFE (not the Motion fallback). */
     bool lastWasRife() const { return m_lastRife; }

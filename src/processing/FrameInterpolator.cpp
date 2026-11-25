@@ -817,6 +817,13 @@ void FrameInterpolator::computeFlow()
     m_flowValid = true;
 }
 
+void FrameInterpolator::requestPhases(int n)
+{
+    if (!m_rifeWanted || n < 2 || m_count < 2 || m_rife.state() != RifeBackend::State::Ready) return;
+    for (int j = 1; j < n; ++j)
+        m_rife.request(static_cast<float>(j) / static_cast<float>(n));
+}
+
 void FrameInterpolator::setMethodHint(Method m)
 {
     m_rifeWanted = (m == Method::RIFE);
