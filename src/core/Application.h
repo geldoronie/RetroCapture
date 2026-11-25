@@ -114,6 +114,14 @@ public:
     // so the post-loadConfig sync keeps it instead of clobbering it with the saved
     // UI value (#163).
     void setStreamingPortExplicit(bool v) { m_streamingPortExplicit = v; }
+    // #223 — which of --stream-width/-height/-fps/-bitrate were given on the CLI.
+    void setStreamingCliOverrides(bool width, bool height, bool fps, bool bitrate)
+    {
+        m_streamingWidthExplicit = width;
+        m_streamingHeightExplicit = height;
+        m_streamingFpsExplicit = fps;
+        m_streamingBitrateExplicit = bitrate;
+    }
     void setStreamingWidth(uint32_t width) { m_streamingWidth = width; }
     void setStreamingHeight(uint32_t height) { m_streamingHeight = height; }
     void setStreamingFps(uint32_t fps) { m_streamingFps = fps; }
@@ -407,6 +415,10 @@ private:
     bool m_streamingEnabled = false;
     uint16_t m_streamingPort = 8080;
     bool m_streamingPortExplicit = false;  // CLI --stream-port / --web-portal-port given (#163)
+    bool m_streamingWidthExplicit = false;   // CLI --stream-width given (#223)
+    bool m_streamingHeightExplicit = false;  // CLI --stream-height given (#223)
+    bool m_streamingFpsExplicit = false;     // CLI --stream-fps given (#223)
+    bool m_streamingBitrateExplicit = false; // CLI --stream-bitrate given (#223)
     uint32_t m_streamingWidth = 640;                // Padrão: 640px (0 = usar resolução de captura)
     uint32_t m_streamingHeight = 480;               // Padrão: 480px (0 = usar resolução de captura)
     uint32_t m_streamingFps = 60;                   // 0 = usar FPS da captura
