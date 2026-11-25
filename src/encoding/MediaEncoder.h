@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <functional>
@@ -234,6 +235,26 @@ private:
     uint64_t m_audioGapsFilled = 0;
     uint64_t m_audioOverlapsDropped = 0;
     uint64_t m_videoFramesOutOfOrder = 0;
+    // #241 — audio that reached encodeAudio() before the first video frame
+    // latched the epoch. The callers drain audio before video in each
+    // loop iteration, so at start the first iteration's audio (captured
+    // AFTER the frame that becomes the epoch) arrived while there was no
+    // epoch yet and used to be dropped: the output then began with up to
+    // ~100 ms (more under load) of missing audio. It is held here (bounded
+    // to the last second) and replayed by the next encodeAudio() call once
+    // the epoch exists; the usual trim drops the part captured before it.
+    struct PendingAudio
+    {
+        std::vector<int16_t> samples;
+        int64_t captureTimestampUs = 0;
+        uint32_t inRate = 0;
+        uint32_t inChannels = 0;
+    };
+    std::deque<PendingAudio> m_preEpochAudio;
+    bool encodeAudioChunk(const int16_t *samples, size_t sampleCount,
+                          int64_t captureTimestampUs, uint32_t inRate, uint32_t inChannels,
+                          std::vector<EncodedPacket> &packets);
+
     // #193 — MediaClock time of the last encodeAudio() call (0 = never).
     // With no audio for > 1 s, encodeVideo() keeps the audio track alive
     // with silence so the output always carries a valid audio stream.
