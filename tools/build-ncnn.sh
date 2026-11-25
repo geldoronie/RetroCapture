@@ -71,4 +71,18 @@ sed -i.bak 's/(int)StorageClass::/(int)spv::StorageClass::/' "$WORK/src/glslang/
     "$@"
 "$CMAKE" --build "$WORK/build" -j "$JOBS"
 "$CMAKE" --install "$WORK/build"
+
+# #255 — on Apple, NCNN_SIMPLEVK weak-links a Vulkan stub (simplevk.tbd)
+# from the ncnn *source* tree, and the installed CMake config keeps that
+# path: once the scratch dir is gone, linking the app fails. Ship the stub
+# in the install tree and point the config at it.
+if [ "$(uname)" = "Darwin" ]; then
+    cp "$WORK/src/src/simplevk.tbd" "$PREFIX/lib/simplevk.tbd"
+    for f in "$PREFIX"/lib/cmake/ncnn/*.cmake; do
+        sed -i.bak "s|[^;\", ]*/simplevk\.tbd|$PREFIX/lib/simplevk.tbd|g" "$f" && rm -f "$f.bak"
+    done
+    if grep -q "simplevk.tbd" "$PREFIX"/lib/cmake/ncnn/*.cmake; then
+        grep -h "simplevk.tbd" "$PREFIX"/lib/cmake/ncnn/*.cmake
+    fi
+fi
 echo "ncnn installed to ${PREFIX}"
