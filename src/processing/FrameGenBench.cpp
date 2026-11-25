@@ -159,6 +159,14 @@ int runFrameGenBench(const std::string &spec)
             std::printf("BENCH rife=ready device=%s\n", fi.rife().device().c_str());
         }
     }
+    // #260 -- rifescale=auto|full|fast (default auto, as the app).
+    if (kv.count("rifescale"))
+    {
+        const std::string &v = kv["rifescale"];
+        fi.setRifeScale(v == "full"   ? FrameInterpolator::RifeScale::Full
+                        : v == "fast" ? FrameInterpolator::RifeScale::Fast
+                                      : FrameInterpolator::RifeScale::Auto);
+    }
 
     const char *names[] = {"ref", "repeat", "blend", "motion", "motion_nopick", "rife"};
     const int nOuts = rife ? 6 : 5;
@@ -264,6 +272,8 @@ int runFrameGenBench(const std::string &spec)
         std::printf("BENCH rife_gl_readback_ms=%.3f rife_gl_upload_ms=%.3f (GL side of the host round trip, EMA)\n",
                     rs.readbackMs, rs.uploadMs);
         std::printf("BENCH rife_fallbacks=%d (frames shown with Motion instead)\n", rifeFallbacks);
+        std::printf("BENCH rife_size=%ux%u (network input; the output is %ux%u)\n", fi.rifeWidth(), fi.rifeHeight(),
+                    w, h);
     }
     std::fflush(stdout);
     fi.destroy();

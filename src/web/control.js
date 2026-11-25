@@ -2789,7 +2789,8 @@ function renderFrameGenStatus(data) {
         } else if (rife.state === 'loading') {
             note = tr('web.config.image.framegen_rife_loading', 'RIFE: loading the model (Motion meanwhile)');
         } else if (rife.state === 'ready') {
-            note = 'RIFE: ' + rife.device + ', ' + rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
+            note = 'RIFE: ' + rife.device + (rife.width ? ' @ ' + rife.width + 'x' + rife.height : '') + ', ' +
+                rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
         }
         if (note) el.textContent = (el.textContent ? el.textContent + ' — ' : '') + note;
     }
@@ -2802,6 +2803,10 @@ function applyFrameGenToForm(data) {
     const protectEl = document.getElementById('frameGenProtectStatic');
     if (modeEl) modeEl.value = data.mode || 'off';
     if (methodEl) methodEl.value = data.method || 'motion';
+    const scaleEl = document.getElementById('frameGenRifeScale');
+    if (scaleEl) scaleEl.value = data.rifeScale || 'auto';
+    const scaleGroup = document.getElementById('frameGenRifeScaleGroup');
+    if (scaleGroup) scaleGroup.classList.toggle('d-none', (data.method || 'motion') !== 'rife');
     if (protectEl) protectEl.checked = !!data.protectStatic;
     const skipEl = document.getElementById('frameGenSkipRepeats');
     if (skipEl) skipEl.checked = data.skipRepeats !== false;
@@ -2841,6 +2846,7 @@ async function commitFrameGeneration() {
             method: methodEl.value,
             protectStatic: protectEl ? protectEl.checked : true,
             skipRepeats: (document.getElementById('frameGenSkipRepeats') || {checked: true}).checked,
+            rifeScale: (document.getElementById('frameGenRifeScale') || {value: 'auto'}).value,
             outputs,
         }));
     } catch (err) {
@@ -2851,7 +2857,7 @@ async function commitFrameGeneration() {
 document.addEventListener('DOMContentLoaded', () => {
     const modeEl = document.getElementById('frameGenMode');
     if (!modeEl) return;
-    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
+    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenRifeScale', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
     for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.addEventListener('change', commitFrameGeneration);

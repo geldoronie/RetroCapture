@@ -1361,6 +1361,7 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"method\": " << jsonString(FrameGenSettings::methodName(g.method)) << ", "
         << "\"protectStatic\": " << jsonBool(g.protectStatic) << ", "
         << "\"skipRepeats\": " << jsonBool(g.skipRepeats) << ", "
+        << "\"rifeScale\": " << jsonString(FrameGenSettings::rifeScaleName(g.rifeScale)) << ", "
         << "\"outputs\": {"
         << "\"window\": " << jsonBool(g.window) << ", "
         << "\"stream\": " << jsonBool(g.stream) << ", "
@@ -1379,7 +1380,9 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"inferMs\": " << jsonNumber(st.rifeInferMs) << ", "
         << "\"latencyMs\": " << jsonNumber(st.rifeLatencyMs) << ", "
         << "\"delivered\": " << st.rifeDelivered << ", "
-        << "\"late\": " << st.rifeLate << "}, "
+        << "\"late\": " << st.rifeLate << ", "
+        << "\"width\": " << st.rifeWidth << ", "
+        << "\"height\": " << st.rifeHeight << "}, "
         << "\"active\": " << jsonBool(st.active) << ", "
         << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
         << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
@@ -1429,6 +1432,18 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
                 return true;
             }
             g.method = m;
+        }
+        if (json.contains("rifeScale"))
+        {
+            const int s = json["rifeScale"].is_string()
+                              ? FrameGenSettings::rifeScaleFromName(json["rifeScale"].get<std::string>())
+                              : -1;
+            if (s < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'rifeScale' (use auto, full or fast)");
+                return true;
+            }
+            g.rifeScale = s;
         }
         auto readBool = [&](const nlohmann::json &obj, const char *key, bool &dst) -> bool {
             if (!obj.contains(key)) return true;

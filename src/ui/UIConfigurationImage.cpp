@@ -562,8 +562,8 @@ static void renderRifeStatus(const UIManager::FrameGenStatus &st)
         ImGui::TextDisabled("RIFE: starting Vulkan / loading the model... (Motion meanwhile)");
     else if (st.rifeState == 2)
     {
-        ImGui::TextDisabled("RIFE on %s: %.1f ms/frame, %llu frames, %llu late (shown with Motion)",
-                            st.rifeDevice.c_str(), st.rifeInferMs,
+        ImGui::TextDisabled("RIFE on %s at %ux%u: %.1f ms/frame, %llu frames, %llu late (shown with Motion)",
+                            st.rifeDevice.c_str(), st.rifeWidth, st.rifeHeight, st.rifeInferMs,
                             static_cast<unsigned long long>(st.rifeDelivered),
                             static_cast<unsigned long long>(st.rifeLate));
     }
@@ -611,6 +611,23 @@ void UIConfigurationImage::renderFrameGeneration()
     {
         fg.method = method;
         changed = true;
+    }
+    if (fg.method == FrameGenSettings::RIFE)
+    {
+        // #260 — the network's size: its cost grows with the pixel count.
+        static const char *scales[] = {"Auto (reduce above 720p)", "Full (native size)",
+                                       "Fast (always ~720p)"};
+        int scale = fg.rifeScale;
+        if (ImGui::Combo("RIFE resolution##framegen", &scale, scales, IM_ARRAYSIZE(scales)))
+        {
+            fg.rifeScale = scale;
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Above 720p the network runs on a ~1280x720 copy and its frame is scaled\n"
+                              "back up on the GPU: 1080p60 keeps up instead of stuttering. Real frames\n"
+                              "stay native; generated ones are a little softer. Full keeps the native\n"
+                              "size (needs a fast GPU above 720p).");
     }
     ImGui::PopItemWidth();
     if (ImGui::Checkbox("Keep static regions still (HUD, borders)##framegen", &fg.protectStatic))
