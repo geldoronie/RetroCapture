@@ -202,28 +202,50 @@
                                             <small class="form-text text-muted mt-1" data-i18n="web.config.source.auto_apply_hint">Changes are applied automatically on selection.</small>
                                         </div>
 
-                                        <!-- Source Overscan -->
+                                        <!-- Source Crop (#225: 4 sides, % or px, link modes, auto-crop) -->
                                         <div class="col-12">
                                             <div class="card">
                                                 <div class="card-body">
-                                                    <div class="d-flex justify-content-between align-items-baseline mb-2">
-                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i><span data-i18n="web.config.source.overscan">Source overscan</span></h6>
-                                                        <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" id="overscanLocked">
-                                                            <label class="form-check-label small" for="overscanLocked" data-i18n="web.config.source.lock_xy">Lock X / Y</label>
+                                                    <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2 mb-2">
+                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i><span data-i18n="web.config.source.overscan">Source crop</span></h6>
+                                                        <div class="d-flex flex-wrap gap-2">
+                                                            <select class="form-select form-select-sm w-auto" id="cropUnit">
+                                                                <option value="percent" data-i18n="web.config.source.crop_unit_percent">%</option>
+                                                                <option value="px" data-i18n="web.config.source.crop_unit_px">px</option>
+                                                            </select>
+                                                            <select class="form-select form-select-sm w-auto" id="cropLink">
+                                                                <option value="none" data-i18n="web.config.source.crop_link_none">Independent sides</option>
+                                                                <option value="pairs" data-i18n="web.config.source.crop_link_pairs">Lock left/right + top/bottom</option>
+                                                                <option value="all" data-i18n="web.config.source.crop_link_all">Lock all sides</option>
+                                                            </select>
                                                         </div>
                                                     </div>
                                                     <div class="row g-2">
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanX"><span data-i18n="web.config.source.horizontal">Horizontal:</span> <span id="overscanXValue">0.0%</span></label>
-                                                            <input type="range" class="form-range" id="overscanX" min="0" max="30" step="0.5" value="0">
+                                                            <label class="form-label small mb-1" for="cropTop"><span data-i18n="web.config.source.crop_top">Top:</span> <span id="cropTopValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropTop" data-side="top" min="0" max="45" step="0.5" value="0">
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanY"><span data-i18n="web.config.source.vertical">Vertical:</span> <span id="overscanYValue">0.0%</span></label>
-                                                            <input type="range" class="form-range" id="overscanY" min="0" max="30" step="0.5" value="0">
+                                                            <label class="form-label small mb-1" for="cropBottom"><span data-i18n="web.config.source.crop_bottom">Bottom:</span> <span id="cropBottomValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropBottom" data-side="bottom" min="0" max="45" step="0.5" value="0">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label small mb-1" for="cropLeft"><span data-i18n="web.config.source.crop_left">Left:</span> <span id="cropLeftValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropLeft" data-side="left" min="0" max="45" step="0.5" value="0">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label small mb-1" for="cropRight"><span data-i18n="web.config.source.crop_right">Right:</span> <span id="cropRightValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropRight" data-side="right" min="0" max="45" step="0.5" value="0">
                                                         </div>
                                                     </div>
-                                                    <div class="form-text small" data-i18n="web.config.source.overscan_hint">Crops a percentage of the source borders before downscaling — useful to remove letterbox or mimic CRT bezels.</div>
+                                                    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" id="cropAutoBtn"><i class="bi bi-magic me-1"></i><span data-i18n="web.config.source.crop_auto">Auto-crop</span></button>
+                                                        <label class="small mb-0" for="cropThreshold"><span data-i18n="web.config.source.crop_threshold">Black threshold:</span> <span id="cropThresholdValue">24</span></label>
+                                                        <input type="range" class="form-range w-auto" id="cropThreshold" min="0" max="96" step="1" value="24">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="cropResetBtn" data-i18n="web.config.source.crop_reset">Reset</button>
+                                                        <span class="small text-muted" id="cropAutoStatus"></span>
+                                                    </div>
+                                                    <div class="form-text small" data-i18n="web.config.source.overscan_hint">Crops each border of the source independently, before the shader and every output (preview, stream, recording, virtual camera, remote). Auto-crop detects black borders on the live picture.</div>
                                                 </div>
                                             </div>
                                         </div>

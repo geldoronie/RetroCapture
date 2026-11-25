@@ -58,6 +58,9 @@ private:
     std::string m_avfFormatsForDeviceId; // tracks which device's formats we cached
 #endif
     void renderCaptureSettings();
+    // #225 — 4-side source crop controls + the drag-time visual guide.
+    void renderSourceCrop();
+    void drawCropGuide();
     void renderQuickResolutions();
     void renderQuickFPS();
     // Phase 6+/#47 polish: UI surface for the Remote source — base URL

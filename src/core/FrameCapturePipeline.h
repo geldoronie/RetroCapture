@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+
+#include "../processing/SourceCrop.h"
 
 // #157 — FrameCapturePipeline: the per-frame capture -> shader -> distribute
 // pipeline extracted out of Application (behavior-preserving). It does not own
@@ -23,8 +26,8 @@ public:
 private:
     Application &m_app;
 
-    // #224 — the source crop for a srcW x srcH frame, as fractions of the
-    // frame per side (0 = no crop). Visible region = 1 - left - right etc.
+    // #224/#225 — the source crop for a srcW x srcH frame, as fractions of
+    // the texture per side (0 = no crop); top = texture row 0.
     void getSourceCropFractions(uint32_t srcW, uint32_t srcH,
                                 float &left, float &right,
                                 float &top, float &bottom) const;
@@ -43,4 +46,21 @@ private:
     uint64_t m_lastStreamSeq = 0;
     uint64_t m_lastRawSeq = 0;
     uint64_t m_lastRecordSeq = 0;
+
+    // #225 — auto-crop: a few spaced readbacks of the uncropped source.
+    void runAutoCropSampling();
+    struct AutoCropSampler
+    {
+        bool active = false;
+        int threshold = 24;
+        int samples = 0; // frames read back
+        int found = 0;   // of those, frames with a picture (not all dark)
+        uint64_t lastSeq = 0;
+        uint32_t w = 0, h = 0;
+        BlackBorders result;
+        std::vector<uint8_t> pixels;
+        static constexpr int kSamples = 6;
+        static constexpr uint64_t kSeqSpacing = 5;
+    };
+    AutoCropSampler m_autoCrop;
 };

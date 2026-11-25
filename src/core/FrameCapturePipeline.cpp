@@ -14,6 +14,7 @@
 #endif
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
+#include "../processing/SourceCrop.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../renderer/PBOManager.h"
 #ifdef USE_SDL2
@@ -137,12 +138,109 @@ void FrameCapturePipeline::getSourceCropFractions(uint32_t srcW, uint32_t srcH,
     left = right = top = bottom = 0.0f;
     if (!m_app.m_ui || srcW == 0 || srcH == 0)
         return;
-    // Symmetric overscan: X crops left+right, Y crops top+bottom.
-    // std::clamp is C++17; the old MinGW of the Windows build lacks it.
-    const float x = std::max(0.0f, std::min(0.45f, m_app.m_ui->getSourceOverscanPercentX() / 100.0f));
-    const float y = std::max(0.0f, std::min(0.45f, m_app.m_ui->getSourceOverscanPercentY() / 100.0f));
-    left = right = (x > 0.00001f) ? x : 0.0f;
-    top = bottom = (y > 0.00001f) ? y : 0.0f;
+    m_app.m_ui->getSourceCrop().fractions(srcW, srcH, left, right, top, bottom);
+    // A Remote source's texture is stored the other way up (see the
+    // shouldFlipY note below): its row 0 is the BOTTOM of the picture.
+    if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
+        std::swap(top, bottom);
+}
+
+void FrameCapturePipeline::runAutoCropSampling()
+{
+    // #225 — auto-crop: sample a few frames of the UNCROPPED source, detect
+    // the black borders on each, and keep the smallest border per side (a
+    // letterbox is black on every frame; a dark scene is not a border).
+    if (!m_app.m_ui || !m_app.m_frameProcessor)
+        return;
+    int threshold = 0;
+    if (m_app.m_ui->takeSourceAutoCropRequest(threshold))
+    {
+        m_autoCrop = AutoCropSampler{};
+        m_autoCrop.active = true;
+        m_autoCrop.threshold = threshold;
+    }
+    if (!m_autoCrop.active)
+        return;
+
+    const GLuint tex = m_app.m_frameProcessor->getTexture();
+    const uint32_t w = m_app.m_frameProcessor->getTextureWidth();
+    const uint32_t h = m_app.m_frameProcessor->getTextureHeight();
+    const uint64_t seq = m_app.m_frameProcessor->getFrameSeq();
+    if (tex == 0 || w == 0 || h == 0)
+        return;
+    if (m_autoCrop.samples > 0 && (w != m_autoCrop.w || h != m_autoCrop.h))
+    {
+        // Source resized mid-sampling: start over on the new size.
+        const int t = m_autoCrop.threshold;
+        m_autoCrop = AutoCropSampler{};
+        m_autoCrop.active = true;
+        m_autoCrop.threshold = t;
+    }
+    // Space the samples out a little so they see different frames.
+    if (m_autoCrop.samples > 0 && seq < m_autoCrop.lastSeq + AutoCropSampler::kSeqSpacing)
+        return;
+    m_autoCrop.lastSeq = seq;
+    m_autoCrop.w = w;
+    m_autoCrop.h = h;
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    bool ok = false;
+    BlackBorders b;
+    bool found = false;
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        const size_t stride = ((static_cast<size_t>(w) * 3 + 3) / 4) * 4;
+        m_autoCrop.pixels.resize(stride * h);
+        glReadPixels(0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                     GL_RGB, GL_UNSIGNED_BYTE, m_autoCrop.pixels.data());
+        found = detectBlackBorders(m_autoCrop.pixels.data(), w, h, stride,
+                                   m_autoCrop.threshold, b);
+        ok = true;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glDeleteFramebuffers(1, &fbo);
+    if (!ok)
+        return;
+
+    ++m_autoCrop.samples;
+    if (found)
+    {
+        // Readback row 0 is texture row 0: the top of the picture, except
+        // for a Remote source (stored bottom-up).
+        if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
+            std::swap(b.top, b.bottom);
+        if (m_autoCrop.found == 0)
+        {
+            m_autoCrop.result = b;
+        }
+        else
+        {
+            m_autoCrop.result.top = std::min(m_autoCrop.result.top, b.top);
+            m_autoCrop.result.bottom = std::min(m_autoCrop.result.bottom, b.bottom);
+            m_autoCrop.result.left = std::min(m_autoCrop.result.left, b.left);
+            m_autoCrop.result.right = std::min(m_autoCrop.result.right, b.right);
+        }
+        ++m_autoCrop.found;
+    }
+
+    if (m_autoCrop.samples >= AutoCropSampler::kSamples)
+    {
+        const BlackBorders &r = m_autoCrop.result;
+        LOG_INFO("Auto-crop: " + std::to_string(m_autoCrop.found) + "/" +
+                 std::to_string(m_autoCrop.samples) + " frames with picture, borders top=" +
+                 std::to_string(r.top) + " bottom=" + std::to_string(r.bottom) +
+                 " left=" + std::to_string(r.left) + " right=" + std::to_string(r.right) +
+                 " px on " + std::to_string(w) + "x" + std::to_string(h));
+        m_app.m_ui->applySourceAutoCrop(m_autoCrop.found > 0, r.top, r.bottom, r.left, r.right, w, h);
+        m_autoCrop.active = false;
+        m_autoCrop.pixels.clear();
+        m_autoCrop.pixels.shrink_to_fit();
+    }
 }
 
 bool FrameCapturePipeline::renderAndDistributeFrame()
@@ -170,6 +268,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         LOG_DEBUG("================================");
     }
     
+    // #225 — auto-crop sampling reads the uncropped capture texture.
+    runAutoCropSampling();
+
     // #224 — source pre-pass: the crop (overscan) is a property of the
     // SOURCE, so it runs here, before and independently of the shader
     // chain. The cropped texture then feeds the shader (when one is

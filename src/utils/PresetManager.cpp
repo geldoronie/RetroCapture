@@ -189,6 +189,18 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
             presetJson["capture"]["sourceType"] = data.sourceType;
         }
 
+        // Source crop (#225)
+        if (data.hasSourceCrop)
+        {
+            presetJson["sourceCrop"] = {
+                {"top", data.sourceCrop.value[SourceCrop::Top]},
+                {"bottom", data.sourceCrop.value[SourceCrop::Bottom]},
+                {"left", data.sourceCrop.value[SourceCrop::Left]},
+                {"right", data.sourceCrop.value[SourceCrop::Right]},
+                {"unit", SourceCrop::unitName(data.sourceCrop.unit)},
+                {"link", SourceCrop::linkName(data.sourceCrop.link)}};
+        }
+
         // Image settings
         // Note: fullscreen and monitorIndex are NOT saved - they vary per user/system
         presetJson["image"]["brightness"] = data.imageBrightness;
@@ -354,6 +366,19 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             {
                 data.sourceType = capture["sourceType"].get<int>();
             }
+        }
+
+        // Load source crop (#225)
+        if (presetJson.contains("sourceCrop") && presetJson["sourceCrop"].is_object())
+        {
+            const auto &c = presetJson["sourceCrop"];
+            data.sourceCrop.value[SourceCrop::Top] = c.value("top", 0.0f);
+            data.sourceCrop.value[SourceCrop::Bottom] = c.value("bottom", 0.0f);
+            data.sourceCrop.value[SourceCrop::Left] = c.value("left", 0.0f);
+            data.sourceCrop.value[SourceCrop::Right] = c.value("right", 0.0f);
+            data.sourceCrop.unit = SourceCrop::unitFromName(c.value("unit", std::string("percent")).c_str(), SourceCrop::Percent);
+            data.sourceCrop.link = SourceCrop::linkFromName(c.value("link", std::string("none")).c_str(), SourceCrop::LinkNone);
+            data.hasSourceCrop = true;
         }
 
         // Load image settings
