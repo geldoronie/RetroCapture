@@ -1081,6 +1081,10 @@ async function loadImageSettings() {
         if (expandAfterEl) {
             expandAfterEl.checked = settings.expandLimitedAfterDecode === true;
         }
+        const downscaleEl = document.getElementById('downscaleFilter');
+        if (downscaleEl) {
+            downscaleEl.value = settings.downscaleFilter || 'auto';
+        }
 
         if (maintainAspectEl) {
             maintainAspectEl.checked = settings.maintainAspect || false;
@@ -1184,6 +1188,10 @@ async function updateImageSettings() {
         if (expandAfterEl) {
             settings.expandLimitedAfterDecode = expandAfterEl.checked; // #243
         }
+        const downscaleEl = document.getElementById('downscaleFilter');
+        if (downscaleEl) {
+            settings.downscaleFilter = downscaleEl.value;
+        }
         
         await api.setImageSettings(settings);
         
@@ -1195,6 +1203,7 @@ async function updateImageSettings() {
             gamma: settings.gamma,
             colorRange: settings.colorRange,
             expandLimitedAfterDecode: settings.expandLimitedAfterDecode,
+            downscaleFilter: settings.downscaleFilter,
             maintainAspect: settings.maintainAspect,
             fullscreen: settings.fullscreen
         };
@@ -1606,6 +1615,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const expandAfterChk = document.getElementById('expandLimitedAfterDecode');
     if (expandAfterChk) {
         expandAfterChk.addEventListener('change', updateImageSettingsDebounced); // #243
+    }
+    const downscaleSel = document.getElementById('downscaleFilter');
+    if (downscaleSel) {
+        downscaleSel.addEventListener('change', updateImageSettingsDebounced);
     }
     // #242 — per-slider reset buttons (data-reset-target / data-reset-value).
     document.querySelectorAll('.slider-reset').forEach(function(btn) {

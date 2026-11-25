@@ -1,4 +1,5 @@
 #include "FrameCapturePipeline.h"
+#include "../renderer/AreaDownscaler.h"
 #include "Application.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
@@ -559,11 +560,43 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, scaleFilter);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, scaleFilter);
 
-            m_app.m_renderer->renderTexture(shaderSrcTex,
-                                      fboW, fboH,
-                                      false, false, 1.0f, 1.0f, false,
-                                      shaderSrcW, shaderSrcH,
-                                      /*preserveViewport=*/true);
+            // Downscale filter: NEAREST keeps hard pixel edges and is exact
+            // on whole ratios (2x, 3x); on others (1280x720 -> 640x480 =
+            // 2 x 1.5) it drops source lines unevenly, so the area average
+            // is used there (Auto), or always / never when picked.
+            bool area = false;
+            if (needsDownscale && m_app.m_ui)
+            {
+                const int f = m_app.m_ui->getSourceDownscaleFilter();
+                const bool whole = (shaderSrcW % fboW == 0) && (shaderSrcH % fboH == 0);
+                area = f == 2 || (f == 0 && !whole);
+            }
+            bool drawn = false;
+            if (area)
+            {
+                if (!m_areaDownscaler)
+                    m_areaDownscaler = std::make_unique<AreaDownscaler>();
+                drawn = m_areaDownscaler->render(shaderSrcTex, shaderSrcW, shaderSrcH, fboW, fboH);
+                if (m_downscaleLogged != (drawn ? 2 : 1))
+                {
+                    m_downscaleLogged = drawn ? 2 : 1;
+                    LOG_INFO("Source downscale " + std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
+                             " -> " + std::to_string(fboW) + "x" + std::to_string(fboH) +
+                             (drawn ? ": area average" : ": area average unavailable, nearest"));
+                }
+            }
+            else if (needsDownscale && m_downscaleLogged != 3)
+            {
+                m_downscaleLogged = 3;
+                LOG_INFO("Source downscale " + std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
+                         " -> " + std::to_string(fboW) + "x" + std::to_string(fboH) + ": nearest");
+            }
+            if (!drawn)
+                m_app.m_renderer->renderTexture(shaderSrcTex,
+                                          fboW, fboH,
+                                          false, false, 1.0f, 1.0f, false,
+                                          shaderSrcW, shaderSrcH,
+                                          /*preserveViewport=*/true);
 
             glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
