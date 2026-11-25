@@ -73,6 +73,7 @@ private:
     // not once per render-loop iteration.
     uint64_t m_lastStreamSeq = 0;
     uint64_t m_lastRawSeq = 0;
+    std::vector<uint8_t> m_rawSourceData; // #264 — /raw without the upscale
     uint64_t m_lastRecordSeq = 0;
 
     // #247 — one render of a source frame through the shader chain to the
@@ -92,6 +93,8 @@ private:
     };
     // Returns true when the frame was already presented (invalid window).
     bool renderPass(const PassSpec &spec);
+    // Synchronous RGB readback of a texture (bottom-up rows, no padding).
+    bool readTextureRGB(GLuint tex, uint32_t w, uint32_t h, std::vector<uint8_t> &out);
     // Status / overlay counters, UI, swap and loop pacing.
     bool finishFrame();
 

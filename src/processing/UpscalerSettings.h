@@ -46,6 +46,9 @@ struct UpscalerSettings
     int customHeight = 1080;
     float sharpness = 0.75f; // 0..1, mapped to FSR_SHARPENING / NIS_SHARPNESS
     Position position = Position::Before;
+    // #264 — /raw carries the upscaled picture (the default). Off sends the
+    // native source, so the remote client applies its own upscaler.
+    bool raw = true;
 
     bool active() const { return mode != Mode::Off; }
     bool usesSharpness() const
@@ -186,7 +189,8 @@ struct UpscalerSettings
                               {"customWidth", customWidth},
                               {"customHeight", customHeight},
                               {"sharpness", sharpness},
-                              {"position", positionName(position)}};
+                              {"position", positionName(position)},
+                              {"raw", raw}};
     }
 
     // Applies the keys present in j (unknown values are ignored). Returns
@@ -228,6 +232,15 @@ struct UpscalerSettings
             }
             position = p;
         }
+        if (j.contains("raw"))
+        {
+            if (!j["raw"].is_boolean())
+            {
+                if (err) *err = "Invalid upscaler 'raw'. Use true or false";
+                return false;
+            }
+            raw = j["raw"].get<bool>();
+        }
         if (j.contains("customWidth") && j["customWidth"].is_number())
             customWidth = j["customWidth"].get<int>();
         if (j.contains("customHeight") && j["customHeight"].is_number())
@@ -241,7 +254,8 @@ struct UpscalerSettings
     bool operator==(const UpscalerSettings &o) const
     {
         return mode == o.mode && target == o.target && customWidth == o.customWidth &&
-               customHeight == o.customHeight && sharpness == o.sharpness && position == o.position;
+               customHeight == o.customHeight && sharpness == o.sharpness && position == o.position &&
+               raw == o.raw;
     }
     bool operator!=(const UpscalerSettings &o) const { return !(*this == o); }
 };

@@ -283,6 +283,42 @@ GLuint FrameCapturePipeline::runUpscaler(UpscalerSettings::Position where, GLuin
     return out;
 }
 
+bool FrameCapturePipeline::readTextureRGB(GLuint tex, uint32_t w, uint32_t h, std::vector<uint8_t> &out)
+{
+    // Synchronous readback of a pre-shader texture for /raw and the
+    // apply-shader-off outputs.
+    if (!tex || w == 0 || h == 0)
+        return false;
+    bool ok = false;
+    GLuint tmpFBO = 0;
+    glGenFramebuffers(1, &tmpFBO);
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, tmpFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        const size_t rowUnpadded = static_cast<size_t>(w) * 3;
+        const size_t rowPadded = ((rowUnpadded + 3) / 4) * 4;
+        m_app.m_captureSourcePadded.resize(rowPadded * h);
+        glReadPixels(0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h), GL_RGB, GL_UNSIGNED_BYTE,
+                     m_app.m_captureSourcePadded.data());
+        // #187 — keep glReadPixels' native bottom-up order (do NOT flip),
+        // only strip the row padding. The shaded path (frameData) is read via
+        // PBO with flipY=false (also bottom-up) and records/streams correctly;
+        // this buffer feeds the same encoders (recording, /stream, /raw), so it
+        // must match that orientation. The old vertical flip here produced
+        // upside-down recording whenever apply-shader was OFF.
+        out.resize(rowUnpadded * h);
+        for (uint32_t row = 0; row < h; ++row)
+            memcpy(out.data() + row * rowUnpadded, m_app.m_captureSourcePadded.data() + row * rowPadded, rowUnpadded);
+        ok = true;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glDeleteFramebuffers(1, &tmpFBO);
+    return ok;
+}
+
 bool FrameCapturePipeline::renderAndDistributeFrame()
 {
     // #152 - the per-frame render + shader + output-resolution + window draw +
@@ -1650,11 +1686,17 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
                         // #251 — the output went through the shader chain: /raw and an
                         // apply-shader-off stream / recording then need the separate
-                        // pre-shader readback. The upscaler alone isn't a reason: /raw
-                        // carries the upscaled picture, which is then the output itself.
-                        // upscaler): /raw and an apply-shader-off stream / recording
-                        // then need the separate pre-shader source readback.
+                        // pre-shader readback. The upscaler alone isn't a reason: the
+                        // upscaled picture is then the output itself.
                         const bool processed = masterOn && shaderActive;
+                        // #264 — /raw with the upscaler off for it: the cropped source.
+                        const bool rawUpscaled = m_upscalerSettings.raw;
+                        const GLuint rawTex = rawUpscaled ? preShaderTex : sourceTex;
+                        const uint32_t rawTexW = rawUpscaled ? preShaderW : sourceW;
+                        const uint32_t rawTexH = rawUpscaled ? preShaderH : sourceH;
+                        // The output (frameData) is /raw's picture only without the
+                        // chain, and with the upscaler either off or wanted on /raw.
+                        const bool rawNeedsReadback = processed || (m_upscalerRan && !rawUpscaled);
                         const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
                         const bool recordWantsSource = m_app.m_ui && passRecord &&
@@ -1663,7 +1705,8 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // /raw client also triggers the source-frame capture below.
                         const bool rawWantsSource = passRaw && m_app.m_streamManager->hasRawClients();
                         const bool needSourceCapture = processed &&
-                                                       (streamWantsSource || recordWantsSource || rawWantsSource);
+                                                       (streamWantsSource || recordWantsSource ||
+                                                        (rawWantsSource && rawTex == preShaderTex));
 
                         bool sourceFrameReady = false;
                         uint32_t sourceFrameW = 0, sourceFrameH = 0;
@@ -1671,43 +1714,30 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         {
                             // #224 — /raw carries the source crop: read the
                             // pre-pass texture, not the raw capture texture.
-                            GLuint srcTex = preShaderTex;
                             sourceFrameW = preShaderW;
                             sourceFrameH = preShaderH;
-                            if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
+                            sourceFrameReady = readTextureRGB(preShaderTex, sourceFrameW, sourceFrameH,
+                                                              m_app.m_captureSourceFrameData);
+                        }
+
+                        // #264 — /raw's own picture when it differs from the one above:
+                        // the upscaler is off for /raw (the remote client upscales), so
+                        // it takes the cropped source instead of the upscaled picture.
+                        const std::vector<uint8_t> *rawData = nullptr;
+                        uint32_t rawW = 0, rawH = 0;
+                        if (rawWantsSource && rawNeedsReadback)
+                        {
+                            if (rawTex == preShaderTex && sourceFrameReady)
                             {
-                                GLuint tmpFBO = 0;
-                                glGenFramebuffers(1, &tmpFBO);
-                                GLint prevFBO = 0;
-                                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-                                glBindFramebuffer(GL_FRAMEBUFFER, tmpFBO);
-                                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
-                                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
-                                {
-                                    const size_t rowUnpadded = static_cast<size_t>(sourceFrameW) * 3;
-                                    const size_t rowPadded = ((rowUnpadded + 3) / 4) * 4;
-                                    m_app.m_captureSourcePadded.resize(rowPadded * sourceFrameH);
-                                    glReadPixels(0, 0, static_cast<GLsizei>(sourceFrameW),
-                                                 static_cast<GLsizei>(sourceFrameH),
-                                                 GL_RGB, GL_UNSIGNED_BYTE, m_app.m_captureSourcePadded.data());
-                                    // #187 — keep glReadPixels' native bottom-up order (do NOT flip),
-                                    // only strip the row padding. The shaded path (frameData) is read via
-                                    // PBO with flipY=false (also bottom-up) and records/streams correctly;
-                                    // this raw-source buffer feeds the same encoders (recording, /stream,
-                                    // /raw), so it must match that orientation. The old vertical flip here
-                                    // produced upside-down recording whenever apply-shader was OFF.
-                                    m_app.m_captureSourceFrameData.resize(rowUnpadded * sourceFrameH);
-                                    for (uint32_t row = 0; row < sourceFrameH; ++row)
-                                    {
-                                        const uint32_t srcRow = row;
-                                        const uint8_t *s = m_app.m_captureSourcePadded.data() + srcRow * rowPadded;
-                                        uint8_t *d = m_app.m_captureSourceFrameData.data() + row * rowUnpadded;
-                                        memcpy(d, s, rowUnpadded);
-                                    }
-                                    sourceFrameReady = true;
-                                }
-                                glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-                                glDeleteFramebuffers(1, &tmpFBO);
+                                rawData = &m_app.m_captureSourceFrameData;
+                                rawW = sourceFrameW;
+                                rawH = sourceFrameH;
+                            }
+                            else if (readTextureRGB(rawTex, rawTexW, rawTexH, m_rawSourceData))
+                            {
+                                rawData = &m_rawSourceData;
+                                rawW = rawTexW;
+                                rawH = rawTexH;
                             }
                         }
 
@@ -1785,12 +1815,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                             //     stop while audio kept flowing).
                             if (passRaw && m_app.m_streamManager->hasRawClients())
                             {
-                                if (sourceFrameReady && curMeta.streamOk && curMeta.seq != m_lastRawSeq)
+                                if (rawData && curMeta.streamOk && curMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = curMeta.seq;
-                                    m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
+                                    m_app.m_streamManager->pushRawFrame(rawData->data(), rawW, rawH, curMeta.tsUs);
                                 }
-                                else if (!sourceFrameReady && !processed && dataMeta.streamOk &&
+                                else if (!rawNeedsReadback && dataMeta.streamOk &&
                                          dataMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = dataMeta.seq;
