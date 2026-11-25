@@ -157,8 +157,8 @@ void UIConfigurationImage::renderAspectRatio()
                       "recording and virtual camera (fitted into their frame). "
                       "Integer scaling only affects this window.");
 
-    const char *scaleItems[] = {"Off (fit)", "Integer (pixel-perfect)",
-                                "Integer + fill (integer lines, exact aspect)"};
+    const char *scaleItems[] = {"Off (fit)", "Integer (uniform NxN)",
+                                "Integer + fill (per-axis NxM)"};
     int scale = static_cast<int>(geom.integerScale);
     ImGui::PushItemWidth(260);
     if (ImGui::Combo("Integer scaling", &scale, scaleItems, 3))
@@ -166,6 +166,12 @@ void UIConfigurationImage::renderAspectRatio()
         geom.integerScale = static_cast<OutputGeometry::IntegerScale>(scale);
         geomChanged = true;
     }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Integer: same whole factor on both axes (1x, 2x, 3x...), "
+                          "source pixel aspect, black borders.\n"
+                          "Integer + fill: whole factors per axis (e.g. 4x by 3x) chosen "
+                          "to best match the aspect ratio below while fitting the window.\n"
+                          "Falls back to fit when the window is smaller than 1x.");
 
     const char *aspectItems[] = {"Auto (source)", "4:3", "8:7 (NES/SNES square pixels)",
                                  "16:9", "10:9 (Game Boy)", "3:2 (GBA)", "Custom"};

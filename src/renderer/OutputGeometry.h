@@ -30,9 +30,10 @@ struct OutputGeometry
     enum class IntegerScale : int
     {
         Off = 0,     // fit (or stretch, see maintainAspect)
-        Integer = 1, // both axes integer multiples of the source pixel grid
-        IntegerFill = 2 // integer on the scanline axis, the other axis
-                        // fills the exact target aspect
+        Integer = 1,    // uniform N x N, largest that fits (source pixel
+                        // aspect; the aspect override is not applied)
+        IntegerFill = 2 // independent integer factors sx x sy that best
+                        // approximate the target display aspect
     };
 
     IntegerScale integerScale = IntegerScale::Off;
@@ -164,36 +165,61 @@ struct OutputGeometry
         float a = displayAspect(srcW, srcH); // unrotated
         if (integerScale != IntegerScale::Off)
         {
-            // Work in the unrotated frame: the scanline axis is the
-            // source's vertical axis.
+            // Work in the unrotated frame (window axes swapped for 90/270)
+            // so sx always scales the source's horizontal axis.
+            const int sw = static_cast<int>(srcW);
+            const int sh = static_cast<int>(srcH);
             const int uw = swap ? H : W;
             const int uh = swap ? W : H;
-            for (int ky = uh / static_cast<int>(srcH); ky >= 1; --ky)
+            // Capped so a tiny source cannot make the search expensive.
+            const int maxX = std::min(uw / sw, 64);
+            const int maxY = std::min(uh / sh, 64);
+            int bestX = 0, bestY = 0;
+            if (maxX >= 1 && maxY >= 1)
             {
-                const int h = ky * static_cast<int>(srcH);
-                int w;
                 if (integerScale == IntegerScale::Integer)
                 {
-                    int kx = static_cast<int>(std::lround(h * a / static_cast<float>(srcW)));
-                    // Closest integer to the target aspect; if it does
-                    // not fit, drop a vertical step rather than skewing
-                    // the aspect.
-                    kx = std::max(1, kx);
-                    w = kx * static_cast<int>(srcW);
+                    // Uniform N x N: largest factor that fits.
+                    bestX = bestY = std::min(maxX, maxY);
                 }
                 else
                 {
-                    w = static_cast<int>(std::lround(h * a));
+                    // Independent integer factors whose ratio best
+                    // approximates the target display aspect; ties go
+                    // to the larger area.
+                    double bestErr = 0.0;
+                    long long bestArea = -1;
+                    for (int sy = 1; sy <= maxY; ++sy)
+                    {
+                        for (int sx = 1; sx <= maxX; ++sx)
+                        {
+                            const double ar = (static_cast<double>(sx) * sw) /
+                                              (static_cast<double>(sy) * sh);
+                            const double err = std::fabs(std::log(ar / static_cast<double>(a)));
+                            const long long area = static_cast<long long>(sx) * sw *
+                                                   static_cast<long long>(sy) * sh;
+                            if (bestArea < 0 || err < bestErr - 1e-9 ||
+                                (err <= bestErr + 1e-9 && area > bestArea))
+                            {
+                                bestErr = err;
+                                bestArea = area;
+                                bestX = sx;
+                                bestY = sy;
+                            }
+                        }
+                    }
                 }
-                if (w <= uw)
-                {
-                    Rect r;
-                    r.w = swap ? h : w;
-                    r.h = swap ? w : h;
-                    r.x = (W - r.w) / 2;
-                    r.y = (H - r.h) / 2;
-                    return r;
-                }
+            }
+            if (bestX >= 1 && bestY >= 1)
+            {
+                const int w = bestX * sw;
+                const int h = bestY * sh;
+                Rect r;
+                r.w = swap ? h : w;
+                r.h = swap ? w : h;
+                r.x = (W - r.w) / 2;
+                r.y = (H - r.h) / 2;
+                return r;
             }
             // Window smaller than 1x: fall back to fit.
         }
