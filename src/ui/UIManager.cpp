@@ -646,14 +646,17 @@ void UIManager::render()
             // decoded remote /raw. Audio has a caveat (no local
             // loopback by default) that the OSD tooltip surfaces.
             toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+            // The virtual camera is allowed in client mode too: it carries
+            // whatever the pipeline renders, which there is the received
+            // stream, so a viewer can relay it to OBS / a video call.
+            toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
+#endif
             if (!clientMode)
             {
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
-#endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
@@ -813,10 +816,8 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-        if (m_virtcamWindow)   m_virtcamWindow->setVisible(false);
-#endif
-        // Recording window stays openable in client mode (#68).
+        // Recording (#68) and virtual camera windows stay openable in
+        // client mode: both carry the received stream.
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
