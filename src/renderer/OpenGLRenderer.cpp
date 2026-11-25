@@ -40,10 +40,12 @@ std::string generateVertexShader()
                "in vec2 aTexCoord;\n"
                "\n"
                "out vec2 TexCoord;\n"
+               "uniform vec4 uvXform;\n"
                "\n"
                "void main() {\n"
                "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-               "    TexCoord = aTexCoord;\n"
+               "    vec2 t = aTexCoord - vec2(0.5);\n"
+               "    TexCoord = vec2(dot(uvXform.xy, t), dot(uvXform.zw, t)) + vec2(0.5);\n"
                "}\n";
     } else if (isES) {
         // OpenGL ES 2.0 - usar attribute/varying
@@ -53,10 +55,12 @@ std::string generateVertexShader()
                "attribute vec2 aTexCoord;\n"
                "\n"
                "varying vec2 TexCoord;\n"
+               "uniform vec4 uvXform;\n"
                "\n"
                "void main() {\n"
                "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-               "    TexCoord = aTexCoord;\n"
+               "    vec2 t = aTexCoord - vec2(0.5);\n"
+               "    TexCoord = vec2(dot(uvXform.xy, t), dot(uvXform.zw, t)) + vec2(0.5);\n"
                "}\n";
     } else if (major >= 3) {
         // OpenGL 3.0+ Desktop - usar layout location com "core"
@@ -65,10 +69,12 @@ std::string generateVertexShader()
                "layout (location = 1) in vec2 aTexCoord;\n"
                "\n"
                "out vec2 TexCoord;\n"
+               "uniform vec4 uvXform;\n"
                "\n"
                "void main() {\n"
                "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-               "    TexCoord = aTexCoord;\n"
+               "    vec2 t = aTexCoord - vec2(0.5);\n"
+               "    TexCoord = vec2(dot(uvXform.xy, t), dot(uvXform.zw, t)) + vec2(0.5);\n"
                "}\n";
     } else {
         // OpenGL 2.1 Desktop - usar attribute/varying, sem "core"
@@ -77,10 +83,12 @@ std::string generateVertexShader()
                "attribute vec2 aTexCoord;\n"
                "\n"
                "varying vec2 TexCoord;\n"
+               "uniform vec4 uvXform;\n"
                "\n"
                "void main() {\n"
                "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-               "    TexCoord = aTexCoord;\n"
+               "    vec2 t = aTexCoord - vec2(0.5);\n"
+               "    TexCoord = vec2(dot(uvXform.xy, t), dot(uvXform.zw, t)) + vec2(0.5);\n"
                "}\n";
     }
 }
@@ -428,6 +436,12 @@ void OpenGLRenderer::renderTexture(GLuint texture, uint32_t windowWidth, uint32_
         glUniform1i(flipYLoc, flipY ? 1 : 0);
     }
     
+    // #227 — output geometry (rotation / mirror) as a texcoord transform.
+    GLint uvLoc = glGetUniformLocation(m_shaderProgram, "uvXform");
+    if (uvLoc >= 0) {
+        glUniform4f(uvLoc, m_uvXform[0], m_uvXform[1], m_uvXform[2], m_uvXform[3]);
+    }
+
     // Configurar brilho
     GLint brightnessLoc = glGetUniformLocation(m_shaderProgram, "brightness");
     if (brightnessLoc >= 0) {

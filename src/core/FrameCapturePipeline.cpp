@@ -17,6 +17,7 @@
 #include "../processing/SourceCrop.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../renderer/PBOManager.h"
+#include "../renderer/OutputGeometry.h"
 #ifdef USE_SDL2
 #include "../output/WindowManagerSDL.h"
 #else
@@ -717,39 +718,62 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
     uint32_t windowWidth = m_app.m_window->getWidth();
     uint32_t windowHeight = m_app.m_window->getHeight();
-    GLint viewportX = 0;
-    GLint viewportY = 0;
-    GLsizei viewportWidth = windowWidth;
-    GLsizei viewportHeight = windowHeight;
 
-    if (m_app.m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
-    {
-        // Calculate texture and window aspect ratio (same as renderTexture)
-        float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
-        float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
-
-        if (textureAspect > windowAspect)
-        {
-            // Texture is wider: adjust height (letterboxing)
-            viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
-            viewportY = (windowHeight - viewportHeight) / 2;
-        }
-        else
-        {
-            // Texture is taller: adjust width (pillarboxing)
-            viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
-            viewportX = (windowWidth - viewportWidth) / 2;
-        }
-    }
+    // #227 — output geometry: integer scaling / aspect override pick the
+    // window rect, rotation / mirror go in as a texcoord transform. With
+    // the defaults this is the previous maintain-aspect fit (or stretch).
+    const OutputGeometry geom = m_app.m_ui ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    const OutputGeometry::Rect winRect =
+        geom.windowRect(finalRenderWidth, finalRenderHeight,
+                        static_cast<int>(windowWidth), static_cast<int>(windowHeight),
+                        m_app.m_maintainAspect);
+    GLint viewportX = winRect.x;
+    GLint viewportY = winRect.y;
+    GLsizei viewportWidth = winRect.w;
+    GLsizei viewportHeight = winRect.h;
 
     // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // Renderizar textura final na janela (sempre preenche a janela completamente).
+    // Integer scaling is about pixel-exact presentation: sample the final
+    // texture with NEAREST for this one draw and restore its filter after.
+    const bool nearestPresent = geom.integerScale != OutputGeometry::IntegerScale::Off;
+    GLint prevMinFilter = GL_LINEAR, prevMagFilter = GL_LINEAR;
+    if (nearestPresent)
+    {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        if (glGetTexParameteriv)
+        {
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &prevMinFilter);
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &prevMagFilter);
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    if (geom.hasOrientation())
+    {
+        float uv[4];
+        geom.uvMatrix(/*yDown=*/false, uv);
+        m_app.m_renderer->setUVTransform(uv);
+    }
+
+    // Renderizar textura final na janela.
     // enableBlend=false pelo mesmo motivo do resize acima.
-    m_app.m_renderer->renderTexture(finalTexture, m_app.m_window->getWidth(), m_app.m_window->getHeight(),
+    glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+    m_app.m_renderer->renderTexture(finalTexture, windowWidth, windowHeight,
                               shouldFlipY, false, m_app.m_brightness, m_app.m_contrast,
-                              m_app.m_maintainAspect, finalRenderWidth, finalRenderHeight);
+                              false, finalRenderWidth, finalRenderHeight,
+                              /*preserveViewport=*/true);
+
+    m_app.m_renderer->resetUVTransform();
+    if (nearestPresent)
+    {
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, prevMinFilter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, prevMagFilter);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
     // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
@@ -925,19 +949,57 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                 // + streamed frames all reflect the un-adjusted
                 // image — user tweaks brightness expecting it
                 // to land in OBS and it doesn't.
+                //
+                // #227 — the same pass applies the output geometry
+                // (aspect override, rotation / mirror). The image is
+                // fitted into a canvas of the size the encoder will
+                // resize to (output resolution, else the stream /
+                // recording size), so the encoder's plain resize keeps
+                // the rotated / re-aspected image undistorted. Integer
+                // scaling is window-only and never reaches here.
                 static GLuint postImageFBO     = 0;
                 static GLuint postImageTex     = 0;
                 static uint32_t postImageW     = 0;
                 static uint32_t postImageH     = 0;
+                const bool geomActive = geom.affectsOutputs();
                 const bool postImageActive =
-                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f);
+                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f) || geomActive;
+
+                uint32_t passW = captureTextureWidth;
+                uint32_t passH = captureTextureHeight;
+                OutputGeometry::Rect passRect;
+                passRect.w = static_cast<int>(passW);
+                passRect.h = static_cast<int>(passH);
+                if (geomActive)
+                {
+                    uint32_t targetW = 0, targetH = 0;
+                    if (m_app.m_outputWidth > 0 && m_app.m_outputHeight > 0)
+                    {
+                        targetW = m_app.m_outputWidth;
+                        targetH = m_app.m_outputHeight;
+                    }
+                    else if (m_app.m_streamManager && m_app.m_streamManager->isActive() &&
+                             m_app.m_streamingWidth > 0 && m_app.m_streamingHeight > 0)
+                    {
+                        targetW = m_app.m_streamingWidth;
+                        targetH = m_app.m_streamingHeight;
+                    }
+                    else if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
+                    {
+                        const RecordingSettings rs = m_app.m_recordingManager->getRecordingSettings();
+                        targetW = rs.width;
+                        targetH = rs.height;
+                    }
+                    geom.outputCanvas(finalRenderWidth, finalRenderHeight, targetW, targetH,
+                                      passW, passH, passRect);
+                }
 
                 GLuint fboTextureToAttach = textureToCapture;
                 if (postImageActive)
                 {
                     if (postImageFBO == 0 || postImageTex == 0 ||
-                        postImageW != captureTextureWidth ||
-                        postImageH != captureTextureHeight)
+                        postImageW != passW ||
+                        postImageH != passH)
                     {
                         if (postImageFBO) glDeleteFramebuffers(1, &postImageFBO);
                         if (postImageTex) glDeleteTextures(1, &postImageTex);
@@ -945,8 +1007,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         glGenTextures(1, &postImageTex);
                         glBindTexture(GL_TEXTURE_2D, postImageTex);
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                                     captureTextureWidth,
-                                     captureTextureHeight, 0,
+                                     passW,
+                                     passH, 0,
                                      GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -966,8 +1028,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         }
                         else
                         {
-                            postImageW = captureTextureWidth;
-                            postImageH = captureTextureHeight;
+                            postImageW = passW;
+                            postImageH = passH;
                         }
                     }
                     if (postImageFBO && postImageTex)
@@ -976,6 +1038,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         glViewport(0, 0, postImageW, postImageH);
                         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                         glClear(GL_COLOR_BUFFER_BIT);
+                        glViewport(passRect.x, passRect.y, passRect.w, passRect.h);
+                        if (geom.hasOrientation())
+                        {
+                            // The read-back is consumed top-down (row 0
+                            // = image top), so this FBO's visual space is
+                            // y-down, except for a Remote frame, which is
+                            // stored the other way round and flipped on
+                            // read-back (#210).
+                            float uv[4];
+                            geom.uvMatrix(/*yDown=*/!remoteSource, uv);
+                            m_app.m_renderer->setUVTransform(uv);
+                        }
                         m_app.m_renderer->renderTexture(
                             textureToCapture,
                             postImageW, postImageH,
@@ -984,7 +1058,10 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             /*maintainAspect=*/false,
                             captureTextureWidth, captureTextureHeight,
                             /*preserveViewport=*/true);
+                        m_app.m_renderer->resetUVTransform();
                         fboTextureToAttach = postImageTex;
+                        captureTextureWidth = postImageW;
+                        captureTextureHeight = postImageH;
                         // Re-bind the original captureFBO so the
                         // attach-and-read below operates on it
                         // unchanged.
