@@ -116,7 +116,7 @@ echo "── game30: 30 fps game on a 60 fps capture, with pauses"
 run_phase game30 22 RETROCAPTURE_TEST_GAME_FPS=30 RETROCAPTURE_TEST_PAUSE=1.5,0.5
 read -r FPS ADDED CAD < <(last_window "$WORK/game30.log")
 S="import json; s=json.load(open('$WORK/game30.json'))['status']"
-check "game rate ~30 fps (sourceFps)"     "$S; assert 26 <= s['sourceFps'] <= 34, s['sourceFps']"
+check "game rate ~30 fps (sourceFps)"     "$S; v=s['sourceFps']; print('      sourceFps', v); assert 26 <= v <= 34"
 check "capture ~60 fps (captureFps)"      "$S; assert 55 <= s['captureFps'] <= 65, s['captureFps']"
 check "repeats skipped"                   "$S; assert s['repeatsSkipped'] > 100, s['repeatsSkipped']"
 check "fill output >= 45 fps (got $FPS)"  "assert float('$FPS') >= 45"

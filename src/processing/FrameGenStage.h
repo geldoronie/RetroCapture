@@ -52,6 +52,9 @@ public:
     int effectiveFactor() const { return m_effFactor; }
     /** Capture interval (every captured frame, repeats included); 0 = unknown. */
     int64_t capturePeriodUs() const { return m_capPeriodUs; }
+    /** Learnt game cadence (low percentile of recent spans between new
+     *  pictures); 0 until known or with repeat skipping off. */
+    int64_t cadenceUs() const { return m_cadenceUs; }
     /** Captures skipped as repeats so far (monotonic). */
     uint64_t repeatsSkipped() const { return m_repeats; }
 

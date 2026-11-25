@@ -161,7 +161,11 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     const int factor = display ? 0 : m_frameGen->effectiveFactor();
 
     // Source rate = distinct frames (the game's own rate with skipRepeats).
-    const int64_t period = m_frameGen->clock().periodUs();
+    // Source rate: the learnt game cadence when repeats are skipped (the
+    // clock's running average also counts pauses and held-through repeats,
+    // so it reads low while the picture is still), else the clock's period.
+    const int64_t cadence = fg.skipRepeats ? m_frameGen->cadenceUs() : 0;
+    const int64_t period = cadence > 0 ? cadence : m_frameGen->clock().periodUs();
     const int64_t capPeriod = m_frameGen->capturePeriodUs();
     const double srcFps = period > 0 ? 1e6 / static_cast<double>(period) : 0.0;
     const double capFps = capPeriod > 0 ? 1e6 / static_cast<double>(capPeriod) : 0.0;
