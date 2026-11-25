@@ -1019,6 +1019,16 @@ void UICallbackWiring::wireRecordingCallbacks()
                 settings.width = m_app.m_captureWidth;
                 settings.height = m_app.m_captureHeight;
                 settings.fps = m_app.m_captureFps; // Use actual capture FPS, not UI setting
+                // #247 — frame generation feeding the recording: record the
+                // output timeline (N x the capture rate), not the source.
+                {
+                    const FrameGenSettings fg = m_app.m_ui->getFrameGenSettings();
+                    if (fg.record && fg.factor() >= 2 &&
+                        m_app.m_ui->getSourceType() != UIManager::SourceType::Remote)
+                    {
+                        settings.fps = m_app.m_captureFps * static_cast<uint32_t>(fg.factor());
+                    }
+                }
                 settings.bitrate = m_app.m_ui->getRecordingBitrate();
                 settings.codec = m_app.m_ui->getRecordingVideoCodec();
                 settings.preset = (settings.codec == "h264") ? m_app.m_ui->getRecordingH264Preset() : m_app.m_ui->getRecordingH265Preset();

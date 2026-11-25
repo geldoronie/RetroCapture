@@ -332,6 +332,96 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         }
     }
 
+    // #198 — identity + capture time of the live frame.
+    const FrameMeta liveMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
+                             m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
+
+    // #247 — frame generation. Off (the default) or idle: one pass over the
+    // live frame feeding the window and every output, exactly as before.
+    // Active: the outputs that get generated frames are fed by a pass over
+    // the output timeline; the others (and /raw, the remote clients' own
+    // source) keep the live frame, so a latency-sensitive window can stay
+    // on real frames while the stream / recording get the generated ones.
+    PassSpec live;
+    live.srcTex = sourceTex;
+    live.srcW = sourceW;
+    live.srcH = sourceH;
+    live.meta = liveMeta;
+    live.pbo = m_app.m_pboManager.get();
+    live.pboInFlight = &m_pboInFlight;
+
+    const FrameGenPlan plan = planFrameGeneration(sourceTex, sourceW, sourceH, liveMeta);
+    if (!plan.active)
+    {
+        if (renderPass(live))
+            return true;
+    }
+    else
+    {
+        PassSpec gen;
+        gen.srcTex = plan.frame.tex;
+        gen.srcW = plan.frame.w;
+        gen.srcH = plan.frame.h;
+        gen.meta = FrameMeta{plan.frame.seq, plan.frame.tsUs, plan.streamPhaseOk, plan.recordPhaseOk};
+        gen.window = plan.genWindow;
+        gen.stream = plan.genStream;
+        gen.record = plan.genRecord;
+        gen.virtcam = plan.genVirtcam;
+        gen.raw = false;
+        if (!m_genPbo)
+            m_genPbo = std::make_unique<PBOManager>();
+        gen.pbo = m_genPbo.get();
+        gen.pboInFlight = &m_genPboInFlight;
+
+        live.window = !plan.genWindow;
+        live.stream = plan.liveStream;
+        live.record = plan.liveRecord;
+        live.virtcam = plan.liveVirtcam;
+        live.raw = true;
+        const bool liveNeeded = live.window || plan.liveOutputsActive;
+
+        // The chain's temporal state (FrameCount, feedback, history) follows
+        // the window's sequence; the other run of this iteration is frozen.
+        ShaderEngine *se = m_app.m_shaderEngine.get();
+        bool early = false;
+        if (liveNeeded)
+        {
+            if (se && !live.window) se->setStateFrozen(true);
+            early = renderPass(live);
+            if (se) se->setStateFrozen(false);
+        }
+        if (!early)
+        {
+            if (se && !gen.window) se->setStateFrozen(true);
+            early = renderPass(gen);
+            if (se) se->setStateFrozen(false);
+        }
+        if (early)
+            return true;
+    }
+
+    return finishFrame();
+}
+
+bool FrameCapturePipeline::renderPass(const PassSpec &spec)
+{
+    // #247 — one render of a source frame through the shader chain to the
+    // window (spec.window) and/or the outputs the spec selects. With every
+    // output selected and the live frame this is the pre-#247 body as is.
+    const GLuint sourceTex = spec.srcTex;
+    const uint32_t sourceW = spec.srcW;
+    const uint32_t sourceH = spec.srcH;
+    const bool passStream = spec.stream && m_app.m_streamManager && m_app.m_streamManager->isActive();
+    const bool passRaw = spec.raw && m_app.m_streamManager && m_app.m_streamManager->isActive();
+    const bool passRecord = spec.record && m_app.m_recordingManager && m_app.m_recordingManager->isRecording();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    const bool passVirtcam = spec.virtcam && m_app.m_virtcam && m_app.m_virtcam->isRunning();
+#else
+    const bool passVirtcam = false;
+#endif
+    PBOManager *const pbo = spec.pbo;
+    FrameMeta &pboInFlight = *spec.pboInFlight;
+
     // Apply shader if active
     GLuint textureToRender = sourceTex;
     bool isShaderTexture = false;
@@ -502,15 +592,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
     // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
     // Clear with transparent black so blending works correctly
-    if (isShaderTexture)
+    if (spec.window)
     {
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparent for shaders with alpha
+        if (isShaderTexture)
+        {
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparent for shaders with alpha
+        }
+        else
+        {
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
+        }
+        glClear(GL_COLOR_BUFFER_BIT);
     }
-    else
-    {
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
-    }
-    glClear(GL_COLOR_BUFFER_BIT);
 
     // For shader textures (framebuffer), invert Y (shader renders inverted)
     // For original texture (camera), don't invert Y (already correct)
@@ -732,6 +825,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     GLsizei viewportWidth = winRect.w;
     GLsizei viewportHeight = winRect.h;
 
+    // #247 — only the pass that owns the window draws it (the body keeps
+    // its original indentation to keep the diff small).
+    if (spec.window) {
     // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -774,15 +870,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, prevMagFilter);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
+    } // spec.window
 
     // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
     // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
-    bool needsFrameCapture = (m_app.m_streamManager && m_app.m_streamManager->isActive()) ||
-                            (m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                            || (m_app.m_virtcam && m_app.m_virtcam->isRunning())
-#endif
-                            ;
+    bool needsFrameCapture = passStream || passRaw || passRecord || passVirtcam;
 
     // Log para debug: verificar tamanho da textura final antes da captura
     static int finalTextureSizeLogCount = 0;
@@ -803,8 +895,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         // #198 — the captured frame currently on screen. Synchronous
         // readbacks are of this frame; the async PBO one is of the frame
         // read back on the previous call (see m_pboInFlight).
-        const FrameMeta curMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
-                                m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
+        const FrameMeta curMeta = spec.meta;
 
         // Capturar do viewport (o que está sendo renderizado)
         uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -859,12 +950,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                 // IMPORTANTE: Se há resolução de saída configurada, usar finalTexture
                 // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
                 // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
-                bool needsFrameCapture = (m_app.m_recordingManager && m_app.m_recordingManager->isRecording()) ||
-                                        (m_app.m_streamManager && m_app.m_streamManager->isActive())
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                                        || (m_app.m_virtcam && m_app.m_virtcam->isRunning())
-#endif
-                                        ;
+                bool needsFrameCapture = passRecord || passStream || passRaw || passVirtcam;
                 
                 if (needsFrameCapture)
                 {
@@ -1121,14 +1207,12 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // "push throttle skips=20-24/s" while the encoder sat
                         // idle waiting for input).
                         // #198 — once per captured frame, with its capture time.
-                        if (m_app.m_streamManager && m_app.m_streamManager->isActive() &&
-                            curMeta.seq != m_lastStreamSeq)
+                        if (passStream && curMeta.streamOk && curMeta.seq != m_lastStreamSeq)
                         {
                             m_lastStreamSeq = curMeta.seq;
                             m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
                         }
-                        if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording() &&
-                            curMeta.seq != m_lastRecordSeq)
+                        if (passRecord && curMeta.recordOk && curMeta.seq != m_lastRecordSeq)
                         {
                             m_lastRecordSeq = curMeta.seq;
                             m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
@@ -1237,19 +1321,19 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         else             allowPBO = true;
 #endif
                     }
-                    bool useAsyncPBO = (allowPBO && m_app.m_pboManager &&
-                                        m_app.m_pboManager->init(textureWidth, textureHeight, readFormat) &&
-                                        m_app.m_pboManager->isInitialized());
+                    bool useAsyncPBO = (allowPBO && pbo &&
+                                        pbo->init(textureWidth, textureHeight, readFormat) &&
+                                        pbo->isInitialized());
 
                     if (useAsyncPBO)
                     {
                         // #198 — getReadData() below returns the readback
                         // started on the previous call: label it with the
                         // frame that readback was of.
-                        dataMeta = m_pboInFlight;
-                        m_pboInFlight = curMeta;
+                        dataMeta = pboInFlight;
+                        pboInFlight = curMeta;
                         // Agenda glReadPixels no PBO (não bloqueia).
-                        m_app.m_pboManager->startAsyncRead(0, 0,
+                        pbo->startAsyncRead(0, 0,
                                                      static_cast<GLsizei>(textureWidth),
                                                      static_cast<GLsizei>(textureHeight));
 
@@ -1266,7 +1350,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // (shouldFlipY): a remote frame arrives in the
                             // opposite orientation, so flip it here too or
                             // client recordings / virtcam are upside-down.
-                            frameDataReady = m_app.m_pboManager->getReadData(
+                            frameDataReady = pbo->getReadData(
                                 frameData.data(), textureWidth, textureHeight, /*flipY=*/remoteSource);
                             // #85 — Virtual camera also gets fed from
                             // the RGB path (no-shader / direct capture
@@ -1276,8 +1360,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // shader is off, which was the symptom
                             // user hit on first end-to-end test.
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                            if (frameDataReady && m_app.m_virtcam &&
-                                m_app.m_virtcam->isRunning())
+                            if (frameDataReady && passVirtcam)
                             {
                                 m_app.m_virtcam->pushFrame(
                                     frameData.data(),
@@ -1291,7 +1374,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             auto &rgbaData = m_app.m_captureRgbaScratch;
                             rgbaData.resize(static_cast<size_t>(textureWidth) *
                                             static_cast<size_t>(textureHeight) * 4);
-                            if (m_app.m_pboManager->getReadData(rgbaData.data(),
+                            if (pbo->getReadData(rgbaData.data(),
                                                           textureWidth, textureHeight,
                                                           /*flipY=*/remoteSource)) // #210
                             {
@@ -1301,7 +1384,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 // below so the sink keeps the alpha
                                 // channel intact (sws RGBA → YUYV).
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                                if (m_app.m_virtcam && m_app.m_virtcam->isRunning())
+                                if (passVirtcam)
                                 {
                                     m_app.m_virtcam->pushFrame(
                                         rgbaData.data(),
@@ -1417,14 +1500,13 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // single-readback path.
                         const bool masterOn = (m_app.m_ui && m_app.m_ui->getShaderPipelineEnabled());
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
-                        const bool streamWantsSource = m_app.m_ui && m_app.m_streamManager && m_app.m_streamManager->isActive() &&
+                        const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
-                        const bool recordWantsSource = m_app.m_ui && m_app.m_recordingManager && m_app.m_recordingManager->isRecording() &&
+                        const bool recordWantsSource = m_app.m_ui && passRecord &&
                                                        !m_app.m_ui->getRecordingApplyShader();
                         // Phase 2 of #47: /raw is by-contract pre-shader, so any connected
                         // /raw client also triggers the source-frame capture below.
-                        const bool rawWantsSource = m_app.m_streamManager && m_app.m_streamManager->isActive() &&
-                                                    m_app.m_streamManager->hasRawClients();
+                        const bool rawWantsSource = passRaw && m_app.m_streamManager->hasRawClients();
                         const bool needSourceCapture = masterOn && shaderActive &&
                                                        (streamWantsSource || recordWantsSource || rawWantsSource);
 
@@ -1486,7 +1568,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // time jittered slightly below 1/fps — visible in the log as
                         // "push throttle: pushes=37/s skips=24/s" while VAAPI sat idle
                         // waiting for input.
-                        if (frameDataReady && m_app.m_streamManager && m_app.m_streamManager->isActive())
+                        if (frameDataReady && (passStream || passRaw))
                         {
                             const bool useSource = streamWantsSource && sourceFrameReady;
                             static int streamPushLogCount = 0;
@@ -1516,7 +1598,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // synchronous → current frame; frameData may be
                             // the previous frame on the async PBO path).
                             const FrameMeta streamMeta = useSource ? curMeta : dataMeta;
-                            if (m_app.m_streamManager->hasClients() && streamMeta.seq != m_lastStreamSeq)
+                            if (passStream && streamMeta.streamOk && m_app.m_streamManager->hasClients() &&
+                                streamMeta.seq != m_lastStreamSeq)
                             {
                                 m_lastStreamSeq = streamMeta.seq;
                                 if (useSource)
@@ -1545,7 +1628,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             //     disabling the shader from the UI silently kills
                             //     /raw transmission (#67 — client log showed video
                             //     stop while audio kept flowing).
-                            if (m_app.m_streamManager->hasRawClients())
+                            if (passRaw && m_app.m_streamManager->hasRawClients())
                             {
                                 if (sourceFrameReady && curMeta.seq != m_lastRawSeq)
                                 {
@@ -1560,7 +1643,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 }
                             }
                         }
-                        if (frameDataReady && m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
+                        if (frameDataReady && passRecord)
                         {
                             const bool useSource = recordWantsSource && sourceFrameReady;
                             static int recordingPushLogCount = 0;
@@ -1574,7 +1657,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 LOG_DEBUG("===================================");
                             }
                             const FrameMeta recordMeta = useSource ? curMeta : dataMeta;
-                            if (recordMeta.seq != m_lastRecordSeq)
+                            if (recordMeta.recordOk && recordMeta.seq != m_lastRecordSeq)
                             {
                                 m_lastRecordSeq = recordMeta.seq;
                                 if (useSource)
@@ -1591,7 +1674,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             } // fim do else (FBO completo)
         } // fim do if (needsFrameCapture)
     } // fim do if (captureDataSize > 0)
+    return false;
+}
 
+bool FrameCapturePipeline::finishFrame()
+{
     auto streamManager = m_app.m_streamManager.get();
     if (m_app.m_ui && streamManager && streamManager->isActive())
     {
@@ -1687,6 +1774,17 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         {
             pc.recordActive  = m_app.m_recordingManager->isRecording();
             pc.recordEncoded = m_app.m_recordingManager->getVideoFramesEncoded();
+        }
+        // #247 — output timeline, real vs generated.
+        if (m_frameGen)
+        {
+            const FrameGenClock &clk = m_frameGen->clock();
+            pc.genActive    = m_frameGen->isActive();
+            pc.genReal      = clk.realEmitted();
+            pc.genGenerated = clk.generatedEmitted();
+            pc.genDropped   = clk.dropped();
+            const UIManager::FrameGenStatus st = m_app.m_ui->getFrameGenStatus();
+            pc.genTargetFps = st.outputFps;
         }
         m_app.m_ui->setPerfCounters(pc);
     }

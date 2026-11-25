@@ -56,6 +56,13 @@ public:
     
     // Aplicar shader/preset na textura
     GLuint applyShader(GLuint inputTexture, uint32_t width, uint32_t height);
+
+    // #247 — while frozen, applyShader() renders normally but leaves the
+    // chain's temporal state alone (FrameCount, PassFeedback ping-pong,
+    // frame history). Frame generation uses it for the second chain run of
+    // an iteration (one timeline for the window, another for the encoders),
+    // so feedback / history shaders keep seeing ONE continuous sequence.
+    void setStateFrozen(bool frozen) { m_stateFrozen = frozen; }
     
     // Atualizar viewport (dimensões da janela)
     void setViewport(uint32_t width, uint32_t height);
@@ -131,6 +138,7 @@ private:
     // Uniforms
     std::unordered_map<std::string, GLint> m_uniformLocations;
     float m_frameCount = 0.0f;
+    bool m_stateFrozen = false; // #247
     float m_time = 0.0f;
     
     // Parâmetros customizados (valores alterados pelo usuário)

@@ -1685,8 +1685,13 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // IMPORTANTE: Incrementar FrameCount apenas uma vez por frame (não por pass)
         // Isso permite que shaders animados funcionem corretamente
         // FrameCount é usado por shaders para criar animações baseadas no número de frames
-        m_frameCount += 1.0f;
-        m_time += 0.016f; // ~60fps (aproximado, será ajustado pelo tempo real se necessário)
+        // #247 — a frozen (secondary) run renders without advancing the
+        // chain's temporal state, see setStateFrozen().
+        if (!m_stateFrozen)
+        {
+            m_frameCount += 1.0f;
+            m_time += 0.016f; // ~60fps (aproximado, será ajustado pelo tempo real se necessário)
+        }
 
         // Aplicar cada pass
         for (size_t i = 0; i < m_passes.size(); ++i)
@@ -1709,7 +1714,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // algum sampler PassFeedback<N>* foi detectado durante o bind.
         for (auto &fbPass : m_passes)
         {
-            if (!fbPass.feedbackEnabled || fbPass.feedbackTexture == 0)
+            if (m_stateFrozen || !fbPass.feedbackEnabled || fbPass.feedbackTexture == 0)
             {
                 continue;
             }
@@ -1732,7 +1737,7 @@ GLuint ShaderEngine::applyShader(GLuint inputTexture, uint32_t width, uint32_t h
         // O histórico deve conter frames JÁ PROCESSADOS (saída do shader)
         // IMPORTANTE: Precisamos copiar o conteúdo para texturas dedicadas, não apenas armazenar referências
         // As texturas dos framebuffers são reutilizadas e sobrescritas a cada frame
-        if (currentTexture != 0 && currentWidth > 0 && currentHeight > 0)
+        if (!m_stateFrozen && currentTexture != 0 && currentWidth > 0 && currentHeight > 0)
         {
             // Encontrar qual framebuffer contém currentTexture
             GLuint sourceFramebuffer = 0;

@@ -462,9 +462,8 @@ bool Application::initCapture()
     {
         LOG_INFO("Source is remote — creating VideoCaptureRemote");
         auto remote = std::make_unique<VideoCaptureRemote>();
-        VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-        if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-        else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+        const VideoCaptureRemote::InterpolationMode imode =
+            VideoCaptureRemote::interpolationModeFromName(m_remoteInterpolation);
         remote->setInterpolationMode(imode);
         remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
@@ -2188,6 +2187,12 @@ void Application::shutdown()
         m_capture->stopCapture();
         m_capture->close();
         m_capture.reset();
+    }
+
+    // #247 — frame-generation GL objects, while the context is current.
+    if (m_pipeline)
+    {
+        m_pipeline->releaseGL();
     }
 
     if (m_shaderEngine)

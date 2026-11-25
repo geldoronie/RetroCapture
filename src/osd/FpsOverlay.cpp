@@ -63,6 +63,9 @@ void FpsOverlay::tick()
         m_winStreamStart = c.streamEncoded;
         m_winRawStart    = c.rawEncoded;
         m_winRecordStart = c.recordEncoded;
+        m_winGenRealStart = c.genReal;
+        m_winGenStart     = c.genGenerated;
+        m_winGenDropStart = c.genDropped;
         return;
     }
 
@@ -131,6 +134,9 @@ void FpsOverlay::tick()
         m_winStreamStart = c.streamEncoded;
         m_winRawStart    = c.rawEncoded;
         m_winRecordStart = c.recordEncoded;
+        m_winGenRealStart = c.genReal;
+        m_winGenStart     = c.genGenerated;
+        m_winGenDropStart = c.genDropped;
     }
 }
 
@@ -163,6 +169,12 @@ void FpsOverlay::publishWindow(double windowSec)
     s.rawFps       = static_cast<float>(counterDelta(c.rawEncoded, m_winRawStart) / windowSec);
     s.recordActive = c.recordActive;
     s.recordFps    = static_cast<float>(counterDelta(c.recordEncoded, m_winRecordStart) / windowSec);
+
+    s.genActive    = c.genActive;
+    s.genRealFps   = static_cast<float>(counterDelta(c.genReal, m_winGenRealStart) / windowSec);
+    s.genFps       = static_cast<float>(counterDelta(c.genGenerated, m_winGenStart) / windowSec);
+    s.genDropped   = static_cast<uint32_t>(counterDelta(c.genDropped, m_winGenDropStart));
+    s.genTargetFps = c.genTargetFps;
 
     m_display = s;
     std::lock_guard<std::mutex> lock(m_statsMutex);
@@ -248,6 +260,20 @@ void FpsOverlay::renderCompact()
     ImGui::TextColored(rateColor(s.renderFps, nominal), "%.1f", s.renderFps);
     ImGui::SameLine();
     ImGui::Text("%.1fms", s.frameAvgMs);
+    if (s.genActive)
+    {
+        // #247 — output timeline: real + generated.
+        ImGui::SameLine();
+        ImGui::TextColored(kColLabel, "GEN");
+        ImGui::SameLine();
+        const float out = s.genRealFps + s.genFps;
+        ImGui::TextColored(rateColor(out, s.genTargetFps), "%.0f+%.0f", s.genRealFps, s.genFps);
+        if (s.genDropped > 0)
+        {
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::TextColored(kColBad, "(-%u)", s.genDropped);
+        }
+    }
     if (s.streamActive)
     {
         ImGui::SameLine();
@@ -311,6 +337,28 @@ void FpsOverlay::renderFull()
     ImGui::Text("%.2f / %.2f / %.2f ms", s.frameMinMs, s.frameAvgMs, s.frameMaxMs);
     ImGui::SameLine();
     ImGui::TextColored(kColLabel, "min/avg/max");
+
+    // Frame generation (#247): the output timeline, real vs generated.
+    if (s.genActive)
+    {
+        const float out = s.genRealFps + s.genFps;
+        ImGui::TextColored(kColLabel, "Output");
+        ImGui::SameLine(col);
+        ImGui::TextColored(rateColor(out, s.genTargetFps), "%6.2f", out);
+        ImGui::SameLine();
+        if (s.genTargetFps > 0.0f)
+            ImGui::TextColored(kColLabel, "/ %.2f fps", s.genTargetFps);
+        else
+            ImGui::TextColored(kColLabel, "fps (per refresh)");
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        ImGui::SameLine(col);
+        ImGui::TextColored(kColLabel, "real %.1f + gen %.1f", s.genRealFps, s.genFps);
+        if (s.genDropped > 0)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(kColBad, "drop %u", s.genDropped);
+        }
+    }
 
     // Encoders (only while they run)
     auto encoderRow = [&](const char *label, float fps) {
