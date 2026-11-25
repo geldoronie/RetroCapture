@@ -18,6 +18,7 @@
 
 class Application;
 class PBOManager;
+class AreaDownscaler;
 
 class FrameCapturePipeline
 {
@@ -108,6 +109,8 @@ private:
     FrameGenPlan planFrameGeneration(GLuint srcTex, uint32_t w, uint32_t h, const FrameMeta &live);
     std::unique_ptr<FrameGenStage> m_frameGen;
     std::unique_ptr<PBOManager> m_genPbo;   // the generated pass's readback
+    std::unique_ptr<AreaDownscaler> m_areaDownscaler; // logical-size downscale (area average)
+    int m_downscaleLogged = 0; // last downscale filter logged (1 area->nearest, 2 area, 3 nearest)
     FrameMeta m_genPboInFlight;
     bool m_frameGenVsync = false;           // display mode turned vsync on
     int m_frameGenLoggedMode = -1;
