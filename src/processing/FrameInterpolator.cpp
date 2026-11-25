@@ -142,6 +142,27 @@ void main() {
 }
 )";
 
+// #260 — a reduced RIFE frame scaled back up, with the detail the
+// reduction lost taken from the full-size Motion frame: out = up(rife) +
+// (motion - up(down(motion))). Both "up"s are the same bilinear sampling of
+// same-size textures, so the added part is only the high frequencies the
+// reduction removed. Where RIFE and Motion disagree at low frequencies
+// (Motion got the motion wrong) the detail is dropped and RIFE stays alone.
+const char *kRifeDetailFS = R"(
+uniform sampler2D uRife;        // reduced RIFE frame (LINEAR)
+uniform sampler2D uMotionSmall; // Motion frame reduced the same way (LINEAR)
+uniform sampler2D uMotion;      // full-size Motion frame (NEAREST)
+const vec3 W = vec3(0.299, 0.587, 0.114);
+void main() {
+    vec3 r = texture(uRife, TexCoord).rgb;
+    vec3 ms = texture(uMotionSmall, TexCoord).rgb;
+    vec3 m = texture(uMotion, TexCoord).rgb;
+    float d = abs(dot(r - ms, W));
+    float keep = 1.0 - smoothstep(0.03, 0.10, d);
+    FragColor = vec4(clamp(r + keep * (m - ms), 0.0, 1.0), 1.0);
+}
+)";
+
 // Source -> level-0 luma: box average of uScale x uScale source pixels,
 // taken as (uScale/2)^2 bilinear taps on texel corners (LINEAR sampler).
 const char *kLumaFS = R"(
@@ -465,8 +486,9 @@ bool FrameInterpolator::ensurePrograms()
     m_progConsensus = buildProgram(match + kConsensusFS, "consensus");
     m_progWarp = buildProgram(kWarpFS, "warp");
     m_progDiff = buildProgram(kDiffFS, "diff");
+    m_progRifeDetail = buildProgram(kRifeDetailFS, "rife-detail");
     if (!m_progCopy || !m_progLuma || !m_progDown || !m_progSearch || !m_progConsensus ||
-        !m_progWarp || !m_progDiff)
+        !m_progWarp || !m_progDiff || !m_progRifeDetail)
     {
         m_failReason = "shader compilation failed";
         destroy();
@@ -554,6 +576,11 @@ void FrameInterpolator::releaseTargets()
     freeTarget(m_flowFinal);
     freeTarget(m_diff);
     freeTarget(m_out);
+    freeTarget(m_rifeIn);
+    freeTarget(m_rifeRes);
+    freeTarget(m_rifeMotion);
+    freeTarget(m_rifeMotionSmall);
+    m_rifeW = m_rifeH = 0;
     m_levels.clear();
     m_w = m_h = 0;
     m_count = 0;
@@ -688,7 +715,36 @@ bool FrameInterpolator::pushFrame(GLuint srcTex, uint32_t w, uint32_t h)
     drawTo(s.color);
     if (m_motionOk) buildPyramid(s);
     restoreFilters();
-    if (m_rifeWanted) m_rife.submitFrame(s.color.fbo, w, h);
+    if (m_rifeWanted)
+    {
+        // #260 — the network gets a reduced copy above 720p (Auto / Fast).
+        uint32_t rw = w, rh = h;
+        GLuint rifeFbo = s.color.fbo;
+        if (rifeReducedSize(m_rifeScale, w, h, rw, rh))
+        {
+            bool ok = m_rifeIn.w == rw && m_rifeIn.h == rh && m_rifeRes.w == rw && m_rifeRes.h == rh;
+            if (!ok)
+                ok = makeTarget(m_rifeIn, rw, rh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, true) &&
+                     makeTarget(m_rifeRes, rw, rh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, true);
+            if (ok)
+            {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, s.color.fbo);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_rifeIn.fbo);
+                glBlitFramebuffer(0, 0, static_cast<GLint>(w), static_cast<GLint>(h), 0, 0,
+                                  static_cast<GLint>(rw), static_cast<GLint>(rh), GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                rifeFbo = m_rifeIn.fbo;
+            }
+            else
+            {
+                rw = w;
+                rh = h;
+            }
+        }
+        m_rifeW = rw;
+        m_rifeH = rh;
+        m_rife.submitFrame(rifeFbo, rw, rh);
+    }
 
     m_latest = slot;
     if (m_count < 2) ++m_count;
@@ -829,6 +885,34 @@ void FrameInterpolator::requestPhases(int n)
         m_rife.request(static_cast<float>(j) / static_cast<float>(n));
 }
 
+bool FrameInterpolator::rifeReducedSize(RifeScale s, uint32_t w, uint32_t h, uint32_t &rw, uint32_t &rh)
+{
+    rw = w;
+    rh = h;
+    const uint64_t px = static_cast<uint64_t>(w) * h;
+    if (s == RifeScale::Full || w == 0 || h == 0 || px <= kRifeFastPixels + kRifeFastPixels / 8)
+        return false; // 720p (and a little above) runs native
+    // Same pixel count as 1280x720 whatever the aspect, even sizes.
+    const double k = std::sqrt(static_cast<double>(kRifeFastPixels) / static_cast<double>(px));
+    rw = static_cast<uint32_t>(std::lround(w * k)) & ~1u;
+    rh = static_cast<uint32_t>(std::lround(h * k)) & ~1u;
+    if (rw < 64 || rh < 64)
+    {
+        rw = w;
+        rh = h;
+        return false;
+    }
+    return true;
+}
+
+void FrameInterpolator::setRifeScale(RifeScale s)
+{
+    if (s == m_rifeScale) return;
+    m_rifeScale = s;
+    // The held frames were sent at the old size: start a new pair.
+    m_rife.reset();
+}
+
 void FrameInterpolator::setMethodHint(Method m)
 {
     m_rifeWanted = (m == Method::RIFE);
@@ -849,7 +933,12 @@ GLuint FrameInterpolator::render(float t, const Options &opt)
         if (m_rife.state() == RifeBackend::State::Ready)
         {
             const auto t0 = std::chrono::steady_clock::now();
-            const bool ok = m_rife.fetch(tc, opt.rifeWaitMs, m_out.tex);
+            // #260 — a reduced pair: fetch at its size, scale up to the output.
+            const bool reduced = (m_rifeW != m_w || m_rifeH != m_h) && m_rifeRes.tex &&
+                                 m_rifeRes.w == m_rifeW && m_rifeRes.h == m_rifeH;
+            bool ok = m_rife.fetch(tc, opt.rifeWaitMs, reduced ? m_rifeRes.tex : m_out.tex);
+            if (ok && reduced)
+                upscaleRife(tc, opt);
             if (m_profile)
             {
                 glFinish();
@@ -877,6 +966,17 @@ GLuint FrameInterpolator::render(float t, const Options &opt)
     }
 
     const auto t0 = std::chrono::steady_clock::now();
+    drawWarp(tc, opt, motion, m_out);
+    if (m_profile)
+    {
+        glFinish();
+        m_timings.warpMs = msSince(t0);
+    }
+    return m_out.tex;
+}
+
+void FrameInterpolator::drawWarp(float tc, const Options &opt, bool motion, const Target &dst)
+{
     glUseProgram(m_progWarp);
     bindTex(0, m_slots[1 - m_latest].color.tex, true);
     bindTex(1, m_slots[m_latest].color.tex, true);
@@ -896,14 +996,47 @@ GLuint FrameInterpolator::render(float t, const Options &opt)
     setF(m_progWarp, "uMethod", motion ? 1.0f : 0.0f);
     setF(m_progWarp, "uProtect", opt.protectStatic ? 1.0f : 0.0f);
     setF(m_progWarp, "uPick", opt.edgeAwarePick ? 1.0f : 0.0f);
+    drawTo(dst);
+    restoreFilters();
+}
+
+void FrameInterpolator::upscaleRife(float tc, const Options &opt)
+{
+    // #260 — m_rifeRes holds the reduced RIFE frame. Without optical flow it
+    // is a plain bilinear scale; with it the Motion frame restores the detail.
+    const GLint rw = static_cast<GLint>(m_rifeW), rh = static_cast<GLint>(m_rifeH);
+    const GLint w = static_cast<GLint>(m_w), h = static_cast<GLint>(m_h);
+    bool detail = m_motionOk;
+    if (detail && (m_rifeMotion.w != m_w || m_rifeMotion.h != m_h))
+        detail = makeTarget(m_rifeMotion, m_w, m_h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, false);
+    if (detail && (m_rifeMotionSmall.w != m_rifeW || m_rifeMotionSmall.h != m_rifeH))
+        detail = makeTarget(m_rifeMotionSmall, m_rifeW, m_rifeH, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, true);
+    if (!detail)
+    {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_rifeRes.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_out.fbo);
+        glBlitFramebuffer(0, 0, rw, rh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
+    if (!m_flowValid)
+        computeFlow();
+    drawWarp(tc, opt, true, m_rifeMotion);
+    // Reduce the Motion frame exactly as the real frames were for the network.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_rifeMotion.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_rifeMotionSmall.fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glUseProgram(m_progRifeDetail);
+    bindTex(0, m_rifeRes.tex, true);
+    bindTex(1, m_rifeMotionSmall.tex, true);
+    bindTex(2, m_rifeMotion.tex, false);
+    setI(m_progRifeDetail, "uRife", 0);
+    setI(m_progRifeDetail, "uMotionSmall", 1);
+    setI(m_progRifeDetail, "uMotion", 2);
     drawTo(m_out);
     restoreFilters();
-    if (m_profile)
-    {
-        glFinish();
-        m_timings.warpMs = msSince(t0);
-    }
-    return m_out.tex;
 }
 
 GLuint FrameInterpolator::latestTexture() const
@@ -940,7 +1073,7 @@ void FrameInterpolator::destroy()
     m_rife.shutdown();
     releaseTargets();
     GLuint *progs[] = {&m_progCopy, &m_progLuma, &m_progDown, &m_progSearch, &m_progConsensus, &m_progWarp,
-                       &m_progDiff};
+                       &m_progDiff, &m_progRifeDetail};
     for (GLuint *p : progs)
     {
         if (*p) glDeleteProgram(*p);

@@ -74,6 +74,8 @@ void fillRifeStatus(UIManager::FrameGenStatus &st, const FrameInterpolator &fi, 
         st.rifeLatencyMs = static_cast<float>(rs.latencyMs);
         st.rifeDelivered = rs.delivered;
         st.rifeLate = rs.late;
+        st.rifeWidth = fi.rifeWidth();
+        st.rifeHeight = fi.rifeHeight();
     }
 }
 } // namespace
@@ -160,6 +162,9 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
                  : fg.method == FrameGenSettings::RIFE ? FrameInterpolator::Method::RIFE
                                                        : FrameInterpolator::Method::Motion;
     opt.protectStatic = fg.protectStatic;
+    fi.setRifeScale(fg.rifeScale == FrameGenSettings::RifeFull   ? FrameInterpolator::RifeScale::Full
+                    : fg.rifeScale == FrameGenSettings::RifeFast ? FrameInterpolator::RifeScale::Fast
+                                                                 : FrameInterpolator::RifeScale::Auto);
     const bool fill = fg.mode == FrameGenSettings::Fill;
     const int factorIn = display ? 0 : fill ? FrameGenStage::kFactorFill : fg.factor();
     const FrameGenStage::Frame frame = m_frameGen->update(srcTex, w, h, live.seq, live.tsUs, MediaClock::nowUs(),

@@ -390,6 +390,8 @@ public:
         float rifeLatencyMs = 0.0f;  // real frame in -> first result out
         uint64_t rifeDelivered = 0;  // frames RIFE delivered in time
         uint64_t rifeLate = 0;       // frames that fell back to Motion
+        uint32_t rifeWidth = 0;      // #260 — size the network runs at
+        uint32_t rifeHeight = 0;
     };
     FrameGenStatus getFrameGenStatus() const
     {

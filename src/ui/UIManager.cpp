@@ -2969,6 +2969,11 @@ void UIManager::loadConfig()
                 g.protectStatic = fg["protectStatic"].get<bool>();
             if (fg.contains("skipRepeats") && fg["skipRepeats"].is_boolean())
                 g.skipRepeats = fg["skipRepeats"].get<bool>();
+            if (fg.contains("rifeScale") && fg["rifeScale"].is_string())
+            {
+                const int s = FrameGenSettings::rifeScaleFromName(fg["rifeScale"].get<std::string>());
+                if (s >= 0) g.rifeScale = s;
+            }
             if (fg.contains("outputs") && fg["outputs"].is_object())
             {
                 auto &o = fg["outputs"];
@@ -3527,6 +3532,7 @@ void UIManager::saveConfig()
                 {"method", FrameGenSettings::methodName(g.method)},
                 {"protectStatic", g.protectStatic},
                 {"skipRepeats", g.skipRepeats},
+                {"rifeScale", FrameGenSettings::rifeScaleName(g.rifeScale)},
                 {"outputs", {
                     {"window", g.window},
                     {"stream", g.stream},

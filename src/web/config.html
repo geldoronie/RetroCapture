@@ -634,6 +634,16 @@
                                                 <option value="rife" data-i18n="web.config.image.framegen_rife">RIFE (neural, Vulkan; best quality)</option>
                                             </select>
                                         </div>
+                                        <!-- #260 — RIFE network size -->
+                                        <div class="col-md-6" id="frameGenRifeScaleGroup">
+                                            <label class="form-label" for="frameGenRifeScale" data-i18n="web.config.image.framegen_rife_scale">RIFE resolution</label>
+                                            <select class="form-select" id="frameGenRifeScale">
+                                                <option value="auto" data-i18n="web.config.image.framegen_rife_scale_auto">Auto (reduce above 720p)</option>
+                                                <option value="full" data-i18n="web.config.image.framegen_rife_scale_full">Full (native size)</option>
+                                                <option value="fast" data-i18n="web.config.image.framegen_rife_scale_fast">Fast (always ~720p)</option>
+                                            </select>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.framegen_rife_scale_hint">Above 720p the network runs on a ~1280x720 copy and the detail is restored at full size, so 1080p60 keeps up. Full needs a fast GPU above 720p.</small>
+                                        </div>
                                         <div class="col-12">
                                             <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="frameGenProtectStatic">
