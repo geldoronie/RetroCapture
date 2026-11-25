@@ -2894,6 +2894,8 @@ async function loadUpscaler() {
         set('upscalerCustomHeight', up.customHeight);
         set('upscalerSharpness', up.sharpness);
         set('upscalerPosition', up.position);
+        const raw = document.getElementById('upscalerRaw');
+        if (raw && up.raw !== undefined) raw.checked = !!up.raw;
         syncUpscalerControls();
     } catch (err) {
         console.warn('Failed to load upscaler settings:', err);
@@ -2910,6 +2912,8 @@ async function commitUpscaler() {
         sharpness: parseFloat(val('upscalerSharpness')),
         position: val('upscalerPosition')
     };
+    const raw = document.getElementById('upscalerRaw');
+    if (raw) up.raw = raw.checked;
     try {
         await api.setImageSettings({ upscaler: up });
     } catch (err) {
@@ -2919,7 +2923,7 @@ async function commitUpscaler() {
 
 document.addEventListener('DOMContentLoaded', () => {
     const ids = ['upscalerMode', 'upscalerTarget', 'upscalerCustomWidth',
-                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition'];
+                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition', 'upscalerRaw'];
     let present = false;
     ids.forEach(function(id) {
         const el = document.getElementById(id);

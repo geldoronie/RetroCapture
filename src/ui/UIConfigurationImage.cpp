@@ -177,7 +177,8 @@ void UIConfigurationImage::renderUpscaler()
                       "Built-in spatial upscaler. It runs in the pipeline "
                       "before or after your shader preset, so both work "
                       "together. Applies to the window, stream, recording "
-                      "and virtual camera; /raw stays the untouched source.");
+                      "and virtual camera; /raw gets the upscale (never the "
+                      "shader) unless 'Upscale /raw' is off.");
 
     UpscalerSettings up = m_uiManager->getUpscalerSettings();
     bool changed = false;
@@ -267,6 +268,20 @@ void UIConfigurationImage::renderUpscaler()
                           "the scanline density right (one scanline per source line).\n"
                           "The chain then renders at the largest whole multiple of the source\n"
                           "that fits the target, and the upscaler scales that to the target.");
+
+    // #264 — /raw is the picture a remote RetroCapture applies its own shader
+    // to; it can also apply its own upscaler.
+    bool rawUp = up.raw;
+    if (ImGui::Checkbox("Upscale /raw (remote clients)##upscaler", &rawUp))
+    {
+        up.raw = rawUp;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Off: /raw sends the native picture and the remote client applies its\n"
+                          "own upscaler: less bandwidth and less decode work on the client.\n"
+                          "/raw never carries your shader. With the upscaler after the shader\n"
+                          "chain, /raw is always the native picture.");
 
     if (!on) ImGui::EndDisabled();
 

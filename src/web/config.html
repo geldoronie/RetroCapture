@@ -667,7 +667,7 @@
                                         <div class="col-12">
                                             <hr>
                                             <h6 data-i18n="web.config.image.upscaler">Upscaler</h6>
-                                            <p class="text-muted small" data-i18n="web.config.image.upscaler_hint">Built-in spatial upscaler (FSR 1 / NIS / Anime4K). It runs before or after your shader preset, so both work together. Applies to the window, stream, recording and virtual camera; /raw stays the untouched source.</p>
+                                            <p class="text-muted small" data-i18n="web.config.image.upscaler_hint">Built-in spatial upscaler (FSR 1 / NIS / Anime4K). It runs before or after your shader preset, so both work together. Applies to the window, stream, recording and virtual camera; /raw gets the upscale (never the shader) unless "Upscale /raw" is off.</p>
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label" for="upscalerMode" data-i18n="web.config.image.upscaler_mode">Mode</label>
@@ -714,6 +714,14 @@
                                                 <option value="after" data-i18n="web.config.image.upscaler_after">After the shader chain</option>
                                             </select>
                                             <small class="form-text text-muted" data-i18n="web.config.image.upscaler_position_hint">CRT and pixel-art shaders expect the native resolution: with a CRT shader, After keeps the scanline density right.</small>
+                                        </div>
+                                        <!-- #264 — upscale on /raw (remote clients) -->
+                                        <div class="col-md-6">
+                                            <div class="form-check form-switch mt-2">
+                                                <input class="form-check-input" type="checkbox" id="upscalerRaw" checked>
+                                                <label class="form-check-label" for="upscalerRaw" data-i18n="web.config.image.upscaler_raw">Upscale /raw (remote clients)</label>
+                                            </div>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.upscaler_raw_hint">Off: /raw sends the native picture and the remote client applies its own upscaler (less bandwidth and decode work). With the upscaler after the shader chain, /raw is always native.</small>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
