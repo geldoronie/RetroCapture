@@ -25,6 +25,7 @@ class WindowManagerSDL;
 #endif
 class OpenGLRenderer;
 class ShaderEngine;
+class UpscalerStage; // #251
 class UIManager;
 class FrameProcessor;
 class StreamManager;
@@ -215,6 +216,8 @@ private:
 #endif
     std::unique_ptr<OpenGLRenderer> m_renderer;
     std::unique_ptr<ShaderEngine> m_shaderEngine;
+    // #251 — built-in upscaler (own shader engine, created lazily on the GL thread).
+    std::unique_ptr<UpscalerStage> m_upscaler;
     // #159 — declared BEFORE m_ui so it is destroyed AFTER the UIManager that
     // stores its registered lambdas (which capture the wiring).
     std::unique_ptr<UICallbackWiring> m_callbackWiring;

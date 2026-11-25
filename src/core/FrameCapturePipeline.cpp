@@ -15,6 +15,7 @@
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
 #include "../processing/SourceCrop.h"
+#include "../processing/UpscalerStage.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../renderer/PBOManager.h"
 #include "../renderer/OutputGeometry.h"
@@ -244,6 +245,40 @@ void FrameCapturePipeline::runAutoCropSampling()
     }
 }
 
+void FrameCapturePipeline::upscalerTarget(uint32_t refW, uint32_t refH,
+                                          uint32_t &tw, uint32_t &th) const
+{
+    // Auto = the output resolution when set, else the window.
+    uint32_t autoW = m_app.m_outputWidth, autoH = m_app.m_outputHeight;
+    if (autoW == 0 || autoH == 0)
+    {
+        autoW = m_app.m_window ? m_app.m_window->getWidth() : m_app.m_windowWidth;
+        autoH = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
+    }
+    const bool fitAspect = m_app.m_maintainAspect ||
+                           (m_app.m_ui && m_app.m_ui->getOutputGeometry().forcesAspect());
+    m_upscalerSettings.targetSize(refW, refH, autoW, autoH, fitAspect, tw, th);
+}
+
+GLuint FrameCapturePipeline::runUpscaler(UpscalerSettings::Position where, GLuint tex,
+                                         uint32_t &w, uint32_t &h,
+                                         uint32_t refW, uint32_t refH)
+{
+    if (!m_app.m_upscaler || !UpscalerStage::runsAt(m_upscalerSettings, where))
+        return tex;
+    uint32_t tw = 0, th = 0;
+    upscalerTarget(refW, refH, tw, th);
+    // Custom target: the stage clamps it the same way; pass it as "auto"
+    // so the stage computes exactly the size chosen here.
+    UpscalerSettings s = m_upscalerSettings;
+    s.target = UpscalerSettings::Target::Auto;
+    const GLuint out = m_app.m_upscaler->process(s, where, tex, w, h, refW, refH,
+                                                 tw, th, /*fitAspect=*/false);
+    if (out != tex)
+        m_upscalerRan = true;
+    return out;
+}
+
 bool FrameCapturePipeline::renderAndDistributeFrame()
 {
     // #152 - the per-frame render + shader + output-resolution + window draw +
@@ -332,6 +367,10 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         }
     }
 
+    // #251 — the built-in upscaler's settings, one copy for every pass of
+    // this iteration (live and generated run the same stage).
+    m_upscalerSettings = m_app.m_ui ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
+
     // #198 — identity + capture time of the live frame.
     const FrameMeta liveMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
                              m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
@@ -382,19 +421,26 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
         // The chain's temporal state (FrameCount, feedback, history) follows
         // the window's sequence; the other run of this iteration is frozen.
+        // #251 — the upscaler's own engine is frozen in lockstep, so its
+        // FrameCount doesn't advance twice per iteration either.
         ShaderEngine *se = m_app.m_shaderEngine.get();
+        UpscalerStage *us = m_app.m_upscaler.get();
+        auto freeze = [se, us](bool frozen) {
+            if (se) se->setStateFrozen(frozen);
+            if (us) us->setStateFrozen(frozen);
+        };
         bool early = false;
         if (liveNeeded)
         {
-            if (se && !live.window) se->setStateFrozen(true);
+            if (!live.window) freeze(true);
             early = renderPass(live);
-            if (se) se->setStateFrozen(false);
+            freeze(false);
         }
         if (!early)
         {
-            if (se && !gen.window) se->setStateFrozen(true);
+            if (!gen.window) freeze(true);
             early = renderPass(gen);
-            if (se) se->setStateFrozen(false);
+            freeze(false);
         }
         if (early)
             return true;
@@ -425,6 +471,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // Apply shader if active
     GLuint textureToRender = sourceTex;
     bool isShaderTexture = false;
+    // Size of textureToRender when isShaderTexture (shader chain and / or
+    // the #251 upscaler produced it).
+    uint32_t processedW = 0, processedH = 0;
+
+    // #251 — set by runUpscaler() when the upscaler produced this pass's image.
+    m_upscalerRan = false;
 
     // Master toggle: when the user disables the shader pipeline
     // from the Shader tab we keep the loaded preset / parameters
@@ -524,8 +576,26 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
             shaderSrcH = fboH;
         }
 
+        // #251 — upscaler. Before: the chain runs on the upscaled image.
+        // After: the chain sees the native source and renders at the
+        // largest whole multiple of it that fits the upscale target; the
+        // upscaler then takes the chain's output to the target.
+        const uint32_t nativeW = shaderSrcW, nativeH = shaderSrcH;
+        shaderSrcTex = runUpscaler(UpscalerSettings::Position::Before, shaderSrcTex,
+                                   shaderSrcW, shaderSrcH, nativeW, nativeH);
+        if (m_app.m_upscaler && nativeW > 0 && nativeH > 0 &&
+            UpscalerStage::runsAt(m_upscalerSettings, UpscalerSettings::Position::After))
+        {
+            uint32_t tw = 0, th = 0;
+            upscalerTarget(nativeW, nativeH, tw, th);
+            const uint32_t k = std::max<uint32_t>(1, std::min(tw / nativeW, th / nativeH));
+            m_app.m_shaderEngine->setViewport(nativeW * k, nativeH * k);
+        }
+
         textureToRender = m_app.m_shaderEngine->applyShader(shaderSrcTex, shaderSrcW, shaderSrcH);
         isShaderTexture = true;
+        processedW = m_app.m_shaderEngine->getOutputWidth();
+        processedH = m_app.m_shaderEngine->getOutputHeight();
         
         // Log saída do shader
         static int shaderOutputLogCount = 0;
@@ -545,8 +615,24 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
             textureToRender = sourceTex;
             isShaderTexture = false;
         }
-        else
+        else if (processedW > 0 && processedH > 0)
         {
+            // #251 — upscaler after the chain.
+            textureToRender = runUpscaler(UpscalerSettings::Position::After, textureToRender,
+                                          processedW, processedH, nativeW, nativeH);
+        }
+    }
+    else if (m_upscalerSettings.active() && sourceTex != 0 && sourceW > 0 && sourceH > 0)
+    {
+        // #251 — no shader chain: the upscaler alone (either position).
+        uint32_t w = sourceW, h = sourceH;
+        const GLuint up = runUpscaler(m_upscalerSettings.position, sourceTex, w, h, sourceW, sourceH);
+        if (m_upscalerRan)
+        {
+            textureToRender = up;
+            isShaderTexture = true;
+            processedW = w;
+            processedH = h;
         }
     }
 
@@ -622,9 +708,9 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     }
     else if (isShaderTexture)
     {
-        // Without maintainAspect, use shader output dimensions
-        renderWidth = m_app.m_shaderEngine->getOutputWidth();
-        renderHeight = m_app.m_shaderEngine->getOutputHeight();
+        // Without maintainAspect, use shader (/ upscaler, #251) output dimensions
+        renderWidth = processedW;
+        renderHeight = processedH;
         if (renderWidth == 0 || renderHeight == 0)
         {
             LOG_WARN("Shader output dimensions invalid (0x0), using capture dimensions");
@@ -968,8 +1054,8 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                     {
                         // Sem resolução de saída, mas com shader: usar textureToRender com dimensões reais do shader
                         textureToCapture = textureToRender;
-                        captureTextureWidth = m_app.m_shaderEngine->getOutputWidth();
-                        captureTextureHeight = m_app.m_shaderEngine->getOutputHeight();
+                        captureTextureWidth = processedW;
+                        captureTextureHeight = processedH;
                         
                         // Se dimensões do shader são inválidas, usar renderWidth/renderHeight
                         if (captureTextureWidth == 0 || captureTextureHeight == 0)
@@ -1227,7 +1313,9 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // Master pipeline toggle off → applyShader was skipped above and
                         // textureToCapture is the source RGB texture, so treat as RGB.
                         const bool pipelineEnabled = (!m_app.m_ui || m_app.m_ui->getShaderPipelineEnabled());
-                        bool isShaderTexture = (pipelineEnabled && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
+                        // #251 — the upscaler's output is RGBA too.
+                        bool isShaderTexture = (pipelineEnabled && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive()) ||
+                                               m_upscalerRan;
                         // #85 — When the post-image render pass
                         // ran above, what's attached to captureFBO
                         // is RGBA regardless of source. Otherwise
@@ -1500,6 +1588,10 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // single-readback path.
                         const bool masterOn = (m_app.m_ui && m_app.m_ui->getShaderPipelineEnabled());
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
+                        // #251 — the output is processed (shader chain and / or the
+                        // upscaler): /raw and an apply-shader-off stream / recording
+                        // then need the separate pre-shader source readback.
+                        const bool processed = (masterOn && shaderActive) || m_upscalerRan;
                         const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
                         const bool recordWantsSource = m_app.m_ui && passRecord &&
@@ -1507,7 +1599,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // Phase 2 of #47: /raw is by-contract pre-shader, so any connected
                         // /raw client also triggers the source-frame capture below.
                         const bool rawWantsSource = passRaw && m_app.m_streamManager->hasRawClients();
-                        const bool needSourceCapture = masterOn && shaderActive &&
+                        const bool needSourceCapture = processed &&
                                                        (streamWantsSource || recordWantsSource || rawWantsSource);
 
                         bool sourceFrameReady = false;
@@ -1635,7 +1727,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                                     m_lastRawSeq = curMeta.seq;
                                     m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
                                 }
-                                else if (!sourceFrameReady && (!masterOn || !shaderActive) &&
+                                else if (!sourceFrameReady && !processed &&
                                          dataMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = dataMeta.seq;

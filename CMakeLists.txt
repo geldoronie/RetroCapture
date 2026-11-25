@@ -1314,6 +1314,12 @@ if(PLATFORM_WINDOWS)
         COMPONENT shaders
         FILES_MATCHING PATTERN "*"
     )
+    # #251 — built-in upscaler passes (not in the user shader browser).
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/internal"
+        DESTINATION share/retrocapture/shaders
+        COMPONENT shaders
+        FILES_MATCHING PATTERN "*"
+    )
 
     # Assets (logo, etc.)
     if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
@@ -1362,6 +1368,13 @@ else()
     # XDG_DATA_DIRS (/usr/share, /usr/local/share) → retrocapture/.
     if(EXISTS "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl")
         install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/shaders_glsl"
+            DESTINATION share/retrocapture/shaders
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
+    # #251 — built-in upscaler passes (not in the user shader browser).
+    if(EXISTS "${CMAKE_SOURCE_DIR}/shaders/internal")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/internal"
             DESTINATION share/retrocapture/shaders
             FILES_MATCHING PATTERN "*"
         )

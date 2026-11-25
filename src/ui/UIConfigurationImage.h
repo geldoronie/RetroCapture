@@ -22,6 +22,7 @@ private:
 
     void renderBrightnessContrast();
     void renderSourceColor();
+    void renderUpscaler(); // #251
     void renderAspectRatio();
     void renderFullscreen();
     void renderMonitorSelection();

@@ -2827,6 +2827,71 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================================
+// #251 — built-in upscaler via the "upscaler" object of
+// /api/v1/image/settings.
+// ============================================================
+
+function syncUpscalerControls() {
+    const target = document.getElementById('upscalerTarget');
+    const custom = target && target.value === 'custom';
+    document.querySelectorAll('.upscaler-custom').forEach(function(el) {
+        el.classList.toggle('d-none', !custom);
+    });
+    const sharp = document.getElementById('upscalerSharpness');
+    const badge = document.getElementById('upscalerSharpnessValue');
+    if (sharp && badge) badge.textContent = parseFloat(sharp.value).toFixed(2);
+}
+
+async function loadUpscaler() {
+    try {
+        const settings = await api.getImageSettings();
+        const up = settings && settings.upscaler;
+        if (!up) return;
+        const set = function(id, v) { const el = document.getElementById(id); if (el && v !== undefined) el.value = v; };
+        set('upscalerMode', up.mode);
+        set('upscalerTarget', up.target);
+        set('upscalerCustomWidth', up.customWidth);
+        set('upscalerCustomHeight', up.customHeight);
+        set('upscalerSharpness', up.sharpness);
+        set('upscalerPosition', up.position);
+        syncUpscalerControls();
+    } catch (err) {
+        console.warn('Failed to load upscaler settings:', err);
+    }
+}
+
+async function commitUpscaler() {
+    const val = function(id) { const el = document.getElementById(id); return el ? el.value : undefined; };
+    const up = {
+        mode: val('upscalerMode'),
+        target: val('upscalerTarget'),
+        customWidth: parseInt(val('upscalerCustomWidth'), 10) || 1920,
+        customHeight: parseInt(val('upscalerCustomHeight'), 10) || 1080,
+        sharpness: parseFloat(val('upscalerSharpness')),
+        position: val('upscalerPosition')
+    };
+    try {
+        await api.setImageSettings({ upscaler: up });
+    } catch (err) {
+        console.warn('Failed to set upscaler settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const ids = ['upscalerMode', 'upscalerTarget', 'upscalerCustomWidth',
+                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition'];
+    let present = false;
+    ids.forEach(function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        present = true;
+        el.addEventListener('change', function() { syncUpscalerControls(); commitUpscaler(); });
+        if (id === 'upscalerSharpness') el.addEventListener('input', syncUpscalerControls);
+    });
+    if (present) loadUpscaler();
+});
+
+// ============================================================
 // Source crop (#225) — mirrors the native UI's Source Crop section:
 // 4 independent sides in percent or source pixels, link modes, and
 // auto-crop. Values are persisted server-side via

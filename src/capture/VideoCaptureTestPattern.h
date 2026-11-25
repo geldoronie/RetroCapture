@@ -37,6 +37,10 @@
  *    second, plus the sync flash band. Positions are a pure function of
  *    the frame timestamp (see renderMotion), so any instant can be
  *    rendered exactly: frame generation is measured against it.
+ *  - "edges" (#251): a static, hard-edged pattern defined in normalised
+ *    coordinates (concentric rings, a rotated checkerboard, a colour
+ *    starburst), so the same pattern rendered at a higher --width/--height
+ *    is the ground truth of an upscale. Measures upscalers.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -77,9 +81,10 @@ public:
 private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
     void renderLevels();
+    void renderEdges();
     void renderInterlaced(uint64_t frameIndex);
 
-    enum class Variant { Bars, Levels, Interlaced, Motion };
+    enum class Variant { Bars, Levels, Interlaced, Motion, Edges };
     Variant m_variant = Variant::Bars;
 
     uint32_t m_width = 1280;

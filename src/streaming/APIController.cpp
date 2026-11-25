@@ -1228,7 +1228,9 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"customAspectH\": " << jsonNumber(geom.customAspectH) << ", "
          << "\"rotation\": " << jsonNumber(geom.rotation) << ", "
          << "\"flipH\": " << jsonBool(geom.flipH) << ", "
-         << "\"flipV\": " << jsonBool(geom.flipV)
+         << "\"flipV\": " << jsonBool(geom.flipV) << ", "
+         // #251 — built-in upscaler.
+         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump()
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
@@ -2478,6 +2480,22 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
                 m_uiManager->setOutputGeometry(geom);
                 updated = true;
             }
+        }
+
+        // #251 — built-in upscaler: {"mode", "target", "customWidth",
+        // "customHeight", "sharpness", "position"}; keys left out keep
+        // their value.
+        if (json.contains("upscaler"))
+        {
+            UpscalerSettings up = m_uiManager->getUpscalerSettings();
+            std::string err;
+            if (!up.applyJson(json["upscaler"], &err))
+            {
+                sendErrorResponse(clientFd, 400, err);
+                return true;
+            }
+            m_uiManager->setUpscalerSettings(up);
+            updated = true;
         }
 
         if (updated) m_uiManager->saveConfig();

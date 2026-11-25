@@ -71,6 +71,11 @@ public:
     void disableShader();
     
     bool isShaderActive() const { return m_shaderActive; }
+
+    // #251 — keep (default) or skip the per-frame copy of the output into the
+    // OriginalHistory/PassPrev ring. An engine whose presets never sample the
+    // history (the built-in upscaler) turns it off to save a full-size draw.
+    void setFrameHistoryEnabled(bool enabled) { m_frameHistoryEnabled = enabled; }
     
     // Obter dimensões de saída do shader
     uint32_t getOutputWidth() const { return m_outputWidth; }
@@ -149,6 +154,7 @@ private:
     std::vector<uint32_t> m_frameHistoryWidths;
     std::vector<uint32_t> m_frameHistoryHeights;
     static constexpr size_t MAX_FRAME_HISTORY = 7;
+    bool m_frameHistoryEnabled = true; // #251
     
     // Framebuffer temporário reutilizável para copiar frames ao histórico
     // Criado uma vez e reutilizado entre frames (evita criar/deletar a cada frame)

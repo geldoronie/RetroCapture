@@ -648,6 +648,58 @@
                                             <p class="text-muted small mt-1" data-i18n="web.config.image.framegen_rate_hint">Stream and recording carry the generated frames their FPS allows: set them to the output rate (e.g. 60 for a 30 fps source at 2x). An output switched off keeps the real frames with no added latency.</p>
                                             <p class="small" id="frameGenStatus"></p>
                                         </div>
+                                        <!-- #251 — built-in upscaler -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.upscaler">Upscaler</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.upscaler_hint">Built-in spatial upscaler (FSR 1 / NIS / Anime4K). It runs before or after your shader preset, so both work together. Applies to the window, stream, recording and virtual camera; /raw stays the untouched source.</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerMode" data-i18n="web.config.image.upscaler_mode">Mode</label>
+                                            <select class="form-select" id="upscalerMode">
+                                                <option value="off" data-i18n="web.config.image.upscaler_off">Off</option>
+                                                <option value="fsr">FSR 1</option>
+                                                <option value="fsr-easu" data-i18n="web.config.image.upscaler_fsr_easu">FSR 1 (EASU only)</option>
+                                                <option value="nis">NVIDIA NIS</option>
+                                                <option value="anime4k-s">Anime4K S</option>
+                                                <option value="anime4k-m">Anime4K M</option>
+                                                <option value="denoise-fsr" data-i18n="web.config.image.upscaler_denoise_fsr">Denoise + FSR</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerTarget" data-i18n="web.config.image.upscaler_target">Target</label>
+                                            <select class="form-select" id="upscalerTarget">
+                                                <option value="auto" data-i18n="web.config.image.upscaler_target_auto">Auto (window / output size)</option>
+                                                <option value="2x">2x</option>
+                                                <option value="3x">3x</option>
+                                                <option value="4x">4x</option>
+                                                <option value="custom" data-i18n="web.config.image.upscaler_target_custom">Custom</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6 upscaler-custom d-none">
+                                            <label class="form-label" for="upscalerCustomWidth" data-i18n="web.config.image.width">Width</label>
+                                            <input type="number" class="form-control" id="upscalerCustomWidth" min="16" max="7680" step="16" value="1920">
+                                        </div>
+                                        <div class="col-md-6 upscaler-custom d-none">
+                                            <label class="form-label" for="upscalerCustomHeight" data-i18n="web.config.image.height">Height</label>
+                                            <input type="number" class="form-control" id="upscalerCustomHeight" min="16" max="4320" step="16" value="1080">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">
+                                                <span data-i18n="web.config.image.upscaler_sharpness">Sharpness</span>
+                                                <span id="upscalerSharpnessValue" class="badge bg-primary ms-2">0.75</span>
+                                            </label>
+                                            <input type="range" class="form-range" id="upscalerSharpness" min="0" max="1" step="0.01" value="0.75">
+                                            <small class="form-text text-muted" data-i18n="web.config.image.upscaler_sharpness_hint">FSR 1, Denoise + FSR and NIS. Not used by EASU only and Anime4K.</small>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerPosition" data-i18n="web.config.image.upscaler_position">Position</label>
+                                            <select class="form-select" id="upscalerPosition">
+                                                <option value="before" data-i18n="web.config.image.upscaler_before">Before the shader chain</option>
+                                                <option value="after" data-i18n="web.config.image.upscaler_after">After the shader chain</option>
+                                            </select>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.upscaler_position_hint">CRT and pixel-art shaders expect the native resolution: with a CRT shader, After keeps the scanline density right.</small>
+                                        </div>
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
                                                 <input class="form-check-input" type="checkbox" id="maintainAspect">

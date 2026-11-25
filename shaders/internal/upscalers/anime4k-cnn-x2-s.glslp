@@ -42,7 +42,7 @@ wrap_mode4 = clamp_to_edge
 scale_type4 = source
 scale4 = 2.0
 
-shader5 = ../stock.glsl
+shader5 = shaders/stock.glsl
 filter_linear5 = true
 wrap_mode5 = clamp_to_edge
 scale_type5 = viewport

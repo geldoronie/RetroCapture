@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "../utils/FilesystemCompat.h"
 #include "../processing/SourceCrop.h"
+#include "../processing/UpscalerSettings.h"
 
 /**
  * @brief Manages capture presets (save, load, list, delete)
@@ -50,6 +51,7 @@ public:
         float imageGamma = 1.0f;
         int imageColorRange = 0; // 0 = Auto, 1 = Limited, 2 = Full
         bool imageExpandLimitedAfterDecode = false; // #243 (older presets: off)
+        UpscalerSettings upscaler; // #251 (older presets: Off)
         // #229 — deinterlacing (older presets load as Off / Auto)
         int deinterlaceMode = 0; // 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend
         int fieldOrder = 0;      // 0 = Auto, 1 = TFF, 2 = BFF

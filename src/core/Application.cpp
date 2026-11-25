@@ -24,6 +24,7 @@
 #include "../output/WindowManager.h"
 #endif
 #include "../shader/ShaderEngine.h"
+#include "../processing/UpscalerStage.h"
 #include "../ui/UIManager.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/OSDChat.h"
@@ -372,6 +373,9 @@ bool Application::initRenderer()
     LOG_INFO("Creating PBOManager...");
     m_pboManager = std::make_unique<PBOManager>();
     LOG_INFO("PBOManager created");
+
+    // #251 — built-in upscaler stage; its shader engine is created on first use.
+    m_upscaler = std::make_unique<UpscalerStage>();
 
     // Initialize ShaderEngine
     LOG_INFO("Creating ShaderEngine...");
@@ -2195,6 +2199,12 @@ void Application::shutdown()
         m_pipeline->releaseGL();
     }
 
+    if (m_upscaler)
+    {
+        m_upscaler->shutdown(); // #251
+        m_upscaler.reset();
+    }
+
     if (m_shaderEngine)
     {
         m_shaderEngine->shutdown();
@@ -2562,6 +2572,7 @@ void Application::applyPreset(const std::string &presetName)
         m_ui->setGamma(data.imageGamma);
         m_ui->setColorRange(data.imageColorRange);
         m_ui->setExpandLimitedAfterDecode(data.imageExpandLimitedAfterDecode);
+        m_ui->setUpscalerSettings(data.upscaler); // #251
         m_ui->setDeinterlaceMode(data.deinterlaceMode);
         m_ui->setFieldOrder(data.fieldOrder);
         m_ui->setMaintainAspect(m_maintainAspect);
@@ -2740,6 +2751,7 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         data.imageGamma = m_ui->getGamma();
         data.imageColorRange = m_ui->getColorRange();
         data.imageExpandLimitedAfterDecode = m_ui->getExpandLimitedAfterDecode();
+        data.upscaler = m_ui->getUpscalerSettings(); // #251
         data.deinterlaceMode = m_ui->getDeinterlaceMode();
         data.fieldOrder = m_ui->getFieldOrder();
     }

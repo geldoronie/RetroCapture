@@ -14,6 +14,7 @@
 #include "../osd/FpsOverlay.h"
 #include "../renderer/OutputGeometry.h"
 #include "../processing/FrameGenSettings.h"
+#include "../processing/UpscalerSettings.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -380,6 +381,21 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_frameGenMutex);
         m_frameGenStatus = st;
+    }
+
+    // #251 — built-in upscaler (Image window > Upscaler). Written by the UI
+    // and the web API thread, read by the render loop every frame.
+    UpscalerSettings getUpscalerSettings() const
+    {
+        std::lock_guard<std::mutex> lock(m_upscalerMutex);
+        return m_upscaler;
+    }
+    // Sets (sanitised) without saving; callers save the config.
+    void setUpscalerSettings(const UpscalerSettings &s)
+    {
+        std::lock_guard<std::mutex> lock(m_upscalerMutex);
+        m_upscaler = s;
+        m_upscaler.sanitize();
     }
 
     // Controles V4L2
@@ -1443,6 +1459,9 @@ private:
     // #227 — see getOutputGeometry().
     OutputGeometry m_outputGeometry;
     mutable std::mutex m_outputGeometryMutex;
+    // #251 — see getUpscalerSettings().
+    UpscalerSettings m_upscaler;
+    mutable std::mutex m_upscalerMutex;
 
     // #247 — see getFrameGenSettings().
     FrameGenSettings m_frameGen;

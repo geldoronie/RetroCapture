@@ -6,6 +6,7 @@
 
 #include "../processing/SourceCrop.h"
 #include "../processing/FrameGenStage.h"
+#include "../processing/UpscalerSettings.h"
 #include "../renderer/glad_loader.h"
 
 // #157 — FrameCapturePipeline: the per-frame capture -> shader -> distribute
@@ -40,6 +41,17 @@ private:
     void getSourceCropFractions(uint32_t srcW, uint32_t srcH,
                                 float &left, float &right,
                                 float &top, float &bottom) const;
+
+    // #251 — built-in upscaler stage (UpscalerStage, owned by Application).
+    // Runs it when this frame's settings put it at `where`; otherwise returns
+    // tex unchanged. refW/refH = native source size (2x/3x/4x refer to it).
+    // Sets m_upscalerRan when it produced the texture it returns.
+    GLuint runUpscaler(UpscalerSettings::Position where, GLuint tex,
+                       uint32_t &w, uint32_t &h, uint32_t refW, uint32_t refH);
+    // The upscale target for a refW x refH source this frame.
+    void upscalerTarget(uint32_t refW, uint32_t refH, uint32_t &tw, uint32_t &th) const;
+    UpscalerSettings m_upscalerSettings; // copy taken at the start of the frame
+    bool m_upscalerRan = false;          // the upscaler produced this frame's image
 
     // #198 — identity + capture time of the pixels a readback produced.
     struct FrameMeta
