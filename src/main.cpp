@@ -2,6 +2,8 @@
 #include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
 #include "ui/UIRemoteConnection.h"
+#include "processing/FrameGenBench.h"
+#include "processing/FrameGenSettings.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
 
@@ -103,6 +105,9 @@ void printUsage(const char *programName)
     std::cout << "  --web-portal-ssl-key <path>      Path to the SSL key (default: ssl/server.key)\n";
     std::cout << "\nOther:\n";
     std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
+    std::cout << "  --frame-gen <mode>     Frame generation (#247): off, 2x, 3x, 4x, display (this run only)\n";
+    std::cout << "  --frame-gen-method <m> blend or motion (GPU optical flow, default)\n";
+    std::cout << "  --frame-gen-outputs <list>  Comma list of window,stream,recording,virtcam (default: all)\n";
     std::cout << "  --help, -h             Show this help\n";
     std::cout << "\nExamples:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
@@ -227,6 +232,8 @@ int main(int argc, char *argv[])
     
     // UI visibility
     bool hideUI = false; // Hide ImGui UI on startup
+    // #247 — frame generation overrides (this run only) and the bench.
+    std::string frameGenMode, frameGenMethod, frameGenOutputs, frameGenBench;
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -752,6 +759,23 @@ int main(int argc, char *argv[])
         {
             hideUI = true;
         }
+        else if (arg == "--frame-gen" && i + 1 < argc)
+        {
+            frameGenMode = argv[++i];
+        }
+        else if (arg == "--frame-gen-method" && i + 1 < argc)
+        {
+            frameGenMethod = argv[++i];
+        }
+        else if (arg == "--frame-gen-outputs" && i + 1 < argc)
+        {
+            frameGenOutputs = argv[++i];
+        }
+        else if (arg == "--framegen-bench" && i + 1 < argc)
+        {
+            // Test tooling (see FrameGenBench.h), not in --help.
+            frameGenBench = argv[++i];
+        }
         else
         {
             LOG_WARN("Argumento desconhecido: " + arg);
@@ -1072,6 +1096,47 @@ int main(int argc, char *argv[])
         }
     }
     
+    // #247 — frame-generation bench: needs only the GL context; exit after.
+    if (!frameGenBench.empty())
+    {
+        const int rc = runFrameGenBench(frameGenBench);
+        app.shutdown();
+        return rc;
+    }
+
+    // #247 — frame generation from the command line (not persisted).
+    if (app.getUIManager() && (!frameGenMode.empty() || !frameGenMethod.empty() || !frameGenOutputs.empty()))
+    {
+        FrameGenSettings fg = app.getUIManager()->getFrameGenSettings();
+        if (!frameGenMode.empty())
+        {
+            const int m = FrameGenSettings::modeFromName(frameGenMode);
+            if (m < 0)
+                LOG_WARN("Unknown --frame-gen mode: " + frameGenMode);
+            else
+                fg.mode = m;
+        }
+        if (!frameGenMethod.empty())
+        {
+            const int m = FrameGenSettings::methodFromName(frameGenMethod);
+            if (m < 0)
+                LOG_WARN("Unknown --frame-gen-method: " + frameGenMethod);
+            else
+                fg.method = m;
+        }
+        if (!frameGenOutputs.empty())
+        {
+            const std::string list = "," + frameGenOutputs + ",";
+            fg.window = list.find(",window,") != std::string::npos;
+            fg.stream = list.find(",stream,") != std::string::npos;
+            fg.record = list.find(",recording,") != std::string::npos;
+            fg.virtcam = list.find(",virtcam,") != std::string::npos;
+        }
+        app.getUIManager()->setFrameGenSettings(fg, /*persist=*/false);
+        LOG_INFO(std::string("Frame generation (command line): ") + FrameGenSettings::modeName(fg.mode) + ", " +
+                 FrameGenSettings::methodName(fg.method));
+    }
+
     // Hide UI if requested (same as pressing F12)
     // IMPORTANT: This must be done AFTER init() but BEFORE run()
     // so cursor visibility is set correctly on startup

@@ -13,6 +13,7 @@
 #include "../processing/SourceCrop.h"
 #include "../osd/FpsOverlay.h"
 #include "../renderer/OutputGeometry.h"
+#include "../processing/FrameGenSettings.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -338,6 +339,47 @@ public:
             m_outputGeometry.rotation = OutputGeometry::normalizeRotation(g.rotation);
         }
         saveConfig();
+    }
+
+    // #247 — frame generation. Written by the UI and the web API thread,
+    // read by the render loop every frame (copy-out under a lock).
+    // persist=false applies a CLI override without rewriting config.json.
+    FrameGenSettings getFrameGenSettings() const
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        return m_frameGen;
+    }
+    void setFrameGenSettings(const FrameGenSettings &s, bool persist = true)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_frameGenMutex);
+            m_frameGen = s;
+            m_frameGen.mode = FrameGenSettings::clampMode(s.mode);
+            m_frameGen.method = FrameGenSettings::clampMethod(s.method);
+        }
+        if (persist) saveConfig();
+    }
+    // What the render loop reports back (UI hint / web API).
+    struct FrameGenStatus
+    {
+        bool supported = true;        // GPU can run the interpolator at all
+        bool motionSupported = true;  // ... and the motion (optical flow) method
+        bool active = false;          // generating right now
+        int effectiveMode = 0;        // FrameGenSettings::Mode in effect
+        bool remoteDriven = false;    // driven by the remote "motion" interpolation
+        float sourceFps = 0.0f;       // measured source rate
+        float outputFps = 0.0f;       // output timeline rate (source x factor)
+        float addedLatencyMs = 0.0f;  // look-ahead latency it adds
+    };
+    FrameGenStatus getFrameGenStatus() const
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        return m_frameGenStatus;
+    }
+    void setFrameGenStatus(const FrameGenStatus &st)
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        m_frameGenStatus = st;
     }
 
     // Controles V4L2
@@ -1401,6 +1443,11 @@ private:
     // #227 — see getOutputGeometry().
     OutputGeometry m_outputGeometry;
     mutable std::mutex m_outputGeometryMutex;
+
+    // #247 — see getFrameGenSettings().
+    FrameGenSettings m_frameGen;
+    FrameGenStatus m_frameGenStatus;
+    mutable std::mutex m_frameGenMutex;
 
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;

@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "../processing/SourceCrop.h"
+#include "../processing/FrameGenStage.h"
+#include "../renderer/glad_loader.h"
 
 // #157 — FrameCapturePipeline: the per-frame capture -> shader -> distribute
 // pipeline extracted out of Application (behavior-preserving). It does not own
@@ -13,6 +16,7 @@
 // changing init order, ownership, or threading.
 
 class Application;
+class PBOManager;
 
 class FrameCapturePipeline
 {
@@ -22,6 +26,11 @@ public:
     // Per-frame render + shader + capture/push. Returns true when the frame was
     // already presented (caller should skip the rest of its loop iteration).
     bool renderAndDistributeFrame();
+
+    // #247 — release the GL objects this class owns (context current).
+    void releaseGL();
+
+    ~FrameCapturePipeline();
 
 private:
     Application &m_app;
@@ -37,6 +46,12 @@ private:
     {
         uint64_t seq = 0;     // FrameProcessor frame sequence (0 = none)
         int64_t tsUs = 0;     // capture time on MediaClock
+        // #247 — may this frame go to /stream / the recording? A generated
+        // frame only goes to an encoder whose fps carries its phase. Kept
+        // with the frame because the async readback delivers it one
+        // iteration later.
+        bool streamOk = true;
+        bool recordOk = true;
     };
     // The async PBO readback hands back the PREVIOUS readback's pixels;
     // this remembers which frame that readback was of.
@@ -46,6 +61,44 @@ private:
     uint64_t m_lastStreamSeq = 0;
     uint64_t m_lastRawSeq = 0;
     uint64_t m_lastRecordSeq = 0;
+
+    // #247 — one render of a source frame through the shader chain to the
+    // window and/or a subset of the outputs.
+    struct PassSpec
+    {
+        GLuint srcTex = 0;
+        uint32_t srcW = 0, srcH = 0;
+        FrameMeta meta;
+        bool window = true;
+        bool stream = true;
+        bool record = true;
+        bool virtcam = true;
+        bool raw = true;
+        PBOManager *pbo = nullptr;          // async readback for this pass
+        FrameMeta *pboInFlight = nullptr;   // ... and what it is reading
+    };
+    // Returns true when the frame was already presented (invalid window).
+    bool renderPass(const PassSpec &spec);
+    // Status / overlay counters, UI, swap and loop pacing.
+    bool finishFrame();
+
+    // #247 — frame generation: which outputs get the generated timeline
+    // this iteration, and the timeline frame itself.
+    struct FrameGenPlan
+    {
+        bool active = false;
+        FrameGenStage::Frame frame;
+        bool genWindow = false, genStream = false, genRecord = false, genVirtcam = false;
+        bool streamPhaseOk = true, recordPhaseOk = true; // see FrameMeta
+        bool liveStream = true, liveRecord = true, liveVirtcam = true;
+        bool liveOutputsActive = false; // a live-pass output is running (incl. /raw)
+    };
+    FrameGenPlan planFrameGeneration(GLuint srcTex, uint32_t w, uint32_t h, const FrameMeta &live);
+    std::unique_ptr<FrameGenStage> m_frameGen;
+    std::unique_ptr<PBOManager> m_genPbo;   // the generated pass's readback
+    FrameMeta m_genPboInFlight;
+    bool m_frameGenVsync = false;           // display mode turned vsync on
+    int m_frameGenLoggedMode = -1;
 
     // #225 — auto-crop: a few spaced readbacks of the uncropped source.
     void runAutoCropSampling();

@@ -2,6 +2,7 @@
 #include "UIManager.h"
 #include "UISectionHeader.h"
 #include "../utils/TranslationManager.h"
+#include "../processing/FrameGenSettings.h"
 #include <imgui.h>
 #include <algorithm>
 
@@ -32,6 +33,7 @@ void UIConfigurationImage::render()
 
     renderBrightnessContrast();
     renderSourceColor();
+    renderFrameGeneration();
     renderOutputResolution();
     renderAspectRatio();
     renderFullscreen();
@@ -385,4 +387,99 @@ void UIConfigurationImage::renderFpsOverlay()
     if (compact) ImGui::EndDisabled();
 
     if (!enabled) ImGui::EndDisabled();
+}
+
+void UIConfigurationImage::renderFrameGeneration()
+{
+    // #247 — output clock + GPU motion-compensated interpolation.
+    ui_section_header("Frame generation",
+                      "Synthesises in-between frames from the source "
+                      "(e.g. 30 -> 60 fps, or 60 fps on a 120/144 Hz "
+                      "display). Runs before the shader chain, so shaders "
+                      "process every output frame. Needs the next source "
+                      "frame: adds up to one source frame of latency.");
+
+    FrameGenSettings fg = m_uiManager->getFrameGenSettings();
+    const UIManager::FrameGenStatus st = m_uiManager->getFrameGenStatus();
+    const bool remote = m_uiManager->getSourceType() == UIManager::SourceType::Remote;
+    bool changed = false;
+
+    if (remote)
+    {
+        ImGui::TextWrapped("Remote source: pick \"Motion\" in Remote -> Connect to "
+                           "Remote... -> display interpolation to generate frames "
+                           "on this window.");
+        ImGui::BeginDisabled();
+    }
+
+    static const char *modes[] = {"Off", "2x source rate", "3x source rate", "4x source rate",
+                                  "Display refresh (window only)"};
+    int mode = fg.mode;
+    ImGui::PushItemWidth(240);
+    if (ImGui::Combo("Mode##framegen", &mode, modes, IM_ARRAYSIZE(modes)))
+    {
+        fg.mode = mode;
+        changed = true;
+    }
+    static const char *methods[] = {"Blend (cheap, ghosts on motion)", "Motion (GPU optical flow)"};
+    int method = fg.method;
+    if (ImGui::Combo("Method##framegen", &method, methods, IM_ARRAYSIZE(methods)))
+    {
+        fg.method = method;
+        changed = true;
+    }
+    ImGui::PopItemWidth();
+    if (ImGui::Checkbox("Keep static regions still (HUD, borders)##framegen", &fg.protectStatic))
+        changed = true;
+
+    const bool display = fg.mode == FrameGenSettings::Display;
+    ImGui::TextUnformatted("Generated frames go to:");
+    if (ImGui::Checkbox("Window##framegen", &fg.window)) changed = true;
+    ImGui::SameLine();
+    if (display) ImGui::BeginDisabled();
+    if (ImGui::Checkbox("Stream##framegen", &fg.stream)) changed = true;
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Recording##framegen", &fg.record)) changed = true;
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Virtual camera##framegen", &fg.virtcam)) changed = true;
+    if (display) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("An output switched off keeps the real frames, with no added latency.");
+
+    if (remote) ImGui::EndDisabled();
+
+    if (changed)
+        m_uiManager->setFrameGenSettings(fg);
+
+    if (!st.supported)
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
+                           "Not available on this GPU (needs OpenGL 3.3 / GLES 3.0).");
+    }
+    else if (!st.motionSupported && fg.method == FrameGenSettings::Motion)
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f),
+                           "This GPU has no float render targets: using Blend.");
+    }
+    if (st.active)
+    {
+        if (st.outputFps > 0.0f)
+            ImGui::Text("Source %.2f fps -> output %.2f fps, +%.1f ms latency", st.sourceFps, st.outputFps,
+                        st.addedLatencyMs);
+        else
+            ImGui::Text("Source %.2f fps -> one frame per refresh, +%.1f ms latency", st.sourceFps,
+                        st.addedLatencyMs);
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    if (fg.mode != FrameGenSettings::Off && !display && (fg.stream || fg.record))
+    {
+        ImGui::TextDisabled("Stream / recording carry the generated frames their FPS allows: "
+                            "set them to the output rate (e.g. 60 for 30 fps at 2x).");
+    }
+    if (display)
+    {
+        ImGui::TextDisabled("Display mode follows the window refresh (vsync while focused); "
+                            "outputs keep the real frames.");
+    }
+    ImGui::PopTextWrapPos();
 }

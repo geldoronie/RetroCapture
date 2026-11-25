@@ -509,6 +509,14 @@ void VideoCaptureRemote::stopCapture()
     }
 }
 
+VideoCaptureRemote::InterpolationMode VideoCaptureRemote::interpolationModeFromName(const std::string &name)
+{
+    if (name == "nearest") return InterpolationMode::Nearest;
+    if (name == "off") return InterpolationMode::Off;
+    if (name == "motion") return InterpolationMode::Motion;
+    return InterpolationMode::Linear;
+}
+
 void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
 {
     if (m_interpolationMode.load() == mode) return;
@@ -530,6 +538,8 @@ void VideoCaptureRemote::setInterpolationMode(InterpolationMode mode)
         m_frameQueue.clear();
         m_lastConsumed = QueuedFrame{};
         m_blendBuffer.clear();
+        m_motionLeadUs = 0;
+        m_motionPrevTargetUs = 0;
     }
     m_streamAnchored.store(false);
     m_firstPtsUs.store(0);
@@ -639,15 +649,43 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
         }
     }
 
-    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= nowWallUs)
+    const InterpolationMode mode = m_interpolationMode.load();
+    // #247 — Motion: release one frame period early (see the enum).
+    const bool motion = (mode == InterpolationMode::Motion);
+    const int64_t releaseAtUs = motion ? nowWallUs + (m_motionLeadUs > 0 ? m_motionLeadUs : 16667) : nowWallUs;
+    bool consumedNew = false;
+    while (!m_frameQueue.empty() && m_frameQueue.front().targetWallUs <= releaseAtUs)
     {
         m_lastConsumed = std::move(m_frameQueue.front());
         m_frameQueue.pop_front();
         ++m_statConsumed;
+        consumedNew = true;
     }
     if (m_lastConsumed.rgb.empty())
     {
         return false;
+    }
+    if (motion)
+    {
+        // One hand-over per decoded frame: the engine pairs consecutive
+        // frames by sequence number, a repeat would read as a new frame.
+        if (!consumedNew)
+        {
+            return false;
+        }
+        const int64_t d = m_lastConsumed.targetWallUs - m_motionPrevTargetUs;
+        if (m_motionPrevTargetUs > 0 && d >= 2000 && d <= 250000)
+        {
+            m_motionLeadUs = m_motionLeadUs > 0 ? (m_motionLeadUs * 7 + d) / 8 : d;
+        }
+        m_motionPrevTargetUs = m_lastConsumed.targetWallUs;
+        frame.data        = m_lastConsumed.rgb.data();
+        frame.size        = m_lastConsumed.rgb.size();
+        frame.width       = m_lastConsumed.width;
+        frame.height      = m_lastConsumed.height;
+        frame.format      = 0; // RGB24
+        frame.timestampUs = m_lastConsumed.targetWallUs; // its display time (MediaClock)
+        return true;
     }
 
     // Default: hand out the cached frame as-is. The Linear / Nearest
@@ -658,7 +696,6 @@ bool VideoCaptureRemote::captureLatestFrame(Frame &frame)
     uint8_t *outData = m_lastConsumed.rgb.data();
     size_t outSize   = m_lastConsumed.rgb.size();
 
-    const InterpolationMode mode = m_interpolationMode.load();
     if (mode != InterpolationMode::Off && !m_frameQueue.empty())
     {
         const QueuedFrame &next = m_frameQueue.front();

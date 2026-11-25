@@ -126,21 +126,24 @@ void UIRemoteConnection::renderManualTab(bool /*sourceIsRemote*/,
     // Interpolation mode dropdown — same options the Source-tab path
     // used to expose. Lives here now so all the Remote-mode controls
     // are co-located.
-    const char *modes[]      = {"linear", "nearest", "off"};
+    // #247 — "motion" runs the GPU frame-generation engine per refresh
+    // (motion-compensated, one frame of look-ahead).
+    const char *modes[]      = {"linear", "nearest", "off", "motion"};
     const char *modeLabels[] = {
         "Linear (smooth, slight ghosting)",
         "Nearest (clean frames, may stutter)",
-        "Off (strict PTS, may stutter)"
+        "Off (strict PTS, may stutter)",
+        "Motion (GPU optical flow, no ghosting)"
     };
     std::string currentMode = m_uiManager->getRemoteInterpolation();
     int currentModeIndex = 0;
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         if (currentMode == modes[i]) { currentModeIndex = i; break; }
     }
     ui_section_header(T("remote.display_interp").c_str());
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 3))
+    if (ImGui::Combo("##remoteInterp", &currentModeIndex, modeLabels, 4))
     {
         m_uiManager->triggerRemoteInterpolationChange(modes[currentModeIndex]);
     }

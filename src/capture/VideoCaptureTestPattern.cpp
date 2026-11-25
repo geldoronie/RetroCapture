@@ -2,6 +2,7 @@
 #include "../utils/Logger.h"
 #include "../utils/MediaClock.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -14,11 +15,16 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
     m_open = true;
     const char *variant = std::getenv("RETROCAPTURE_TEST_PATTERN");
     const std::string v = variant ? variant : "";
-    m_variant = v == "levels" ? Variant::Levels : v == "interlaced" ? Variant::Interlaced : Variant::Bars;
+    m_variant = v == "levels"       ? Variant::Levels
+                : v == "interlaced" ? Variant::Interlaced
+                : v == "motion"     ? Variant::Motion
+                                    : Variant::Bars;
     if (m_variant == Variant::Levels)
         LOG_INFO("VideoCaptureTestPattern: 'levels' variant (grey steps + colour bars)");
     else if (m_variant == Variant::Interlaced)
         LOG_INFO("VideoCaptureTestPattern: 'interlaced' variant (woven TFF fields, moving bar)");
+    else if (m_variant == Variant::Motion)
+        LOG_INFO("VideoCaptureTestPattern: 'motion' variant (scrolling background, sprites, static HUD)");
     if (m_buffer.empty())
         m_buffer.resize(static_cast<size_t>(m_width) * m_height * 3, 0);
     LOG_INFO("VideoCaptureTestPattern opened: " + std::to_string(m_width) + "x" +
@@ -109,6 +115,133 @@ void VideoCaptureTestPattern::renderInterlaced(uint64_t f)
     }
 }
 
+namespace
+{
+// Small integer hash -> 0..255 (deterministic background texture).
+inline uint32_t hash2(int32_t x, int32_t y)
+{
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (h ^ (h >> 16)) & 0xFFu;
+}
+inline int32_t floorDiv(int32_t a, int32_t b)
+{
+    return (a >= 0) ? a / b : -((-a + b - 1) / b);
+}
+} // namespace
+
+void VideoCaptureTestPattern::renderMotion(uint8_t *rgb, uint32_t w, uint32_t h, double t, bool flash)
+{
+    if (!rgb || w == 0 || h == 0)
+        return;
+    // Sizes scale with the frame height (designed at 720p).
+    const double k = static_cast<double>(h) / 720.0;
+    const int32_t tile = static_cast<int32_t>(32 * k) > 4 ? static_cast<int32_t>(32 * k) : 4;
+    const int32_t cell = tile / 8 > 1 ? tile / 8 : 1;
+    // Wrap the time so the float offsets stay exact over long runs.
+    const double tw = std::fmod(t, 3600.0);
+    const double scrollX = tw * 240.0 * k;                  // 4 px/frame at 60 fps
+    const double scrollY = 24.0 * k * std::sin(tw * 0.9);   // slow vertical sway
+    const int32_t ox = static_cast<int32_t>(std::floor(scrollX));
+    const int32_t oy = static_cast<int32_t>(std::floor(scrollY));
+
+    struct Sprite { double x, y, r; uint8_t c[3]; };
+    const double W = static_cast<double>(w), H = static_cast<double>(h);
+    const Sprite sprites[3] = {
+        {W * (0.50 + 0.36 * std::cos(tw * 1.3)), H * (0.55 + 0.22 * std::sin(tw * 2.1)), 46 * k, {230, 60, 50}},
+        {W * (0.30 + 0.20 * std::sin(tw * 2.7)), H * (0.45 + 0.25 * std::cos(tw * 1.7)), 34 * k, {60, 200, 80}},
+        {W * (0.72 + 0.18 * std::cos(tw * 3.3 + 1.0)), H * (0.62 + 0.15 * std::sin(tw * 2.9)), 58 * k, {250, 210, 40}},
+    };
+    const uint32_t hudH = h / 12;
+    const uint32_t flashY0 = h - h / 8;
+    const int counter = static_cast<int>(std::floor(t * 2.0)) % 10000;
+
+    for (uint32_t y = 0; y < h; ++y)
+    {
+        uint8_t *row = rgb + static_cast<size_t>(y) * w * 3;
+        if (y >= flashY0)
+        {
+            std::memset(row, flash ? 255 : 0, static_cast<size_t>(w) * 3);
+            continue;
+        }
+        if (y < hudH)
+        {
+            // Static HUD: dark bar, fixed "text" blocks, a 4-digit counter.
+            for (uint32_t x = 0; x < w; ++x)
+            {
+                uint8_t *px = row + static_cast<size_t>(x) * 3;
+                px[0] = 16; px[1] = 24; px[2] = 64;
+                const uint32_t gx = x / (hudH / 3 + 1), gy = y / (hudH / 3 + 1);
+                if (gy == 1 && x < w / 2 && (hash2(static_cast<int32_t>(gx), 7) & 1u))
+                {
+                    px[0] = px[1] = px[2] = 220;
+                }
+                if (gy == 1 && x >= (w * 3) / 4)
+                {
+                    const uint32_t digit = (gx - ((w * 3) / 4) / (hudH / 3 + 1)) % 5;
+                    const int val = (digit < 4) ? (counter / (digit == 0 ? 1000 : digit == 1 ? 100 : digit == 2 ? 10 : 1)) % 10 : 0;
+                    if (digit < 4 && ((val + gx) & 1))
+                    {
+                        px[0] = 250; px[1] = 230; px[2] = 90;
+                    }
+                }
+            }
+            continue;
+        }
+        const int32_t v = static_cast<int32_t>(y) + oy;
+        const int32_t ty = floorDiv(v, tile);
+        const int32_t cy = floorDiv(v, cell);
+        for (uint32_t x = 0; x < w; ++x)
+        {
+            const int32_t u = static_cast<int32_t>(x) + ox;
+            const int32_t tx = floorDiv(u + ((ty & 1) ? tile / 2 : 0), tile);
+            const int32_t cx = floorDiv(u, cell);
+            // Bricks with a blocky per-cell texture and dark mortar lines.
+            const uint32_t n = hash2(cx, cy);
+            const uint32_t base = hash2(tx, ty);
+            const int32_t lu = (u + ((ty & 1) ? tile / 2 : 0)) - tx * tile;
+            const int32_t lv = v - ty * tile;
+            uint8_t r, g, b;
+            if (lu < cell || lv < cell)
+            {
+                r = 40; g = 30; b = 30;
+            }
+            else
+            {
+                r = static_cast<uint8_t>(110 + (base & 63) + (n & 31));
+                g = static_cast<uint8_t>(60 + ((base >> 2) & 31) + (n & 15));
+                b = static_cast<uint8_t>(50 + (n & 31));
+            }
+            for (const Sprite &s : sprites)
+            {
+                const double dx = static_cast<double>(x) + 0.5 - s.x;
+                const double dy = static_cast<double>(y) + 0.5 - s.y;
+                const double d2 = dx * dx + dy * dy;
+                if (d2 < s.r * s.r)
+                {
+                    const double rIn = s.r - 4.0 * k;
+                    if (d2 > rIn * rIn)
+                    {
+                        r = g = b = 10; // outline
+                    }
+                    else if (dx > -0.5 * s.r && dx < -0.1 * s.r && dy > -0.5 * s.r && dy < -0.1 * s.r)
+                    {
+                        r = g = b = 250; // highlight
+                    }
+                    else
+                    {
+                        r = s.c[0]; g = s.c[1]; b = s.c[2];
+                    }
+                }
+            }
+            uint8_t *px = row + static_cast<size_t>(x) * 3;
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+        }
+    }
+}
+
 void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
 {
     const size_t needed = static_cast<size_t>(m_width) * m_height * 3;
@@ -122,6 +255,12 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
     if (m_variant == Variant::Interlaced)
     {
         renderInterlaced(f);
+        return;
+    }
+    if (m_variant == Variant::Motion)
+    {
+        renderMotion(m_buffer.data(), m_width, m_height, static_cast<double>(timestampUs) / 1e6,
+                     (timestampUs % 1000000LL) < 100000LL);
         return;
     }
 

@@ -30,6 +30,15 @@ struct PerfCounters
     uint64_t rawEncoded      = 0;
     bool     recordActive    = false;
     uint64_t recordEncoded   = 0;
+
+    // Frame generation (#247): frames put on the output timeline, split
+    // into real (captured) and generated ones, plus slots that were due
+    // but skipped because the loop ran late. Monotonic.
+    bool     genActive       = false;
+    uint64_t genReal         = 0;
+    uint64_t genGenerated    = 0;
+    uint64_t genDropped      = 0;
+    float    genTargetFps    = 0.0f; // output timeline rate (0 = per refresh)
 };
 
 /**
@@ -61,6 +70,13 @@ struct FpsStats
     float rawFps          = 0.0f;
     bool  recordActive    = false;
     float recordFps       = 0.0f;
+
+    // Frame generation (#247)
+    bool     genActive    = false;
+    float    genRealFps   = 0.0f;
+    float    genFps       = 0.0f;  // generated frames per second
+    uint32_t genDropped   = 0;     // in this window
+    float    genTargetFps = 0.0f;
 };
 
 /**
@@ -136,6 +152,9 @@ private:
     uint64_t m_winStreamStart = 0;
     uint64_t m_winRawStart    = 0;
     uint64_t m_winRecordStart = 0;
+    uint64_t m_winGenRealStart = 0;
+    uint64_t m_winGenStart     = 0;
+    uint64_t m_winGenDropStart = 0;
 
     // Main-thread copy used for drawing, and the locked copy for the API.
     FpsStats           m_display;

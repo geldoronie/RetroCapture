@@ -2730,6 +2730,103 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================================
+// #247 — Frame generation via /api/v1/frame-generation.
+// ============================================================
+
+const FRAMEGEN_OUTPUTS = {
+    frameGenOutWindow: 'window',
+    frameGenOutStream: 'stream',
+    frameGenOutRecording: 'recording',
+    frameGenOutVirtcam: 'virtualCamera',
+};
+
+function renderFrameGenStatus(data) {
+    const el = document.getElementById('frameGenStatus');
+    if (!el || !data || !data.status) return;
+    const st = data.status;
+    const tr = (key, fallback) =>
+        (typeof window.t === 'function' && window.t(key) !== key) ? window.t(key) : fallback;
+    if (!st.supported) {
+        el.textContent = tr('web.config.image.framegen_unsupported', 'Not available on this GPU (needs OpenGL 3.3 / GLES 3.0).');
+    } else if (st.active) {
+        const out = st.outputFps > 0 ? st.outputFps.toFixed(2) + ' fps' : tr('web.config.image.framegen_per_refresh', 'one frame per refresh');
+        el.textContent = st.sourceFps.toFixed(2) + ' fps \u2192 ' + out +
+            ' (+' + st.addedLatencyMs.toFixed(1) + ' ms) \u2014 ' +
+            st.realFps.toFixed(1) + ' real + ' + st.generatedFps.toFixed(1) + ' gen';
+    } else {
+        el.textContent = '';
+    }
+}
+
+function applyFrameGenToForm(data) {
+    if (!data) return;
+    const modeEl = document.getElementById('frameGenMode');
+    const methodEl = document.getElementById('frameGenMethod');
+    const protectEl = document.getElementById('frameGenProtectStatic');
+    if (modeEl) modeEl.value = data.mode || 'off';
+    if (methodEl) methodEl.value = data.method || 'motion';
+    if (protectEl) protectEl.checked = !!data.protectStatic;
+    const outputs = data.outputs || {};
+    for (const [id, key] of Object.entries(FRAMEGEN_OUTPUTS)) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.checked = outputs[key] !== false;
+            // Display mode is per window refresh: outputs keep real frames.
+            el.disabled = (data.mode === 'display' && key !== 'window');
+        }
+    }
+    renderFrameGenStatus(data);
+}
+
+async function loadFrameGeneration() {
+    try {
+        applyFrameGenToForm(await api.getFrameGeneration());
+    } catch (err) {
+        console.warn('Failed to load frame generation settings:', err);
+    }
+}
+
+async function commitFrameGeneration() {
+    const modeEl = document.getElementById('frameGenMode');
+    const methodEl = document.getElementById('frameGenMethod');
+    const protectEl = document.getElementById('frameGenProtectStatic');
+    if (!modeEl || !methodEl) return;
+    const outputs = {};
+    for (const [id, key] of Object.entries(FRAMEGEN_OUTPUTS)) {
+        const el = document.getElementById(id);
+        if (el) outputs[key] = el.checked;
+    }
+    try {
+        applyFrameGenToForm(await api.setFrameGeneration({
+            mode: modeEl.value,
+            method: methodEl.value,
+            protectStatic: protectEl ? protectEl.checked : true,
+            outputs,
+        }));
+    } catch (err) {
+        console.warn('Failed to set frame generation settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const modeEl = document.getElementById('frameGenMode');
+    if (!modeEl) return;
+    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', ...Object.keys(FRAMEGEN_OUTPUTS)];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', commitFrameGeneration);
+    }
+    loadFrameGeneration();
+    // Live status (rates) while the page is open.
+    setInterval(async () => {
+        if (document.hidden) return;
+        try {
+            renderFrameGenStatus(await api.getFrameGeneration());
+        } catch (err) { /* host offline: keep the last status */ }
+    }, 2000);
+});
+
+// ============================================================
 // Source crop (#225) — mirrors the native UI's Source Crop section:
 // 4 independent sides in percent or source pixels, link modes, and
 // auto-crop. Values are persisted server-side via

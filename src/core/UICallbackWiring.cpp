@@ -932,9 +932,8 @@ void UICallbackWiring::wireStreamingCallbacks()
         m_app.m_remoteInterpolation = v;
         if (auto *remote = dynamic_cast<VideoCaptureRemote *>(m_app.m_capture.get()))
         {
-            VideoCaptureRemote::InterpolationMode mode = VideoCaptureRemote::InterpolationMode::Linear;
-            if (v == "nearest") mode = VideoCaptureRemote::InterpolationMode::Nearest;
-            else if (v == "off") mode = VideoCaptureRemote::InterpolationMode::Off;
+            const VideoCaptureRemote::InterpolationMode mode =
+                VideoCaptureRemote::interpolationModeFromName(v);
             remote->setInterpolationMode(mode);
         }
     });
@@ -1020,6 +1019,16 @@ void UICallbackWiring::wireRecordingCallbacks()
                 settings.width = m_app.m_captureWidth;
                 settings.height = m_app.m_captureHeight;
                 settings.fps = m_app.m_captureFps; // Use actual capture FPS, not UI setting
+                // #247 — frame generation feeding the recording: record the
+                // output timeline (N x the capture rate), not the source.
+                {
+                    const FrameGenSettings fg = m_app.m_ui->getFrameGenSettings();
+                    if (fg.record && fg.factor() >= 2 &&
+                        m_app.m_ui->getSourceType() != UIManager::SourceType::Remote)
+                    {
+                        settings.fps = m_app.m_captureFps * static_cast<uint32_t>(fg.factor());
+                    }
+                }
                 settings.bitrate = m_app.m_ui->getRecordingBitrate();
                 settings.codec = m_app.m_ui->getRecordingVideoCodec();
                 settings.preset = (settings.codec == "h264") ? m_app.m_ui->getRecordingH264Preset() : m_app.m_ui->getRecordingH265Preset();
@@ -1840,9 +1849,8 @@ void UICallbackWiring::wireSourceAndMiscCallbacks()
                                          }
                                          {
                                              auto remote = std::make_unique<VideoCaptureRemote>();
-                                             VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-                                             if (m_app.m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-                                             else if (m_app.m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+                                             const VideoCaptureRemote::InterpolationMode imode =
+                                                 VideoCaptureRemote::interpolationModeFromName(m_app.m_remoteInterpolation);
                                              remote->setInterpolationMode(imode);
                                              remote->setAudioVolume(m_app.m_remoteAudioGain);
                                              m_app.m_capture = std::move(remote);
@@ -2017,9 +2025,8 @@ void UICallbackWiring::wireSourceAndMiscCallbacks()
             // V4L2/DS if the user just flipped source type).
             {
                 auto remote = std::make_unique<VideoCaptureRemote>();
-                VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-                if (m_app.m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-                else if (m_app.m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+                const VideoCaptureRemote::InterpolationMode imode =
+                    VideoCaptureRemote::interpolationModeFromName(m_app.m_remoteInterpolation);
                 remote->setInterpolationMode(imode);
                 remote->setAudioVolume(m_app.m_remoteAudioGain);
                 remote->setAuthToken(authToken);

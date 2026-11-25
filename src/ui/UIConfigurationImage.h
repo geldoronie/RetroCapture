@@ -27,4 +27,5 @@ private:
     void renderMonitorSelection();
     void renderOutputResolution();
     void renderFpsOverlay();
+    void renderFrameGeneration(); // #247
 };

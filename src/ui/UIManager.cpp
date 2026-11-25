@@ -2950,6 +2950,36 @@ void UIManager::loadConfig()
                 setFieldOrder(deint["fieldOrder"].get<int>());
         }
 
+        // #247 — frame generation (own block; absent in older configs = off)
+        if (config.contains("frameGeneration") && config["frameGeneration"].is_object())
+        {
+            auto &fg = config["frameGeneration"];
+            FrameGenSettings g;
+            if (fg.contains("mode") && fg["mode"].is_string())
+            {
+                const int m = FrameGenSettings::modeFromName(fg["mode"].get<std::string>());
+                if (m >= 0) g.mode = m;
+            }
+            if (fg.contains("method") && fg["method"].is_string())
+            {
+                const int m = FrameGenSettings::methodFromName(fg["method"].get<std::string>());
+                if (m >= 0) g.method = m;
+            }
+            if (fg.contains("protectStatic") && fg["protectStatic"].is_boolean())
+                g.protectStatic = fg["protectStatic"].get<bool>();
+            if (fg.contains("outputs") && fg["outputs"].is_object())
+            {
+                auto &o = fg["outputs"];
+                if (o.contains("window") && o["window"].is_boolean()) g.window = o["window"].get<bool>();
+                if (o.contains("stream") && o["stream"].is_boolean()) g.stream = o["stream"].get<bool>();
+                if (o.contains("recording") && o["recording"].is_boolean()) g.record = o["recording"].get<bool>();
+                if (o.contains("virtualCamera") && o["virtualCamera"].is_boolean())
+                    g.virtcam = o["virtualCamera"].get<bool>();
+            }
+            std::lock_guard<std::mutex> lock(m_frameGenMutex);
+            m_frameGen = g;
+        }
+
         // Carregar configurações de imagem
         if (config.contains("image"))
         {
@@ -3477,6 +3507,21 @@ void UIManager::saveConfig()
         config["deinterlace"] = {
             {"mode", m_deinterlaceMode},
             {"fieldOrder", m_fieldOrder}};
+
+        // #247 — frame generation
+        {
+            const FrameGenSettings g = getFrameGenSettings();
+            config["frameGeneration"] = {
+                {"mode", FrameGenSettings::modeName(g.mode)},
+                {"method", FrameGenSettings::methodName(g.method)},
+                {"protectStatic", g.protectStatic},
+                {"outputs", {
+                    {"window", g.window},
+                    {"stream", g.stream},
+                    {"recording", g.record},
+                    {"virtualCamera", g.virtcam},
+                }}};
+        }
 
         // Salvar configurações de imagem
         config["image"] = {
