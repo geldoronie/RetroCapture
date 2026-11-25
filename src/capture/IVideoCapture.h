@@ -116,6 +116,13 @@ public:
         return 0;
     }
 
+    /**
+     * Quantization the backend reports for the negotiated format (#228):
+     * 0 = unknown / driver default, 1 = limited (16-235), 2 = full (0-255).
+     * FrameProcessor uses it when the colour range is set to Auto.
+     */
+    virtual int getReportedColorRange() const { return 0; }
+
     // AVFoundation-specific extensions. Default no-op so V4L2,
     // DirectShow and Remote captures don't need to implement them.
     virtual std::vector<AVFoundationFormatInfo> listFormats(const std::string &deviceId = "")

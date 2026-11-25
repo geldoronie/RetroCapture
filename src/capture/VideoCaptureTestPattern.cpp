@@ -2,7 +2,9 @@
 #include "../utils/Logger.h"
 #include "../utils/MediaClock.h"
 
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 VideoCaptureTestPattern::VideoCaptureTestPattern() = default;
 VideoCaptureTestPattern::~VideoCaptureTestPattern() { close(); }
@@ -10,6 +12,10 @@ VideoCaptureTestPattern::~VideoCaptureTestPattern() { close(); }
 bool VideoCaptureTestPattern::open(const std::string & /*device*/)
 {
     m_open = true;
+    const char *variant = std::getenv("RETROCAPTURE_TEST_PATTERN");
+    m_variant = (variant && std::string(variant) == "levels") ? Variant::Levels : Variant::Bars;
+    if (m_variant == Variant::Levels)
+        LOG_INFO("VideoCaptureTestPattern: 'levels' variant (grey steps + colour bars)");
     if (m_buffer.empty())
         m_buffer.resize(static_cast<size_t>(m_width) * m_height * 3, 0);
     LOG_INFO("VideoCaptureTestPattern opened: " + std::to_string(m_width) + "x" +
@@ -54,11 +60,46 @@ std::vector<DeviceInfo> VideoCaptureTestPattern::listDevices()
     return {DeviceInfo{"test", "Test Pattern", "synthetic", true}};
 }
 
+void VideoCaptureTestPattern::renderLevels()
+{
+    static const uint8_t steps[8] = {0, 16, 32, 64, 128, 192, 235, 255};
+    static const uint8_t bars[8][3] = {
+        {255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
+        {255, 0, 255},   {255, 0, 0},   {0, 0, 255},   {16, 16, 16},
+    };
+    const uint32_t colW = (m_width > 0) ? (m_width / 8) : 1;
+    for (uint32_t y = 0; y < m_height; ++y)
+    {
+        uint8_t *row = m_buffer.data() + static_cast<size_t>(y) * m_width * 3;
+        for (uint32_t x = 0; x < m_width; ++x)
+        {
+            uint32_t c = colW ? (x / colW) : 0;
+            if (c > 7) c = 7;
+            uint8_t *px = row + static_cast<size_t>(x) * 3;
+            if (y < m_height / 2)
+            {
+                px[0] = px[1] = px[2] = steps[c];
+            }
+            else
+            {
+                px[0] = bars[c][0];
+                px[1] = bars[c][1];
+                px[2] = bars[c][2];
+            }
+        }
+    }
+}
+
 void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
 {
     const size_t needed = static_cast<size_t>(m_width) * m_height * 3;
     if (m_buffer.size() < needed)
         m_buffer.resize(needed);
+    if (m_variant == Variant::Levels)
+    {
+        renderLevels();
+        return;
+    }
 
     // 8 SMPTE-style vertical colour bars (R,G,B per bar). Having all three
     // channels vary across the frame is what lets the smoke-test assert the

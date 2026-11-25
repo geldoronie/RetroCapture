@@ -1946,6 +1946,18 @@ void Application::run()
             dummyLogShown = true;
         }
 
+        // #228 — source colour controls live in UIManager (Image window,
+        // web API, config); hand them to the frame processor every
+        // iteration on the GL thread. A no-op unless a value changed.
+        if (m_ui && m_frameProcessor)
+        {
+            SourceAdjustments adj;
+            adj.colorRange = static_cast<SourceColorRange>(m_ui->getColorRange());
+            adj.saturation = m_ui->getSaturation();
+            adj.gamma = m_ui->getGamma();
+            m_frameProcessor->setSourceAdjustments(adj);
+        }
+
         if (shouldProcess && !m_isReconfiguring)
         {
             // Double-check that capture is still open and not being reconfigured
@@ -2538,6 +2550,9 @@ void Application::applyPreset(const std::string &presetName)
         // Update image settings
         m_ui->setBrightness(m_brightness);
         m_ui->setContrast(m_contrast);
+        m_ui->setSaturation(data.imageSaturation);
+        m_ui->setGamma(data.imageGamma);
+        m_ui->setColorRange(data.imageColorRange);
         m_ui->setMaintainAspect(m_maintainAspect);
         // fullscreen and monitorIndex are NOT updated - they vary per user/system
 
@@ -2708,6 +2723,12 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
     // Note: fullscreen and monitorIndex are NOT saved - they can vary
     data.imageBrightness = m_brightness;
     data.imageContrast = m_contrast;
+    if (m_ui)
+    {
+        data.imageSaturation = m_ui->getSaturation();
+        data.imageGamma = m_ui->getGamma();
+        data.imageColorRange = m_ui->getColorRange();
+    }
     data.maintainAspect = m_maintainAspect;
     // fullscreen is NOT saved - varies per user preference
     // monitorIndex is NOT saved - varies per system

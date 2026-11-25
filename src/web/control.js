@@ -1082,6 +1082,14 @@ async function loadImageSettings() {
             }
         }
         
+        // #228 — source colour controls
+        setSliderWithBadge('saturation', settings.saturation !== undefined ? settings.saturation : 1);
+        setSliderWithBadge('gamma', settings.gamma !== undefined ? settings.gamma : 1);
+        const colorRangeEl = document.getElementById('colorRange');
+        if (colorRangeEl) {
+            colorRangeEl.value = settings.colorRange || 'auto';
+        }
+
         if (maintainAspectEl) {
             maintainAspectEl.checked = settings.maintainAspect || false;
         }
@@ -1117,6 +1125,17 @@ async function loadImageSettings() {
     } catch (error) {
         console.error('Failed to load image configuration:', error);
     }
+}
+
+/**
+ * Sets a range input and its "<id>Value" badge (#228).
+ */
+function setSliderWithBadge(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = value;
+    const badge = document.getElementById(id + 'Value');
+    if (badge) badge.textContent = parseFloat(value).toFixed(2);
 }
 
 /**
@@ -1156,6 +1175,9 @@ async function updateImageSettings() {
         const settings = {
             brightness: brightnessEl ? parseFloat(brightnessEl.value) : 0,
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
+            saturation: document.getElementById('saturation') ? parseFloat(document.getElementById('saturation').value) : 1,
+            gamma: document.getElementById('gamma') ? parseFloat(document.getElementById('gamma').value) : 1,
+            colorRange: document.getElementById('colorRange') ? document.getElementById('colorRange').value : 'auto',
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
             monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1,
@@ -1173,6 +1195,9 @@ async function updateImageSettings() {
         appState.image = {
             brightness: settings.brightness,
             contrast: settings.contrast,
+            saturation: settings.saturation,
+            gamma: settings.gamma,
+            colorRange: settings.colorRange,
             maintainAspect: settings.maintainAspect,
             fullscreen: settings.fullscreen
         };
@@ -1566,6 +1591,31 @@ document.addEventListener('DOMContentLoaded', function() {
     if (contrast) {
         contrast.addEventListener('input', updateImageSettingsDebounced);
         contrast.addEventListener('change', updateImageSettingsDebounced);
+    }
+    // #228 — source colour controls
+    ['saturation', 'gamma'].forEach(function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', function() {
+            setSliderWithBadge(id, this.value);
+            updateImageSettingsDebounced();
+        });
+        el.addEventListener('change', updateImageSettingsDebounced);
+    });
+    const colorRangeSel = document.getElementById('colorRange');
+    if (colorRangeSel) {
+        colorRangeSel.addEventListener('change', updateImageSettingsDebounced);
+    }
+    const resetColorBtn = document.getElementById('resetColor');
+    if (resetColorBtn) {
+        resetColorBtn.addEventListener('click', function() {
+            setSliderWithBadge('brightness', 1);
+            setSliderWithBadge('contrast', 1);
+            setSliderWithBadge('saturation', 1);
+            setSliderWithBadge('gamma', 1);
+            if (colorRangeSel) colorRangeSel.value = 'auto';
+            updateImageSettings();
+        });
     }
     if (maintainAspect) {
         maintainAspect.addEventListener('change', updateImageSettingsDebounced);

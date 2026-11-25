@@ -205,6 +205,9 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
         // Note: fullscreen and monitorIndex are NOT saved - they vary per user/system
         presetJson["image"]["brightness"] = data.imageBrightness;
         presetJson["image"]["contrast"] = data.imageContrast;
+        presetJson["image"]["saturation"] = data.imageSaturation;
+        presetJson["image"]["gamma"] = data.imageGamma;
+        presetJson["image"]["colorRange"] = data.imageColorRange;
         presetJson["image"]["maintainAspect"] = data.maintainAspect;
         // fullscreen is NOT saved - varies per user preference
         // monitorIndex is NOT saved - varies per system
@@ -392,6 +395,18 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (image.contains("contrast"))
             {
                 data.imageContrast = image["contrast"].get<float>();
+            }
+            if (image.contains("saturation"))
+            {
+                data.imageSaturation = image["saturation"].get<float>();
+            }
+            if (image.contains("gamma"))
+            {
+                data.imageGamma = image["gamma"].get<float>();
+            }
+            if (image.contains("colorRange"))
+            {
+                data.imageColorRange = image["colorRange"].get<int>();
             }
             if (image.contains("maintainAspect"))
             {

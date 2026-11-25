@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <string>
+
+// Vertex shader for a full-screen textured quad (attributes aPos/aTexCoord,
+// varying TexCoord) in the GLSL dialect of the current context. Shared with
+// other GPU passes (SourcePrePass) so they stay dialect-compatible.
+std::string generateVertexShader();
 
 // Forward declaration
 class OpenGLStateTracker;

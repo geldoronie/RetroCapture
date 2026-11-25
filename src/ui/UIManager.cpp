@@ -2948,6 +2948,12 @@ void UIManager::loadConfig()
                 m_brightness = image["brightness"];
             if (image.contains("contrast"))
                 m_contrast = image["contrast"];
+            if (image.contains("saturation"))
+                m_saturation = image["saturation"].get<float>();
+            if (image.contains("gamma"))
+                m_gamma = image["gamma"].get<float>();
+            if (image.contains("colorRange"))
+                setColorRange(image["colorRange"].get<int>());
             if (image.contains("maintainAspect"))
                 m_maintainAspect = image["maintainAspect"];
             if (image.contains("fullscreen"))
@@ -3438,6 +3444,9 @@ void UIManager::saveConfig()
         config["image"] = {
             {"brightness", m_brightness},
             {"contrast", m_contrast},
+            {"saturation", m_saturation},
+            {"gamma", m_gamma},
+            {"colorRange", m_colorRange},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
             {"monitorIndex", m_monitorIndex},

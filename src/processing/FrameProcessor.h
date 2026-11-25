@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../renderer/glad_loader.h"
+#include "SourcePrePass.h"
 #include <cstdint>
 #include <vector>
 
@@ -43,7 +44,13 @@ public:
      */
     // Returns the external (zero-copy DMABUF) texture when the capture
     // provided one this frame, else the internally-uploaded texture.
-    GLuint getTexture() const { return m_externalTexture ? m_externalTexture : m_texture; }
+    // When source adjustments are active (#228) this is the adjusted copy,
+    // so the shader chain and every output see the corrected image.
+    GLuint getTexture() const
+    {
+        if (m_processedTexture) return m_processedTexture;
+        return m_externalTexture ? m_externalTexture : m_texture;
+    }
 
     /**
      * Get the texture width.
@@ -91,6 +98,13 @@ public:
      */
     bool getTextureFilterLinear() const { return m_textureFilterLinear; }
 
+    /**
+     * Source adjustments applied before the shader chain (#228). Takes
+     * effect on the next processFrame(); call on the GL thread.
+     */
+    void setSourceAdjustments(const SourceAdjustments &adj);
+    const SourceAdjustments &getSourceAdjustments() const { return m_adjust; }
+
 private:
     OpenGLRenderer* m_renderer = nullptr;
     GLuint m_texture = 0;
@@ -111,6 +125,18 @@ private:
     SwsContext* m_swsContext = nullptr;
     int m_swsWidth = 0;
     int m_swsHeight = 0;
+
+    // #228 — source colour adjustments and the GPU pass applying them.
+    SourceAdjustments m_adjust;
+    bool m_adjustDirty = false;
+    SourcePrePass m_prePass;
+    GLuint m_processedTexture = 0; // m_prePass output, 0 = pass bypassed
+    bool m_lastFrameWasYUV = false;
+    int m_reportedColorRange = 0;  // capture's quantization hint
+    bool m_swsFullRange = false;   // YUV range the sws context decodes
+
+    void runPrePass();
+    bool wantYUVFullRange() const;
 
     // Texture filtering configurável
     bool m_textureFilterLinear = false; // Padrão: GL_NEAREST (mais rápido)

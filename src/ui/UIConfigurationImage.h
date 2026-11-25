@@ -21,6 +21,7 @@ private:
     UIManager *m_uiManager = nullptr;
 
     void renderBrightnessContrast();
+    void renderSourceColor();
     void renderAspectRatio();
     void renderFullscreen();
     void renderMonitorSelection();
