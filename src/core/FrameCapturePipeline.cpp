@@ -90,6 +90,61 @@ FrameCapturePipeline::FrameCapturePipeline(Application &app) : m_app(app)
 {
 }
 
+namespace
+{
+// (Re)create an RGB colour render target of the given size. Used by the
+// source pre-pass (crop) and the shader-source rescale pass.
+void ensureColorTarget(GLuint &fbo, GLuint &tex, uint32_t &curW, uint32_t &curH,
+                       uint32_t w, uint32_t h)
+{
+    if (fbo != 0 && tex != 0 && curW == w && curH == h)
+        return;
+    if (tex != 0)
+    {
+        glDeleteTextures(1, &tex);
+        tex = 0;
+    }
+    if (fbo != 0)
+    {
+        glDeleteFramebuffers(1, &fbo);
+        fbo = 0;
+    }
+
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+                 static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, tex, 0);
+
+    curW = w;
+    curH = h;
+}
+} // namespace
+
+void FrameCapturePipeline::getSourceCropFractions(uint32_t srcW, uint32_t srcH,
+                                                  float &left, float &right,
+                                                  float &top, float &bottom) const
+{
+    left = right = top = bottom = 0.0f;
+    if (!m_app.m_ui || srcW == 0 || srcH == 0)
+        return;
+    // Symmetric overscan: X crops left+right, Y crops top+bottom.
+    // std::clamp is C++17; the old MinGW of the Windows build lacks it.
+    const float x = std::max(0.0f, std::min(0.45f, m_app.m_ui->getSourceOverscanPercentX() / 100.0f));
+    const float y = std::max(0.0f, std::min(0.45f, m_app.m_ui->getSourceOverscanPercentY() / 100.0f));
+    left = right = (x > 0.00001f) ? x : 0.0f;
+    top = bottom = (y > 0.00001f) ? y : 0.0f;
+}
+
 bool FrameCapturePipeline::renderAndDistributeFrame()
 {
     // #152 - the per-frame render + shader + output-resolution + window draw +
@@ -115,15 +170,75 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         LOG_DEBUG("================================");
     }
     
+    // #224 — source pre-pass: the crop (overscan) is a property of the
+    // SOURCE, so it runs here, before and independently of the shader
+    // chain. The cropped texture then feeds the shader (when one is
+    // active) or is rendered directly (when not), and the /raw source
+    // readback below reads it too — so the preview, /stream, recording,
+    // virtual camera and /raw all honour the crop with the shader on or
+    // off. The crop zooms the visible region back to the source size, so
+    // downstream dimensions don't change.
+    GLuint sourceTex = m_app.m_frameProcessor->getTexture();
+    uint32_t sourceW = m_app.m_frameProcessor->getTextureWidth();
+    uint32_t sourceH = m_app.m_frameProcessor->getTextureHeight();
+    {
+        float cropL = 0.0f, cropR = 0.0f, cropT = 0.0f, cropB = 0.0f;
+        getSourceCropFractions(sourceW, sourceH, cropL, cropR, cropT, cropB);
+        const bool needsCrop = (cropL > 0.0f || cropR > 0.0f || cropT > 0.0f || cropB > 0.0f);
+        if (needsCrop && sourceTex != 0 && sourceW > 0 && sourceH > 0)
+        {
+            ensureColorTarget(m_app.m_sourceCropFBO, m_app.m_sourceCropTexture,
+                              m_app.m_sourceCropFBOWidth, m_app.m_sourceCropFBOHeight,
+                              sourceW, sourceH);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_sourceCropFBO);
+
+            // Enlarge the viewport so only the visible region of the source
+            // lands inside the FBO. FBO row 0 is texture row 0, i.e. the
+            // TOP of the picture (the window render flips Y), so the top
+            // crop pushes the viewport below y=0 and the bottom crop past
+            // the FBO height.
+            const float visibleFracX = 1.0f - cropL - cropR;
+            const float visibleFracY = 1.0f - cropT - cropB;
+            const float vpW = static_cast<float>(sourceW) / visibleFracX;
+            const float vpH = static_cast<float>(sourceH) / visibleFracY;
+            const GLint vpX = static_cast<GLint>(-cropL * vpW);
+            const GLint vpY = static_cast<GLint>(-cropT * vpH);
+            glViewport(vpX, vpY, static_cast<GLsizei>(vpW), static_cast<GLsizei>(vpH));
+
+            // NEAREST keeps the pixelated look of retro sources (same
+            // filter the pre-#224 shader-branch crop used); the
+            // FrameProcessor's filter is restored afterwards.
+            const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
+                                            ? GL_LINEAR
+                                            : GL_NEAREST;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sourceTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            m_app.m_renderer->renderTexture(sourceTex, sourceW, sourceH,
+                                            false, false, 1.0f, 1.0f, false,
+                                            sourceW, sourceH,
+                                            /*preserveViewport=*/true);
+
+            glBindTexture(GL_TEXTURE_2D, sourceTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, restoreFilter);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            sourceTex = m_app.m_sourceCropTexture;
+        }
+    }
+
     // Apply shader if active
-    GLuint textureToRender = m_app.m_frameProcessor->getTexture();
+    GLuint textureToRender = sourceTex;
     bool isShaderTexture = false;
 
     // Master toggle: when the user disables the shader pipeline
     // from the Shader tab we keep the loaded preset / parameters
     // intact but stop running the chain on the live render. The
     // captured texture for stream/recording then reflects the
-    // raw source — same path the user sees on the window.
+    // (cropped) source — same path the user sees on the window.
     const bool shaderPipelineOn = (!m_app.m_ui || m_app.m_ui->getShaderPipelineEnabled());
     if (shaderPipelineOn && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive())
     {
@@ -140,22 +255,15 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             m_app.m_shaderEngine->setViewport(currentWidth, currentHeight);
         }
 
-        // Source para o shader chain. Por default, usamos a textura full-res
-        // do FrameProcessor. Se o usuário pediu uma resolução LÓGICA menor que
-        // a que o V4L2 entregou (driver ajustou pra mais próxima suportada),
-        // fazemos um downscale com filter=NEAREST aqui — assim shaders CRT
-        // recebem entrada "pixelada" baixa-res como foram desenhados, em vez
-        // de 1080p suave onde scanlines viram sub-pixel e somem.
-        GLuint shaderSrcTex = m_app.m_frameProcessor->getTexture();
-        uint32_t shaderSrcW = m_app.m_frameProcessor->getTextureWidth();
-        uint32_t shaderSrcH = m_app.m_frameProcessor->getTextureHeight();
-
-        // Lê overscan antes de decidir o caminho — se há overscan, mesmo
-        // que não precise de downscale, ainda fazemos o pass do FBO pra
-        // aplicar o crop via viewport offset.
-        const float overscanXPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentX() : 0.0f;
-        const float overscanYPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentY() : 0.0f;
-        const bool needsOverscan = (overscanXPctRead > 0.001f || overscanYPctRead > 0.001f);
+        // Source para o shader chain: a textura (já cortada) do pre-pass.
+        // Se o usuário pediu uma resolução LÓGICA menor que a que o V4L2
+        // entregou (driver ajustou pra mais próxima suportada), fazemos um
+        // downscale com filter=NEAREST aqui — assim shaders CRT recebem
+        // entrada "pixelada" baixa-res como foram desenhados, em vez de
+        // 1080p suave onde scanlines viram sub-pixel e somem.
+        GLuint shaderSrcTex = sourceTex;
+        uint32_t shaderSrcW = sourceW;
+        uint32_t shaderSrcH = sourceH;
 
         // Logical size the shader should see. Local capture: what the user
         // asked for (the driver may have picked something bigger). Remote
@@ -181,71 +289,25 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                    (wantW > shaderSrcW || wantH > shaderSrcH) &&
                                    shaderSrcTex != 0);
 
-        if ((needsDownscale || needsUpscale || needsOverscan) && shaderSrcTex != 0)
+        if ((needsDownscale || needsUpscale) && shaderSrcTex != 0)
         {
-            // FBO size: logical quando há rescale, source dims caso contrário.
-            const uint32_t fboW = (needsDownscale || needsUpscale) ? wantW : shaderSrcW;
-            const uint32_t fboH = (needsDownscale || needsUpscale) ? wantH : shaderSrcH;
-
-            if (m_app.m_shaderSourceFBO == 0 ||
-                m_app.m_shaderSourceFBOWidth != fboW ||
-                m_app.m_shaderSourceFBOHeight != fboH)
-            {
-                if (m_app.m_shaderSourceTexture != 0)
-                {
-                    glDeleteTextures(1, &m_app.m_shaderSourceTexture);
-                    m_app.m_shaderSourceTexture = 0;
-                }
-                if (m_app.m_shaderSourceFBO != 0)
-                {
-                    glDeleteFramebuffers(1, &m_app.m_shaderSourceFBO);
-                    m_app.m_shaderSourceFBO = 0;
-                }
-
-                glGenTextures(1, &m_app.m_shaderSourceTexture);
-                glBindTexture(GL_TEXTURE_2D, m_app.m_shaderSourceTexture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-                             static_cast<GLsizei>(fboW),
-                             static_cast<GLsizei>(fboH),
-                             0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-                glGenFramebuffers(1, &m_app.m_shaderSourceFBO);
-                glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_shaderSourceFBO);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                       GL_TEXTURE_2D, m_app.m_shaderSourceTexture, 0);
-
-                m_app.m_shaderSourceFBOWidth = fboW;
-                m_app.m_shaderSourceFBOHeight = fboH;
-            }
+            const uint32_t fboW = wantW;
+            const uint32_t fboH = wantH;
+            ensureColorTarget(m_app.m_shaderSourceFBO, m_app.m_shaderSourceTexture,
+                              m_app.m_shaderSourceFBOWidth, m_app.m_shaderSourceFBOHeight,
+                              fboW, fboH);
 
             glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_shaderSourceFBO);
-
-            // Overscan: amplia o viewport de modo que apenas a região
-            // central (1 - 2*overscan) do source caia dentro do FBO.
-            // X e Y independentes; 0 = sem corte, 0.45 = corta 45% de cada lado.
-            // std::clamp é C++17; o MinGW antigo do build Windows não tem.
-            const float overscanX = std::max(0.0f, std::min(0.45f, overscanXPctRead / 100.0f));
-            const float overscanY = std::max(0.0f, std::min(0.45f, overscanYPctRead / 100.0f));
-            const float visibleFracX = 1.0f - 2.0f * overscanX;
-            const float visibleFracY = 1.0f - 2.0f * overscanY;
-            const float vpW = static_cast<float>(fboW) / visibleFracX;
-            const float vpH = static_cast<float>(fboH) / visibleFracY;
-            const GLint vpX = static_cast<GLint>((static_cast<float>(fboW) - vpW) / 2.0f);
-            const GLint vpY = static_cast<GLint>((static_cast<float>(fboH) - vpH) / 2.0f);
-            glViewport(vpX, vpY,
-                       static_cast<GLsizei>(vpW),
-                       static_cast<GLsizei>(vpH));
+            glViewport(0, 0, static_cast<GLsizei>(fboW), static_cast<GLsizei>(fboH));
 
             // Forçar NEAREST na textura source pra preservar look pixelado
-            // no downscale, e restaurar pra config do FrameProcessor depois.
+            // no downscale, e restaurar o filtro original depois (o da
+            // FrameProcessor, ou NEAREST pra textura do crop pre-pass).
             // Remote upscale (#209) uses LINEAR, matching the bilinear CPU
             // upscale it replaces.
             const GLint scaleFilter = needsUpscale ? GL_LINEAR : GL_NEAREST;
-            const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
+            const GLint restoreFilter = (shaderSrcTex == m_app.m_frameProcessor->getTexture() &&
+                                         m_app.m_frameProcessor->getTextureFilterLinear())
                                             ? GL_LINEAR
                                             : GL_NEAREST;
             glActiveTexture(GL_TEXTURE0);
@@ -287,8 +349,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         // DEBUG: Check returned texture
         if (textureToRender == 0)
         {
-            LOG_WARN("Shader returned invalid texture (0), using original texture");
-            textureToRender = m_app.m_frameProcessor->getTexture();
+            LOG_WARN("Shader returned invalid texture (0), using source texture");
+            textureToRender = sourceTex;
             isShaderTexture = false;
         }
         else
@@ -1169,8 +1231,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
                         // Per-pipeline shader override: when the master is on AND
                         // the shader is active, individual pipelines can request the
-                        // raw pre-shader source instead. We do a sync readback of
-                        // m_frameProcessor->getTexture() (raw V4L2 RGB upload) only
+                        // pre-shader source instead. We do a sync readback of the
+                        // source pre-pass texture (the capture upload, cropped by
+                        // the source crop when one is set — #224) only
                         // when at least one active pipeline asked for it — keeps the
                         // common case (both pipelines follow the master) on the fast
                         // single-readback path.
@@ -1191,9 +1254,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         uint32_t sourceFrameW = 0, sourceFrameH = 0;
                         if (needSourceCapture && m_app.m_frameProcessor)
                         {
-                            GLuint srcTex = m_app.m_frameProcessor->getTexture();
-                            sourceFrameW = m_app.m_frameProcessor->getTextureWidth();
-                            sourceFrameH = m_app.m_frameProcessor->getTextureHeight();
+                            // #224 — /raw carries the source crop: read the
+                            // pre-pass texture, not the raw capture texture.
+                            GLuint srcTex = sourceTex;
+                            sourceFrameW = sourceW;
+                            sourceFrameH = sourceH;
                             if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
                             {
                                 GLuint tmpFBO = 0;

@@ -363,6 +363,11 @@ private:
     GLuint m_shaderSourceTexture = 0;
     uint32_t m_shaderSourceFBOWidth = 0;
     uint32_t m_shaderSourceFBOHeight = 0;
+    // #224 — source pre-pass (crop) render target, at source size.
+    GLuint m_sourceCropFBO = 0;
+    GLuint m_sourceCropTexture = 0;
+    uint32_t m_sourceCropFBOWidth = 0;
+    uint32_t m_sourceCropFBOHeight = 0;
     uint32_t m_windowWidth = 1920;
     uint32_t m_windowHeight = 1080;
     

@@ -23,6 +23,12 @@ public:
 private:
     Application &m_app;
 
+    // #224 — the source crop for a srcW x srcH frame, as fractions of the
+    // frame per side (0 = no crop). Visible region = 1 - left - right etc.
+    void getSourceCropFractions(uint32_t srcW, uint32_t srcH,
+                                float &left, float &right,
+                                float &top, float &bottom) const;
+
     // #198 — identity + capture time of the pixels a readback produced.
     struct FrameMeta
     {
